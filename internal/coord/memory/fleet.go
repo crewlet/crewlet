@@ -231,47 +231,48 @@ func (f *Fleet) Release(_ context.Context, key string) error {
 	return nil
 }
 
-// Fail records one failed authentication and reports how many are in the
-// window.
-func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) (int, error) {
+// Fail records one failed authentication.
+func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) error {
 	if subject == "" {
-		return 0, errors.New("coord/memory: an attempt needs a subject")
+		return errors.New("coord/memory: an attempt needs a subject")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.attempts[subject] = append(f.attempts[subject], now)
-	// DISCARD THE OLDEST, which is what the KV bucket's per-record history
-	// does when it overflows. The other direction — refusing the newest —
+	at := f.attempts[subject]
+	// THE NEWEST BY INSTANT, which is what the KV backend's record keeps:
+	// two nodes' failures land in whichever order the store takes them,
+	// so the one dropped on overflow is the OLDEST instant, never merely
+	// the first to arrive. The other direction — refusing the newest —
 	// would leave the record frozen at attempts that then age out, and the
 	// caller un-throttled under the flood that filled it. Deleted in place,
 	// so the backing array stays the cap's size under a flood.
-	if over := len(f.attempts[subject]) - coord.AttemptCap; over > 0 {
-		f.attempts[subject] = slices.Delete(f.attempts[subject], 0, over)
+	slices.SortStableFunc(at, time.Time.Compare)
+	if over := len(at) - coord.AttemptCap; over > 0 {
+		at = slices.Delete(at, 0, over)
 	}
-	return f.live(subject, now), nil
+	f.attempts[subject] = at
+	return nil
 }
 
-// Failures reports how many attempts against subject are in the window.
-func (f *Fleet) Failures(_ context.Context, subject string, now time.Time) (int, error) {
+// Failures reports what the window holds against subject.
+func (f *Fleet) Failures(_ context.Context, subject string, now time.Time) (coord.Attempted, error) {
 	if subject == "" {
-		return 0, errors.New("coord/memory: an attempt needs a subject")
+		return coord.Attempted{}, errors.New("coord/memory: an attempt needs a subject")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.live(subject, now), nil
-}
-
-// live counts the attempts still inside the window. Held under the lock.
-func (f *Fleet) live(subject string, now time.Time) int {
 	cutoff := now.Add(-f.ages.Attempt)
-	count := 0
+	var out coord.Attempted
+	// Held oldest first ([Fleet.Fail] sorts on the way in), so the window
+	// answers in the order the contract states.
 	for _, at := range f.attempts[subject] {
 		if at.After(cutoff) {
-			count++
+			out.At = append(out.At, at)
 		}
 	}
-	return count
+	return out, nil
 }
 
 // Flush forgets every attempt against subject.

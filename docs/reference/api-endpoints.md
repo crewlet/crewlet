@@ -187,19 +187,20 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
 | `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
 | `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
-| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded** and throttled per source. Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works |
-| `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, whether the first-operator route is still open, the password floor. **Unguarded**, and it carries **no user list and no count of people** |
+| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.local.totp` is `required` and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/bootstrap`, `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule; a provider's sign-in never is |
+| `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, whether the first-operator route is still open, and `min_password_length` — the deployment's own `api.auth.local.min_password_length`, never below the engine's twelve, which is exactly the floor the founding and every redemption enforce. **Unguarded**, and it carries **no user list and no count of people** |
 | `POST` | `/auth/bootstrap` | **The first person.** Redeems a one-time code a node wrote to a file beside its store, 0600, and creates an operator carrying the whole `max_grants` ceiling — the one stated exemption in the authority model. The code is checked **on the identity log**, so any node redeems a code any node wrote. The founding first **takes** the exemption on the company's one bootstrap subject, so exactly one founder can land: a second code presented while another founding is part-way through is `409 bootstrap_in_progress` carrying `until`, when that one lapses, and a caller arriving after the first finished is `409 bootstrap_closed`. The founding that takes a code ends every earlier, unfinished one first, so an attempt that stopped halfway never holds the founder's address or login against a fresh code. A code that is real and no longer works — past its **24 hours**, withdrawn by a re-issue, or written by this node and never published — is `410 bootstrap_code_stale`, whose remedy is `crewlet iam bootstrap-code` (or a restart of the node that wrote it); a code nobody holds is the uniform `401`. A code **spells its own expiry** — `cwl_boot_<unix seconds>_<64 hex>`, and the digest the log holds is over the whole value — so one past it is `410` on every node, including after its record is swept a week later, when it used to be the uniform `401` everywhere but on the node still holding its file. **Unguarded**, and closed for good the moment anybody is enrolled |
-| `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential. Answers the address it is for, who sent it, the password floor, and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill — and, where an identity provider is configured, `provider_start`: the path the page's form **posts** to — `POST /auth/invite/{id}/provider`, below — for somebody who would rather redeem it through the provider than set a password. Absent, redeemed and expired are one `410`, and every `410` on any invitation route is a **failed attempt counted against the caller's source** — the id in the link is the credential, so walking ids is guessing at one, and it is turned away at the same ceiling as a guessed password |
-| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and reach whoever issued it decided — the enrolment names the invitation as its authority and the record refuses anything it does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{login, name, password}`, and the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. Only a record that could not land is `503`. **Retry until it lands**: the person a redemption creates is derived from the invitation, so every attempt names one person and a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. `POST /auth/bootstrap` takes `{code, login, email, name, password}`, accepts the code while the log holds it live or taken by its own founding that has not finished (never withdrawn, ended or past its 24 hours), derives the founder from the code the same way, and answers its enrolment the same way — except that a code that died between the form and the post is `410 bootstrap_code_stale` rather than `409`, because one command replaces it |
-| `GET` | `/auth/oidc/start` `/auth/oidc/callback` | The identity-provider round trip, with PKCE and a sealed 10-minute flight cookie so a login begun on one node finishes on another. **Unguarded** — a browser following a redirect carries nothing this engine issued. **Absent** where no provider is configured. Linking is explicit: a subject nobody is **linked** to is refused, never provisioned or matched on an address. `?step_up=<window>` makes it a **confirmation** of the person already signed in, inside the window a `403 step_up_required` named — `step_up` or `step_up_sensitive`, and any other value is `400`: the provider is asked with `prompt=login` and a `max_age` of **that window**, the callback accepts only an `auth_time` inside it, and it replaces the session it was made from — see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are). `max_age` is the window rather than the hour whatever the gesture needed, because `prompt=login` is a request a provider may ignore: one that did answered a confirmation from its own session half an hour old, inside the hour and outside the fifteen minutes the gesture asked for. It is a signed-in person's gesture: nobody signed in is `401`, a node that cannot establish who is is `503` with a `Retry-After` — never the `401` that sends a browser to sign in again — and a machine credential, a machine token acting as its owner included, is `403 step_up_required` naming the window. Every provider sign-in is proved at the ID token's `auth_time`, never at the instant it arrived. `?return_to=` is where the browser lands once it is over: a **path on this deployment of at most 400 bytes**, and anything else — another host, a protocol-relative `//…`, a longer path — lands on `/dashboard`. The bound is the flight cookie's: the path rides in it, and a browser keeps a cookie of 4096 bytes and drops a larger one without a word, which failed the sign-in a whole round trip later. **The start redeems no invitation**: it is a link, which any site can send a browser to, and `?invite=` is refused `400` naming `POST /auth/invite/{id}/provider` — a redemption starts from its invitation's page. A subject a restore left linked to two people is `409 subject_conflict` — never `503`, because waiting does not clear it. A provider whose discovery cannot be reached is `503` with a `Retry-After`; a start this node's own configuration cannot make — a provider block that does not validate — is `500`, because waiting does not fix it |
-| `POST` | `/auth/invite/{id}/provider` | **Redeem an invitation through the identity provider** — the invitation page's form, `application/x-www-form-urlencoded`, with `login` (the person grammar, `jane.doe`; absent, the proposal the page showed) and `return_to`, bounded as the start's is. Answers `303` to the provider with the sealed flight: the invitation and the login ride in it, and the callback enrols the person the invitation creates — its grants, its address, the login chosen, the provider's `name` as a display name and no password — **links the account the provider came back with** to them, and signs them in by redirect. The invitation redeemed is always the one sealed at the start, never one the way back names. **A POST and never a link**, because the account it links is whichever one the browser is signed in with at the provider: started by a link, any site could send a colleague through somebody else's invitation and pin *their* account to it. So it is origin-checked like every other state change (a post from another site is `403 csrf_origin`), and the start link above refuses `?invite=`. **Unguarded** — holding the link is the credential — and throttled per source **before** the invitation is read. A spent link is `410`, counted like every other; a login outside the grammar, or a body that is not a form, is `400`. A provider account already linked to somebody else and an invitation begun with a different provider account are `409 subject_conflict` at the callback — never `503`, because waiting clears neither — and neither spends the link. **Absent** where no provider is configured |
-| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage, grants and colleague level, and the two instants your proof of identity stops counting — `reauth_at` for an ordinary [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture and `sensitive_reauth_at` for a sensitive one — with `step_up_due` and `sensitive_step_up_due` saying whether the next one of each will ask you to confirm it |
-| `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request, `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too |
+| `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it, the password floor, the `seat` it binds (`{handle, name}` as the chart calls it now — absent for an invitation that binds none), and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill — and, where an identity provider is configured, `provider_start`: the path the page's form **posts** to — `POST /auth/invite/{id}/provider`, below — for somebody who would rather redeem it through the provider than set a password. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt in the audit trail's tally**: walking ids or secrets is guessing at a link, which the tally shows. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference |
+| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants, reach and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. An invitation that binds a seat claims it **first** and binds the person to it: a seat removed, made an agent's or bound to somebody else since the issue is `410` before anything is written, and one a colleague's bind races is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: the person a redemption creates is derived from the invitation, so every attempt names one person and a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. `POST /auth/bootstrap` takes `{code, login, email, name, password}`, accepts the code while the log holds it live or taken by its own founding that has not finished (never withdrawn, ended or past its 24 hours), derives the founder from the code the same way, and answers its enrolment the same way — except that a code that died between the form and the post is `410 bootstrap_code_stale` rather than `409`, because one command replaces it |
+| `GET` | `/auth/oidc/start` `/auth/oidc/callback` | The identity-provider round trip, with PKCE and a sealed 10-minute flight cookie so a login begun on one node finishes on another — `__Host-crewlet_oidc_flight` at `Path=/` on an https deployment, and only that name is read there, so no sibling host can plant a login in progress; `crewlet_oidc_flight` on plain http. **Unguarded** — a browser following a redirect carries nothing this engine issued. **Absent** where no provider is configured. Linking is explicit: a subject nobody is **linked** to is refused, never provisioned or matched on an address. `?step_up=<window>` makes it a **confirmation** of the person already signed in, inside the window a `403 step_up_required` named — `step_up` or `step_up_sensitive`, and any other value is `400`: the provider is asked with `prompt=login` and a `max_age` of **that window**, the callback accepts only an `auth_time` inside it — judged exactly, with no clock skew, since the proof it records opens that same window and one accepted past it would be stale on arrival — and it replaces the session it was made from — see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are). `max_age` is the window rather than the hour whatever the gesture needed, because `prompt=login` is a request a provider may ignore: one that did answered a confirmation from its own session half an hour old, inside the hour and outside the fifteen minutes the gesture asked for. It is a signed-in person's gesture: nobody signed in is `401`, a node that cannot establish who is is `503` with a `Retry-After` — never the `401` that sends a browser to sign in again — and a machine credential, a machine token acting as its owner included, is `403 step_up_required` naming the window. **A request presenting a bearer is that same `403`, in the same bytes, whatever the bearer** — matched, refused or uncheckable — and before its resolution is read: the provider confirms a browser's own session and a bearer has none, and an answer that told a good bearer from a bad one would be one more place to test a value. Every provider sign-in is proved at the ID token's `auth_time`, never at the instant it arrived. `?return_to=` is where the browser lands once it is over: a **path on this deployment of at most 400 bytes**, judged as a browser will read the redirect it becomes, and anything else lands on `/dashboard` — another host, a protocol-relative `//…`, a backslash anywhere (`/\evil.example.com` is `https://evil.example.com` to a browser, which reads a backslash as a slash in a web address), a control character (a browser strips tabs and newlines before it parses, so `/<TAB>/evil.example.com` is the same address), a percent-encoded slash or backslash that decodes to either, and a longer path. It is judged again where the callback redirects, because the flight carrying it may have been sealed by another node. The bound is the flight cookie's: the path rides in it, and a browser keeps a cookie of 4096 bytes and drops a larger one without a word, which failed the sign-in a whole round trip later. **A flight is exchanged once**: presented to a node that has already finished it, it is refused as a failed sign-in before the provider is asked anything and without waiting for a turn at the token endpoint, and a callback whose browser leaves while it waits its turn at the provider's token endpoint — eight exchanges per provider per node at once — is `503`, counted as no attempt and spends nothing: a flight is spent only once it holds its turn, so the reload of the same callback is exchanged then. A turn is held for the provider's answer alone and given back before any refusal, so a refused callback never keeps another waiting through the sign-in pad. **The start redeems no invitation**: it is a link, which any site can send a browser to, and `?invite=` is refused `400` naming `POST /auth/invite/{id}/provider` — a redemption starts from its invitation's page. A subject a restore left linked to two people is `409 subject_conflict` — never `503`, because waiting does not clear it. A provider whose discovery cannot be reached is `503` with a `Retry-After`; a start this node's own configuration cannot make — a provider block that does not validate — is `500`, because waiting does not fix it |
+| `POST` | `/auth/invite/{id}/provider` | **Redeem an invitation through the identity provider** — the invitation page's form, `application/x-www-form-urlencoded`, with `secret` (the half of the link after the id, **required** and checked before anything else), `login` (the person grammar, `jane.doe`; absent, the proposal the page showed) and `return_to`, bounded as the start's is. Answers `303` to the provider with the sealed flight: the invitation, its secret and the login ride in it, and the callback enrols the person the invitation creates — its grants, its address, its seat, the login chosen, the provider's `name` as a display name and no password — **links the account the provider came back with** to them, and signs them in by redirect. The invitation redeemed is always the one sealed at the start, never one the way back names. **A POST and never a link**, because the account it links is whichever one the browser is signed in with at the provider: started by a link, any site could send a colleague through somebody else's invitation and pin *their* account to it. So it is origin-checked like every other state change (a post from another site is `403 csrf_origin`), and the start link above refuses `?invite=`. **Unguarded** — holding the link is the credential — and, like the view, on no curve. A spent link is `410`, counted as the view's is; a login outside the grammar, or a body that is not a form, is `400`. A provider account already linked to somebody else and an invitation begun with a different provider account are `409 subject_conflict` at the callback — never `503`, because waiting clears neither — and neither spends the link. **Absent** where no provider is configured |
+| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage, grants and colleague level, and the two instants your proof of identity stops counting — `reauth_at` for an ordinary [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture and `sensitive_reauth_at` for a sensitive one — with `step_up_due` and `sensitive_step_up_due` saying whether the next one of each will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
+| `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request, and so does **putting a new value under the same id**: the cookie is bound to the value it was exchanged with, so rotating a leaked token's value ends every session the old value opened — each announced once as `iam_session_ended` with `credential_changed`, as a removed entry's is, since no record states either. `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too. A refused bearer here is answered exactly as on every guarded route: `401`, counted in the audit trail's failure tally, and never slowed or refused on its address — see [A bearer is its own protection](#a-bearer-is-its-own-protection) |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline and the grants its identity provider's groups conferred |
-| `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up_sensitive`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled" |
+| `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up_sensitive`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled". The second leg answers `{"status": "enrolled"}` — and, through a session that could only enrol a second factor, **replaces that session**: the restricted one is ended first, a whole one opens keeping its absolute deadline and its proof instant (the password's — the enrolment's code proves a seed, not who holds it, so it opens no fresh step-up window), its cookie is on the response and it is answered beside the status as `session` (the sign-in's own shape, `status: signed_in`). Such a session enrols only while its person holds **no** second factor — decided in the write's own snapshot — so one that has come to hold one since the session opened is `403 second_factor_required` and nothing is stored: a password alone never replaces a factor. The seed is sealed under your own key before it is stored, and opened only to check a code |
 | `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a proof inside `step_up_sensitive`, refused as `POST /auth/totp` is. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
-| `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine. It reads the session under either cookie name, as the guard does, and clears both. Only a session this node's rows still hold is closed and announced as `iam_session_ended`: a cookie past its deadline, revoked, or naming a session a record already ended is cleared and nothing is written, and a node that cannot read its rows records the close without announcing it |
+| `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine. It ends the session behind **either** cookie name — the one this deployment issues, and the other a browser may still hold from before `api.external_url` moved to https, which the guard no longer authenticates — and clears both. Only a session this node's rows still hold is closed and announced as `iam_session_ended`: a cookie past its deadline, revoked, or naming a session a record already ended is cleared and nothing is written, and a node that cannot read its rows records the close without announcing it. **Unguarded**, and that is what makes the promise true: behind the request guard, a node that could not read its identity estate answered `503 identity_unavailable` before the sign-out ran and the cookie stayed set. It verifies every bearer the browser holds itself, and the origin check still judges it |
+| `POST` | `/auth/logout/oidc` | End this session **and your session at the identity provider** — OpenID Connect's RP-initiated logout, for a machine somebody else will use next, where a plain sign-out leaves the provider signing the next person straight back in. It ends the session here exactly as `POST /auth/logout` does — the same close, the same only-a-live-session rule, the cookie cleared under both names — and then answers `303` to the provider's `end_session_endpoint` with `client_id` and `post_logout_redirect_uri` set to `api.external_url` + `/dashboard`, which has to be registered at the provider beside the callback. It sends no `id_token_hint`, because the engine keeps no ID token after a sign-in: a provider that requires one asks the person to confirm or refuses, at its own page. Where the provider publishes no `end_session_endpoint`, publishes one that is not an `https` address on a host (a relative one would send the browser to a path on this deployment, a plain-http one to whoever answers on the path), or cannot be reached, it answers `200` `{"status":"signed out","provider_session":"not_ended","detail":…}` — signed out here, told plainly that the provider session was not ended. Post it as a form from the page, so the browser follows the redirect. **Unguarded**, for the plain sign-out's reason — a node that cannot read its identity estate still clears the cookie and still sends the browser to the provider — and a session that may only enrol a second factor reaches it too; **absent** where no provider is configured |
 | `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node. A revocation nobody can confirm is `503` with its `op_id` rather than a claim that your other sessions ended |
 | `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own. A session already over — ended by a record, past its absolute deadline, revoked or invalidated — answers `ended` with nothing written or announced. A node that cannot read its rows answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id` — the id is derived from the lineage, so asking again is the same operation |
 | `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, and the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through. An unbound credential is an **ordinary state**, not an error — a pipeline's token acts under its own login, and binding a person to a seat is a directory row rather than a different credential |
@@ -234,11 +235,27 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
 
-> **Auth.** Every route requires `Authorization: Bearer <token>`, reads
-> included — `/ws/stream` too, and it accepts `?token=…` since browsers cannot
-> set headers on a WebSocket. Only there: a token in the query string of any
-> other route authenticates nobody, because a URL lands in proxy logs and
-> browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
+> **Auth.** Every route needs a credential, reads included, and three shapes
+> of one reach every route: a **session cookie** a person gets by signing in
+> (`__Host-crewlet_session` on an https deployment, `crewlet_session` on plain
+> http, and only the name the deployment issues is read — the bare name is one
+> a sibling host can plant); `Authorization: Bearer` with a **Tier A token**, the deployment's own
+> machine credential from `api.auth.tokens`; and `Authorization: Bearer` with a
+> **[machine token](#post-iamcredentials-mints-a-machine-token)** (`cwl_pat_…`),
+> somebody in the directory — a person's own token or a service account's —
+> acting as its owner. The two bearers are told apart by the value's shape,
+> which picks how it is checked and admits nothing by itself, and all three
+> resolve to the same principal, so no route knows which arrived. **When a
+> request carries a header and a cookie, the header decides**: a browser sends
+> its cookie whether or not the caller meant to, and an `Authorization` header
+> is only ever there because somebody put it there — so a request presenting a
+> *wrong* header stays anonymous rather than being upgraded by whatever cookie
+> is in the jar. `/ws/stream` also accepts a token as `?token=…`, since a
+> browser cannot set a header on a WebSocket and the shipped dashboard opens
+> its socket that way; the session cookie a browser sends on the handshake
+> works there too. Only there: a token in the query string of any other route
+> authenticates nobody, because a URL lands in proxy logs and browser
+> history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
 > `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/static/*`),
 > and the five sign-in routes plus `/auth/invite/*` — a login cannot require a
 > login. That is an **exact list and not a `/auth/` prefix**: the same surface
@@ -260,20 +277,6 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > never opened sends no close frame — so the dashboard re-asks over plain HTTP
 > to tell "your token is wrong" from "the engine is down". Without it a reader
 > holding a stale token sees "retrying" for ever.
->
-> **Three credential shapes reach every route, and the header wins.** A Tier A
-> bearer in `Authorization` is the deployment's own machine credential; a
-> [machine token](#post-iamcredentials-mints-a-machine-token) (`cwl_pat_…`)
-> in the same header is somebody in the directory — a person's own token, or a
-> service account's — and acts as its owner; a `crewlet_session` cookie is a
-> person who signed in. The two bearers are told apart by the value's shape,
-> which picks how it is checked and admits nothing by itself. All three
-> resolve to the same principal, so no route knows which arrived. When a
-> request carries a header and a cookie, the **header** decides — a browser
-> sends its cookie whether or not the caller meant to, and an `Authorization`
-> header is only ever there because somebody put it there. A request presenting
-> a *wrong* header therefore stays anonymous rather than being upgraded by
-> whatever cookie is in the jar.
 >
 > **`api.auth.max_grants` clamps a person exactly as it clamps a token.** The
 > ceiling is applied when the request is resolved, not written anywhere, so
@@ -322,12 +325,19 @@ Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#c
 `POST /auth/login` answers `401 sign_in_refused` for every way it can fail — a
 login nobody holds, a wrong password, a person suspended, a person removed, a
 second factor that does not check out — at the same wall-clock instant,
-measured from when the request arrived.
+measured from when the request was admitted.
 
 **Both halves are needed.** A code that distinguished the arms would make the
 timing pad pointless, and a delay that distinguished them would make the single
-code pointless. A miss pays the same argon2 verify a hit does, through a
-fixed-cost decoy, because otherwise the *absence* of that cost is the answer.
+code pointless. A miss takes the same turn at the node's verify cap that a
+hit's argon2 verification does, through a decoy that holds it for as long as a
+verification takes, because otherwise the *absence* of that cost is the answer.
+Every verification and decoy waits for its own address's turn — one at a time
+per address, served in turn — so one address's flood queues behind itself
+rather than in front of everybody, and a request that goes away while it waits
+is answered `503` and counts as no attempt at all. A turn that has begun is
+held to its end whether or not its request is still there — a decoy's as much
+as a verification's — so hanging up says nothing about which one it was.
 
 What that buys is that this surface is not a roster: a caller cannot learn who
 works here, nor test a list of addresses against it.
@@ -337,13 +347,98 @@ already have:
 
 | Code | Why it is safe to be specific |
 |---|---|
-| `throttled` | Keyed on the **source**, not the subject. A stranger learns they are rate-limited, which they already knew. Keyed on a login it would be an oracle — "this account exists and I can lock it" |
-| `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens |
+| `throttled` | `429` with a `Retry-After`: the seconds until this attempt is admitted. Keyed on the subject **as typed** from the caller's source — never on the source alone, and never on what it resolved to — a name nobody holds climbs the curve exactly as a real one does, so a stranger learns only that they failed recently from where they are, which they already knew. Keyed on the resolved person it would be an oracle — "this account exists and I can slow it down" — which is why the one curve that is, a second factor's, is reached only past the password |
+| `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens. It is also the `403` a session that may only enrol a second factor meets at `POST /auth/totp` once its person holds one — enrolled since, from another session: a password alone never enrols over a factor, and the remedy is to sign in again with it |
+| `second_factor_enrolment_required` | A `status` on a successful sign-in, and a `403` from every guarded route but three for the session it opened — reached only by somebody who proved the password, so it says nothing to a stranger. The deployment requires a second factor and this person holds none: the session may read `GET /auth/session`, enrol one at `POST /auth/totp` and re-confirm the password at `POST /auth/step-up`, and sign out at `POST /auth/logout` or `POST /auth/logout/oidc`, which no guard stands in front of — and enrolling replaces it with a whole one. Its own code rather than `step_up_required`, because no fresher password changes the answer |
 | `bootstrap_closed` | Says this company has started, which whoever can reach an unstarted one would find out by trying |
-| `bootstrap_code_stale` | Reachable only by presenting a code whose digest is on the identity log, or in the serving node's own file — so only by somebody holding a real one — or one whose **own** spelled expiry has passed, which is answered alike whoever minted it and so says nothing a stranger could not read off their own request. Says it aged out, was withdrawn or never reached the log, and names `crewlet iam bootstrap-code`, because the alternative answers were both wrong: `sign_in_refused` sent a founder hunting for a typo in a code that was right, and `bootstrap_closed` told them a company still waiting for them had started. Counted against the source like every failed attempt |
+| `bootstrap_code_stale` | Reachable only by presenting a code whose digest is on the identity log, or in the serving node's own file — so only by somebody holding a real one — or one whose **own** spelled expiry has passed, which is answered alike whoever minted it and so says nothing a stranger could not read off their own request. Says it aged out, was withdrawn or never reached the log, and names `crewlet iam bootstrap-code`, because the alternative answers were both wrong: `sign_in_refused` sent a founder hunting for a typo in a code that was right, and `bootstrap_closed` told them a company still waiting for them had started. Counted in the failure tally like every failed attempt |
 | `bootstrap_in_progress` | `409`, reachable only by presenting a code the log holds live — so only by somebody holding a real one. Says another code's founding is part-way through, and when it lapses (`until`), because only one founder can land: the code presented works the moment that one finishes or lapses, and `crewlet iam bootstrap-code` ends it at once. Neither `bootstrap_closed` (nobody is in the company) nor `bootstrap_code_stale` (this code is fine). Not counted as a failed attempt, for `bootstrap_closed`'s reason |
-| `invite_spent` | Read by somebody holding the link, which is already evidence it was issued to them. One code for redeemed, withdrawn and expired, because the remedy is the same and telling them apart would say "already used" to somebody whose link merely aged out |
+| `invite_spent` | Read by somebody holding the link, which is already evidence it was issued to them. One code for redeemed, withdrawn and expired — and for a secret that is not the link's, answered in the same bytes as an id nobody issued — because the remedy is the same and telling them apart would say "already used" to somebody whose link merely aged out, or say which ids exist to somebody guessing secrets |
 | `subject_conflict` | `409` from `/auth/oidc/callback` and the provider redemption, reached only past an ID token that **verified**, so the caller has proved they hold that account at the provider and what it says is about their own account: somebody else here is linked to it, an invitation was begun with a different account, or a restore left it linked to more than one person. A definite refusal with no `Retry-After`, because waiting never clears it; an administrator changing a link does. It never says who; the node's log (`api_oidc_subject_conflict`) names the holders. From `/iam`, the same code answers an administrator linking a subject somebody else holds, naming that `holder` |
+
+### A failure costs a wait, never a lockout
+
+The sign-in routes are throttled by a **curve**, not a ceiling. Each failure
+doubles the wait before the next attempt on the same key — 1, 2, 4, 8, 16, then
+30 seconds, and never more — and a correct credential after the wait always
+succeeds. A wait of up to five seconds is served inside the request, which a
+person at a form reads as a slow answer; a longer one is `429 throttled` with a
+`Retry-After` naming it. There is no lockout, because a lockout is something an
+outsider can cause: keyed on a login it would shut that person out for as long
+as anybody kept typing their name.
+
+One key: the login or address **as typed** (an address folded the way the
+directory folds one), from one source — the client's address as the trusted
+proxies resolve it, an IPv6 client by its `/64`. It has no allowance, so the
+first failure already costs a second, and it catches a run at one account. A
+success clears that pair on every node and nothing else: clearing more was a
+bypass, since anybody holding an account could sign in as themselves between
+guesses at somebody else's and wipe the record of every one. An attempt still
+being checked counts as a failure against its pair until it resolves, so a
+burst of concurrent guesses at one account is served one after another along
+the curve rather than all at once.
+
+**A second factor also climbs the person's own curve.** Somebody holding a
+person's password could otherwise guess at the six digits from every address
+they have, each a fresh pair — a `/48` of IPv6 is sixty-five thousand of them,
+enough to find a code in about an hour. So once the password has proved
+itself, the code is also decided on a curve keyed on the person the login
+resolved to, shared across the fleet, the same 1-to-30-second doubling: every
+address's wrong codes climb it together, and a wait past five seconds is
+`429 throttled`. Keyed on the resolved person here and nowhere else, because
+it is reached only past the password, so it tells nobody anything the password
+did not. The code that completes the sign-in lifts it, and a curve that reaches
+its ceiling is announced as `iam_second_factor_throttled` — somebody holding
+that person's password is guessing at their code, and the password is what to
+rotate.
+
+**No address is ever refused on its own.** A curve on the source alone —
+which this surface had, ten failures free and then the same doubling wait — is
+one anybody sharing the address holds shut for everybody else: one stranger's
+failure every twenty-five seconds, at any name, kept every sign-in from that
+office or proxy at `429`, the right passwords included. So one password tried
+against many names from one address meets no curve; it is bounded by the
+address's one turn at the node's verify cap — one name per verification,
+however many it sends at once — by its allowance of fresh names the
+coordination store is asked about (sixteen at once, then one a second), by the
+password floor and blocklist, and by the pad, and it is shown by the audit
+trail's per-client failure tally. A credential that
+names nobody — an invitation link, a founder's code, a provider's round trip —
+meets no curve at all, and every refusal of one is still counted in the tally.
+
+The window is fifteen minutes and the fleet shares it at every step: every
+failure is written, and a node reads a climbing pair's record before each
+attempt it admits, so however a load balancer spreads a run across nodes the
+sixth failure anywhere owes the ceiling everywhere. A pair already being
+refused costs the coordination store nothing, and a clean one is read once a
+window. What the fleet holds is a keyed digest of the
+pair, never what was typed.
+
+#### A bearer is its own protection
+
+Every guarded route compares the bearer it is handed — a Tier A token, a
+machine token or a session cookie — and whether it matched is the whole of the
+answer. No curve stands in front of that comparison: a bearer names nobody
+until it is compared, so a curve there could only be keyed on the address, and
+a refusal decided on an address is one anybody sharing it holds shut for
+everybody else — including the break-glass Tier A token. What protects a
+bearer is its value: 32 bytes of `crypto/rand` in a machine token, an HMAC
+under the fleet's keyring in a session cookie, and at least 26 characters in a
+Tier A value, which `crewlet validate` refuses shorter. Every refused bearer on
+a guarded route is still a failed attempt in the audit trail's per-client,
+per-minute tally, so a spray is seen; it is never answered `429`, however many
+valid or refused requests the address has in flight. An unguarded route —
+`/health`, `/ready`, the dashboard's shell and assets, the webhooks, the
+sign-in routes — never compares a bearer at all: the request is anonymous
+there, and the provider step-up start refuses any request that presents one.
+
+**Every source is the proxy's unless you say otherwise.** Behind a proxy that is
+not in [`api.trusted_proxies`](../getting-started/configuration.md#tier-a), every
+caller shares the proxy's address and therefore one curve per login — a
+stranger guessing at somebody's login puts that person's own sign-in behind the
+same wait — and every audit row names the proxy.
+`crewlet validate` warns when `api.external_url` is `https` and no proxy is
+trusted, because the engine never terminates TLS itself.
 
 ### Which grant a route needs
 
@@ -517,6 +612,22 @@ which is `github.com` or the GitHub Enterprise Server base the company
 configures. A reverse proxy in front of the engine should pass these headers
 through unchanged; one that adds its own `Content-Security-Policy` produces two
 policies, and a browser enforces both.
+
+**Some answers also carry `Cache-Control: no-store`.** Every response under
+`/config`, whose body is the whole company document; a `/secrets` reveal's
+value; and **every response under `/auth`**, a refusal and a redirect included —
+the request guard's own (`401 invalid_token`, `403
+second_factor_enrolment_required`, `503 identity_unavailable`), the origin
+check's `403`, the router's `404` and `405`, and every route's — whose answers
+are a second-factor seed and the `otpauth://` URI carrying it, recovery codes
+shown exactly once, who the caller is, the address an invitation was sent to,
+and every sign-in's `Set-Cookie`. The guard sets it for the whole prefix before
+anything beneath it writes, so a route added there is covered the moment it is
+mounted. Without it a browser's disk cache — or a
+shared proxy, for everybody behind it — keeps those after the tab, the session
+and the step-up that was needed to read them. `no-store` rather than `private`,
+which still lets the browser keep it, or `no-cache`, which only revalidates
+what was kept.
 
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
@@ -893,9 +1004,10 @@ for the request and answered as `op_id`. So the retry an `unknown` asks for
 names what its first attempt may have created: a person whose address and login
 that attempt already claimed is finished rather than refused `409` by its own
 first half, and an invitation that landed is answered with its own link and the
-deadline it was issued with. The invitation's id is what its link carries, so it
-is derived under the company's own key and an operation key is never a way to
-compute a link. A create's key is therefore a **uuid7**, as every `op_id` is,
+deadline it was issued with. The invitation's id and the secret its link carries
+are both derived under the company's own key — the id from the operation key and
+the secret from the id — so the retry hands back the very link the first
+attempt issued, and an operation key is never a way to compute one. A create's key is therefore a **uuid7**, as every `op_id` is,
 and any other value is `400 bad_params`. The same key with a *different* body —
 another address, another login, other grants — is `409 bad_params` carrying the
 `op_id`, and so is the key of an invitation since redeemed or aged out: a retry
@@ -1026,9 +1138,29 @@ the credential they acted through (`operator_id`) — and never the subject.
 
 `POST /iam/invitations` answers the invitation URL and `POST /iam/credentials`
 answers the token. Neither is stored and neither can be read back: what the
-estate holds is the invitation's id (which *is* the verifier — holding the
-link is holding the id) and a SHA-256 of the token. An invitation an
-administrator lost is re-issued rather than recovered.
+estate holds is the invitation's id and a SHA-256 of the secret its link
+carries, and a SHA-256 of the token. An invitation an administrator lost is
+re-issued rather than recovered.
+
+The invitation URL is the **dashboard's invitation screen**:
+
+```text
+<api.external_url>/dashboard#/invite/<id>.<secret>
+```
+
+with the credential in the fragment, which a browser never sends — so neither
+half is in any access log on the way to the page. The screen reads
+`GET /auth/invite/{id}` with the secret in the `X-Crewlet-Invite-Secret` header
+and redeems with `POST /auth/invite/{id}` carrying it in the body. It used to be
+the JSON route itself, which a person clicking it in their mail saw as a JSON
+document with no form.
+
+`POST /iam/invitations` takes `{email, grants, colleague, seat, reason}`.
+`seat` names a seat redeeming the invitation **binds** the person to — by any
+handle the chart answers to it by — and must be a **human** seat nobody is
+bound to: a seat the chart does not hold and an agent's seat are `400`, and one
+somebody holds is `409` naming them. The invitation records the seat's
+identity, so a rename before the redemption binds the same seat.
 
 `POST /iam/bootstrap-code` answers the **file path** and never the value,
 together with the **node** that wrote it — on a fleet the file is on whichever

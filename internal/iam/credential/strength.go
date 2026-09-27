@@ -82,13 +82,23 @@ func buildCommon(raw string) map[string]bool {
 // answered to somebody who has already proved who they are and is choosing a
 // new secret. A generic refusal there is somebody typing variations until one
 // sticks.
-func CheckStrength(password string) error {
-	if n := utf8.RuneCountInString(password); n < iam.MinPasswordChars {
+//
+// # The floor is an ARGUMENT, because a deployment may raise it
+//
+// min is the deployment's own `api.auth.local.min_password_length` (read
+// through internal/config's APILocal.Passwords), and the length refused is the
+// larger of it and [iam.MinPasswordChars]: the engine's floor is a floor under
+// every deployment's, so a caller passing zero, or anything smaller, still gets
+// twelve. It used to take no floor at all — the setting was validated,
+// documented, reported by `/auth/config` as twelve whatever it said, and
+// enforced by nothing, so a company that asked for twenty accepted fifteen.
+func CheckStrength(password string, min int) error {
+	floor := max(min, iam.MinPasswordChars)
+	if n := utf8.RuneCountInString(password); n < floor {
 		return fmt.Errorf("%w: it is %d characters and the minimum is %d. "+
 			"There are no other rules — no required digit, no required symbol "+
 			"— because length is the only one that makes a password harder to "+
-			"guess without making it harder to remember", ErrWeak, n,
-			iam.MinPasswordChars)
+			"guess without making it harder to remember", ErrWeak, n, floor)
 	}
 	if common[fold(password)] {
 		return fmt.Errorf("%w: it is one of the patterns people reach for when "+

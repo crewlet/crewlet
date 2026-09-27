@@ -195,3 +195,7 @@ type quietAudit struct{}
 
 func (quietAudit) Emit(context.Context, events.Payload)       {}
 func (quietAudit) Failed(context.Context, authevents.Failure) {}
+func (quietAudit) EmitOnce(context.Context, authevents.OnceClass, string,
+	time.Duration, events.Payload) bool {
+	return true
+}

@@ -60,10 +60,11 @@ func catalogue() []events.Payload {
 		// webhook.go
 		RawWebhook{},
 		// auth.go
-		IAMSessionStarted{}, IAMSessionEnded{}, IAMSessionReuseDetected{},
+		IAMSessionStarted{}, IAMSessionEnded{},
 		IAMLoginFailures{}, IAMStepUpCompleted{}, IAMCredentialMinted{},
 		IAMCredentialRevoked{}, IAMGrantsChanged{}, IAMTokenFirstUse{},
-		IAMTokenOverreach{}, IAMRecoveryCodeUsed{}, IAMMFAReset{},
+		IAMTokenOverreach{}, IAMRecoveryCodeUsed{}, IAMSecondFactorThrottled{},
+		IAMMFAReset{},
 		IAMIdentityLinked{}, IAMIdentityUnlinked{},
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 	}
@@ -102,9 +103,9 @@ var wireTypes = []string{
 	"iam_login_failures",
 	"iam_mfa_reset",
 	"iam_recovery_code_used",
+	"iam_second_factor_throttled",
 	"iam_session_ended",
 	"iam_session_generation_bumped",
-	"iam_session_reuse_detected",
 	"iam_session_started",
 	"iam_stepup_completed",
 	"iam_token_first_use",
@@ -345,7 +346,6 @@ var wireTags = map[string][]string{
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers"},
 	"iam_session_started":             {"acr", "expires_at", "lineage", "login", "method", "person", "remote", "second_factor"},
 	"iam_session_ended":               {"by", "lineage", "operator_id", "person", "reason"},
-	"iam_session_reuse_detected":      {"lineage", "person", "remote", "rotation"},
 	"iam_login_failures":              {"attempts", "client", "clients", "methods", "minute", "people", "subjects", "throttled"},
 	"iam_stepup_completed":            {"lineage", "login", "person", "remote", "replaces", "second_factor"},
 	"iam_credential_minted":           {"by", "colleague", "credential", "expires_at", "grants", "kind", "operator_id", "owner", "reason"},
@@ -354,6 +354,7 @@ var wireTags = map[string][]string{
 	"iam_token_first_use":             {"every_use", "remote", "route", "token"},
 	"iam_token_overreach":             {"every_use", "remote", "route", "status", "token"},
 	"iam_recovery_code_used":          {"login", "person", "remaining", "remote"},
+	"iam_second_factor_throttled":     {"login", "person", "remote"},
 	"iam_mfa_reset":                   {"by", "operator_id", "person", "reason"},
 	"iam_identity_linked":             {"by", "issuer", "operator_id", "person", "via"},
 	"iam_identity_unlinked":           {"by", "issuer", "operator_id", "person", "reason"},
@@ -782,7 +783,7 @@ func (f *filler) fill(v reflect.Value, name string) {
 		// trip prove the tag rather than prove that two empty slices match.
 		v.SetUint(uint64(f.next()))
 	case reflect.Uint, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		// A counter that can never be negative — a rotation index, a
+		// A counter that can never be negative — a revocation epoch, a
 		// session generation — is unsigned on the wire as it is in the
 		// engine, and an unhandled kind here panics the whole suite rather
 		// than naming the payload.

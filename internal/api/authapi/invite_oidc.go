@@ -52,6 +52,16 @@ import (
 // it stands when the person comes back — ten minutes is long enough for the
 // link to be spent by somebody else — and the invitation it decides about is
 // the one SEALED into the flight, never one the way back could name.
+//
+// THE LINK'S SECRET TRAVELS SEALED WITH IT. The start is handed the secret in
+// the form beside the login and checks it before sending anybody anywhere; the
+// flight carries it under the fleet keyring ([oidc.Flight.InviteSecret]), and
+// the callback presents it again — to the same check, and to the enrolment's
+// own record, which asks it once more where the grants land. A flight could
+// only have been minted by a start that held the secret, so this is the same
+// proof carried across the round trip rather than a second one, and it is what
+// lets the record hold every redemption to one rule whichever proof finishes
+// it.
 
 // providerRedemption is the path an invitation's page posts to, beneath the
 // invitation's own: `POST /auth/invite/{id}/provider`.
@@ -87,23 +97,21 @@ const formEncoding = "application/x-www-form-urlencoded"
 //
 // A FORM, encoded as a browser encodes one, rather than JSON: the answer is a
 // redirect to the provider, which only a top-level navigation follows. Its
-// fields are `login`, the login the person chose (the page's proposal when
-// absent), and `return_to`, where to land.
+// fields are `secret`, the half of the link after the id (REQUIRED), `login`,
+// the login the person chose (the page's proposal when absent), and
+// `return_to`, where to land.
 //
-// ADMITTED PER SOURCE BEFORE THE INVITATION IS READ, like the invitation's
-// own routes: it reads the same row, and a lookup ahead of admission is a free
-// walk of ids the others are throttled against.
+// ON NO CURVE, like the invitation's own routes — a link names nobody until
+// it opens: see [Service.uncounted]. The form is read first, because the
+// secret the lookup is checked against is in it.
 func (s *Service) StartProviderRedemption(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
-	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailInvite) {
-		return
-	}
-	held, ok := s.invitation(w, r, arrived, source)
+	adm := s.uncounted(r)
+	form, ok := readForm(w, r)
 	if !ok {
 		return
 	}
-	form, ok := readForm(w, r)
+	secret := form.Get("secret")
+	held, ok := s.presentedInvitation(w, r, adm, r.PathValue("id"), secret)
 	if !ok {
 		return
 	}
@@ -129,7 +137,7 @@ func (s *Service) StartProviderRedemption(w http.ResponseWriter, r *http.Request
 	}
 	s.launch(w, r, oidc.Flight{
 		Return: returnPath(form.Get("return_to")),
-		Invite: held.ID, Login: login,
+		Invite: held.ID, InviteSecret: secret, Login: login,
 	}, http.StatusSeeOther)
 }
 
@@ -169,10 +177,11 @@ func readForm(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 // redeemThroughProvider finishes a redemption the flight carried, once the ID
 // token has verified.
 func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, attempt authevents.Failure, flight oidc.Flight,
+	adm admission, attempt authevents.Failure, flight oidc.Flight,
 	claims oidc.Claims, refresh string, provedAt time.Time) {
 
-	held, ok := s.invitationByID(w, r, arrived, attempt.Client, flight.Invite)
+	held, ok := s.presentedInvitation(w, r, adm, flight.Invite,
+		flight.InviteSecret)
 	if !ok {
 		return
 	}
@@ -202,7 +211,7 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 		if holder.ID == person {
 			s.spendInvitation(r, held, person, opID)
 		}
-		s.refuseSpentInvitationID(w, r, arrived, attempt.Client, held.ID)
+		s.refuseInvitation(w, r, adm, held.ID, true)
 		return
 	}
 	email, err := s.openSealed(r, held)
@@ -230,6 +239,7 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 		// invitation's and never the provider's, for the linking rule.
 		Name: claims.Name, Email: email, Login: flight.Login,
 		Grants: held.Grants, Colleague: held.Colleague, Invitation: held.ID,
+		InvitationSecret: flight.InviteSecret, Seat: held.Seat,
 		Link: &iamdomain.Link{Issuer: claims.Issuer, Blind: blind},
 		OpID: opID, Reason: "redeemed an invitation through the identity provider",
 	})
@@ -266,14 +276,14 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 	log.InfoContext(r.Context(), "api_invite_redeemed",
 		"invitation", held.ID, "person", person, "login", flight.Login,
 		"through", "oidc")
-	s.throttle.Flush(r.Context(), attempt.Client)
 	s.completeSignIn(w, r, iamdomain.Sighting{
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: flight.Login, Grants: held.Grants, Colleague: held.Colleague,
+		Seat: held.Seat,
 	}, signIn{
 		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
 		refresh: refresh, groupGrants: s.boot.API.Auth.OIDC.GrantsFor(claims.Groups),
-		provedAt: provedAt,
+		provedAt: &provedAt,
 	})
 }
 

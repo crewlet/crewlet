@@ -22,6 +22,9 @@ func serving() Bootstrap {
 	b := DefaultBootstrap()
 	b.API.Port = DefaultAPIPort
 	b.API.ExternalURL = "https://crewlet.example.com"
+	// The front end that terminates the https above, named — which is what
+	// a sound deployment behind a proxy looks like.
+	b.API.TrustedProxies = []string{"10.0.0.0/8"}
 	b.API.Auth.MaxGrants = iam.AllGrants
 	b.API.Auth.Tokens = []APIToken{{
 		ID: "founder", Token: strings.Repeat("k", 32),
@@ -606,18 +609,6 @@ func TestTheSessionWindowsRefuseAnOrderNobodyMeant(t *testing.T) {
 	b.API.Auth.Session = APISession{StepUpRaw: "15m", StepUpSensitiveRaw: "1h"}
 	refuses(t, b, "longer than `step_up`")
 
-	// A ROTATION WINDOW LONGER THAN THE SESSION means no session ever
-	// reaches its second window and the rotation buys nothing.
-	b = serving()
-	b.API.Auth.Session = APISession{AbsoluteRaw: "2h", RotateAfterRaw: "24h"}
-	refuses(t, b, "longer than `absolute`")
-
-	// THE ROTATION FLOOR IS ARITHMETIC. Below it an ordinary NTP spread
-	// reaches the reuse arm, which ends every session a person holds.
-	b = serving()
-	b.API.Auth.Session = APISession{RotateAfterRaw: "1m"}
-	refuses(t, b, "rotate_after")
-
 	b = serving()
 	b.API.Auth.Session = APISession{AbsoluteRaw: "1000h"}
 	refuses(t, b, "absolute")
@@ -637,7 +628,6 @@ func TestTheSessionDefaultsApplyToAnUnsetBlock(t *testing.T) {
 	}
 	for name, pair := range map[string][2]any{
 		"absolute":          {s.Absolute(), DefaultSessionAbsolute},
-		"rotate_after":      {s.RotateAfter(), DefaultSessionRotateAfter},
 		"step_up":           {s.StepUp(), DefaultSessionStepUp},
 		"step_up_sensitive": {s.StepUpSensitive(), DefaultSessionStepUpSensitive},
 	} {
@@ -775,6 +765,12 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 		b.API.ExternalURL = "http://crewlet.example.com"
 		named(t, b, "api.external_url")
 	})
+	t.Run("https behind nothing trusted", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.TrustedProxies = nil
+		named(t, b, "api.trusted_proxies")
+	})
 	t.Run("an oidc backend with no refresh token", func(t *testing.T) {
 		t.Parallel()
 		b := serving()
@@ -910,12 +906,19 @@ func TestASoundApiPostureWarnsAboutNothing(t *testing.T) {
 // bind.
 func TestANodeServingNoApiWarnsAboutNoneOfIt(t *testing.T) {
 	t.Parallel()
-	b := DefaultBootstrap()
-	b.API.ExternalURL = "http://crewlet.example.com"
-	b.API.Auth.Local = &APILocal{TOTP: iam.SecondFactorOptional, AcceptInsecure: true}
-	for _, w := range b.Warnings() {
-		if strings.HasPrefix(w.Path, "api.") {
-			t.Errorf("a node binding no port warned about its API: %s", w.Path)
+	// Plain http off loopback, and https with nothing trusted: each is a
+	// warning on a node that serves.
+	for _, external := range []string{
+		"http://crewlet.example.com", "https://crewlet.example.com",
+	} {
+		b := DefaultBootstrap()
+		b.API.ExternalURL = external
+		b.API.Auth.Local = &APILocal{TOTP: iam.SecondFactorOptional, AcceptInsecure: true}
+		for _, w := range b.Warnings() {
+			if strings.HasPrefix(w.Path, "api.") {
+				t.Errorf("a node binding no port, reached at %s, warned about "+
+					"its API: %s", external, w.Path)
+			}
 		}
 	}
 }

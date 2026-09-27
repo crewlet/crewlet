@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -34,8 +35,14 @@ const Prefix = "/auth/"
 // deployment nobody can enter: the posture read, the sign-in, the bootstrap
 // and the OIDC pair — and the invitation's own three, its view, its
 // redemption and its redemption through the provider, because holding the
-// link is the credential. Every one is admitted per SOURCE by the throttle
-// and every one is origin-checked like any other state change.
+// link is the credential. The sign-in meets the throttle's curve, keyed on
+// the login as TYPED from the caller's source; the rest present a credential
+// that names nobody and meet no curve ([Service.uncounted]). And the two
+// sign-outs of THIS session, because a sign-out clears the cookie whatever
+// this node can read — guarded, a node that could not read its identity
+// estate answered them 503 before they ran — and each verifies every bearer
+// the browser holds for itself ([Service.signOut]). Every one is
+// origin-checked like any other state change.
 //
 // THE REST NEED A SESSION, and they are guarded by the same middleware every
 // other route is — reading what it resolved rather than validating a second
@@ -44,6 +51,11 @@ const Prefix = "/auth/"
 // [auth.Mux] RATHER THAN *http.ServeMux, and it is the package that owns the
 // exemption list that defines it — see there for why a mux this surface can
 // name is what makes the gate below possible at all.
+//
+// NOTHING HERE MAY BE STORED, and no route marks itself so: the guard marks
+// every answer under /auth `no-store` before anything beneath it writes —
+// its own refusals and the origin check's included — which a wrapper around
+// these routes could not reach. See [auth.Guard.Middleware].
 func (s *Service) Routes(mux auth.Mux) {
 	// Unguarded.
 	mux.HandleFunc("GET "+auth.PathAuthConfig, s.Config)
@@ -56,6 +68,7 @@ func (s *Service) Routes(mux auth.Mux) {
 	// account created for somebody who never saw it.
 	mux.HandleFunc("GET "+auth.AuthInvitePrefix+"{id}", s.ViewInvite)
 	mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}", s.RedeemInvite)
+	mux.HandleFunc("POST "+auth.PathAuthLogout, s.Logout)
 	if s.provider != nil {
 		// ABSENT RATHER THAN ERRORING on a deployment with no provider,
 		// which is the honest shape: a 404 says this company does not
@@ -68,15 +81,20 @@ func (s *Service) Routes(mux auth.Mux) {
 		// can refuse another site starting it.
 		mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}"+providerRedemption,
 			s.StartProviderRedemption)
+		// SIGNING OUT OF THE PROVIDER TOO, where there is one. It shares
+		// its shape with `/auth/logout/{lineage}` below, which would
+		// otherwise read it as a lineage named `oidc`: the mux prefers
+		// the literal segment whatever the order, so the two can sit in
+		// different groups, unguarded here and guarded there.
+		mux.HandleFunc("POST "+auth.PathAuthLogoutProvider, s.LogoutProvider)
 	}
 
 	// Guarded.
-	mux.HandleFunc("GET /auth/session", s.Session)
+	mux.HandleFunc("GET "+auth.PathAuthSession, s.Session)
 	mux.HandleFunc("POST /auth/token", s.Token)
-	mux.HandleFunc("POST /auth/step-up", s.StepUp)
-	mux.HandleFunc("POST /auth/totp", s.EnrolTOTP)
+	mux.HandleFunc("POST "+auth.PathAuthStepUp, s.StepUp)
+	mux.HandleFunc("POST "+auth.PathAuthTOTP, s.EnrolTOTP)
 	mux.HandleFunc("POST /auth/totp/recovery", s.RegenerateRecovery)
-	mux.HandleFunc("POST /auth/logout", s.Logout)
 	mux.HandleFunc("POST /auth/logout/all", s.LogoutEverywhere)
 	// THE THIRD LOGOUT: one NAMED session, which is what a person uses to
 	// end the one they left open somewhere else without ending the one
@@ -112,7 +130,10 @@ const tokenLifetime = time.Hour
 // bearer gets, so the grants are the entry's cut to this node's ceiling on
 // each request, a token the identity directory binds to a seat acts as that
 // seat, and removing the entry from the configuration ends the session on the
-// next request. It used to be minted for the token's derived principal id,
+// next request. The cookie is BOUND TO THE VALUE exchanged, so putting a new
+// value under the same id ends it too — a session is the token it was
+// exchanged from, and answering a leak by rotating the value must end what the
+// leaked value opened. It used to be minted for the token's derived principal id,
 // which no directory row holds: once the start record applied every request
 // answered 401 and cleared the cookie, and before that it served a grantless
 // nobody — and a bound token was refused the exchange outright.
@@ -183,6 +204,11 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
 		AbsoluteExpiresAt: expires,
+		// BOUND TO THE VALUE PRESENTED, never to the id alone: a new
+		// value under this id is a new token, and it ends this session
+		// on every node's next request. See internal/iam/session's
+		// credential.go.
+		Credential: session.CredentialOf(entry.Token),
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_token_exchange_mint_failed", "error", err)
@@ -200,6 +226,9 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, loginResponse{
 		Person: principal.ID.String(), Login: principal.Login,
 		Seat: principal.Seat, ExpiresAt: expires, Position: at.String(),
+		// A TOKEN'S SESSION IS NEVER RESTRICTED: presenting the token
+		// was the whole proof, and it holds no second factor to enrol.
+		Status: statusSignedIn,
 	})
 }
 
@@ -236,11 +265,7 @@ type stepUpRequest struct {
 // person the authority they stepped up to use — or, copied onto a fresh
 // deadline, let group-derived authority outlive the provider's assertion.
 func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailPassword) {
-		return
-	}
 	principal, resolution := iam.From(r.Context())
 	if resolution != iam.Resolved {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -272,6 +297,15 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
+	// THE CURVE ON WHO THEY SIGNED IN AS, which is the subject here: the
+	// same pair a password sign-in by that login climbs, so a stolen cookie
+	// is not a way round the curve on the password it guards.
+	adm, ok := s.admit(w, r, credential.Attempt{
+		Source: source, Subject: principal.Login}, types.FailPassword)
+	if !ok {
+		return
+	}
+	defer adm.ticket.Release()
 
 	held, err := s.directory.PersonByLogin(r.Context(), principal.Login)
 	if err != nil {
@@ -286,27 +320,40 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		Person: held.ID,
 	}
 	if held.ID == "" || !stageAdmits(held.Stage) {
-		s.refuseSignIn(w, r, arrived, attempt, "step-up subject not active")
+		s.refuseSignIn(w, r, adm, attempt, "step-up subject not active")
 		return
 	}
 	verifier, found := firstCredential(held.Credentials, iamdomain.MethodPassword)
 	if !found {
-		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, attempt, "step-up: no password credential")
+		if s.decoy(w, r, adm, in.Password) {
+			s.refuseSignIn(w, r, adm, attempt, "step-up: no password credential")
+		}
 		return
 	}
-	if ok, _ := s.hasher.Verify(verifier.Verifier, in.Password); !ok {
-		s.refuseSignIn(w, r, arrived, attempt, "step-up: password mismatch")
+	proved, stale, err := s.hasher.Verify(r.Context(), adm.source,
+		verifier.Verifier, in.Password)
+	if err != nil {
+		abandoned(w, r, adm.source, err)
+		return
+	}
+	if !proved {
+		s.refuseSignIn(w, r, adm, attempt, "step-up: password mismatch")
 		return
 	}
 	var factor factorUse
 	if holdsSecondFactor(held) {
 		attempt.Method = types.FailSecondFactor
-		var proved bool
-		if factor, proved = s.proveSecondFactor(w, r, arrived, attempt, held,
-			in.Code); !proved {
+		var factored bool
+		if factor, factored = s.proveSecondFactor(w, r, adm, attempt, held,
+			in.Code); !factored {
 			return
 		}
+	}
+	// A STEP-UP PRESENTS THE PASSWORD TOO, and a person who only ever
+	// confirms on a long-lived session would otherwise keep the old cost
+	// for as long as that session lasts. Deferred, like the sign-in's.
+	if stale {
+		defer s.rehashPassword(r, held.ID, verifier, in.Password)
 	}
 
 	replaced, ok := s.replacedSession(w, r, held)
@@ -317,7 +364,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	// fresh reauth instant on the row every node reads. A field written
 	// locally would be proof on ONE node, and the surface that asks for it
 	// is reached through whichever node a request lands on.
-	s.throttle.Flush(r.Context(), source)
+	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
 		stepUp:      true,
@@ -346,7 +393,8 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 func (s *Service) replacedSession(w http.ResponseWriter, r *http.Request,
 	held iamdomain.Sighting) (session.Validation, bool) {
 
-	v := s.signer.Validate(r.Context(), s.directoryFor(), session.Presented(r))
+	v := s.signer.Validate(r.Context(), s.directoryFor(),
+		session.Presented(r, s.boot.API.ExternalBase()))
 	switch {
 	case v.Row == session.RowValid && v.Bearer.Person == held.ID:
 		return v, true

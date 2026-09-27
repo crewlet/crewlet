@@ -3,12 +3,10 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -41,7 +39,6 @@ type signedIn struct {
 	lineage uuid.UUID
 	dir     *fakeDirectory
 	chart   *fakeChart
-	ended   *endings
 }
 
 // sessionKeyring is the fleet keyring every signer in this file is built
@@ -57,8 +54,8 @@ func newSignedIn(t *testing.T) *signedIn {
 	t.Helper()
 	at := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
 	signer, err := session.New(session.Options{
-		Material: sessionKeyring(), RotateAfter: time.Hour,
-		Now: func() time.Time { return at },
+		Material: sessionKeyring(),
+		Now:      func() time.Time { return at },
 	})
 	if err != nil {
 		t.Fatalf("build a signer: %v", err)
@@ -88,7 +85,6 @@ func newSignedIn(t *testing.T) *signedIn {
 		chart: &fakeChart{position: 1000, seats: map[string]session.Seat{
 			sessionSeat: {Handle: sessionSeat, Kind: "human", Unit: "platform"},
 		}},
-		ended: &endings{},
 	}
 }
 
@@ -106,7 +102,6 @@ func (s *signedIn) guard(ceiling ...iam.Grant) *auth.Guard {
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
 		External: b.API.ExternalBase(),
-		OnReuse:  s.ended.record,
 		Audit:    newAuditTrail(s.t),
 		Now:      func() time.Time { return s.at },
 	})
@@ -222,39 +217,6 @@ func (c *fakeChart) Position(context.Context) (uint64, time.Duration, error) {
 		return 0, 0, c.err
 	}
 	return c.position, c.lag, nil
-}
-
-type endings struct {
-	mu      sync.Mutex
-	persons []string
-	epochs  []uint64
-
-	// failing is how many of the next revocations answer that they did
-	// not land, which is how a case stands a revocation up that failed or
-	// came back unknown.
-	failing int
-	asked   int
-}
-
-// record is the session arm's OnReuse: every call is ASKED, and one is
-// recorded as a revocation only when it lands.
-func (e *endings) record(_ context.Context, person string, epoch uint64) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.asked++
-	if e.failing > 0 {
-		e.failing--
-		return errors.New("the revocation's outcome is unknown")
-	}
-	e.persons = append(e.persons, person)
-	e.epochs = append(e.epochs, epoch)
-	return nil
-}
-
-func (e *endings) all() []string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return append([]string(nil), e.persons...)
 }
 
 // --- what a cookie buys ------------------------------------------------- //
@@ -709,16 +671,21 @@ func TestAChartPastTheStallGraceIsUnavailable(t *testing.T) {
 
 // SIGNING OUT STILL WORKS WHEN THE SEAT IS GONE.
 //
-// The refusal above is written only for a GUARDED route. `/auth/logout` is
-// how somebody ends the session they are holding, and refusing it would
-// leave a leaver with a live bearer and no way to end it.
+// The seat refusal is written for every guarded route but the `/auth/`
+// surface, whose subject is a person's own credential. Signing out everywhere,
+// reading who you are, stepping up and enrolling a second factor are guarded
+// routes there, and refusing them would leave a leaver with a live bearer and
+// no way to end it. The rows name the routes the surface REGISTERS — they
+// named `/auth/logout-all` and `/auth/totp/enrol`, which nothing serves, and
+// passed only because the spared surface is a prefix. `/auth/logout` itself
+// is unguarded and reaches its handler whatever the guard could say.
 func TestASeatRefusalDoesNotReachTheSignOutRoute(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
 	delete(rig.chart.seats, sessionSeat)
 	g := rig.guard()
-	for _, path := range []string{"/auth/logout", "/auth/logout-all",
-		"/auth/session", "/auth/step-up", "/auth/totp/enrol"} {
+	for _, path := range []string{auth.PathAuthLogout, "/auth/logout/all",
+		auth.PathAuthSession, auth.PathAuthStepUp, auth.PathAuthTOTP} {
 
 		got := rig.call(g, http.MethodPost, path, rig.withCookie)
 		if got.status != http.StatusOK {
@@ -734,47 +701,25 @@ func TestASeatRefusalDoesNotReachTheSignOutRoute(t *testing.T) {
 	}
 }
 
-// A REPLAYED COOKIE ENDS EVERY SESSION OF THAT PERSON.
+// A COOKIE FROM A NODE WHOSE CLOCK RAN AHEAD IS SERVED.
 //
-// The one thing nobody can establish from a replay is which of the two
-// holders is the person, so the epoch is bumped rather than the lineage
-// ended: ending only the lineage would leave whoever captured it holding
-// whatever they rotate to next.
-func TestAReplayedCookieAsksForThePersonsEpochToBeBumped(t *testing.T) {
+// The bearer used to carry a rotation index derived from the minting node's
+// clock, and one ahead of the validating node's clock past a two-minute
+// overlap was called a replay: the request was refused and the person's
+// revocation epoch bumped, which signed them out everywhere. The index was
+// signed, so only a node holding the keyring could have written it — the arm
+// fired on an NTP fault and on nothing else. Mutation: refuse a cookie minted
+// four hours ahead and this is a 401.
+func TestACookieFromANodeWhoseClockRanAheadIsServed(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
-	// A BEARER FROM THE FUTURE. Its rotation index is derived from the
-	// MINTING clock, so one signed four windows ahead of the validating
-	// node's clock carries an index this fleet could not have issued — the
-	// one positive evidence of theft rotate.go recognises, since a lagging
-	// index is an idle session and a captured cookie in identical bytes.
-	lineage := lineageAt(t, rig.at)
-	future, err := session.New(session.Options{
-		Material:    sessionKeyring(),
-		RotateAfter: time.Hour,
-		Now:         func() time.Time { return rig.at.Add(4 * time.Hour) },
-	})
-	if err != nil {
-		t.Fatalf("build a future-clocked signer: %v", err)
-	}
-	ahead, err := future.Mint(session.Mint{
-		Lineage:           lineage,
-		Person:            sessionPerson,
-		Epoch:             3,
-		Generation:        1,
-		StartPosition:     sessionStart,
-		AbsoluteExpiresAt: rig.at.Add(4 * time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
-	rig.cookie = ahead
+	rig.cookie = rig.aheadOfTheClock(t)
 	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
-	if got.status != http.StatusUnauthorized {
-		t.Fatalf("status %d, want 401 (body %v)", got.status, got.body)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %v)", got.status, got.body)
 	}
-	if ended := rig.ended.all(); len(ended) != 1 || ended[0] != sessionPerson {
-		t.Errorf("ended %v, want exactly %q", ended, sessionPerson)
+	if got.principal.Login != "sarah.chen" {
+		t.Errorf("login %q, want sarah.chen", got.principal.Login)
 	}
 }
 
@@ -805,4 +750,49 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// ON HTTPS A SESSION AUTHENTICATES ONLY UNDER ITS `__Host-` NAME.
+//
+// A browser sets `__Host-crewlet_session` only from this exact host;
+// `crewlet_session` any sibling host can write with a Domain covering this
+// one. The guard read both, so a sibling that planted ITS OWN valid session
+// under the bare name signed a visitor who held none in as that session's
+// person, and everything they then did landed in an account the sibling's
+// author reads. The same bearer — signed, live, one the rows hold — is
+// resolved under the issued name and is anonymous under the other.
+//
+// Mutation: read the bare name too and the planted cookie resolves.
+func TestOnHTTPSASessionAuthenticatesOnlyUnderItsPrefixedName(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	b := config.DefaultBootstrap()
+	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token"}}
+	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.ExternalURL = "https://crewlet.example.com"
+	arm, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: rig.signer, Directory: rig.dir, Applier: rig.dir, Chart: rig.chart,
+		External: b.API.ExternalBase(), Audit: newAuditTrail(t),
+		Now: func() time.Time { return rig.at },
+	})
+	if err != nil {
+		t.Fatalf("build the session arm: %v", err)
+	}
+	g := auth.New(&b).WithSessions(arm)
+
+	issued := rig.call(g, http.MethodGet, "/agents", func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: rig.cookie})
+	})
+	if issued.how != iam.Resolved {
+		t.Fatalf("the bearer under the issued name resolved as %v, want resolved; "+
+			"the planted case below would say nothing", issued.how)
+	}
+	planted := rig.call(g, http.MethodGet, "/agents", func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: rig.cookie})
+	})
+	if planted.how == iam.Resolved || planted.status == http.StatusOK {
+		t.Errorf("the same bearer under the bare name answered %d as %v: a "+
+			"sibling host that plants its own session signs a visitor in as "+
+			"its author", planted.status, planted.how)
+	}
 }

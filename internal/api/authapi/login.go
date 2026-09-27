@@ -2,11 +2,14 @@ package authapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -77,17 +81,41 @@ type loginResponse struct {
 	// needs it, because the bearer carries the same number and every node
 	// validates against its own applier.
 	Position string `json:"position"`
+
+	// Status is what the session just opened may do: everything its
+	// grants allow, or — on a deployment that requires a second factor
+	// the person does not hold — nothing but enrol one.
+	//
+	// IN THE ANSWER, and not only in the refusal every other route would
+	// give, because a client has to render the enrolment rather than
+	// discover it: a sign-in that succeeded and then answered 403 on the
+	// first screen reads as a broken deployment.
+	Status sessionStatus `json:"status"`
 }
+
+// sessionStatus is what a session may do, as a sign-in and `GET /auth/session`
+// report it.
+type sessionStatus string
+
+const (
+	// statusSignedIn is an ordinary session.
+	statusSignedIn sessionStatus = "signed_in"
+
+	// statusEnrolmentRequired is a session that may only enrol a second
+	// factor — the code the guard refuses every other route with, so a
+	// client matches one string wherever it meets it.
+	statusEnrolmentRequired = sessionStatus(httpjson.CodeSecondFactorEnrolmentRequired)
+)
 
 // Login signs somebody in with what they know.
 //
 // # UNGUARDED, and what stands in for the guard
 //
-// A login cannot require a login. What bounds it instead is the per-SOURCE
-// throttle, run before anything is looked up, and the pad that makes every
-// refusal leave at one deadline. It is origin-checked like every other state
-// change — being exempt from the credential guard is not being exempt from the
-// cross-site rule.
+// A login cannot require a login. What bounds it instead is the throttle's
+// curve — on the source and on the login as it was typed, run before anything
+// is looked up — and the pad that makes every refusal leave at one deadline.
+// It is origin-checked like every other state change — being exempt from the
+// credential guard is not being exempt from the cross-site rule.
 //
 // # One refusal, and why the shape is the whole of it
 //
@@ -97,11 +125,7 @@ type loginResponse struct {
 // arms are distinguishable only in this node's log. See the package doc for
 // why both halves are needed.
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailPassword) {
-		return
-	}
 	if s.backend() != config.AuthBackendLocal {
 		// A DEPLOYMENT THAT SIGNS IN THROUGH A PROVIDER SERVES NO
 		// PASSWORD ROUTE, and it says so rather than refusing as though
@@ -123,10 +147,18 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in loginRequest
-	if err := json.Unmarshal(body, &in); err != nil {
+	if err = json.Unmarshal(body, &in); err != nil {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
+	// THE CURVE, ON WHAT WAS TYPED — before it is looked up, so a login
+	// nobody holds climbs it exactly as a real one does.
+	adm, ok := s.admit(w, r, credential.Attempt{
+		Source: source, Subject: in.Login}, types.FailPassword)
+	if !ok {
+		return
+	}
+	defer adm.ticket.Release()
 
 	held, method := s.resolve(r.Context(), in.Login)
 	// THE ATTEMPT AS THE AUDIT TRAIL COUNTS IT: the value typed goes in as
@@ -139,12 +171,13 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	// THE DECOY RUNS ON THE MISS, and it is not optional. Without it the
 	// no-such-login arm returns in microseconds and the wrong-password arm
-	// pays an argon2 verify — a difference a stopwatch reads as a roster.
-	// internal/iam/credential owns the cost; this is the branch that
-	// spends it.
+	// pays an argon2 verify in its source's turn — a difference a stopwatch
+	// reads as a roster. internal/iam/credential owns the cost; this is the
+	// branch that spends it.
 	if held.ID == "" {
-		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, attempt, "no such "+method)
+		if s.decoy(w, r, adm, in.Password) {
+			s.refuseSignIn(w, r, adm, attempt, "no such "+method)
+		}
 		return
 	}
 	if !stageAdmits(held.Stage) {
@@ -152,8 +185,9 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		// suspension measurable: an attacker with a known-good password
 		// would learn from the timing alone which accounts had been
 		// turned off, which is the roster again in a different shape.
-		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, attempt, "stage "+string(held.Stage))
+		if s.decoy(w, r, adm, in.Password) {
+			s.refuseSignIn(w, r, adm, attempt, "stage "+string(held.Stage))
+		}
 		return
 	}
 
@@ -162,13 +196,19 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		// A PERSON WITH NO PASSWORD — enrolled through a provider, or
 		// invited and not yet redeemed. The decoy again, for the same
 		// reason the stage arm pays it.
-		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, attempt, "no password credential")
+		if s.decoy(w, r, adm, in.Password) {
+			s.refuseSignIn(w, r, adm, attempt, "no password credential")
+		}
 		return
 	}
-	ok, _ := s.hasher.Verify(verifier.Verifier, in.Password)
-	if !ok {
-		s.refuseSignIn(w, r, arrived, attempt, "password mismatch")
+	proved, stale, err := s.hasher.Verify(r.Context(), adm.source,
+		verifier.Verifier, in.Password)
+	if err != nil {
+		abandoned(w, r, adm.source, err)
+		return
+	}
+	if !proved {
+		s.refuseSignIn(w, r, adm, attempt, "password mismatch")
 		return
 	}
 
@@ -178,23 +218,222 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	var factor factorUse
 	if holdsSecondFactor(held) {
 		if in.Code == "" {
-			s.throttle.Pad(r.Context(), arrived)
+			// NEITHER A SUCCESS NOR A FAILURE, and the ticket is released
+			// as one: the password proved itself and the sign-in is not
+			// complete. Counted as a success it would clear the pair, and
+			// somebody holding the password would clear their curve
+			// between every guess at the code.
+			s.throttle.Pad(r.Context(), adm.at)
 			httpjson.Fail(w, http.StatusUnauthorized,
 				httpjson.CodeSecondFactorRequired)
 			return
 		}
 		attempt.Method = types.FailSecondFactor
-		var proved bool
-		if factor, proved = s.proveSecondFactor(w, r, arrived, attempt, held,
-			in.Code); !proved {
+		var factored bool
+		if factor, factored = s.proveSecondFactor(w, r, adm, attempt, held,
+			in.Code); !factored {
 			return
 		}
 	}
+	// THE SIGN-IN HAS SUCCEEDED, so this is the one instant a verifier
+	// written under an older cost can be rewritten: the plaintext is in hand.
+	// DEFERRED, so it starts once this has answered — see
+	// [Service.rehashPassword].
+	if stale {
+		defer s.rehashPassword(r, held.ID, verifier, in.Password)
+	}
 
-	s.throttle.Flush(r.Context(), source)
+	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
 	})
+}
+
+// rehashPassword rewrites a password verifier written under a weaker cost at
+// this hasher's current one, for a sign-in that has just proved the password —
+// in the BACKGROUND, owned by this surface, once the answer is on its way.
+//
+// # The only instant a cost raise can be carried out
+//
+// The plaintext is not stored, so a stronger digest can be computed only when
+// somebody presents their password — which is why the parameters ride in the
+// stored verifier and [credential.Hasher.Verify] reports one that is stale. It
+// reported it to nobody: every sign-in discarded the flag, so raising the cost
+// changed new passwords and left every existing verifier at the old one for
+// the life of the deployment.
+//
+// STALE IS WEAKER and never merely different, which is what makes acting on
+// the flag safe in a rolling upgrade: a node still on an older build meets the
+// verifiers a newer one wrote at a raised cost, and rewriting those at this
+// build's cost would be a downgrade, undone by the next sign-in on an upgraded
+// node and redone by the next here. Verify leaves them unreported.
+//
+// # Never on the request, and never at a sign-in's expense
+//
+// The person is waiting for a session, not for a stronger digest, so nothing
+// they wait on includes it: callers DEFER this, so it starts once the handler
+// has answered, whatever it answered. It was inline once, given the time left
+// before the refusal pad's deadline — and a 64 MiB derivation after a 64 MiB
+// verification had all but used that up, so the write that followed ran on an
+// expired context, failed, and the verifier was never rewritten on any real
+// hardware while every such sign-in paid for a second derivation.
+//
+// SO IT HAS BUDGETS OF ITS OWN, and neither is the pad: the derivation takes a
+// slot of the cap only if one is free at once ([credential.Hasher.Rehash]) —
+// a rewrite nobody waits on must not queue ahead of the sign-ins behind it —
+// and the write has [rehashBudget]. One rewrite per person runs at a time,
+// because a person signing in twice while the first is in flight would pay a
+// second derivation the operation id would then discard. Anything short of a
+// confirmed write is LOGGED and changes nothing: the old verifier still
+// verifies at its own cost, and the next sign-in asks again.
+//
+// # Idempotent, and never over somebody else's change
+//
+// The operation id is derived from the person and the verifier being REPLACED,
+// so every attempt to retire one verifier is one operation, whichever node
+// makes it. And the swap is decided inside the write's own snapshot: only the
+// credential that was verified, still holding the verifier that was verified,
+// is rewritten — a password changed in between keeps its change — and it keeps
+// its id, because a re-hash is the same credential at a different cost.
+func (s *Service) rehashPassword(r *http.Request, person string,
+	stale iamdomain.Credential, password string) {
+
+	// WITHOUT CANCEL, because the request is answered and its context about
+	// to end — a rewrite that inherited it would do nothing at all — and
+	// bounded, because what it waits on is a broker that may not answer.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()),
+		rehashBudget)
+	if !s.rehashes.start(person, cancel) {
+		cancel()
+		log.DebugContext(ctx, "api_password_rehash_skipped", "person", person,
+			"reason", "a rewrite for this person is in flight, or this "+
+				"surface is stopping")
+		return
+	}
+	go func() {
+		defer s.rehashes.finish(person)
+		s.rewriteVerifier(ctx, person, stale, password)
+	}()
+}
+
+// rehashBudget bounds a background rewrite's write.
+//
+// THE PUBLISHER'S OWN RESOLVE BUDGET ([statelog.DefaultResolveBudget]): the
+// write waits that long for this node's applier and then answers `pending`,
+// which is durable, so bounding the whole write at it caps only what the
+// publisher does not bound itself — an append the broker never acknowledges —
+// without cutting short a write that would have landed. A second number here
+// would be a second opinion about how long an identity write takes.
+const rehashBudget = statelog.DefaultResolveBudget
+
+// rewriteVerifier is one background rewrite: derive at the current cost, and
+// swap the verifier in the write's own snapshot.
+func (s *Service) rewriteVerifier(ctx context.Context, person string,
+	stale iamdomain.Credential, password string) {
+
+	fresh, err := s.hasher.Rehash(password)
+	if err != nil {
+		log.InfoContext(ctx, "api_password_rehash_skipped",
+			"person", person, "error", err)
+		return
+	}
+	digest := sha256.Sum256([]byte(stale.Verifier))
+	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
+		PersonID: person,
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
+			out := slices.Clone(held)
+			for i, c := range out {
+				if c.ID == stale.ID && c.Method == iamdomain.MethodPassword &&
+					c.Verifier == stale.Verifier {
+					out[i].Verifier = fresh
+				}
+			}
+			return out, nil
+		},
+		OpID:   "rehash:" + person + ":" + hex.EncodeToString(digest[:8]),
+		Reason: "re-hashed the password at the current cost",
+	})
+	if err != nil || !landed(result) {
+		log.WarnContext(ctx, "api_password_rehash_unrecorded",
+			"person", person, "error", errText(err), "op_id", result.OpID,
+			"outcome", string(result.Outcome))
+		return
+	}
+	log.InfoContext(ctx, "api_password_rehashed", "person", person,
+		"position", result.Position.String())
+}
+
+// rehashes is the background rewrites a surface owns: which person each is
+// for, how to cancel it, and a way to wait for them all.
+//
+// ITS LIFETIME IS THE SURFACE'S, and [Service.Stop] ends it — none starts
+// after, those in flight are waited for as long as the stop allows and then
+// cancelled — because a goroutine nobody can stop would go on writing to a
+// broker the engine is tearing down.
+type rehashes struct {
+	mu       sync.Mutex
+	stopped  bool
+	inFlight map[string]context.CancelFunc
+	running  sync.WaitGroup
+}
+
+// start claims the one rewrite a person may have in flight, reporting false
+// when theirs is already running or the surface is stopping.
+func (h *rehashes) start(person string, cancel context.CancelFunc) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stopped {
+		return false
+	}
+	if _, running := h.inFlight[person]; running {
+		return false
+	}
+	if h.inFlight == nil {
+		h.inFlight = map[string]context.CancelFunc{}
+	}
+	h.inFlight[person] = cancel
+	h.running.Add(1)
+	return true
+}
+
+// finish releases a person's rewrite once it has returned.
+func (h *rehashes) finish(person string) {
+	h.mu.Lock()
+	cancel := h.inFlight[person]
+	delete(h.inFlight, person)
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	h.running.Done()
+}
+
+// stop refuses every rewrite from now on, waits for those in flight until ctx
+// ends, then cancels whatever is left and waits for it to return.
+//
+// GRACEFUL AND THEN CUT, which is [http.Server.Shutdown]'s shape and for its
+// reason: a rewrite a moment from landing is worth the moment, and one waiting
+// on a broker that has stopped answering is not worth the shutdown.
+func (h *rehashes) stop(ctx context.Context) {
+	h.mu.Lock()
+	h.stopped = true
+	h.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		h.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	h.mu.Lock()
+	for _, cancel := range h.inFlight {
+		cancel()
+	}
+	h.mu.Unlock()
+	<-done
 }
 
 // resolve finds the person a sign-in names, by login or by address.
@@ -279,18 +518,16 @@ func firstCredential(held []iamdomain.Credential, method iamdomain.CredentialMet
 
 // holdsSecondFactor reports whether this person holds any second factor.
 //
-// HELD RATHER THAN CONFIGURED, and the difference is what makes
-// `second_factor: optional` mean anything: the deployment says whether one may
-// be required, and the PERSON's own credentials say whether one is. A
-// deployment that requires it refuses a person who holds none at enrolment
-// rather than here, which is where somebody can still do something about it.
+// HELD RATHER THAN CONFIGURED: what a sign-in asks for is what the PERSON
+// holds, so somebody holding a factor is always asked for it, whatever the
+// deployment says. A deployment that REQUIRES one does not refuse a person who
+// holds none here — they could never sign in to enrol it — but opens them a
+// session that may do nothing else ([Service.enrolmentOnly]).
+//
+// ONE READING WITH THE ENROLMENT'S, which asks the same of the set a decide
+// read rather than of a sighting ([holdsFactor]).
 func holdsSecondFactor(held iamdomain.Sighting) bool {
-	for _, method := range iamdomain.SecondFactorMethods {
-		if _, ok := firstCredential(held.Credentials, method); ok {
-			return true
-		}
-	}
-	return false
+	return holdsFactor(held.Credentials)
 }
 
 // factorUse is a second factor that checked out, and what spending it takes.
@@ -319,17 +556,45 @@ type factorUse struct {
 // six digits and refused for everybody who had both. Both are evaluated
 // whatever the first answered, so the time taken does not say which one a
 // person holds; the app wins where both would match.
-func (s *Service) checkSecondFactor(held iamdomain.Sighting, code string) (factorUse, bool) {
+//
+// # The app's seed is opened here and nowhere else
+//
+// It is stored SEALED under the person's key and bound to the credential
+// ([iamdomain.Sealer.SealCredential]), and opened only to check a code. A seed
+// that does not open is never a match, and which of two things it is decides
+// the answer: a value that is not this credential's seed — moved, forged, or
+// enrolled in the clear before seeds were sealed — and a key a removal
+// destroyed are refusals like a wrong code, while a key store this node could
+// not read is an ERROR, the unknown arm, because answering an outage as a
+// wrong code would send somebody to re-type a code that was right.
+func (s *Service) checkSecondFactor(ctx context.Context, held iamdomain.Sighting,
+	code string) (factorUse, bool, error) {
+
 	var app, recovery factorUse
 	appOK, recoveryOK := false, false
 	if c, ok := firstCredential(held.Credentials, iamdomain.MethodTOTP); ok {
-		// THE LAST ACCEPTED STEP is what makes a code single-use, and it
-		// is read from the credential rather than kept in memory: the
-		// node that accepts the next code is rarely the node that
-		// accepted the last.
-		step, matched := credential.VerifyTOTP(c.Verifier, code, s.now(), lastStep(c))
-		app = factorUse{factor: types.FactorTOTP, credential: c.ID, step: step}
-		appOK = matched
+		seed, err := s.sealer.OpenCredential(ctx, held.ID, c.ID,
+			iamdomain.FieldTOTP, c.Verifier)
+		switch {
+		case errors.Is(err, secrets.ErrDecrypt):
+			log.ErrorContext(ctx, "api_totp_seed_unopenable",
+				"person", held.ID, "credential", c.ID, "error", err,
+				"hint", "the seed on this credential is not one sealed for it; "+
+					"reset the person's second factor so they enrol again")
+		case errors.Is(err, iamdomain.ErrShredded):
+			log.InfoContext(ctx, "api_totp_seed_shredded",
+				"person", held.ID, "credential", c.ID)
+		case err != nil:
+			return factorUse{}, false, err
+		default:
+			// THE LAST ACCEPTED STEP is what makes a code single-use,
+			// and it is read from the credential rather than kept in
+			// memory: the node that accepts the next code is rarely
+			// the node that accepted the last.
+			step, matched := credential.VerifyTOTP(seed, code, s.now(), lastStep(c))
+			app = factorUse{factor: types.FactorTOTP, credential: c.ID, step: step}
+			appOK = matched
+		}
 	}
 	if c, ok := firstCredential(held.Credentials, iamdomain.MethodRecovery); ok {
 		verifiers := recoveryVerifiers(c)
@@ -341,11 +606,11 @@ func (s *Service) checkSecondFactor(held iamdomain.Sighting, code string) (facto
 	}
 	switch {
 	case appOK:
-		return app, true
+		return app, true, nil
 	case recoveryOK:
-		return recovery, true
+		return recovery, true, nil
 	}
-	return factorUse{}, false
+	return factorUse{}, false, nil
 }
 
 // errFactorSpent reports a second factor that checked out and had been spent
@@ -386,7 +651,7 @@ func (s *Service) spendSecondFactor(ctx context.Context, person string,
 	remaining := use.remaining
 	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
 		PersonID: person,
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			spent = true
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
@@ -411,7 +676,7 @@ func (s *Service) spendSecondFactor(ctx context.Context, person string,
 				}
 				out = append(out, c)
 			}
-			return out
+			return out, nil
 		},
 		OpID:   "second-factor:" + person + ":" + uuid.NewString(),
 		Reason: "spent a " + string(use.factor) + " second factor",
@@ -450,22 +715,63 @@ func withExtra(c iamdomain.Credential, key string, value any) iamdomain.Credenti
 // factor is presented, so the check, the spend and the refusal are decided
 // once. A recovery code spent here is ALSO its own event, because a person
 // down to their last one is one lost phone away from needing an administrator.
+//
+// # On the person's own curve, before the code is looked at
+//
+// The attempt's pair — the login as typed, from its address — is one curve,
+// and a caller holding the password divides it by every address and spelling
+// they have: a /48 of IPv6 is sixty-five thousand fresh pairs, and six digits
+// fall to that in about an hour. So a code is ALSO decided on a curve keyed
+// on the PERSON the login resolved to ([credential.Throttle.AdmitSecondFactor]),
+// shared across the fleet, before it is checked: every address's guesses at
+// one person climb it together, a wait past five seconds is `429` with the
+// time left, a wrong code or a code already spent is a failure on it, and the
+// code that completes the sign-in lifts it. Keyed on the resolved person here
+// and nowhere else, because this is reached only past the password: it tells
+// nobody anything about who exists that the password did not. And a curve
+// that reaches its ceiling is announced ([types.IAMSecondFactorThrottled]),
+// because it means somebody holding this person's password is guessing at
+// their code.
 func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, attempt authevents.Failure, held iamdomain.Sighting,
+	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
 	code string) (factorUse, bool) {
 
-	use, ok := s.checkSecondFactor(held, code)
+	curve, err := s.throttle.AdmitSecondFactor(r.Context(), held.ID)
+	switch {
+	case errors.Is(err, credential.ErrThrottled):
+		throttled := attempt
+		throttled.Throttled = true
+		s.audit.Failed(r.Context(), throttled)
+		httpjson.Throttled(w, credential.RetryAfter(err))
+		return factorUse{}, false
+	case err != nil:
+		abandoned(w, r, adm.source, err)
+		return factorUse{}, false
+	}
+	defer curve.Release()
+
+	use, ok, err := s.checkSecondFactor(r.Context(), held, code)
+	if err != nil {
+		// THE SEED COULD NOT BE OPENED because this node could not reach
+		// the person's key — the unknown arm, never a wrong code. Nothing
+		// was decided about the code, so presenting it again decides it.
+		log.WarnContext(r.Context(), "api_second_factor_unchecked",
+			"person", held.ID, "error", err)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		return factorUse{}, false
+	}
 	if !ok {
 		// STILL THE GENERIC REFUSAL, because a wrong CODE and a wrong
 		// password must not be distinguishable to somebody who has
 		// stolen one of the two.
-		s.refuseSignIn(w, r, arrived, attempt, "second factor mismatch")
+		s.refuseSecondFactor(w, r, adm, attempt, held, curve, "second factor mismatch")
 		return factorUse{}, false
 	}
 	use, spend, err := s.spendSecondFactor(r.Context(), held.ID, use)
 	switch {
 	case errors.Is(err, errFactorSpent):
-		s.refuseSignIn(w, r, arrived, attempt, "second factor already spent")
+		s.refuseSecondFactor(w, r, adm, attempt, held, curve,
+			"second factor already spent")
 		return factorUse{}, false
 	case err != nil:
 		// NOT A REFUSAL: the code was right, and this node could not
@@ -484,6 +790,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		unresolved(w, r, "api_second_factor_unresolved", spend)
 		return factorUse{}, false
 	}
+	curve.Succeed(r.Context())
 	if use.factor == types.FactorRecovery {
 		s.audit.Emit(r.Context(), types.IAMRecoveryCodeUsed{
 			Person: held.ID, Login: held.Login, Remaining: use.remaining,
@@ -491,6 +798,23 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		})
 	}
 	return use, true
+}
+
+// refuseSecondFactor is a second factor that did not prove itself: a failure
+// on the person's curve — announced, once per person per window, when it takes
+// that curve to its ceiling — and then the same generic refusal every failed
+// sign-in answers.
+func (s *Service) refuseSecondFactor(w http.ResponseWriter, r *http.Request,
+	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
+	curve *credential.Ticket, why string) {
+
+	if curve.Fail(r.Context()) {
+		s.audit.EmitOnce(r.Context(), authevents.OnceSecondFactorCeiling,
+			held.ID, credential.Window, types.IAMSecondFactorThrottled{
+				Person: held.ID, Login: held.Login, Remote: attempt.Client,
+			})
+	}
+	s.refuseSignIn(w, r, adm, attempt, why)
 }
 
 // signIn is how a completed sign-in was proved, for the event it announces.
@@ -527,32 +851,113 @@ type signIn struct {
 	// see [Service.keep].
 	refresh string
 
-	// provedAt is when a PROVIDER sign-in's person authenticated at the
+	// provedAt is when this sign-in's person proved who they are, where
+	// that was NOT here and now — and nil for every way in that was: a
+	// password, a second factor, an invitation, the bootstrap code.
+	//
+	// TWO WAYS IN SET IT. A PROVIDER sign-in's person authenticated at the
 	// provider ([oidc.Flight.ProvedAt]) — possibly long ago, and the zero
-	// time when the provider did not say. Every other way in was proved
-	// HERE, at this instant, and ignores it.
-	provedAt time.Time
+	// time when the provider did not say, which is kept as zero: nothing
+	// datable was proved. And an ENROLMENT's replacement session inherits
+	// the proof of the enrolment-only session it replaces, because the
+	// code the enrolment checked proves possession of a seed that same
+	// session was handed moments earlier — which says nothing about who is
+	// holding it. Dated now, it restarted both step-up windows and handed
+	// whoever held the restricted cookie a sensitive window its password
+	// never earned. A POINTER, so "proved nothing datable" (a zero time)
+	// and "proved here" (nil) stay two answers.
+	provedAt *time.Time
+
+	// because is what the replaced session's close records as its reason,
+	// and empty for a step-up's own ("replaced by a step-up").
+	because string
+}
+
+// enrolmentOnly reports whether a sign-in opens a session that may do nothing
+// but enrol a second factor.
+//
+// # A sign-in that proved a password and nothing else, where one is required
+//
+// `api.auth.local.totp: required` says nobody signs in on a password alone. So
+// a sign-in THIS SURFACE verified — the password route, a password step-up, an
+// invitation's redemption, the founding — that proved no second factor opens
+// a restricted session. Proving none means holding none: the password route
+// and the step-up demand a code from anybody who holds a factor, and a new
+// person holds none yet.
+//
+// A PROVIDER'S SIGN-IN IS NEVER RESTRICTED, because its second factor is the
+// provider's and invisible here — asking for one on top would be a factor on
+// top of a factor the engine cannot see. A Tier A exchange never reaches this.
+func (s *Service) enrolmentOnly(how signIn) bool {
+	switch how.method {
+	case types.SignInPassword, types.SignInInvite, types.SignInBootstrap:
+		return how.factor == "" && s.secondFactorRequired()
+	}
+	return false
+}
+
+// secondFactorRequired reports whether this deployment requires a second factor
+// of somebody who signs in with a password: the `api.auth.local` block's own
+// `totp`, and nothing where there is no such block.
+//
+// THE BLOCK AND NOT THE RESOLVED BACKEND, because the block is what states what
+// a password sign-in needs: a deployment whose people sign in through a
+// provider can still found its company and redeem invitations by password, and
+// the local block — where there is one — is what says whether those need a
+// factor. [iam.SecondFactor.Requires] reads a value this build does not know
+// as required, which is the safe direction for "must you prove more".
+func (s *Service) secondFactorRequired() bool {
+	local := s.boot.API.Auth.Local
+	return local != nil && local.TOTP.Requires()
 }
 
 // proofOf is the instant a sign-in proved who somebody is: the provider's own
-// for a provider sign-in, and this one for everything this surface verified
-// itself.
+// for a provider sign-in, the replaced session's for an enrolment's
+// replacement, and this one for everything this surface verified itself — see
+// [signIn.provedAt].
 func (s *Service) proofOf(how signIn) time.Time {
-	if how.method == types.SignInOIDC {
-		return how.provedAt
+	if how.provedAt != nil {
+		return *how.provedAt
 	}
 	return s.now()
 }
 
-// completeSignIn opens the session and sets the cookie.
+// completeSignIn opens the session, sets the cookie and answers.
 func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	held iamdomain.Sighting, how signIn) {
+
+	answer, ok := s.openSignIn(w, r, held, how)
+	if !ok {
+		return
+	}
+	if how.redirect != "" {
+		// A BROWSER THAT ARRIVED BY NAVIGATION leaves the same way. The
+		// cookie is on this response, so the page it lands on is signed
+		// in; a JSON body here was what the provider's callback answered,
+		// which a browser renders as text and goes nowhere.
+		//
+		// JUDGED AGAIN HERE, where it leaves: the value came out of a
+		// flight another node may have sealed — see [returnPath].
+		http.Redirect(w, r, returnPath(how.redirect), http.StatusFound)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, answer)
+}
+
+// openSignIn opens the session, sets its cookie and announces it, answering
+// what a JSON caller is told — or false once it has written a refusal.
+//
+// SEPARATE FROM THE ANSWER because one caller answers in a shape of its own: a
+// second factor's enrolment that replaces an enrolment-only session reports
+// the enrolment, with the session it opened beside it.
+func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
+	held iamdomain.Sighting, how signIn) (loginResponse, bool) {
 
 	lineage, err := uuid.NewV7()
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_lineage_failed", "error", err)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-		return
+		return loginResponse{}, false
 	}
 	expires := s.now().Add(s.boot.API.Auth.Session.Absolute())
 	if !how.absolute.IsZero() {
@@ -567,22 +972,27 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// may not have applied. This way round a failure changes nothing
 		// and the retry is clean; the one residue, an open that fails
 		// after the close landed, is a person asked to sign in again.
+		because := how.because
+		if because == "" {
+			because = "replaced by a step-up"
+		}
 		closed, closeErr := s.writer.CloseSession(r.Context(), how.replaces,
-			held.ID, "replaced by a step-up", "step-up:"+how.replaces)
+			held.ID, because, "step-up:"+how.replaces)
 		if closeErr != nil {
 			log.WarnContext(r.Context(), "api_step_up_close_failed",
 				"error", closeErr, "lineage", how.replaces)
 			httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(closeErr))
-			return
+			return loginResponse{}, false
 		}
 		if !landed(closed) {
 			// THE SAME GESTURE FAILING, for the same reason: opening the
 			// replacement beside a close nothing can confirm is the
 			// second live session this order exists to prevent.
 			unresolved(w, r, "api_step_up_close_unresolved", closed)
-			return
+			return loginResponse{}, false
 		}
 	}
+	restricted := s.enrolmentOnly(how)
 	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
@@ -597,7 +1007,10 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// from last week — see [Service.proofOf].
 		ProvedAt:    s.proofOf(how),
 		GroupGrants: how.groupGrants,
-		OpID:        "session:" + lineage.String(),
+		// A PASSWORD ALONE WHERE A SECOND FACTOR IS REQUIRED opens a
+		// session that may only enrol one — see [Service.enrolmentOnly].
+		EnrolmentOnly: restricted,
+		OpID:          "session:" + lineage.String(),
 		// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT, because
 		// nothing in this answer reads the row: the bearer carries the
 		// position and every node validates against its own applier.
@@ -606,7 +1019,7 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_session_failed", "error", err)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
-		return
+		return loginResponse{}, false
 	}
 	if !landed(opened.Result) {
 		// NO BEARER FROM AN UNRESOLVED START. It would carry position
@@ -614,12 +1027,12 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// session that ended — a cookie that signs its holder out on
 		// their first request, beside an event saying they signed in.
 		unresolved(w, r, "api_sign_in_session_unresolved", opened.Result)
-		return
+		return loginResponse{}, false
 	}
 	at := opened.Result.Position
 	if how.refresh != "" && !s.keep(r, lineage.String(), held.ID, how.refresh, at) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(nil))
-		return
+		return loginResponse{}, false
 	}
 
 	// THE EPOCH AND THE GENERATION THE SESSION WAS OPENED AT, as the
@@ -631,16 +1044,21 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
 		AbsoluteExpiresAt: expires,
+		// AND THE BEARER CARRIES THE RESTRICTION TOO, signed: the record
+		// above did not wait, so no node has the row yet — this one
+		// included — and a node serves reads on the bearer alone until it
+		// does. See [session.Bearer.EnrolmentOnly].
+		EnrolmentOnly: restricted,
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_mint_failed", "error", err)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-		return
+		return loginResponse{}, false
 	}
 	http.SetCookie(w, session.Cookie(s.boot.API.ExternalBase(), bearer, expires))
 	log.InfoContext(r.Context(), "api_sign_in",
 		"person", held.ID, "login", held.Login, "seat", held.Seat,
-		"position", at.String())
+		"position", at.String(), "enrolment_only", restricted)
 	if how.stepUp {
 		s.audit.Emit(r.Context(), types.IAMStepUpCompleted{
 			Person: held.ID, Login: held.Login, Lineage: lineage.String(),
@@ -654,18 +1072,14 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 			SecondFactor: how.factor, ACR: how.acr, ExpiresAt: expires,
 		})
 	}
-	if how.redirect != "" {
-		// A BROWSER THAT ARRIVED BY NAVIGATION leaves the same way. The
-		// cookie is on this response, so the page it lands on is signed
-		// in; a JSON body here was what the provider's callback answered,
-		// which a browser renders as text and goes nowhere.
-		http.Redirect(w, r, how.redirect, http.StatusFound)
-		return
+	status := statusSignedIn
+	if restricted {
+		status = statusEnrolmentRequired
 	}
-	httpjson.Write(w, http.StatusOK, loginResponse{
+	return loginResponse{
 		Person: held.ID, Login: held.Login, Seat: held.Seat,
-		ExpiresAt: expires, Position: at.String(),
-	})
+		ExpiresAt: expires, Position: at.String(), Status: status,
+	}, true
 }
 
 // keep takes custody of a provider sign-in's refresh token, reporting whether
@@ -715,18 +1129,28 @@ func (s *Service) backend() config.AuthBackend {
 	return s.boot.API.Auth.Resolved()
 }
 
-// sourceOf is what the throttle keys on.
+// passwordFloor is the shortest password this deployment accepts: its own
+// `api.auth.local.min_password_length`, or the engine's twelve.
 //
-// THE CLIENT, RESOLVED THROUGH THE TRUSTED PROXIES, and never the login: keyed
-// on the subject a throttle is an oracle — "this account exists and I can lock
-// it" — and keyed on a client the only thing it discloses is a rate limit the
-// caller already met.
+// ONE READING FOR EVERY SITE THAT SETS OR DESCRIBES A PASSWORD — the two
+// enrolments that choose one and the two answers that tell a form what to
+// refuse before it posts — so a form can never be told one number while the
+// route enforces another. That was the shape before this: every site said
+// twelve, and none read the setting.
+func (s *Service) passwordFloor() int { return s.boot.API.Auth.Local.Passwords() }
+
+// sourceOf is the source the throttle keys on, beside what was typed.
+//
+// THE CLIENT, RESOLVED THROUGH THE TRUSTED PROXIES — the half of the key that
+// says where an attempt came from, so a run at one account from one address is
+// slowed without the person it is aimed at, signing in from somewhere else,
+// sharing its curve.
 //
 // THROUGH THE GUARD, because resolving it is the one place `api.trusted_proxies`
-// is read: keyed on a proxy's own address this throttle would bucket the whole
-// internet together and lock the company out the moment one attacker arrives,
-// and keyed on a header anybody may send it would let that attacker pick their
-// own bucket. See internal/api/auth/client.go.
+// is read: keyed on a proxy's own address, every caller's attempts at one login
+// would share one curve, so a stranger guessing at somebody's login would slow
+// that person's own sign-in; keyed on a header anybody may send, the stranger
+// would pick their own curve. See internal/api/auth/client.go.
 func (s *Service) sourceOf(r *http.Request) string { return s.clients.Of(r) }
 
 // lastStep reads the last accepted TOTP step off a credential's carried

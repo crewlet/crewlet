@@ -43,23 +43,81 @@ A few things worth knowing when deploying Crewlet:
   one generic error for every arm — no such login, wrong password, wrong
   second-factor code, code already spent — because telling a caller which one
   applies tells an attacker the same, and the first of them is the company's
-  roster. Three mechanisms keep the timing from saying it instead: admission
-  is keyed on the request's SOURCE and happens before the subject is resolved
-  (a throttle keyed on who you claim to be is one only real people can
-  trigger, so the 429 becomes the oracle); a subject that does not exist is
-  still verified against, with a fixed-cost decoy; and both arms answer at one
-  deadline measured from the instant the request arrived. Under enough load to
-  push a real verification past that deadline the arms separate again — stated
-  rather than hidden, and at that point every request on the node is slow.
+  roster. Three mechanisms keep the timing from saying it instead: the
+  throttle is keyed on the subject as TYPED from the request's source, and
+  decides before anything is looked up (a throttle keyed on who the subject
+  resolved to is one only real people can trigger, so its delay becomes the
+  oracle); a subject that does not exist is still verified against, with a
+  decoy that takes the same turn at the node's verify cap a verification does
+  and holds it as long — a draw from the node's recent verifications at its
+  current cost, held to the end whether or not the request is still there; and
+  both arms answer at one deadline measured from the instant the attempt was
+  admitted. The verify cap is shared out one turn per
+  source address at a time, so one address cannot fill it, cannot push
+  anybody else's verification past that deadline, and cannot separate its own
+  arms by queueing them behind each other. What remains is a load spike from at
+  least as many addresses as the node has cores, and then both arms queue
+  alike — stated rather than hidden.
+- **A failed sign-in costs a wait, never a lockout.** Each failure doubles the
+  wait before the next attempt on its key, one second to thirty, and a correct
+  credential after the wait always succeeds — a lockout is something an
+  outsider can cause, against any login they can type. A success clears only
+  its own (subject, source) pair, so holding one account never wipes the
+  record of guesses at another. A second-factor code is also decided on a
+  curve keyed on the person, reached only past their password, so somebody
+  holding it cannot spread their guesses at the code across addresses; its
+  ceiling is announced as `iam_second_factor_throttled`, which means the
+  password is known and should be rotated. No address is ever refused on its own: a
+  curve on the source alone let any stranger at an office's or a proxy's
+  address hold every sign-in from it at `429`, so one password tried across
+  many names from one address is bounded by the password floor, the argon2id
+  cost and the verify cap instead, and shown in the audit trail's per-client
+  failure tally; an invitation link, a founder code and a provider round trip
+  meet no curve at all, their 256 bits being what bounds a walk. No curve
+  stands in front of a bearer — a Tier A token, a machine token or a session
+  cookie: a bearer names nobody until it is compared, so a curve there could
+  only be keyed on the address, and one was a way for any stranger at an
+  address to hold every token used from it at `429`. A bearer's protection is its length and randomness (a Tier A value is
+  refused under 26 characters), and every refused one is counted in the audit
+  trail's per-client failure tally. Behind a proxy, name it in
+  `api.trusted_proxies`: otherwise every caller is the proxy, and a stranger
+  guessing at somebody's login slows that person's own sign-in.
 - **Passwords are argon2id at 64 MiB, t=3, p=1, with a twelve-character
   minimum and no composition rules.** The parameters are in the stored
   verifier, so raising the cost re-hashes each person's on their next
   successful sign-in — the only instant a stronger digest can be computed,
-  because the plaintext is not stored. Machine tokens and recovery codes are
+  because the plaintext is not stored. A re-hash only ever raises a cost: a
+  node still on an older build during a rolling upgrade leaves a verifier the
+  newer build wrote exactly as it is. Machine tokens and recovery codes are
   SHA-256 rather than argon2id, deliberately: both are minted by this engine
   from `crypto/rand`, so there is no dictionary to grind and the memory cost
   would buy nothing while adding a hundred milliseconds to every request a CI
   job makes.
+- **A second factor's seed is sealed, under the person's own key.** TOTP is
+  symmetric, so the seed is the one credential the identity estate has to keep
+  as a secret rather than a verifier — and that estate is replicated to every
+  node, snapshotted, backed up and donated to joining peers. The seed is sealed
+  when it is enrolled, bound to the person *and* the credential it was enrolled
+  as, and opened only to check a code; removing the person destroys the key it
+  is sealed under. **Builds before this change stored it in the clear**, so a
+  deployment running one holds every enrolled seed in its identity log, its
+  snapshots and every backup taken since. Treat those seeds as disclosed: a
+  seed stored in the clear no longer verifies (the node logs
+  `api_totp_seed_unopenable` naming the person and credential), so have each
+  such person sign in with a recovery code and enrol their app again, or reset
+  their second factor (`crewlet iam reset-mfa`, `POST
+  /iam/people/{id}/mfa/reset`) so they re-enrol at their next sign-in —
+  re-sealing the old value would leave the copies already written readable.
+- **An invitation link carries a secret, and the estate keeps only its hash.**
+  The invitation's id is the row's key — in its record, every snapshot and
+  backup, and every access log a request for it passed through — so it opens
+  nothing on its own. The link is `…/dashboard#/invite/<id>.<secret>`, the
+  secret after the `#`, which no browser sends to a server; the dashboard
+  presents it beside the id in a header or a body, never in a URL, and a wrong
+  one is refused exactly as an id nobody issued is. **Builds before this change
+  made the id itself the link**, so an invitation they issued is in every
+  backup as a working credential: such an invitation is now redeemable by
+  nobody, and the remedy is to issue it again.
 - **An identity provider's assertion is never a link by address.** A person is
   bound to a provider subject by an invitation somebody issued or by an
   administrator — never because the provider asserted an address that matches

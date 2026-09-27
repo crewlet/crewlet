@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -220,6 +221,55 @@ func TestATokenRemovedFromTheConfigEndsItsSession(t *testing.T) {
 	if !cleared {
 		t.Error("the ended session's cookie was not cleared, so the browser " +
 			"re-presents a value that can never work again")
+	}
+}
+
+// ROTATING A TOKEN'S VALUE ENDS THE SESSIONS THE OLD VALUE OPENED.
+//
+// The exchanged session answers to the entry this node holds under the
+// token's id, and it used to answer to the id alone: an operator who answered
+// a leak by putting a new value under the same id left every session exchanged
+// from the leaked value working for the rest of its hour. The cookie is bound
+// to the value it was exchanged with, so a new value ends it — on a node that
+// has not applied the session's start record too, because the configuration is
+// never late. THE CONTROL is the same rebuild with the value unchanged, which
+// keeps it.
+func TestRotatingATokensValueEndsTheSessionsTheOldValueOpened(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  int
+	}{
+		{"the value is rotated", "a-rotated-tier-a-token-for-ops-0003", http.StatusUnauthorized},
+		{"the value is kept", opsValue, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newExchangeRig(t)
+			cookie, status := r.exchange(opsValue)
+			if status != http.StatusOK || cookie == nil {
+				t.Fatalf("the exchange answered %d", status)
+			}
+			if strings.Contains(cookie.Value, opsValue) {
+				t.Fatal("the cookie carries the token's value")
+			}
+			edited := r.boot
+			edited.API.Auth.Tokens = slices.Clone(r.boot.API.Auth.Tokens)
+			for i := range edited.API.Auth.Tokens {
+				if edited.API.Auth.Tokens[i].ID == "ops" {
+					edited.API.Auth.Tokens[i].Token = tc.value
+				}
+			}
+			r.rebuild(edited)
+			for _, applied := range []uint64{1 << 40, 0} {
+				r.estate.setApplied(applied)
+				if _, rec := r.probe(cookie); rec.Code != tc.want {
+					t.Errorf("at applied %d the session answered %d (%s), "+
+						"want %d", applied, rec.Code, rec.Body.String(), tc.want)
+				}
+			}
+		})
 	}
 }
 

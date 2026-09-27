@@ -402,13 +402,13 @@ func revokeToken(t *testing.T, rig *writeRig, owner, id string) {
 	if err := rig.draining(func() error {
 		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 			PersonID: owner,
-			Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+			Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 				for i := range held {
 					if held[i].ID == id {
 						held[i].RevokedAt = brokerAt.Add(-time.Second)
 					}
 				}
-				return held
+				return held, nil
 			},
 			OpID: "op-revoke-" + id, Reason: "leaked",
 		})

@@ -244,17 +244,21 @@ var categories = map[string]placement{
 	// signature verdicts are engine-rated for the same reason: a key id is
 	// whatever a frame says, so the node reports each (domain, key id)
 	// once, under a cap on how many distinct ids it will ever name.
-	"iam_session_started":           {"auth", RateAuthenticated},
-	"iam_session_ended":             {"auth", RateAuthenticated},
-	"iam_session_reuse_detected":    {"auth", RateAuthenticated},
-	"iam_login_failures":            {"auth", RateEngine},
-	"iam_stepup_completed":          {"auth", RateAuthenticated},
-	"iam_credential_minted":         {"auth", RateAuthenticated},
-	"iam_credential_revoked":        {"auth", RateAuthenticated},
-	"iam_grants_changed":            {"auth", RateAuthenticated},
-	"iam_token_first_use":           {"auth", RateAuthenticated},
-	"iam_token_overreach":           {"auth", RateAuthenticated},
-	"iam_recovery_code_used":        {"auth", RateAuthenticated},
+	"iam_session_started":    {"auth", RateAuthenticated},
+	"iam_session_ended":      {"auth", RateAuthenticated},
+	"iam_login_failures":     {"auth", RateEngine},
+	"iam_stepup_completed":   {"auth", RateAuthenticated},
+	"iam_credential_minted":  {"auth", RateAuthenticated},
+	"iam_credential_revoked": {"auth", RateAuthenticated},
+	"iam_grants_changed":     {"auth", RateAuthenticated},
+	"iam_token_first_use":    {"auth", RateAuthenticated},
+	"iam_token_overreach":    {"auth", RateAuthenticated},
+	"iam_recovery_code_used": {"auth", RateAuthenticated},
+	// AUTHENTICATED because only a caller the password admitted can
+	// reach a second factor, and at most one row per person per window
+	// on each node: the rate is bounded by whose passwords are known to
+	// somebody guessing, never by what a stranger can send.
+	"iam_second_factor_throttled":   {"auth", RateAuthenticated},
 	"iam_mfa_reset":                 {"auth", RateAuthenticated},
 	"iam_identity_linked":           {"auth", RateAuthenticated},
 	"iam_identity_unlinked":         {"auth", RateAuthenticated},

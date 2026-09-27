@@ -515,6 +515,75 @@ func TestOneFieldsSealedValueDoesNotOpenAsAnother(t *testing.T) {
 	}
 }
 
+// A SECOND FACTOR'S SEED OPENS ONLY AS THE CREDENTIAL IT WAS ENROLLED AS.
+//
+// A seed is the one credential this estate holds as a secret, so it is sealed
+// under its person's key — and every seed a person ever enrolled is sealed under
+// that ONE key, so the person half cannot tell their current seed from the one
+// they replaced, sitting in an old backup. The credential id in the associated
+// data is what does: a seed pasted over another credential's opens as nothing,
+// under the same person or another, and so does one sealed as a name.
+//
+// And the three answers a verification branches on stay three: a moved value
+// is secrets.ErrDecrypt (a refusal), a destroyed key is ErrShredded (a
+// refusal), and an unreachable store is neither (the unknown arm).
+//
+// Mutation: seal under [iamdomain.AADFor] alone and the re-enrolment row opens.
+func TestASecondFactorSeedOpensOnlyAsTheCredentialItWasEnrolledAs(t *testing.T) {
+	t.Parallel()
+	sealer, store := newSealer(t)
+	ctx := t.Context()
+	const other = "018f3a9c-0000-7000-8000-000000000002"
+	for _, id := range []string{who, other} {
+		if err := sealer.Mint(ctx, id, mintedBy, time.Now()); err != nil {
+			t.Fatalf("mint %s: %v", id, err)
+		}
+	}
+	const seed = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+	sealed, err := sealer.SealCredential(ctx, who, "cred-a", iamdomain.FieldTOTP, seed)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if strings.Contains(sealed, seed) {
+		t.Fatalf("the sealed seed carries the seed in the clear: %q", sealed)
+	}
+	if plain, err := sealer.OpenCredential(ctx, who, "cred-a", iamdomain.FieldTOTP,
+		sealed); err != nil || plain != seed {
+		t.Fatalf("the seed does not open as what it is: (%q, %v)", plain, err)
+	}
+	for name, open := range map[string]func() (string, error){
+		"the same person's re-enrolment": func() (string, error) {
+			return sealer.OpenCredential(ctx, who, "cred-b", iamdomain.FieldTOTP, sealed)
+		},
+		"another person's credential of the same id": func() (string, error) {
+			return sealer.OpenCredential(ctx, other, "cred-a", iamdomain.FieldTOTP, sealed)
+		},
+		"the person's name column": func() (string, error) {
+			return sealer.Open(ctx, who, iamdomain.FieldName, sealed)
+		},
+	} {
+		if plain, err := open(); !errors.Is(err, secrets.ErrDecrypt) {
+			t.Errorf("%s opened the seed as (%q, %v), want secrets.ErrDecrypt",
+				name, plain, err)
+		}
+	}
+	if _, err := sealer.Shred(ctx, other); err != nil {
+		t.Fatalf("shred: %v", err)
+	}
+	if _, err := sealer.OpenCredential(ctx, other, "cred-a", iamdomain.FieldTOTP,
+		sealed); !errors.Is(err, iamdomain.ErrShredded) {
+		t.Errorf("a removed person's seed answered %v, want ErrShredded", err)
+	}
+	store.mu.Lock()
+	store.fail = errors.New("the coordination store is unreachable")
+	store.mu.Unlock()
+	_, err = sealer.OpenCredential(ctx, who, "cred-a", iamdomain.FieldTOTP, sealed)
+	if err == nil || errors.Is(err, secrets.ErrDecrypt) || errors.Is(err, iamdomain.ErrShredded) {
+		t.Errorf("an unreachable store answered %v — it must be neither refusal, "+
+			"or an outage reads as a wrong code", err)
+	}
+}
+
 // NOTHING IS CACHED, which is what makes a shred take effect everywhere at
 // once rather than on whichever nodes happened to evict an entry.
 func TestNoKeyIsCachedAcrossOpens(t *testing.T) {

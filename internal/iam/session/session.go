@@ -66,7 +66,7 @@ import (
 
 // Version prefixes every bearer, so a later format is told from this one
 // rather than failing as a bad signature.
-const Version = "v2"
+const Version = "v3"
 
 // SigningDomain separates a session bearer from every other thing this fleet's
 // keyring signs.
@@ -81,8 +81,8 @@ const SigningDomain = "crewlet/iam/session/v2"
 
 // Idle is how long a session survives with nothing happening on it.
 //
-// A CONSTANT AND NOT A CONFIGURED FIELD, unlike the absolute lifetime and the
-// rotation period, because it RIDES IN EVERY BEARER: a node moves the deadline
+// A CONSTANT AND NOT A CONFIGURED FIELD, unlike the absolute lifetime, because
+// it RIDES IN EVERY BEARER: a node moves the deadline
 // out by this much on a re-issue, and two nodes disagreeing about it would
 // hand one browser two different expiries depending on which node it reached.
 // A configured value would also mean a deployment that lowered it did not
@@ -105,25 +105,6 @@ const Idle = 12 * time.Hour
 // twenty times. It costs no store write at all — the deadline is in the
 // signature — so the only cost being managed here is the header.
 const ReissueAfter = 5 * time.Minute
-
-// Overlap is how long a cookie from the window either side of a rotation
-// boundary is still served.
-//
-// TWO MINUTES, and it exists for requests IN FLIGHT ACROSS THE BOUNDARY: a
-// page that loaded at 10:59:58 and fires four parallel requests at 11:00:01
-// must not have three of them refused because the window turned over between
-// the first and the rest. It also absorbs the ordinary skew between two
-// ingress nodes' clocks, which is what makes the forward arm safe.
-const Overlap = 2 * time.Minute
-
-// DefaultRotateAfter is how long one rotation window lasts when nothing says
-// otherwise.
-//
-// ONE HOUR. What it bounds is how long a CAPTURED cookie goes on looking
-// current beside the one its owner keeps being re-issued — see rotate.go for
-// what the index can and cannot prove. It is a default rather than the value:
-// the configured field lands with the rest of the session block.
-const DefaultRotateAfter = time.Hour
 
 // CookieBaseName is the bearer's name without the `__Host-` prefix.
 const CookieBaseName = "crewlet_session"
@@ -153,11 +134,32 @@ const HostCookieName = "__Host-" + CookieBaseName
 // setup, while an unprefixed cookie on a public https deployment works
 // perfectly and silently accepts one a sibling subdomain wrote.
 func CookieName(externalURL string) string {
-	parsed, err := url.Parse(strings.TrimSpace(externalURL))
-	if err == nil && parsed.Scheme == "http" {
-		return CookieBaseName
+	return NameFor(externalURL, CookieBaseName)
+}
+
+// NameFor is what a cookie of this engine's called base is set under for a
+// deployment reachable at externalURL: `__Host-` + base wherever the bearer
+// takes the prefix, and the bare base on plain http — [CookieName]'s rule, for
+// the OTHER cookies a browser is handed (the provider round trip's flight).
+//
+// ONE RULE FOR EVERY COOKIE, because the prefix's guarantee is per cookie: a
+// flight cookie a sibling host could write beside a session cookie it cannot
+// is a second way to hand a browser somebody else's login in progress. A
+// prefixed cookie must be Secure, carry `Path=/` and no Domain — see
+// [HostPrefixed] for the first.
+func NameFor(externalURL, base string) string {
+	if HostPrefixed(externalURL) {
+		return "__Host-" + base
 	}
-	return HostCookieName
+	return base
+}
+
+// HostPrefixed reports whether a deployment reachable at externalURL names its
+// cookies with the `__Host-` prefix — everything but plain http, for
+// [CookieName]'s reasons — which is also whether they must be Secure.
+func HostPrefixed(externalURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(externalURL))
+	return err != nil || parsed.Scheme != "http"
 }
 
 // Cookie is the bearer as a browser must be given it.
@@ -201,31 +203,61 @@ func Clear(externalURL string) *http.Cookie {
 	return out
 }
 
-// CookieNames are the two names a browser can be holding a bearer under, in
-// the order a request's are read.
+// CookieNames are the two names a browser can be holding a bearer under, the
+// prefixed one first.
 //
 // BOTH, AND IN ONE PLACE. The scheme of `api.external_url` decides which name
 // a node ISSUES, but a browser keeps whatever it was issued: a deployment that
 // corrected its URL from http to https has every signed-in browser still
-// presenting the bare name. Everything that READS a bearer therefore reads
-// both, and everything that ENDS one clears both — and the sign-out read only
-// the configured name and cleared only it, so after such a correction a
-// person who signed out stayed signed in, their session never closed. The
-// prefixed name first, because it is the one this deployment issues when it
-// can and the only one a sibling host cannot plant.
+// holding the bare name. Everything that ENDS a bearer therefore reaches both
+// — [Held] and [Clears] — while only the issued name AUTHENTICATES, which is
+// [Presented]'s rule.
 var CookieNames = []string{HostCookieName, CookieBaseName}
 
-// Presented is the bearer a request carries under either name, or empty.
+// Presented is the bearer a request carries under the name a deployment
+// reachable at externalURL issues — [CookieName] — or empty.
 //
-// It reads nothing else and decides nothing: a value under either name still
-// has to verify, so reading both discloses nothing and costs a map lookup.
-func Presented(r *http.Request) string {
-	for _, name := range CookieNames {
-		if c, err := r.Cookie(name); err == nil && c.Value != "" {
-			return c.Value
-		}
+// ONE NAME, READ AS ISSUED, because the prefix is the whole of what keeps a
+// sibling host's cookie out: a browser sets `__Host-crewlet_session` only from
+// this exact host, while `crewlet_session` any host under the same registrable
+// domain can write, with a Domain covering this one. Read under either name —
+// as it was, so that a deployment moving from http to https kept its browsers
+// signed in — a sibling that planted ITS OWN valid session under the bare name
+// signed a visitor who held none in as that session's person: every change
+// they then made landed in an account the sibling's author can read, which is
+// the fixation the prefix exists to close. So a move to https signs each
+// browser in again once, and [Held] is what lets the sign-out still end what
+// the old name held.
+func Presented(r *http.Request, externalURL string) string {
+	if c, err := r.Cookie(CookieName(externalURL)); err == nil {
+		return c.Value
 	}
 	return ""
+}
+
+// Held is every bearer a request carries under either name, the one a
+// deployment reachable at externalURL issues first.
+//
+// FOR ENDING AND NEVER FOR AUTHENTICATING: a sign-out closes each one that
+// verifies and is still live, so a browser holding the name an http deployment
+// issued before it moved to https — a name [Presented] no longer reads — has
+// that session closed rather than merely its cookie forgotten. Reaching a
+// planted cookie here ends its planter's own session, which is theirs to lose.
+func Held(r *http.Request, externalURL string) []string {
+	issued := CookieName(externalURL)
+	var out []string
+	if c, err := r.Cookie(issued); err == nil && c.Value != "" {
+		out = append(out, c.Value)
+	}
+	for _, name := range CookieNames {
+		if name == issued {
+			continue
+		}
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			out = append(out, c.Value)
+		}
+	}
+	return out
 }
 
 // Clears are the cookies that end a session in a browser under EVERY name one
@@ -271,16 +303,14 @@ type Options struct {
 	// fleet is REFUSED — see the package doc.
 	Material runtoken.Material
 
-	// RotateAfter is one rotation window. Zero takes
-	// [DefaultRotateAfter].
-	RotateAfter time.Duration
-
 	// Now is the clock.
 	//
 	// WALL CLOCK, NOT MONOTONIC, and there is no choice about it: every
 	// instant a bearer carries was written by another process on another
 	// node, and a monotonic reading's epoch is per-boot — meaningless
-	// anywhere but where it was taken. rotate.go states what that costs.
+	// anywhere but where it was taken. What that costs is a deadline read
+	// on a node whose clock is off by the difference, and no more: nothing
+	// here turns a disagreement between two clocks into a revocation.
 	Now func() time.Time
 }
 
@@ -290,10 +320,9 @@ type Options struct {
 // of the keyring, the session's own facts and the clock. There is nothing here
 // to invalidate, which is the same sentence as "there is no validation cache".
 type Signer struct {
-	activeTag   string
-	keys        map[string][]byte
-	rotateAfter time.Duration
-	now         func() time.Time
+	activeTag string
+	keys      map[string][]byte
+	now       func() time.Time
 }
 
 // New builds a signer, or refuses the deployment.
@@ -305,14 +334,7 @@ func New(opts Options) (*Signer, error) {
 			"signed in on whichever node its request happened to reach: %w",
 			ErrNoKeyring, errNoActiveKey(opts.Material))
 	}
-	s := &Signer{
-		keys:        map[string][]byte{},
-		rotateAfter: opts.RotateAfter,
-		now:         opts.Now,
-	}
-	if s.rotateAfter <= 0 {
-		s.rotateAfter = DefaultRotateAfter
-	}
+	s := &Signer{keys: map[string][]byte{}, now: opts.Now}
 	if s.now == nil {
 		s.now = time.Now
 	}

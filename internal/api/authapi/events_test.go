@@ -106,6 +106,15 @@ type estate struct {
 	// unresolved names the writes whose outcome nothing can establish:
 	// each answers `unknown` under its own op id instead of landing.
 	unresolved map[string]bool
+
+	// credentialOps are the operation ids every SetCredentials was asked
+	// under, in order.
+	credentialOps []string
+
+	// unapplied is a node that has applied none of the sessions this
+	// estate opened: its position is below every bearer's start, and it
+	// holds no session row — see [estate.Resolve].
+	unapplied bool
 }
 
 // outcome is what one of this estate's writes answers: applied at a position,
@@ -169,24 +178,36 @@ func (e *estate) OpenSession(_ context.Context, in iamdomain.SessionStart) (iamd
 	return opened, nil
 }
 
-func (e *estate) SetCredentials(_ context.Context, in iamdomain.CredentialSet) (
+func (e *estate) SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (
 	statelog.Result, error) {
 
+	// A WRITE ON A CONTEXT THAT HAS ENDED LANDS NOTHING, as the domain's
+	// publisher refuses one — or a write handed no time at all would read
+	// here as one that landed.
+	if err := ctx.Err(); err != nil {
+		return statelog.Result{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.credentialOps = append(e.credentialOps, in.OpID)
 	held := slices.Clone(e.person.Credentials)
 	if e.before != nil {
 		held = e.before(held)
+	}
+	formed, err := in.Apply(held)
+	if err != nil {
+		// A REFUSAL IN THE SNAPSHOT publishes nothing, as the domain's
+		// decide does.
+		return statelog.Result{}, err
 	}
 	result := e.outcome("SetCredentials", in.OpID, 10)
 	if result.Outcome == statelog.OutcomeUnknown {
 		// WHETHER IT LANDED IS WHAT NOBODY CAN SAY; the estate here
 		// keeps the set it had, which is the harder of the two for the
 		// surface — a spend it cannot confirm and a code still usable.
-		in.Apply(held)
 		return result, nil
 	}
-	e.person.Credentials = in.Apply(held)
+	e.person.Credentials = formed
 	return result, nil
 }
 
@@ -213,7 +234,7 @@ func newSignInRig(t *testing.T) *signInRig {
 func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
 	t.Helper()
 	hasher := credential.NewHasher(cheap, 1)
-	verifier, err := hasher.Hash(password)
+	verifier, err := hasher.Hash(t.Context(), "", password)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,13 +244,16 @@ func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
 	}
 	stepRaw, _ := json.Marshal(int64(0))
 	verifiersRaw, _ := json.Marshal(verifiers)
+	const person = "0192f00d-0000-7000-8000-00000000000a"
 	e := &estate{person: iamdomain.Sighting{
-		ID: "0192f00d-0000-7000-8000-00000000000a", Kind: iam.KindPerson,
+		ID: person, Kind: iam.KindPerson,
 		Stage: iam.StageActive, Login: "jane.doe",
 		Credentials: []iamdomain.Credential{
 			{ID: "pw", Method: iamdomain.MethodPassword, Verifier: verifier},
-			{ID: "app", Method: iamdomain.MethodTOTP, Verifier: totpSeed,
-				Extra: map[string]json.RawMessage{"last_step": stepRaw}},
+			// THE SEED SEALED, as enrolment stores it.
+			{ID: "app", Method: iamdomain.MethodTOTP,
+				Verifier: sealedSeed(t, person, "app", totpSeed),
+				Extra:    map[string]json.RawMessage{"last_step": stepRaw}},
 			{ID: "codes", Method: iamdomain.MethodRecovery,
 				Extra: map[string]json.RawMessage{"verifiers": verifiersRaw}},
 		},
@@ -414,21 +438,36 @@ func TestACodeSpentConcurrentlyIsRefusedToTheLoser(t *testing.T) {
 	}
 }
 
-// A THROTTLED ATTEMPT IS COUNTED AS ONE THE CEILING TURNED AWAY.
+// A THROTTLED ATTEMPT IS COUNTED AS ONE THE CURVE TURNED AWAY, AND SAYS WHEN
+// TO COME BACK.
+//
+// The curve on one login from one address: a wait served inside the request
+// after the first failure and the second, and the fourth attempt — owing seven
+// seconds, past what a request is held open for — answered 429 with those
+// seconds in `Retry-After`. It used to be answered with no header at all, so a
+// client retried at once and was refused again. Mutation: write the 429
+// without the header and the wait is unreadable.
 func TestAThrottledAttemptIsCountedAsThrottled(t *testing.T) {
 	t.Parallel()
 	r := newSignInRig(t)
-	for range credential.AdmitLimit {
-		r.login(t, "nobody.here", password, "")
+	for i := range 3 {
+		if got := r.login(t, "nobody.here", password, ""); got != http.StatusUnauthorized {
+			t.Fatalf("attempt %d answered %d, want the ordinary refusal after "+
+				"a wait served in the request", i+1, got)
+		}
 	}
-	if got := r.login(t, "nobody.here", password, ""); got != http.StatusTooManyRequests {
-		t.Fatalf("past the limit answered %d, want 429", got)
+	rec := r.signIn(t, "nobody.here", password, "")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the fourth attempt answered %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "7" {
+		t.Errorf("Retry-After %q, want the 7 seconds the curve owes", got)
 	}
 	_, failures := r.audit.snapshot()
 	last := failures[len(failures)-1]
 	if !last.Throttled || last.Method != types.FailPassword || last.Subject != "" {
 		t.Errorf("throttled failure = %+v: want it marked throttled, on the "+
 			"route's method, and naming nobody — it was refused before the "+
-			"body was read", last)
+			"login was looked up", last)
 	}
 }

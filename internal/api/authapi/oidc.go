@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -13,16 +14,35 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// flightCookieName is where the sealed login-in-progress rides.
+// flightCookieBase is the name the sealed login-in-progress rides under,
+// before the prefix — see [Service.flightCookieName].
 //
 // ITS OWN COOKIE rather than a field of the session one, because the two exist
 // at opposite times: the flight is set before anybody is signed in and cleared
 // the moment they are, and a session cookie carrying a login in progress would
 // be a cookie whose meaning depends on which half of a round trip it is in.
-const flightCookieName = "crewlet_oidc_flight"
+const flightCookieBase = "crewlet_oidc_flight"
+
+// flightCookieName is the name the flight is set and read under on this
+// deployment: `__Host-crewlet_oidc_flight` wherever the session cookie takes
+// the prefix, the bare name on plain http — [session.NameFor], one rule for
+// every cookie a browser is handed.
+//
+// THE PREFIX IS WHY IT IS ONE NAME, READ AS ISSUED. A browser sets a
+// `__Host-` cookie only from this exact host, Secure, at `Path=/`, so a
+// sibling host cannot write one; the bare name any sibling can write, with a
+// Domain covering this one. Read under both names on https, a flight another
+// host planted — one its author began, for the provider account the browser
+// happens to hold — would be the one this callback finished. A flight lives
+// ten minutes, so a deployment moving from http to https costs a login begun
+// in those minutes its restart and nothing more.
+func (s *Service) flightCookieName() string {
+	return session.NameFor(s.boot.API.ExternalBase(), flightCookieBase)
+}
 
 // OIDCStart sends the browser to the provider: an ordinary sign-in, or — with
 // `?step_up=<window>` — a signed-in person confirming who they are, inside the
@@ -90,9 +110,9 @@ func (s *Service) launch(w http.ResponseWriter, r *http.Request, want oidc.Fligh
 	if err != nil {
 		// A FAULT AND NOT AN OUTAGE, so a 500 rather than a 503 asking to
 		// be retried: what fails here is this node's own configuration
-		// (no keyring, a provider block that does not validate, a
-		// discovery document naming an authorization endpoint that is not
-		// a url) or its own randomness and cipher — none of which clears
+		// (a provider block that does not validate, a discovery
+		// document naming an authorization endpoint that is not a url)
+		// or its own randomness and cipher — none of which clears
 		// by waiting two seconds. What does clear by waiting, the
 		// provider's discovery being unreachable, answered above.
 		log.ErrorContext(r.Context(), "api_oidc_start_failed", "error", err)
@@ -121,18 +141,19 @@ func (s *Service) launch(w http.ResponseWriter, r *http.Request, want oidc.Fligh
 // that is the same decision written as a field, and a field is how it ends up
 // on by accident.
 func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailOIDC) {
-		return
-	}
+	// ON NO CURVE: before an ID token verifies nothing here names anybody,
+	// and afterwards the provider has already proved who it is — see
+	// [Service.uncounted]. A round trip that ends in nobody still reaches
+	// the failure tally.
+	adm := s.uncounted(r)
 	// A ROUND TRIP THAT ENDS IN NOBODY is one failed attempt, whichever
 	// check refused it. The subject is the provider's own, once an ID
 	// token verified and there is one; before that nothing names anybody.
 	attempt := authevents.Failure{Client: source, Method: types.FailOIDC}
-	cookie, err := r.Cookie(flightCookieName)
+	cookie, err := r.Cookie(s.flightCookieName())
 	if err != nil || cookie.Value == "" {
-		s.refuseSignIn(w, r, arrived, attempt, "no flight cookie")
+		s.refuseSignIn(w, r, adm, attempt, "no flight cookie")
 		return
 	}
 	// THE FLIGHT IS CLEARED WHATEVER HAPPENS NEXT. A login that failed
@@ -142,19 +163,30 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	flight, err := oidc.Open(s.cipher, cookie.Value, s.now())
 	if err != nil {
-		s.refuseSignIn(w, r, arrived, attempt, "flight: "+err.Error())
+		s.refuseSignIn(w, r, adm, attempt, "flight: "+err.Error())
 		return
 	}
 	// THE STATE COMPARISON, and it is what stops a callback link somebody
 	// was SENT from completing a login in their browser: the attacker
 	// cannot know the value sealed in the cookie beside it.
 	if r.URL.Query().Get("state") != flight.State {
-		s.refuseSignIn(w, r, arrived, attempt, "state mismatch")
+		s.refuseSignIn(w, r, adm, attempt, "state mismatch")
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		s.refuseSignIn(w, r, arrived, attempt, "no authorization code")
+		s.refuseSignIn(w, r, adm, attempt, "no authorization code")
+		return
+	}
+	// A FLIGHT THIS NODE HAS ALREADY FINISHED IS REFUSED HERE, before it
+	// asks for the discovery document or waits for a turn at the token
+	// endpoint: it would be refused inside the turn anyway, and whoever
+	// stockpiled a spent cookie could otherwise keep the provider's slots
+	// queued with presentations that ask it nothing — see
+	// [oidc.Redemptions]. This records nothing; the flight is spent inside
+	// the turn, by [Service.exchange].
+	if s.redeemed.Seen(flight, s.now()) {
+		s.refuseSignIn(w, r, adm, attempt, "flight already redeemed on this node")
 		return
 	}
 
@@ -164,11 +196,27 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
-	tokens, err := s.provider.Exchange(r.Context(),
-		metadata.TokenEndpoint, code, flight.Verifier)
-	if err != nil {
+	tokens, err := s.exchange(r.Context(), flight, metadata.TokenEndpoint, code)
+	switch {
+	case errors.Is(err, errFlightSpent):
+		// ANOTHER PRESENTATION OF THIS FLIGHT held the turn first, and
+		// both had passed the check above. Refused exactly as that check
+		// refuses — and only now, with the turn already given back, so
+		// the pad below holds nothing the provider's next caller needs.
+		s.refuseSignIn(w, r, adm, attempt, "flight already redeemed on this node")
+		return
+	case err != nil && r.Context().Err() != nil:
+		// THE BROWSER WENT AWAY, while it waited for its turn or during
+		// the exchange itself: nothing was refused, so nothing is counted
+		// as a failed attempt. A wait that ended spent nothing, and the
+		// reload the 503 invites presents the same flight to be exchanged
+		// then; an exchange that was cut off stays spent, since the
+		// provider may have been asked.
+		abandoned(w, r, source, err)
+		return
+	case err != nil:
 		log.WarnContext(r.Context(), "api_oidc_exchange_failed", "error", err)
-		s.refuseSignIn(w, r, arrived, attempt, "code exchange failed")
+		s.refuseSignIn(w, r, adm, attempt, "code exchange failed")
 		return
 	}
 	keys, err := s.provider.Keys(r.Context())
@@ -181,7 +229,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		tokens.IDToken, flight.Nonce, s.now())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_id_token_refused", "error", err)
-		s.refuseSignIn(w, r, arrived, attempt, "id token: "+err.Error())
+		s.refuseSignIn(w, r, adm, attempt, "id token: "+err.Error())
 		return
 	}
 
@@ -191,11 +239,11 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	provedAt, err := flight.ProvedAt(claims, s.now())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_step_up_unconfirmed", "error", err)
-		s.refuseSignIn(w, r, arrived, attempt, "step-up: "+err.Error())
+		s.refuseSignIn(w, r, adm, attempt, "step-up: "+err.Error())
 		return
 	}
 	if flight.Invite != "" {
-		s.redeemThroughProvider(w, r, arrived, attempt, flight, claims,
+		s.redeemThroughProvider(w, r, adm, attempt, flight, claims,
 			tokens.Refresh, provedAt)
 		return
 	}
@@ -223,10 +271,9 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		// NO LINK, NO SIGN-IN. See this function's doc: an address the
 		// provider asserts is not a link, and this is where that rule
 		// is enforced rather than merely stated.
-		s.refuseSignIn(w, r, arrived, attempt, "no linked credential for this subject")
+		s.refuseSignIn(w, r, adm, attempt, "no linked credential for this subject")
 		return
 	}
-	s.throttle.Flush(r.Context(), source)
 
 	// BACK TO WHERE THE LOGIN BEGAN, by redirect. The callback is a
 	// browser following the provider's redirect, and it used to answer the
@@ -237,7 +284,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// so it is not the caller's to change now.
 	how := signIn{
 		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
-		refresh: tokens.Refresh, provedAt: provedAt,
+		refresh: tokens.Refresh, provedAt: &provedAt,
 		// THE GROUP MAPPING RIDES INSIDE THE SESSION, never onto the
 		// person's own row: what a provider's groups confer is true for
 		// as long as that assertion is, and writing it to the estate
@@ -260,6 +307,48 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		how.absolute = replaced.Bearer.AbsoluteExpiresAt
 	}
 	s.completeSignIn(w, r, held, how)
+}
+
+// errFlightSpent is [Service.exchange]'s answer for a flight another
+// presentation spent while this one waited for its turn.
+var errFlightSpent = errors.New("authapi: the flight was already redeemed on " +
+	"this node")
+
+// exchange redeems a flight's authorization code at the provider: a turn at
+// its token endpoint, the flight spent inside it, the code exchanged — and the
+// turn given back BEFORE IT RETURNS, on every outcome.
+//
+// # Admitted, then spent, then asked
+//
+// The TURN comes first ([oidc.ExchangeSlots]), waited for on the request's own
+// context, so a browser that leaves while it waits has asked the provider
+// nothing and spent nothing: the answer is its context's error. The flight is
+// SPENT once the provider WILL be asked and before it is ([oidc.Redemptions]):
+// whoever started a flight holds its cookie and its state, and could otherwise
+// make this node exchange a code at the provider once per request for the
+// flight's whole ten minutes — while spent before the turn came, a flight
+// whose browser left during the wait was refused as a replay on the reload,
+// having reached nobody. A flight another presentation spent while this one
+// waited answers [errFlightSpent] having asked the provider nothing.
+//
+// # The turn never outlives the provider's answer
+//
+// Every refusal the caller writes waits out the sign-in pad first, and a turn
+// held across one is one of the provider's eight slots held for 400 ms having
+// asked the provider nothing. So the turn is this function's alone and ends
+// with it: the caller cannot refuse from inside one, whichever arm it adds.
+func (s *Service) exchange(ctx context.Context, flight oidc.Flight,
+	tokenEndpoint, code string) (oidc.Tokens, error) {
+
+	admission, err := s.provider.Admit(ctx)
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	defer admission.Release()
+	if !s.redeemed.Redeem(flight, s.now()) {
+		return oidc.Tokens{}, errFlightSpent
+	}
+	return admission.Exchange(ctx, tokenEndpoint, code, flight.Verifier)
 }
 
 // stepUpFlight is what a provider STEP-UP start seals: the window the provider
@@ -296,7 +385,11 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 // and the step-up exists to prove somebody is. This route is unguarded, so
 // the guard hands a request it could not resolve through rather than
 // answering it — and a node that cannot establish who is signed in says so
-// with a 503, never the 401 that tells a browser to sign in again.
+// with a 503, never the 401 that tells a browser to sign in again. A request
+// presenting a BEARER is refused before any of that, alike whatever the
+// bearer: the provider confirms a browser's own session and a bearer has none,
+// and an answer here that told a matching bearer from a refused one would be
+// one more place to test a value, on a route the guard does not judge it on.
 func (s *Service) stepUpFlight(w http.ResponseWriter, r *http.Request,
 	want oidc.Flight, window iam.Recency) (oidc.Flight, bool) {
 
@@ -307,6 +400,18 @@ func (s *Service) stepUpFlight(w http.ResponseWriter, r *http.Request,
 				"inside: " + string(iam.RecencyStepUp) + " or " +
 				string(iam.RecencySensitive) + ", the window a " +
 				"step_up_required refusal carries"})
+		return oidc.Flight{}, false
+	}
+	// EVERY PRESENTED BEARER IS REFUSED ALIKE, matched, refused or
+	// uncheckable, and before its resolution is read. The provider confirms
+	// a BROWSER's own session, and a bearer has none — and an answer that
+	// differed for a good bearer and a bad one, a step-up refusal for one
+	// and a 401 for the other, was a way to test bearer values on a route
+	// the guard does not judge them on.
+	if auth.PresentedBearer(r.Context()) {
+		refuseStepUp(w, window, "a bearer credential proves nobody is "+
+			"present, so the identity provider cannot confirm it; confirm "+
+			"from the browser the person signed in with")
 		return oidc.Flight{}, false
 	}
 	principal, how := iam.From(r.Context())
@@ -382,53 +487,98 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 }
 
 // returnPath is where the browser goes once the login completes, from the
-// value the caller asked for.
+// value the caller asked for: the value itself when it is a path on this
+// deployment, and the dashboard otherwise.
 //
 // # An open redirect is the ordinary way a sign-in flow leaks a credential
 //
 // The value is the caller's — a query parameter on the sign-in start, a form
-// field on a redemption's — so it is refused unless it is a PATH on this
-// deployment: no scheme, no host, and a leading single slash.
-// `//evil.example.com` is a protocol-relative URL that browsers follow
-// off-site, which is exactly the shape a naive "starts with /" check admits.
+// field on a redemption's — so it is kept only if it is a PATH ON THIS
+// DEPLOYMENT, and the question that decides that is how a BROWSER reads the
+// `Location` it becomes, never how Go's parser reads it. The two disagree, and
+// every disagreement is an address off-site:
+//
+//   - `//evil.example.com` is a protocol-relative URL, which a browser
+//     follows to another host — the shape a naive "starts with /" admits.
+//   - `/\evil.example.com` is the SAME URL to a browser, which reads a
+//     backslash as a slash in an http(s) address (the WHATWG URL standard's
+//     special-scheme rule), while Go's parser reads it as a path — so the
+//     check this replaced admitted it, and `http.Redirect` emitted it
+//     verbatim.
+//   - `/<TAB>/evil.example.com` is that URL again, because a browser strips
+//     every tab and newline from an address before it parses one.
+//
+// So a backslash and every control character are refused anywhere in the
+// value, and the path is judged a second time DECODED — `/%2F/evil` and
+// `/%5Cevil` are paths a browser keeps, and refused anyway, because they are
+// never a screen this deployment serves and a page that decoded one before
+// navigating would be the open redirect again.
 //
 // AND IT IS BOUNDED at [maxReturnPath], a longer one taking the default as any
 // other path this deployment will not honour does: the value rides in the
 // flight cookie, and one too long for it is a sign-in that fails a whole
 // provider round trip later with nothing to say why.
+//
+// IT IS ASKED TWICE: where the value arrives, so nothing else is sealed into a
+// flight, and where it LEAVES, as the redirect a sign-in answers — because a
+// flight is opened by whichever node the callback reaches, and during a
+// rolling upgrade that may be a build that sealed a value by a looser rule.
 func returnPath(raw string) string {
 	want := strings.TrimSpace(raw)
-	if want == "" || len(want) > maxReturnPath {
-		return "/dashboard"
-	}
-	if !strings.HasPrefix(want, "/") || strings.HasPrefix(want, "//") {
-		return "/dashboard"
-	}
-	parsed, err := url.Parse(want)
-	if err != nil || parsed.Scheme != "" || parsed.Host != "" {
-		return "/dashboard"
+	if !localPath(want) {
+		return auth.PathDashboard
 	}
 	return want
+}
+
+// localPath reports whether a value is one [returnPath] keeps — see there.
+func localPath(want string) bool {
+	if want == "" || len(want) > maxReturnPath || !offSiteFree(want) {
+		return false
+	}
+	parsed, err := url.Parse(want)
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" ||
+		parsed.User != nil || parsed.Opaque != "" {
+		return false
+	}
+	// THE DECODED PATH, which `%2F` and `%5C` spell a second way.
+	return offSiteFree(parsed.Path)
+}
+
+// offSiteFree reports whether a path starts with exactly one slash and holds
+// nothing a browser would read as the start of another address: no second
+// leading slash, no backslash, and no control character — the bytes the WHATWG
+// URL parser strips before it parses, tab and newline among them.
+func offSiteFree(path string) bool {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return false
+	}
+	for i := 0; i < len(path); i++ {
+		if b := path[i]; b == '\\' || b < 0x20 || b == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // maxReturnPath bounds a return path, in bytes as the caller sent it.
 //
 // THE FLIGHT COOKIE IS WHAT IT HAS TO FIT. The path is sealed into the flight
 // beside the state, the nonce and the verifier (43 characters each), an
-// invitation's id and a login of up to [iam.MaxLogin], and RFC 6265 §6.1 asks a
-// browser to keep a cookie of 4096 bytes — name, value and attributes — and
-// promises nothing past it. Past it a browser DROPS the cookie without a word:
-// the start answers, the person goes round the provider, and the callback
-// refuses them for carrying no flight. It was unbounded, so a return path of a
-// few kilobytes — a dashboard link carrying a long search in its fragment — was
-// exactly that failure.
+// invitation's id and its link's secret (43 characters too) and a login of up
+// to [iam.MaxLogin], and RFC 6265 §6.1 asks a browser to keep a cookie of 4096
+// bytes — name, value and attributes — and promises nothing past it. Past it a
+// browser DROPS the cookie without a word: the start answers, the person goes
+// round the provider, and the callback refuses them for carrying no flight. It
+// was unbounded, so a return path of a few kilobytes — a dashboard link
+// carrying a long search in its fragment — was exactly that failure.
 //
 // 400 is what still fits at its worst: every byte one the flight's JSON writes
 // as six (`<`, `&`, a byte that is not UTF-8) and the whole envelope base64,
-// sealed beside the longest invitation id and login under a keyring id of
-// sixty-four characters, leaves the cookie under the floor with room to spare —
-// the case a test seals. And it is several times the longest address the
-// dashboard routes to, fragment and query included.
+// sealed beside the longest invitation id, its secret and a login under a
+// keyring id of sixty-four characters, leaves the cookie under the floor with
+// room to spare — the case a test seals. And it is several times the longest
+// address the dashboard routes to, fragment and query included.
 const maxReturnPath = 400
 
 // flightCookie builds the sealed login-in-progress cookie.
@@ -437,11 +587,17 @@ const maxReturnPath = 400
 // the callback is a cross-site navigation from the provider, and Strict would
 // withhold the cookie on exactly the request that needs it. Lax sends it on a
 // top-level GET, which is what a redirect back from a provider is.
+//
+// `Path=/`, SECURE WHEN PREFIXED AND NO DOMAIN, which are the three things a
+// browser requires of a `__Host-` cookie before it will set one — see
+// [Service.flightCookieName]. It was scoped to `/auth/`, which the prefix does
+// not allow; the cost of `/` is a sealed value of a few hundred bytes riding
+// every request for the ten minutes a login takes.
 func (s *Service) flightCookie(value string, expires time.Time) *http.Cookie {
 	cookie := &http.Cookie{
-		Name: flightCookieName, Value: value, Path: "/auth/",
+		Name: s.flightCookieName(), Value: value, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		Secure:  strings.HasPrefix(s.boot.API.ExternalBase(), "https://"),
+		Secure:  session.HostPrefixed(s.boot.API.ExternalBase()),
 		Expires: expires,
 	}
 	if value == "" {

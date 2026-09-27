@@ -48,8 +48,8 @@ import (
 //
 // A browser rotates its session cookie on REST requests, and a socket cannot
 // receive a Set-Cookie, so the bytes this socket holds age while the tab stays
-// in use. That is what the session's rotation rule already allows for — a
-// LAGGING rotation index is served, not called theft (internal/iam/session) —
+// in use. An old bearer is served as readily as a fresh one — a cookie carries
+// nothing that tells a replayed copy from its owner's (internal/iam/session) —
 // and the idle deadline it carries is the one limit that can close a socket
 // whose person is still active. When it does, the close is 4401 and the tab
 // reconnects with the cookie the browser holds NOW.
@@ -168,9 +168,10 @@ func revalidate(ctx context.Context, conn *websocket.Conn, client *Client,
 		//nolint:contextcheck // derived from ctx; see the paragraph above
 		principal, how := iam.From(r.Context())
 		switch {
-		case refusal != nil:
-			// RESOLVED AND STILL REFUSED — the person's seat is gone.
-			log.InfoContext(ctx, "stream_closed_seat_refused",
+		case refusal != nil && refusal.Applies(r):
+			// RESOLVED AND STILL REFUSED — the person's seat is gone,
+			// or their session may only enrol a second factor.
+			log.InfoContext(ctx, "stream_closed_refused",
 				"code", string(refusal.Code), "detail", refusal.Detail)
 			_ = conn.Close(CloseUnauthorized, string(refusal.Code))
 			return

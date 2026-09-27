@@ -831,7 +831,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		var rev uint64
 		if mine == nil {
 			if rev, err = l.kv.Create(ctx, key, claimData); err != nil {
-				if errors.Is(err, jetstream.ErrKeyExists) {
+				if lostCreateRace(err) {
 					continue
 				}
 				return nil, unavailable("create lease "+resource, err)
@@ -1250,7 +1250,7 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 				return 0, "", err
 			}
 			if _, err := s.epochs.Create(ctx, key, data); err != nil {
-				if errors.Is(err, jetstream.ErrKeyExists) {
+				if lostCreateRace(err) {
 					continue
 				}
 				return 0, "", unavailable("mint epoch "+resource, err)

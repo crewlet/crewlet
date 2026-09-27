@@ -338,6 +338,14 @@ const (
 	// never appears in cleartext anywhere: what a lookup uses is the
 	// keyed blind, which is not reversible at all.
 	FieldEmail Field = "email"
+
+	// FieldTOTP is an authenticator app's shared SEED — the one credential
+	// this estate stores as a secret rather than a verifier, because TOTP
+	// is symmetric and an engine holding only a digest could verify
+	// nothing (see [MethodTOTP]). It is sealed through
+	// [Sealer.SealCredential], never [Sealer.Seal]: a person may re-enrol,
+	// so the value is bound to the CREDENTIAL as well as to them.
+	FieldTOTP Field = "totp"
 )
 
 // Seal encrypts one of a person's own values.
@@ -393,6 +401,86 @@ func (s *Sealer) Open(ctx context.Context, personID string, field Field,
 // their values it is.
 func AADFor(personID string, field Field) string {
 	return "iam_person/" + personID + "/" + string(field)
+}
+
+// SealCredential encrypts one of a person's CREDENTIAL secrets — a second
+// factor's seed — under that person's own key, bound to the credential it
+// belongs to.
+//
+// # Under the person's key, because a removal has to reach it
+//
+// A seed is the one credential here that is a secret rather than a verifier,
+// and the estate it is written to is replicated, snapshotted, backed up and
+// donated to joining peers: in the clear it was a second factor every node, every
+// artefact and every donor held for good, and read off the cluster port by
+// anybody who could read a stream. Sealed under the person's own key it is
+// exactly as unreadable as their name and address — to the applier that writes
+// it, to every artefact — and removing them shreds it with the rest.
+//
+// # Bound to the credential as well as the person
+//
+// The associated data is [AADForCredential]: the person, AND the credential's
+// own id, AND the field. The person half is [Sealer.Seal]'s argument over
+// again, and the credential half is the one that is load-bearing here: every
+// seed a person has ever enrolled is sealed under ONE key, so without it a
+// seed they replaced — still sitting in an old backup, or a row a restore
+// brought back — could be pasted over the current credential's and would open.
+// With it, a seed opens only as the credential it was enrolled as.
+func (s *Sealer) SealCredential(ctx context.Context, personID, credentialID string,
+	field Field, plaintext string) (string, error) {
+
+	if credentialID == "" {
+		return "", errors.New("iamdomain: a credential secret needs the " +
+			"credential it belongs to: an empty id would bind every one of " +
+			"this person's seeds to the same associated data")
+	}
+	cipher, err := s.cipherFor(ctx, personID)
+	if err != nil {
+		return "", err
+	}
+	sealed, err := cipher.Encrypt(plaintext, AADForCredential(personID, credentialID, field))
+	if err != nil {
+		return "", fmt.Errorf("iamdomain: seal %s's %s %s: %w", personID, field,
+			credentialID, err)
+	}
+	return sealed, nil
+}
+
+// OpenCredential decrypts a credential secret [Sealer.SealCredential] sealed.
+//
+// Its errors are the three answers a verification needs, and a caller tells
+// them apart with errors.Is: [ErrShredded] is a person whose key a removal
+// destroyed (nothing will ever open it — a refusal); [secrets.ErrDecrypt] is a
+// value that is not this credential's seed under this person's key (a refusal
+// too, and one worth an error line, because it is a row that was moved, forged
+// or written before seeds were sealed); anything else is a key store this node
+// could not read, which is the unknown arm and never a refusal.
+func (s *Sealer) OpenCredential(ctx context.Context, personID, credentialID string,
+	field Field, sealed string) (string, error) {
+
+	if credentialID == "" || sealed == "" {
+		return "", fmt.Errorf("iamdomain: %s's %s has no credential id or no "+
+			"sealed value to open: %w", personID, field, secrets.ErrDecrypt)
+	}
+	cipher, err := s.cipherFor(ctx, personID)
+	if err != nil {
+		return "", err
+	}
+	plain, err := cipher.Decrypt(sealed, AADForCredential(personID, credentialID, field))
+	if err != nil {
+		return "", fmt.Errorf("iamdomain: open %s's %s %s: %w", personID, field,
+			credentialID, err)
+	}
+	return plain, nil
+}
+
+// AADForCredential binds a sealed credential secret to the person it belongs
+// to, the credential it was enrolled as, and which of that credential's values
+// it is — the person's half in [AADFor]'s grammar and the credential's in
+// [secrets.AADForCredential]'s, so neither rule is written twice.
+func AADForCredential(personID, credentialID string, field Field) string {
+	return "iam_person/" + personID + "/" +
+		secrets.AADForCredential(credentialID, string(field))
 }
 
 // cipherFor builds the one-key cipher a person's values are sealed under.

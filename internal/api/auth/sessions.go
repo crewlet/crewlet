@@ -96,17 +96,38 @@ func ActsAsThemselves(path string) bool {
 // Refusal is an answer the guard writes itself, rather than one a route
 // derives from the resolution it was handed.
 //
-// IT EXISTS FOR EXACTLY ONE CASE and is not a fourth resolution arm: a
-// credential that validated and whose SEAT did not — a person whose session is
-// live, or a Tier A token the directory binds, bound to a seat the chart will
-// not let them act as. Every other outcome is one of [iam.Resolution]'s three,
-// which is what every surface downstream already reads.
+// IT EXISTS FOR EXACTLY TWO CASES and is not a fourth resolution arm, because
+// in both the caller is somebody this node knows perfectly well and what is
+// refused is what they may reach: a credential that validated and whose SEAT
+// did not — a person whose session is live, or a Tier A token the directory
+// binds, bound to a seat the chart will not let them act as — and a session
+// that may only ENROL A SECOND FACTOR. Every other outcome is one of
+// [iam.Resolution]'s three, which is what every surface downstream already
+// reads.
 type Refusal struct {
 	// Status is the HTTP status, Code the machine-readable reason, and
-	// Detail the sentence that names the seat.
+	// Detail the sentence that says what was refused and why.
 	Status int
 	Code   httpjson.Code
 	Detail string
+
+	// spares names the routes this refusal does not reach — see
+	// [Refusal.Applies].
+	spares func(r *http.Request) bool
+}
+
+// Applies reports whether this refusal answers r, or whether r is one of the
+// routes it leaves the caller.
+//
+// EACH REFUSAL CARRIES ITS OWN, because the two leave different things: a seat
+// refusal leaves the whole `/auth/` surface, whose subject is the person's own
+// credential rather than the seat ([ActsAsThemselves]), and an enrolment
+// refusal leaves exactly the three guarded routes that let a person in
+// ([EnrolmentAdmits]). One rule in the middleware for both was either an
+// enrolment-only session reaching every `/auth/` route — recovery codes and
+// signing everybody out included — or an offboarded person unable to sign out.
+func (f *Refusal) Applies(r *http.Request) bool {
+	return f.spares == nil || !f.spares(r)
 }
 
 // seatRefusal is the answer to a credential resolved to a seat the chart will
@@ -121,7 +142,76 @@ func seatRefusal(binding session.Binding) *Refusal {
 		Status: http.StatusForbidden,
 		Code:   httpjson.CodeSeatUnavailable,
 		Detail: binding.Detail,
+		spares: func(r *http.Request) bool { return ActsAsThemselves(r.URL.Path) },
 	}
+}
+
+// enrolmentRefusal is the answer to a session that may only enrol a second
+// factor, on every guarded route but the three [EnrolmentAdmits] names: 403
+// `second_factor_enrolment_required`.
+//
+// # Why a session and not a sign-in refusal
+//
+// `api.auth.local.totp: required` says nobody signs in on a password alone,
+// and a person who holds no second factor — freshly invited, the founder, one
+// an administrator reset — has nothing else to present. Refusing the sign-in
+// would lock them out of the one gesture that satisfies the rule, so the
+// sign-in succeeds into a session that can make THAT gesture and nothing else,
+// and enrolling replaces it with a whole one. It was never built: the setting
+// was validated, documented and read by nothing, so a deployment that
+// required a second factor admitted a password alone everywhere.
+//
+// THE PERSON IS STILL RESOLVED, as a seat refusal's is: this node knows exactly
+// who they are, the three routes need to, and the cookie is not cleared —
+// signing in again reaches the same restricted session.
+func enrolmentRefusal() *Refusal {
+	return &Refusal{
+		Status: http.StatusForbidden,
+		Code:   httpjson.CodeSecondFactorEnrolmentRequired,
+		Detail: "this session was opened with a password alone, and this " +
+			"deployment requires a second factor you do not hold yet: enrol " +
+			"one with POST " + PathAuthTOTP + " — until you do, this session " +
+			"can do nothing else",
+		spares: EnrolmentAdmits,
+	}
+}
+
+// EnrolmentAdmits reports whether r is one of the three GUARDED routes an
+// enrolment-only session may reach.
+//
+// # Exactly these, and why each
+//
+//   - `GET /auth/session`, so a client can learn it holds such a session and
+//     render the enrolment rather than an error page;
+//   - `POST /auth/totp`, the enrolment itself, both legs — whose completion
+//     replaces this session with a whole one;
+//   - `POST /auth/step-up`, because enrolling asks a proof inside the
+//     sensitive window, and a person who took longer than that to find their
+//     phone must be able to re-confirm the password without signing out; it
+//     opens another enrolment-only session, since a password is still all
+//     they hold.
+//
+// And TO LEAVE, both sign-outs of this session — `POST /auth/logout` and, where
+// a provider is, `POST /auth/logout/oidc` — which are not here because the
+// guard does not judge them at all: they are [Unguarded], so no refusal
+// reaches them, this one included. The provider sign-out was missing while
+// both were guarded, and a session that could only enrol was answered this
+// refusal there, its cookie kept and the provider never reached.
+//
+// AN EXACT LIST OF METHOD AND PATH, never a prefix, for the exemption list's
+// reason: the same surface regenerates recovery codes, signs a person out
+// everywhere and ends other people's sessions, and a prefix would hand those to
+// a password alone. Recovery codes wait for the whole session the enrolment
+// opens, because they are the second factor's own backup and a set minted on a
+// password alone would satisfy the rule without an authenticator at all.
+func EnrolmentAdmits(r *http.Request) bool {
+	switch r.URL.Path {
+	case PathAuthSession:
+		return r.Method == http.MethodGet || r.Method == http.MethodHead
+	case PathAuthTOTP, PathAuthStepUp:
+		return r.Method == http.MethodPost
+	}
+	return false
 }
 
 // RetryIdentitySeconds is the `Retry-After` on an identity 503 — the guard's,
@@ -217,42 +307,9 @@ type Sessions struct {
 	// `__Host-` prefix on exactly the deployments that need it.
 	external string
 
-	// audit is where a refused cookie is counted and the two session
-	// facts only this arm can see are recorded: a replay, and a deadline
-	// passing. See audit.go.
+	// audit is where the one session fact only this arm can see is
+	// recorded: a deadline passing. See audit.go.
 	audit Audit
-
-	// onReuse is called when a bearer's rotation index proves a cookie was
-	// replayed past the overlap, with the person and the EPOCH the bearer
-	// was minted at. It ends every session the person opened at or below
-	// that epoch, and answers an error when it cannot say the revocation
-	// LANDED — refused, failed, or an outcome nobody can establish.
-	//
-	// ONCE PER LINEAGE WHILE IT LANDS: a replayed cookie is refused, and
-	// whoever holds it can present it again — before the dedupe, every
-	// presentation published another revocation, which is a write to the
-	// identity log paced by the holder of a cookie this node had already
-	// refused. So the revocation is taken on a once-per-lineage claim
-	// ([authevents.OnceReuseRevocation]) and KEPT once it lands, and HANDED
-	// BACK when it did not, so the next presentation asks again. It used to
-	// hang on the claim that records the replay, which is never handed
-	// back: one failed or unknown revocation left the person's other
-	// sessions live for the rest of the bearer's life, with nothing asking
-	// again.
-	//
-	// AND CONDITIONAL ON THE EPOCH, which is what makes the retry safe
-	// rather than the dedupe: the claim is one NODE's and it is bounded, so
-	// another ingress node seeing the same replay — or this one retrying —
-	// asks again, and a revocation that moves the epoch only while it is
-	// still at the bearer's is one that lands once however often it is
-	// asked for.
-	//
-	// A SEAM RATHER THAN A WRITE FROM HERE, which is internal/iam/session's
-	// own rule arriving one layer out: validation runs on every ingress
-	// node on every request, and a validator that could append to the log
-	// is one an unauthenticated caller can make write. Nil logs and does
-	// not write, which is the honest posture for a node with no publisher.
-	onReuse func(ctx context.Context, person string, epoch uint64) error
 
 	// now is the clock, injectable so a case can pin what a principal's
 	// freshness is measured against.
@@ -287,16 +344,11 @@ type SessionsDeps struct {
 	// External is `api.external_url`.
 	External string
 
-	// OnReuse ends every session of a person whose cookie was replayed,
-	// up to the epoch the replayed bearer carries, and answers an error
-	// when it cannot say that landed. Optional; see [Sessions.onReuse].
-	OnReuse func(ctx context.Context, person string, epoch uint64) error
-
 	// Audit records what this arm sees. REQUIRED, and not only for the
-	// rows: the revocation a replay triggers is taken on a once-per-lineage
-	// claim of the trail's, so an arm with no trail would have nothing to
-	// stop a refused cookie writing a revocation every time it was
-	// presented.
+	// rows: a deadline ending is announced on a once-per-lineage claim of
+	// the trail's, so an arm with no trail would have nothing to stop a
+	// cookie presented past its deadline announcing that ending again every
+	// time it was presented.
 	Audit Audit
 
 	// Now is the clock. Nil takes UTC wall time.
@@ -325,14 +377,14 @@ func NewSessions(deps SessionsDeps) (*Sessions, error) {
 			"is the one fall-through internal/iam/session forbids")
 	case deps.Audit == nil:
 		return nil, errors.New("auth: the session arm needs an audit trail; " +
-			"a replayed cookie's revocation is taken once per lineage on the " +
-			"trail's own decision, so without one every presentation of a " +
-			"refused cookie would write another")
+			"a deadline ending is announced once per lineage on the trail's " +
+			"own decision, so without one every presentation of an expired " +
+			"cookie would announce it again")
 	}
 	s := &Sessions{
 		signer: deps.Signer, directory: deps.Directory, chart: deps.Chart,
 		applier:  deps.Applier,
-		external: deps.External, onReuse: deps.OnReuse, audit: deps.Audit,
+		external: deps.External, audit: deps.Audit,
 		now: deps.Now,
 	}
 	if s.now == nil {
@@ -353,14 +405,16 @@ func (g *Guard) WithSessions(s *Sessions) *Guard {
 	return g
 }
 
-// cookieOf is the bearer a request presents, or empty.
+// cookieOf is the bearer a request presents under the name this deployment
+// issues, or empty.
 //
-// BOTH NAMES ARE READ, because a deployment's scheme decides which one a
-// browser holds and a node whose `api.external_url` was just corrected from
-// http to https would otherwise refuse every cookie already in every jar
-// until each person signed in again. The rule is [session.Presented]'s, so the
-// sign-out that ends a bearer reads exactly the ones this resolves.
-func cookieOf(r *http.Request) string { return session.Presented(r) }
+// ONE NAME, never either: the bare name is one a sibling host can plant on an
+// https deployment, and a planted session read as the visitor's is a sign-in
+// they never made — see [session.Presented], whose rule this is, so the
+// sign-in surface reads exactly the bearer this resolves.
+func (s *Sessions) cookieOf(r *http.Request) string {
+	return session.Presented(r, s.external)
+}
 
 // needOf is which column of the session table this request reads.
 //
@@ -409,21 +463,16 @@ type sessionAnswer struct {
 // resolve turns a cookie into an answer, or reports that this request carries
 // none.
 //
-// client is the GUARD's resolver of the caller's own address, handed in
-// rather than held, because the guard is what reads `api.trusted_proxies`
-// and a second reading of it here would be a second answer to "is this peer
-// the proxy". It is called only on the paths that record something.
-//
 // ceiling and proof are the guard's own `api.auth.max_grants` and step-up
 // window, applied to a person as they are to a token.
 //
 // tokens is the guard's Tier A entries by login, for a session exchanged from
 // one: see [tierASubjects].
 func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
-	ceiling []iam.Grant, proof proofWindows, client func(*http.Request) string,
+	ceiling []iam.Grant, proof proofWindows,
 	tokens func(login string) (config.APIToken, bool)) sessionAnswer {
 
-	cookie := cookieOf(r)
+	cookie := s.cookieOf(r)
 	if cookie == "" {
 		return sessionAnswer{how: iam.Anonymous}
 	}
@@ -432,9 +481,6 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	v := s.signer.Validate(r.Context(), subjects, cookie)
 	if v.Row == session.RowBehind && v.Answer(need) == session.AnswerUnavailable {
 		v = s.awaitStart(r.Context(), subjects, cookie, v)
-	}
-	if v.Reuse {
-		s.reuse(r, v, client(r))
 	}
 	switch v.Answer(need) {
 	case session.AnswerUnavailable:
@@ -475,6 +521,8 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	}
 
 	binding := session.ResolveSeat(r.Context(), s.chart, v.Person)
+	var refusal *Refusal
+	reissue := true
 	switch binding.Answer() {
 	case session.AnswerUnavailable:
 		log.WarnContext(r.Context(), "api_session_seat_unavailable",
@@ -499,16 +547,33 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// bearer is live and works the moment somebody rebinds them,
 		// and discarding it would sign out a person whose only problem
 		// is a chart edit.
-		return sessionAnswer{
-			principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
-			refusal: seatRefusal(binding), presented: true,
-		}
+		refusal, reissue = seatRefusal(binding), false
 	}
-
-	s.reissue(w, v)
+	if v.EnrolmentOnly() {
+		// A SESSION THAT MAY ONLY ENROL A SECOND FACTOR, refused as
+		// that whatever its seat: the seat refusal leaves the whole of
+		// /auth/ and this one only three routes of it, so the narrower
+		// answer is the one that holds — and enrolling is the first
+		// thing either person has to do. The cookie is kept and
+		// re-issued as any live session's is — its holder is working
+		// through the enrolment — and signing in again would only reach
+		// the same restricted session.
+		//
+		// READ OFF THE BEARER AS WELL AS THE ROW, because a read on a
+		// node that has not applied the session's start is served on
+		// the bearer alone ([session.RowBehind]) with no row to read —
+		// and every sign-in answers before any node applies it. Asked of
+		// the row alone, a password reached every read on every node
+		// for the apply latency after every sign-in, the socket's
+		// snapshot among them.
+		refusal, reissue = enrolmentRefusal(), true
+	}
+	if reissue {
+		s.reissue(w, v)
+	}
 	return sessionAnswer{
 		principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
-		presented: true,
+		refusal: refusal, presented: true,
 	}
 }
 
@@ -633,6 +698,10 @@ func (t tierATokens) byLogin(login string) (config.APIToken, bool) {
 // read as for anybody, and the one fact about its SUBJECT is whether this node
 // still holds the entry.
 //
+// A HELD ENTRY ANSWERS WITH ITS VALUE ([session.Identity.Credential]), which
+// the bearer was bound to when it was exchanged, so a token rotated to a new
+// value under the same id has ended every session the old value opened.
+//
 // A GONE ENTRY IS A SUBJECT THAT MAY NOT ACT, answered as a retired principal:
 // validation then ends the session wherever this node stands against its start
 // record, and the cookie is cleared. Answered as ABSENT instead, a node below
@@ -661,15 +730,27 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 	// token's session bumps it under the token's login, which is what ends
 	// every session exchanged from that token.
 	epoch := identity.Person.Epoch
-	if _, held := d.tokens(person); !held {
-		identity.Person = session.PersonRow{Found: true, Stage: iam.StageRetired,
-			Login: person, Epoch: epoch}
-		return identity, nil
-	}
 	// NO GRANTS AND NO SEAT on the row: who a token's session acts as is
 	// composed from the entry by the guard, on every request.
 	identity.Person = session.PersonRow{Found: true, Stage: iam.StageActive,
 		Login: person, Epoch: epoch}
+	entry, held := d.tokens(person)
+	if !held {
+		// THE ENTRY IS GONE — removed, or renamed out from under the
+		// login — so the credential the session stands for is WITHDRAWN,
+		// which ends it exactly as a new value does, and says so: the
+		// session's own binding refuses it with the ending the audit
+		// trail announces ([session.EndingCredential]). It was answered as
+		// a retired person, which refused the cookie and told nobody.
+		identity.Credential = session.Withdrawn()
+		return identity, nil
+	}
+	// AND THE VALUE the entry holds now, which the bearer was bound to when
+	// it was exchanged: a session is the token it was exchanged FROM, and
+	// a new value under the same id is a different token. Answered by the
+	// id alone, rotating a leaked value left every session exchanged from
+	// it working for the rest of its hour.
+	identity.Credential = session.CredentialOf(entry.Token)
 	return identity, nil
 }
 
@@ -822,66 +903,6 @@ func personID(value string) uuid.UUID {
 	return parsed
 }
 
-// reuse records a replayed cookie and asks for the person's epoch to be
-// bumped — the row ONCE per lineage, and the revocation until it lands, for as
-// long as the bearer could still be presented.
-//
-// # Two decisions, released by different facts
-//
-// The replayed bearer is refused and nothing stops whoever holds it presenting
-// it again, and the rotation check that recognises a replay runs before any
-// row is read, so every presentation reaches here. The ROW is a fact about the
-// replay and is said once: a row per presentation would be a feed paced by the
-// holder of a cookie this node had already turned away. The REVOCATION is an
-// action, and it is taken once it LANDS: a claim of its own
-// ([authevents.OnceReuseRevocation]) keeps a second presentation from asking
-// while one is in flight or after one landed, and is handed back when the
-// revocation failed or came back unknown, so the next presentation asks again.
-// Both hung on the row's claim once, which is never handed back — a revocation
-// that did not land was never asked for again, and the person's other
-// sessions, the replayed copy's holder included, stayed live until an operator
-// read the log line. [iamdomain.Writer.RevokePast] is what makes the retry
-// safe: it moves the epoch only while it is still at the replayed bearer's.
-//
-// THE WINDOW IS THE BEARER'S OWN REMAINING LIFETIME: past its absolute
-// deadline the deadline check refuses it before the rotation is looked at,
-// so it can never reach here again.
-func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
-	ctx := r.Context()
-	lineage := v.Bearer.Lineage.String()
-	window := v.Bearer.AbsoluteExpiresAt.Sub(s.now())
-	if s.audit.EmitOnce(ctx, authevents.OnceSessionReuse, lineage, window,
-		types.IAMSessionReuseDetected{
-			Person: v.Bearer.Person, Lineage: lineage,
-			Rotation: v.Bearer.Rotation, Remote: remote,
-		}) {
-		// AT WARN whether or not a writer is wired: the log line is the
-		// evidence an investigation looks for, and a node with no
-		// publisher must not make the event invisible as well as
-		// unactionable.
-		log.WarnContext(ctx, "iam_session_reuse_detected",
-			"person", v.Bearer.Person, "lineage", lineage, "detail", v.Detail)
-	}
-	if s.onReuse == nil {
-		return
-	}
-	release, claimed := s.audit.Claim(ctx, authevents.OnceReuseRevocation,
-		lineage, window)
-	if !claimed {
-		log.DebugContext(ctx, "iam_session_reuse_repeated",
-			"lineage", lineage, "detail", "its revocation landed or is in flight")
-		return
-	}
-	if err := s.onReuse(ctx, v.Bearer.Person, v.Bearer.Epoch); err != nil {
-		release()
-		log.ErrorContext(ctx, "iam_session_reuse_not_revoked",
-			"person", v.Bearer.Person, "lineage", lineage, "error", err,
-			"detail", "the replayed cookie was refused and this person's "+
-				"other sessions may still be live; the next presentation of "+
-				"the cookie asks again, and `crewlet iam revoke` ends them now")
-	}
-}
-
 // ended records what a refusing row means for the audit trail — which, for
 // most rows, is nothing.
 //
@@ -890,18 +911,40 @@ func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
 // because whether it was somebody's failed attempt depends on whether the
 // route needed it — see audit.go.
 //
-// A DEADLINE is the one way a session ends that no record states — the idle
-// deadline lives in the bearer and nowhere else — so this is the only frame
-// that can ever say a session ended that way; see [Sessions.deadline]. Every
-// OTHER ended row — the row says so, the epoch or the generation moved, the
-// person was suspended — was ended by a record, and whoever wrote the record
-// already said so.
+// TWO WAYS A SESSION ENDS THAT NO RECORD STATES, and this is the only frame
+// that can ever say either happened: a DEADLINE — the idle one lives in the
+// bearer and nowhere else — see [Sessions.deadline]; and the CREDENTIAL a
+// token's session was exchanged from changing — a value in a configuration
+// file — see [Sessions.credentialChanged]. Every OTHER ended row — the row
+// says so, the epoch or the generation moved, the person was suspended — was
+// ended by a record, and whoever wrote the record already said so.
 func (s *Sessions) ended(r *http.Request, v session.Validation,
 	directory session.Directory) {
 
-	if v.Row == session.RowEnded && v.Deadline != "" {
+	switch {
+	case v.Row != session.RowEnded:
+	case v.Ending.Deadline():
 		s.deadline(r, v, directory)
+	case v.Ending == session.EndingCredential:
+		s.credentialChanged(r, v)
 	}
+}
+
+// credentialChanged announces a session the credential it was exchanged from
+// ended — ONCE per lineage per node, on the claim a deadline ending takes.
+//
+// NO READ IS NEEDED to know no record got there first: the binding is asked
+// only of a bearer the rows would still serve ([session.EndingCredential]),
+// so the validation that refused it already read them. What it cannot know is
+// WHEN the value changed — the configuration says what it is now, not since
+// when — so the row carries the instant it was noticed, as a deadline's does.
+func (s *Sessions) credentialChanged(r *http.Request, v session.Validation) {
+	lineage := v.Bearer.Lineage.String()
+	s.audit.EmitOnce(r.Context(), authevents.OnceSessionEnded, lineage, 0,
+		types.IAMSessionEnded{
+			Person: v.Bearer.Person, Lineage: lineage,
+			Reason: types.EndCredentialChanged,
+		})
 }
 
 // deadline announces a session its own deadline ended — ONCE, and only when a
@@ -923,7 +966,7 @@ func (s *Sessions) ended(r *http.Request, v session.Validation,
 // cookie on Tuesday. Whoever wrote that record already announced the ending,
 // and a second row naming `idle` or `absolute` would name the wrong cause for
 // a session that was over a day earlier. So the rows are asked
-// ([session.Standing]) — the same directory validation read through, a token's
+// ([session.Signer.Standing]) — the same directory validation read through, a token's
 // exchanged session included — and the ending is announced only when they
 // say the session was live. A node that cannot say HANDS THE CLAIM BACK and
 // announces nothing: a fact nobody could confirm is not one to announce, and
@@ -937,17 +980,23 @@ func (s *Sessions) deadline(r *http.Request, v session.Validation,
 	if !claimed {
 		return
 	}
-	standing := session.Standing(ctx, directory, v.Bearer)
-	switch standing.Row {
-	case session.RowValid:
+	standing := s.signer.Standing(ctx, directory, v.Bearer)
+	switch {
+	case standing.Row == session.RowValid,
+		standing.Ending == session.EndingCredential:
+		// LIVE BY EVERY RECORD. A token's session whose credential has
+		// also changed is announced by its deadline: this node never saw
+		// it presented between the change and the deadline — that would
+		// have taken the claim above — and the deadline is the ending a
+		// presentation can date.
 		reason := types.EndIdle
-		if v.Deadline == session.DeadlineAbsolute {
+		if v.Ending == session.EndingAbsolute {
 			reason = types.EndAbsolute
 		}
 		s.audit.Emit(ctx, types.IAMSessionEnded{
 			Person: v.Bearer.Person, Lineage: lineage, Reason: reason,
 		})
-	case session.RowBehind, session.RowStalled:
+	case standing.Row == session.RowBehind, standing.Row == session.RowStalled:
 		log.DebugContext(ctx, "iam_session_deadline_unconfirmed",
 			"lineage", lineage, "row", string(standing.Row),
 			"detail", standing.Detail, "error", errText(standing.Err))

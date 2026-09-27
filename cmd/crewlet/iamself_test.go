@@ -30,6 +30,10 @@ type selfNode struct {
 	mintAuth  string
 	mintQuery string
 	mintBody  map[string]any
+
+	// restricted makes every sign-in answer a session that may only enrol
+	// a second factor.
+	restricted bool
 }
 
 const selfCookie = "the-session-bearer"
@@ -57,7 +61,12 @@ func newSelfNode(t *testing.T) *selfNode {
 		default:
 			http.SetCookie(w, &http.Cookie{Name: session.CookieBaseName,
 				Value: selfCookie, HttpOnly: true})
-			httpjson.Write(w, http.StatusOK, map[string]string{"person": "p-jane"})
+			status := "signed_in"
+			if n.restricted {
+				status = string(httpjson.CodeSecondFactorEnrolmentRequired)
+			}
+			httpjson.Write(w, http.StatusOK, map[string]string{
+				"person": "p-jane", "status": status})
 		}
 	})
 	signedIn := func(r *http.Request) bool {
@@ -213,6 +222,27 @@ func TestARefusedMintStillSignsOut(t *testing.T) {
 	if strings.Join(n.steps, ",") != "login,mint,logout" {
 		t.Errorf("the node saw %v — the session a refused mint opened was left "+
 			"open", n.steps)
+	}
+}
+
+// A PASSWORD ALONE WHERE A SECOND FACTOR IS REQUIRED MINTS NOTHING, SAYS WHY,
+// AND STILL SIGNS OUT.
+//
+// The sign-in succeeds into a session that may only enrol a second factor —
+// its answer says `second_factor_enrolment_required` — so a mint would only be
+// refused. The command says what to do instead, asks the node for nothing, and
+// ends the session it opened. Mutation: ignore the status and the node sees a
+// mint; return before the deferred sign-out and it sees no logout.
+func TestAPasswordAloneWhereAFactorIsRequiredMintsNothing(t *testing.T) {
+	n := newSelfNode(t)
+	n.restricted = true
+	_, _, err := runSelf(t, n, "a long pass phrase\n")
+	if err == nil || !strings.Contains(err.Error(), "authenticator app") {
+		t.Fatalf("a restricted sign-in answered %v, want the enrolment named", err)
+	}
+	if strings.Join(n.steps, ",") != "login,logout" {
+		t.Errorf("the node saw %v, want a sign-in and a sign-out and no mint",
+			n.steps)
 	}
 }
 

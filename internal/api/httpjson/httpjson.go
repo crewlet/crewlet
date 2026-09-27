@@ -375,19 +375,26 @@ const (
 	//
 	// ONE CODE FOR ALL OF THEM, deliberately. It is paired with the
 	// timing defence in internal/iam/credential — both arms padded to one
-	// wall-clock deadline measured from arrival — because a code that
+	// wall-clock deadline measured from admission — because a code that
 	// distinguished them would make the pad pointless, and a pad with a
 	// distinguishing code would make the code pointless. Neither half
 	// works alone.
 	CodeSignInRefused Code = "sign_in_refused"
 
-	// CodeThrottled is too many failed attempts from one source.
+	// CodeThrottled is an attempt the throttle's curve says must wait
+	// longer than it will hold a request open for. It is a 429 carrying
+	// the time left in `Retry-After`, and [Throttled] is its one writer.
 	//
-	// THE ONE SPECIFIC REFUSAL ON THIS SURFACE, and it is safe precisely
-	// because it is keyed on the SOURCE rather than on the subject: a
-	// stranger learns they have been rate-limited, which they already
-	// knew. Keyed on a login it would be an oracle — "this account
-	// exists and I can lock it".
+	// THE ONE SPECIFIC REFUSAL ON A SIGN-IN SURFACE, and it is safe
+	// precisely because the curve a stranger can reach is keyed on the
+	// SOURCE and on what was TYPED, never on what it resolved to: they learn
+	// they have failed recently from where they are, which they already
+	// knew, and a name nobody holds is throttled exactly as a real one is.
+	// Keyed on a resolved login it would be an oracle — "this account
+	// exists". The one curve that IS keyed on the resolved person, a second
+	// factor's, is reached only past the password, so it tells its caller
+	// nothing the password did not — and its sentence cannot say "from
+	// here", because it counts every address.
 	CodeThrottled Code = "throttled"
 
 	// CodeSecondFactorRequired is a first factor that checked out where a
@@ -397,14 +404,30 @@ const (
 	// factor, so it discloses nothing to a stranger — and because without
 	// it a client cannot tell "your password is wrong" from "now type
 	// your code", which are different screens.
+	//
+	// A SIGN-IN'S 401, AND ALSO THE ENROLMENT'S 403: a session that may
+	// only enrol a second factor, whose person has come to hold one since
+	// it opened, has proved only the first factor and may not enrol over
+	// the second — the remedy there is the same, sign in with it.
 	CodeSecondFactorRequired Code = "second_factor_required"
 
 	// CodeStepUpRequired is a session that is valid and has not proved
 	// identity recently enough for what it just asked to do.
 	CodeStepUpRequired Code = "step_up_required"
 
+	// CodeSecondFactorEnrolmentRequired is a session opened on a password
+	// alone where the deployment requires a second factor its person does
+	// not hold: it may enrol one (`POST /auth/totp`), read who it is,
+	// re-confirm its password and sign out, and every other route answers
+	// this, 403.
+	//
+	// ITS OWN CODE, not `step_up_required`: no fresher proof of the same
+	// kind changes the answer — enrolling a factor does — and a client that
+	// read it as a step-up would ask for the password in a loop.
+	CodeSecondFactorEnrolmentRequired Code = "second_factor_enrolment_required"
+
 	// CodeSessionRevoked is a bearer this node KNOWS is over: signed out,
-	// revoked, expired, or ended by reuse detection.
+	// revoked or expired.
 	//
 	// DISTINCT FROM [CodeInvalidToken], because a client acts on them
 	// differently: this one means discard the cookie and sign in again,
@@ -666,12 +689,15 @@ var codes = map[Code]string{
 	// oracle the single code exists to close, written out in the body.
 	CodeSignInRefused: "Those sign-in details were not accepted. Check them " +
 		"and try again.",
-	CodeThrottled: "There have been too many failed sign-in attempts from " +
-		"here. Wait a little and try again.",
+	CodeThrottled: "There have been too many failed attempts. Wait for the " +
+		"time this answer names, then try again.",
 	CodeSecondFactorRequired: "Enter the code from your authenticator app, or " +
 		"one of your recovery codes.",
 	CodeStepUpRequired: "This action needs you to have confirmed who you are " +
 		"recently. Confirm it, then try again.",
+	CodeSecondFactorEnrolmentRequired: "This company requires a second factor " +
+		"and you have not set one up yet. Add an authenticator app to your " +
+		"account, and everything else opens once you have.",
 	CodeSessionRevoked: "This session has ended. Sign in again.",
 	CodeBootstrapClosed: "The first-operator setup is not available on this " +
 		"deployment. Ask somebody who already has an account to invite you.",
@@ -1023,6 +1049,20 @@ func RetrySeconds(hint time.Duration) int {
 		return 0
 	}
 	return int((hint + time.Second - 1) / time.Second)
+}
+
+// Throttled writes `429 throttled` carrying the wait left as a Retry-After.
+//
+// ONE WRITER, for [Unavailable]'s reason: a 429 with no Retry-After tells a
+// client it was refused and not when it may try again, so it retries at once,
+// is refused again, and a person at a form reads a lockout where there is a
+// wait of seconds. ROUNDED UP and never below a second, because a hint of
+// 0.2s sent as 0 is a client told to come back before the curve could have
+// admitted it — and zero here would read as "do not retry", which is never
+// what a curve means.
+func Throttled(w http.ResponseWriter, retryAfter time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(max(RetrySeconds(retryAfter), 1)))
+	Fail(w, http.StatusTooManyRequests, CodeThrottled)
 }
 
 // UnavailableWith is [Unavailable] carrying a detail: what could not be read,

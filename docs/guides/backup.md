@@ -390,8 +390,7 @@ backwards, and one of those rollbacks hands somebody a working credential:
 
 - **A session ended after the artefact was taken comes back alive.** The row
   that ended it is in the artefact as an open session, so a bearer that was
-  revoked — or that somebody signed out of, or that reuse detection
-  killed — validates again.
+  revoked — or that somebody signed out of — validates again.
 - **A revocation performed after the artefact was taken is undone.** A
   person's revocation epoch is a number in the restored rows, so a leaver
   whose access was cut yesterday holds an epoch the estate now accepts.

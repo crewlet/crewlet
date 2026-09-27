@@ -812,12 +812,25 @@ means the engine is fine and the protocol was wrong. A node that cannot read
 its identity estate answers `503` rather than `401`, and a person whose seat
 the chart no longer holds gets the guard's `403` naming the seat.
 
-**The guard is mounted whether or not `api.auth` is configured.** It applies one
-rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
-existence of a check. An API built with no Tier A at all therefore has no token
-that can match, and every guarded route answers `401`. That is the only safe
-reading of "an app was built without being told who may act", and it removes the
-possibility of a process serving `/config` writes with nothing in front of them.
+**The guard is mounted whether or not `api.auth` is configured, and it decides
+who is asking — never what they may do.** Every request leaves its middleware
+carrying one of three answers: **resolved** (a session cookie, a Tier A token
+or a machine token matched, and the principal it names), **anonymous** (nothing
+was presented, or what was presented is refused), or **unknown** (this node
+could not read what it needed to tell — answered `503` with a `Retry-After`,
+never the `401` that tells a browser to sign in again). What is not guarded is
+exactly the list above; every other route is, whatever its method, and there is
+no second list of routes that are "especially" guarded. What a resolved caller
+may then *do* is each surface's own question, asked where it is enforced: every
+route states the grant its verb takes, and `internal/authz`'s router decides it
+against the principal — `401` for somebody unresolved, `403` for a grant they do
+not hold or a proof of who they are that is too old (`step_up_required`). Tier
+A supplies the *posture* — which credentials exist and the ceiling their grants
+are cut to — never the existence of a check: an API built with no Tier A at all
+has no token that can match, and every guarded route answers `401`. That is the
+only safe reading of "an app was built without being told who may act", and it
+removes the possibility of a process serving `/config` writes with nothing in
+front of them.
 
 ### What Tier A must state on every node
 
@@ -863,6 +876,7 @@ as written with its consequence somewhere else:
 |---------|-------------------------|
 | `api.auth.local.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, a password backend with an optional second factor, already is one |
+| `api.external_url` is `https://` and `api.trusted_proxies` is empty | The engine never terminates TLS itself, so something in front of it does — and unless it is named, every caller's source is its address. The sign-in throttle then keys every caller's attempts at one login together, so a stranger guessing at somebody's login slows that person's own sign-in, and every audit row names the proxy. Not a refusal because one front end is right with the list empty: a balancer that passes each client's own address through as the peer rather than in a header |
 | An OIDC `scopes` list written without `offline_access` (an unset list asks for it) | Nothing notices a deactivation. An identity provider tells this engine nothing when somebody is disabled, so the session it already minted works until its absolute deadline — and the deactivation probe, which is what would end it early, is a refresh-token exchange with nothing to exchange |
 | A group mapping conferring `secrets:read`, `secrets:write` or `config:write` | Adding somebody to a directory group is an ordinary act performed by whoever administers the identity provider. The first two read and write this company's credentials, and `config:write` is [host access](#configwrite-is-host-access). Declaring them on the person's own record puts the decision where it is reviewed |
 | A group mapping conferring `people:manage` | Membership of that group lets whoever administers the identity provider make somebody able to invite, suspend, re-grant and remove every person here — the grant that decides who holds every other one — and nobody here reviews a membership change. Declaring it on the person's own record puts the decision where it is reviewed |
@@ -870,9 +884,10 @@ as written with its consequence somewhere else:
 `api.trusted_proxies` is a **CIDR list, never a bool**, because the question a
 forwarded header poses is not "does this deployment sit behind a proxy" but "is
 *this* peer the proxy". A bool set true trusts a header anybody can send, which
-hands an attacker their own rate-limit bucket and their own audit row; set false
+hands an attacker their own throttle key and their own audit row; set false
 behind a real proxy it buckets the entire internet under one address. `0.0.0.0/0`
-is refused for the first reason.
+is refused for the first reason, and an `https` external URL with the list
+empty is warned about for the second.
 
 **CORS** defaults to same-origin. The dashboard is served by this process so it
 needs no entry; list any other browser origin explicitly in

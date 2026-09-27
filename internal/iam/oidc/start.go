@@ -37,6 +37,12 @@ type Flight struct {
 	// SEALED rather than signed: it is what proves the party redeeming
 	// the code is the party that asked for it, so a readable one is PKCE
 	// defeated.
+	//
+	// IT IS ALSO WHAT NAMES THE FLIGHT to the node that finishes it, which
+	// remembers every flight it has exchanged by a digest of this value
+	// ([Redemptions]) — thirty-two random bytes that are sealed here and
+	// never travel in a URL, which is everything a name for a replay
+	// defence needs, and a value every build has always sealed.
 	Verifier string `json:"verifier"`
 
 	// Return is where the browser goes once the login completes. It is
@@ -50,11 +56,18 @@ type Flight struct {
 	// enrols the person it was issued for and pins the subject the
 	// provider comes back with to them. Empty for an ordinary sign-in.
 	//
-	// SEALED HERE for Return's reason: an invitation id is the credential
-	// its link carries, and one a caller could swap on the way back from
-	// the provider would let any provider account finish somebody else's
+	// SEALED HERE for Return's reason: an invitation is the credential its
+	// link carries, and one a caller could swap on the way back from the
+	// provider would let any provider account finish somebody else's
 	// invitation that the caller merely started.
 	Invite string `json:"invite,omitempty"`
+
+	// InviteSecret is the secret the invitation's link carries beside its
+	// id, which the start checked and the callback presents again to the
+	// redemption. SEALED for Verifier's reason above: it is a secret,
+	// and the envelope's AEAD is the only thing keeping it one on its way
+	// through the browser. Empty exactly when Invite is.
+	InviteSecret string `json:"invite_secret,omitempty"`
 
 	// Login is the login the redeemer chose on the invitation's page, in
 	// the person grammar — or the one that page proposed from the
@@ -111,12 +124,21 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 	if err = c.Validate(); err != nil {
 		return "", "", fmt.Errorf("%w: %w", ErrNotConfigured, err)
 	}
-	flight := Flight{Return: want.Return, Invite: want.Invite, Login: want.Login,
+	flight := Flight{Return: want.Return, Invite: want.Invite,
+		InviteSecret: want.InviteSecret, Login: want.Login,
 		MaxAge: want.MaxAge, ExpiresAt: now.Add(FlightTTL)}
-	if flight.MaxAge > 0 && flight.Invite != "" {
+	switch {
+	case flight.MaxAge > 0 && flight.Invite != "":
 		return "", "", fmt.Errorf("oidc: a round trip either confirms a " +
 			"signed-in person or redeems an invitation for somebody new, " +
 			"never both")
+	case (flight.Invite == "") != (flight.InviteSecret == ""):
+		// ONE WITHOUT THE OTHER is a redemption the callback could never
+		// finish — the id opens nothing without its link's secret — or a
+		// secret carried for no invitation at all, so it is refused here
+		// rather than a round trip later.
+		return "", "", fmt.Errorf("oidc: a redemption carries an invitation " +
+			"AND its link's secret, or neither")
 	}
 	for _, into := range []*string{&flight.State, &flight.Nonce, &flight.Verifier} {
 		if *into, err = randomValue(); err != nil {
@@ -198,8 +220,11 @@ func Open(cipher secrets.Cipher, sealed string, now time.Time) (Flight, error) {
 	}
 	switch {
 	case flight.State == "" || flight.Nonce == "" || flight.Verifier == "":
+		// THE VERIFIER is also what a replay is refused on ([Redemptions]),
+		// so a flight without one could never be told from its next
+		// presentation — which it never reaches, being refused here.
 		return Flight{}, fmt.Errorf("%w: the login cookie is missing one of "+
-			"the three values a round trip carries", ErrRefused)
+			"the values a round trip carries", ErrRefused)
 	case !now.Before(flight.ExpiresAt):
 		return Flight{}, fmt.Errorf("%w: the login took longer than %s",
 			ErrRefused, FlightTTL)
@@ -227,13 +252,28 @@ func Open(cipher secrets.Cipher, sealed string, now time.Time) (Flight, error) {
 // the provider did not give — no `auth_time`, which `max_age` makes required,
 // or one outside the window — is [ErrRefused]: the person asked to confirm who
 // they are, and nothing confirmed it.
+//
+// # The window is judged exactly, with no skew
+//
+// What this answers is the instant the replacement session is PROVED at, and
+// the guard stamps that session's deadlines from it by the same window the
+// flight asked for (`ReauthAt` is the proof plus `step_up`, the sensitive one
+// plus `step_up_sensitive`) — so "accepted here" and "fresh for the gesture
+// that asked" are one comparison, and an `auth_time` is accepted only while the
+// window it opens is still open now. It was judged within [ClockSkew] and the
+// unadjusted instant returned, so a proof up to a minute past the window was
+// accepted, the session it came from ended, a replacement opened and
+// announced as a step-up — already stale, and the gesture refused
+// `step_up_required` again. The skew is for `exp`, `iat` and `nbf`, which the
+// token's own verification judges within it; a provider whose clock runs
+// behind this one's reads older here by its lag, which costs its person that
+// much of their window and never admits a proof that is not fresh.
 func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
 	at := c.AuthTime
 	if at.After(now) {
-		// A PROVIDER'S CLOCK AHEAD OF THIS ONE, by the amount no token
-		// validation here tolerates for anything else either: the
-		// authentication happened, and not later than the token that
-		// reports it arrived.
+		// A PROVIDER'S CLOCK AHEAD OF THIS ONE, inside the skew the
+		// token's own `iat` was held to: the authentication happened,
+		// and not later than the token that reports it arrived.
 		at = now
 	}
 	if f.MaxAge <= 0 {
@@ -244,7 +284,7 @@ func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("%w: the provider asserted no "+
 			"auth_time, which it must when max_age is asked, so nothing says "+
 			"the person authenticated at all", ErrRefused)
-	case now.Sub(at) > f.MaxAge:
+	case now.Sub(at) >= f.MaxAge:
 		return time.Time{}, fmt.Errorf("%w: the provider says the person "+
 			"authenticated %s ago, outside the %s window this confirmation "+
 			"asked for", ErrRefused, now.Sub(at).Round(time.Second), f.MaxAge)
@@ -252,7 +292,7 @@ func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
 	return at, nil
 }
 
-// randomValue is one unguessable URL-safe value.
+// randomValue is one unguessable URL-safe value of [entropyBytes].
 func randomValue() (string, error) {
 	raw := make([]byte, entropyBytes)
 	if _, err := rand.Read(raw); err != nil {

@@ -55,6 +55,12 @@ type Identity struct {
 	// lag is zero and the answer is still unknown.
 	Deferred bool
 
+	// Credential is the configured secret this bearer's subject answers to
+	// NOW — a Tier A token's value, for a session exchanged from one — or
+	// zero for a person, who answers to rows. A bearer bound to another
+	// value is a session that is over; see credential.go.
+	Credential Credential
+
 	// Session and Person are the rows, each three-valued in its own right
 	// through its Found field.
 	Session LineageRow
@@ -68,10 +74,10 @@ type Identity struct {
 type LineageRow struct {
 	Found bool
 
-	// Ended reports a session that stopped — signed out, revoked, expired
-	// or ended by reuse detection. The row is KEPT until the sweep
-	// collects it, because "this session was ended by reuse detection" is
-	// the sentence an investigation is looking for.
+	// Ended reports a session that stopped — signed out, revoked or
+	// expired. The row is KEPT until the sweep collects it, because "this
+	// session was revoked, and when" is the sentence an investigation is
+	// looking for.
 	Ended bool
 
 	// Epoch is the revocation epoch the session was opened at.
@@ -91,6 +97,15 @@ type LineageRow struct {
 	// them. The guard unions them with the person's declared set and
 	// clamps both to its ceiling.
 	GroupGrants []iam.Grant
+
+	// EnrolmentOnly marks a session its sign-in opened on a password alone
+	// where the deployment requires a second factor the person does not
+	// hold: it may enrol one and do nothing else. The session's fact, like
+	// ProvedAt — decided once, by what the sign-in proved — and carried in
+	// the BEARER too ([Bearer.EnrolmentOnly]), because this row is absent on
+	// exactly the node that serves a session it has not applied yet. Read
+	// the two together through [Validation.EnrolmentOnly], never this alone.
+	EnrolmentOnly bool
 }
 
 // PersonRow is the holder's row.
@@ -125,21 +140,15 @@ type Row string
 
 const (
 	// RowValid is everything checking out: the signature verifies, the
-	// rotation index is current or inside the overlap, the row is present
-	// and live, its epoch equals the bearer's and the person's, the
-	// generation matches, and neither deadline has passed.
+	// row is present and live, its epoch equals the bearer's and the
+	// person's, the generation matches, and neither deadline has passed.
 	RowValid Row = "valid"
 
 	// RowEnded is a session that is over: the row says ended, or the
 	// person's epoch has moved past the bearer's, or the fleet-wide
-	// generation has.
+	// generation has, or the configured credential it was exchanged from
+	// has a new value.
 	RowEnded Row = "ended"
-
-	// RowReuse is an index the engine could not have issued, or a
-	// rotation id that does not verify for the index beside it. The
-	// person's revocation epoch is bumped, which ends every session they
-	// hold. rotate.go argues what does and does not reach here.
-	RowReuse Row = "reuse"
 
 	// RowGone is no row, on a node whose applied position COVERS the
 	// bearer's start position. That node has seen everything up to and
@@ -149,8 +158,9 @@ const (
 
 	// RowBehind is no row, on a node whose applied position is BELOW the
 	// bearer's start position, within the stall grace. It serves reads —
-	// the signature and the epoch are proof the sign-in happened — and
-	// refuses writes with 503.
+	// the signature and the epoch are proof the sign-in happened, and the
+	// bearer's own scope says what the session may reach — and refuses
+	// writes with 503.
 	//
 	// A WRITE REACHES THAT 503 ONLY AFTER A WAIT, and the wait is the
 	// request guard's rather than this table's (internal/api/auth's
@@ -188,33 +198,49 @@ const (
 	RowMalformed Row = "malformed"
 )
 
-// Deadline is which of a bearer's own deadlines ended a session.
+// Ending is what ended a session when no RECORD did.
 //
-// A VALUE BESIDE [RowEnded] RATHER THAN TWO MORE ROWS, because the table's
-// answer is the same for both — refuse, and clear the cookie — and a row is a
+// A VALUE BESIDE [RowEnded] RATHER THAN MORE ROWS, because the table's answer
+// is the same for all of them — refuse, and clear the cookie — and a row is a
 // decision about what a request may do. What differs is what the audit trail
-// says happened, and a deadline is the one way a session ends that no record
-// ever states: the idle deadline lives in the bearer and nowhere else, so the
-// frame that validates a bearer is the only one that can ever see it pass.
-type Deadline string
+// says happened, and these are the ways a session ends that no record ever
+// states: the idle deadline lives in the bearer and nowhere else, the absolute
+// one too, and the value a token's session was exchanged from lives in a
+// configuration file — so the frame that validates a bearer is the only one
+// that can ever see any of them decide.
+type Ending string
 
 const (
-	// DeadlineIdle is a session unused for [Idle].
-	DeadlineIdle Deadline = "idle"
+	// EndingIdle is a session unused for [Idle].
+	EndingIdle Ending = "idle"
 
-	// DeadlineAbsolute is a session past the lifetime it was minted with,
+	// EndingAbsolute is a session past the lifetime it was minted with,
 	// which no re-issue moves.
-	DeadlineAbsolute Deadline = "absolute"
+	EndingAbsolute Ending = "absolute"
+
+	// EndingCredential is a session exchanged from a configured credential
+	// whose value is not the one it was exchanged from any more — a new
+	// value under the token's id, or the entry removed — decided while
+	// this node's rows would still have served it, so no record this node
+	// holds got there first. See credential.go.
+	EndingCredential Ending = "credential"
 )
 
-// Valid reports whether d is none or one of the two deadlines.
-func (d Deadline) Valid() bool {
-	return d == "" || d == DeadlineIdle || d == DeadlineAbsolute
+// Valid reports whether e is none or an ending this build names.
+func (e Ending) Valid() bool {
+	return e == "" || e == EndingIdle || e == EndingAbsolute || e == EndingCredential
 }
 
-// Rows are the seven, in the order the design's table states them.
+// Deadline reports whether e is one of the bearer's own deadlines.
+func (e Ending) Deadline() bool { return e == EndingIdle || e == EndingAbsolute }
+
+// Rows are the six, in the order the design's table states them.
+//
+// THERE IS NO REUSE ROW. A bearer carries nothing that tells a replayed copy
+// from the cookie its owner holds — see the bearer format's doc for what the
+// rotation index that used to stand for one actually detected.
 var Rows = []Row{
-	RowValid, RowEnded, RowReuse, RowGone, RowBehind, RowStalled, RowMalformed,
+	RowValid, RowEnded, RowGone, RowBehind, RowStalled, RowMalformed,
 }
 
 // Need is what a request is asking to do, which picks the column.
@@ -265,7 +291,6 @@ const (
 var sessionTable = map[Row]struct{ Reads, Writes, StepUp Answer }{
 	RowValid:     {AnswerServe, AnswerServe, AnswerStepUp},
 	RowEnded:     {AnswerRefuse, AnswerRefuse, AnswerRefuse},
-	RowReuse:     {AnswerRefuse, AnswerRefuse, AnswerRefuse},
 	RowGone:      {AnswerRefuse, AnswerRefuse, AnswerRefuse},
 	RowBehind:    {AnswerServe, AnswerUnavailable, AnswerUnavailable},
 	RowStalled:   {AnswerUnavailable, AnswerUnavailable, AnswerUnavailable},
@@ -294,20 +319,10 @@ type Validation struct {
 	Bearer Bearer
 
 	// Reissue is a fresh cookie value to set, or empty. It is produced on
-	// a served row only, and only when the idle deadline or the rotation
-	// index has actually moved — a Set-Cookie on every response is a
-	// header nobody needs.
+	// a served row only, and only once the idle deadline has drifted past
+	// [ReissueAfter] — a Set-Cookie on every response is a header nobody
+	// needs.
 	Reissue string
-
-	// Reuse reports that the caller must bump this person's revocation
-	// epoch, which ends every session they hold, and log
-	// `iam_session_reuse_detected` at WARN.
-	//
-	// A FLAG RATHER THAN A WRITE FROM HERE. This package holds no
-	// publisher and must not: minting and validating happen on every
-	// ingress node on every request, and a validator that could append to
-	// the log is one an unauthenticated caller can make write.
-	Reuse bool
 
 	// Person is the holder's row as this node has it, empty on the rows
 	// that read nothing.
@@ -316,7 +331,10 @@ type Validation struct {
 	// Session is the session's own row as this node has it — when it was
 	// proved — and the zero row on [RowBehind], whose whole meaning is that
 	// this node has not applied it: a node that is behind serves reads on
-	// the signature and the epoch, and claims no proof it cannot see.
+	// the signature and the epoch, and claims no proof it cannot see. What
+	// the bearer says about the session is on [Validation.Bearer], and a
+	// fact both carry is read through a method that asks both —
+	// [Validation.EnrolmentOnly].
 	Session LineageRow
 
 	// Detail says which fact decided, for a log line. It is NEVER sent to
@@ -326,10 +344,26 @@ type Validation struct {
 	// Err is the read failure behind [RowStalled], when there was one.
 	Err error
 
-	// Deadline is which of the bearer's own deadlines ended it, set on a
-	// [RowEnded] a deadline decided and empty everywhere else — including
+	// Ending is what ended it when no record did — one of the bearer's own
+	// deadlines, or the credential a token's session stands for — set on a
+	// [RowEnded] one of those decided and empty everywhere else, including
 	// the ends a RECORD decided, which already said so when it landed.
-	Deadline Deadline
+	Ending Ending
+}
+
+// EnrolmentOnly reports whether the session this bearer names may do nothing
+// but enrol a second factor.
+//
+// THE UNION OF ITS TWO COPIES, and never either alone. The BEARER's is signed
+// and every node holds it, which is what makes the restriction hold on a node
+// serving reads it has no row for ([RowBehind], whose [Validation.Session] is
+// the zero row); the ROW's is what `GET /iam/people/{id}/sessions` lists. Both
+// are written from the one decision the sign-in made, and a session either of
+// them calls restricted is restricted: a reading of the row alone served
+// every restricted session whole for the apply latency after its sign-in, on
+// every node including the one that answered it.
+func (v Validation) EnrolmentOnly() bool {
+	return v.Bearer.EnrolmentOnly || v.Session.EnrolmentOnly
 }
 
 // Answer is what this validation permits for one kind of request.
@@ -386,41 +420,32 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	// recently it was used.
 	switch {
 	case !now.Before(b.AbsoluteExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b, Deadline: DeadlineAbsolute,
+		return Validation{Row: RowEnded, Bearer: b, Ending: EndingAbsolute,
 			Detail: "the absolute deadline has passed"}
 	case !now.Before(b.IdleExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b, Deadline: DeadlineIdle,
+		return Validation{Row: RowEnded, Bearer: b, Ending: EndingIdle,
 			Detail: "the idle deadline has passed"}
-	}
-
-	// THEN THE ROTATION, because reuse is the one verdict that makes this
-	// node WRITE, and it must not wait on a read that may not be servable.
-	// rotate.go argues what reaches each arm.
-	rotation := s.rotationOf(b, now)
-	if rotation == rotationReuse {
-		return Validation{Row: RowReuse, Bearer: b, Reuse: true,
-			Detail: fmt.Sprintf("rotation index %d is ahead of the window "+
-				"this session is in", b.Rotation)}
 	}
 
 	// AND ONLY THEN THE ROWS. Nothing above this line reads anything, so
 	// an unauthenticated caller cannot price a request by sending rubbish.
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
-	v := standing(b, identity, err)
+	v := s.standing(b, identity, err)
 	if v.Row == RowValid || v.Row == RowBehind {
 		// THROUGH served, BOTH OF THEM. Both serve reads on the bearer's
 		// own proof, so both must move the idle deadline: an arm that
 		// served without re-issuing would let a session in continuous
 		// use on a lagging node expire on the deadline it was minted
 		// with.
-		return s.served(v.Row, b, identity, rotation, now, v.Detail)
+		return s.served(v.Row, b, identity, now, v.Detail)
 	}
 	return v
 }
 
-// Standing is the row a bearer's ROWS put it on, with its own deadlines and
-// its rotation set aside: what this node's copy of the estate says about the
-// session, and nothing the bearer says about itself.
+// Standing is the row a bearer's ROWS put it on, with its own deadlines set
+// aside: what this node's copy of the estate — and, for a session exchanged
+// from a Tier A token, the value configured under the token's name — says
+// about the session, and nothing the bearer says about when it ends.
 //
 // # It exists for one question, and answers it three ways
 //
@@ -436,16 +461,22 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 //
 //   - [RowValid]: the session was live until its own deadline, which is the
 //     whole of what ended it.
-//   - [RowEnded] or [RowGone]: a record ended it, or the sweep has already
-//     collected it; either way the ending was not the deadline's to announce.
+//   - [RowEnded] carrying [EndingCredential]: the rows would still serve it,
+//     and the credential a token's session was exchanged from has since
+//     changed — no record ended it either, so the deadline, the ending a
+//     presentation can date, is still the one to announce.
+//   - [RowEnded] otherwise, or [RowGone]: a record ended it, or the sweep has
+//     already collected it; either way the ending was not the deadline's to
+//     announce.
 //   - [RowBehind] or [RowStalled]: this node cannot say, and a fact nobody
 //     could confirm is not one to announce.
 //
-// NO RE-ISSUE AND NO ROTATION VERDICT: the answer is about the rows alone, and
-// a bearer past its deadline is never served.
-func Standing(ctx context.Context, directory Directory, b Bearer) Validation {
+// NO RE-ISSUE: a bearer past its deadline is never served.
+func (s *Signer) Standing(ctx context.Context, directory Directory,
+	b Bearer) Validation {
+
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
-	v := standing(b, identity, err)
+	v := s.standing(b, identity, err)
 	if v.Row == RowValid || v.Row == RowBehind {
 		v.Person, v.Session = identity.Person, identity.Session
 	}
@@ -454,11 +485,37 @@ func Standing(ctx context.Context, directory Directory, b Bearer) Validation {
 
 // standing is the row one read of the estate puts a bearer on — the half of
 // the table that is about the ROWS, shared by [Signer.Validate] and
-// [Standing] so the two can never disagree about what a row means.
+// [Signer.Standing] so the two can never disagree about what a row means —
+// and, on a row that would serve, whether the bearer still stands for the
+// credential its subject answers to.
+//
+// THE BINDING IS ASKED ONLY OF A SERVING ROW, and on BOTH of them: a node that
+// has not applied the session's row still holds the configuration, so a
+// rotated token's session is over there too rather than served for reads
+// until the row arrives.
+//
+// AND IT SAYS SO, as [EndingCredential]: the rows would have served, so no
+// record this node holds ended the session, and nothing but this frame will
+// ever say it ended. Left bare, a break-glass session cut off by the value it
+// was exchanged from changing ended without a row, and the trail could not
+// say which sessions a rotation ended.
+func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
+	v := rowsStanding(b, identity, err)
+	if v.Row != RowValid && v.Row != RowBehind {
+		return v
+	}
+	if ok, why := s.bound(b, identity.Credential); !ok {
+		return Validation{Row: RowEnded, Bearer: b, Person: identity.Person,
+			Ending: EndingCredential, Detail: why}
+	}
+	return v
+}
+
+// rowsStanding is [Signer.standing] without the binding: the rows alone.
 //
 // A SERVING ROW comes back bare, for its caller to finish: Validate re-issues
 // through [Signer.served] and Standing only reports it.
-func standing(b Bearer, identity Identity, err error) Validation {
+func rowsStanding(b Bearer, identity Identity, err error) Validation {
 	if err != nil {
 		return Validation{Row: RowStalled, Bearer: b, Err: err,
 			Detail: "this node could not read the identity estate"}
@@ -525,25 +582,23 @@ func standing(b Bearer, identity Identity, err error) Validation {
 	return Validation{Row: RowValid, Bearer: b}
 }
 
-// served finishes a row that is allowed to serve, re-issuing the cookie when
-// something in it has actually moved.
+// served finishes a row that is allowed to serve, re-issuing the cookie once
+// its idle deadline has drifted past [ReissueAfter].
 //
-// TWO REASONS TO RE-ISSUE and both are free: the idle deadline has drifted
-// past [ReissueAfter], or the rotation window has turned over. Neither writes
-// anything — the deadline and the index are both in the signature — so the
-// only cost being managed is a Set-Cookie header, which is why the throttle
-// exists at all.
+// THE RE-ISSUE IS FREE — the deadline is in the signature, so nothing is
+// written — and the only cost being managed is a Set-Cookie header, which is
+// why the throttle exists at all.
 func (s *Signer) served(row Row, b Bearer, identity Identity,
-	rotation rotationVerdict, now time.Time, detail string) Validation {
+	now time.Time, detail string) Validation {
 
 	out := Validation{Row: row, Bearer: b, Person: identity.Person,
 		Session: identity.Session, Detail: detail}
 	issuedAt := b.IdleExpiresAt.Add(-Idle)
 	stale := now.Sub(issuedAt) >= ReissueAfter
-	if !stale && rotation != rotationBehind {
+	if !stale {
 		return out
 	}
-	fresh, err := s.issue(b, s.rotationAt(b.Lineage, now), now)
+	fresh, err := s.issue(b, identity.Credential, now)
 	if err != nil {
 		// A RE-ISSUE THAT CANNOT BE SIGNED DOES NOT REFUSE THE REQUEST.
 		// The bearer in hand has already verified and has not expired,

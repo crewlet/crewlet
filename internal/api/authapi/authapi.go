@@ -18,20 +18,23 @@
 // # The rule that shapes every refusal on this surface
 //
 // A SIGN-IN SURFACE MUST NOT BE A ROSTER. Every failed sign-in answers one
-// code, at one wall-clock deadline measured from arrival, whatever actually
+// code, at one wall-clock deadline measured from admission, whatever actually
 // went wrong — no such login, wrong password, wrong second factor, a person
 // suspended, a person removed. A caller that could tell those apart has a list
 // of who works here and a way to test it.
 //
 // Both halves are needed and neither works alone: a distinguishing code makes
 // the timing pad pointless, and a distinguishing delay makes the single code
-// pointless. internal/iam/credential owns the timing half — admission per
-// source BEFORE the subject resolves, a fixed-cost decoy on the miss, both
-// arms padded to one deadline — and this package owns the shape half.
+// pointless. internal/iam/credential owns the timing half — a delay curve
+// decided BEFORE the subject resolves, on the subject as it was TYPED from the
+// source it came from, a fixed-cost decoy on the miss, both arms padded to one
+// deadline — and this package owns the shape half.
 //
 // The exceptions are named rather than assumed, and each discloses nothing a
-// stranger did not already have: a throttle refusal is keyed on the SOURCE, so
-// it tells somebody they are rate-limited, which they knew; a second-factor
+// stranger did not already have: a throttle refusal names only the caller's
+// own recent failures from where they are, on what they typed — a name nobody
+// holds climbs the curve exactly as a real one does — so it tells somebody
+// they are rate-limited, which they knew; a second-factor
 // prompt is reached only by somebody who already passed the first; an
 // invitation's refusal is read by somebody holding the link; and a STALE
 // founder code (`bootstrap_code_stale`) is answered only to somebody presenting
@@ -51,6 +54,18 @@
 // wrong code would be. A spend this node cannot RECORD is a 503 rather than a
 // session: signing somebody in on a code that stays usable is the replay the
 // spend exists to close.
+//
+// # A required second factor is enrolled before anything else
+//
+// `api.auth.local.totp: required` says nobody acts on a password alone, and a
+// person who holds no second factor has nothing else to present. So a sign-in
+// this surface verified that proved a password and no second factor opens a
+// session marked ENROLMENT-ONLY on its own start record, and answers
+// `status: second_factor_enrolment_required`; internal/api/auth refuses that
+// session every route but the four that let its person in, and enrolling an
+// authenticator through it REPLACES it with a whole session, as a step-up
+// does. The mark is the session's because what restricts it is what its
+// sign-in proved — see [Service.enrolmentOnly].
 //
 // # Three outcomes stay three, on every write
 //
@@ -75,7 +90,7 @@
 // Some routes here are unguarded, because requiring a credential to obtain one
 // is a deployment nobody can enter: the posture read, the login itself, the
 // first operator's bootstrap, the OIDC pair and the invitation pair. Each that
-// touches the store is admitted per SOURCE by the throttle, and each that
+// touches the store is admitted by the throttle first, and each that
 // changes state is origin-checked like every other write (internal/api/auth's
 // CSRF gate) — the guard is what they are exempt from, not the cross-site
 // rule, and that gate exempting them too is what left login CSRF open.
@@ -272,13 +287,30 @@ func unresolved(w http.ResponseWriter, r *http.Request, event string,
 		})
 }
 
-// Opener opens one sealed value under the key of whatever it belongs to.
+// Sealer is the sealing this surface does, and nothing else of the estate's
+// key machinery.
 //
-// CONSUMER-DEFINED AND ONE METHOD, like every other seam here: this surface
-// opens an invitation's address and nothing else, so it takes the ability to
-// open one value rather than a sealer that could reach every person's.
-type Opener interface {
+// CONSUMER-DEFINED AND THREE METHODS, like every other seam here: it opens an
+// invitation's address, and seals and opens a second factor's seed — the one
+// credential this estate keeps as a secret rather than a verifier. It takes no
+// mint, no shred and no listing, so a sign-in route can reach a value it was
+// handed and never a key.
+//
+// [iamdomain.Sealer] is what a running node hands in.
+type Sealer interface {
+	// Open opens one of an owner's values — here, an invitation's address,
+	// under the invitation's own key.
 	Open(ctx context.Context, owner string, field iamdomain.Field, sealed string) (string, error)
+
+	// SealCredential and OpenCredential seal and open a credential secret
+	// under its PERSON's key, bound to the credential it belongs to — see
+	// [iamdomain.Sealer.SealCredential] for why both halves, and
+	// [iamdomain.Sealer.OpenCredential] for the three answers the second
+	// one gives.
+	SealCredential(ctx context.Context, person, credential string,
+		field iamdomain.Field, plaintext string) (string, error)
+	OpenCredential(ctx context.Context, person, credential string,
+		field iamdomain.Field, sealed string) (string, error)
 }
 
 // Blinds is where the keyed blind an address or a provider subject is matched
@@ -306,8 +338,15 @@ type Blinds interface {
 // factor — is published as it happens, and a FAILED attempt is only ever
 // COUNTED, because whoever failed decides how many of those there are. See
 // internal/iam/authevents, whose Trail is what a running node hands in.
+//
+// EmitOnce is the first door for a fact worth one row per window rather than
+// one per occurrence — a person's second factor at its ceiling, which every
+// further wrong code would otherwise announce again — decided by the node's
+// one dedupe rather than a second copy of it here.
 type Audit interface {
 	Emit(ctx context.Context, payload events.Payload)
+	EmitOnce(ctx context.Context, class authevents.OnceClass, key string,
+		window time.Duration, payload events.Payload) bool
 	Failed(ctx context.Context, f authevents.Failure)
 }
 
@@ -344,9 +383,9 @@ type Options struct {
 	// rather than a refusal at boot.
 	Hasher *credential.Hasher
 
-	// Throttle is the fleet's failed-attempt window with the two timing
-	// defences around it. REQUIRED — without it every refusal on this
-	// surface is an oracle with a stopwatch.
+	// Throttle is the sign-in delay curve with the two timing defences
+	// around it. REQUIRED — without it every refusal on this surface is an
+	// oracle with a stopwatch, and a password is guessed at line rate.
 	Throttle *credential.Throttle
 
 	// Blinder is where the address and subject blinds come from. REQUIRED.
@@ -363,15 +402,20 @@ type Options struct {
 	// somewhere else.
 	Cipher secrets.Cipher
 
-	// Opener opens a sealed value under its own key. REQUIRED.
+	// Sealer seals and opens the values this surface handles. REQUIRED.
 	//
-	// AN INVITATION'S ADDRESS is what this surface opens and the only
-	// thing: a form has to show which address a link was sent to, or the
-	// person guesses which of theirs it was. It is sealed under the
-	// INVITATION's key rather than a person's, because there is no person
-	// yet — minting one for an invitation that may never be redeemed
-	// would leave a key behind for every address anybody ever typed.
-	Opener Opener
+	// AN INVITATION'S ADDRESS is one: a form has to show which address a
+	// link was sent to, or the person guesses which of theirs it was. It
+	// is sealed under the INVITATION's key rather than a person's, because
+	// there is no person yet — minting one for an invitation that may
+	// never be redeemed would leave a key behind for every address anybody
+	// ever typed.
+	//
+	// A SECOND FACTOR'S SEED is the other, sealed when it is enrolled and
+	// opened only to check a code: it is a secret the replicated estate
+	// would otherwise hold in the clear on every node, in every snapshot
+	// and every backup.
+	Sealer Sealer
 
 	// Sessions is what one bearer is validated against. REQUIRED.
 	//
@@ -430,7 +474,7 @@ type Service struct {
 	throttle  *credential.Throttle
 	blinder   Blinds
 	sessions  session.Directory
-	opener    Opener
+	sealer    Sealer
 	cipher    secrets.Cipher
 	clients   *auth.Clients
 	provider  *oidc.Provider
@@ -438,12 +482,31 @@ type Service struct {
 	custody   Custody
 	now       func() time.Time
 
+	// redeemed is every provider round trip this node has finished, so a
+	// flight cookie is exchanged at the provider once however often it is
+	// presented — see [oidc.Redemptions].
+	redeemed *oidc.Redemptions
+
 	// codeMu serialises every change to this node's founder-code FILE —
 	// the boot offer, a re-issue and the removal after a redemption — so
 	// two re-issues arriving at once cannot each withdraw, each write and
 	// each mint, leaving two live codes and a file holding only one.
 	codeMu sync.Mutex
+
+	// rehashes are the password rewrites this surface runs after a
+	// sign-in has answered — see [Service.rehashPassword] — and what
+	// [Service.Stop] ends.
+	rehashes rehashes
 }
+
+// Stop ends the work this surface runs after its answers: no password rewrite
+// starts from now on, and those in flight are waited for until ctx ends and
+// then cancelled — returning only once every one has.
+//
+// CALLED ONCE THE LISTENER HAS STOPPED, so no request can start another, and
+// before the engine the writes go to is torn down. Safe to call more than
+// once.
+func (s *Service) Stop(ctx context.Context) { s.rehashes.stop(ctx) }
 
 // New builds the surface, or refuses a missing dependency by name.
 //
@@ -466,7 +529,7 @@ func New(opts Options) (*Service, error) {
 		{"Throttle", opts.Throttle == nil},
 		{"Blinder", opts.Blinder == nil},
 		{"Sessions", opts.Sessions == nil},
-		{"Opener", opts.Opener == nil},
+		{"Sealer", opts.Sealer == nil},
 		// THE CIPHER ONLY WHERE A PROVIDER IS. A deployment signing in
 		// with passwords seals no flight, so requiring it would refuse
 		// a wiring that is complete.
@@ -493,11 +556,12 @@ func New(opts Options) (*Service, error) {
 		// Tier A — see [Service.directoryFor] for what the bare estate
 		// cost a token's own sign-out.
 		sessions: auth.SessionSubjects(opts.Bootstrap, opts.Sessions),
-		opener:   opts.Opener,
+		sealer:   opts.Sealer,
 		cipher:   opts.Cipher,
 		provider: opts.Provider,
 		custody:  opts.Custody,
 		clients:  opts.Clients, audit: opts.Audit, now: opts.Now,
+		redeemed: oidc.NewRedemptions(),
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -522,17 +586,18 @@ func joinNames(names []string) string {
 // the caller must not.
 //
 // THE ATTEMPT IS COUNTED, NEVER PUBLISHED. A failed sign-in is authored by
-// whoever can reach this listener, so it goes to the audit trail's counter and
-// its per-client, per-minute tally — the engine's own loop decides when a row
-// is written, and the row carries counts rather than what was typed.
+// whoever can reach this listener, so it goes to the throttle's curve, the
+// audit trail's counter and its per-client, per-minute tally — the engine's
+// own loop decides when a row is written, and the row carries counts rather
+// than what was typed.
 //
-// IT PADS BEFORE IT ANSWERS. The pad is measured from when the request
-// ARRIVED rather than from here, so a slow arm and a fast one leave at the
+// IT PADS BEFORE IT ANSWERS. The pad is measured from when the request was
+// ADMITTED rather than from here, so a slow arm and a fast one leave at the
 // same instant — which is the only shape in which a stopwatch learns nothing.
 func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, attempt authevents.Failure, why string) {
+	in admission, attempt authevents.Failure, why string) {
 
-	s.throttle.Fail(r.Context(), attempt.Client)
+	in.ticket.Fail(r.Context())
 	s.audit.Failed(r.Context(), attempt)
 	log.WarnContext(r.Context(), "api_sign_in_refused",
 		// THE ARM, for the log only. Never the login, never the
@@ -541,42 +606,121 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 		// operator's screen renders.
 		"reason", why, "method", string(attempt.Method), "route", r.URL.Path,
 		"source", attempt.Client)
-	s.throttle.Pad(r.Context(), arrived)
+	s.throttle.Pad(r.Context(), in.at)
 	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSignInRefused)
 }
 
-// admit runs the per-source throttle, answering false once it has written the
-// refusal.
-//
-// BEFORE ANYTHING IS LOOKED UP, which is what keying on the source rather than
-// on the subject buys: a caller cannot learn that a login exists by watching
-// which requests get rate-limited.
-//
-// A THROTTLED REQUEST IS A FAILED ATTEMPT TOO, counted apart as one the
-// ceiling turned away: a client that keeps going after it was stopped is the
-// part of a guessing run an operator most wants to see, and the method names
-// which door it was pushing on.
-func (s *Service) admit(w http.ResponseWriter, r *http.Request, source string,
-	method types.FailureMethod) bool {
+// admission is one attempt the throttle let through: its ticket, the instant a
+// refusal is padded from, and where it came from. An attempt on no curve —
+// [Service.uncounted] — holds a nil ticket, whose methods do nothing.
+type admission struct {
+	ticket *credential.Ticket
+	at     time.Time
+	source string
+}
 
-	err := s.throttle.Admit(r.Context(), source)
+// admit runs the throttle's curve for one attempt, answering its [admission]
+// or false once it has written the refusal.
+//
+// BEFORE ANYTHING IS LOOKED UP, on the subject as the caller TYPED it and the
+// source it came from: keyed on what it resolved to, the curve would be one
+// only real people could climb, and the roster again. A route whose
+// credential names nobody takes [Service.uncounted] instead. A wait of up to
+// [credential.InlineDelay] is served inside this call; a longer one is
+// `429 throttled` naming the time left.
+//
+// THE CALLER RESOLVES THE TICKET — [credential.Ticket.Fail] through
+// [Service.refuseSignIn] or its siblings, [credential.Ticket.Succeed] where
+// the credential proved itself — and DEFERS [credential.Ticket.Release], so an
+// attempt that reached no verdict counts as nothing.
+//
+// THE PAD RUNS FROM ADMISSION, not from arrival: the curve's own wait is the
+// same for a name that exists and one that does not, and a deadline it had
+// already spent would leave the verification after it unpadded.
+//
+// A THROTTLED REQUEST IS A FAILED ATTEMPT TOO, counted apart as one the curve
+// turned away: a client that keeps going after it was stopped is the part of
+// a guessing run an operator most wants to see, and the method names which
+// door it was pushing on.
+func (s *Service) admit(w http.ResponseWriter, r *http.Request,
+	attempt credential.Attempt, method types.FailureMethod) (admission, bool) {
+
+	ticket, err := s.throttle.Admit(r.Context(), attempt)
 	if err == nil {
-		return true
+		return admission{ticket: ticket, at: s.throttle.Now(),
+			source: attempt.Source}, true
 	}
 	if errors.Is(err, credential.ErrThrottled) {
 		s.audit.Failed(r.Context(), authevents.Failure{
-			Client: source, Method: method, Throttled: true,
+			Client: attempt.Source, Method: method, Throttled: true,
 		})
-		// THE ONE SPECIFIC REFUSAL HERE, and it is safe because it is
-		// keyed on the source: a stranger learns they are rate-limited,
-		// which they already knew.
-		httpjson.Fail(w, http.StatusTooManyRequests, httpjson.CodeThrottled)
-		return false
+		httpjson.Throttled(w, credential.RetryAfter(err))
+		return admission{}, false
 	}
-	log.WarnContext(r.Context(), "api_sign_in_admission_failed",
+	abandoned(w, r, attempt.Source, err)
+	return admission{}, false
+}
+
+// abandoned answers an attempt whose wait ended with its request — for its
+// place on the curve, or for its source's turn at the verify cap: the caller
+// went away, or this node is stopping. Nothing was attempted and nothing was
+// decided, so the answer is for a node that will take the attempt later, and a
+// caller that defers [credential.Ticket.Release] counts it as nothing.
+func abandoned(w http.ResponseWriter, r *http.Request, source string, err error) {
+	log.DebugContext(r.Context(), "api_sign_in_wait_abandoned",
 		"error", err, "source", source)
 	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
-	return false
+}
+
+// decoy spends the turn a verification would have, for a subject with no
+// verifier to check, answering false once it has answered a request that went
+// away before its turn came — see [credential.Hasher.Decoy].
+func (s *Service) decoy(w http.ResponseWriter, r *http.Request, in admission,
+	presented string) bool {
+
+	if err := s.hasher.Decoy(r.Context(), in.source, presented); err != nil {
+		abandoned(w, r, in.source, err)
+		return false
+	}
+	return true
+}
+
+// hash is a new password's verifier, derived in the turn of the source that
+// chose it, or false once it has answered.
+func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
+	password, route string) (string, bool) {
+
+	verifier, err := s.hasher.Hash(r.Context(), in.source, password)
+	switch {
+	case err == nil:
+		return verifier, true
+	case r.Context().Err() != nil:
+		abandoned(w, r, in.source, err)
+	default:
+		log.ErrorContext(r.Context(), "api_"+route+"_hash_failed", "error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	}
+	return "", false
+}
+
+// uncounted is the admission of an attempt whose credential names nobody — a
+// founder's code, an invitation link, a provider's round trip: the instant its
+// refusal is padded from and where it came from, and no ticket.
+//
+// # No curve, and not for want of a key
+//
+// The only key such an attempt has is its SOURCE, and a curve on the source
+// alone is one anybody sharing the address holds shut for everybody else at
+// it — an office, a VPN's egress, the whole internet behind a proxy this
+// deployment was not told to trust. These routes had one: a provider callback
+// nobody started fails for free, so one stranger could keep every provider
+// sign-in, every invitation and the founder's code at that address answering
+// 429. What bounds a walk is the credential itself — a link's secret and a
+// founder's code are each 256 bits of crypto/rand, and a provider's round trip
+// is the provider's — and what shows one is the audit trail's failure tally,
+// which every refusal still reaches.
+func (s *Service) uncounted(r *http.Request) admission {
+	return admission{at: s.throttle.Now(), source: s.sourceOf(r)}
 }
 
 // stageAdmits reports whether a person's enrolment stage lets them act.

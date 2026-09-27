@@ -72,8 +72,8 @@ func (a *Applier) writeSessionOpen(ctx context.Context, tx *sql.Tx,
 // writeSessionClose records one session ending, and keeps the row.
 //
 // THE ROW IS KEPT UNTIL THE SWEEP COLLECTS IT, rather than deleted, because
-// "this session was ended by reuse detection" is the sentence an investigation
-// is looking for — and a delete would leave the investigation with a session
+// "this session was revoked, and why" is the sentence an investigation is
+// looking for — and a delete would leave the investigation with a session
 // that simply is not there, which reads as one that never existed.
 func (a *Applier) writeSessionClose(ctx context.Context, tx *sql.Tx,
 	at applyContext) (int, error) {

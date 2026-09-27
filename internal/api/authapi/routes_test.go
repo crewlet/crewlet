@@ -1,14 +1,19 @@
 package authapi_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/oidc"
 )
 
 // EVERY ROUTE THIS SURFACE REGISTERS IS DELIBERATELY GUARDED OR DELIBERATELY
@@ -29,13 +34,15 @@ import (
 func TestEveryAuthRouteIsClassified(t *testing.T) {
 	t.Parallel()
 
-	// THE UNGUARDED FIVE, plus the invitation pair. Each is here because
-	// requiring a credential to obtain one is a deployment nobody can
-	// enter — or, for the invitation, because holding the link IS the
-	// credential.
+	// THE UNGUARDED SIGN-IN ROUTES, plus the invitation pair and the
+	// sign-out. Each sign-in route is here because requiring a credential to
+	// obtain one is a deployment nobody can enter — for the invitation,
+	// because holding the link IS the credential — and the sign-out because
+	// it must clear the cookie on a node that cannot read its identity
+	// estate, verifying every bearer it ends for itself.
 	unguarded := []string{
 		auth.PathAuthConfig, auth.PathAuthLogin, auth.PathAuthBootstrap,
-		auth.AuthInvitePrefix + "{id}",
+		auth.AuthInvitePrefix + "{id}", auth.PathAuthLogout,
 	}
 	// THE OIDC PAIR IS CONDITIONAL, and this case is over a surface with
 	// no provider — which is an ordinary deployment rather than a gap:
@@ -45,7 +52,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	// does and is broken. Their exemption is asserted below, on a surface
 	// that has one.
 	optional := []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
-		auth.AuthInvitePrefix + "{id}/provider"}
+		auth.AuthInvitePrefix + "{id}/provider", auth.PathAuthLogoutProvider}
 	// EVERYTHING ELSE NEEDS A SESSION, and the list is spelled out rather
 	// than derived as "the rest": a route that went missing from the
 	// registration would otherwise pass silently, and one added would be
@@ -53,7 +60,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	guarded := []string{
 		"/auth/session", "/auth/token", "/auth/step-up",
 		"/auth/totp", "/auth/totp/recovery",
-		"/auth/logout", "/auth/logout/all", "/auth/logout/{lineage}",
+		"/auth/logout/all", "/auth/logout/{lineage}",
 	}
 
 	mux := &recordingMux{}
@@ -101,6 +108,103 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	}
 }
 
+// NOTHING THIS SURFACE ANSWERS MAY BE STORED.
+//
+// Its answers are a second-factor seed and the URI that carries it, recovery
+// codes shown exactly once, who somebody is, the address an invitation was sent
+// to and every sign-in's Set-Cookie — and none carried a Cache-Control, so a
+// browser's disk cache or a shared proxy was free to keep them long after the
+// tab, the session and the step-up that was needed to read them. Then only
+// what the routes wrote carried one: a wrapper around them could not reach the
+// answers written before them — the guard's refusals, the origin check's, the
+// mux's own 404 and 405. So the guard marks every answer under /auth, and this
+// walks EVERY route the surface registers — on a deployment with a provider,
+// so the conditional three are mounted too — through the REAL guard and origin
+// check a node runs them behind, and holds each answer, whatever its status
+// and whoever wrote it, to `no-store`: with no credential (the guard's 401 on
+// every guarded route), from another site, an enrolment-only session on a
+// route it may not reach, and a path and a method nothing serves.
+//
+// Mutation: drop the guard's marking and every row fails.
+func TestNothingThisSurfaceAnswersMayBeStored(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	svc := build(t, b, oidc.NewProvider(oidc.Config{
+		Issuer: idp.URL, ClientID: idpClientID,
+		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
+	}, idp.Client(), func() time.Time { return clock }))
+
+	serve := http.NewServeMux()
+	recorded := &recordingMux{}
+	svc.Routes(teeMux{recorded, serve})
+	if len(recorded.patterns) < 15 {
+		t.Fatalf("the surface registered %d routes (%v); this walk is not "+
+			"reading the mux", len(recorded.patterns), recorded.patterns)
+	}
+	// AS A NODE RUNS IT: the guard, and the origin check beneath it.
+	h := auth.New(&b).Middleware(auth.NewCSRF(&b).Middleware(serve))
+	hold := func(what string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s answered %d with Cache-Control %q, want no-store",
+				what, rec.Code, got)
+		}
+	}
+	for _, pattern := range recorded.patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		path = strings.NewReplacer("{id}", invitationID,
+			"{lineage}", "0192f00d-0000-7000-8000-0000000000aa").Replace(path)
+		for _, origin := range []string{b.API.ExternalBase(), "https://elsewhere.example"} {
+			req := httptest.NewRequest(method, path, nil)
+			req.Header.Set("Origin", origin)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			hold(pattern+" from "+origin, rec)
+		}
+	}
+	for _, stray := range [][2]string{
+		{http.MethodGet, auth.PathAuthLogin},   // a method nothing serves
+		{http.MethodGet, "/auth/nothing-here"}, // a path nothing serves
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(stray[0], stray[1], nil))
+		hold(stray[0]+" "+stray[1], rec)
+	}
+
+	// AND THE GUARD'S REFUSAL OF A SESSION IT RESOLVED: an enrolment-only
+	// session asking for the recovery codes it may not have yet.
+	r := newSignInRigWith(t, func(o *authapi.Options) {
+		requiring(o, iam.SecondFactorRequired)
+		o.Sessions = o.Writer.(*estate)
+	})
+	passwordOnly(r.estate)
+	g := guarded(t, r)
+	login, _ := json.Marshal(map[string]string{"login": "jane.doe", "password": password})
+	_, restricted := send(t, g, http.MethodPost, auth.PathAuthLogin, string(login), "")
+	if restricted == "" {
+		t.Fatal("the password sign-in set no cookie; this case tests nothing")
+	}
+	refused, _ := send(t, g, http.MethodPost, "/auth/totp/recovery", "{}", restricted)
+	if refused.Code != http.StatusForbidden {
+		t.Fatalf("the enrolment-only session was answered %d at the recovery "+
+			"codes, want the guard's 403", refused.Code)
+	}
+	hold("the guard's enrolment refusal", refused)
+}
+
+// teeMux registers every route on each of its muxes: one to read the patterns
+// back, one to serve them.
+type teeMux []auth.Mux
+
+func (m teeMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	for _, each := range m {
+		each.HandleFunc(pattern, handler)
+	}
+}
+
 // recordingMux is a mux that mounts nothing and remembers everything.
 //
 // [http.ServeMux] does not report what was registered on it, which is why
@@ -133,7 +237,7 @@ func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
 	withProvider(t).Routes(mux)
 
 	for _, want := range []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
-		auth.AuthInvitePrefix + "{id}/provider"} {
+		auth.AuthInvitePrefix + "{id}/provider", auth.PathAuthLogoutProvider} {
 		if !slices.ContainsFunc(mux.patterns, func(p string) bool {
 			return pathOf(p) == want
 		}) {
@@ -144,8 +248,17 @@ func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
 		if !auth.Unguarded(strings.Replace(want, "{id}", "abc", 1)) {
 			t.Errorf("%s is guarded: a provider round trip is a BROWSER "+
 				"following a redirect, which carries nothing this engine "+
-				"issued — so requiring a credential makes it unreachable", want)
+				"issued, and signing out of the provider must clear the "+
+				"cookie on a node that cannot read its identity estate — so "+
+				"requiring a credential makes it unreachable there", want)
 		}
+	}
+	// AND IT IS ABSENT WHERE THERE IS NONE, as the round trip is.
+	plain := &recordingMux{}
+	surface(t).Routes(plain)
+	if slices.Contains(plain.patterns, "POST "+auth.PathAuthLogoutProvider) {
+		t.Errorf("%s is mounted on a deployment with no provider",
+			auth.PathAuthLogoutProvider)
 	}
 }
 

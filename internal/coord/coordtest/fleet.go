@@ -192,22 +192,26 @@ func (h *fleetHarness) claimSetup(key string, at time.Time) bool {
 	return ok
 }
 
-func (h *fleetHarness) fail(subject string, at time.Time) int {
+func (h *fleetHarness) fail(subject string, at time.Time) {
 	h.t.Helper()
-	n, err := h.f.Fail(h.ctx, subject, at)
-	if err != nil {
+	if err := h.f.Fail(h.ctx, subject, at); err != nil {
 		h.t.Fatalf("Fail(%s): %v", subject, err)
 	}
-	return n
+}
+
+// window is what the attempts window holds against a subject.
+func (h *fleetHarness) window(subject string, at time.Time) coord.Attempted {
+	h.t.Helper()
+	got, err := h.f.Failures(h.ctx, subject, at)
+	if err != nil {
+		h.t.Fatalf("Failures(%s): %v", subject, err)
+	}
+	return got
 }
 
 func (h *fleetHarness) failures(subject string, at time.Time) int {
 	h.t.Helper()
-	n, err := h.f.Failures(h.ctx, subject, at)
-	if err != nil {
-		h.t.Fatalf("Failures(%s): %v", subject, err)
-	}
-	return n
+	return h.window(subject, at).Count()
 }
 
 func (h *fleetHarness) flush(subject string) {
@@ -455,6 +459,17 @@ var claimCases = []fleetCase{{
 	name: "an unnamed record is an error, not a race somebody else won",
 	fn:   func(h *fleetHarness) { h.report(CheckUnnamedRecordsAreRefused(h.ctx, h.f, h.now())) },
 }, {
+	// AND A RACE SOMEBODY ELSE WON IS NOT AN OUTAGE, above all over a
+	// record just removed: a create over the marker a removal leaves is a
+	// compare-and-set every loser of which was beaten by a first writer.
+	// The check covers every verb whose record can be removed, not just
+	// the claims — see it for why — and a replicated stream is where it
+	// bites, which internal/queue/jetstream/jetstreamtest carries it to.
+	name: "creates racing over a removed record are races, never outages",
+	fn: func(h *fleetHarness) {
+		h.report(CheckCreatesOverARemovedRecordAreRaces(h.ctx, h.f, h.now()))
+	},
+}, {
 	name: "exactly one of many concurrent callers claims",
 	fn: func(h *fleetHarness) {
 		at := h.now()
@@ -545,16 +560,52 @@ var attemptCases = []fleetCase{{
 	name: "a failed attempt counts for every node",
 	fn: func(h *fleetHarness) {
 		at := h.now()
-		if got := h.fail("token:op-1", at); got != 1 {
-			h.t.Fatalf("Fail returned %d for the first attempt, want 1", got)
+		h.fail("token:op-1", at)
+		if got := h.failures("token:op-1", at); got != 1 {
+			h.t.Fatalf("Failures after one attempt = %d, want 1", got)
 		}
-		if got := h.fail("token:op-1", at); got != 2 {
-			h.t.Fatalf("Fail returned %d for the second attempt, want 2", got)
-		}
+		h.fail("token:op-1", at)
 		if got := h.failures("token:op-1", at); got != 2 {
-			h.t.Fatalf("Failures = %d, want the 2 that Fail just reported — a throttle "+
-				"reads this BEFORE it validates anything, so a count only the "+
-				"writer can see throttles nobody", got)
+			h.t.Fatalf("Failures = %d, want the 2 just recorded — a node seeds "+
+				"its curve from this, so a count only the writer can see "+
+				"throttles nobody on the next node", got)
+		}
+	},
+}, {
+	// EVERY ATTEMPT IS ANSWERED, OLDEST FIRST, and not a count and the
+	// newest. A delay runs from the last failure, so a node seeding its
+	// curve from a count alone has to date every failure made elsewhere to
+	// the moment it asked; and every instant is its writer's clock, so a
+	// reader judges each against its own — summarised to the newest, one
+	// written by a clock running fast hid every failure after it.
+	name: "the window answers every attempt, oldest first",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		later := at.Add(h.ages.Attempt / 4)
+		h.fail("token:op-1", at)
+		h.fail("token:op-1", later)
+		h.fail("token:op-1", at.Add(time.Second))
+		got := h.window("token:op-1", later)
+		if want := []time.Time{at, at.Add(time.Second), later}; !slices.EqualFunc(
+			got.At, want, time.Time.Equal) {
+			h.t.Fatalf("window = %v, want every attempt oldest first: %v",
+				got.At, want)
+		}
+		if got.Count() != 3 || !got.Last().Equal(later) {
+			h.t.Fatalf("window = %+v, want 3 attempts, the newest at %v",
+				got, later)
+		}
+		if empty := h.window("token:never-seen", later); empty.Count() != 0 ||
+			!empty.Last().IsZero() {
+			h.t.Fatalf("an untouched subject's window = %+v, want the zero one",
+				empty)
+		}
+		// AND AN ATTEMPT THAT AGED OUT IS NOT THE NEWEST.
+		h.fail("token:op-2", at)
+		if got := h.window("token:op-2", at.Add(h.ages.Attempt+time.Second)); //
+		got.Count() != 0 || !got.Last().IsZero() {
+			h.t.Fatalf("a window whose only attempt aged out = %+v, want the "+
+				"zero one", got)
 		}
 	},
 }, {
@@ -569,10 +620,10 @@ var attemptCases = []fleetCase{{
 	},
 }, {
 	// A FLUSH IS FLEET-VISIBLE, which is the half a per-process throttle
-	// cannot do: the credential that proves the caller is not who the
-	// lockout was protecting against has to lift the lockout everywhere,
-	// or an operator who has just authenticated is still refused by the
-	// next node the balancer picks.
+	// cannot do: the credential that proves the caller is who the throttle
+	// was protecting has to lift the wait everywhere, or a person who has
+	// just signed in is still made to wait by the next node the balancer
+	// picks.
 	name: "a successful authentication flushes the window for every reader",
 	fn: func(h *fleetHarness) {
 		at := h.now()
@@ -586,8 +637,9 @@ var attemptCases = []fleetCase{{
 		// nothing could write past would make the next failed attempt
 		// uncountable — the throttle switched off by the one gesture
 		// that is supposed to reset it.
-		if got := h.fail("token:op-1", at); got != 1 {
-			h.t.Fatalf("Fail after a flush returned %d, want 1", got)
+		h.fail("token:op-1", at)
+		if got := h.failures("token:op-1", at); got != 1 {
+			h.t.Fatalf("Failures after a flush and one attempt = %d, want 1", got)
 		}
 	},
 }, {
@@ -654,6 +706,30 @@ var attemptCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE CAP KEEPS THE NEWEST BY INSTANT, NOT BY ARRIVAL. Two nodes'
+	// failures reach the store in whichever order it takes them, so an
+	// older failure can land after a record is already full of newer ones —
+	// and the one to drop is that older one, since the newest failures are
+	// what a curve's count and its wait are read from. Dropped by arrival,
+	// the record loses a newer attempt to make room for a failure that
+	// ages out first, and the count reads one short once it has.
+	name: "the cap keeps the newest attempts whatever order they arrive in",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		later := at.Add(h.ages.Attempt / 2)
+		for range coord.AttemptCap {
+			h.fail("token:late-arrival", later)
+		}
+		h.fail("token:late-arrival", at)
+		past := at.Add(h.ages.Attempt + time.Second)
+		if got := h.window("token:late-arrival", past); got.Count() != coord.AttemptCap ||
+			!got.Last().Equal(later) {
+			h.t.Fatalf("window once the late-arriving older attempt aged out = %+v, "+
+				"want the %d newer attempts at %v: the cap dropped a newer attempt to "+
+				"keep an older one", got, coord.AttemptCap, later)
+		}
+	},
+}, {
 	// Two nodes refusing the same caller in the same instant record two
 	// attempts. A counter they had to agree on would lose one of them,
 	// which is the per-process throttle's own arithmetic wearing a fleet's
@@ -665,8 +741,7 @@ var attemptCases = []fleetCase{{
 		errs := make(chan error, 8)
 		for range 8 {
 			wg.Go(func() {
-				_, err := h.f.Fail(h.ctx, "token:concurrent", at)
-				errs <- err
+				errs <- h.f.Fail(h.ctx, "token:concurrent", at)
 			})
 		}
 		wg.Wait()

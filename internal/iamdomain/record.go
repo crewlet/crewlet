@@ -22,8 +22,9 @@ import (
 // because a record a peer cannot read is deferred on that peer: written at the
 // ceiling for no reason, every record of a rolling upgrade would be deferred on
 // every older node. Two is [SweepRecordVersion], three is
-// [OperatorRecordVersion], and nothing else has moved.
-const RecordVersion = 3
+// [OperatorRecordVersion], four is [ConditionRecordVersion], and nothing else
+// has moved.
+const RecordVersion = 4
 
 // BaseRecordVersion is what every record carries whose meaning has not changed
 // since this domain landed: every op but a sweep, written by a party that
@@ -71,6 +72,45 @@ const SweepRecordVersion = 2
 // gestures somebody made through `/iam`. See [namesOperator] for which records
 // carry one.
 const OperatorRecordVersion = 3
+
+// ConditionRecordVersion is what a record carries that states a CONDITION on
+// what it permits — a condition an older build does not know, would carry past
+// as an unknown field, and would therefore apply as permitting MORE than its
+// writer said.
+//
+// Two records state one:
+//
+//   - a SESSION START that may only enrol a second factor
+//     ([Session.EnrolmentOnly]): an older node would apply it as a whole
+//     session, and its rows — its session listing, and anything that reads
+//     the row — would say the session may do everything. The bearer carries
+//     the restriction too, in a form an older build refuses outright
+//     ([session.Bearer.EnrolmentOnly]); the version is what keeps that
+//     build's ROWS from saying the opposite.
+//   - an INVITATION that is redeemable only with its link's secret and that
+//     binds a seat when it is redeemed ([Invitation.Verifier],
+//     [Invitation.Seat]): an older node would redeem it on its id alone, which
+//     every snapshot and backup holds in the clear, and enrol the person with
+//     no seat.
+//
+// A VERSION AND NOT JUST A FIELD, for [SweepRecordVersion]'s reason turned
+// round: there a field an older build skipped made two nodes' rows differ,
+// and here it would make one node's rows say a condition does not exist. At
+// version 4 an older node DEFERS the record, and a deferred record is the
+// unknown arm on every read of its bucket — a 503 on a restricted session or
+// an invitation there, never the wider answer.
+//
+// ONLY THE RECORDS THAT CARRY A CONDITION: an ordinary session start stays at
+// the base, or every sign-in of a rolling upgrade would be deferred on every
+// older node. The versions are cumulative, so a version-4 record that also
+// names a credential needs nothing more.
+const ConditionRecordVersion = 4
+
+// conditioned raises a record to the version that carries a condition on what
+// it permits — see [ConditionRecordVersion].
+func conditioned(rec *MutationRecord) {
+	rec.V = max(rec.V, ConditionRecordVersion)
+}
 
 // writeVersion is the version a record of op is written at: the lowest that
 // carries its meaning, given whether it names the credential its actor acted
@@ -214,10 +254,10 @@ const (
 	// OpRevoke bumps a person's REVOCATION EPOCH, which ends every session
 	// they hold, everywhere, at once. Its subject is [KindPerson].
 	//
-	// Three things reach it and they are deliberately one op: signing out
-	// everywhere, changing a password, and a session bearer presenting a
-	// rotation index past the overlap window — which is REUSE, and the only
-	// safe reading of reuse is that somebody else has the cookie.
+	// Three things reach it and they are deliberately one op: a person
+	// signing out everywhere, an administrator ending somebody's sessions,
+	// and a second factor reset — each of which has to end whatever that
+	// person's cookies are doing wherever they are.
 	//
 	// IT CARRIES A [MutationRecord.Reason] because the three are
 	// indistinguishable afterwards and an operator investigating a
@@ -247,12 +287,12 @@ const (
 
 	// OpClose ends one session. Its subject is [KindSession].
 	//
-	// ROTATIONS ARE NOT RECORDS and this is the reason the pair is only
-	// two: a rotation id is an HMAC over the lineage and the session's age
-	// in rotate_after units, so the busiest thing a signed-in person does
-	// writes nothing on this log at all. What lands here is a session
-	// beginning and a session ending, which is a handful of records per
-	// person per day.
+	// A RE-ISSUE IS NOT A RECORD and this is the reason the pair is only
+	// two: the idle deadline a re-issue moves lives in the bearer's own
+	// signed payload, so the busiest thing a signed-in person does writes
+	// nothing on this log at all. What lands here is a session beginning
+	// and a session ending, which is a handful of records per person per
+	// day.
 	OpClose OpKind = "close"
 
 	// OpInvalidate ends EVERY session in the company at once, on
@@ -461,10 +501,10 @@ type MutationRecord struct {
 	// Reason is why, in at most [MaxReason] bytes, for the operations
 	// whose motive is not recoverable from their effect.
 	//
-	// A REVOCATION IS THE CASE IT EXISTS FOR: signing out everywhere, a
-	// password change and detected token reuse produce an identical epoch
-	// bump, and which one fired is the first question anybody investigating
-	// a compromise asks. It is prose an operator wrote or a constant the
+	// A REVOCATION IS THE CASE IT EXISTS FOR: signing out everywhere, an
+	// administrator ending somebody's sessions and a second factor reset
+	// produce an identical epoch bump, and which one fired is the first
+	// question anybody investigating a compromise asks. It is prose an operator wrote or a constant the
 	// engine chose, never a stack trace and never a value from a request.
 	Reason string `json:"reason,omitempty"`
 

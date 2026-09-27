@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -29,7 +28,7 @@ import (
 // real start and the real callback against a provider in a TLS test server.
 
 // invitedAddress is the address the redemption cases' invitation was issued
-// to, opened by [addressOpener].
+// to, opened by [stubSealer].
 const invitedAddress = "dana.sre@example.com"
 
 // offeredInvitation is a live invitation carrying grants and a sealed address,
@@ -42,6 +41,9 @@ type offeredInvitation struct {
 	// ambiguous answers every subject as linked to two people, which only
 	// a restore produces.
 	ambiguous bool
+
+	// seat is the identity of a seat the invitation binds, or empty.
+	seat string
 }
 
 func (d offeredInvitation) InvitationByID(_ context.Context, id string) (
@@ -55,6 +57,8 @@ func (d offeredInvitation) InvitationByID(_ context.Context, id string) (
 		InvitedBy: "founder", ExpiresAt: clock.Add(time.Hour),
 		Grants:    []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
 		Colleague: iam.ColleagueRead,
+		Verifier:  iamdomain.InvitationVerifier(invitationSecret),
+		Seat:      d.seat,
 	}, nil
 }
 
@@ -96,7 +100,7 @@ func roundTrip(t *testing.T, idp *provider, directory authapi.Directory,
 	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
 		o.Directory = directory
 		o.Writer = writer
-		o.Opener = addressOpener{address: invitedAddress}
+		o.Sealer = stubSealer{address: invitedAddress}
 		o.Cipher = cipher
 		o.Audit = audit
 	})
@@ -122,8 +126,15 @@ func roundTrip(t *testing.T, idp *provider, directory authapi.Directory,
 }
 
 // redemptionStart is an invitation's page posting its form to the provider
-// redemption, as a browser encodes one.
+// redemption, as a browser encodes one — carrying the link's secret, as the
+// page's form does, unless the case says which secret it presents.
 func redemptionStart(id string, form url.Values) *http.Request {
+	if form == nil {
+		form = url.Values{}
+	}
+	if !form.Has("secret") {
+		form.Set("secret", invitationSecret)
+	}
 	r := httptest.NewRequest(http.MethodPost, auth.AuthInvitePrefix+id+"/provider",
 		strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -153,7 +164,8 @@ func TestAnInvitationRedeemedThroughTheProviderLinksItsSubject(t *testing.T) {
 	idp := newProvider(t)
 	writer := &redemptionWriter{}
 	audit := &recordingAudit{}
-	started, finished := roundTrip(t, idp, offeredInvitation{id: invitationID},
+	started, finished := roundTrip(t, idp,
+		offeredInvitation{id: invitationID, seat: "platform-lead"},
 		writer, audit, redemptionStart(invitationID, url.Values{
 			"login": {"dana.ops"}, "return_to": {"/welcome"},
 		}), "")
@@ -184,6 +196,13 @@ func TestAnInvitationRedeemedThroughTheProviderLinksItsSubject(t *testing.T) {
 			in.PersonID, person)
 	case in.Invitation != invitationID:
 		t.Errorf("the enrolment names invitation %q as its authority", in.Invitation)
+	case in.InvitationSecret != invitationSecret:
+		// THE SECRET CROSSED THE ROUND TRIP SEALED, and the record asks
+		// it again: a callback that dropped it would be refused there.
+		t.Errorf("the enrolment presents secret %q, want the link's own",
+			in.InvitationSecret)
+	case in.Seat != "platform-lead":
+		t.Errorf("the enrolment binds seat %q, want the invitation's", in.Seat)
 	case in.Email != invitedAddress:
 		t.Errorf("enrolled address %q, want the invitation's", in.Email)
 	case in.Login != "dana.ops":
@@ -361,55 +380,6 @@ func TestARedemptionIsNeverStartedByALink(t *testing.T) {
 	}
 }
 
-// A REDEMPTION START IS ADMITTED BEFORE THE INVITATION IS READ.
-//
-// The id in the link is the credential, so the start is throttled per source
-// like the invitation's own routes — and the admission comes first, or a
-// source at the ceiling could still walk ids through this door and learn
-// which are live from the answers it was refused on.
-//
-// Mutation: drop the start's admission and the directory is read.
-func TestARedemptionStartIsAdmittedBeforeTheInvitationIsRead(t *testing.T) {
-	t.Parallel()
-	idp := newProvider(t)
-	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendOIDC
-	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
-	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
-		Limit: 1, Now: func() time.Time { return clock },
-		Sleep: func(context.Context, time.Duration) {},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	start := redemptionStart(invitationID, url.Values{"login": {"dana.ops"}})
-	directory := &countingInvitations{offeredInvitation: offeredInvitation{
-		id: invitationID}}
-	mux := http.NewServeMux()
-	buildWith(t, b, oidc.NewProvider(oidc.Config{
-		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
-		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
-	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
-		o.Directory = directory
-		o.Throttle = throttle
-	}).Routes(mux)
-	throttle.Fail(context.Background(), "198.51.100.7")
-
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, start)
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("a source at the ceiling answered %d (%s), want 429", rec.Code,
-			rec.Body)
-	}
-	if directory.reads.Load() != 0 {
-		t.Errorf("a source at the ceiling had %d invitations read for it",
-			directory.reads.Load())
-	}
-	if flight := flightSet(rec); flight != "" {
-		t.Errorf("a throttled start set a flight: %q", flight)
-	}
-}
-
 // countingInvitations is [offeredInvitation] counting how often an invitation
 // is read.
 type countingInvitations struct {
@@ -427,7 +397,7 @@ func (d *countingInvitations) InvitationByID(ctx context.Context, id string) (
 // flightSet is the flight cookie a response set, or "" when it set none.
 func flightSet(rec *httptest.ResponseRecorder) string {
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "crewlet_oidc_flight" && c.Value != "" {
+		if strings.HasSuffix(c.Name, "crewlet_oidc_flight") && c.Value != "" {
 			return c.Value
 		}
 	}
@@ -519,11 +489,10 @@ func TestTheInvitationOffersTheProviderOnlyWhereThereIsOne(t *testing.T) {
 			mux := http.NewServeMux()
 			buildWith(t, bootstrapFor(t), provider, func(o *authapi.Options) {
 				o.Directory = offeredInvitation{id: invitationID}
-				o.Opener = addressOpener{address: invitedAddress}
+				o.Sealer = stubSealer{address: invitedAddress}
 			}).Routes(mux)
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-				"/auth/invite/"+invitationID, nil))
+			mux.ServeHTTP(rec, viewInvite(invitationID))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status %d (%s)", rec.Code, rec.Body)
 			}

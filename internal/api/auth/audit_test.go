@@ -418,84 +418,34 @@ func TestADeadlineEndsOnlyASessionNoRecordEnded(t *testing.T) {
 	}
 }
 
-// A REPLAYED COOKIE REVOKES ONCE, however often it is presented.
+// A COOKIE FROM A NODE WHOSE CLOCK RAN AHEAD ANNOUNCES NOTHING.
 //
-// The replay is refused and nothing stops its holder presenting it again, and
-// each presentation used to publish another revocation — a write to the
-// identity log paced by the holder of a cookie this node had already turned
-// away. Mutation: revoke on every presentation and the count is three.
-func TestAReplayedCookieRevokesOnceHoweverOftenItIsPresented(t *testing.T) {
+// It used to publish `iam_session_reuse_detected` at WARN and ask for the
+// person's revocation epoch to be bumped — a theft alarm naming them, over two
+// hosts' clocks disagreeing. Mutation: announce a replay for a bearer ahead of
+// the clock and the trail holds a row.
+func TestACookieFromAFastNodeAnnouncesNothing(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
 	tr := newAuditTrail(t)
 	rig.cookie = rig.aheadOfTheClock(t)
 	g := rig.withAudit(tr)
 	for range 3 {
-		if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != http.StatusUnauthorized {
-			t.Fatalf("a replayed cookie answered %d", got.status)
+		if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != http.StatusOK {
+			t.Fatalf("a cookie from a fast node answered %d", got.status)
 		}
 	}
-	if ended := rig.ended.all(); len(ended) != 1 {
-		t.Errorf("revoked %d times for three presentations, want once", len(ended))
-	}
-	// AT THE BEARER'S EPOCH, which is what makes the revocation itself
-	// land once however many nodes ask: it moves the epoch only while it is
-	// still at the one the replayed cookie was minted at.
-	rig.ended.mu.Lock()
-	epochs := append([]uint64(nil), rig.ended.epochs...)
-	rig.ended.mu.Unlock()
-	if len(epochs) != 1 || epochs[0] != 3 {
-		t.Errorf("revoked through epochs %v, want the replayed bearer's 3", epochs)
-	}
-	reuse := tr.published("iam_session_reuse_detected")
-	if len(reuse) != 1 {
-		t.Fatalf("%d reuse rows, want 1", len(reuse))
-	}
-	row, _ := events.DataAs[*types.IAMSessionReuseDetected](reuse[0])
-	if row.Person != sessionPerson || row.Rotation == 0 {
-		t.Errorf("reuse row = %+v, want the person and the index the replay carried", row)
+	tr.mu.Lock()
+	published := len(tr.events)
+	tr.mu.Unlock()
+	if published != 0 {
+		t.Errorf("serving a cookie from a fast node published %d rows, want "+
+			"none", published)
 	}
 }
 
-// A REPLAY'S REVOCATION THAT DID NOT LAND IS ASKED FOR AGAIN, and the row
-// that records the replay is still said once.
-//
-// The revocation hung on the claim that records the replay, which is never
-// handed back: one that failed or came back unknown left the person's other
-// sessions live for the rest of the bearer's life, with nothing asking again.
-// Mutation: keep the revocation's claim when it did not land, and the second
-// presentation asks nothing.
-func TestAReplaysRevocationThatDidNotLandIsAskedAgain(t *testing.T) {
-	t.Parallel()
-	rig := newSignedIn(t)
-	tr := newAuditTrail(t)
-	rig.cookie = rig.aheadOfTheClock(t)
-	rig.ended.failing = 1
-	g := rig.withAudit(tr)
-	for range 3 {
-		if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != http.StatusUnauthorized {
-			t.Fatalf("a replayed cookie answered %d", got.status)
-		}
-	}
-	rig.ended.mu.Lock()
-	asked := rig.ended.asked
-	rig.ended.mu.Unlock()
-	if asked != 2 {
-		t.Errorf("the revocation was asked for %d times over three "+
-			"presentations with the first failing, want 2: once that failed "+
-			"and once that landed, and none after it landed", asked)
-	}
-	if ended := rig.ended.all(); len(ended) != 1 {
-		t.Errorf("%d revocations landed, want 1", len(ended))
-	}
-	if reuse := tr.published("iam_session_reuse_detected"); len(reuse) != 1 {
-		t.Errorf("%d reuse rows, want 1: the row records the replay, and a "+
-			"retried revocation is not a second replay", len(reuse))
-	}
-}
-
-// THE SESSION ARM IS REFUSED WITHOUT A TRAIL, because the revocation above
-// hangs on the trail's decision.
+// THE SESSION ARM IS REFUSED WITHOUT A TRAIL, because a deadline ending is
+// announced once per lineage on the trail's own decision.
 func TestTheSessionArmNeedsATrail(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
@@ -537,7 +487,6 @@ func (s *signedIn) withAudit(tr *trail) *auth.Guard {
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
 		External: b.API.ExternalBase(),
-		OnReuse:  s.ended.record,
 		Audit:    tr,
 		Now:      func() time.Time { return s.at },
 	})
@@ -552,8 +501,8 @@ func (s *signedIn) withAudit(tr *trail) *auth.Guard {
 func (s *signedIn) signerAt(at time.Time) {
 	s.t.Helper()
 	signer, err := session.New(session.Options{
-		Material: sessionKeyring(), RotateAfter: time.Hour,
-		Now: func() time.Time { return at },
+		Material: sessionKeyring(),
+		Now:      func() time.Time { return at },
 	})
 	if err != nil {
 		s.t.Fatalf("build a signer: %v", err)
@@ -561,20 +510,20 @@ func (s *signedIn) signerAt(at time.Time) {
 	s.signer = signer
 }
 
-// aheadOfTheClock mints this rig's session on a signer four windows ahead of
-// the rig's own clock — the node-whose-clock-ran-fast case, and the one
-// positive evidence of a replay rotate.go recognises.
+// aheadOfTheClock mints this rig's session on a signer four hours ahead of
+// the rig's own clock — the node-whose-clock-ran-fast case — with a lineage
+// minted on that clock, as the node would mint it.
 func (s *signedIn) aheadOfTheClock(t *testing.T) string {
 	t.Helper()
 	future, err := session.New(session.Options{
-		Material: sessionKeyring(), RotateAfter: time.Hour,
-		Now: func() time.Time { return s.at.Add(4 * time.Hour) },
+		Material: sessionKeyring(),
+		Now:      func() time.Time { return s.at.Add(4 * time.Hour) },
 	})
 	if err != nil {
 		t.Fatalf("build a future-clocked signer: %v", err)
 	}
 	cookie, err := future.Mint(session.Mint{
-		Lineage: lineageAt(t, s.at), Person: sessionPerson, Epoch: 3,
+		Lineage: lineageAt(t, s.at.Add(4*time.Hour)), Person: sessionPerson, Epoch: 3,
 		Generation: 1, StartPosition: sessionStart,
 		AbsoluteExpiresAt: s.at.Add(4 * time.Hour),
 	})
@@ -582,4 +531,80 @@ func (s *signedIn) aheadOfTheClock(t *testing.T) string {
 		t.Fatalf("mint: %v", err)
 	}
 	return cookie
+}
+
+// A TOKEN'S SESSION ENDED BY ITS CREDENTIAL CHANGING IS SAID ONCE.
+//
+// A session exchanged from a Tier A token is bound to the value it was
+// exchanged with, so a new value under the token's id — how a leak is answered
+// — ends it, and so does the entry's removal. No record states either: the
+// value lives in a configuration file. The ending was refused and cleared and
+// said nowhere, so the trail could not name the break-glass sessions a
+// rotation cut off. It is announced now, once per lineage per node, and a
+// session also past its deadline by then is announced by its deadline rather
+// than — as the deadline arm used to read its rows — not at all.
+//
+// Mutations: drop the credential ending and the first two cases publish
+// nothing; read it as a record's ending in the deadline arm and the last does.
+func TestAChangedCredentialIsAnEndingSaidOnce(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		login  string
+		value  string
+		later  time.Duration
+		status int
+		want   types.SessionEndReason
+	}{
+		{"its value rotated", iam.TokenLogin("ci"), "the-value-before-rotation",
+			0, http.StatusUnauthorized, types.EndCredentialChanged},
+		{"its entry removed", iam.TokenLogin("gone"), "a-value-nothing-holds-now",
+			0, http.StatusUnauthorized, types.EndCredentialChanged},
+		{"rotated, and past its deadline by the next presentation",
+			iam.TokenLogin("ci"), "the-value-before-rotation",
+			2 * time.Hour, http.StatusUnauthorized, types.EndAbsolute},
+		{"its value kept", iam.TokenLogin("ci"), "a-tier-a-token", 0, http.StatusOK, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			cookie, err := rig.signer.Mint(session.Mint{
+				Lineage: rig.lineage, Person: tc.login, Epoch: 3, Generation: 1,
+				StartPosition: sessionStart, AbsoluteExpiresAt: rig.at.Add(time.Hour),
+				Credential: session.CredentialOf(tc.value),
+			})
+			if err != nil {
+				t.Fatalf("mint an exchanged session: %v", err)
+			}
+			rig.cookie = cookie
+			if tc.later > 0 {
+				rig.at = rig.at.Add(tc.later)
+				rig.signerAt(rig.at)
+			}
+			tr := newAuditTrail(t)
+			g := rig.withAudit(tr)
+			for range 2 {
+				if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != tc.status {
+					t.Fatalf("the exchanged session answered %d, want %d", got.status, tc.status)
+				}
+			}
+			ended := tr.published("iam_session_ended")
+			if tc.want == "" {
+				if len(ended) != 0 {
+					t.Errorf("a session whose credential is unchanged was announced "+
+						"ended %d times", len(ended))
+				}
+				return
+			}
+			if len(ended) != 1 {
+				t.Fatalf("%d session-ended rows for two presentations, want 1", len(ended))
+			}
+			row, _ := events.DataAs[*types.IAMSessionEnded](ended[0])
+			if row.Reason != tc.want || row.Person != tc.login ||
+				row.Lineage != rig.lineage.String() || row.By != "" {
+				t.Errorf("ended row = %+v, want %q naming %s and its session, "+
+					"authored by nobody", row, tc.want, tc.login)
+			}
+		})
+	}
 }

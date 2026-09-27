@@ -28,8 +28,9 @@
 // So the lock is taken to READ the cache, released, and taken again to write
 // what was fetched. What that opens — several callers deciding to fetch at
 // once — is closed by a SINGLEFLIGHT rather than by holding the lock: the
-// first caller fetches and the rest wait on its result, so one key rotation
-// produces one request however many tokens arrive during it.
+// first caller starts a fetch and every caller waits on its result, so one key
+// rotation produces one request however many tokens arrive during it. The
+// fetch belongs to none of them — see [Set.fetch].
 //
 // # An unknown key id is rate-limited, not free
 //
@@ -38,10 +39,25 @@
 // forgery attempt — an amplifier an unauthenticated caller aims wherever the
 // key set is hosted. So an unknown id refetches at most once per
 // [RefreshFloor], and inside that window it is simply refused.
+//
+// THE FLOOR IS MEASURED FROM THE LAST ATTEMPT, WHETHER OR NOT IT SUCCEEDED.
+// It was measured from the last success, so a minute into an outage at the
+// source every token naming an unknown kid — on the Forge webhook, a kid the
+// sender chooses — was a fetch again, one after another, each against a host
+// that had just failed. And the same floor holds for a key the set DOES name
+// once the set is past its TTL: inside a floor of a failed attempt the stale
+// key is served without asking again, where every such token used to wait out
+// a fresh attempt at a failing host before being handed that same stale key.
+// A COLD cache is the exception, and deliberately: it has nothing to answer
+// from, so it asks again — one request in flight at a time, however many
+// callers — because refusing from a recorded failure would turn a blip at
+// boot into a minute of refusals.
 package jwks
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -119,6 +135,12 @@ type Set struct {
 	keys      map[string]any
 	fetchedAt time.Time
 	flight    *flight
+
+	// attemptedAt is when the last fetch ENDED, whether or not it
+	// succeeded, and failed says whether it did not — what the refresh
+	// floor is measured from. See the package doc.
+	attemptedAt time.Time
+	failed      bool
 }
 
 // flight is one in-progress fetch, waited on by everybody who asked while it
@@ -174,7 +196,8 @@ func New(opts Options) *Set {
 }
 
 // Key returns the key with this id, fetching the set when the cache is cold,
-// stale, or does not name it.
+// stale, or does not name it — at most once per [RefreshFloor] unless the
+// cache is cold.
 func (s *Set) Key(ctx context.Context, keyID string) (any, error) {
 	cached, known, refuse := s.cached(keyID)
 	switch {
@@ -205,20 +228,29 @@ func (s *Set) Key(ctx context.Context, keyID string) (any, error) {
 	return nil, fmt.Errorf("%w %q", ErrUnknownKey, keyID)
 }
 
-// cached answers from the map alone: the key when it is fresh, and whether an
-// unknown id is inside the refresh floor and must simply be refused.
+// cached answers from the map alone when it can: the key when it is fresh, or
+// stale inside the refresh floor of a failed attempt, and whether an unknown
+// id is inside the floor and must simply be refused.
 func (s *Set) cached(keyID string) (key any, known, refuse bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	age := s.now().Sub(s.fetchedAt)
+	now := s.now()
 	key, held := s.keys[keyID]
+	floored := s.keys != nil && now.Sub(s.attemptedAt) < RefreshFloor
 	switch {
-	case held && age < TTL:
+	case held && now.Sub(s.fetchedAt) < TTL:
 		return key, true, false
-	case !held && s.keys != nil && age < RefreshFloor:
+	case held && floored && s.failed:
+		// STALE, AND THE SOURCE FAILED MOMENTS AGO: served as the fetch
+		// that failed served it, without asking a failing host again.
+		// The failure was reported when it happened, once.
+		return key, true, false
+	case !held && floored:
 		// A key id this set does not name, asked for again inside the
-		// floor. Answering from the cache is what keeps a forged kid
-		// from becoming an outbound request per attempt.
+		// floor of the last attempt — a success or a failure. Answering
+		// from the cache is what keeps a forged kid from becoming an
+		// outbound request per attempt, an outage at the source
+		// included.
 		return nil, false, true
 	}
 	return nil, false, false
@@ -237,49 +269,73 @@ func (s *Set) stale(keyID string) (any, bool) {
 //
 // THE LOCK IS HELD ONLY TO JOIN OR START A FLIGHT, never across the request
 // itself — which is the whole of what this package exists to get right.
+//
+// # The flight belongs to nobody's request
+//
+// Whoever finds no flight starts one, and every caller — that one included —
+// then waits on ITS OWN context: a caller with a shorter deadline gives up
+// rather than being held to somebody else's. The request itself runs on a
+// context no caller can cancel, bounded by [FetchTimeout] instead. It used to
+// run on the first caller's, so the first caller hanging up — a browser tab
+// closed mid sign-in, a webhook sender giving up — failed every verification
+// waiting on the same flight, each refused for somebody else's disconnect.
 func (s *Set) fetch(ctx context.Context) (map[string]any, error) {
 	s.mu.Lock()
 	inflight := s.flight
-	leader := inflight == nil
-	if leader {
+	if inflight == nil {
 		inflight = &flight{done: make(chan struct{})}
 		s.flight = inflight
+		go s.fly(context.WithoutCancel(ctx), inflight)
 	}
 	s.mu.Unlock()
 
-	if !leader {
-		// A FOLLOWER WAITS ON ITS OWN CONTEXT TOO. The leader's
-		// deadline is the leader's; a caller with a shorter one gives
-		// up rather than being held to somebody else's.
-		select {
-		case <-inflight.done:
-			return inflight.keys, inflight.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	select {
+	case <-inflight.done:
+		return inflight.keys, inflight.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
+}
 
+// fly performs one flight's request and publishes what it found to everybody
+// waiting on it.
+//
+// ITS LIFETIME IS THE REQUEST'S, bounded by [FetchTimeout] whatever client the
+// set was given, so a flight nobody waits on any more still ends.
+func (s *Set) fly(ctx context.Context, inflight *flight) {
+	ctx, cancel := context.WithTimeout(ctx, FetchTimeout)
+	defer cancel()
 	keys, err := s.read(ctx)
 	s.mu.Lock()
+	now := s.now()
 	if err == nil {
-		s.keys, s.fetchedAt = keys, s.now()
+		s.keys, s.fetchedAt = keys, now
 	}
-	// THE FLIGHT IS CLEARED WHETHER OR NOT IT SUCCEEDED, so a failure is
-	// retried by the next caller rather than latching. What keeps that
-	// from being a request per attempt is the refresh floor above, which
-	// only applies once there IS a cache — a cold cache retrying is a
-	// deployment that has never reached its provider, and hiding that
-	// would be worse.
+	// THE ATTEMPT IS RECORDED WHETHER OR NOT IT SUCCEEDED, and the flight
+	// is cleared either way, so a failure is never latched: once the
+	// refresh floor has passed the next caller asks again. What keeps an
+	// outage from being a request per attempt is that floor, measured
+	// from THIS instant — see [Set.cached] — which holds wherever there is
+	// a cache to answer from. A cold cache retries at once, one flight at
+	// a time: it has nothing else to say.
+	s.attemptedAt, s.failed = now, err != nil
 	inflight.keys, inflight.err = keys, err
 	s.flight = nil
 	s.mu.Unlock()
 	close(inflight.done)
-	return keys, err
 }
 
-// document is the subset of a JWK set this reads. Only RSA keys, because every
-// caller's parser accepts only RS256 — a key of another type could never
-// verify a token any of them would accept.
+// document is the subset of a JWK set this reads: RSA keys, and elliptic-curve
+// keys on P-256 and P-384.
+//
+// WHAT EACH CALLER NEEDS, and nothing either does not. The identity provider
+// signs ID tokens RS256 almost everywhere and ES256 or ES384 at the providers
+// that offer them (internal/iam/oidc's Algorithms), so its key set has to
+// yield both types; the Forge relay pins RS256, and an EC key handed to its
+// RSA verifier fails on the key's TYPE before any arithmetic, so reading one
+// costs that caller nothing. Other curves and other key types (`oct`, `OKP`)
+// are skipped — an `oct` key above all, since a symmetric key read out of a
+// published set is a signing secret anybody can download.
 type document struct {
 	Keys []struct {
 		Kid string `json:"kid"`
@@ -287,6 +343,9 @@ type document struct {
 		Use string `json:"use"`
 		N   string `json:"n"`
 		E   string `json:"e"`
+		Crv string `json:"crv"`
+		X   string `json:"x"`
+		Y   string `json:"y"`
 	} `json:"keys"`
 }
 
@@ -316,10 +375,19 @@ func (s *Set) read(ctx context.Context) (map[string]any, error) {
 		// issuer has said is not for signatures, and accepting it
 		// would verify a token against a key its own publisher says
 		// cannot have signed one.
-		if k.Kty != "RSA" || k.Kid == "" || k.Use == "enc" {
+		if k.Kid == "" || k.Use == "enc" {
 			continue
 		}
-		pub, err := rsaKey(k.N, k.E)
+		var pub any
+		var err error
+		switch k.Kty {
+		case "RSA":
+			pub, err = rsaKey(k.N, k.E)
+		case "EC":
+			pub, err = ecKey(k.Crv, k.X, k.Y)
+		default:
+			continue
+		}
 		if err != nil {
 			// ONE UNUSABLE ENTRY MUST NOT DISCARD THE REST: a key
 			// set carries the outgoing key alongside the incoming
@@ -334,12 +402,13 @@ func (s *Set) read(ctx context.Context) (map[string]any, error) {
 	}
 	if len(keys) == 0 {
 		// AN ERROR RATHER THAN AN EMPTY SET, so the cache is not
-		// updated. Storing the empty result would poison it: every
-		// subsequent lookup finds an unknown id against a non-nil map,
-		// which the refresh floor then holds for a minute — so a
-		// momentarily broken document would keep refusing tokens well
-		// after the source recovered.
-		return nil, fmt.Errorf("jwks: %s carried no usable RSA key", s.url)
+		// updated. Storing the empty result would poison it: every key
+		// the set held before would be gone, and on a cold cache every
+		// lookup would find an unknown id against a non-nil map, which
+		// the refresh floor then holds for a minute — so a momentarily
+		// broken document would keep refusing tokens well after the
+		// source recovered.
+		return nil, fmt.Errorf("jwks: %s carried no usable signing key", s.url)
 	}
 	return keys, nil
 }
@@ -367,4 +436,51 @@ func rsaKey(modulus, exponent string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("exponent out of range: %s", exp)
 	}
 	return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(exp.Int64())}, nil
+}
+
+// curves are the elliptic curves a key set's EC entries may name, by their JWK
+// `crv`, with the length of one coordinate on each.
+//
+// P-256 AND P-384, which are ES256's and ES384's: the curves the providers
+// that sign with ECDSA use. P-521 is left out because nothing this engine
+// verifies accepts ES512, and a key only an unaccepted algorithm could use is
+// a key nothing should hold.
+var curves = map[string]struct {
+	curve elliptic.Curve
+	bytes int
+}{
+	"P-256": {elliptic.P256(), 32},
+	"P-384": {elliptic.P384(), 48},
+}
+
+// ecKey rebuilds a public key from a JWK's curve and base64url coordinates.
+//
+// EACH COORDINATE MUST BE THE CURVE'S FULL LENGTH, which RFC 7518 §6.2.1.2
+// requires and which is what makes the two halves unambiguous, and the POINT
+// MUST BE ON THE CURVE: [ecdsa.ParseUncompressedPublicKey] refuses one that is
+// not, because a verifier handed an off-curve point is the invalid-curve
+// attack's way in.
+func ecKey(crv, x, y string) (*ecdsa.PublicKey, error) {
+	want, known := curves[crv]
+	if !known {
+		return nil, fmt.Errorf("curve %q is not one this engine verifies with", crv)
+	}
+	xb, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(x, "="))
+	if err != nil {
+		return nil, fmt.Errorf("x: %w", err)
+	}
+	yb, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(y, "="))
+	if err != nil {
+		return nil, fmt.Errorf("y: %w", err)
+	}
+	if len(xb) != want.bytes || len(yb) != want.bytes {
+		return nil, fmt.Errorf("a %s coordinate is %d bytes, and x and y are %d "+
+			"and %d", crv, want.bytes, len(xb), len(yb))
+	}
+	point := append(append([]byte{4}, xb...), yb...)
+	pub, err := ecdsa.ParseUncompressedPublicKey(want.curve, point)
+	if err != nil {
+		return nil, fmt.Errorf("point: %w", err)
+	}
+	return pub, nil
 }

@@ -1,15 +1,18 @@
 package oidc_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -209,7 +212,7 @@ func TestALoginBegunOnOneNodeFinishesOnAnother(t *testing.T) {
 	if flight.Return != "/work" {
 		t.Errorf("the return address reads %q", flight.Return)
 	}
-	tokens, err := config.Exchange(t.Context(), idp.Client(), metadata.TokenEndpoint,
+	tokens, err := exchange(t.Context(), nodeB, metadata.TokenEndpoint,
 		code, flight.Verifier)
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
@@ -333,13 +336,14 @@ func TestACodeCannotBeRedeemedWithoutTheVerifier(t *testing.T) {
 	}
 	code := idp.authorize(t, redirect)
 	_ = sealed
+	provider := oidc.NewProvider(config, idp.Client(), func() time.Time { return at })
 
 	for name, verifier := range map[string]string{
 		"no verifier at all": "",
 		"somebody else's":    "a-verifier-the-challenge-was-not-made-from",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := config.Exchange(t.Context(), idp.Client(),
+			if _, err := exchange(t.Context(), provider,
 				idp.Server.URL+"/token", code, verifier); err == nil {
 				t.Error("the provider redeemed a code against the wrong " +
 					"verifier, so this case is asserting about a provider " +
@@ -371,18 +375,25 @@ func TestAFlightIsNotRedeemableAfterItsWindow(t *testing.T) {
 // A FLIGHT CARRIES THE REDEMPTION IT IS FINISHING, AND MINTS ITS OWN SECRETS.
 //
 // An invitation redeemed through the provider is decided at the CALLBACK, so
-// the invitation and the login the redeemer chose must survive the round trip
-// sealed — a query parameter on the way back could be swapped for somebody
-// else's invitation. And whatever the caller hands in, the state, the nonce
-// and the verifier are this package's own: a caller able to choose them would
-// be able to predict them.
+// the invitation, its link's secret and the login the redeemer chose must
+// survive the round trip sealed — a query parameter on the way back could be
+// swapped for somebody else's invitation. And whatever the caller hands in, the
+// state, the nonce and the verifier are this package's own: a caller able to
+// choose them would be able to predict them.
+//
+// AN INVITATION WITHOUT ITS SECRET, or a secret without an invitation, is
+// refused at the start: the callback could never finish the first, and the
+// second is a secret carried for nothing. Mutation: drop the secret from the
+// copy and the round trip loses it; drop the refusal and a half-redemption
+// starts.
 func TestAFlightCarriesTheRedemptionAndMintsItsOwnSecrets(t *testing.T) {
 	t.Parallel()
 	idp := newIssuer(t)
 	cipher := testCipher(t)
 	_, sealed, err := idp.config().Start(cipher, idp.Server.URL+"/authorize",
-		oidc.Flight{Return: "/welcome", Invite: "inv-1", Login: "jane.doe",
-			State: "chosen", Nonce: "chosen", Verifier: "chosen"}, at)
+		oidc.Flight{Return: "/welcome", Invite: "inv-1", InviteSecret: "s3cr3t",
+			Login: "jane.doe", State: "chosen", Nonce: "chosen",
+			Verifier: "chosen"}, at)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -390,10 +401,21 @@ func TestAFlightCarriesTheRedemptionAndMintsItsOwnSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if flight.Invite != "inv-1" || flight.Login != "jane.doe" ||
-		flight.Return != "/welcome" {
-		t.Errorf("the flight carries (%q, %q, %q), want the redemption it "+
-			"was started for", flight.Invite, flight.Login, flight.Return)
+	if flight.Invite != "inv-1" || flight.InviteSecret != "s3cr3t" ||
+		flight.Login != "jane.doe" || flight.Return != "/welcome" {
+		t.Errorf("the flight carries (%q, %q, %q, %q), want the redemption it "+
+			"was started for", flight.Invite, flight.InviteSecret, flight.Login,
+			flight.Return)
+	}
+	for _, half := range []oidc.Flight{
+		{Invite: "inv-1"},
+		{InviteSecret: "s3cr3t"},
+	} {
+		if _, _, err := idp.config().Start(cipher, idp.Server.URL+"/authorize",
+			half, at); err == nil {
+			t.Errorf("a flight carrying invitation %q with secret %q started",
+				half.Invite, half.InviteSecret)
+		}
 	}
 	for name, value := range map[string]string{
 		"state": flight.State, "nonce": flight.Nonce, "verifier": flight.Verifier,
@@ -468,8 +490,16 @@ func TestAProofIsDatedByTheProvider(t *testing.T) {
 		{"a step-up inside its window", time.Hour, at.Add(-time.Minute),
 			at.Add(-time.Minute), false},
 		{"a step-up with no auth_time", time.Hour, time.Time{}, time.Time{}, true},
-		{"a step-up outside its window", time.Hour, at.Add(-time.Hour - time.Second),
-			time.Time{}, true},
+		// THE WINDOW IS JUDGED EXACTLY: the instant answered here is what
+		// the replacement session's deadline is stamped from, so a proof
+		// at the window's edge or past it — by any amount, the clock skew
+		// included — opens nothing that is still open.
+		{"a step-up a second inside its window", time.Hour,
+			at.Add(-time.Hour + time.Second), at.Add(-time.Hour + time.Second), false},
+		{"a step-up at its window's edge", time.Hour,
+			at.Add(-time.Hour), time.Time{}, true},
+		{"a step-up past its window by less than the skew", time.Hour,
+			at.Add(-time.Hour - 30*time.Second), time.Time{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -485,6 +515,39 @@ func TestAProofIsDatedByTheProvider(t *testing.T) {
 				t.Errorf("answered (%s, %v), want %s", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// A STEP-UP THE PROVIDER CONFIRMED IS FRESH FOR THE WINDOW IT ASKED FOR.
+//
+// The instant [oidc.Flight.ProvedAt] answers is the proof the replacement
+// session is stamped with, and the guard gives it the window's deadline — the
+// proof plus the same window the flight asked the provider for. So accepting a
+// proof and that proof being fresh must be ONE judgement: accepted inside a
+// minute's clock skew past the window and dated unadjusted, the replacement was
+// already stale when it opened, and the gesture that asked for it refused it
+// again. Every age around the window's edge is asked here, and each proof that
+// is accepted must leave the window open at the instant it was accepted.
+//
+// Mutation: judge the window within the skew and the ages just past it are
+// accepted stale; judge it with `>` and the edge itself is.
+func TestAStepUpTheProviderConfirmedIsFreshForTheWindowItAskedFor(t *testing.T) {
+	t.Parallel()
+	for _, window := range []time.Duration{15 * time.Minute, time.Hour} {
+		for age := window - 2*time.Second; age <= window+2*oidc.ClockSkew; age += time.Second {
+			proved, err := oidc.Flight{MaxAge: window}.ProvedAt(
+				oidc.Claims{AuthTime: at.Add(-age)}, at)
+			if err != nil {
+				continue
+			}
+			// THE GUARD'S OWN ARITHMETIC: fresh while now is before the
+			// proof plus the window (iam.Principal.Fresh).
+			if !at.Before(proved.Add(window)) {
+				t.Errorf("a %s step-up proved %s ago was accepted, and the "+
+					"session it opens is stale for that window already",
+					window, age)
+			}
+		}
 	}
 }
 
@@ -557,5 +620,264 @@ func TestDiscoveryRefusesADocumentMissingAnEndpoint(t *testing.T) {
 				t.Errorf("a document with no %s was accepted", drop)
 			}
 		})
+	}
+}
+
+// DISCOVERY IS ONE FETCH HOWEVER MANY ASK, AND NOBODY'S HANG-UP FAILS IT.
+//
+// The document is cold at boot and stale once a day, and both land under load
+// — a node restarted in the morning's sign-in wave — where every start and
+// callback in flight used to fetch it for itself: a herd at the provider's
+// metadata host from one node. And the fetch belongs to none of the callers,
+// so the first one leaving — a browser tab closed mid sign-in — fails nobody
+// still waiting.
+//
+// Mutation: fetch per caller and the host counts every one; fetch on the first
+// caller's context and the rest are answered its cancellation.
+func TestDiscoveryIsOneFetchHoweverManyAsk(t *testing.T) {
+	t.Parallel()
+	gate, reached := make(chan struct{}), make(chan struct{})
+	var served atomic.Int64
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if served.Add(1) == 1 {
+			close(reached)
+		}
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                 server.URL,
+			"authorization_endpoint": server.URL + "/authorize",
+			"token_endpoint":         server.URL + "/token",
+			"jwks_uri":               server.URL + "/jwks",
+		})
+	}))
+	t.Cleanup(server.Close)
+	config := testConfig()
+	config.Issuer = server.URL
+	provider := oidc.NewProvider(config, server.Client(), func() time.Time { return at })
+
+	first, hangUp := context.WithCancel(t.Context())
+	firstDone := make(chan error, 1)
+	go func() { _, err := provider.Metadata(first); firstDone <- err }()
+	// THE FIRST CALLER STARTS THE FETCH, and only then do the rest arrive.
+	<-reached
+	const callers = 24
+	var wg sync.WaitGroup
+	errs := make([]error, callers)
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = provider.Metadata(t.Context())
+		}()
+	}
+	// Let them all reach the wait before anything answers.
+	time.Sleep(50 * time.Millisecond)
+	hangUp()
+	if err := <-firstDone; err == nil {
+		t.Error("the caller that hung up was answered a document")
+	}
+	close(gate)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("caller %d was failed: %v", i, err)
+		}
+	}
+	if n := served.Load(); n != 1 {
+		t.Errorf("%d callers fetched the document %d times, want one", callers+1, n)
+	}
+}
+
+// discoveryDoc is a minimal discovery document for a server at base.
+func discoveryDoc(base string) map[string]any {
+	return map[string]any{
+		"issuer":                 base,
+		"authorization_endpoint": base + "/authorize",
+		"token_endpoint":         base + "/token",
+		"jwks_uri":               base + "/jwks",
+	}
+}
+
+// movingClock is a clock a case moves while a provider's own goroutine reads
+// it.
+type movingClock struct{ nanos atomic.Int64 }
+
+func newMovingClock(start time.Time) *movingClock {
+	c := &movingClock{}
+	c.nanos.Store(start.UnixNano())
+	return c
+}
+
+func (c *movingClock) now() time.Time           { return time.Unix(0, c.nanos.Load()).UTC() }
+func (c *movingClock) advance(by time.Duration) { c.nanos.Add(int64(by)) }
+
+// signalling is a log handler that closes seen the first time a record with
+// its message arrives, so a case can wait for a provider's own goroutine to
+// have finished something it reports.
+type signalling struct {
+	message string
+	once    sync.Once
+	seen    chan struct{}
+}
+
+func newSignalling(message string) *signalling {
+	return &signalling{message: message, seen: make(chan struct{})}
+}
+
+func (h *signalling) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *signalling) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == h.message {
+		h.once.Do(func() { close(h.seen) })
+	}
+	return nil
+}
+
+func (h *signalling) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *signalling) WithGroup(string) slog.Handler      { return h }
+
+// A STALE DISCOVERY DOCUMENT IS ANSWERED AT ONCE, AND REFRESHED BEHIND IT.
+//
+// Past its TTL the document was re-read before anybody was answered, so with
+// the metadata host hanging every sign-in start waited out the fetch — up to
+// its ten seconds — to be handed the document this node already held, which
+// is what a failed refresh answered anyway. It is handed over at once now,
+// even to a caller whose request has already ended, and the refresh runs
+// behind the answer.
+//
+// Mutation: wait on the flight for a stale document and the ended caller is
+// answered its cancellation.
+func TestAStaleDiscoveryDocumentIsAnsweredAtOnce(t *testing.T) {
+	t.Parallel()
+	var served atomic.Int64
+	hang := make(chan struct{})
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if served.Add(1) > 1 {
+			select {
+			case <-hang:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		_ = json.NewEncoder(w).Encode(discoveryDoc(server.URL))
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(hang) })
+	config := testConfig()
+	config.Issuer = server.URL
+	clock := newMovingClock(at)
+	provider := oidc.NewProvider(config, server.Client(), clock.now)
+	if _, err := provider.Metadata(t.Context()); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	clock.advance(oidc.MetadataTTL + time.Minute)
+	gone, leave := context.WithCancel(t.Context())
+	leave()
+	got, err := provider.Metadata(gone)
+	if err != nil || got.Issuer != server.URL {
+		t.Fatalf("a stale document with the host hanging answered (%+v, %v), "+
+			"want the document this node holds, at once", got, err)
+	}
+	// AND THE REFRESH WAS STARTED BEHIND THE ANSWER.
+	waitFor(t, func() bool { return served.Load() == 2 })
+}
+
+// A FAILED REFRESH HOLDS THE NEXT ONE BACK FOR THE FLOOR.
+//
+// Nothing was recorded about a refresh that failed, so past the TTL every
+// sign-in start — unauthenticated, as many as anybody cares to send — started
+// another fetch the moment the last one failed: a request per attempt at a
+// host that had just failed. A failed refresh now holds the next one back for
+// [oidc.MetadataRetryFloor], the key set's own minute, while the document this
+// node holds goes on being served; past the floor, one caller asks again.
+//
+// Mutation: drop the floor and the ten starts inside it fetch again.
+func TestAFailedDiscoveryRefreshHoldsTheNextBackForTheFloor(t *testing.T) {
+	t.Parallel()
+	var served atomic.Int64
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if served.Add(1) > 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(discoveryDoc(server.URL))
+	}))
+	t.Cleanup(server.Close)
+	config := testConfig()
+	config.Issuer = server.URL
+	clock := newMovingClock(at)
+	failed := newSignalling("oidc_provider_metadata_refresh_failed")
+	provider := oidc.NewProvider(config, server.Client(), clock.now).
+		WithLogger(slog.New(failed))
+	if _, err := provider.Metadata(t.Context()); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	clock.advance(oidc.MetadataTTL + time.Minute)
+	if _, err := provider.Metadata(t.Context()); err != nil {
+		t.Fatalf("a stale document was refused: %v", err)
+	}
+	select {
+	case <-failed.seen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh never reported failing")
+	}
+	for range 10 {
+		if got, err := provider.Metadata(t.Context()); err != nil || got.Issuer != server.URL {
+			t.Fatalf("inside the floor answered (%+v, %v), want the held document", got, err)
+		}
+	}
+	// ANYTHING THE STARTS ABOVE SENT WOULD HAVE ARRIVED BY NOW.
+	time.Sleep(100 * time.Millisecond)
+	if got := served.Load(); got != 2 {
+		t.Errorf("ten starts inside the floor of a failed refresh made %d "+
+			"fetches at a failing host, want none", got-2)
+	}
+
+	clock.advance(oidc.MetadataRetryFloor)
+	if _, err := provider.Metadata(t.Context()); err != nil {
+		t.Fatalf("past the floor a stale document was refused: %v", err)
+	}
+	waitFor(t, func() bool { return served.Load() == 3 })
+}
+
+// A NODE THAT HOLDS NO DOCUMENT ASKS AGAIN AT ONCE.
+//
+// The floor holds a refresh back only where there is a document to answer
+// from. A node that has never read one has nothing else to say, so its next
+// caller asks straight away — one fetch in flight at a time — rather than
+// refusing every sign-in for a minute over a blip at boot.
+//
+// Mutation: floor a cold cache too and the second start is refused.
+func TestANodeHoldingNoDiscoveryDocumentAsksAgainAtOnce(t *testing.T) {
+	t.Parallel()
+	var served atomic.Int64
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if served.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(discoveryDoc(server.URL))
+	}))
+	t.Cleanup(server.Close)
+	config := testConfig()
+	config.Issuer = server.URL
+	provider := oidc.NewProvider(config, server.Client(), func() time.Time { return at })
+	if _, err := provider.Metadata(t.Context()); err == nil {
+		t.Fatal("a 502 was taken for a discovery document")
+	}
+	if got, err := provider.Metadata(t.Context()); err != nil || got.Issuer != server.URL {
+		t.Errorf("the next start after a failed first fetch answered (%+v, %v), "+
+			"want the document the recovered host serves", got, err)
 	}
 }

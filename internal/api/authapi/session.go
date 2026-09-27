@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -94,7 +95,7 @@ type configResponse struct {
 func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
 	out := configResponse{Backend: s.backend()}
 	if s.backend() == config.AuthBackendLocal {
-		out.MinPasswordLength = iam.MinPasswordChars
+		out.MinPasswordLength = s.passwordFloor()
 		out.SecondFactor = string(s.boot.API.Auth.Local.TOTP)
 	}
 	if s.provider != nil {
@@ -149,6 +150,14 @@ type sessionResponse struct {
 	// can say so before they start rather than after.
 	StepUpDue          bool `json:"step_up_due"`
 	SensitiveStepUpDue bool `json:"sensitive_step_up_due"`
+
+	// Status is what the session this request carried may do: `signed_in`,
+	// or `second_factor_enrolment_required` for one that may only enrol a
+	// second factor — which is how a client that holds such a session,
+	// and is refused everything else, learns to render the enrolment. A
+	// request whose credential was a header carries no session and is
+	// `signed_in`.
+	Status sessionStatus `json:"status"`
 }
 
 // Session answers who the caller is.
@@ -178,8 +187,16 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 	// the year 1. A request whose credential was a header carries no
 	// session, and the zero bearer omits it.
 	var expires time.Time
+	status := statusSignedIn
 	if r.Header.Get("Authorization") == "" {
-		expires = s.presentedSession(r).Bearer.AbsoluteExpiresAt
+		presented := s.presentedSession(r)
+		expires = presented.Bearer.AbsoluteExpiresAt
+		// THE BEARER'S MARK AND THE ROW'S TOGETHER, as the guard reads
+		// it: on a node that has not applied the session's start there
+		// is no row, and the session is still the restricted one.
+		if presented.EnrolmentOnly() {
+			status = statusEnrolmentRequired
+		}
 	}
 	httpjson.Write(w, http.StatusOK, sessionResponse{
 		Person: principal.ID.String(), Login: principal.Login,
@@ -193,6 +210,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		SensitiveReauthAt:  principal.SensitiveReauthAt,
 		StepUpDue:          s.stepUpDue(principal),
 		SensitiveStepUpDue: !principal.Proved(iam.RecencySensitive, s.now()),
+		Status:             status,
 	})
 }
 
@@ -226,6 +244,17 @@ func (s *Service) stepUpDue(p iam.Principal) bool {
 // it nothing is presented, and the record catching up later merely makes the
 // row agree with what already happened.
 //
+// # Unguarded, or the promise above is not one
+//
+// The request guard answers `503 identity_unavailable` on a node whose identity
+// estate it cannot read, BEFORE any handler runs — and this route was behind
+// it, so on exactly that node no sign-out cleared anything. It is exempt now
+// ([auth.PathAuthLogout] is on the guard's exact list), which it can afford
+// because it trusts nothing the guard would have told it: every bearer it ends
+// is read here under its signature and this node's rows. The guard still
+// hands through whatever it resolved, for [callerName]; the origin check still
+// judges the post.
+//
 // # A session already over is cleared, and nothing else
 //
 // The cookie is read under its signature AND this node's rows, and only a
@@ -239,15 +268,36 @@ func (s *Service) stepUpDue(p iam.Principal) bool {
 // records the close the person asked for, and announces nothing it cannot say
 // was live.
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
-	s.clearSession(w)
+	s.signOut(w, r)
+	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
+}
 
-	presented := s.presentedSession(r)
+// signOut is [Service.Logout] up to its answer: the cookie cleared under
+// every name, and each session a cookie named closed and announced when this
+// node's rows still hold it. Both sign-outs answer after it — the plain one
+// with a body, the provider one with a redirect — so they end a session
+// identically.
+//
+// EVERY BEARER THE BROWSER HOLDS, under either name ([session.Held]), where
+// the guard authenticates only the name this deployment issues: a browser
+// still holding the name an http deployment issued before it moved to https
+// is signed in by nothing any more, and its session is closed here rather
+// than left live behind a cookie the sign-out merely forgot.
+func (s *Service) signOut(w http.ResponseWriter, r *http.Request) {
+	s.clearSession(w)
+	for _, cookie := range session.Held(r, s.boot.API.ExternalBase()) {
+		s.endHeld(r, s.signer.Validate(r.Context(), s.directoryFor(), cookie))
+	}
+}
+
+// endHeld closes and announces one session a sign-out found, when this node's
+// rows still hold it — see [Service.Logout].
+func (s *Service) endHeld(r *http.Request, presented session.Validation) {
 	bearer := presented.Bearer
 	if bearer.Lineage == uuid.Nil {
 		// NOTHING TO END, and it is not an error: a client that clears
 		// its own cookie and posts here is asking for exactly what
 		// already happened.
-		httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
 		return
 	}
 	lineage := bearer.Lineage.String()
@@ -262,7 +312,6 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	default:
 		log.DebugContext(r.Context(), "api_sign_out_already_over",
 			"lineage", lineage, "row", string(presented.Row))
-		httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
 		return
 	}
 	// THE PERSON COMES OFF THE SAME VERIFIED BEARER as the lineage, and
@@ -294,7 +343,105 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	log.InfoContext(r.Context(), "api_sign_out", "lineage", lineage)
-	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
+}
+
+// providerSession says what became of the person's session at the identity
+// provider, on a sign-out that could not send the browser there.
+type providerSession string
+
+// providerNotEnded is the one value: the session here is over and the one at
+// the provider is not, which the person has to know if they are walking away
+// from a shared machine.
+const providerNotEnded providerSession = "not_ended"
+
+// providerLogoutAnswer is what a provider sign-out answers when it cannot
+// redirect: the plain sign-out's own status, and what it could not do.
+type providerLogoutAnswer struct {
+	Status          string          `json:"status"`
+	ProviderSession providerSession `json:"provider_session"`
+	Detail          string          `json:"detail"`
+}
+
+// LogoutProvider ends THIS session and then sends the browser to the identity
+// provider to end the person's session THERE — OpenID Connect's RP-initiated
+// logout.
+//
+// # Why it exists beside the plain sign-out
+//
+// Signing out here ends this engine's session and leaves the provider's: the
+// next "sign in with the provider" is answered from it without anybody typing
+// anything. On a machine somebody else uses next, that is the same as not
+// having signed out. So this route ends the session here exactly as
+// [Service.Logout] does — the same close, the same only-a-live-session rule,
+// the cookie cleared first — and answers `303` to the provider's
+// `end_session_endpoint`, naming this client and asking to be sent back to the
+// dashboard. A 303 because the caller is a browser that POSTed: it is what
+// makes the browser follow with a GET, as a top-level navigation the provider's
+// own page can answer.
+//
+// # What it cannot promise
+//
+// It sends no `id_token_hint`, because this engine keeps no ID token once a
+// sign-in completes: a provider that requires one asks the person to confirm,
+// or refuses, at its own page — and the session HERE is over either way. And a
+// provider that publishes no `end_session_endpoint`, or whose discovery cannot
+// be reached, is answered as the plain sign-out is, saying the provider's
+// session was not ended: the local half happened, and the person is told the
+// other did not rather than being sent nowhere.
+//
+// `post_logout_redirect_uri` is `api.external_url` + `/dashboard`, and the
+// provider only honours one registered for this client — so it is registered
+// beside the callback, or the provider leaves the person on its own page.
+//
+// UNGUARDED for [Service.Logout]'s reason, and here it matters twice: a node
+// that cannot read its identity estate must still clear the cookie AND still
+// send the browser to the provider, which is the half a person on a shared
+// machine is relying on.
+func (s *Service) LogoutProvider(w http.ResponseWriter, r *http.Request) {
+	s.signOut(w, r)
+
+	notEnded := func(why string) {
+		httpjson.Write(w, http.StatusOK, providerLogoutAnswer{
+			Status: "signed out", ProviderSession: providerNotEnded, Detail: why,
+		})
+	}
+	metadata, err := s.provider.Metadata(r.Context())
+	if err != nil {
+		log.WarnContext(r.Context(), "api_oidc_discovery_failed", "error", err)
+		notEnded("signed out here; the identity provider could not be reached, " +
+			"so your session there was not ended — sign out at the provider too")
+		return
+	}
+	if metadata.EndSessionEndpoint == "" {
+		notEnded("signed out here; the identity provider publishes no " +
+			"end_session_endpoint, so your session there was not ended — sign " +
+			"out at the provider too")
+		return
+	}
+	// AN HTTPS ADDRESS ON A HOST, as the issuer itself must be, or the
+	// browser is not sent there at all. It used to be enough that the value
+	// parsed: a RELATIVE one was then a path on this deployment and a
+	// plain-http one an address anybody on the path could answer, and either
+	// redirect read to the person as a sign-out at their provider that did
+	// not happen.
+	target, err := url.Parse(metadata.EndSessionEndpoint)
+	if err == nil && (target.Scheme != "https" || target.Host == "") {
+		err = fmt.Errorf("%q is not an https address on a host",
+			metadata.EndSessionEndpoint)
+	}
+	if err != nil {
+		log.WarnContext(r.Context(), "api_oidc_end_session_unusable",
+			"endpoint", metadata.EndSessionEndpoint, "error", err)
+		notEnded("signed out here; the identity provider's end_session_endpoint " +
+			"is not an https address, so your session there was not ended — " +
+			"sign out at the provider too")
+		return
+	}
+	query := target.Query()
+	query.Set("client_id", s.provider.Config().ClientID)
+	query.Set("post_logout_redirect_uri", s.boot.API.ExternalBase()+auth.PathDashboard)
+	target.RawQuery = query.Encode()
+	http.Redirect(w, r, target.String(), http.StatusSeeOther)
 }
 
 // callerName is the name a row about this request records as its author, or
@@ -392,13 +539,11 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 // absolute deadline, whether the named lineage is this cookie's — is the
 // bearer's own.
 //
-// EITHER NAME, by [session.Presented]'s rule — the guard's own. Reading only
-// the name this deployment issues left a browser that still held the other
-// (every one signed in before `api.external_url` moved from http to https)
-// signed in after it signed out: the guard went on accepting the cookie, and
-// the sign-out neither closed its session nor cleared it.
+// THE NAME THIS DEPLOYMENT ISSUES, by [session.Presented]'s rule — the
+// guard's own, so what this reads is what the request was authenticated with.
+// The sign-out alone reaches the other name too, through [session.Held].
 func (s *Service) presentedSession(r *http.Request) session.Validation {
-	cookie := session.Presented(r)
+	cookie := session.Presented(r, s.boot.API.ExternalBase())
 	if cookie == "" {
 		return session.Validation{}
 	}
@@ -509,8 +654,12 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 // named sign-out ended, so a person who ends the session they are using is not
 // left looking at a signed-in page.
 func (s *Service) clearIfPresented(w http.ResponseWriter, r *http.Request, lineage string) {
-	if lineage == s.presentedSession(r).Bearer.Lineage.String() {
-		s.clearSession(w)
+	for _, cookie := range session.Held(r, s.boot.API.ExternalBase()) {
+		held := s.signer.Validate(r.Context(), s.directoryFor(), cookie)
+		if lineage == held.Bearer.Lineage.String() {
+			s.clearSession(w)
+			return
+		}
 	}
 }
 

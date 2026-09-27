@@ -193,6 +193,23 @@ type Invitation struct {
 	// two-hats split the person's own carries. See [Person.Colleague].
 	Colleague iam.Colleague `json:"colleague,omitempty"`
 
+	// Verifier is [InvitationVerifier] of the secret the link carries
+	// beside the id ([Blinder.InvitationSecret]) — what a redemption's
+	// presented secret is checked against, and never the secret, because
+	// the id alone is in every snapshot, backup and proxy log.
+	//
+	// AN INVITATION WITHOUT ONE IS REDEEMABLE BY NOBODY: it was issued
+	// before links carried a secret, and admitting it on its id would be
+	// admitting exactly what this field exists to close.
+	Verifier string `json:"verifier,omitempty"`
+
+	// Seat is the IDENTITY of the seat redeeming this BINDS — the handle
+	// the seat was created under (ADR-0020) — or empty for an invitation
+	// that binds none. Decided once by whoever issued it, on a seat the
+	// chart held as a human seat nobody was bound to, and claimed as one
+	// more step of the redemption's own sequence.
+	Seat string `json:"seat,omitempty"`
+
 	// ExpiresAt is when it stops being redeemable. THE WRITER'S CLOCK is
 	// not what enforces it: the applier stores the instant and the
 	// redemption compares against the BROKER's, so two nodes reach the
@@ -263,10 +280,40 @@ type Session struct {
 	// mapping exists for.
 	GroupGrants []iam.Grant `json:"group_grants,omitempty"`
 
+	// EnrolmentOnly marks a session that may do nothing but ENROL A SECOND
+	// FACTOR: opened by a password alone — a sign-in, a step-up, an
+	// invitation's redemption or the founding — for a person who holds
+	// none, on a deployment whose `api.auth.local.totp` requires one.
+	//
+	// ON THE SESSION, decided ONCE by the sign-in that opened it, rather
+	// than re-derived per request from the person's credentials and the
+	// node's configuration: what makes a session restricted is what its
+	// SIGN-IN proved, and a person who enrols afterwards has proved
+	// nothing more on this session — completing the enrolment REPLACES it
+	// with a full one, as a step-up does. Derived per request, the answer
+	// would also move with every node's own setting, and one browser would
+	// be restricted on one node and free on the next.
+	//
+	// ITS ZERO IS AN UNRESTRICTED SESSION, which is every session that
+	// existed before this field and every one a provider or a Tier A token
+	// opens. What stops an older build reading a restricted one as free is
+	// the record's VERSION ([ConditionRecordVersion]), not this field: a
+	// build that cannot decode it defers the record rather than dropping
+	// the field and serving the session whole.
+	//
+	// NOT THE ONLY COPY. The bearer the sign-in mints carries the same
+	// decision, signed ([session.Bearer.EnrolmentOnly]), because this row
+	// is exactly what a node serving a session it has not applied yet does
+	// not have — and a sign-in answers before any node applies it. The row
+	// is what the directory's session listing reads; the request path reads
+	// both.
+	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
+
 	// EndedReason is why a session stopped, on the CLOSE record: signed
-	// out, revoked, expired, or reuse detected. "This session was ended by
-	// reuse detection" is the sentence an investigation is looking for,
-	// and it is the one an ordinary delete would not have left behind.
+	// out, revoked, expired, or the identity provider withdrew it. "This
+	// session was revoked, and why" is the sentence an investigation is
+	// looking for, and it is the one an ordinary delete would not have
+	// left behind.
 	EndedReason string `json:"ended_reason,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`

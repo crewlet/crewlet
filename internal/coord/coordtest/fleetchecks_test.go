@@ -2,6 +2,7 @@ package coordtest_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -123,4 +124,105 @@ func containing(errs []error, want string) bool {
 		}
 	}
 	return false
+}
+
+// markerLoser is the KV backend as it WAS on a replicated stream: every writer
+// after the first to reach a record just removed is told the store is down,
+// because the broker's refusal of a create over the removal's marker matched
+// neither sentinel the create looked for. Only the attempts window and the
+// delivery claims are made to lie — two verbs are enough to show the check
+// reads what each verb answered rather than trusting any of them.
+type markerLoser struct {
+	wholeFleet
+
+	mu sync.Mutex
+	// raced are the records removed since they were last written, each
+	// true once the first writer after the removal has landed.
+	raced map[string]bool
+}
+
+func (m *markerLoser) removed(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.raced[key] = false
+}
+
+// lost reports a write that reached a removed record after its first writer.
+func (m *markerLoser) lost(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	landed, removed := m.raced[key]
+	if removed && !landed {
+		m.raced[key] = true
+	}
+	return removed && landed
+}
+
+func (m *markerLoser) Flush(ctx context.Context, subject string) error {
+	m.removed("attempt|" + subject)
+	return m.wholeFleet.Flush(ctx, subject)
+}
+
+func (m *markerLoser) Fail(ctx context.Context, subject string, now time.Time) error {
+	if m.lost("attempt|" + subject) {
+		return fmt.Errorf("%w: record the failed attempt: wrong last sequence",
+			coord.ErrUnavailable)
+	}
+	return m.wholeFleet.Fail(ctx, subject, now)
+}
+
+func (m *markerLoser) Release(ctx context.Context, key string) error {
+	m.removed("claim|" + key)
+	return m.wholeFleet.Release(ctx, key)
+}
+
+func (m *markerLoser) Claim(ctx context.Context, key string, now time.Time) (bool, error) {
+	if m.lost("claim|" + key) {
+		return false, fmt.Errorf("%w: claim the delivery: wrong last sequence",
+			coord.ErrUnavailable)
+	}
+	return m.wholeFleet.Claim(ctx, key, now)
+}
+
+func TestTheSuiteCatchesARaceOverARemovedRecordAnsweredAsAnOutage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
+
+	if errs := coordtest.CheckCreatesOverARemovedRecordAreRaces(ctx, memory.NewFleet(),
+		at); len(errs) != 0 {
+		t.Fatalf("the check objected to a correct twin, so it is measuring itself: %v", errs)
+	}
+
+	errs := coordtest.CheckCreatesOverARemovedRecordAreRaces(ctx,
+		&markerLoser{wholeFleet: memory.NewFleet(), raced: map[string]bool{}}, at)
+	if len(errs) == 0 {
+		t.Fatal("the check passed a backend that tells every loser of a create " +
+			"over a removed record the store is down — a failed sign-in left " +
+			"unrecorded, a delivery claim answered unknown and processed twice")
+	}
+	if !containing(errs, "Fail racing") {
+		t.Errorf("the check objected, but not to the failed attempts: %v", errs)
+	}
+
+	// AND THE CLAIMS, which the check reaches only once the attempts come
+	// back clean: a verb a check stops at is one it never looked at.
+	honestAttempts := &markerLoser{wholeFleet: memory.NewFleet(), raced: map[string]bool{}}
+	errs = coordtest.CheckCreatesOverARemovedRecordAreRaces(ctx,
+		claimsOnly{honestAttempts}, at)
+	if !containing(errs, "Claim racing") {
+		t.Errorf("a backend lying only about claims came back %v, want the "+
+			"claims named", errs)
+	}
+}
+
+// claimsOnly is a [markerLoser] whose attempts window tells the truth.
+type claimsOnly struct{ *markerLoser }
+
+func (c claimsOnly) Flush(ctx context.Context, subject string) error {
+	return c.wholeFleet.Flush(ctx, subject)
+}
+
+func (c claimsOnly) Fail(ctx context.Context, subject string, now time.Time) error {
+	return c.wholeFleet.Fail(ctx, subject, now)
 }

@@ -15,22 +15,21 @@ import (
 
 // THE BEARER'S WIRE FORMAT, and what each field is doing there.
 //
-//	v2.<key tag>.<generation>.<lineage>~<rotation>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>.<mac>
+//	v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>][.cred:<binding>].<mac>
 //
-// NINE FIELDS, dot-separated, with the session's own triple joined by `~` so
-// that the three values a node needs before it reads anything travel as one
-// token. Every one of them is here because a node has to answer with it and
-// has no other way to know it:
+// NINE FIELDS, dot-separated, with the session's own pair joined by `~` so
+// that the two values a node needs before it reads anything travel as one
+// token — and up to two more, each present only where it says something: the
+// scope, on a session that may do less than everything, and the binding, on a
+// session that stands for a configured credential. Every one of them is here
+// because a node has to answer with it and has no other way to know it:
 //
 //   - the KEY TAG, so a verifier knows which keyring entry to look up rather
 //     than trying each one — which is what makes adding a key zero-downtime;
 //   - the GENERATION, the fleet-wide counter a restore's last step moves, so
 //     one write ends every session in the company;
-//   - the LINEAGE, which is the session's identity, the subject its records
-//     arbitrate on, AND — being a uuid7 — the instant it began, which is what
-//     the rotation index is derived from;
-//   - the ROTATION index, which is the window this cookie was issued in — an
-//     integer, for the reason rotate.go gives at length;
+//   - the LINEAGE, which is the session's identity and the subject its
+//     records arbitrate on;
 //   - the PERSON, so a node can read their row without first reading the
 //     session's;
 //   - the EPOCH the session was opened at, which is what lets a node that has
@@ -39,11 +38,69 @@ import (
 //   - the START POSITION, which is what turns "no row" into the two answers it
 //     actually is — a session that ended, or one this node has not seen;
 //   - the ABSOLUTE expiry, which no re-issue ever moves;
-//   - the IDLE expiry, which every re-issue does, with no store write at all.
+//   - the IDLE expiry, which every re-issue does, with no store write at all;
+//   - the SCOPE, present only on a session that may do less than everything:
+//     `enrol`, one its sign-in opened on a password alone where a second
+//     factor is required ([Bearer.EnrolmentOnly]);
+//   - the BINDING, present only on a session exchanged from a Tier A token: a
+//     MAC over the token's value, so rotating the value ends the sessions the
+//     old one opened ([Bearer.Binding], and credential.go for why a MAC).
+//
+// # There is no rotation index, and v2 had one
+//
+// v2 carried the session's age in rotation windows beside the lineage, derived
+// from the instant inside a uuid7 lineage so that "rotating" a cookie wrote
+// nothing. What an index can PROVE is the whole question, and the answer is
+// nothing a replay leaves behind. A cookie whose index trails the clock is an
+// idle session and a captured one in identical bytes — the only thing that
+// could tell them apart is a record of which index was last issued, which is
+// exactly what deriving the index removed — so that arm was served and
+// re-issued. The one arm that still acted, an index AHEAD of the clock past a
+// two-minute overlap, could not be a replay either: the index is inside the
+// signed payload, so only a node holding the keyring wrote it, and it wrote it
+// from its own clock. That arm fired on exactly one thing — two nodes whose
+// clocks disagreed by more than the overlap — and its answer was to bump the
+// person's revocation epoch, which signed them out everywhere and ended every
+// machine token they held, over an NTP fault on somebody else's host.
+//
+// With neither arm deciding anything, the index did one thing: it forced a
+// re-issue at every window boundary, which [ReissueAfter] already does five
+// minutes into any window. So it is gone, and with it `session.rotate_after`
+// and the reuse revocation. What bounds a captured cookie is what always did:
+// the idle deadline (twelve hours from the last use), the absolute deadline
+// (configured), the person's revocation epoch and the fleet's generation (one
+// write each, immediate). The version moved because the session pair is a
+// field v2 read as a triple — a v2 bearer is malformed here, and a v3 one is
+// malformed to a v2 build, rather than either being misread.
+//
+// # Why the scope is in the bearer, and why it is optional
+//
+// IT IS THE SIGN-IN'S OWN FACT, decided once when the session opened, and the
+// bearer is the one copy of the session every node holds. The session's row
+// carries it too, but a node that has not applied the row yet serves reads on
+// the signature and the epoch alone ([RowBehind]) — and every sign-in answers
+// before any node applies its row. A restriction only the row carried was one
+// every node ignored for the apply latency after every password sign-in, the
+// one that answered it included: a password alone read the whole company, the
+// socket's snapshot among it, on a deployment that requires a second factor.
+//
+// ABSENT WHEN THE SESSION IS WHOLE, and that is the rolling-upgrade decision
+// rather than tidiness. A whole session's bearer is byte for byte the nine
+// fields every build reads, so a fleet part-way through an upgrade keeps every
+// ordinary session on every node. A scoped one is ten, which a build that
+// knows no scope refuses as MALFORMED — the direction that fails safe, because
+// such a build would otherwise serve it whole. What that costs is a person
+// part-way through enrolling asked to sign in again on that node, for a
+// session that could do nothing but enrol. And a scope this build cannot NAME
+// is refused the same way, for the same reason: a newer build narrowing a
+// session in a way this one would serve whole. A binding is an attribute of
+// the same kind, and it is refused by a build that does not know it for the
+// same reason — such a build would serve an exchanged session whatever value
+// its token has now.
 //
 // NOTHING HERE IS SECRET and nothing here grants anything on its own: a bearer
-// in a proxy log discloses a lineage, a person id and two deadlines, and is
-// worthless without the mac. What it deliberately does NOT carry is anything
+// in a proxy log discloses a lineage, a person id, two deadlines and whether
+// the session may only enrol, and is worthless without the mac. What it deliberately does NOT carry is anything
 // about the person — no login, no address, no grants — because a cookie is the
 // value most likely to end up somewhere nobody meant it to.
 
@@ -55,12 +112,8 @@ type Bearer struct {
 	// Generation is the fleet-wide session generation at mint.
 	Generation uint64
 
-	// Lineage is the session's own uuid7. Its embedded instant is the
-	// session's start, which [Signer.rotationAt] derives the index from.
+	// Lineage is the session's own id.
 	Lineage uuid.UUID
-
-	// Rotation is the window index this cookie was issued in.
-	Rotation uint64
 
 	// Person is whose session it is.
 	Person string
@@ -76,7 +129,28 @@ type Bearer struct {
 	// moved by every one.
 	AbsoluteExpiresAt time.Time
 	IdleExpiresAt     time.Time
+
+	// EnrolmentOnly marks a session that may do nothing but enrol a second
+	// factor: the bearer's SCOPE, signed with everything else and carried
+	// through every re-issue, so every node reads it whether or not it has
+	// applied the session's row. See the format's doc above, and
+	// [Validation.EnrolmentOnly] for the one reading of it.
+	EnrolmentOnly bool
+
+	// Binding is the MAC over the configured credential a session stands
+	// for, under a key derived from the one this bearer is signed with, or
+	// empty for a person's session. See credential.go.
+	Binding string
 }
+
+// scopeEnrolment is the scope a bearer of a session that may only enrol a
+// second factor carries — see [Bearer.EnrolmentOnly].
+const scopeEnrolment = "enrol"
+
+// bindingPrefix opens the attribute that carries [Bearer.Binding]. A PREFIX
+// AND A VALUE, where a scope is a bare word, because the value is a MAC and
+// the prefix is what tells the two kinds of attribute apart.
+const bindingPrefix = "cred:"
 
 // ErrMalformed reports a cookie that is not a bearer of this format at all.
 //
@@ -96,9 +170,7 @@ var ErrMalformed = errors.New("session: not a bearer of this format")
 // derived here, because [Idle] is a constant precisely so that every node
 // agrees on it.
 type Mint struct {
-	// Lineage is the session's uuid7. It MUST be one: the rotation index
-	// is derived from the instant inside it, so a lineage minted any other
-	// way is a session whose age nothing can compute.
+	// Lineage is the session's id: the subject its records arbitrate on.
 	Lineage uuid.UUID
 
 	Person        string
@@ -108,6 +180,19 @@ type Mint struct {
 
 	// AbsoluteExpiresAt is the deadline no re-issue moves.
 	AbsoluteExpiresAt time.Time
+
+	// EnrolmentOnly scopes the bearer to enrolling a second factor, for a
+	// session its sign-in opened on a password alone where one is
+	// required. THE SAME DECISION the session's start record carries, made
+	// once by the sign-in — see [Bearer.EnrolmentOnly] for why the bearer
+	// carries it too.
+	EnrolmentOnly bool
+
+	// Credential is the configured secret a session stands for — the value
+	// of the Tier A token `POST /auth/token` exchanged — or zero for a
+	// person's session. The bearer carries a binding to it and never the
+	// value: see credential.go.
+	Credential Credential
 }
 
 // Mint issues a bearer for a session that has just started.
@@ -115,11 +200,6 @@ func (s *Signer) Mint(m Mint) (string, error) {
 	switch {
 	case m.Lineage == uuid.Nil:
 		return "", errors.New("session: a bearer needs its session's lineage")
-	case m.Lineage.Version() != 7:
-		return "", fmt.Errorf("session: lineage %s is a version-%d uuid and "+
-			"the rotation index is derived from the instant inside a version-7 "+
-			"one — a session whose start nothing can read is one whose age "+
-			"nothing can compute", m.Lineage, m.Lineage.Version())
 	case m.Person == "":
 		return "", errors.New("session: a bearer needs the person it is for — " +
 			"a node reads their row before it reads the session's")
@@ -135,47 +215,63 @@ func (s *Signer) Mint(m Mint) (string, error) {
 		Epoch:             m.Epoch,
 		StartPosition:     m.StartPosition,
 		AbsoluteExpiresAt: m.AbsoluteExpiresAt,
-	}, s.rotationAt(m.Lineage, now), now)
+		EnrolmentOnly:     m.EnrolmentOnly,
+	}, m.Credential, now)
 }
 
-// issue signs one bearer at a rotation index, stamping the idle deadline.
+// issue signs one bearer, stamping the idle deadline and binding it to cred
+// under the key it is signed with.
 //
 // IT ALWAYS SIGNS UNDER THE ACTIVE KEY, including when it is re-issuing a
 // cookie that arrived under an older one. That is what makes a keyring
 // rotation drain: every live session moves to the new key the first time it is
 // used, so by the time the old key is dropped the sessions still on it are the
 // ones that have been idle longer than the re-issue window.
-func (s *Signer) issue(b Bearer, rotation uint64, now time.Time) (string, error) {
+func (s *Signer) issue(b Bearer, cred Credential, now time.Time) (string, error) {
 	key, held := s.keys[s.activeTag]
 	if !held {
 		return "", fmt.Errorf("%w: the active key is not in this signer's "+
 			"keyring", ErrNoKeyring)
 	}
 	b.KeyTag = s.activeTag
-	b.Rotation = rotation
 	b.IdleExpiresAt = now.Add(Idle)
+	b.Binding = ""
+	if !cred.IsZero() {
+		b.Binding = bindingUnder(key, cred)
+	}
 	payload := b.payload()
 	return payload + "." + sign(key, payload), nil
 }
 
 // payload is everything the signature covers, which is the whole bearer bar
-// the signature itself.
+// the signature itself — the scope included, so a bearer cannot be widened by
+// cutting it off.
 func (b Bearer) payload() string {
-	return strings.Join([]string{
+	parts := []string{
 		Version,
 		b.KeyTag,
 		strconv.FormatUint(b.Generation, 10),
-		b.Lineage.String() + "~" + strconv.FormatUint(b.Rotation, 10) +
-			"~" + b.Person,
+		b.Lineage.String() + "~" + b.Person,
 		strconv.FormatUint(b.Epoch, 10),
 		strconv.FormatUint(b.StartPosition, 10),
 		strconv.FormatInt(b.AbsoluteExpiresAt.Unix(), 10),
 		strconv.FormatInt(b.IdleExpiresAt.Unix(), 10),
-	}, ".")
+	}
+	if b.EnrolmentOnly {
+		parts = append(parts, scopeEnrolment)
+	}
+	if b.Binding != "" {
+		parts = append(parts, bindingPrefix+b.Binding)
+	}
+	return strings.Join(parts, ".")
 }
 
-// fields is how many dot-separated parts a bearer has, signature included.
+// fields is how many dot-separated parts a WHOLE session's bearer has,
+// signature included; each attribute adds one — see the format's doc.
 const fields = 9
+
+// attributes is how many a bearer may carry: a scope and a binding.
+const attributes = 2
 
 // parse reads a cookie's structure and verifies its signature.
 //
@@ -191,7 +287,7 @@ const fields = 9
 // the drop do nothing at all.
 func (s *Signer) parse(cookie string) (Bearer, error) {
 	parts := strings.Split(cookie, ".")
-	if len(parts) != fields || parts[0] != Version {
+	if len(parts) < fields || len(parts) > fields+attributes || parts[0] != Version {
 		return Bearer{}, fmt.Errorf("%w: %d fields at version %q",
 			ErrMalformed, len(parts), firstField(parts))
 	}
@@ -200,32 +296,32 @@ func (s *Signer) parse(cookie string) (Bearer, error) {
 		return Bearer{}, fmt.Errorf("%w: signed under a key this node does "+
 			"not hold", ErrMalformed)
 	}
-	payload := strings.Join(parts[:fields-1], ".")
+	mac := parts[len(parts)-1]
+	payload := strings.Join(parts[:len(parts)-1], ".")
 	// CONSTANT TIME. A byte-by-byte compare leaks the signature one byte
 	// at a time to anyone who can time the endpoint, and a sign-in
 	// endpoint is deliberately reachable with no other credential.
-	if !hmac.Equal([]byte(parts[fields-1]), []byte(sign(key, payload))) {
+	if !hmac.Equal([]byte(mac), []byte(sign(key, payload))) {
 		return Bearer{}, fmt.Errorf("%w: the signature does not verify",
 			ErrMalformed)
 	}
 
 	var b Bearer
 	b.KeyTag = parts[1]
-	triple := strings.Split(parts[3], "~")
-	if len(triple) != 3 {
-		return Bearer{}, fmt.Errorf("%w: the session triple has %d parts",
-			ErrMalformed, len(triple))
+	if err := b.readAttributes(parts[fields-1 : len(parts)-1]); err != nil {
+		return Bearer{}, err
 	}
-	lineage, err := uuid.Parse(triple[0])
+	pair := strings.Split(parts[3], "~")
+	if len(pair) != 2 {
+		return Bearer{}, fmt.Errorf("%w: the session pair has %d parts",
+			ErrMalformed, len(pair))
+	}
+	lineage, err := uuid.Parse(pair[0])
 	if err != nil {
 		return Bearer{}, fmt.Errorf("%w: the lineage is not a uuid", ErrMalformed)
 	}
-	if lineage.Version() != 7 {
-		return Bearer{}, fmt.Errorf("%w: the lineage is a version-%d uuid, so "+
-			"the session's start is unreadable", ErrMalformed, lineage.Version())
-	}
 	b.Lineage = lineage
-	b.Person = triple[2]
+	b.Person = pair[1]
 	if b.Person == "" {
 		return Bearer{}, fmt.Errorf("%w: the bearer names no person", ErrMalformed)
 	}
@@ -234,7 +330,6 @@ func (s *Signer) parse(cookie string) (Bearer, error) {
 		into *uint64
 	}{
 		{parts[2], &b.Generation},
-		{triple[1], &b.Rotation},
 		{parts[4], &b.Epoch},
 		{parts[5], &b.StartPosition},
 	} {
@@ -260,6 +355,31 @@ func (s *Signer) parse(cookie string) (Bearer, error) {
 		*field.into = time.Unix(seconds, 0).UTC()
 	}
 	return b, nil
+}
+
+// readAttributes reads what a bearer carries past its fixed fields: a scope,
+// then a binding, each at most once and in that order — the order
+// [Bearer.payload] writes them in, so a bearer this engine minted always
+// reads.
+//
+// AN ATTRIBUTE THIS BUILD CANNOT NAME IS REFUSED, never served whole: it is a
+// newer build saying this session may do less, or answers to something this
+// build would not check, and reading it as nothing would be reading it as
+// everything.
+func (b *Bearer) readAttributes(attrs []string) error {
+	for i, attr := range attrs {
+		switch {
+		case attr == scopeEnrolment && i == 0:
+			b.EnrolmentOnly = true
+		case strings.HasPrefix(attr, bindingPrefix) && i == len(attrs)-1 &&
+			len(attr) > len(bindingPrefix):
+			b.Binding = strings.TrimPrefix(attr, bindingPrefix)
+		default:
+			return fmt.Errorf("%w: attribute %q is not one this build knows "+
+				"in that place", ErrMalformed, attr)
+		}
+	}
+	return nil
 }
 
 // firstField is the version a malformed value claimed, for the message, with

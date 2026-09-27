@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -1366,11 +1367,17 @@ func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *
 
 // httpSurface is the HTTP listener a node binds: the whole API on a node with
 // the ingress role, or only its seats' tool bridge on a node without it. The
-// app and the projector are nil in the second shape.
+// app and the projector are nil in the second shape, and the sign-in surface
+// is nil there and on a node that serves no sign-in (see [signInSurface]).
 type httpSurface struct {
 	app       *api.App
 	server    *http.Server
 	projector *observe.Projector
+
+	// auth is the sign-in surface, held here for the work it runs after
+	// its answers — a stale password's rewrite — which is its own to stop
+	// and must stop before the engine its writes go to does.
+	auth *authapi.Service
 }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
@@ -1398,6 +1405,12 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	}
 	if s.app != nil {
 		s.app.Stop()
+	}
+	// AFTER THE LISTENER, so no request can start another rewrite, and
+	// before [shutdown] tears down the engine a rewrite writes through —
+	// within what is left of the same grace, and cut after it.
+	if s.auth != nil {
+		s.auth.Stop(grace)
 	}
 	log.InfoContext(ctx, "api_stopped")
 }
@@ -2066,7 +2079,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// setter — see Engine.SetOnCompanyPublished.
 	e.SetOnCompanyPublished(func(context.Context) { app.Stream().CompanyPublished() })
 
-	return &httpSurface{app: app, server: server, projector: projector}, nil
+	return &httpSurface{app: app, server: server, projector: projector,
+		auth: authSurface}, nil
 }
 
 // serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it

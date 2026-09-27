@@ -440,11 +440,11 @@ func TestAContentWriteNeverTouchesALink(t *testing.T) {
 	if err := rig.during(func() error {
 		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 			PersonID: ada, OpID: "set-password", Reason: "a password",
-			Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+			Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 				return append(held, iamdomain.Credential{
 					ID: uuid.NewString(), Method: iamdomain.MethodPassword,
 					Verifier: "$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA",
-				})
+				}), nil
 			},
 		})
 		return err
@@ -472,11 +472,11 @@ func TestAContentWriteNeverTouchesALink(t *testing.T) {
 		"a credential set adding one": func() error {
 			_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 				PersonID: ada, OpID: "set-oidc", Reason: "smuggled",
-				Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+				Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 					return append(held, iamdomain.Credential{
 						ID: uuid.NewString(), Method: iamdomain.MethodOIDC,
 						SubjectBlind: rig.subject("second").Blind,
-					})
+					}), nil
 				},
 			})
 			return err
@@ -600,7 +600,7 @@ func TestAnEnrolmentThroughTheProviderPinsItsSubject(t *testing.T) {
 		broker = &silentBroker{Appender: inner, on: ".person."}
 		return broker
 	})
-	var invitation string
+	var invitation, secret string
 	offered := []iam.Grant{iam.GrantStateRead}
 	if err := rig.draining(func() error {
 		issued, err := rig.writer.Invite(t.Context(), iamdomain.InviteMint{
@@ -609,7 +609,7 @@ func TestAnEnrolmentThroughTheProviderPinsItsSubject(t *testing.T) {
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
 			OpID:      operationKey(), Reason: "onboarding",
 		})
-		invitation = issued.ID
+		invitation, secret = issued.ID, issued.Secret
 		return err
 	}); err != nil {
 		t.Fatalf("invite: %v", err)
@@ -629,7 +629,8 @@ func TestAnEnrolmentThroughTheProviderPinsItsSubject(t *testing.T) {
 				Name: "A joiner", Email: "joiner@example.com",
 				Login: "joiner.one", Grants: grants,
 				Colleague: iam.ColleagueRead, Invitation: invitation,
-				Link: &through, OpID: "redeem-" + person,
+				InvitationSecret: secret,
+				Link:             &through, OpID: "redeem-" + person,
 				Reason: "redeemed through the identity provider",
 			})
 			return err
@@ -777,7 +778,7 @@ func TestARedemptionFinishedByPasswordAnnouncesTheLinkItHolds(t *testing.T) {
 		broker = &silentBroker{Appender: inner, on: ".person."}
 		return broker
 	})
-	var invitation string
+	var invitation, secret string
 	offered := []iam.Grant{iam.GrantStateRead}
 	if err := rig.draining(func() error {
 		issued, err := rig.writer.Invite(t.Context(), iamdomain.InviteMint{
@@ -786,7 +787,7 @@ func TestARedemptionFinishedByPasswordAnnouncesTheLinkItHolds(t *testing.T) {
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
 			OpID:      operationKey(), Reason: "onboarding",
 		})
-		invitation = issued.ID
+		invitation, secret = issued.ID, issued.Secret
 		return err
 	}); err != nil {
 		t.Fatalf("invite: %v", err)
@@ -803,7 +804,8 @@ func TestARedemptionFinishedByPasswordAnnouncesTheLinkItHolds(t *testing.T) {
 				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 				Name: "Later", Email: "later@example.com", Login: "later.one",
 				Grants: grants, Colleague: iam.ColleagueRead,
-				Invitation: invitation, Link: through, OpID: "redeem-" + person,
+				Invitation: invitation, InvitationSecret: secret,
+				Link: through, OpID: "redeem-" + person,
 				Reason: "redeemed",
 			})
 			return err

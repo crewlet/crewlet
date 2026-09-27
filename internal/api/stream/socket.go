@@ -320,9 +320,11 @@ func resolved(guard *auth.Guard, w http.ResponseWriter,
 	r *http.Request) (*http.Request, *auth.Refusal) {
 
 	if !errors.Is(iam.Reason(r.Context()), iam.ErrUnresolved) {
-		// NO REFUSAL CAN BE PENDING HERE: the middleware writes a seat
-		// refusal itself on every path outside `/auth/`, so a request
-		// it answered and passed on is one it did not refuse.
+		// NO REFUSAL CAN BE PENDING HERE: the middleware writes a
+		// resolved caller's refusal itself on every route that refusal
+		// applies to — a lost seat and an enrolment-only session both
+		// reach the socket — so a request it answered and passed on is
+		// one it did not refuse.
 		return r, nil
 	}
 	return guard.Resolve(w, r)

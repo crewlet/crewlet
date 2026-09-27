@@ -2,6 +2,8 @@ package jwks_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -9,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 
 	"sync/atomic"
@@ -449,6 +452,104 @@ func TestAFailedFetchIsRetriedByTheNextCaller(t *testing.T) {
 	}
 }
 
+// failingAfterFirst serves the test key once and answers 502 to every request
+// after it, counting them all: a source that was up and then went down.
+func failingAfterFirst(t *testing.T) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var served atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if served.Add(1) > 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"keys":[{"kid":"k0","kty":"RSA","n":"` +
+			base64.RawURLEncoding.EncodeToString(testKey.PublicKey.N.Bytes()) +
+			`","e":"AQAB"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	return server, &served
+}
+
+// THE REFRESH FLOOR HOLDS THROUGH AN OUTAGE AT THE SOURCE.
+//
+// The floor that keeps a forged kid from being a fetch per token was measured
+// from the last SUCCESS, so once the source went down and the set aged past
+// the floor, every token naming a kid nobody published — on the Forge webhook,
+// one the sender picks — was a fetch again, one after another, each at a host
+// that had just failed. It is measured from the last ATTEMPT: inside it an
+// unknown kid is refused and nothing is asked, and once it passes one caller
+// asks again.
+//
+// Mutation: measure the floor from the last success and the ten forged kids
+// are ten fetches.
+func TestTheRefreshFloorHoldsThroughAnOutage(t *testing.T) {
+	t.Parallel()
+	server, served := failingAfterFirst(t)
+	clock := pinned
+	source := jwks.New(jwks.Options{URL: server.URL, Now: func() time.Time { return clock }})
+	if _, err := source.Key(t.Context(), "k0"); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	// THE SOURCE IS DOWN, and the set is past its TTL.
+	clock = clock.Add(2 * time.Hour)
+	if _, err := source.Key(t.Context(), "made-up"); err == nil {
+		t.Fatal("a kid nobody published resolved")
+	}
+	if got := served.Load(); got != 2 {
+		t.Fatalf("the source was asked %d times, want the warm fetch and the "+
+			"one the first forged kid made", got)
+	}
+	for range 10 {
+		if _, err := source.Key(t.Context(), "made-up"); err == nil {
+			t.Fatal("a kid nobody published resolved")
+		}
+	}
+	if got := served.Load(); got != 2 {
+		t.Errorf("ten forged kids inside the floor of a failed attempt made %d "+
+			"fetches at a failing source, want none", got-2)
+	}
+
+	// PAST THE FLOOR, one caller asks again.
+	clock = clock.Add(jwks.RefreshFloor)
+	_, _ = source.Key(t.Context(), "made-up")
+	if got := served.Load(); got != 3 {
+		t.Errorf("past the floor the source was asked %d more times, want one", got-2)
+	}
+}
+
+// A STALE KEY IS SERVED AT ONCE INSIDE THE FLOOR OF A FAILED ATTEMPT.
+//
+// Past its TTL a key the set names is re-read, and with the source down the
+// stale key is served anyway. But every such token used to ask the failing
+// source again first — waiting out the fetch, up to its timeout against a host
+// that hangs, before being handed the key it could have had at once. Inside the
+// floor of a failed attempt the stale key is served without asking.
+//
+// Mutation: drop the stale arm from the cache's own answer and every lookup
+// below is a fetch.
+func TestAStaleKeyIsServedAtOnceInsideTheFloorOfAFailure(t *testing.T) {
+	t.Parallel()
+	server, served := failingAfterFirst(t)
+	clock := pinned
+	source := jwks.New(jwks.Options{URL: server.URL, Now: func() time.Time { return clock }})
+	if _, err := source.Key(t.Context(), "k0"); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	clock = clock.Add(2 * time.Hour)
+	for i := range 6 {
+		key, err := source.Key(t.Context(), "k0")
+		if err != nil || key == nil {
+			t.Fatalf("lookup %d of a stale key with the source down: %v", i, err)
+		}
+	}
+	if got := served.Load(); got != 2 {
+		t.Errorf("six lookups of a stale key made %d fetches at a failing "+
+			"source, want the one that failed", got-1)
+	}
+}
+
 // A KEY THE ISSUER PUBLISHED FOR ENCRYPTION NEVER VERIFIES A SIGNATURE.
 //
 // `use` is optional, so requiring "sig" would discard every set that omits it.
@@ -476,5 +577,159 @@ func TestAnEncryptionKeyIsNotUsedToVerifySignatures(t *testing.T) {
 			t.Errorf("the %q key was discarded: %v — `use` is optional, so "+
 				"requiring it would refuse every set that omits it", kid, err)
 		}
+	}
+}
+
+// THE FIRST CALLER HANGING UP FAILS NOBODY ELSE.
+//
+// Every caller waits on one flight, and the flight used to run on the context
+// of whoever started it — so that caller going away, a browser tab closed in
+// the middle of a sign-in or a webhook sender giving up, failed every
+// verification waiting beside it, each refused for somebody else's
+// disconnect. The flight runs on a context no caller can cancel, bounded by
+// the fetch timeout, and each caller waits on its own.
+//
+// Mutation: fetch on the first caller's context and the second caller is
+// answered its cancellation.
+func TestTheFirstCallerHangingUpFailsNobodyElse(t *testing.T) {
+	t.Parallel()
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	var served atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if served.Add(1) == 1 {
+			close(reached)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		_, _ = w.Write([]byte(`{"keys":[{"kid":"k0","kty":"RSA","n":"` +
+			base64.RawURLEncoding.EncodeToString(testKey.PublicKey.N.Bytes()) +
+			`","e":"AQAB"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	set := jwks.New(jwks.Options{URL: server.URL})
+
+	first, hangUp := context.WithCancel(t.Context())
+	firstDone := make(chan error, 1)
+	go func() { _, err := set.Key(first, "k0"); firstDone <- err }()
+	<-reached
+	secondDone := make(chan error, 1)
+	go func() { _, err := set.Key(t.Context(), "k0"); secondDone <- err }()
+	// THE SECOND CALLER IS ON THE FLIGHT before the first goes: give it the
+	// moment it takes to reach the wait, which nothing outside can observe.
+	time.Sleep(50 * time.Millisecond)
+
+	hangUp()
+	if err := <-firstDone; err == nil {
+		t.Fatal("the caller that hung up was answered a key")
+	}
+	close(release)
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Errorf("a caller still waiting was failed by another's hang-up: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second caller was never answered")
+	}
+	if n := served.Load(); n != 1 {
+		t.Errorf("the key set was fetched %d times, want the one flight", n)
+	}
+}
+
+// ecJWK is one EC key as a key set publishes it: its curve and its two
+// coordinates at the curve's full length.
+func ecJWK(t *testing.T, kid, crv string, pub *ecdsa.PublicKey) string {
+	t.Helper()
+	x, y := coordinates(t, pub)
+	return ecEntry(kid, crv, x, y)
+}
+
+// coordinates are a public key's x and y, each at its curve's full length.
+func coordinates(t *testing.T, pub *ecdsa.PublicKey) (x, y []byte) {
+	t.Helper()
+	point, err := pub.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := (len(point) - 1) / 2
+	return point[1 : 1+size], point[1+size:]
+}
+
+// ecEntry is a key set's EC entry over whatever coordinates a case supplies.
+func ecEntry(kid, crv string, x, y []byte) string {
+	return `{"kid":"` + kid + `","kty":"EC","crv":"` + crv + `","x":"` +
+		base64.RawURLEncoding.EncodeToString(x) + `","y":"` +
+		base64.RawURLEncoding.EncodeToString(y) + `"}`
+}
+
+// AN ELLIPTIC-CURVE KEY ON P-256 OR P-384 IS READ, AND NOTHING ELSE OF ITS KIND.
+//
+// Providers that sign ID tokens ES256 or ES384 publish EC keys, and a set read
+// for RSA alone left every sign-in at one of them refused as an unknown key.
+// What is read is exactly what those two algorithms verify with: a key on
+// another curve is skipped — without discarding the RSA key beside it, which is
+// the rotation rule — and so is a point that is not on its curve (the
+// invalid-curve attack's way in) and a coordinate shorter than its curve's.
+//
+// Mutation: skip every EC entry and the P-256 and P-384 keys are unknown; add
+// P-521 to the curves read and its key is handed back. The off-curve and short
+// entries are held by the parser and the length rule together.
+func TestAnEllipticCurveKeyIsReadOnTheCurvesThatVerify(t *testing.T) {
+	t.Parallel()
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p521, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A POINT OFF ITS CURVE: P-256's x beside a y one bit away from its own.
+	x, y := coordinates(t, &p256.PublicKey)
+	bent := slices.Clone(y)
+	bent[len(bent)-1] ^= 1
+	offCurve := ecEntry("off", "P-256", x, bent)
+	// AND A POINT SHORTER THAN ITS CURVE: P-384's coordinates named P-256
+	// would be too long, and P-256's cut to thirty bytes too short.
+	short := ecEntry("short", "P-256", x[:30], y[:30])
+
+	doc := `{"keys":[` + ecJWK(t, "p256", "P-256", &p256.PublicKey) + `,` +
+		ecJWK(t, "p384", "P-384", &p384.PublicKey) + `,` +
+		ecJWK(t, "p521", "P-521", &p521.PublicKey) + `,` +
+		offCurve + `,` + short + `,` +
+		`{"kid":"rsa","kty":"RSA","n":"` + modulusOf(t) + `","e":"AQAB"}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(doc))
+	}))
+	t.Cleanup(server.Close)
+	set := jwks.New(jwks.Options{URL: server.URL})
+
+	for kid, want := range map[string]*ecdsa.PublicKey{
+		"p256": &p256.PublicKey, "p384": &p384.PublicKey,
+	} {
+		got, err := set.Key(t.Context(), kid)
+		if err != nil {
+			t.Errorf("the %s key was not read: %v", kid, err)
+			continue
+		}
+		if pub, ok := got.(*ecdsa.PublicKey); !ok || !pub.Equal(want) {
+			t.Errorf("the %s key reads as %T %v, want the published point", kid, got, got)
+		}
+	}
+	for _, kid := range []string{"p521", "off", "short"} {
+		if _, err := set.Key(t.Context(), kid); err == nil {
+			t.Errorf("the %q entry was handed back to verify with", kid)
+		}
+	}
+	if _, err := set.Key(t.Context(), "rsa"); err != nil {
+		t.Errorf("the RSA key beside them was discarded: %v", err)
 	}
 }

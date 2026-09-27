@@ -634,7 +634,10 @@ the proxy has already terminated TLS — so the session cookie's `Secure` flag,
 its `__Host-` prefix, the origin every write is checked against and the base
 every webhook URL is built on all come from this one value. Behind a proxy,
 name the proxy's own block in `api.trusted_proxies` too, or every caller shares
-one rate-limit bucket.
+the proxy's address — one sign-in throttle curve per login for everybody,
+so a stranger guessing at somebody's login slows that person's own sign-in,
+and one client in every audit row. `crewlet validate` warns about an `https` external
+URL with no proxy trusted, because the engine never terminates TLS itself.
 
 ```bash
 crewlet run -config crewlet.yaml    # engine + embedded API on :80
@@ -983,7 +986,7 @@ from that map — a guard test fails if the two drift.
 | Category | Event types |
 |---|---|
 | `a2a` | `a2a_channel_closed`, `a2a_channel_opened`, `a2a_message_sent` |
-| `auth` | `iam_credential_minted`, `iam_credential_revoked`, `iam_grants_changed`, `iam_identity_linked`, `iam_identity_unlinked`, `iam_login_failures`, `iam_mfa_reset`, `iam_recovery_code_used`, `iam_session_ended`, `iam_session_generation_bumped`, `iam_session_reuse_detected`, `iam_session_started`, `iam_stepup_completed`, `iam_token_first_use`, `iam_token_overreach`, `statelog_record_tampered`, `statelog_record_unverifiable` |
+| `auth` | `iam_credential_minted`, `iam_credential_revoked`, `iam_grants_changed`, `iam_identity_linked`, `iam_identity_unlinked`, `iam_login_failures`, `iam_mfa_reset`, `iam_recovery_code_used`, `iam_second_factor_throttled`, `iam_session_ended`, `iam_session_generation_bumped`, `iam_session_started`, `iam_stepup_completed`, `iam_token_first_use`, `iam_token_overreach`, `statelog_record_tampered`, `statelog_record_unverifiable` |
 | `decision` | `contribution_received`, `contribution_requested`, `decision_requested`, `decision_resolved` |
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `config_revision_activated`, `config_revision_applied`, `config_revision_scrubbed`, `org_started`, `org_stopped` |
@@ -1034,8 +1037,8 @@ type at all rather than an excluded one: a per-request **authorization
 decision** (orders of magnitude more voluminous than everything else here, and
 a fact about a poll rather than about the company — a Tier A token refused by
 a route is the coalesced `iam_token_overreach` instead) and a **session
-touch** (a clock rather than an event; a session's rotation is derived, so an
-hour of use writes nothing anywhere). The exclusion table lists types something
+touch** (a clock rather than an event; a re-issue moves a deadline inside the
+cookie's own signature, so an hour of use writes nothing anywhere). The exclusion table lists types something
 publishes, and nothing publishes either of these.
 
 #### Querying events

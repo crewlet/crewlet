@@ -97,7 +97,7 @@ func (f *FleetStore) FollowIfAbsent(ctx context.Context, backend, handle, channe
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, jetstream.ErrKeyExists):
+	case lostCreateRace(err):
 		return false, nil
 	default:
 		return false, unavailable(

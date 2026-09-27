@@ -26,10 +26,18 @@ const (
 	// proved nothing yet. It may not act.
 	StageInvited Stage = "invited"
 
-	// StageEnrolling is a principal mid-proof — setting a credential,
-	// completing a second factor. Distinct from invited because an
+	// StageEnrolling is a principal part-way through proving who they
+	// are, who may not act yet. Distinct from invited because an
 	// abandoned enrolment is a half-built credential somebody has to
 	// clean up, and collapsing the two hides which ones those are.
+	//
+	// NOT THE SECOND-FACTOR ENROLMENT a required factor asks for: nothing
+	// in this build moves a person here on its own — an administrator
+	// may set it — and a person who must enrol a factor before anything
+	// else is ACTIVE, holding a SESSION that may only enrol one (the
+	// identity estate's Session.EnrolmentOnly, carried on the session's
+	// bearer too). The restriction is what a sign-in proved, which is a
+	// fact about the session; a stage is a fact about the person.
 	StageEnrolling Stage = "enrolling"
 
 	// StageActive is enrolled and may act. The only stage that may.

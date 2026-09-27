@@ -53,15 +53,14 @@
 //
 // [Trail.EmitOnce] is the other shape a rate needs: a fact that repeats and is
 // worth one row per window — a Tier A token's first use in an hour or its
-// overreach, a replayed cookie, a session noticed past its deadline. It is the
-// notification digest's idiom (one row stands for the window) applied to a
-// single key, and it reports whether it published so a caller that has to act
-// exactly once alongside the row can hang the action on the same decision.
-// [Trail.Claim] is the same decision for a caller that must READ or WRITE
-// before it knows what the fact is, and hands the key back when it cannot say
-// — the revocation a replayed cookie triggers is taken on a claim of its own
-// ([OnceReuseRevocation]) rather than on the row's, because the row is said
-// once whatever happens and the revocation is asked for again until it lands.
+// overreach, a session noticed past its deadline. It is the notification
+// digest's idiom (one row stands for the window) applied to a single key, and
+// it reports whether it published so a caller that has to act exactly once
+// alongside the row can hang the action on the same decision. [Trail.Claim] is
+// the same decision for a caller that must READ before it knows what the fact
+// is, and hands the key back when it cannot say — a deadline ending is claimed
+// before the rows are asked whether a record ended the session first, and
+// handed back when this node cannot read them.
 //
 // EACH CLASS OF FACT KEEPS ITS OWN BOUNDED SET ([OnceClass]), so a class
 // remembered for the life of the process can never evict one that expires —
@@ -146,10 +145,11 @@ type Failure struct {
 	// a wrong password for a real login — or empty.
 	Person string
 
-	// Throttled says the attempt was refused at the throttle's ceiling
-	// before anything was verified. It is counted apart, because "this
-	// client kept going after it was stopped" is a different fact from
-	// "this client guessed wrong".
+	// Throttled says the attempt was answered 429 before anything was
+	// verified — the throttle's curve owed its key a longer wait than a
+	// request is held open for. It is counted apart, because "this client
+	// came back before its wait was over" is a different fact from "this
+	// client guessed wrong".
 	Throttled bool
 }
 
@@ -172,25 +172,24 @@ const (
 	// MaxSubjectsCounted is how many distinct subjects one tally counts
 	// before it saturates.
 	//
-	// 256, well past any honest caller and past what the throttle lets a
-	// guesser reach: somebody mistyping their own login presents one or
-	// two, and a client the throttle admits presents at most
-	// credential.AdmitLimit VERIFIED attempts a window. The one arm
-	// that can present hundreds of distinct values in a minute from one
-	// client is a bearer spray, which nothing throttles — and for that,
-	// "at least 256" is already all an operator does anything with. At
-	// eight bytes a digest it bounds the counting to about 130 KiB across
-	// every tally a minute can hold.
+	// 256, well past any honest caller: somebody mistyping their own login
+	// presents one or two. What presents hundreds of distinct values in a
+	// minute from one client is a spray — one password across the
+	// directory, or bearers — and no curve slows either, because the
+	// sign-in curve is keyed on the pair and a bearer's value is its own
+	// protection; for a spray, "at least 256" is already all an operator
+	// does anything with. At eight bytes a digest it bounds the counting to
+	// about 130 KiB across every tally a minute can hold.
 	MaxSubjectsCounted = 256
 
 	// MaxPeopleNamed is how many resolved people one row names.
 	//
-	// SIXTEEN. The throttle admits six verified attempts per client per
-	// window, so more than a handful of distinct real people from one
-	// client in one minute arrives only through a fleet whose
-	// coordination store is down (each node then throttles on its own
-	// count); sixteen covers that with room. Past it, an attempt is
-	// still COUNTED — only the name list stops growing.
+	// SIXTEEN, which is past every account a TARGETED run aims at — a
+	// handful of people worth becoming — so a row names all of them, while
+	// a spray across the directory is told apart by the distinct-subject
+	// count beside the names rather than by a list of everybody it tried,
+	// which would put the company's roster in one row. Past it, an attempt
+	// is still COUNTED — only the name list stops growing.
 	MaxPeopleNamed = 16
 
 	// MaxFoldedClients is how many distinct clients the "*" row counts

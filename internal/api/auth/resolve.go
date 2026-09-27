@@ -245,45 +245,10 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 	// stays anonymous rather than being quietly upgraded by whatever
 	// cookie happened to be in the jar.
 	if candidate := g.Credential(r); candidate != "" {
-		entry, ok := g.entry(candidate)
-		if !ok && g.machine != nil {
-			// THE THIRD ARM, chosen by the value's SHAPE and never
-			// gated on it: a value that parses is still verified, and
-			// one that does not is refused below like any other. See
-			// tokens.go.
-			if presented, isToken := credential.ParseToken(candidate); isToken {
-				return g.token(r, presented, candidate)
-			}
-		}
-		if !ok {
-			// PRESENT AND WRONG IS STILL ANONYMOUS, not unknown:
-			// this node checked and the answer was no. Unknown is
-			// reserved for the question it could not ask.
-			//
-			// AND IT IS MARKED, so a guarded route's refusal can count
-			// it as a failed attempt — never a row of its own, because
-			// whoever holds the wrong value decides how many of these
-			// there are, and never counted HERE, because an unguarded
-			// route's bearer was not this guard's to check. See
-			// audit.go.
-			return r.WithContext(refusedCredential(
-				iam.WithAnonymous(r.Context()), candidate)), nil
-		}
-		principal, how, refusal := g.principalFor(r.Context(), entry, g.now())
-		if how == iam.Unknown {
-			// THE CREDENTIAL IS GOOD AND ITS SEAT CANNOT BE SAID, which
-			// is 503 and never the bare credential: served as itself
-			// here and as its seat on the next node, one actor would
-			// author under two names in one audit trail.
-			return r.WithContext(
-				iam.WithUnresolved(r.Context(), errBindingUnavailable)), nil
-		}
-		ctx := iam.WithPrincipal(r.Context(), principal)
-		return r.WithContext(withTierA(ctx, entry, true)), refusal
+		return g.bearer(r, candidate)
 	}
 	if g.sessions != nil {
-		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.Client,
-			g.tokenByLogin)
+		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.tokenByLogin)
 		if answer.presented {
 			if answer.tierA != nil && answer.how == iam.Resolved {
 				return g.exchanged(r, *answer.tierA, answer.via)
@@ -303,6 +268,46 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 		}
 	}
 	return r.WithContext(iam.WithAnonymous(r.Context())), nil
+}
+
+// bearer resolves a request that presented candidate as its bearer: a Tier A
+// entry, a machine token, or nobody.
+func (g *Guard) bearer(r *http.Request, candidate string) (*http.Request, *Refusal) {
+	entry, ok := g.entry(candidate)
+	if !ok && g.machine != nil {
+		// THE THIRD ARM, chosen by the value's SHAPE and never
+		// gated on it: a value that parses is still verified, and
+		// one that does not is refused below like any other. See
+		// tokens.go.
+		if presented, isToken := credential.ParseToken(candidate); isToken {
+			return g.token(r, presented, candidate)
+		}
+	}
+	if !ok {
+		// PRESENT AND WRONG IS STILL ANONYMOUS, not unknown:
+		// this node checked and the answer was no. Unknown is
+		// reserved for the question it could not ask.
+		//
+		// AND IT IS MARKED, so a guarded route's refusal can count
+		// it as a failed attempt — never a row of its own, because
+		// whoever holds the wrong value decides how many of these
+		// there are, and never counted HERE, because an unguarded
+		// route's bearer was not this guard's to check. See
+		// audit.go.
+		return r.WithContext(refusedCredential(
+			iam.WithAnonymous(r.Context()), candidate)), nil
+	}
+	principal, how, refusal := g.principalFor(r.Context(), entry, g.now())
+	if how == iam.Unknown {
+		// THE CREDENTIAL IS GOOD AND ITS SEAT CANNOT BE SAID, which
+		// is 503 and never the bare credential: served as itself
+		// here and as its seat on the next node, one actor would
+		// author under two names in one audit trail.
+		return r.WithContext(
+			iam.WithUnresolved(r.Context(), errBindingUnavailable)), nil
+	}
+	ctx := iam.WithPrincipal(r.Context(), principal)
+	return r.WithContext(withTierA(ctx, entry, true)), refusal
 }
 
 // exchanged is who a session exchanged from a Tier A token is: THE TOKEN, as

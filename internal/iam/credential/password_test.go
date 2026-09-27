@@ -16,6 +16,12 @@ import (
 // invisible: every test still passes, every login still works, and the only
 // thing that moved is how long an offline attack against a stolen database
 // takes. Nothing else would notice, so this does.
+//
+// Changing them here is changing them for the next build, and a change may
+// only RAISE a parameter: a verifier is rewritten only at a cost that lowers
+// none of its own ([TestAVerifierIsRewrittenOnlyUpNeverDown]), so a new cost
+// that trades one parameter down for another up reaches nobody enrolled before
+// it.
 func TestTheCostParametersAreTheOnesThatShip(t *testing.T) {
 	t.Parallel()
 	if credential.Memory != 64*1024 {
@@ -78,15 +84,16 @@ func testParams() credential.Params {
 func TestAPasswordVerifiesAndAWrongOneDoesNot(t *testing.T) {
 	t.Parallel()
 	h := credential.NewHasher(testParams(), 2)
-	verifier, err := h.Hash("a-long-enough-password")
+	verifier, err := h.Hash(t.Context(), "", "a-long-enough-password")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if ok, rehash := h.Verify(verifier, "a-long-enough-password"); !ok || rehash {
+	if ok, rehash, err := h.Verify(t.Context(), "", verifier, "a-long-enough-password"); !ok ||
+		rehash || err != nil {
 		t.Errorf("the password verified %v and asked for a rehash %v under the "+
-			"cost it was written at", ok, rehash)
+			"cost it was written at (%v)", ok, rehash, err)
 	}
-	if ok, _ := h.Verify(verifier, "a-long-enough-passwore"); ok {
+	if ok, _, _ := h.Verify(t.Context(), "", verifier, "a-long-enough-passwore"); ok {
 		t.Error("a password one character out verified")
 	}
 	// The verifier is a PHC string, which is what lets an operator take
@@ -107,7 +114,7 @@ func TestAPasswordVerifiesAndAWrongOneDoesNot(t *testing.T) {
 func TestRaisingTheCostAsksForARehashOnTheNextLogin(t *testing.T) {
 	t.Parallel()
 	weak := credential.NewHasher(testParams(), 2)
-	verifier, err := weak.Hash("a-long-enough-password")
+	verifier, err := weak.Hash(t.Context(), "", "a-long-enough-password")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
@@ -115,7 +122,10 @@ func TestRaisingTheCostAsksForARehashOnTheNextLogin(t *testing.T) {
 	raised.Time = 2
 	strong := credential.NewHasher(raised, 2)
 
-	ok, rehash := strong.Verify(verifier, "a-long-enough-password")
+	ok, rehash, err := strong.Verify(t.Context(), "", verifier, "a-long-enough-password")
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
 	if !ok {
 		t.Fatal("a verifier written at the old cost stopped verifying when " +
 			"the cost was raised, which is every person in the company " +
@@ -127,12 +137,92 @@ func TestRaisingTheCostAsksForARehashOnTheNextLogin(t *testing.T) {
 	}
 	// And a verifier written at the CURRENT cost is not reported stale,
 	// or every login would rewrite a row for nothing.
-	fresh, err := strong.Hash("a-long-enough-password")
+	fresh, err := strong.Hash(t.Context(), "", "a-long-enough-password")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if _, rehash := strong.Verify(fresh, "a-long-enough-password"); rehash {
+	if _, rehash, _ := strong.Verify(t.Context(), "", fresh, "a-long-enough-password"); rehash {
 		t.Error("a verifier at the current cost was reported stale")
+	}
+}
+
+// A VERIFIER IS REWRITTEN ONLY UP, NEVER DOWN.
+//
+// The cost moves only with a build, so it moves during a ROLLING UPGRADE: two
+// builds share one identity estate, and a person signs in on whichever node
+// the balancer picks. Reported stale whenever its parameters merely DIFFERED,
+// a verifier the newer build had written at its raised cost was read as stale
+// by a node still on the older build, which rewrote it at its own weaker cost
+// — and an upgraded node then rewrote it back up, so every person's verifier
+// flapped for the whole rollout and spent part of it at the cost being
+// retired. Nothing else would ever notice: every sign-in still works.
+//
+// So stale is WEAKER — below this hasher's cost in some parameter an attacker
+// pays for and above it in none — and every other verifier verifies and is
+// left alone. Parallelism is not such a parameter. The weaker rows are the
+// controls: they are what a cost raise must still reach. Mutation: compare the
+// parameters with `!=` again and every row that is higher somewhere goes red.
+func TestAVerifierIsRewrittenOnlyUpNeverDown(t *testing.T) {
+	t.Parallel()
+	// A COST WITH ROOM BELOW IT IN EVERY PARAMETER, and cheap enough to
+	// hash ten times: what is asserted is the order, not the numbers.
+	current := credential.Params{Memory: 64, Time: 2, Threads: 1, KeyLen: 32}
+	with := func(change func(*credential.Params)) credential.Params {
+		p := current
+		change(&p)
+		return p
+	}
+	for _, c := range []struct {
+		name   string
+		stored credential.Params
+		stale  bool
+	}{
+		{"the same cost", current, false},
+
+		// WEAKER: a cost raise reaches these.
+		{"less memory", with(func(p *credential.Params) { p.Memory /= 2 }), true},
+		{"fewer passes", with(func(p *credential.Params) { p.Time-- }), true},
+		{"a shorter digest", with(func(p *credential.Params) { p.KeyLen = 16 }), true},
+
+		// STRONGER: a newer build's, read by an older one mid-rollout.
+		{"more memory", with(func(p *credential.Params) { p.Memory *= 2 }), false},
+		{"more passes", with(func(p *credential.Params) { p.Time++ }), false},
+		{"a longer digest", with(func(p *credential.Params) { p.KeyLen = 64 }), false},
+
+		// NEITHER: a rewrite would lower one parameter to raise another.
+		{"more memory and fewer passes", with(func(p *credential.Params) {
+			p.Memory *= 2
+			p.Time--
+		}), false},
+		{"less memory and a longer digest", with(func(p *credential.Params) {
+			p.Memory /= 2
+			p.KeyLen = 64
+		}), false},
+
+		// NOT A COST: parallelism changes how soon one verification
+		// finishes and nothing an attacker pays.
+		{"other parallelism only", with(func(p *credential.Params) { p.Threads = 2 }), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			verifier, err := credential.NewHasher(c.stored, 1).Hash(t.Context(), "", "a-long-enough-password")
+			if err != nil {
+				t.Fatalf("hash: %v", err)
+			}
+			ok, stale, err := credential.NewHasher(current, 1).Verify(t.Context(), "",
+				verifier, "a-long-enough-password")
+			if err != nil {
+				t.Fatalf("verify: %v", err)
+			}
+			if !ok {
+				t.Fatal("a verifier at another cost stopped verifying — it " +
+					"must verify at its OWN parameters, whatever this build's are")
+			}
+			if stale != c.stale {
+				t.Errorf("a verifier at %+v through a hasher at %+v was "+
+					"reported stale %v, want %v", c.stored, current, stale, c.stale)
+			}
+		})
 	}
 }
 
@@ -156,8 +246,9 @@ func TestAnUnreadableVerifierRefusesLikeAWrongPassword(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if ok, rehash := h.Verify(verifier, "a-long-enough-password"); ok || rehash {
-				t.Errorf("%q verified %v / rehash %v", verifier, ok, rehash)
+			if ok, rehash, err := h.Verify(t.Context(), "", verifier,
+				"a-long-enough-password"); ok || rehash || err != nil {
+				t.Errorf("%q verified %v / rehash %v (%v)", verifier, ok, rehash, err)
 			}
 		})
 	}

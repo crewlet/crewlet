@@ -530,8 +530,8 @@ func Catalogue() []Instrument {
 				"needs one and refused — a credential an unguarded route " +
 				"verifies itself, such as a webhook relay's own JWT, is " +
 				"never counted (`method`), and whether the attempt was " +
-				"verified and wrong or turned away at the throttle's " +
-				"ceiling (`outcome`). It is " +
+				"verified and wrong or answered 429 by the throttle's " +
+				"curve (`outcome`). It is " +
 				"the ONLY per-attempt record there is, by design: an " +
 				"unauthenticated caller authors this rate, so the event log " +
 				"gets one coalesced `iam_login_failures` row per client per " +

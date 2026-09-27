@@ -438,8 +438,8 @@ func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
 		if err := rig.during(func() error {
 			_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 				PersonID: person, OpID: "tokens",
-				Apply: func([]iamdomain.Credential) []iamdomain.Credential {
-					return credentials
+				Apply: func([]iamdomain.Credential) ([]iamdomain.Credential, error) {
+					return credentials, nil
 				},
 			})
 			return err
@@ -566,11 +566,11 @@ func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
 		if err := rig.during(func() error {
 			_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 				PersonID: person, OpID: "one-more",
-				Apply: func(current []iamdomain.Credential) []iamdomain.Credential {
+				Apply: func(current []iamdomain.Credential) ([]iamdomain.Credential, error) {
 					return append(current, iamdomain.Credential{
 						V: iamdomain.DocumentVersion, ID: "new-token",
 						Method: iamdomain.MethodToken, Verifier: "h5",
-					})
+					}), nil
 				},
 			})
 			return err
@@ -610,10 +610,10 @@ func TestTheSweepPublisherWritesTheVersionThatStatesItsPredicate(t *testing.T) {
 	if err := rig.during(func() error {
 		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 			PersonID: person, OpID: "revoke",
-			Apply: func([]iamdomain.Credential) []iamdomain.Credential {
+			Apply: func([]iamdomain.Credential) ([]iamdomain.Credential, error) {
 				return []iamdomain.Credential{{V: iamdomain.DocumentVersion,
 					ID: "revoked", Method: iamdomain.MethodToken, Verifier: "h",
-					RevokedAt: wall}}
+					RevokedAt: wall}}, nil
 			},
 		})
 		return err

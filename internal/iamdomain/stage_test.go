@@ -92,7 +92,9 @@ func TestEditingASuspendedPersonLeavesThemSuspended(t *testing.T) {
 
 	if _, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 		PersonID: id, OpID: "op-factor", Reason: "clear a factor",
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential { return held },
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
+			return held, nil
+		},
 	}); err != nil {
 		t.Fatalf("set credentials: %v", err)
 	}

@@ -31,9 +31,13 @@ import "slices"
 type SecondFactor string
 
 const (
-	// SecondFactorRequired is: nobody may hold an active password
-	// credential without a second factor enrolled, and a person who has
-	// not enrolled one is sent to do so before they can act.
+	// SecondFactorRequired is: nobody acts on a password alone. A person
+	// who holds a second factor is asked for it at every password sign-in
+	// and step-up; a person who holds none — freshly invited, the founder,
+	// one an administrator reset — signs in to a session that may do
+	// nothing but ENROL one, and enrolling replaces it with a whole
+	// session. internal/api/authapi decides which sessions those are and
+	// internal/api/auth refuses every other route to them.
 	SecondFactorRequired SecondFactor = "required"
 
 	// SecondFactorOptional is: a person may enrol one and is not made to.

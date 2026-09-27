@@ -185,7 +185,7 @@ func (r *providerStepUp) confirm(t *testing.T, query string,
 	t.Helper()
 	start := httptest.NewRequest(http.MethodGet,
 		auth.PathAuthOIDCStart+"?"+query+"&return_to=/settings", nil)
-	start.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: r.cookie})
+	start.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: r.cookie})
 	start = start.WithContext(as(start.Context()))
 	started = httptest.NewRecorder()
 	r.mux.ServeHTTP(started, start)
@@ -196,7 +196,7 @@ func (r *providerStepUp) confirm(t *testing.T, query string,
 	callback := httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCCallback+
 		"?state="+url.QueryEscape(state)+"&code="+url.QueryEscape(code), nil)
 	callback.RemoteAddr = "198.51.100.7:5100"
-	callback.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: r.cookie})
+	callback.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: r.cookie})
 	for _, c := range started.Result().Cookies() {
 		callback.AddCookie(c)
 	}
@@ -263,6 +263,12 @@ func TestAProviderStepUpConfirmsAtTheProviderAndReplacesTheSession(t *testing.T)
 				t.Errorf("the replacement was proved at %s, want the provider's %s",
 					starts[0].ProvedAt, r.idp.authTime)
 			}
+			// AND THAT PROOF LEAVES THE WINDOW IT CONFIRMED OPEN, by the
+			// guard's own arithmetic — the gesture that asked is admitted.
+			if !clock.Before(starts[0].ProvedAt.Add(maxAge)) {
+				t.Errorf("the replacement was proved at %s, already outside "+
+					"the %s window it confirmed", starts[0].ProvedAt, maxAge)
+			}
 			if !starts[0].AbsoluteExpiresAt.Equal(r.absolute) {
 				t.Errorf("the replacement ends at %s, want the replaced session's %s",
 					starts[0].AbsoluteExpiresAt, r.absolute)
@@ -294,20 +300,28 @@ func TestAProviderStepUpConfirmsAtTheProviderAndReplacesTheSession(t *testing.T)
 // accepted here and then refused by the sensitive gesture it was for.
 //
 // Mutation: seal the ordinary window whatever the start named, and the
-// half-hour-old authentication is accepted.
+// half-hour-old authentication is accepted; judge the window within the clock
+// skew, and the cases just past it end the session and open a stale one.
 func TestAProviderStepUpTheProviderDidNotConfirmChangesNothing(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		window   iam.Recency
 		authTime time.Time
 	}{
-		"no auth_time":            {iam.RecencyStepUp, time.Time{}},
-		"outside the window":      {iam.RecencyStepUp, clock.Add(-2 * time.Hour)},
-		"just outside the window": {iam.RecencyStepUp, clock.Add(-config.DefaultSessionStepUp - time.Second)},
+		"no auth_time":       {iam.RecencyStepUp, time.Time{}},
+		"outside the window": {iam.RecencyStepUp, clock.Add(-2 * time.Hour)},
+		// AT THE EDGE and JUST PAST IT — by less than a minute's clock
+		// skew — are outside: the replacement's deadline is stamped from
+		// this instant by the same window, so a proof accepted there opens
+		// a session already stale for the gesture that asked for it.
+		"at the window's edge": {iam.RecencyStepUp,
+			clock.Add(-config.DefaultSessionStepUp)},
+		"just past the window, inside the clock skew": {iam.RecencyStepUp,
+			clock.Add(-config.DefaultSessionStepUp - oidc.ClockSkew/2)},
 		"half an hour old, asked for the sensitive window": {iam.RecencySensitive,
 			clock.Add(-30 * time.Minute)},
-		"just outside the sensitive window": {iam.RecencySensitive,
-			clock.Add(-config.DefaultSessionStepUpSensitive - time.Second)},
+		"just past the sensitive window, inside the clock skew": {iam.RecencySensitive,
+			clock.Add(-config.DefaultSessionStepUpSensitive - oidc.ClockSkew/2)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -456,5 +470,41 @@ func TestAProviderStepUpForSomebodyElseReplacesNothing(t *testing.T) {
 	if closes, starts := r.changes(); len(closes) != 0 || len(starts) != 0 {
 		t.Errorf("a step-up that came back as somebody else ended %+v and "+
 			"opened %+v", closes, starts)
+	}
+}
+
+// THE STEP-UP START ANSWERS EVERY BEARER ALIKE.
+//
+// The start is unguarded, and it read the guard's resolution: a Tier A token
+// that matched was a `403 step_up_required`, one that did not was a `401`.
+// That difference was a way to test bearer values on a route the guard does
+// not judge them on. Every presented bearer is now the same refusal, in the
+// same bytes, before its resolution is read — through the REAL guard here,
+// since the property is about what the guard hands the route. Mutation: read
+// the resolution first and the wrong value answers 401 while the right one
+// answers 403.
+func TestAProviderStepUpStartAnswersEveryBearerAlike(t *testing.T) {
+	t.Parallel()
+	r := newProviderStepUp(t)
+	b := bootstrapFor(t)
+	guarded := auth.New(&b).Middleware(r.mux)
+	answer := func(bearer string) (int, string) {
+		req := httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCStart+
+			"?step_up="+string(iam.RecencySensitive), nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		rec := httptest.NewRecorder()
+		guarded.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	rightStatus, rightBody := answer(b.API.Auth.Tokens[0].Token)
+	wrongStatus, wrongBody := answer("a-value-no-entry-holds-at-all")
+	if rightStatus != http.StatusForbidden {
+		t.Fatalf("a Tier A bearer answered %d (%s), want 403 step_up_required",
+			rightStatus, rightBody)
+	}
+	if wrongStatus != rightStatus || wrongBody != rightBody {
+		t.Errorf("a wrong bearer answered %d %s and the right one %d %s: the "+
+			"start says which bearers match", wrongStatus, wrongBody,
+			rightStatus, rightBody)
 	}
 }

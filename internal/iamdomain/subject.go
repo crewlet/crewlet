@@ -208,14 +208,14 @@ const (
 	KindLink ObjectKind = "link"
 
 	// KindSession is one signed-in session's whole life, by its LINEAGE:
-	// the uuid7 the session was opened with, which its rotations are
-	// derived from and which never changes while it lives.
+	// the uuid7 the session was opened with, which never changes while it
+	// lives.
 	//
 	// ONE SUBJECT PER SESSION, so two requests closing one session contend
 	// and a thousand people signing in at nine o'clock do not contend at
-	// all. Rotations are NOT records: a rotation id is an HMAC over the
-	// lineage and the session's age in rotate_after units, so the busiest
-	// thing a session does writes nothing at all.
+	// all. A re-issue is NOT a record: the idle deadline it moves is in the
+	// bearer's signed payload, so the busiest thing a session does writes
+	// nothing at all.
 	KindSession ObjectKind = "session"
 
 	// KindInvalidation ends EVERY session in the company at once, on ONE

@@ -430,6 +430,11 @@ type SessionRecord struct {
 	ExpiresAt time.Time
 	EndedAt   time.Time
 	EndedWhy  string
+
+	// EnrolmentOnly is a session that may only enrol a second factor — see
+	// [Session.EnrolmentOnly] — which an administrator reading somebody's
+	// sessions needs told apart from a whole one.
+	EnrolmentOnly bool
 }
 
 // Live reports a session that has not ended and has not aged out.
@@ -440,9 +445,9 @@ func (s SessionRecord) Live(now time.Time) bool {
 
 // Sessions lists one person's sessions, newest first.
 //
-// ENDED ONES INCLUDED, because "this session was ended by reuse detection" is
-// the sentence an investigation is looking for and a listing that showed only
-// the live ones could never carry it. The row is kept until the sweep
+// ENDED ONES INCLUDED, because "this session was revoked, and why" is the
+// sentence an investigation is looking for and a listing that showed only the
+// live ones could never carry it. The row is kept until the sweep
 // collects it for exactly that reason.
 func (r *Reader) Sessions(ctx context.Context, personID string) (
 	[]SessionRecord, error) {
@@ -451,7 +456,7 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT lineage, person_id, epoch, created_at,
-			       absolute_expires_at, ended_at, ended_reason
+			       absolute_expires_at, ended_at, ended_reason, document
 			FROM iam_sessions WHERE person_id = ?
 			ORDER BY created_at DESC`, personID)
 		if err != nil {
@@ -466,10 +471,18 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 				created int64
 				expires int64
 				ended   int64
+				doc     []byte
 			)
 			if err := rows.Scan(&row.Lineage, &row.PersonID, &epoch, &created,
-				&expires, &ended, &row.EndedWhy); err != nil {
+				&expires, &ended, &row.EndedWhy, &doc); err != nil {
 				return fmt.Errorf("iamdomain: scan a session: %w", err)
+			}
+			// A DOCUMENT THIS BUILD CANNOT OPEN is listed without the
+			// flag rather than failing the listing: every other column
+			// is the row's own, and this is the one fact that lives only
+			// in the document.
+			if held, err := DecodeSession(doc); err == nil {
+				row.EnrolmentOnly = held.EnrolmentOnly
 			}
 			row.Epoch = uint64(epoch)
 			row.CreatedAt = fromMillis(created)

@@ -60,8 +60,8 @@ import (
 // clock skew or a paused duty, while an expired verifier is not kept for ever;
 // and the listing can say what was revoked and why for that week, after which
 // the change trail, kept for its own horizon, is the account of it. The row is kept for the sessions screen and an investigation to say
-// what ended and why ("ended by reuse detection" is the sentence somebody is
-// looking for); past a week the session's own trail row — kept for the session
+// what ended and why ("ended by a revocation, and whose" is the sentence
+// somebody is looking for); past a week the session's own trail row — kept for the session
 // horizon, ninety days by default — is the durable account of it, and the row
 // itself is a thing nobody can present answering a question nobody is asking.
 const SessionRowGrace = 7 * 24 * time.Hour

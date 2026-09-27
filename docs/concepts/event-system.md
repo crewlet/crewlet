@@ -289,11 +289,11 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
 #       the publishing node's, and the fleet-wide record is iam_history
 iam_session_started        # method, second factor, lineage, client address
 iam_session_ended          # logout / logout_all / idle / absolute / revoked
-                           # / idp_revoked / person_removed. An idle or
-                           # absolute end is noticed when the bearer is next
-                           # presented, once per session per node
-iam_session_reuse_detected # a cookie replayed past the rotation overlap;
-                           # every session the person held was ended
+                           # / idp_revoked / person_removed /
+                           # credential_changed. An idle or absolute end, and
+                           # a token's session whose value changed or whose
+                           # entry was removed, is noticed when the bearer is
+                           # next presented, once per session per node
 iam_login_failures         # ONE per client per minute, from the engine's own
                            # flush loop: counts, the distinct-subject count,
                            # the methods (a rejected bearer is `bearer`), how
@@ -313,6 +313,10 @@ iam_token_first_use        # a Tier A token used, once per token per hour
 iam_token_overreach        # a Tier A token refused by a route, coalesced the
                            # same way
 iam_recovery_code_used     # and how many the person has left
+iam_second_factor_throttled   # a person's second-factor curve at its ceiling:
+                              # somebody holding their password is guessing
+                              # at their code. Once per person per window per
+                              # node
 iam_session_generation_bumped   # every session in the company ended
 statelog_record_unverifiable    # a state-log record signed under a key this
                                 # node does not hold; nothing under it applies

@@ -420,14 +420,13 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           in does not last longer, it lapses with the bucket and says
 //	           nothing, and a spent callback state that lapses early is a
 //	           replayable one
-//	attempts   the throttle's window, a quarter of an hour, plus the one
-//	           EXPLICIT MESSAGE CAP in this estate: History caps a caller's
-//	           record at coord.AttemptCap attempts and discards the OLDEST
-//	           when it overflows. A KV bucket's stream is DiscardNew, so
-//	           the cap it has by default refuses the NEWEST write, and a
-//	           throttled record that stops accepting attempts un-throttles
-//	           its caller as the old ones age out — under exactly the
-//	           flood that filled it
+//	attempts   the throttle's window, a quarter of an hour: a caller's
+//	           record is ONE value holding its newest coord.AttemptCap
+//	           instants, written by compare-and-set and read with one get,
+//	           and every write re-dates the key, so a caller nobody fails
+//	           against for a window leaves the bucket. It used to be one
+//	           revision per attempt with the bucket's history as the cap,
+//	           and reading that back was a consumer — see attemptsRecord
 //	ledger     turn-completion retention, days: it has to outlast the
 //	           redelivery horizon and the scheduler's catchup floor
 //	cooldowns  the longest credential cooldown, an hour
@@ -549,11 +548,11 @@ type FleetConfig struct {
 	SetupOnceRetention time.Duration
 
 	// AttemptWindow is how long one failed authentication counts against
-	// the caller that made it. The bucket's age IS the window: each
-	// attempt is a record of its own and the broker's expiry is what ends
-	// it, so nothing here sweeps a counter. The CAP on one caller's record
-	// is coord.AttemptCap rather than a field here — see its doc for why
-	// it is not configuration.
+	// the caller that made it, and the attempts bucket's age: a caller's
+	// record is re-dated by every write and leaves the bucket a window
+	// after the last, so nothing here sweeps a counter. The CAP on one
+	// caller's record is coord.AttemptCap rather than a field here — see
+	// its doc for why it is not configuration.
 	AttemptWindow time.Duration
 
 	// LedgerRetention is how long a turn completion is remembered.
@@ -669,8 +668,8 @@ type FleetStore struct {
 
 	// attemptWindow is the age the attempts bucket was created with, held
 	// so the read filters on the SAME number the broker reaps on. Two
-	// sources for one window is how a record outlives the window it is
-	// counted in, or is counted after the bucket has dropped its peers.
+	// sources for one window is how an instant outlives the window it is
+	// counted in, or a record is reaped while its instants still count.
 	attemptWindow time.Duration
 }
 
@@ -714,11 +713,11 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		jsprovision.Clustered(cfg.Clustered).SequenceBudget())
 	defer cancel()
 
-	open := func(suffix, describe string, ttl time.Duration, history uint8) (jetstream.KeyValue, error) {
+	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, error) {
 		name := cfg.BucketPrefix + suffix
 		bucket, facts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 			Bucket: name, Description: describe, TTL: ttl,
-			History: history, Replicas: cfg.Replicas,
+			Replicas: cfg.Replicas,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("coord/kv: open %s: %w", name, err)
@@ -741,58 +740,53 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		suffix   string
 		describe string
 		ttl      time.Duration
-		// history is the per-record message cap, and only the attempts
-		// bucket sets one: zero means the KV default of 1, which is the
-		// last-write-wins register every other bucket here holds.
-		history uint8
 	}{
 		{&store.rate, rateSuffix,
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
-			cfg.RateWindow * rateBucketFactor, 0},
+			cfg.RateWindow * rateBucketFactor},
 		{&store.claims, claimsSuffix,
 			"Crewlet inbound-delivery claims; the bucket TTL is the dedupe window",
-			cfg.ClaimTTL, 0},
+			cfg.ClaimTTL},
 		{&store.setup, setupSuffix,
 			"Crewlet spent setup-callback states; the bucket TTL is how long a minted state is valid",
-			cfg.SetupOnceRetention, 0},
+			cfg.SetupOnceRetention},
 		{&store.attempts, attemptsSuffix,
-			"Crewlet failed-authentication attempts; the bucket TTL is the throttle's window and " +
-				"the history is the per-caller cap, which discards the oldest attempt rather than " +
-				"refusing the newest",
-			cfg.AttemptWindow, coord.AttemptCap},
+			"Crewlet failed-authentication attempts; one record per caller holding its newest " +
+				"instants, and the bucket TTL is the throttle's window",
+			cfg.AttemptWindow},
 		{&store.ledger, ledgerSuffix,
 			"Crewlet turn completions; the bucket TTL is the retention horizon",
-			cfg.LedgerRetention, 0},
+			cfg.LedgerRetention},
 		{&store.cooldowns, cooldownSuffix,
 			"Crewlet credential cooldowns; each value carries its own end instant",
-			cfg.CooldownMax, 0},
+			cfg.CooldownMax},
 		{&store.status, statusSuffix,
 			"Crewlet per-node config-apply status; a node that stops reporting ages out",
-			cfg.StatusFreshness, 0},
+			cfg.StatusFreshness},
 		{&store.config, configSuffix,
-			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0, 0},
+			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0},
 		{&store.budgets, budgetSuffix,
-			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0, 0},
+			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0},
 		{&store.channels, channelSuffix,
-			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0, 0},
+			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0},
 		{&store.follows, followsSuffix,
 			"Crewlet chat thread-follows; the bucket TTL is the last-activity horizon",
-			cfg.FollowRetention, 0},
+			cfg.FollowRetention},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
-			cfg.FireRetention, 0},
+			cfg.FireRetention},
 		{&store.runs, runsSuffix,
-			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0, 0},
+			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
 		{&store.secrets, secretsSuffix,
-			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0, 0},
+			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
 		{&store.integrations, integrationsSuffix,
-			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0, 0},
+			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
 		{&store.mailboxes, mailboxesSuffix,
-			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0, 0},
+			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
 		{&store.positions, positionsSuffix,
-			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0, 0},
+			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {
-		got, err := open(bucket.suffix, bucket.describe, bucket.ttl, bucket.history)
+		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
 			return nil, err
 		}
@@ -864,7 +858,7 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 			switch {
 			case created == nil:
 				return true, nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return false, unavailable("increment the rate window", created)
@@ -935,11 +929,11 @@ func claimOnce(ctx context.Context, bucket jetstream.KeyValue, what, key string,
 		return false, errors.New("coord/kv: a claim needs a key")
 	}
 	// Create is the whole mechanism: it fails when the key exists, so the
-	// FIRST caller wins and every other gets ErrKeyExists. Expiry is the
+	// FIRST caller wins and every other loses the race. Expiry is the
 	// bucket's, which means the server decides when a claim lapses and no
 	// node compares its own clock to a peer's deadline.
 	if _, err := bucket.Create(ctx, encodeKey(key), []byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
-		if errors.Is(err, jetstream.ErrKeyExists) {
+		if lostCreateRace(err) {
 			return false, nil
 		}
 		return false, unavailable(what, err)
@@ -964,74 +958,212 @@ func (f *FleetStore) Release(ctx context.Context, key string) error {
 
 // ---- the authentication attempts ---------------------------------------- //
 
-// Fail records one failed authentication and reports how many are in the
-// window.
+// attemptsRecord is one subject's record in the attempts bucket: the instants
+// of its newest failures, newest last, at most coord.AttemptCap of them.
 //
-// TWO ROUND TRIPS, and the second is the answer rather than a courtesy: a
-// throttle decides on the count its own failure produced ("that was the
-// fifth"), and making the caller read it back on the NEXT request would give
-// it a number from before the attempt it is judging. The path is a failed
-// authentication, which is rare by construction — the cost lands on the
-// caller getting it wrong.
-func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) (int, error) {
-	if subject == "" {
-		return 0, errors.New("coord/kv: an attempt needs a subject")
-	}
-	// PUT, NOT CREATE: every attempt is a new REVISION of the subject's
-	// record, which is what makes the bucket's own history the cap. Create
-	// would refuse the second attempt, and a throttle that cannot record
-	// the attempts it exists to count is no throttle at all.
-	if _, err := f.attempts.Put(ctx, encodeKey(subject),
-		[]byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
-		return 0, unavailable("record the failed attempt", err)
-	}
-	return f.Failures(ctx, subject, now)
+// ONE VALUE HOLDING THE INSTANTS, rather than one revision per attempt read
+// back through the key's history. The history was the obvious shape — every
+// attempt a Put, the bucket's per-record history the cap — and reading it was
+// an ephemeral ordered consumer over the subject: on a clustered bucket, two
+// proposals through the metadata group every seat lease and every stream in
+// the fleet shares, on a read the throttle makes for every fresh name a
+// guessing run types. A value is read with one direct get, which no metadata
+// group sees, and the cost moves to the write: a get and a compare-and-set,
+// both on the bucket's own stream.
+//
+// AN OBJECT, so a field a later build adds is one an older build carries past
+// rather than chokes on — two builds share this bucket through a rolling
+// upgrade.
+//
+// # A rolling upgrade from the layout before it
+//
+// The build before this one wrote each attempt as a revision of its own
+// holding a bare RFC 3339 instant — a blind Put, with the bucket's per-key
+// HISTORY of coord.AttemptCap as the cap — and read them back through that
+// history. A bucket it created keeps that history, and while both builds run
+// its nodes go on writing that way. So the newest value alone cannot answer
+// for such a key: a key holding a run of the older build's attempts is a run
+// of revisions whose newest is one instant, and an older node's Put of one
+// instant lands on top of this build's object. When the newest value is not
+// this build's object, the key's history is read and folded ([readAttempts]),
+// and the next write carries the fold forward, so only a key an older build
+// wrote to last costs the consumer a history read opens — and only an older
+// build ever writes one, which is what keeps a stranger from choosing it.
+//
+// WHAT IT CANNOT RECOVER is a history the bucket did not keep: on a bucket
+// this build created, with the default history of one, an older build's Put
+// replaces the object outright, and the fold finds the one instant it wrote.
+// That arises only when an older build joins a fleet this one started — a
+// rollback — and it costs the pair its count until the older node is gone,
+// never more than one window.
+type attemptsRecord struct {
+	At []time.Time `json:"at"`
 }
 
-// Failures reports how many attempts against subject are still in the window.
-func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time) (int, error) {
-	if subject == "" {
-		return 0, errors.New("coord/kv: an attempt needs a subject")
+// attemptsOf reads one revision of a record, whatever build wrote it, and
+// reports whether it is THIS build's object — the one shape that answers for
+// every attempt before it.
+//
+// ANYTHING ELSE IS ONE ATTEMPT: the bare instant an older build wrote per
+// attempt, and a value neither build could have written, because the
+// direction that cannot be defended is the one where a value nobody can parse
+// un-throttles the caller it was written against — so it is dated by the
+// broker's own receipt of the write.
+func attemptsOf(entry jetstream.KeyValueEntry) (attemptsRecord, bool) {
+	var record attemptsRecord
+	if err := json.Unmarshal(entry.Value(), &record); err == nil && record.At != nil {
+		return record, true
 	}
-	// HISTORY, which is an ephemeral ordered consumer over ONE subject —
-	// two metadata proposals on a clustered bucket, the cost this package's
-	// doc names for a listing. It is paid here because the alternative
-	// answers a different question: a stream's per-subject message count is
-	// one request and no consumer, but it carries no instants, so the
-	// window could only ever be the broker's reaping and the `now` a caller
-	// passes would be a parameter one backend honoured and the other
-	// ignored — which is the defect the whole of this file's claim handling
-	// was just rid of. The contract keeps it off the path of every request
-	// instead; see [coord.Attempts.Failures].
-	history, err := f.attempts.History(ctx, encodeKey(subject))
+	if at, err := time.Parse(time.RFC3339Nano, string(entry.Value())); err == nil {
+		return attemptsRecord{At: []time.Time{at}}, false
+	}
+	return attemptsRecord{At: []time.Time{entry.Created()}}, false
+}
+
+// readAttempts reads subject's record at key and the revision a write over it
+// must be conditioned on, or found false where the key holds no attempts.
+//
+// ONE GET when the newest value is this build's object — every write this
+// build makes, so every key a fleet of this build alone ever holds. Anything
+// else is a key an older build wrote to last, and its history is folded, in
+// revision order: this build's object stands for every attempt before it, an
+// older build's instant is one more, and a removal forgets everything before
+// it. See [attemptsRecord] for why.
+func (f *FleetStore) readAttempts(ctx context.Context, key string) (
+	record attemptsRecord, revision uint64, found bool, err error) {
+
+	entry, err := f.attempts.Get(ctx, key)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		// NOTHING RECORDED, which is the ordinary answer: a clean
-		// caller, or one whose attempts have all aged out of the
-		// bucket.
-		return 0, nil
+		// caller, one whose attempts have all aged out of the bucket, or
+		// one a success flushed.
+		return attemptsRecord{}, 0, false, nil
 	}
 	if err != nil {
-		return 0, unavailable("read the failed attempts", err)
+		return attemptsRecord{}, 0, false, unavailable("read the failed attempts", err)
+	}
+	if current, ok := attemptsOf(entry); ok {
+		return current, entry.Revision(), true, nil
+	}
+	history, err := f.attempts.History(ctx, key)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		// FLUSHED between the two reads, or aged out of the bucket.
+		return attemptsRecord{}, 0, false, nil
+	}
+	if err != nil {
+		return attemptsRecord{}, 0, false, unavailable("read the failed attempts' history", err)
+	}
+	var at []time.Time
+	for _, rev := range history {
+		revision = rev.Revision()
+		if rev.Operation() != jetstream.KeyValuePut {
+			at, found = nil, false
+			continue
+		}
+		one, current := attemptsOf(rev)
+		if current {
+			at = slices.Clone(one.At)
+		} else {
+			at = append(at, one.At...)
+		}
+		found = true
+	}
+	if !found {
+		return attemptsRecord{}, 0, false, nil
+	}
+	return attemptsRecord{At: at}.capped(), revision, true, nil
+}
+
+// with is the record with one more attempt at now.
+func (r attemptsRecord) with(now time.Time) attemptsRecord {
+	return attemptsRecord{At: append(slices.Clone(r.At), now.UTC())}.capped()
+}
+
+// capped is the record's newest coord.AttemptCap attempts, oldest first, by
+// INSTANT — never by arrival, since two nodes' failures land in whichever
+// order the broker takes them.
+func (r attemptsRecord) capped() attemptsRecord {
+	at := slices.Clone(r.At)
+	slices.SortFunc(at, time.Time.Compare)
+	// DISCARD THE OLDEST. The other direction — refusing the newest — would
+	// leave the record frozen at attempts that then age out, and the caller
+	// un-throttled under the flood that filled it.
+	if over := len(at) - coord.AttemptCap; over > 0 {
+		at = at[over:]
+	}
+	return attemptsRecord{At: at}
+}
+
+func mustEncodeAttempts(record attemptsRecord) []byte {
+	// A list of instants cannot fail to encode.
+	raw, _ := json.Marshal(record)
+	return raw
+}
+
+// Fail records one failed authentication.
+//
+// A READ AND A COMPARE-AND-SET, retried when another node's write lands in
+// between, so two nodes failing one subject at once record two attempts
+// rather than one overwriting the other. The record's age is the bucket's:
+// every write re-dates the key, so a subject nobody fails against for a whole
+// window leaves the bucket, and one somebody keeps failing against keeps its
+// newest coord.AttemptCap. The read is [FleetStore.readAttempts], so a write
+// on a key an older build wrote to last carries every attempt it held.
+func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) error {
+	if subject == "" {
+		return errors.New("coord/kv: an attempt needs a subject")
+	}
+	key := encodeKey(subject)
+	for range fleetCASRetries {
+		record, revision, found, err := f.readAttempts(ctx, key)
+		if err != nil {
+			return err
+		}
+		if !found {
+			// CREATE, NOT PUT: a node racing this one to the first
+			// attempt must lose and read what it wrote, or one of the
+			// two attempts is overwritten.
+			_, created := f.attempts.Create(ctx, key,
+				mustEncodeAttempts(attemptsRecord{}.with(now)))
+			switch {
+			case created == nil:
+				return nil
+			case lostCreateRace(created):
+				continue
+			default:
+				return unavailable("record the failed attempt", created)
+			}
+		}
+		_, err = f.attempts.Update(ctx, key, mustEncodeAttempts(record.with(now)), revision)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			continue
+		default:
+			return unavailable("record the failed attempt", err)
+		}
+	}
+	return contended("record the failed attempt", subject)
+}
+
+// Failures reports what the window holds against subject.
+//
+// ONE GET, and no consumer — see [attemptsRecord] for what the history read
+// it replaced cost a clustered fleet, and for the one key it is still paid on.
+func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time) (coord.Attempted, error) {
+	if subject == "" {
+		return coord.Attempted{}, errors.New("coord/kv: an attempt needs a subject")
+	}
+	record, _, _, err := f.readAttempts(ctx, encodeKey(subject))
+	if err != nil {
+		return coord.Attempted{}, err
 	}
 	cutoff := now.Add(-f.attemptWindow)
-	live := 0
-	for _, entry := range history {
-		// A PURGE MARKER IS NOT AN ATTEMPT. Flush rolls the record up
-		// and the marker it leaves is a message on the same subject, so
-		// counting entries rather than puts would have a successful
-		// authentication leave one failure behind it.
-		if entry.Operation() != jetstream.KeyValuePut {
-			continue
-		}
-		at, err := time.Parse(time.RFC3339Nano, string(entry.Value()))
-		if err != nil {
-			// UNREADABLE IS STILL AN ATTEMPT. Something wrote a
-			// record here, and the direction that cannot be
-			// defended is the one where a value nobody can parse
-			// un-throttles the caller it was written against.
-			live++
-			continue
-		}
+	var out coord.Attempted
+	// Held oldest first ([attemptsRecord.capped] sorts every write and
+	// every fold), so the window answers in the order the contract states.
+	for _, at := range record.At {
 		// THE INSTANT DECIDES, the way a cooldown's does: the bucket's
 		// age is what keeps the record set finite and the broker reaps
 		// on its own clock, while the WINDOW is judged against the
@@ -1040,10 +1172,10 @@ func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time
 		// each deciding a record has lapsed would both win it; a count
 		// has nothing to win.
 		if at.After(cutoff) {
-			live++
+			out.At = append(out.At, at)
 		}
 	}
-	return live, nil
+	return out, nil
 }
 
 // Flush forgets every attempt against subject.
@@ -1051,9 +1183,10 @@ func (f *FleetStore) Flush(ctx context.Context, subject string) error {
 	if subject == "" {
 		return errors.New("coord/kv: an attempt needs a subject")
 	}
-	// Purge, not Delete, for [FleetStore.Release]'s reason and one more:
-	// Delete appends a marker and leaves every prior revision in place, so
-	// the attempts it is meant to forget would still be there to count.
+	// Purge, not Delete, for [FleetStore.Release]'s reason: the marker a
+	// purge leaves is one the next failure's create writes straight past,
+	// and every earlier revision goes with it rather than lingering in the
+	// stream for the bucket's age.
 	if err := f.attempts.Purge(ctx, encodeKey(subject)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
 		return unavailable("forget the failed attempts", err)
@@ -1105,7 +1238,7 @@ func (f *FleetStore) Record(ctx context.Context, scope, key, detail string, at t
 	// FIRST WRITER WINS, and losing is not a failure: two nodes completing
 	// one trigger is the case the ledger exists to collapse.
 	if _, err := f.ledger.Create(ctx, ledgerKey(scope, key), raw); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyExists) {
+		!lostCreateRace(err) {
 		return unavailable("record the completion", err)
 	}
 	return nil
@@ -1130,7 +1263,7 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 			switch {
 			case created == nil:
 				return nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return unavailable("record the cooldown", created)
@@ -1372,7 +1505,7 @@ func (f *FleetStore) stampRefusal(ctx context.Context, scope string) error {
 			switch {
 			case created == nil:
 				return nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return unavailable("record the budget refusal", created)
@@ -1493,7 +1626,7 @@ func (f *FleetStore) bump(ctx context.Context, scope string, delta, limit int) (
 			switch {
 			case created == nil:
 				return record, true, nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return budgetRecord{}, false, unavailable("charge the budget", created)
@@ -1777,7 +1910,7 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest, seq 
 	case req.ExpectAbsent:
 		revision, err := f.config.Create(ctx, activationKey, raw)
 		if err != nil {
-			if errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err) {
+			if lostCreateRace(err) {
 				return 0, fmt.Errorf("%w: an activation was published while this "+
 					"write was being prepared", coord.ErrActivationRaced)
 			}
@@ -1823,6 +1956,53 @@ func isWrongLastSequence(err error) bool {
 	}
 	return api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence ||
 		api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant
+}
+
+// The two CAS-race classifiers.
+//
+// Every conditional write in this package — a create-only record, a
+// compare-and-set append — has to tell "somebody else wrote first" from "the
+// store could not be reached". Reading the second as the first is a lost
+// update reported as a conflict a caller retries into; reading the first as
+// the second is a race reported as an outage, which is the failure the
+// three-valued rule exists to prevent from the other side.
+
+// lostCreateRace reports whether a create lost to a first writer, and EVERY
+// Create in this package asks it rather than matching a sentinel of its own.
+//
+// THREE SHAPES FOR ONE FACT, and every one of them is somebody else's second
+// writer. ErrKeyExists is the ordinary case. A revision mismatch is what the
+// client reports when the key carried a delete or purge marker it tried to
+// step over and lost. And on a REPLICATED stream a share of those losers come
+// back as a bare API error the client wraps in neither sentinel — the client
+// steps over a marker with a second conditional publish and hands back that
+// publish's refusal unmapped, and a replicated stream refuses with 10164
+// where a solo one refuses with the 10071 the sentinel matches. Measured at
+// three replicas, a fifth of the losers of a create over a marker arrived
+// that way.
+//
+// Getting this wrong is not loud, and it reaches every bucket whose records
+// are ever removed: a delivery claim answered "unknown" after its release and
+// was processed twice, a failed sign-in racing another node's to a flushed
+// record went unrecorded and left its node's throttle on its own curve for
+// the half minute it leaves an unanswering store alone, a charge racing
+// another to a reset counter failed as an outage — each on a clustered estate
+// only, which is exactly where nobody is running the single-server suite that
+// would show it.
+func lostCreateRace(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyExists) ||
+		errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
+		isWrongLastSequence(err)
+}
+
+// lostUpdateRace reports whether a conditional write lost its race.
+//
+// A deleted key lands here too: the record it was conditioned on is gone,
+// which is the same answer for the caller — re-read and re-decide.
+func lostUpdateRace(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
+		errors.Is(err, jetstream.ErrKeyNotFound) ||
+		isWrongLastSequence(err)
 }
 
 // legacyPayloadRecord is the body as a build before [activationRecord.Payload]
@@ -1920,15 +2100,21 @@ func (f *FleetStore) mirrorLegacyPayload(ctx context.Context, epoch uint64,
 		if pointer.Revision() > epoch {
 			return nil
 		}
+		// EACH WRITE ASKS ITS OWN CLASSIFIER, because a create that
+		// steps over a marker loses in shapes an update never does —
+		// see [lostCreateRace].
+		var lost bool
 		if at == 0 {
 			_, err = f.config.Create(ctx, legacyPayloadKey, raw)
+			lost = lostCreateRace(err)
 		} else {
 			_, err = f.config.Update(ctx, legacyPayloadKey, raw, at)
+			lost = lostUpdateRace(err)
 		}
 		switch {
 		case err == nil:
 			return nil
-		case errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err):
+		case lost:
 			// Another writer's mirror landed after the read: read
 			// again, and its epoch decides.
 			continue
@@ -2204,7 +2390,8 @@ func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
 // re-publishes at the purge marker's revision rather than refusing a key whose
 // only history is a delete. What it does not map is that re-publish LOSING — a
 // second creator landing between the two — which answers a bare
-// wrong-last-sequence, so that is read as the row somebody else created too.
+// wrong-last-sequence, so that is read as the row somebody else created too
+// ([lostCreateRace]).
 func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (bool, error) {
 	raw, err := encodeSecret(rec)
 	if err != nil {
@@ -2214,7 +2401,7 @@ func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, jetstream.ErrKeyExists), isWrongLastSequence(err):
+	case lostCreateRace(err):
 		return false, nil
 	default:
 		return false, unavailable("create the secret", err)
@@ -2372,7 +2559,7 @@ func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 	}
 	_, err = f.channels.Create(ctx, encodeKey(ch.ID), raw)
 	switch {
-	case err == nil, errors.Is(err, jetstream.ErrKeyExists):
+	case err == nil, lostCreateRace(err):
 		return nil
 	default:
 		return unavailable("open the channel", err)
@@ -2560,7 +2747,7 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, jetstream.ErrKeyExists):
+	case lostCreateRace(err):
 		return false, nil
 	default:
 		// RAISED, never reported as "somebody else has it". The caller
@@ -2626,7 +2813,7 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, jetstream.ErrKeyExists):
+	case lostCreateRace(err):
 		return false, nil
 	default:
 		return false, unavailable("create the sandbox run", err)

@@ -471,6 +471,18 @@ somebody is enrolled, so reading it means having access to the machine, which
 is the only credential a company genuinely has before it has any. The file is removed when it is used, and the
 route closes for good the moment anybody is enrolled.
 
+**Where a second factor is required** — `api.auth.local.totp: required`, which
+is what validation asks of any deployment a browser reaches off loopback — the
+founding opens a session that may only **enrol an authenticator** (and say who
+it is, re-confirm the password, or sign out). Call `POST /auth/totp` twice —
+once for the seed your app scans, once with the first code it shows — and that
+session is replaced by a whole one; until then every other route answers `403
+second_factor_enrolment_required`. The same holds for everybody you invite:
+redeeming the invitation, and every password sign-in until they have enrolled
+one, opens a session like it. See [A required second factor is enrolled before
+anything
+else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else).
+
 **A code lasts 24 hours.** One that has run out — an install started on Friday
 and finished on Monday — is refused `410 bootstrap_code_stale`, never "this
 company has started", and a refused attempt claims nothing, so the route stays

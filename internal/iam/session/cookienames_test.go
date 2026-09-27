@@ -3,36 +3,58 @@ package session_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
-// A BEARER IS READ UNDER EITHER NAME, the prefixed one first.
+// A BEARER AUTHENTICATES ONLY UNDER THE NAME THIS DEPLOYMENT ISSUES, AND A
+// SIGN-OUT REACHES BOTH.
 //
-// A deployment that corrected `api.external_url` from http to https has every
-// signed-in browser still presenting the bare name, and whatever reads a
-// bearer — the guard, the sign-out — has to read the same ones, or a browser
-// is signed in by one and not signed out by the other.
-func TestABearerIsPresentedUnderEitherName(t *testing.T) {
+// On https the bearer is `__Host-crewlet_session`, which a browser sets only
+// from this exact host; `crewlet_session` any sibling host can write with a
+// Domain covering this one. Read under either name, a sibling that planted its
+// own session signed in a visitor who held none as that session's person — so
+// [session.Presented] reads the issued name alone, on https and on plain http
+// alike. [session.Held] is the sign-out's reading: every bearer the browser
+// holds, the issued one first, so a browser still holding the name an http
+// deployment issued before it moved to https has that session ended too.
+//
+// Mutation: read the other name in Presented and the planted cookie is
+// presented; drop it from Held and the old session outlives its sign-out.
+func TestABearerAuthenticatesOnlyUnderTheNameIssued(t *testing.T) {
 	t.Parallel()
+	const https, plain = "https://crewlet.example.com", "http://127.0.0.1:8080"
 	for _, tc := range []struct {
-		name    string
-		cookies map[string]string
-		want    string
+		name     string
+		external string
+		cookies  map[string]string
+		want     string
+		held     []string
 	}{
-		{"the prefixed name", map[string]string{session.HostCookieName: "host"}, "host"},
-		{"the bare name", map[string]string{session.CookieBaseName: "bare"}, "bare"},
-		{"both, and the prefixed one wins", map[string]string{
-			session.HostCookieName: "host", session.CookieBaseName: "bare"}, "host"},
-		{"neither", map[string]string{"another_app": "x"}, ""},
+		{"https, the prefixed name", https,
+			map[string]string{session.HostCookieName: "host"}, "host", []string{"host"}},
+		{"https, a bare name a sibling planted", https,
+			map[string]string{session.CookieBaseName: "planted"}, "", []string{"planted"}},
+		{"https, both", https, map[string]string{
+			session.HostCookieName: "host", session.CookieBaseName: "bare"},
+			"host", []string{"host", "bare"}},
+		{"http, the bare name", plain,
+			map[string]string{session.CookieBaseName: "bare"}, "bare", []string{"bare"}},
+		{"http, a prefixed name it cannot have issued", plain,
+			map[string]string{session.HostCookieName: "host"}, "", []string{"host"}},
+		{"neither", https, map[string]string{"another_app": "x"}, "", nil},
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 		for name, value := range tc.cookies {
 			r.AddCookie(&http.Cookie{Name: name, Value: value})
 		}
-		if got := session.Presented(r); got != tc.want {
+		if got := session.Presented(r, tc.external); got != tc.want {
 			t.Errorf("%s: presented %q, want %q", tc.name, got, tc.want)
+		}
+		if got := session.Held(r, tc.external); !slices.Equal(got, tc.held) {
+			t.Errorf("%s: held %q, want %q", tc.name, got, tc.held)
 		}
 	}
 }

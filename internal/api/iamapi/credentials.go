@@ -371,7 +371,7 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	opID := s.opIDFor(r, "credentials:revoke:"+id)
 	revoked, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			// RESET PER RUN: the decide may run again against a fresh
 			// snapshot, and the verdict is the last run's.
 			found, method = false, ""
@@ -388,7 +388,7 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 				}
 				out = append(out, c)
 			}
-			return out
+			return out, nil
 		},
 		OpID:   opID,
 		Reason: reason,

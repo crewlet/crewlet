@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -61,6 +64,21 @@ type provider struct {
 	mu     sync.Mutex
 	nonces map[string]string // code -> nonce
 
+	// exchanges counts every request the token endpoint was sent.
+	exchanges atomic.Int64
+
+	// noEndSession makes the discovery document publish no
+	// end_session_endpoint, as some providers' do not.
+	noEndSession bool
+
+	// endSession, when set, is the end_session_endpoint the document
+	// publishes in place of the provider's own.
+	endSession string
+
+	// discoveryDown makes the discovery document answer 502, as a
+	// metadata host that is down does.
+	discoveryDown bool
+
 	// groups is the groups claim every ID token carries, or none.
 	groups []string
 
@@ -80,14 +98,26 @@ func newProvider(t *testing.T) *provider {
 	p := &provider{key: key, nonces: map[string]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc(oidc.MetadataPath, func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		if p.discoveryDown {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		doc := map[string]any{
 			"issuer":                                p.URL,
 			"authorization_endpoint":                p.URL + "/authorize",
 			"token_endpoint":                        p.URL + "/token",
 			"jwks_uri":                              p.URL + "/jwks",
+			"end_session_endpoint":                  p.URL + "/logout?tenant=acme",
 			"code_challenge_methods_supported":      []string{"S256"},
 			"id_token_signing_alg_values_supported": []string{"RS256"},
-		})
+		}
+		if p.noEndSession {
+			delete(doc, "end_session_endpoint")
+		}
+		if p.endSession != "" {
+			doc["end_session_endpoint"] = p.endSession
+		}
+		_ = json.NewEncoder(w).Encode(doc)
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
@@ -98,6 +128,7 @@ func newProvider(t *testing.T) *provider {
 		}}})
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		p.exchanges.Add(1)
 		_ = r.ParseForm()
 		p.mu.Lock()
 		nonce := p.nonces[r.Form.Get("code")]
@@ -269,6 +300,29 @@ func signInThroughProvider(t *testing.T, idp *provider, b config.Bootstrap,
 	options func(*authapi.Options)) *httptest.ResponseRecorder {
 
 	t.Helper()
+	rig := newProviderRig(t, idp, b, options)
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	return rig.callback(t, started.Result().Cookies(), code, state)
+}
+
+// providerRig is one sign-in surface over one provider, and the keyring its
+// flights are sealed under — so a case can seal a flight of its own.
+type providerRig struct {
+	mux    *http.ServeMux
+	cipher secrets.Cipher
+	config oidc.Config
+
+	// provider is the surface's own, so a case can hold its slots.
+	provider *oidc.Provider
+}
+
+// newProviderRig builds the surface a provider sign-in runs through, linked
+// to [linkedPerson] by the subject the provider asserts.
+func newProviderRig(t *testing.T, idp *provider, b config.Bootstrap,
+	options func(*authapi.Options)) providerRig {
+
+	t.Helper()
 	// THE LINK IS KEYED ON THE SUBJECT'S BLIND under the surface's own
 	// blinder, so the directory answers only for the subject this provider
 	// asserts.
@@ -289,38 +343,398 @@ func signInThroughProvider(t *testing.T, idp *provider, b config.Bootstrap,
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := buildWith(t, b, oidc.NewProvider(oidc.Config{
+	cfg := oidc.Config{
 		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
 		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
 		// THE CLAIM THE DEPLOYMENT NAMES, as the engine's own wiring
 		// hands it over.
 		GroupsClaim: b.API.Auth.OIDC.GroupsClaim,
-	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
+	}
+	provider := oidc.NewProvider(cfg, idp.Client(), func() time.Time { return clock })
+	svc := buildWith(t, b, provider, func(o *authapi.Options) {
 		o.Directory = linkedDirectory{blind: subjectBlind, person: linkedPerson}
 		o.Cipher = cipher
 		options(o)
 	})
 	mux := http.NewServeMux()
 	svc.Routes(mux)
+	return providerRig{mux: mux, cipher: cipher, config: cfg, provider: provider}
+}
 
-	start := httptest.NewRequest(http.MethodGet,
-		auth.PathAuthOIDCStart+"?return_to=/work", nil)
+// start begins a sign-in that returns to the given path.
+func (rig providerRig) start(t *testing.T, returnTo string) *httptest.ResponseRecorder {
+	t.Helper()
 	started := httptest.NewRecorder()
-	mux.ServeHTTP(started, start)
+	rig.mux.ServeHTTP(started, httptest.NewRequest(http.MethodGet,
+		auth.PathAuthOIDCStart+"?return_to="+url.QueryEscape(returnTo), nil))
 	if started.Code != http.StatusFound {
 		t.Fatalf("the start answered %d: %s", started.Code, started.Body)
 	}
-	code, state := idp.authorize(t, started.Header().Get("Location"))
+	return started
+}
 
-	callback := httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCCallback+
-		"?state="+url.QueryEscape(state)+"&code="+url.QueryEscape(code), nil)
+// callback is the browser coming back from the provider carrying cookies.
+func (rig providerRig) callback(t *testing.T, cookies []*http.Cookie, code,
+	state string) *httptest.ResponseRecorder {
+
+	t.Helper()
+	return rig.callbackWithin(t.Context(), t, cookies, code, state)
+}
+
+// callbackWithin is [providerRig.callback] on a request whose context is ctx,
+// for a browser that leaves before it is answered.
+func (rig providerRig) callbackWithin(ctx context.Context, t *testing.T,
+	cookies []*http.Cookie, code, state string) *httptest.ResponseRecorder {
+
+	t.Helper()
+	callback := httptest.NewRequestWithContext(ctx, http.MethodGet,
+		auth.PathAuthOIDCCallback+"?state="+url.QueryEscape(state)+
+			"&code="+url.QueryEscape(code), nil)
 	callback.RemoteAddr = "198.51.100.7:5100"
-	for _, c := range started.Result().Cookies() {
+	for _, c := range cookies {
 		callback.AddCookie(c)
 	}
 	finished := httptest.NewRecorder()
-	mux.ServeHTTP(finished, callback)
+	rig.mux.ServeHTTP(finished, callback)
 	return finished
+}
+
+// A SIGN-IN LANDS ON THIS DEPLOYMENT WHATEVER THE FLIGHT CARRIES.
+//
+// The return path is judged where it arrives, and a flight this surface
+// started can carry nothing else — but a flight is opened by whichever node
+// the callback reaches, and during a rolling upgrade the node that SEALED it
+// may be a build that judged by a looser rule. So the callback judges the path
+// again where it leaves, as the redirect: a flight sealed carrying
+// `/\evil.example.com` — another host, to a browser — lands on the dashboard.
+//
+// Mutation: redirect to the flight's path as it came and this lands off-site.
+func TestASignInLandsOnThisDeploymentWhateverTheFlightCarries(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	rig := newProviderRig(t, idp, b, func(*authapi.Options) {})
+
+	// THE COOKIE'S NAME is this surface's, so a real start supplies it.
+	started := rig.start(t, "/work")
+	cookies := started.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("the start set %d cookies, want the flight alone", len(cookies))
+	}
+	// A FLIGHT ANOTHER BUILD SEALED, under the fleet's own keyring.
+	redirect, sealed, err := rig.config.Start(rig.cipher, idp.URL+"/authorize",
+		oidc.Flight{Return: `/\evil.example.com`}, clock)
+	if err != nil {
+		t.Fatalf("seal a flight: %v", err)
+	}
+	cookies[0].Value = sealed
+	code, state := idp.authorize(t, redirect)
+
+	finished := rig.callback(t, cookies, code, state)
+	if finished.Code != http.StatusFound {
+		t.Fatalf("the callback answered %d (%s), want a redirect", finished.Code,
+			finished.Body)
+	}
+	if got := finished.Header().Get("Location"); got != auth.PathDashboard {
+		t.Errorf("the sign-in redirected to %q, which a browser follows off "+
+			"this deployment; want %s", got, auth.PathDashboard)
+	}
+}
+
+// A FLIGHT IS EXCHANGED AT THE PROVIDER ONCE, HOWEVER OFTEN IT IS PRESENTED.
+//
+// Whoever started a flight holds its cookie and its state, and a made-up code
+// is free — so without a record of which flights a node has finished, each
+// presentation of one cookie was an exchange at somebody else's token
+// endpoint, for the flight's whole ten minutes. The second presentation here
+// is refused as a failed sign-in, and the provider never hears of it.
+//
+// Mutation: drop the redemption check and the token endpoint counts two.
+func TestARedeemedFlightIsRefusedOnReplay(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	audit := &recordingAudit{}
+	rig := newProviderRig(t, idp, b, func(o *authapi.Options) { o.Audit = audit })
+
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	cookies := started.Result().Cookies()
+	if first := rig.callback(t, cookies, code, state); first.Code != http.StatusFound {
+		t.Fatalf("the first callback answered %d (%s), want the sign-in",
+			first.Code, first.Body)
+	}
+	replayed := rig.callback(t, cookies, code, state)
+	if replayed.Code != http.StatusUnauthorized {
+		t.Errorf("the replayed flight answered %d (%s), want the one sign-in "+
+			"refusal", replayed.Code, replayed.Body)
+	}
+	if n := idp.exchanges.Load(); n != 1 {
+		t.Errorf("the provider's token endpoint was asked %d times for one "+
+			"flight, want once", n)
+	}
+	if _, failures := audit.snapshot(); len(failures) != 1 {
+		t.Errorf("the trail holds %d failed attempts, want the replay", len(failures))
+	}
+}
+
+// A BROWSER THAT LEAVES WHILE IT WAITS ITS TURN HAS SPENT NOTHING.
+//
+// A callback beyond the eight a provider admits at once waits for a slot on
+// its own request ([oidc.ExchangeSlots]), which is exactly the morning's wave
+// a person reloads a spinning page in. The browser that left is answered 503
+// with a Retry-After and counted as no attempt — and its flight was never
+// spent, since the provider was never asked: the flight used to be spent
+// BEFORE the wait, so the reload presenting the same cookie was refused as a
+// replay and counted as a failed attempt, and every reload in the wave burned
+// a login. Here eight slots are held, the first callback gives up waiting, and
+// the reload of the same cookie, once a slot is free, signs the person in.
+//
+// Mutation: spend the flight before the slot is taken and the reload is 401
+// with a failed attempt; drop the admission's own error arm and the abandoned
+// callback is a counted 401 too.
+func TestACallbackThatGivesUpWaitingForATurnSpendsNoFlight(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	audit := &recordingAudit{}
+	rig := newProviderRig(t, idp, b, func(o *authapi.Options) { o.Audit = audit })
+
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	cookies := started.Result().Cookies()
+
+	// THE WAVE: every slot held by somebody else's exchange.
+	held := holdEverySlot(t, rig.provider)
+	gone, leave := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer leave()
+	abandoned := rig.callbackWithin(gone, t, cookies, code, state)
+	for _, admission := range held {
+		admission.Release()
+	}
+	if abandoned.Code != http.StatusServiceUnavailable ||
+		abandoned.Header().Get("Retry-After") == "" {
+		t.Fatalf("a callback that gave up waiting answered %d (Retry-After %q): "+
+			"%s, want 503 with a Retry-After", abandoned.Code,
+			abandoned.Header().Get("Retry-After"), abandoned.Body)
+	}
+	if n := idp.exchanges.Load(); n != 0 {
+		t.Fatalf("the token endpoint was asked %d times while every slot was "+
+			"held, want none", n)
+	}
+
+	reloaded := rig.callback(t, cookies, code, state)
+	if reloaded.Code != http.StatusFound || reloaded.Header().Get("Location") != "/work" {
+		t.Fatalf("the reload of a flight that never reached the provider "+
+			"answered %d (%s), want the sign-in", reloaded.Code, reloaded.Body)
+	}
+	if n := idp.exchanges.Load(); n != 1 {
+		t.Errorf("the token endpoint was asked %d times, want the reload's one", n)
+	}
+	if _, failures := audit.snapshot(); len(failures) != 0 {
+		t.Errorf("the trail holds %d failed attempts, want none: nobody "+
+			"presented anything wrong", len(failures))
+	}
+}
+
+// A SPENT FLIGHT IS REFUSED WITHOUT WAITING FOR A TURN.
+//
+// Whoever called back once holds a spent cookie for its ten minutes, and a
+// presentation of it asks the provider nothing — so it has nothing to wait for
+// at the token endpoint. Queued for a turn, it took one of the eight to learn
+// it would be refused: eight replays at a time kept every slot, and every
+// legitimate callback and deactivation probe on the node waited behind them
+// for as long as the replays were sent. Here every slot is held by somebody
+// else's exchange, and the replay is still refused at once, as the one failed
+// sign-in, having asked the provider nothing.
+//
+// Mutation: drop the check before the turn and the replay waits for a slot it
+// never gets, answering 503 when its request ends.
+func TestASpentFlightIsRefusedWithoutWaitingForATurn(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	audit := &recordingAudit{}
+	rig := newProviderRig(t, idp, b, func(o *authapi.Options) { o.Audit = audit })
+
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	cookies := started.Result().Cookies()
+	if first := rig.callback(t, cookies, code, state); first.Code != http.StatusFound {
+		t.Fatalf("the first callback answered %d (%s), want the sign-in",
+			first.Code, first.Body)
+	}
+
+	held := holdEverySlot(t, rig.provider)
+	defer func() {
+		for _, admission := range held {
+			admission.Release()
+		}
+	}()
+	// BOUNDED, so the mutation answers rather than hanging the case: a
+	// replay refused before the turn never waits at all.
+	within, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	replayed := rig.callbackWithin(within, t, cookies, code, state)
+	if replayed.Code != http.StatusUnauthorized {
+		t.Errorf("a spent flight presented while every turn was held answered "+
+			"%d (%s), want the one sign-in refusal at once", replayed.Code,
+			replayed.Body)
+	}
+	if n := idp.exchanges.Load(); n != 1 {
+		t.Errorf("the provider's token endpoint was asked %d times for one "+
+			"flight, want once", n)
+	}
+	if _, failures := audit.snapshot(); len(failures) != 1 {
+		t.Errorf("the trail holds %d failed attempts, want the replay", len(failures))
+	}
+}
+
+// A REFUSAL GIVES ITS TURN BACK BEFORE IT WAITS OUT ITS PAD.
+//
+// Two presentations of one flight that arrive before either is exchanged both
+// pass the check before the turn, and the second to hold a turn finds the
+// flight spent. It is refused — and every refusal waits out the sign-in pad
+// first, four times an exchange, so one refused from inside its turn held one
+// of the provider's eight slots for the whole pad having asked the provider
+// nothing, which anybody can do as often as they start a flight and call back
+// twice at once. Here both presentations wait while every slot is held; one is
+// exchanged and signs the person in, the other is parked in its refusal's pad,
+// and while it is parked another caller is admitted at once.
+//
+// NOT PARALLEL, because it knows both presentations are past the check and
+// waiting by counting the goroutines parked for a turn in this process, and a
+// parallel case's callback waiting beside them would be counted too.
+//
+// Mutation: give the turn back only once the refusal has answered (the
+// deferred release this replaced) and the caller beside the pad is never
+// admitted.
+func TestARefusalGivesItsTurnBackBeforeItsPad(t *testing.T) {
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	padding := make(chan struct{}, 2)
+	resume := make(chan struct{})
+	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
+		Now: func() time.Time { return clock },
+		// THE PAD, parked until the case has looked beside it.
+		Sleep: func(ctx context.Context, _ time.Duration) {
+			padding <- struct{}{}
+			select {
+			case <-resume:
+			case <-ctx.Done():
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("credential.NewThrottle: %v", err)
+	}
+	audit := &recordingAudit{}
+	rig := newProviderRig(t, idp, b, func(o *authapi.Options) {
+		o.Throttle = throttle
+		o.Audit = audit
+	})
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	cookies := started.Result().Cookies()
+
+	held := holdEverySlot(t, rig.provider)
+	answers := make([]*httptest.ResponseRecorder, 2)
+	var presented sync.WaitGroup
+	for i := range answers {
+		presented.Go(func() { answers[i] = rig.callback(t, cookies, code, state) })
+	}
+	// BOTH ARE PAST THE CHECK BEFORE THE TURN, which nothing can spend the
+	// flight ahead of while every turn is held.
+	waitUntil(t, func() bool { return waitingForATurn() == len(answers) })
+	held[0].Release()
+	select {
+	case <-padding:
+	case <-time.After(5 * time.Second):
+		t.Fatal("neither presentation of the flight was refused")
+	}
+	beside, cancel := context.WithTimeout(t.Context(), time.Second)
+	admission, err := rig.provider.Admit(beside)
+	cancel()
+	if err != nil {
+		t.Error("a caller beside a refusal's pad waited for the turn the " +
+			"refusal still held, having asked the provider nothing")
+	} else {
+		admission.Release()
+	}
+	close(resume)
+	presented.Wait()
+	for _, admission := range held[1:] {
+		admission.Release()
+	}
+
+	codes := []int{answers[0].Code, answers[1].Code}
+	slices.Sort(codes)
+	if !slices.Equal(codes, []int{http.StatusFound, http.StatusUnauthorized}) {
+		t.Errorf("two presentations of one flight answered %v, want one "+
+			"sign-in and one refusal", codes)
+	}
+	if n := idp.exchanges.Load(); n != 1 {
+		t.Errorf("the provider's token endpoint was asked %d times for one "+
+			"flight, want once", n)
+	}
+	if _, failures := audit.snapshot(); len(failures) != 1 {
+		t.Errorf("the trail holds %d failed attempts, want the refused "+
+			"presentation", len(failures))
+	}
+}
+
+// holdEverySlot takes every one of a provider's turns at its token endpoint,
+// as a wave of somebody else's exchanges would. The caller releases them.
+func holdEverySlot(t *testing.T, provider *oidc.Provider) []*oidc.Admission {
+	t.Helper()
+	held := make([]*oidc.Admission, 0, oidc.ExchangeSlots)
+	for range oidc.ExchangeSlots {
+		admission, err := provider.Admit(t.Context())
+		if err != nil {
+			t.Fatalf("hold a slot: %v", err)
+		}
+		held = append(held, admission)
+	}
+	return held
+}
+
+// waitingForATurn counts the goroutines in this process parked waiting for a
+// turn at a provider's token endpoint. A request gives no other sign that it
+// has reached the wait, and the wait is the one place a case about the order
+// around it has to know a request is.
+func waitingForATurn() int {
+	stacks := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(stacks, true)
+		if n < len(stacks) {
+			stacks = stacks[:n]
+			break
+		}
+		stacks = make([]byte, 2*len(stacks))
+	}
+	return strings.Count(string(stacks), "/internal/iam/oidc.(*Provider).Admit(")
+}
+
+// waitUntil polls a condition for up to five seconds.
+func waitUntil(t *testing.T, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatal("the condition was never reached")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // A PROVIDER SUBJECT TWO PEOPLE HOLD IS A CONFLICT, NOT AN OUTAGE.
@@ -409,4 +823,63 @@ func (d failingSubjects) PersonBySubjectBlind(context.Context, string, time.Time
 	iamdomain.Sighting, error) {
 
 	return iamdomain.Sighting{}, d.err
+}
+
+// THE FLIGHT COOKIE IS `__Host-` ON HTTPS, AND ONLY THAT NAME IS READ THERE.
+//
+// A browser sets a `__Host-` cookie only from this exact host, Secure, at
+// `Path=/` and with no Domain, so no sibling host can write one; the bare name
+// any sibling can write with a Domain covering this host. The flight is what
+// the callback finishes — a flight a sibling planted would be one its author
+// began, finished with the provider account the victim's browser holds — so on
+// https it is set under the prefix and a flight under the bare name is not
+// read at all. Plain http can hold no prefixed cookie, so it takes the bare
+// name, as the session cookie does.
+//
+// Mutation: drop the prefix and the https case fails on the name; read the
+// bare name as well and the planted flight is finished.
+func TestTheFlightCookieIsHostPrefixedOnHTTPS(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	rig := newProviderRig(t, idp, b, func(*authapi.Options) {})
+
+	started := rig.start(t, "/work")
+	cookies := started.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("the start set %d cookies, want the flight", len(cookies))
+	}
+	flight := cookies[0]
+	if flight.Name != "__Host-crewlet_oidc_flight" || flight.Path != "/" ||
+		!flight.Secure || flight.Domain != "" {
+		t.Errorf("an https deployment set the flight as %q, Path=%q, Secure=%v, "+
+			"Domain=%q — want __Host-crewlet_oidc_flight at / , Secure, no Domain",
+			flight.Name, flight.Path, flight.Secure, flight.Domain)
+	}
+
+	// THE SAME FLIGHT UNDER THE BARE NAME, as a sibling host would plant it.
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	planted := *flight
+	planted.Name = "crewlet_oidc_flight"
+	refused := rig.callback(t, []*http.Cookie{&planted}, code, state)
+	if refused.Code != http.StatusUnauthorized {
+		t.Errorf("a flight under the bare name answered %d on https, want the "+
+			"sign-in refusal", refused.Code)
+	}
+	if n := idp.exchanges.Load(); n != 0 {
+		t.Errorf("a flight under the bare name reached the provider %d times", n)
+	}
+
+	// AND PLAIN HTTP TAKES THE BARE NAME, which is all it can hold.
+	plain := bootstrapFor(t)
+	plain.API.ExternalURL = "http://127.0.0.1:8080"
+	plain.API.Auth.Backend = config.AuthBackendOIDC
+	plain.API.Auth.OIDC = b.API.Auth.OIDC
+	onHTTP := newProviderRig(t, idp, plain, func(*authapi.Options) {}).start(t, "/work")
+	if c := onHTTP.Result().Cookies(); len(c) != 1 || c[0].Name != "crewlet_oidc_flight" ||
+		c[0].Secure || c[0].Path != "/" {
+		t.Errorf("a plain http deployment set %+v, want the bare name at /, not Secure", c)
+	}
 }

@@ -594,8 +594,8 @@ stream:
                                     #   Unset takes a flat 512 MiB. SESSIONS SIZE
                                     #   IT — a session writes one record when it
                                     #   opens and one when it closes and nothing
-                                    #   in between, because a rotation id is
-                                    #   derived rather than recorded — so this is
+                                    #   in between, because a re-issue moves a
+                                    #   deadline inside the cookie — so this is
                                     #   about eighteen months of a completely
                                     #   blocked trim for a few hundred people at
                                     #   a pessimistic sign-in rate. Set it toward
@@ -751,7 +751,11 @@ api:
                         #   what the two lines above bind
   trusted_proxies: ["10.0.0.0/8"]
                         # whose X-Forwarded-For is believed. A CIDR list,
-                        #   never a bool; 0.0.0.0/0 is refused
+                        #   never a bool; 0.0.0.0/0 is refused. Empty with
+                        #   an https external_url is warned about: whatever
+                        #   terminates the TLS is then every caller's
+                        #   source — in every audit row, and in the
+                        #   sign-in throttle's key for every login
   auth:
     backend: local      # local | oidc | none. Unset derives from which of
                         #   the two blocks below is present
@@ -763,7 +767,6 @@ api:
        fleet:operate, people:manage, sandbox:run]
     session:
       absolute: 168h          # 1h..720h (default 168h)
-      rotate_after: 1h        # 5m..24h  (default 1h)
       step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
                               #   identity a config, chart, setup, credential,
                               #   deployment or /iam write asks for
@@ -778,9 +781,15 @@ api:
       sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never
                         #   longer than `changes`
     local:              # present on the `local` backend
-      totp: required    # required | optional. NO DEFAULT: state one
+      totp: required    # required | optional. NO DEFAULT: state one.
+                        #   required: a password sign-in by somebody who
+                        #   holds no second factor opens a session that may
+                        #   only enrol one (POST /auth/totp)
       accept_insecure: false   # acknowledge an insecure posture off loopback
-      min_password_length: 12  # 12..256; 0 takes the engine's floor of 12
+      min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
+                               #   Enforced wherever a person sets a password
+                               #   — the founding and every redemption — and
+                               #   what /auth/config tells a form to refuse
     # oidc:             # present on the `oidc` backend instead
     #   issuer: "https://acme.okta.com/oauth2/default"    # https only
     #   client_id: "0oa1b2c3d4"

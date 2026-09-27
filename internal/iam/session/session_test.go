@@ -40,7 +40,7 @@ const (
 	absolute = 8 * time.Hour
 )
 
-// keyring is a two-key keyring, so the rotation arms are exercised by material
+// keyring is a two-key keyring, so a keyring rotation is exercised by material
 // that actually carries two rather than by one key wearing two names.
 func keyring() runtoken.Material {
 	return runtoken.Material{
@@ -54,18 +54,17 @@ func keyring() runtoken.Material {
 
 func newSignedIn(t *testing.T) *signedIn {
 	t.Helper()
-	// A FIXED INSTANT, so a rotation boundary is a value the test names
-	// rather than something it has to wait for.
+	// A FIXED INSTANT, so a deadline is a value the test names rather than
+	// something it has to wait for.
 	c := &clock{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
-	signer, err := session.New(session.Options{
-		Material: keyring(), RotateAfter: time.Hour, Now: c.now,
-	})
+	signer, err := session.New(session.Options{Material: keyring(), Now: c.now})
 	if err != nil {
 		t.Fatalf("build a signer: %v", err)
 	}
-	// THE LINEAGE IS THE CLOCK. A uuid7 minted at the rig's own instant is
-	// what makes "this session is 90 minutes old" a fact the test states.
-	lineage := lineageAt(t, c.at)
+	lineage, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("mint a lineage: %v", err)
+	}
 	cookie, err := signer.Mint(session.Mint{
 		Lineage: lineage, Person: personID, Epoch: 3, Generation: 1,
 		StartPosition: startPos, AbsoluteExpiresAt: c.at.Add(absolute),
@@ -97,22 +96,6 @@ func newSignedIn(t *testing.T) *signedIn {
 func (s *signedIn) validate() session.Validation {
 	s.t.Helper()
 	return s.signer.Validate(s.t.Context(), s.dir, s.cookie)
-}
-
-// lineageAt mints a uuid7 whose embedded instant is at, by hand: the library
-// reads the clock, and a test that needs a session to be exactly ninety
-// minutes old cannot wait ninety minutes.
-func lineageAt(t *testing.T, at time.Time) uuid.UUID {
-	t.Helper()
-	id, err := uuid.NewV7()
-	if err != nil {
-		t.Fatalf("mint a lineage: %v", err)
-	}
-	millis := at.UnixMilli()
-	for i := range 6 {
-		id[i] = byte(millis >> (8 * (5 - i)))
-	}
-	return id
 }
 
 type clock struct {
@@ -324,7 +307,7 @@ func TestAddingAKeyLogsNobodyOutAndTheReissueMovesThem(t *testing.T) {
 	// The fleet before k2 existed mints the cookie...
 	before, err := session.New(session.Options{
 		Material: runtoken.OneKey("k1", "the-previous-key-material"),
-		Now:      rig.clock.now, RotateAfter: time.Hour,
+		Now:      rig.clock.now,
 	})
 	if err != nil {
 		t.Fatalf("build the old signer: %v", err)
@@ -362,24 +345,15 @@ func TestAddingAKeyLogsNobodyOutAndTheReissueMovesThem(t *testing.T) {
 
 // --- minting ----------------------------------------------------------------- //
 
-// A LINEAGE THAT IS NOT A UUID7 IS REFUSED AT MINT.
+// A MINT MISSING A FACT A NODE NEEDS IS REFUSED.
 //
-// The rotation index is the session's age in windows, and the age is read out
-// of the instant inside the lineage. A lineage minted any other way is a
-// session whose age nothing can compute — which would silently pin every
-// cookie at index 0 for ever.
-func TestALineageWithNoInstantInItIsRefused(t *testing.T) {
+// Every one of these is a bearer some node would have to guess about: no
+// lineage is a session nothing can end, no person is a row nobody can read
+// first, and no absolute deadline read as "never" is a session nobody bounded.
+func TestAMintMissingAFactANodeNeedsIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
-	v4, err := uuid.NewRandom()
-	if err != nil {
-		t.Fatalf("mint a v4: %v", err)
-	}
 	for name, in := range map[string]session.Mint{
-		"a version-4 lineage": {
-			Lineage: v4, Person: personID,
-			AbsoluteExpiresAt: rig.clock.now().Add(absolute),
-		},
 		"no lineage at all": {
 			Person: personID, AbsoluteExpiresAt: rig.clock.now().Add(absolute),
 		},
@@ -395,6 +369,25 @@ func TestALineageWithNoInstantInItIsRefused(t *testing.T) {
 				t.Errorf("minted %q", cookie)
 			}
 		})
+	}
+}
+
+// A BEARER OF THE PREVIOUS FORMAT IS MALFORMED, NEVER MISREAD.
+//
+// v2 carried a rotation index in the session's own field, so its lineage,
+// index and person were a triple where v3 has a pair. The version is what
+// tells them apart, and it must: read as v3, a v2 bearer's index would be
+// taken for its person — a row this node would then look up.
+func TestABearerOfThePreviousFormatIsMalformed(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	parts := strings.Split(rig.cookie, ".")
+	pair := strings.Split(parts[3], "~")
+	parts[0] = "v2"
+	parts[3] = pair[0] + "~4~" + pair[1]
+	rig.cookie = strings.Join(parts, ".")
+	if got := rig.validate(); got.Row != session.RowMalformed {
+		t.Errorf("a v2 bearer landed on %q: %s", got.Row, got.Detail)
 	}
 }
 

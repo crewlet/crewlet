@@ -2,11 +2,13 @@ package oidc
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -37,6 +39,24 @@ import (
 //
 // The suite removes each in turn and fails; that is what the checks are, and a
 // comment claiming them would be a claim.
+//
+// Every TIME CLAIM — `exp`, `iat`, `nbf` — is judged within [ClockSkew] of
+// this node's clock, because it was written by the PROVIDER's.
+
+// ClockSkew is how far the identity provider's clock may be from this node's
+// before a time claim it wrote is refused.
+//
+// SIXTY SECONDS, the design's figure, and it is two clocks' worth of ordinary
+// drift rather than a grace period: a host kept by NTP sits within tens of
+// milliseconds of true time and a host whose sync has lapsed drifts seconds a
+// day, so a minute is room for both ends of the exchange to be imperfect and
+// nothing more. What it is FOR is `iat`: a provider whose clock runs a few
+// seconds ahead of this node's issues a token "in the future" on every sign-in,
+// and judged exactly that is a login refused for a reason nobody can see —
+// intermittently, on whichever node's clock is behind. What it costs is a
+// minute on `exp`, the lifetime a captured token is good for, which a provider
+// sets in hours.
+const ClockSkew = 60 * time.Second
 
 // Claims are what this engine reads out of an ID token.
 //
@@ -96,11 +116,54 @@ type Keys interface {
 //
 // RS256 IS THE ONE EVERY PROVIDER SIGNS WITH, and the asymmetric families
 // beside it are here because some providers offer them and nothing is lost by
-// reading one. What is NOT here is every HMAC algorithm: a symmetric token is
-// verified with a shared secret, and the secret a provider shares is the
-// client secret — so accepting HS256 turns the client secret into a token
-// signing key, which is the confusion attack in its original form.
-var Algorithms = []string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS512"}
+// reading one: the RSA-PSS variants over the same keys, and ES256 and ES384
+// over the P-256 and P-384 keys internal/jwks reads — which is also why ES512
+// is NOT here, since no key a set yields could verify it. Each algorithm is
+// BOUND TO ITS KEY by [keyFits], before any signature arithmetic: an RSA
+// family to an RSA key, ES256 to a P-256 key and ES384 to a P-384 one.
+//
+// What is NOT here is every HMAC algorithm: a symmetric token is verified
+// with a shared secret, and the secret a provider shares is the client secret
+// — so accepting HS256 turns the client secret into a token signing key,
+// which is the confusion attack in its original form.
+var Algorithms = []string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS512",
+	"ES256", "ES384"}
+
+// keyFits reports whether a key is the one an algorithm is defined over: an
+// RSA key for the RS and PS families, and for ES256 and ES384 an ECDSA key on
+// the curve RFC 7518 §3.4 names — P-256 and P-384.
+//
+// # Why the library's own check is not enough
+//
+// golang-jwt checks a key's Go TYPE and a signature's LENGTH, and never an
+// ECDSA key's curve: ES384 is SHA-384 and a 96-byte signature, and a P-256
+// signature over that digest, its halves padded to 48 bytes, verifies against
+// a P-256 key — so a token the issuer signed with its ES256 key under an ES384
+// header was accepted, and "the algorithm pin" named one algorithm while the
+// arithmetic ran another. Only the key's holder can make such a token, so it
+// is no way in for anybody else; it is a token this engine would accept that
+// the specification says no verifier may, which is the kind of gap a pin exists
+// to leave no room for. So the binding is stated here, over the key the issuer
+// published, and an algorithm with no arm is refused — a new entry in
+// [Algorithms] verifies nothing until somebody says which key it is over.
+func keyFits(alg string, key any) bool {
+	switch alg {
+	case "RS256", "RS384", "RS512", "PS256", "PS384", "PS512":
+		_, rsaKey := key.(*rsa.PublicKey)
+		return rsaKey
+	case "ES256":
+		return onCurve(key, elliptic.P256())
+	case "ES384":
+		return onCurve(key, elliptic.P384())
+	}
+	return false
+}
+
+// onCurve reports whether a key is an ECDSA public key on exactly this curve.
+func onCurve(key any, curve elliptic.Curve) bool {
+	ec, ok := key.(*ecdsa.PublicKey)
+	return ok && ec.Curve == curve
+}
 
 // Verify checks an ID token and returns what it asserts.
 //
@@ -124,7 +187,15 @@ func (c Config) Verify(ctx context.Context, keys Keys, raw, nonce string,
 			// this process reach the network.
 			return nil, errors.New("no kid in the token header")
 		}
-		return keys.Key(ctx, kid)
+		key, err := keys.Key(ctx, kid)
+		if err != nil {
+			return nil, err
+		}
+		if !keyFits(token.Method.Alg(), key) {
+			return nil, fmt.Errorf("the key %q is not one %s verifies with",
+				kid, token.Method.Alg())
+		}
+		return key, nil
 	}
 	var claims rawClaims
 	_, err := jwt.ParseWithClaims(raw, &claims, keyfunc,
@@ -138,6 +209,9 @@ func (c Config) Verify(ctx context.Context, keys Keys, raw, nonce string,
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuedAt(),
 		jwt.WithTimeFunc(func() time.Time { return now }),
+		// AND EVERY TIME CLAIM WITHIN THE SKEW, `exp`, `iat` and `nbf`
+		// alike: each was written by the provider's clock.
+		jwt.WithLeeway(ClockSkew),
 	)
 	if err != nil {
 		return Claims{}, fmt.Errorf("%w: the id token did not verify: %w",
@@ -286,7 +360,3 @@ func (f *flexibleBool) UnmarshalJSON(data []byte) error {
 	}
 	return nil
 }
-
-// KnownAlgorithm reports whether an algorithm is one this engine accepts, for
-// a caller that has to say why a provider's metadata is unusable.
-func KnownAlgorithm(alg string) bool { return slices.Contains(Algorithms, alg) }

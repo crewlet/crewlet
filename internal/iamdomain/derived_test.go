@@ -293,8 +293,8 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 // named a second object that the first attempt's claim on the address then
 // refused. Derived from the operation key, every attempt of one operation names
 // one id — and an invitation's is derived under the company's key, because the
-// id is the verifier its link carries and a guessable key must not make it a
-// guessable link.
+// id is what its link's secret is derived from and a guessable key must not
+// make it a guessable link.
 func TestACreatesIdentityIsItsOperationKeys(t *testing.T) {
 	t.Parallel()
 	key := operationKey()
@@ -394,6 +394,13 @@ func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 		t.Fatalf("the retry answered %+v (%v), want the first attempt's "+
 			"invitation %s", again, err, first.ID)
 	}
+	// AND THE SAME LINK: the secret is derived from the id, so the retry
+	// shows the link whose verifier the first attempt stored — a secret
+	// minted per call would hand back a link that opens nothing.
+	if first.Secret == "" || again.Secret != first.Secret {
+		t.Errorf("the retry answered secret %q, want the first attempt's %q",
+			again.Secret, first.Secret)
+	}
 	if !again.ExpiresAt.Equal(first.ExpiresAt) {
 		t.Errorf("the retry answered expiry %s, want the one it was issued "+
 			"with %s", again.ExpiresAt, first.ExpiresAt)
@@ -401,8 +408,20 @@ func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 	if got := rig.column(`SELECT id FROM iam_invites`); len(got) != 1 {
 		t.Errorf("iam_invites holds %v after a retry, want the one invitation", got)
 	}
-	// THE KEY FOR ANOTHER ADDRESS, OR ON OTHER TERMS, is another request.
+	// THE KEY FOR ANOTHER ADDRESS, OR ON OTHER TERMS, is another request —
+	// a seat the first attempt did not bind included.
+	rig.seatOnly("platform-lead")
 	for name, attempt := range map[string]func() error{
+		"a seat the first did not bind": func() error {
+			return rig.draining(func() error {
+				_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
+					Email: "priya@example.com", Grants: []iam.Grant{iam.GrantStateRead},
+					Seat: "platform-lead", ExpiresAt: brokerAt.Add(168 * time.Hour),
+					OpID: key, Reason: "onboarding",
+				})
+				return err
+			})
+		},
 		"another address": func() error {
 			_, err := issue(key, "someone.else@example.com",
 				[]iam.Grant{iam.GrantStateRead})

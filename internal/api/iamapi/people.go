@@ -694,7 +694,7 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 	const reason = "the second factor was reset"
 	cleared, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: id,
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			out := held[:0:0]
 			for _, c := range held {
 				if c.Method == iamdomain.MethodTOTP ||
@@ -703,7 +703,7 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 				}
 				out = append(out, c)
 			}
-			return out
+			return out, nil
 		},
 		OpID: opID, Reason: reason,
 	})

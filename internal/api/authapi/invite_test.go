@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -24,6 +24,23 @@ import (
 // creates is derived from.
 const invitationID = "018f3a9c-4d2e-7000-8000-0000000001d1"
 
+// invitationSecret is the secret that invitation's link carries beside its id:
+// what every view presents in its header, every redemption in its body and a
+// provider redemption in its form.
+const invitationSecret = "the-links-own-secret-beside-its-id"
+
+// secretHeader is the header an invitation's view reads the secret from — the
+// dashboard's own spelling of it, which a case holds the surface to.
+const secretHeader = "X-Crewlet-Invite-Secret"
+
+// viewInvite is a GET of an invitation's view presenting its link's secret, as
+// the dashboard's screen asks it.
+func viewInvite(id string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/auth/invite/"+id, nil)
+	r.Header.Set(secretHeader, invitationSecret)
+	return r
+}
+
 // liveInvitation is a directory holding one invitation that can still be
 // redeemed.
 type liveInvitation struct{ stubDirectory }
@@ -32,14 +49,8 @@ func (liveInvitation) InvitationByID(context.Context, string) (iamdomain.Invitat
 	return iamdomain.InvitationRow{
 		ID: invitationID, Blind: "email:dana@example.com", InvitedBy: "founder",
 		ExpiresAt: clock.Add(time.Hour),
+		Verifier:  iamdomain.InvitationVerifier(invitationSecret),
 	}, nil
-}
-
-// addressOpener opens an invitation's address as one fixed value.
-type addressOpener struct{ address string }
-
-func (o addressOpener) Open(context.Context, string, iamdomain.Field, string) (string, error) {
-	return o.address, nil
 }
 
 // sealedInvitation is [liveInvitation] with an address sealed on it, so the
@@ -66,10 +77,10 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 	mux := http.NewServeMux()
 	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
 		o.Directory = sealedInvitation{}
-		o.Opener = addressOpener{address: "Dana.SRE+invites@example.com"}
+		o.Sealer = stubSealer{address: "Dana.SRE+invites@example.com"}
 	}).Routes(mux)
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/invite/"+invitationID, nil))
+	mux.ServeHTTP(rec, viewInvite(invitationID))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
 	}
@@ -83,14 +94,19 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 	}
 }
 
-// AN INVITATION ID THAT RESOLVES TO NOTHING IS A FAILED ATTEMPT, COUNTED.
+// AN INVITATION ID THAT RESOLVES TO NOTHING IS A FAILED ATTEMPT, COUNTED — AND
+// NEVER A REFUSAL OF THE ADDRESS IT CAME FROM.
 //
-// The id in the link is the credential. Admission ran before the lookup, but a
-// 410 recorded nothing, so the per-source ceiling that stops a guessing run at
-// a password never filled here: a source could present a new invitation id on
-// every request for ever. Each 410 now counts against the source and reaches
-// the audit trail's failure tally, so the walk is turned away at the same
-// ceiling as any other guess.
+// The id in the link is the credential, and a 410 once recorded nothing, so a
+// source could present a new invitation id on every request and no operator
+// would see it. Each 410 now reaches the audit trail's failure tally, which is
+// what makes a walk visible. It meets no curve: a link carries 256 bits of
+// secret, so there is nothing a curve would slow, and a curve keyed on the
+// address a link was presented from let one stranger there hold every
+// colleague's invitation, provider sign-in and founder's code at 429.
+//
+// Mutation: drop the count from the 410 and the tally is empty; key the
+// invitation on its source and the walk meets 429.
 func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
 	t.Parallel()
 	audit := &recordingAudit{}
@@ -98,22 +114,16 @@ func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
 	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
 		o.Audit = audit
 	}).Routes(mux)
-	var statuses []int
-	for i := range credential.AdmitLimit + 1 {
+	const walk = 32
+	for i := range walk {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 			fmt.Sprintf("/auth/invite/018f3a9c-4d2e-7000-8000-0000000002%02d", i),
 			nil))
-		statuses = append(statuses, rec.Code)
-	}
-	for i, status := range statuses[:credential.AdmitLimit] {
-		if status != http.StatusGone {
-			t.Errorf("attempt %d answered %d, want 410", i+1, status)
+		if rec.Code != http.StatusGone {
+			t.Fatalf("attempt %d answered %d, want 410 — a walk of ids is seen, "+
+				"never refused on its address", i+1, rec.Code)
 		}
-	}
-	if last := statuses[credential.AdmitLimit]; last != http.StatusTooManyRequests {
-		t.Errorf("after %d ids that resolved to nothing the source was answered "+
-			"%d, want 429 — the walk was never counted", credential.AdmitLimit, last)
 	}
 	_, failures := audit.snapshot()
 	counted := 0
@@ -122,9 +132,63 @@ func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
 			counted++
 		}
 	}
-	if counted != credential.AdmitLimit {
+	if counted != walk {
 		t.Errorf("the trail tallied %d refused invitation ids, want %d", counted,
-			credential.AdmitLimit)
+			walk)
+	}
+}
+
+// spentInvitation is [liveInvitation] redeemed an hour ago.
+type spentInvitation struct{ liveInvitation }
+
+func (spentInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	row, err := liveInvitation{}.InvitationByID(ctx, id)
+	row.RedeemedAt = clock.Add(-time.Hour)
+	return row, err
+}
+
+// A SPENT LINK THAT PROVES ITSELF IS NOT A FAILED ATTEMPT.
+//
+// Its holder — or the mail scanner that re-fetches every link in their inbox —
+// presents the link's own secret for an invitation already redeemed. That is
+// nobody guessing, and counted it put the address the scanner reads from in
+// the failure tally as a guesser. The answer is still the one 410 every
+// refusal gets. THE CONTROL is the same link with a secret that is not its
+// own, which IS a guess and is counted every time.
+func TestASpentLinkThatProvesItselfIsNotAFailedAttempt(t *testing.T) {
+	t.Parallel()
+	const presentations = 8
+	for _, tc := range []struct {
+		name    string
+		secret  string
+		counted int
+	}{
+		{"the link's own secret", invitationSecret, 0},
+		{"a secret that is not the link's", "a-guess-at-the-secret", presentations},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			audit := &recordingAudit{}
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+				o.Directory, o.Audit = spentInvitation{}, audit
+			}).Routes(mux)
+			for range presentations {
+				r := httptest.NewRequest(http.MethodGet, "/auth/invite/"+invitationID, nil)
+				r.Header.Set(secretHeader, tc.secret)
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, r)
+				if rec.Code != http.StatusGone {
+					t.Fatalf("a spent link answered %d, want 410", rec.Code)
+				}
+			}
+			if _, failures := audit.snapshot(); len(failures) != tc.counted {
+				t.Errorf("the trail tallied %d failures for %d presentations, "+
+					"want %d", len(failures), presentations, tc.counted)
+			}
+		})
 	}
 }
 
@@ -200,7 +264,7 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 				"/auth/invite/"+invitationID, strings.NewReader(
-					`{"login":"token:ops","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
+					`{"secret":"`+invitationSecret+`","login":"token:ops","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 			if rec.Code != tc.status {
 				t.Fatalf("status %d, want %d (body %s)", rec.Code, tc.status,
 					rec.Body.String())
@@ -227,6 +291,7 @@ type recordingWriter struct {
 	refusals []error
 	enrolled []iamdomain.Enrolment
 	spent    []iamdomain.InvitationSpend
+	starts   []iamdomain.SessionStart
 
 	// unresolved makes every enrolment past the refusals answer `unknown`
 	// under its own op id: nothing can say whether it landed.
@@ -259,13 +324,29 @@ func (w *recordingWriter) SpendInvitation(_ context.Context,
 	return applied(statelog.Position{}), nil
 }
 
+func (w *recordingWriter) OpenSession(ctx context.Context,
+	in iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
+
+	w.mu.Lock()
+	w.starts = append(w.starts, in)
+	w.mu.Unlock()
+	return w.stubWriter.OpenSession(ctx, in)
+}
+
+// opened is every session this writer was asked to open.
+func (w *recordingWriter) opened() []iamdomain.SessionStart {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.starts)
+}
+
 // redeem posts one redemption with a login and answers its status.
 func redeem(t *testing.T, mux *http.ServeMux, login string) int {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/auth/invite/"+invitationID, strings.NewReader(
-			`{"login":"`+login+`","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
+			`{"secret":"`+invitationSecret+`","login":"`+login+`","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 	return rec.Code
 }
 

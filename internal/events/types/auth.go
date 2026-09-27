@@ -54,7 +54,6 @@ import (
 func init() {
 	events.Register[IAMSessionStarted]()
 	events.Register[IAMSessionEnded]()
-	events.Register[IAMSessionReuseDetected]()
 	events.Register[IAMLoginFailures]()
 	events.Register[IAMStepUpCompleted]()
 	events.Register[IAMCredentialMinted]()
@@ -63,6 +62,7 @@ func init() {
 	events.Register[IAMTokenFirstUse]()
 	events.Register[IAMTokenOverreach]()
 	events.Register[IAMRecoveryCodeUsed]()
+	events.Register[IAMSecondFactorThrottled]()
 	events.Register[IAMMFAReset]()
 	events.Register[IAMIdentityLinked]()
 	events.Register[IAMIdentityUnlinked]()
@@ -159,13 +159,21 @@ const (
 	// EndPersonRemoved is the person being removed, which ends every
 	// session they hold along with everything else about them.
 	EndPersonRemoved SessionEndReason = "person_removed"
+
+	// EndCredentialChanged is a session exchanged from a Tier A token
+	// whose value is not the one it was exchanged from any more — a new
+	// value put under the token's id, which is how a leak is answered, or
+	// the entry removed. Noticed, like a deadline, when its cookie is next
+	// presented, because the value lives in a configuration file and no
+	// record ever states it changed.
+	EndCredentialChanged SessionEndReason = "credential_changed"
 )
 
 // Valid reports whether r is a reason this build names.
 func (r SessionEndReason) Valid() bool {
 	switch r {
 	case EndLogout, EndLogoutAll, EndIdle, EndAbsolute, EndRevoked,
-		EndIDPRevoked, EndPersonRemoved:
+		EndIDPRevoked, EndPersonRemoved, EndCredentialChanged:
 		return true
 	}
 	return false
@@ -193,14 +201,15 @@ const (
 	// FailBootstrap is a wrong one-time founder code.
 	FailBootstrap FailureMethod = "bootstrap"
 
-	// FailInvite is an invitation link refused: one nobody issued, one
-	// already redeemed or aged out, one whose address somebody is already
-	// enrolled under — each a 410 — and a view or a redemption the
-	// throttle turned away. THE ID IN THE LINK IS THE CREDENTIAL, so a
-	// source presenting ids that resolve to nothing is guessing at one;
-	// counted, the per-source ceiling stops the walk as it stops a guessed
-	// password. It used to count only the throttle's own refusals, so a
-	// source could present a new id on every request for ever.
+	// FailInvite is an invitation link that did not prove itself: an id
+	// nobody issued, or a secret that is not the id's link's — each a
+	// 410. THE LINK IS THE CREDENTIAL, so a source presenting ids or
+	// secrets that open nothing is guessing at one, and the tally's count
+	// of distinct values is what shows the walk. A link that DID prove
+	// itself and is spent — redeemed, aged out, its address enrolled — is
+	// the same 410 and NOT a failure: it is the link's holder, or a mail
+	// scanner re-reading it, and counting it named a scanner's address as
+	// a guesser.
 	FailInvite FailureMethod = "invite"
 
 	// FailBearer is a credential presented on a request and refused: an
@@ -313,8 +322,8 @@ type IAMSessionEnded struct {
 	Reason  SessionEndReason `json:"reason"`
 
 	// By is who ended it: the holder for a logout, an administrator for a
-	// revocation or a removal, and EMPTY for a deadline or a provider
-	// verdict, which nobody authored.
+	// revocation or a removal, and EMPTY for a deadline, a provider verdict
+	// or a changed credential, which nobody this engine can name authored.
 	By string `json:"by"`
 
 	// OperatorID is the CREDENTIAL By acted through: a machine token's
@@ -348,30 +357,6 @@ func (e IAMSessionEnded) Summary() string {
 		orSomebody(e.Person, ""), why)
 }
 
-// IAMSessionReuseDetected is a session cookie presented with a rotation index
-// this engine could not have issued — ahead of the clock past the overlap —
-// which is the one positive evidence of a copied cookie a derived rotation can
-// give. Every session the person holds was ended in response.
-type IAMSessionReuseDetected struct {
-	Person  string `json:"person"`
-	Lineage string `json:"lineage"`
-
-	// Rotation is the index the replayed bearer carried.
-	Rotation uint64 `json:"rotation"`
-
-	Remote string `json:"remote"`
-}
-
-// EventType is the "iam_session_reuse_detected" wire type.
-func (IAMSessionReuseDetected) EventType() string { return "iam_session_reuse_detected" }
-
-// Summary says what was done about it, because the reader's next question is
-// whether anything was.
-func (e IAMSessionReuseDetected) Summary() string {
-	return fmt.Sprintf("A replayed session cookie for %s was refused; every "+
-		"session they held was ended", orSomebody(e.Person, ""))
-}
-
 // IAMLoginFailures is every failed attempt one client made inside one minute,
 // counted.
 //
@@ -403,10 +388,11 @@ type IAMLoginFailures struct {
 	// Attempts is how many attempts were verified and refused.
 	Attempts int `json:"attempts"`
 
-	// Throttled is how many were refused at the throttle's ceiling before
-	// anything was verified — the source had already failed too often.
-	// It is the "ceiling reached" of the design, expressed as the count of
-	// requests the ceiling actually turned away.
+	// Throttled is how many were answered 429 before anything was
+	// verified: the throttle's curve owed their key a longer wait than a
+	// request is held open for. A wait short enough to serve inside the
+	// request is not counted here — the attempt went on to be verified,
+	// and is in Attempts if it failed.
 	Throttled int `json:"throttled"`
 
 	// Subjects is how many DISTINCT names or bearers the attempts
@@ -703,6 +689,32 @@ func (e IAMRecoveryCodeUsed) Actor() string { return e.Login }
 func (e IAMRecoveryCodeUsed) Summary() string {
 	return lead(orSomebody(e.Login, e.Person),
 		fmt.Sprintf("used a recovery code (%d left)", e.Remaining))
+}
+
+// IAMSecondFactorThrottled is a person's second-factor curve reaching its
+// ceiling: the most wrong codes the sign-in throttle counts inside its window,
+// from wherever they came. A code is asked for only once the password has
+// proved itself, so this is SOMEBODY HOLDING THAT PERSON'S PASSWORD GUESSING
+// AT THEIR SECOND FACTOR — the password is the thing to rotate.
+//
+// Once per person per window on the node that saw the failure take it there;
+// Remote is the address that failure came from, and one of possibly many.
+type IAMSecondFactorThrottled struct {
+	Person string `json:"person"`
+	Login  string `json:"login"`
+	Remote string `json:"remote"`
+}
+
+// EventType is the "iam_second_factor_throttled" wire type.
+func (IAMSecondFactorThrottled) EventType() string { return "iam_second_factor_throttled" }
+
+// Summary says what it means, because the row's reader has to act on the
+// password rather than on the code.
+func (e IAMSecondFactorThrottled) Summary() string {
+	return fmt.Sprintf("Second factor of %s reached the throttle's ceiling, the "+
+		"last wrong code from %s: somebody holding the password is guessing "+
+		"at the code", orSomebody(e.Login, e.Person),
+		orSomebody(e.Remote, "an unknown address"))
 }
 
 // IAMMFAReset is an administrator clearing a person's second factor, which also

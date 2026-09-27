@@ -2,6 +2,7 @@ package authapi_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -95,7 +97,7 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 		Hasher:    credential.NewHasher(credential.Default(), 1),
 		Throttle:  throttle,
 		Blinder:   fixtureBlinder(t),
-		Opener:    stubOpener{},
+		Sealer:    stubSealer{},
 		Sessions:  stubSessions{},
 		Clients:   auth.NewClients(&b),
 		Provider:  provider,
@@ -111,6 +113,14 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 	if err != nil {
 		t.Fatalf("authapi.New: %v", err)
 	}
+	// THE WORK A SURFACE RUNS AFTER ITS ANSWERS ENDS WITH THE CASE, as it
+	// ends with the listener on a node: cut at once, since a case that
+	// needs a rewrite to land waits for it itself.
+	t.Cleanup(func() {
+		cut, cancel := context.WithCancel(context.Background())
+		cancel()
+		svc.Stop(cut)
+	})
 	return svc
 }
 
@@ -215,10 +225,56 @@ func fixtureBlinder(t *testing.T) *iamdomain.Blinder {
 	return blinder
 }
 
-type stubOpener struct{}
+// stubSealer opens every invitation's address as one fixed value, and seals a
+// credential secret for real — under one fixture key, with the DOMAIN's own
+// associated data ([iamdomain.AADForCredential]) — so a seed sealed for one
+// person's credential opens as that credential and as nothing else, exactly as
+// a running node's per-person sealer answers.
+type stubSealer struct{ address string }
 
-func (stubOpener) Open(context.Context, string, iamdomain.Field, string) (string, error) {
-	return "", nil
+func (s stubSealer) Open(context.Context, string, iamdomain.Field, string) (string, error) {
+	return s.address, nil
+}
+
+func (stubSealer) SealCredential(_ context.Context, person, credentialID string,
+	field iamdomain.Field, plaintext string) (string, error) {
+
+	return fixtureCipher.Encrypt(plaintext,
+		iamdomain.AADForCredential(person, credentialID, field))
+}
+
+func (stubSealer) OpenCredential(_ context.Context, person, credentialID string,
+	field iamdomain.Field, sealed string) (string, error) {
+
+	plain, err := fixtureCipher.Decrypt(sealed,
+		iamdomain.AADForCredential(person, credentialID, field))
+	if err != nil {
+		return "", fmt.Errorf("open %s's %s %s: %w", person, field, credentialID, err)
+	}
+	return plain, nil
+}
+
+// fixtureCipher is the one key [stubSealer] seals under.
+var fixtureCipher = func() secrets.Cipher {
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": []byte(strings.Repeat("s", 32))},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return cipher
+}()
+
+// sealedSeed is a TOTP seed sealed as a person's credential, as enrolment
+// stores it.
+func sealedSeed(t *testing.T, person, credentialID, seed string) string {
+	t.Helper()
+	sealed, err := stubSealer{}.SealCredential(t.Context(), person, credentialID,
+		iamdomain.FieldTOTP, seed)
+	if err != nil {
+		t.Fatalf("seal a seed: %v", err)
+	}
+	return sealed
 }
 
 // stubCipher seals nothing and opens nothing, which is what a case about

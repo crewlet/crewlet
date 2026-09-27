@@ -266,12 +266,13 @@ snapshot the grants land from:
 | Enrolment | Its authority | What the record refuses |
 |---|---|---|
 | Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before the first claim is taken |
-| Redeeming an invitation | The invitation, as its issuer wrote it | A grant or a reach the invitation did not carry, an address it was not issued to, and a link already spent or aged out |
+| Redeeming an invitation | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a grant or a reach the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or bound to somebody else — and a link already spent or aged out |
 | The first person | The one-time code, **taken** on the company's one bootstrap subject | A code that is not on the log, is withdrawn, aged out or ended — any founding while another code's is in progress — and any enrolment once somebody else exists |
 
-An enrolment is a sequence — the address, then the login, then the person — and
-the authority in that table is checked **twice**: once before the first claim,
-and again in the person record's own snapshot, which is the one that counts.
+An enrolment is a sequence — the seat when it binds one, the address, then the
+login, then the person — and the authority in that table is checked **twice**:
+once before the first claim, and again in the person record's own snapshot,
+which is the one that counts.
 For an invitation the early check is a read. For the first person it is a
 **write** — the founding *takes* the exemption on one subject, below — because
 two founders who each pass a read both land. The early check is what keeps a
@@ -333,7 +334,7 @@ Before any grant is consulted, a principal has to be *enrolled*.
 | Stage | May act | Means |
 |---|---|---|
 | `invited` | no | Created, has proved nothing yet |
-| `enrolling` | no | Mid-proof — setting a credential, completing a second factor |
+| `enrolling` | no | Part-way through proving who they are. Nothing moves a person here on its own; an administrator may set it. A person who must [enrol a required second factor](#a-required-second-factor-is-enrolled-before-anything-else) first is `active`, holding a session that may only do that |
 | `active` | **yes** | Enrolled |
 | `suspended` | no | Enrolled and blocked, reversibly, with the record kept |
 | `retired` | no | Has left; the record is kept so their audit rows still resolve to a name |
@@ -576,6 +577,25 @@ record refuses anything the invitation does not cover — and a link that was
 spent or aged out between opening the form and posting it answers
 `410 invite_spent`, the same as one that was already spent.
 
+**The link is an id and a secret, and it opens the dashboard.** An invitation
+link reads
+
+```text
+https://crewlet.example.com/dashboard#/invite/<id>.<secret>
+```
+
+— the dashboard's invitation screen, built from `api.external_url`, with the
+credential after the `#`. A browser never sends a URL's fragment to any server,
+so neither half reaches a proxy's access log on the way to the page. The screen
+then asks `/auth/invite/{id}` itself, with the id in the path and the secret
+**beside** it and never in a URL: in the `X-Crewlet-Invite-Secret` header to
+render, in the JSON body to redeem, and in the form to redeem through the
+identity provider. The id alone opens nothing — it is the row's key, in every
+snapshot, backup and access log — and what the estate keeps of the secret is
+its SHA-256. A missing or wrong secret is answered exactly as an id nobody
+issued is: the same `410`, counted against the caller's source, because told
+apart it would say which ids exist.
+
 **The GET renders and never spends.** A link is followed by things that are not
 the person it was sent to: a mail client prefetching, a security scanner opening
 every URL in a message, a chat app building a preview card. Every one of those
@@ -584,6 +604,24 @@ never saw it — or, far more often, a person told their link was already used b
 whoever scanned their mailbox. So the GET answers what the form needs to render
 and changes nothing; the POST is the person, having typed a password.
 
+**An invitation may bind a seat.** `crewlet iam invite -seat <handle>` and `seat`
+on `POST /iam/invitations` name a **human seat nobody holds**, and redeeming the
+link then binds the person it creates to that seat — onboarding somebody into
+their seat with one link rather than an invitation and a bind afterwards. A seat
+the chart does not hold, an agent's seat and a seat somebody is already bound to
+are refused when the invitation is issued, naming the seat. The invitation
+records the seat's **identity** — the handle it was created under — so a rename
+before the redemption binds the same seat, and the invitation's page shows it
+as the chart calls it then. The redemption claims the seat **first**, before the
+address and the login: a seat is the one thing the chart can move in the week a
+link is open, and a refusal at the first claim leaves nothing behind, where one
+after the address would hold that address against the next invitation to the
+same person. A seat that was removed, made an agent's or bound to a colleague
+since the issue is refused as the link's own refusal — `410`, ask whoever sent
+it for a new one — before anything is written; the rare redemption that races a
+colleague's bind to the seat is `409`, saying the seat is taken and naming
+nobody.
+
 What the form needs includes **a login to propose**. Every person enrols with
 one, and somebody following a link has typed nothing yet, so the GET answers
 `login` derived from the address in the person grammar. The POST carries
@@ -591,9 +629,9 @@ whatever login the person settled on — the proposal or their own — and an
 absent one is refused `400`, as a login somebody else holds is refused `409`
 without saying who.
 
-**A redemption can be retried until it lands.** It is a sequence — the address
-claim, the login claim, the person — so one refused halfway leaves the address
-claimed. The person it creates is therefore **derived from the invitation**
+**A redemption can be retried until it lands.** It is a sequence — the seat
+claim where there is one, the address claim, the login claim, the person — so
+one refused halfway leaves the address claimed. The person it creates is therefore **derived from the invitation**
 (a uuid7 at the invitation's own instant) rather than minted per request:
 every attempt names the same person, a claim the first attempt took is one the
 retry already holds, and somebody told their login was taken simply chooses
@@ -602,16 +640,28 @@ expired invitation is refused before anything is written, and so is one whose
 address somebody is already enrolled under (if that is the person this link
 created and its spend never landed, the spend is published then).
 
-Absent, redeemed and expired are **one refusal**, because the remedy is the same
-and telling them apart would say "this was already used" to somebody whose link
-merely aged out, and send them looking for who used it.
+Absent, redeemed, expired and a secret that is not the link's are **one
+refusal**, because the remedy is the same and telling them apart would say
+"this was already used" to somebody whose link merely aged out, and send them
+looking for who used it.
 
 **The link is shown once and nothing can read it back.** What the estate holds
-is the invitation's id, which *is* the verifier: holding the link is holding
-the id. An invitation an administrator lost is re-issued with one more call
-rather than recovered — and the address it was for is sealed under the
-invitation's own key, minted for it and shredded when it is collected, so an
-address somebody typed and never sent leaves no cleartext anywhere.
+is the invitation's id and the SHA-256 of the secret its link carries — the
+record that issued it carries the same hash and never the secret, and the
+redemption's own record checks the secret against it again where the grants
+land. An invitation an administrator lost is re-issued with one more call
+rather than recovered; the one answer that carries a link again is a **retry of
+the issue itself** under the same key, because the id is derived from the key
+and the secret from the id, both under the company's own key. And the address it
+was for is sealed under the invitation's own key, minted for it and shredded
+when it is collected, so an address somebody typed and never sent leaves no
+cleartext anywhere.
+
+An invitation issued before links carried a secret has no verifier and is
+**redeemable by nobody**: admitting it on its id would admit exactly what the
+secret closes. Issue it again. Its record also travels at the identity log's
+newest record version, so a node running an older build defers it and answers
+the link `410` rather than redeeming it without checking the secret.
 
 **The engine never sends mail.** `crewlet iam invite` and `POST
 /iam/invitations` hand the inviter the URL; getting it to the person is
@@ -741,7 +791,7 @@ would be a credential every operator with a backup holds.
 | Credential | What is stored | Why that and not something else |
 |---|---|---|
 | Password | argon2id, 64 MiB, t=3, p=1, as a PHC string | A person chose it, so the space it came from is small enough to grind — and memory is the cost a GPU cannot buy its way around |
-| Second factor | The TOTP shared secret, sealed under the credential's own key | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
+| Second factor | The TOTP shared secret, sealed under the **person's own key** and bound to the person, the credential it was enrolled as and the field — see [below](#what-is-in-the-clear-and-what-is-not) | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
 | Recovery code | SHA-256 | Minted here from `crypto/rand`, so there is no dictionary to grind and no memory cost to buy |
 | Machine token | SHA-256 over the prefix, the credential id and the secret — everything but the log position the value carries, which is a hint about *when* to look and proves nothing | The same, plus: this is presented on *every* request a pipeline makes, and a hundred milliseconds of argon2id on each is a different kind of outage |
 
@@ -764,6 +814,13 @@ actually choose from (everybody appends `1!`), an attacker who knows the rule
 enumerates it, and they push people to write the result down. Length is the
 only property that buys entropy from a human at no cost to them.
 
+Twelve is the engine's floor and a deployment may raise it with
+`api.auth.local.min_password_length`; nothing lowers it. The raised floor is
+the one every password is held to — the founder's at `POST /auth/bootstrap` and
+every redemption's — and the one `GET /auth/config` and an invitation's view
+report, so a form refuses exactly what the route would. It used to be validated
+and reported as twelve whatever it said, and enforced by nothing.
+
 Behind that floor there is a small blocklist, and it is deliberately hundreds
 of entries rather than a published top-ten-thousand corpus: those lists are
 ranked by observed frequency and human-chosen passwords cluster at six to ten
@@ -780,7 +837,110 @@ The parameters ride in the stored verifier, which is what makes a cost raise
 possible at all: the plaintext is not stored, so the only instant a stronger
 digest can be computed is the one where somebody presents their password. A
 verifier written under an older cost verifies under *its own* parameters and is
-reported stale, and the record that records the successful sign-in rewrites it.
+reported stale, and a sign-in or a step-up that has just succeeded on it
+rewrites it at the current cost — the same credential, its id kept, one write to
+the person's own credentials decided in the write's snapshot, so a password
+changed in the meantime keeps its change.
+
+It only ever goes **up**. A verifier is stale when its cost is *below* this
+build's in memory, passes or digest length and above it in none — never merely
+because its parameters differ. The cost is a property of the build, so it
+moves during a rolling upgrade, when a node still on the older build meets the
+verifiers the newer one has written at the raised cost; rewriting those at its
+own cost would be a downgrade, undone by the person's next sign-in on an
+upgraded node and redone by the one after on an old node, for as long as the
+rollout lasts. So a verifier at a higher cost verifies and is left exactly as
+it is, and so is one that is higher in one parameter and lower in another.
+Parallelism is not a cost — it changes how soon one verification finishes, not
+what an attacker pays — so it decides nothing. A new cost therefore reaches
+existing verifiers only when it lowers none of the three.
+
+It is **best effort and never on the sign-in's time**: the person is waiting
+for a session, not a stronger digest, so the rewrite starts only once the
+sign-in has answered, in the background, and nothing in the answer waits on it.
+It takes a derivation slot only if one is free at that moment — under the load
+the cap exists for it skips rather than queueing ahead of the sign-ins behind
+it — one rewrite per person runs at a time, and its write has the identity
+log's own resolve budget (five seconds). Anything short of a confirmed write is
+logged (`api_password_rehash_skipped`, `api_password_rehash_unrecorded`) and
+changes nothing: the old verifier still verifies, so the next sign-in asks
+again — and every attempt to retire one verifier is one operation, its id
+derived from the person and the verifier it replaces. A node shutting down
+waits for a rewrite in flight within the listener's shutdown grace and cuts it
+after.
+
+### A required second factor is enrolled before anything else
+
+`api.auth.local.totp: required` means **nobody acts on a password alone**. A
+person who holds a second factor is asked for it at every password sign-in and
+step-up, as they always were. A person who holds **none** — freshly invited,
+the founder, somebody an administrator reset — has nothing else to present, so
+refusing their sign-in would lock them out of the one gesture that satisfies
+the rule. Instead the sign-in succeeds into a session that may do **nothing but
+enrol one**:
+
+- `POST /auth/login`, `POST /auth/bootstrap`, `POST /auth/invite/{id}` and a
+  password `POST /auth/step-up` that proved a password and no second factor
+  answer `200` with `"status": "second_factor_enrolment_required"` and the
+  cookie of that session. `GET /auth/session` says the same.
+- The request guard answers **every other route** `403
+  second_factor_enrolment_required` for that session — `/iam`, `/work`, the
+  socket, and the rest of `/auth` too, which regenerates recovery codes and
+  signs a person out everywhere. It admits exactly three: `GET /auth/session`,
+  `POST /auth/totp` and `POST /auth/step-up` (enrolling asks a proof inside
+  `step_up_sensitive`, and somebody who took longer than that to find their
+  phone re-confirms the password without signing out). The two sign-outs of
+  this session, `POST /auth/logout` and `POST /auth/logout/oidc`, are reached
+  too, because the guard does not stand in front of them at all — see
+  [Every route is guarded](#every-route-is-guarded-and-the-exemptions-are-the-list).
+- Completing `POST /auth/totp` through that session **replaces it** with a
+  whole one, as a step-up does: the restricted session is ended first, the new
+  one keeps its absolute deadline and carried grants, and the enrolment's
+  answer carries the new session beside `"status": "enrolled"`, its cookie on
+  the response. It also keeps the restricted session's **proof instant** —
+  when the password was proved — and is never dated at the enrolment: the code
+  the enrolment checks proves possession of a seed that same session was
+  handed a moment earlier, not who is holding it, so it earns no fresh
+  step-up window. Recovery codes come after, from the whole session, while the
+  password's proof is still inside `step_up_sensitive` — or after a step-up
+  that presents the new factor.
+- A restricted session enrols **only while its person holds no second
+  factor**, decided in the snapshot the factor would land on. Its proof is a
+  password alone, and fresh enough for the enrolment's window, so without this
+  whoever held such a session — signed in before the person enrolled their own
+  authenticator from somewhere else — could enrol theirs over it, lock the
+  person out and be handed a whole session. Once a factor is held that
+  enrolment is `403 second_factor_required` and nothing is stored: sign in
+  again with the factor. A whole session may still replace its own.
+
+The restriction is **the session's own fact**, decided by the sign-in that
+opened it rather than re-derived on each request from the person's credentials
+and the node's configuration: what restricts it is what its sign-in proved, and
+a per-node derivation would restrict one browser on one node and free it on the
+next. It is written in **two places, and both are read**:
+
+- **the cookie itself.** The bearer carries a signed scope, `enrol` (see [The
+  session cookie](#the-session-cookie)), so every node reads the restriction
+  whether or not it has applied the session's start. It has to: a sign-in
+  answers before any node applies the session it opened, and a node that has
+  not yet applied it serves reads on the cookie alone — so a restriction only
+  the row carried was one every node ignored for the first moments after every
+  password sign-in.
+- **the session's start record**, which `GET /iam/people/{id}/sessions` reads
+  to mark it `"enrolment_only": true`, so an administrator can tell a person
+  part-way through their first sign-in from one who is working. It is written
+  at the identity log's condition version, so a node running an older build
+  defers it rather than recording the session as whole.
+
+A node running an older build refuses the scoped cookie outright, as a cookie
+not of its format — during a rolling upgrade somebody part-way through enrolling
+may be asked to sign in again there, and is never served whole.
+
+A sign-in through an **identity provider** is never restricted: its second
+factor is the provider's and invisible here. A Tier A token's exchanged
+session is never restricted either. `optional` opens whole sessions on a
+password alone, which is why it is refused off loopback unless
+`accept_insecure` says so.
 
 ### A code is spent when it is used
 
@@ -819,28 +979,206 @@ attacker learning **who works here**, in as many requests as they care to make,
 from nothing but which requests were throttled or how long each took. Three
 mechanisms close it and none is sufficient alone:
 
-1. **Admission is keyed on the source and happens before the subject is
-   resolved.** A throttle keyed on who you claim to be is one that only *real*
-   subjects can trigger, so the 429 becomes the oracle it was added to prevent.
+1. **The throttle is keyed on what was typed, never on what it resolved to,**
+   and decides before anything is looked up. A throttle keyed on the person a
+   login turned out to be is one that only *real* people can trigger, so its
+   delay becomes the oracle it was added to prevent. Keyed on the typed value,
+   a name nobody holds climbs the curve exactly as a real one does.
 2. **A subject that does not exist is still verified against**, with a
-   fixed-cost decoy, so the two arms do the same shape of work rather than one
-   of them returning immediately. It is an HMAC and not a real argon2id
-   derivation: a decoy that ran the password cost would let a stranger spend
-   64 MiB and a hundred milliseconds of the node's budget per request against
-   names that do not exist.
-3. **Both arms answer at one deadline measured from arrival.** That is the
-   only one of the three that equalises the *timing*, because argon2id's cost
-   varies with load and a decoy's does not.
+   decoy, so the two arms do the same shape of work rather than one of them
+   returning immediately. The decoy takes the same **turn** at the node's
+   verify cap a real verification does and holds its slot for as long as one
+   takes — a draw from the node's own recent verifications at its current
+   cost, since a verification's time is a spread rather than one number — and
+   derives nothing once it has something to draw from, so a name that does not
+   exist costs no memory and no CPU, and no more capacity than a real one. A
+   person whose password was set before the cost was last raised verifies at
+   the cheaper cost it was written at, and holds their slot out to the same
+   draw.
+3. **Both arms answer at one deadline measured from admission** — the instant
+   the throttle let the attempt through, which is the last instant both arms
+   share. That is the only one of the three that equalises the *timing*,
+   because argon2id's cost varies with load and a decoy's hold is a measure of
+   it rather than the thing itself.
 
-Under enough load to push a real verification past the deadline the arms
-separate again. That is stated rather than hidden: at that point every request
-on the node is already slow, and the leak is one an attacker has to generate a
-load spike to open.
+**The verify cap is shared out by address, one turn at a time.** A node runs
+as many argon2id derivations at once as it has cores, because each holds
+64 MiB. Every verification and every decoy a request causes waits for its
+address's turn — the client's address as the trusted proxies resolve it, an
+IPv6 client by its `/64` — and an address holds at most one turn, its other
+attempts waiting behind it in arrival order, while addresses are served in
+turn. So one address sending a flood cannot fill the cap, cannot make anybody
+elsewhere wait behind its queue, and cannot push anybody's verification past
+the deadline. Nor can it separate the arms by queueing its own real names
+behind each other, because its decoys queue in the same line for the same
+time. A request that goes away while it waits gives up its place: nothing is
+derived for it, it is answered `503`, and it counts as no attempt. One that
+goes away once its turn has begun holds that turn to its end, a decoy's as much
+as a real verification's, because when a turn ends is what the address's next
+attempt sees — a decoy that let go when its client hung up would free the line
+at once where a real name held it for a whole derivation. What still
+separates the arms is a load spike from at least as many addresses as the
+node has cores, and then both arms queue alike and differ only by how far a
+derivation now is from the recent ones a decoy draws from. The cost falls on
+the address that sent the flood — including anybody sharing it, which for a
+deployment behind a proxy it was not told to trust is everybody.
 
 The refusal itself is **one generic error for every arm** — no such login,
 wrong password, wrong code, code already spent. The one exception is choosing a
 *new* password, which is answered to somebody who has already proved who they
 are and must say what is wrong, or they will type variations until one sticks.
+
+### A failure costs a wait, never a lockout
+
+A hard refusal after N failures is a lockout an outsider can cause. Keyed on a
+login, anybody who can type an administrator's name shuts them out for as long
+as they keep typing it; keyed on an address, one guesser shuts out everybody
+behind it — an office, or the whole company behind a proxy nobody named in
+`api.trusted_proxies`. So a failure costs **time**:
+
+```mermaid
+flowchart LR
+    A[attempt] --> W{wait owed<br/>by its pair}
+    W -- none --> V[verify]
+    W -- "up to 5 s" --> S[held inside<br/>the request] --> V
+    W -- "longer" --> T["429 throttled<br/>Retry-After: the wait"]
+    V -- proved --> OK[success clears<br/>its own pair]
+    V -- refused --> F[failure doubles<br/>the next wait]
+```
+
+Each failure doubles the wait before the next attempt on its key — 1, 2, 4, 8,
+16, then 30 seconds, and never more — and a correct credential after the wait
+always succeeds. The key is **the pair**: the subject as typed (an address
+folded the way the directory folds one, anything else by case), from one
+source — the client's address as the trusted proxies resolve it, an IPv6
+client by its `/64`, since every address in it is one customer's. It catches a
+run at one account, and has no allowance: the first failure already costs a
+second. **A success clears this pair and nothing else**, so somebody holding an
+account cannot sign in as themselves between guesses at somebody else's and
+wipe the record of every one.
+
+**A second factor also climbs the person's own curve.** Past the password,
+the code is decided on the pair's curve *and* on one keyed on the person the
+login resolved to, shared across the fleet the same way, because the pair alone
+lets somebody holding the password divide the curve by every address they have
+— a `/48` of IPv6 is sixty-five thousand fresh pairs, and six digits fall to
+that in about an hour. Every address's wrong codes climb the one curve, a wait
+past five seconds is `429`, and the code that completes the sign-in lifts it. It
+is keyed on the resolved person here and nowhere else, because only somebody
+holding the password can reach it, so it tells nobody who exists. A person's
+curve reaching its ceiling is announced as `iam_second_factor_throttled`:
+somebody holding their password is guessing at their code, and the password is
+what to rotate.
+
+**There is no curve on the source alone.** There was one — ten failures from an
+address free, then the same doubling wait — and it was a lockout by another
+name: a refusal decided on an address is one anybody sharing it holds shut for
+everybody else, so one stranger failing once every twenty-five seconds, at any
+name at all, kept every sign-in from that office, that VPN or that proxy at
+`429`, the right passwords included; and since an attempt still being checked
+counted against it, a dozen colleagues signing in at once met the same `429`
+with nobody failing. What that leaves unslowed by a curve is one password tried
+against many names from one address. What bounds that is the address's one
+turn at the verify cap — one name per derivation, however many it sends at once
+— its allowance of fresh names the fleet is asked about, the twelve-character
+floor and its blocklist, and the pad on every answer; what shows it is the
+audit trail's per-client, per-minute failure tally, which counts how many
+different names one client tried.
+
+A credential that **names nobody** — an invitation link, a founder's one-time
+code, an identity provider's round trip — meets no curve at all: there is no
+subject to pair with its address, each is 256 bits from `crypto/rand` (or the
+provider's own), and a callback nobody started fails for free, so a curve on
+the address alone was a way to hold a whole company's provider sign-ins shut.
+Every refusal of one is still a failed attempt in the tally.
+
+An attempt still being checked counts as a failure against its pair until it
+resolves, so a burst of concurrent guesses at one account is served one after
+another along the curve rather than all at once; and at most sixty-four
+attempts are held waiting on a curve at once on a node — past that, a wait is
+answered `429` straight away rather than parked on an open connection an
+attacker chose to open.
+
+**The fleet shares the pair, at every step.** The window is fifteen minutes.
+Every failure is written to the coordination store, the ceiling's included —
+the fleet's newest failure is what every node measures the wait from — and a
+node reads a pair's record before each attempt it admits on a pair that is
+already climbing, counting on top of it only its own failures the record could
+not yet hold. So however a load balancer spreads a run across nodes, the sixth
+failure anywhere owes the thirty-second ceiling everywhere. The store is still
+never on the path of every attempt: a pair this node already knows is owed more
+than five seconds is refused with a map lookup and no round trip, so a pair
+costs at most one read per attempt its curve lets through; a clean pair is read
+once a window, so an honest sign-in pays one read and its second-factor step
+none; a record is one value read with one get, never a consumer; and a store
+that fails to answer is left alone for thirty seconds rather than timed out on
+every sign-in. A pair nobody has met yet — what every new name a guessing run
+types arrives as — is asked about only as fast as its **source's allowance**
+refills: sixteen at once, then one a second. Past it, a fresh name is decided
+on the node's own count and its failure kept there, so one address typing new
+names costs the coordination store a bounded trickle rather than two round
+trips per name; the same pair's next attempt is shared as ever, and a success
+still clears the fleet's record. Each failure is dated by the clock of the node
+that saw it, and **no node's clock can stretch a wait past the ceiling**: a
+reader takes none of the fleet's failures as later than its own clock, so a
+node ten minutes fast costs a mistyped password the ordinary second elsewhere
+rather than ten minutes, and a node ten minutes slow still counts toward the
+curve — its failures are inside the window, only their wait has passed. Nor
+can a fast clock **shorten** a wait: each failure is judged on its own, so the
+failures made on correct clocks after a fast node's go on moving the wait
+while the fast one is still ahead of the reader's clock, and the fast one keeps
+the time it was first seen once the reader's clock reaches it rather than
+counting as a fresh failure then. What the fleet holds is a digest of the pair
+under a key
+derived from the active keyring entry, never what was typed — a password typed
+into the login box is what lands in that field often enough to matter. A node
+whose coordination store is unreachable goes on throttling on its own curve.
+
+A spent invitation link that **proved itself** — redeemed, expired, its
+address already enrolled — is refused like every other `410` and is **not** a
+failure: that is the link's holder, or a mail scanner re-reading it, and
+counted it named the scanner's address as a guesser. A guesser who does not
+hold the link can never reach the difference.
+
+### A bearer is protected by its value, not by a curve
+
+The password routes are not the only place a guess is answered. Every guarded
+route compares the bearer it is handed — a Tier A token, a machine token or a
+session cookie — and whether it matched is the whole of what the caller learns:
+`401`, or the route's own answer. That comparison is answered as fast as
+requests arrive, on every guarded route alike, and what makes guessing through
+it hopeless is the value itself: a machine token carries 32 bytes from
+`crypto/rand`, a session cookie is an HMAC under the fleet's keyring, and a
+Tier A value is at least 26 characters — `crewlet validate` refuses a shorter
+one, and `crewlet secrets keygen` mints one.
+
+No curve stands in front of the comparison, deliberately. A bearer names
+nobody until it is compared, so the only thing a curve there could be keyed on
+is the **address**, and a refusal decided on an address is one anybody sharing
+it holds shut for everybody else — an office behind one NAT, a VPN's egress, or
+the whole internet behind a proxy not named in `api.trusted_proxies`. One was
+tried, and one stranger's guess every twenty-five seconds kept every valid
+token at that address, the break-glass Tier A token included, answering `429`
+on every guarded route; a client with a dozen *valid* requests in flight met
+the same `429` with nobody guessing at all. A curve on `POST /auth/token` alone
+would slow nobody who is guessing — every other guarded route answers the same
+guess the same way — and would still let a stranger at the address close the
+one route a break-glass holder uses to reach the dashboard.
+
+What a guess costs the guesser is **visibility**: every refused bearer on a
+guarded route is a failed attempt in the audit trail's per-client, per-minute
+tally — `iam_login_failures`, naming the client and how many different values
+it tried.
+
+An **unguarded** route never compares a bearer at all — `/health`, the
+dashboard's assets, the webhooks, the sign-in routes. Nothing there acts on
+whom a bearer names, and comparing one anyway answered a right value and a
+wrong one at different speeds (a matching Tier A token reads the identity
+directory for its seat binding first) on routes whose refusals nothing counts.
+Such a request is simply anonymous, and the one unguarded route that reads a
+resolution, the provider step-up start, refuses any request presenting a
+bearer. The Forge relay's own JWT on `/webhooks/forge` is that route's to
+verify, and never the guard's.
 
 ---
 
@@ -995,9 +1333,102 @@ Sealed, not merely signed. One of the three is a secret: the PKCE verifier is
 what proves the party redeeming the code is the party that asked for it, so an
 attacker who can *read* it has defeated exactly the protection PKCE is.
 
+**What the test suite certifies, and what it cannot.** Every part of the round
+trip here — discovery, PKCE, the code exchange, the key set, each ID-token
+check, the deactivation probe — is exercised against an issuer the suite runs
+itself, in an `httptest` TLS server that signs real tokens with keys it minted.
+That certifies the *protocol*. It cannot certify a particular provider's
+quirks — the shape its groups claim takes, how often it rotates signing keys,
+whether it honours `prompt=login` and `max_age`, what its refresh tokens do —
+because no provider is reached from CI. Those are verified by an operator's own
+sign-in against their provider, and the [discovery report](#what-is-checked-in-an-id-token-and-what-each-check-is-for)
+is the first thing to read when one does not work.
+
 The flight cookie lives ten minutes — long enough for a person to fetch their
 phone for a second factor at the provider, short enough that a cookie carrying
-a verifier is not sitting in a browser for the length of a meeting.
+a verifier is not sitting in a browser for the length of a meeting. It is
+named as the session cookie is: `__Host-crewlet_oidc_flight` on an https
+deployment, which a browser sets only from this exact host, `Secure`, at
+`Path=/` and with no `Domain` — so no sibling host can plant a login in
+progress beside it — and `crewlet_oidc_flight` on plain http, which can hold
+no prefixed cookie. On https the bare name is never read: a flight a sibling
+host planted would be one its author began, finished with whatever provider
+account the browser holds. That name — and `Path=/`, which the prefix requires
+— arrived with the prefix, so while a fleet on https rolls onto the build that
+introduced it, a provider sign-in that started on a node of one build and came
+back to a node of the other finds no flight under the name it reads and is
+refused; the person starts it again. A flight lives ten minutes, so that is the
+whole of the cost, and a deployment moving from http to https pays the same
+once for a sign-in begun in those minutes.
+
+### What a sign-in wave costs the provider
+
+Every callback exchanges a code at the provider's token endpoint, and so does
+anybody who starts a flight and calls back with a made-up code — an
+unauthenticated caller can make one exchange per round trip. So a node puts
+**at most eight requests** on one provider's token endpoint at once, code
+exchanges and deactivation probes together. A callback beyond the eight
+**waits its turn** on its own request rather than being refused: at a hundred
+milliseconds an exchange, a 3,000-person company signing in at nine o'clock
+clears in about 37 seconds, and a browser that gives up waiting is answered
+`503` and counted as no attempt, having asked the provider nothing — and
+having spent nothing either: the reload of that same callback, once a turn is
+free, is exchanged then.
+
+A turn is held **for the provider's answer and nothing else**. Every refused
+sign-in answers at one deadline measured from admission — see
+[A sign-in endpoint is not a roster](#a-sign-in-endpoint-is-not-a-roster) —
+about four times as long as an exchange takes, so a refusal that waited out
+that deadline inside a turn would hold one of the eight having asked the
+provider nothing, and a refusal is what anybody can cause: eight at a time
+would keep every turn, and every sign-in and every
+[deactivation probe](#the-deactivation-probe) on the node would wait behind
+them. So a callback gives its turn back the moment the provider has answered,
+or the moment it knows it will not ask, and is refused only after that — and a
+flight the node has already finished (see below) is refused without waiting
+for a turn at all.
+
+Everything a node sends the provider — the discovery document, the key set,
+every exchange and every probe — goes through one HTTP client with a
+transport of its own, holding **at most ten connections** to that host: the
+eight exchanges and the two fetches beside them. The discovery document and
+the key set are each fetched **once however many sign-ins ask**, on a request
+no single browser owns, so a node restarted in the middle of the morning's
+wave asks the provider for its metadata once rather than once per person, and
+one person closing their tab fails nobody else's sign-in. Once a node holds the
+discovery document, nobody waits for it again: past its day it is served at
+once and re-read behind the answer, and a re-read that fails holds the next one
+back for a minute, so a metadata host that hangs or fails costs no sign-in a
+wait and is not asked again by every sign-in start. A node that holds none asks
+again straight away, since it has nothing else to answer with. The key set is
+re-read at most **once a minute** for a key id it does not name — a forged
+token's — and that minute is counted from the last attempt, a failed one
+included, so an outage at the provider does not turn every such token into a
+request at a host that just failed; inside it a key the set does name is
+served from the copy already held, however old.
+
+And a flight is exchanged **once**. Whoever started a flight holds its cookie
+and its `state`, and a made-up code is free, so the same cookie presented over
+and over would be an exchange at the provider per request for its whole ten
+minutes. The node that finishes a flight remembers it — from the moment the
+flight holds its turn at the token endpoint, never before, so a flight whose
+browser left while it waited was never spent — until the flight would have
+expired anyway — up to 8,192 of them, about a megabyte, far more than a
+morning's wave finishes inside ten minutes — so a cookie presented a second
+time to that node is refused as a failed sign-in before the provider hears of
+it, and before it waits for a turn: it has nothing to wait for. Two
+presentations of one flight that both arrive before either is exchanged are
+settled inside the turn — the first to hold one is exchanged, and the second
+finds the flight spent and gives its turn straight back. A flight is
+remembered by a digest of its **PKCE verifier**, the random secret it has
+always carried sealed, rather than by a field added for the purpose: a flight
+is sealed by one node and opened by whichever node the callback reaches, which
+during a rolling upgrade may be a different build, and a field the older build
+never sealed would have refused every sign-in whose two halves straddled the
+upgrade. The record is per node: a fleet's load balancer
+can hand the same cookie to each node once, which bounds the replay rather than
+removing it, and a coordination write per callback would put a fleet-wide write
+on a path anybody can drive.
 
 ### What is checked in an ID token, and what each check is for
 
@@ -1008,16 +1439,47 @@ removed, is a different way to sign in as somebody else.
 | Check | Removed, it means |
 |---|---|
 | The signature, under a key the **issuer** publishes | Anybody who can reach the callback signs in as anybody |
-| The **algorithm**, pinned to the asymmetric families | A key source handing back bytes turns a published symmetric key into a signing secret. (The classic confusion attack is refused by the key *type* first; the pin is what still stands when the key source changes) |
+| The **algorithm**, pinned to the asymmetric families — RS256/384/512, PS256/384/512, and ES256 and ES384 over P-256 and P-384 keys | A key source handing back bytes turns a published symmetric key into a signing secret. (The classic confusion attack is refused by the key *type* first; the pin is what still stands when the key source changes. And each algorithm is bound to the key it is defined over before any arithmetic — an RS or PS algorithm to an RSA key, ES256 to a P-256 key, ES384 to a P-384 key — so an ES256 header naming an RSA key fails, and so does an ES384 token signed with a P-256 key, which the signature library alone would accept: it checks a key's type and a signature's length, never an elliptic key's curve) |
 | The **issuer**, compared exactly | Any provider's token is accepted — including a free tenant the attacker registered |
 | The **audience**, which must contain this client | Every other application at that provider becomes a way in here |
 | The **nonce**, from the flight cookie | An ID token captured from any other login replays into this one |
 | The **expiry**, required rather than honoured-when-present | A token with no `exp` is valid for ever, so one captured off the wire replays until the provider rotates its key |
 
+Every **time claim** — `exp`, `iat` and `nbf` — is judged within **60
+seconds** of the node's clock. Each was written by the *provider's* clock, and
+two hosts' clocks are never exactly one: a provider running a few seconds ahead
+issues every token "in the future", and judged to the second, each sign-in on a
+node that is behind would be refused for a reason nobody can see. A minute is
+room for two imperfect clocks and nothing more; what it costs is a minute on a
+token lifetime a provider sets in hours.
+
+A step-up's `auth_time` is **not** given that minute. It becomes the proof the
+replacement session is stamped with, and that session's deadline is the proof
+plus the same window the confirmation asked for — so an `auth_time` is accepted
+only while the window it opens is still open. Judged within the skew, a proof
+up to a minute past the window was accepted, the old session ended and a
+replacement opened already stale, and the gesture that asked for it refused
+it again. A provider whose clock runs behind reads older by its lag, which
+costs the person that much of their window and never admits a stale proof.
+
 Beyond those, a token naming more than one audience must name this client as
 its `azp`, and when the company sets `oidc.require_acr` the asserted
 authentication context must match — requesting `acr_values` is a request the
 provider is free to ignore, so the check on the way back is what enforces it.
+
+When a node fetches the provider's discovery document — on first use, then
+once a day — it reports what the document says will not work there, one
+`oidc_provider_metadata_concern` warning per problem, naming the field: an
+`id_token_signing_alg_values_supported` naming no algorithm above (every
+sign-in would be refused as an unverifiable token), a
+`response_types_supported` without `code`, a `code_challenge_methods_supported`
+without `S256` (a provider that ignores the PKCE challenge lets whoever
+intercepts a code redeem it), and a `scopes_supported` without
+`offline_access` while this deployment asks for it (no refresh token, so no
+deactivation probe). **None of them refuses anything**: every one of those
+lists is optional and unevenly kept, so an absent list says nothing, and a
+sign-in refused because a document omitted a value would be an outage caused
+by metadata.
 
 ### Linking is explicit, and an email match is never a link
 
@@ -1030,10 +1492,11 @@ subject is **linked** to a person in exactly two ways:
 
 - **An invitation redeemed through the provider.** The invitation's page
   offers the provider (`provider_start`), and its form **posts** to
-  `POST /auth/invite/{id}/provider`, which sends the browser to the provider
-  with the invitation sealed beside the PKCE verifier. When the person comes
-  back, the callback enrols the person the invitation creates — its grants,
-  its reach, its address, the login they chose, no password — and links the
+  `POST /auth/invite/{id}/provider` with the link's secret beside the login,
+  which sends the browser to the provider with the invitation and that secret
+  sealed beside the PKCE verifier. When the person comes back, the callback
+  enrols the person the invitation creates — its grants, its reach, its
+  address, its seat, the login they chose, no password — and links the
   account the provider came back with to them, then signs them in. The
   invitation is the authority; the provider says only who arrived. **It is a
   POST from the invitation's own page and never a link**, because the account
@@ -1107,6 +1570,25 @@ thing. A warning rather than a refusal, because a company may mean it;
 declaring such a grant on the person's own record puts the decision where it is
 reviewed.
 
+### Signing out of the provider too
+
+A sign-out here ends this engine's session and leaves the provider's, so on a
+machine somebody else uses next, "sign in with the provider" answers straight
+from the old session without anybody typing anything. `POST /auth/logout/oidc`
+is the sign-out for that machine: it ends the session here exactly as the plain
+sign-out does, then sends the browser to the provider's `end_session_endpoint`
+naming this client and asking to come back to the dashboard. Register
+`<api.external_url>/dashboard` as a post-logout redirect URI at the provider,
+or it leaves the person on its own page. No `id_token_hint` is sent, because the
+engine keeps no ID token once a sign-in completes — a provider that insists on
+one asks the person to confirm, and the session here is over either way. A
+provider that publishes no end-session endpoint, publishes one that is not an
+`https` address on a host, or cannot be reached, gets a plain sign-out that
+says so: `provider_session: not_ended`. Like the plain
+sign-out it is not behind the request guard, so a node that cannot read its
+identity estate still ends the session here as far as it can and still sends
+the browser on to the provider.
+
 ### The deactivation probe
 
 A provider that suspends or deletes an account tells nobody. Every other
@@ -1168,7 +1650,7 @@ database read for every forged cookie an attacker sends, and has nothing to say
 at all until the row it names has been applied on the node the request reached.
 
 ```
-__Host-crewlet_session=v2.<key tag>.<generation>.<lineage>~<rotation>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>.<mac>
+__Host-crewlet_session=v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>][.cred:<binding>].<mac>
                         Path=/; HttpOnly; Secure; SameSite=Lax
 ```
 
@@ -1179,12 +1661,18 @@ sign-in would appear to succeed and then not stick. The scheme comes from the
 *configured* url rather than from the request, because the engine sits behind a
 TLS-terminating proxy and reads no `r.TLS`.
 
-A node **issues** one name and **accepts** either: a deployment that corrects
-its url from http to https has every signed-in browser still holding the bare
-one, and refusing those would sign everybody out. Signing out follows the same
-rule — it ends the session behind whichever name the browser presented and
-clears **both** — so a browser can never be accepted under a name the sign-out
-does not reach.
+A node **issues** one name and **authenticates only that one**. The prefix is
+the whole of what keeps another host's cookie out: a browser sets
+`__Host-crewlet_session` only from this exact host, while `crewlet_session` any
+sibling host under the same registrable domain can write, with a `Domain`
+covering this one. Were the bare name read on https too, a sibling that planted
+its *own* valid session would sign a visitor who held none in as that session's
+person — and everything they then did would land in an account the sibling's
+author can read. So a deployment that corrects its url from http to https
+signs each browser in again once. **Signing out reaches both names** — it ends
+the session behind either one the browser holds and clears both — so a browser
+still holding the bare name from before the move has that session closed, not
+merely its cookie forgotten.
 
 A sign-out closes and announces only a session this node's rows still hold. A
 cookie past its deadline, a revoked person's cookie and one naming a session a
@@ -1194,7 +1682,10 @@ anybody holding such a cookie author an `iam_session_ended` row per request.
 A node that cannot read its rows still records the close `POST /auth/logout`
 asked for — the lineage and the person come off the cookie's own verified
 signature, so nothing has to be looked up to write it — and announces nothing,
-since it cannot say the session was live until then. Ending one **named**
+since it cannot say the session was live until then. That is only reachable
+because neither sign-out of this session is behind the request guard: guarded,
+such a node answered them `503 identity_unavailable` before they ran, and the
+cookie stayed set. Ending one **named**
 session reads the same way — its owner and whether it is still live, in one
 snapshot — but there the owner **is** the read: it is what the caller is
 checked against, because a lineage is not a secret. So a node that cannot read
@@ -1208,17 +1699,20 @@ to know it:
 |---|---|
 | key tag | Which keyring entry signed this, so a verifier looks one key up rather than trying each — which is what makes adding a key zero-downtime |
 | generation | The fleet-wide counter `crewlet iam invalidate-all` moves, so one write ends every session — and every machine token — in the company |
-| lineage | The session's identity, the subject its records arbitrate on, and — being a uuid7 — the instant it began, which the rotation index is derived from |
-| rotation | The window this cookie was issued in, derived from the session's age rather than recorded anywhere |
+| lineage | The session's identity, and the subject its records arbitrate on |
 | person | So a node can read their row without first reading the session's |
 | epoch | The person's revocation epoch at sign-in: a node that has **not yet applied** the session's start record still holds proof the sign-in happened |
 | start position | What turns "no row" into the two answers it actually is |
 | absolute expiry | Never moved by a re-issue |
 | idle expiry | Moved by every re-issue, with no store write at all |
+| scope | **Present only on a session that may do less than everything**: `enrol`, one that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else). Signed with the rest and carried through every re-issue, so a node that has not applied the session's row still knows what it may reach. Absent on a whole session, which is why an ordinary cookie is the same nine fields every build reads, and a scoped one — or a scope a build cannot name — is refused by any build that does not know it rather than served whole |
+| binding | **Present only on a session exchanged from a Tier A token** (`cred:<binding>`): a MAC over the token's value under a key derived from the one that signs the cookie, checked on every request against the value configured under the token's id — so a new value ends the session. Recomputed at every re-issue under the new signing key, so a keyring rotation drains an exchanged session onto the new key like any other. A build that does not know the attribute refuses the cookie rather than serving it whatever value the token has now |
 
 Nothing in it is secret and nothing in it grants anything alone: a bearer in a
-proxy log discloses a lineage, a person id and two deadlines, and is worthless
-without the mac. It deliberately carries nothing *about* the person — no login,
+proxy log discloses a lineage, a person id, two deadlines, whether the
+session may only enrol a second factor and — for an exchanged token's — a MAC
+nobody without the keyring can test a guess against, and is worthless without
+the mac. It deliberately carries nothing *about* the person — no login,
 no address, no grants — because a cookie is the value most likely to end up
 somewhere nobody meant it to.
 
@@ -1227,30 +1721,28 @@ nothing to cache. The lookup is a local read of a replicated row and a map
 lookup on a pinned chart view, and the store is never on a network path from
 the request.
 
-### Rotation is derived, so an hour of use writes nothing
+### A cookie cannot tell its owner from a copy, and nothing pretends it can
 
-The rotation index is the session's age in `session.rotate_after` windows, and
-the age is the instant inside the lineage's own uuid7. Any node recomputes it
-with no I/O and nothing is written anywhere — the design this replaces wrote
-one record per session per hour, which measured at ten per person per working
-day and nine tenths of the authentication trail, to keep a clock in a log.
+A re-issue moves the idle deadline, which lives in the cookie's own signed
+payload, so an hour of use writes nothing anywhere. What a cookie **cannot**
+carry is evidence that it was copied: somebody who stopped at noon and came
+back at two holds a cookie issued two hours ago, and so does somebody replaying
+one they captured at noon — **the same bytes**. The only thing that could tell
+them apart is a record of what was last issued, one write per session per
+re-issue, which is exactly the traffic this design exists not to write.
 
-What an index can and cannot prove is worth stating, because it is easy to
-expect more of it. With no rotation record a node holds two numbers: the index
-the cookie carries and the index the clock implies. A cookie whose index is
-*behind* the clock is produced by two completely different things — somebody
-who stopped at noon and came back at two, and somebody replaying a cookie they
-captured — and **they are the same bytes**. So a lagging index is served and
-re-issued rather than treated as theft; treating it as theft does not detect
-theft with a false-positive rate, it detects idleness. What bounds a captured
-cookie instead is the idle deadline, the absolute deadline and the revocation
-epoch.
-
-What *is* positive evidence, and does bump the person's epoch and end every
-session they hold, is an index the engine could not have issued: one ahead of
-the clock by more than the two-minute overlap. An index somebody *edited* never
-reaches that check at all — it is inside the signed payload, so the bearer is
-refused as malformed first.
+An earlier format carried a **rotation index** — the session's age in hourly
+windows — and treated one *ahead* of the validating node's clock by more than
+two minutes as a replay, bumping the person's revocation epoch. The index was
+inside the signed payload, so only a node holding the keyring could have
+written it, from its own clock: the rule fired on two hosts' clocks
+disagreeing and on nothing else, and its answer signed an honest person out of
+every session and machine token they held. It is gone, along with
+`session.rotate_after`. What bounds a captured cookie is what always did: the
+**idle deadline** (twelve hours from the last use), the **absolute deadline**
+(`session.absolute`), and one write — the person's revocation epoch through
+**sign out everywhere**, or the fleet's generation — which ends it everywhere
+at once.
 
 ### Validation is three-valued, twice
 
@@ -1259,11 +1751,10 @@ because each is a row in a domain that **lags independently**.
 
 | What this node's rows say about the session | Reads | Writes | Step-up surfaces |
 |---|---|---|---|
-| Signature valid, rotation index current or in overlap, row present, the row's epoch equals the bearer's and the person's, generation current, both deadlines unexpired | serve | serve | serve if the proof is inside the window the gesture asks for; otherwise `403 step_up_required` |
+| Signature valid, row present, the row's epoch equals the bearer's and the person's, generation current, both deadlines unexpired | serve | serve | serve if the proof is inside the window the gesture asks for; otherwise `403 step_up_required` |
 | Row ended, the person's epoch ahead of the bearer's, the person suspended, or the generation moved | 401 `session_revoked` | 401 | 401 |
-| Rotation index ahead of the window past the overlap | 401, and the epoch bump is published | 401 | 401 |
 | Row absent, and this node's iam position covers the bearer's start position | 401 `session_revoked` | 401 | 401 |
-| Row absent, this node below the bearer's start position, applier lag under 60 s | serve: the signature and the epoch are the proof | wait up to 5 s for this node to apply the bearer's start position, then decide on the rows; 503 `identity_unavailable` if it has not | the same wait, then the same answer |
+| Row absent, this node below the bearer's start position, applier lag under 60 s | serve: the signature and the epoch are the proof, and the cookie's own scope what it may reach | wait up to 5 s for this node to apply the bearer's start position, then decide on the rows; 503 `identity_unavailable` if it has not | the same wait, then the same answer |
 | The iam applier stalled past 60 s, the person's bucket deferred, or the replicated store answers `ErrNoEstate` | 503 | 503 | 503 |
 | Not a bearer of this format at all | 401 | 401 | 401 |
 
@@ -1306,6 +1797,22 @@ re-authentications. The grace exists only for the arm a lagging node can
 honestly serve — reads of a session it has not yet seen — and it ends at the
 same sixty seconds the alarm table already calls a stall, so a node serving
 stale identity is by definition a node already alarmed.
+
+**How far behind a node is, is the larger of two figures**: its backlog at the
+rate its applier has been draining it, and how long its applier has made no
+progress while records were waiting. The first alone cannot see a wedge — the
+drain rate is measured while batches run, so an applier that stops with a
+handful of records outstanding keeps the rate it last had and would read as a
+fraction of a second behind for as long as it stayed stopped, serving sessions
+it has not seen and never honouring a revocation stuck in that backlog. With
+the second, it reads as stalled a minute after it stops. Both tables above
+read it, as does a Tier A token's seat binding. A heartbeat that cannot read
+the log's head keeps its last answer rather than reading as caught up.
+"Progress" is the applier's **checkpoint**, which moves past a record the node
+holds but cannot apply exactly as past one it applied — so holding a newer
+build's record during a rollout is never read as a stalled node, which would
+answer 503 for everybody on it; it is answered for the people that record is
+about, below.
 
 A node holding a record about the person it **cannot apply** — a newer build's
 during a rollout, or one signed under a keyring key it was not restarted with
@@ -1364,9 +1871,13 @@ closes it like any other session — the sign-in surface reads a token's session
 the way the guard does, from the entry, where the bare estate holds no row for
 a token's login and read it as already over; `POST /auth/logout/all` from it
 ends every session that token opened; and `crewlet iam invalidate-all` ends it
-with everybody else's. Rotating the token's *value* under the same id keeps
-its exchanged sessions to their hour, so a rotation that answers a leak
-renames the entry or invalidates.
+with everybody else's. So does **putting a new value under the same id**: the
+cookie carries a binding to the value it was exchanged with — a MAC under a key
+derived from the keyring, never the value or a bare digest of it, which in a
+cookie would be an offline guessing oracle for the break-glass credential — and
+every node checks it against the value it holds under that id, applied or not.
+Rotating a leaked token's value therefore ends every session the leaked value
+opened, on the next request, everywhere.
 
 **The ceiling applies to a person too.** `api.auth.max_grants` is intersected
 into every principal at the moment the request is resolved, so a node whose
@@ -1381,19 +1892,6 @@ second factor and regenerating a recovery set are gestures about a person's own
 credential. Without the exemption an offboarded person would hold a live cookie
 with no way to end it, and every screen they opened would loop through a
 refusal.
-
-**A replayed cookie ends every session that person holds.** A rotation index
-ahead of what the clock can justify, past the overlap, is the one positive
-evidence of theft — and the one thing nobody can establish from it is which of
-the two holders is the person. So the revocation epoch is bumped rather than
-the lineage ended: ending only the lineage would leave whoever captured it
-holding whatever they rotate to next.
-
-The bump is **conditional on the epoch the replayed cookie was minted at**: it
-moves the person's epoch only while it is still there. Every node the replay
-reaches asks for it, and a node asks again if it has forgotten the session
-since, so an unconditional bump would end — once per asking — the sessions the
-person opened after the first one. Past that epoch the ask publishes nothing.
 
 ---
 
@@ -1410,6 +1908,8 @@ or because a client must reach it to obtain a credential at all.
 | `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
 | `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
+| `/auth/config`, `/auth/login`, `/auth/bootstrap`, `/auth/oidc/start`, `/auth/oidc/callback`, `/auth/invite/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link is the credential. Exact paths plus the one prefix, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
+| `/auth/logout`, `/auth/logout/oidc` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered them `503` before they ran, and a person left a shared machine still signed in. Each verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges both. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
 
 Everything else needs one, **reads included**. `allow_anonymous_read` used to
 decide this and defaulted to open, so `/events`, `/agents/{id}/memory` and
@@ -1768,10 +2268,10 @@ Identity has **two trails**, and they answer different questions.
 |---|---|---|
 | `iam_session_started` | The sign-in surface, on a password, app-code, identity-provider, invitation, bootstrap-code or token sign-in | Once per session |
 | `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are: the person, the new session and the one it replaced, the second factor presented and the client — and never which surface it was for, because a step-up proves the session for every surface until `reauth_at`, and the request that prompted it is refused before it and never reaches it, so the only source would be the client's word | Once per step-up |
-| `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), the deactivation probe (`idp_revoked`), or the request guard noticing a deadline (`idle`, `absolute`) | Once per ending, from the fact that ended it: a deadline once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute` |
-| `iam_session_reuse_detected` | The request guard, for a cookie presented past its rotation overlap | Once per session per node — and the sessions the person held are ended once, however often the replay repeats and however many nodes see it: the revocation moves the epoch only while it is still at the replayed cookie's. A revocation that failed or came back unknown is asked for again on the cookie's next presentation, and never announced as a second replay |
+| `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), the deactivation probe (`idp_revoked`), or the request guard noticing a deadline (`idle`, `absolute`) or a token's exchanged session whose value changed or whose entry was removed (`credential_changed`) | Once per ending, from the fact that ended it: a deadline or a changed credential once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute`, and a token's session past its deadline by the time it is presented after a rotation is announced by the deadline |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
+| `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | Once per person per fifteen-minute window per node, naming the address the failure that took it there came from |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
 | `iam_identity_linked` | The identity writer, when a provider subject is pinned to a person — `via: invite` for an invitation redeemed through the provider, `via: admin` for an administrator, with the credential they acted through as `operator_id` | Once per link, and only once the person it names exists |
@@ -1856,9 +2356,9 @@ events filtered out of the store:
 - **the authorization decision** — the answer is the response the caller got,
   and the question is the route they asked; a refusal worth auditing is already
   the overreach row, or the failure count;
-- **a session being used** — rotation is derived from the session's age, so an
-  hour of use writes nothing, and a touch event would be the one row per request
-  the rest of this design exists to avoid.
+- **a session being used** — a re-issue moves a deadline inside the cookie's
+  own signature, so an hour of use writes nothing, and a touch event would be
+  the one row per request the rest of this design exists to avoid.
 
 **Neither link event carries the subject.** It identifies a person at a third
 party, so the estate holds it only as a keyed blind — and an event row is the
@@ -1963,6 +2463,28 @@ Sealing happens at the **writer** rather than on each node, which is what keeps
 the fleet's byte-for-byte identity claim meaningful: every node writes the same
 ciphertext.
 
+An authenticator app's **seed** is sealed under the same key. It is the one
+credential this estate keeps as a secret rather than a verifier — TOTP is
+symmetric, so an engine holding only a digest could check nothing — and the
+enrolment seals it before the write is formed, so the person's document, their
+credential row and the trail entry all carry ciphertext. Its associated data is
+the person, **the credential it was enrolled as**, and the field: every seed a
+person ever enrolled is sealed under their one key, so without the credential a
+replaced seed sitting in an old backup could be pasted over the current one and
+would open. It is opened only to check a code, at a sign-in and a step-up. A
+seed that does not open is never a match: one that is not this credential's is
+refused like a wrong code (and logged, `api_totp_seed_unopenable`, naming the
+person and the credential), a key a removal destroyed is refused too, and a key
+store this node cannot reach is `503` with a `Retry-After`, never a wrong code.
+
+**A seed enrolled before seeds were sealed was stored in the clear**, and it is
+in the identity log, every snapshot and every backup taken since. Such a seed no
+longer verifies; treat it as disclosed rather than sealing it after the fact,
+which would leave every copy already written readable. The person signs in with
+a recovery code and enrols their app again, or an administrator resets their
+second factor (`crewlet iam reset-mfa`), which ends their sessions and has them
+enrol afresh.
+
 A **login** is in the clear, and the asymmetry is deliberate — a login is a
 name the company chose, printed beside every change an operator reads. Blinding
 a value the dashboard renders on every row would cost you the ability to read
@@ -1993,7 +2515,7 @@ Rotating it is a migration, not a setting.
 | `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, and a **link**: an identity-provider subject's blind, which only the link's claim ever writes and which a person's own record never carries. Never a secret that could be presented to anything |
 | `iam_invites` | An address spoken for by somebody who has no person yet, and the grants redeeming it confers |
 | `iam_bootstrap_codes` | How a company with nobody in it acquires its first administrator |
-| `iam_sessions` | One row per session **lineage**. Rotations are not rows — a rotation id is derived — so this grows with sign-ins, not with requests |
+| `iam_sessions` | One row per session **lineage**. A re-issue is not a row — the deadline it moves is inside the cookie's own signature — so this grows with sign-ins, not with requests |
 | `iam_revocation_epochs` | One person's **revocation epoch**, in its own table because every request compares against it |
 | `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session and machine token in the company at once |
 | `iam_history` | The authentication trail: who did what to whom, through which credential, and why |
@@ -2016,8 +2538,9 @@ never two nodes comparing clocks. There are two of them, and they end different
 sets of sessions:
 
 - **A person's revocation epoch** (`iam_revocation_epochs`) ends every session
-  *that person* holds. Signing out everywhere, a password change and detected
-  token reuse all move it, and no capability is needed to move your own:
+  *that person* holds. Signing out everywhere, an administrator ending their
+  sessions and a second-factor reset all move it, and no capability is needed
+  to move your own:
   gating it would make the fastest response to a stolen cookie the one that
   needs an administrator.
 - **The fleet-wide session generation** (`iam_session_generation`) ends *every*
