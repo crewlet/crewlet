@@ -164,7 +164,7 @@ func TestNoKeyringConfiguredFailsTheBoot(t *testing.T) {
 func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 	t.Parallel()
 	if (&Engine{}).refreshSecrets(t.Context()) {
-		t.Error("a node with no store reported that it loaded a snapshot")
+		t.Error("an engine with no store reported that it loaded a snapshot")
 	}
 
 	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
@@ -173,7 +173,7 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if (&Engine{backends: &Backends{Store: db}}).refreshSecrets(t.Context()) {
-		t.Error("a node with no keyring reported that it loaded a snapshot")
+		t.Error("an engine with no keyring reported that it loaded a snapshot")
 	}
 
 	_, cipher := testKeyring(t)

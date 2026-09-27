@@ -264,9 +264,10 @@ type stateLog struct {
 	// transaction would destroy it for a removal that then rolled back,
 	// and nothing could put it back.
 	//
-	// Nil answers "this node holds no key store", which is a legitimate
-	// state rather than a wiring mistake: a node with no keyring deletes
-	// the rows and the key is a peer's to destroy.
+	// Nil only on an Engine with no key store — one built by hand in a
+	// test, since [New] refuses a node without a keyring or a fleet
+	// backend. The applier then deletes the rows and leaves the key to the
+	// identity key duty, which finds every removed person whose key lives.
 	shredder iamdomain.Shredder
 
 	// ceilings is the byte ceiling each domain's stream is CREATED with,

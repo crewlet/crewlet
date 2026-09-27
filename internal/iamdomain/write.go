@@ -66,8 +66,9 @@ type Writer struct {
 	//
 	// A WRITER WITH NEITHER CAN STILL DO MOST OF THIS. Ending a session,
 	// bumping an epoch, suspending somebody and removing them need no key
-	// at all — which is what lets a node with no keyring still revoke
-	// access, the one operation an outage must never block.
+	// at all — which is what lets access be revoked while the company's
+	// secret store cannot be reached, the one operation an outage must
+	// never block.
 	//
 	// THE BLINDER IS RESOLVED PER WRITE and never held from construction:
 	// see [Blinds] for what holding it cost.

@@ -69,11 +69,12 @@ type Applier struct {
 	// record's writer against.
 	NodeID string
 
-	// shredder destroys a removed person's key. Nil is legal and means a
-	// node that holds no key store — a satellite, or a test — in which
-	// case a removal deletes rows and the key is somebody else's to
-	// destroy. It is NOT nil on a node that serves requests, and the
-	// registration is what supplies it.
+	// shredder destroys a removed person's key. Nil is a test's: every
+	// node running this domain holds the keyring and the fleet store its
+	// key store is built from, and the registration is what supplies it.
+	// With none, a removal deletes rows and leaves the key to the identity
+	// key duty ([ShredRemoved]), which destroys every removed person's key
+	// that still lives.
 	shredder Shredder
 
 	// shred is filled inside Apply and drained by Committed. NOT guarded

@@ -308,8 +308,9 @@ func register() []registration {
 				// THE SHREDDER, because removing a person is a key
 				// deletion rather than a row deletion and the apply is
 				// the only thing that sees every removal on every node.
-				// Nil is legal and means a node with no keyring: it
-				// deletes the rows and the key is a peer's to destroy.
+				// Nil only on an Engine built by hand without its key
+				// store; the key duty then destroys what the applier
+				// could not.
 				//
 				// AND THE DIRECTORY'S SIGNAL, the party registry's
 				// second rebuild trigger beside the chart view's: a

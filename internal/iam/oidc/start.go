@@ -104,9 +104,9 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 	want Flight, now time.Time) (redirect, sealed string, err error) {
 
 	if cipher == nil {
-		return "", "", fmt.Errorf("%w: this node has no keyring, so a login "+
-			"begun here could not be finished anywhere — including here",
-			ErrNotConfigured)
+		return "", "", fmt.Errorf("%w: no keyring to seal the login flight "+
+			"under, so a login begun here could not be finished anywhere — "+
+			"including here", ErrNotConfigured)
 	}
 	if err = c.Validate(); err != nil {
 		return "", "", fmt.Errorf("%w: %w", ErrNotConfigured, err)
@@ -183,7 +183,8 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 // the caller's move for all of them is to start the login again.
 func Open(cipher secrets.Cipher, sealed string, now time.Time) (Flight, error) {
 	if cipher == nil {
-		return Flight{}, fmt.Errorf("%w: this node has no keyring", ErrNotConfigured)
+		return Flight{}, fmt.Errorf("%w: no keyring to open the login flight with",
+			ErrNotConfigured)
 	}
 	body, err := cipher.Decrypt(sealed, flightAAD)
 	if err != nil {

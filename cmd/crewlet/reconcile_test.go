@@ -196,7 +196,7 @@ func TestASealedStoreWithNoKeyringRefusesRatherThanReseeding(t *testing.T) {
 	}
 	err = seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), nil, quiet())
 	if err == nil {
-		t.Fatal("a node with no keyring seeded over a sealed revision")
+		t.Fatal("a seed holding no keyring wrote over a sealed revision")
 	}
 	if !strings.Contains(err.Error(), "sealed") {
 		t.Errorf("the error does not say what is wrong: %v", err)

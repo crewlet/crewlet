@@ -157,10 +157,9 @@ type TeardownInput struct {
 type PassInput struct {
 	// Sink records a minted credential.
 	//
-	// NIL IS A DRY RUN, and it is the honest posture for a caller that
-	// could not have recorded what it created: a node with no keyring can
-	// still read a surface and report what it finds, which is most of what
-	// a pass is for.
+	// NIL IS A DRY RUN: a check reads a surface and reports what it
+	// finds, which is most of what a pass is for, and creates nothing it
+	// could not record.
 	Sink provision.TokenSink
 
 	// WebhookBase is the address third-party apps reach this deployment on, and
@@ -467,9 +466,9 @@ func (r *Runner) Hold(
 ) (context.Context, func(), bool, error) {
 	if r == nil {
 		// NO RUNNER, SO NO LEASE — and the deadline still applies. What it
-		// bounds here is not a lease but the pass: a node with no keyring
-		// reads and reports, and a read that never returns wedges the loop
-		// just as thoroughly as one that outlived a lease would.
+		// bounds here is not a lease but the pass: an engine built with no
+		// fleet store has no runner, and a read that never returns wedges
+		// the loop just as thoroughly as one that outlived a lease would.
 		bounded, cancel := context.WithTimeout(ctx, PassDeadline)
 		return bounded, cancel, true, nil
 	}

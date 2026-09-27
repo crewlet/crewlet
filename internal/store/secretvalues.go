@@ -58,9 +58,9 @@ type SecretValues struct {
 // SecretValues returns the secret store sealed with this cipher.
 //
 // A NIL CIPHER IS A STORE THAT REFUSES EVERYTHING rather than one that
-// stores plaintext — see the type comment. It is not an error to construct,
-// because a node with no keyring is a supported deployment; it is an error
-// to use.
+// stores plaintext — see the type comment. Every node holds a keyring, so the
+// engine never builds one; it is refused where it is used rather than where
+// it is built, which keeps this a plain accessor.
 func (d *DB) SecretValues(cipher secrets.Cipher) *SecretValues {
 	return &SecretValues{db: d, cipher: cipher}
 }

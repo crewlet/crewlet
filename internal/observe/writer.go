@@ -33,10 +33,11 @@ type EventSink interface {
 // up off its durable inbox.
 type Writer struct{ events EventSink }
 
-// NewWriter builds a writer, or nil for a node with nowhere to write.
+// NewWriter builds a writer, or nil for a nil sink.
 //
-// Nil rather than an error: a node with no store is a supported deployment,
-// and the caller registers what it gets back without a branch.
+// Nil rather than an error, so a caller registers what it gets back without a
+// branch. Every node opens its store and hands its event sink in; nil is a
+// caller with nowhere to write, which a test builds.
 func NewWriter(sink EventSink) *Writer {
 	if sink == nil {
 		return nil

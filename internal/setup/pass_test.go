@@ -429,10 +429,9 @@ func TestAHoldStillCarriesTheCallersCancellation(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO RUNNER IS STILL BOUNDED. It has no keyring, so it mints
-// nothing and holds no lease — but it still reads a third-party app, and a read
-// that never returns wedges the loop just as thoroughly as one that outlived a
-// lease would.
+// A NIL RUNNER IS STILL BOUNDED. It holds no lease — but a pass behind it
+// still reads a third-party app, and a read that never returns wedges the loop
+// just as thoroughly as one that outlived a lease would.
 func TestANilRunnerStillBoundsThePass(t *testing.T) {
 	t.Parallel()
 	var r *Runner
@@ -444,7 +443,7 @@ func TestANilRunnerStillBoundsThePass(t *testing.T) {
 	defer release()
 
 	if _, ok := ctx.Deadline(); !ok {
-		t.Fatal("a node with no runner runs its passes unbounded")
+		t.Fatal("a nil runner runs its passes unbounded")
 	}
 }
 

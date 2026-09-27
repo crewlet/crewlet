@@ -113,14 +113,14 @@ func TestAFailedWriteDoesNotFailThePublish(t *testing.T) {
 	}
 }
 
-func TestANodeWithNoStoreRegistersNoListener(t *testing.T) {
+func TestACallerWithNoSinkRegistersNoListener(t *testing.T) {
 	t.Parallel()
-	// A node with no store is a supported deployment. NewWriter returns
-	// nil so the caller registers what it gets back without a branch —
+	// A caller with no sink gets nil back from NewWriter, so it registers
+	// what it gets back without a branch —
 	// which only works if a nil writer yields a nil listener rather than a
 	// method value that panics on the first publish.
 	if l := observe.NewWriter(nil).Listen(); l != nil {
-		t.Error("a storeless node got a publish listener")
+		t.Error("a caller with no sink got a publish listener")
 	}
 }
 

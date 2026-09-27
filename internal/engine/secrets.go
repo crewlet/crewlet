@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"time"
@@ -151,9 +150,9 @@ func (e *Engine) migrateSecrets(ctx context.Context) {
 // was the last kind living somewhere only one node could see, so a rotation
 // reached the node an operator pointed the CLI at and nowhere else.
 //
-// Nil values with a nil error means "this node has no secret store at all",
-// which leaves the environment-only resolver in place — a supported
-// deployment, not a degraded one.
+// Nil values with a nil error means an Engine with no store at all — one
+// built by hand in a test, since [New] refuses a set of backends without
+// them — which leaves the environment-only resolver in place.
 func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) {
 	if e.backends == nil {
 		return nil, nil
@@ -178,7 +177,7 @@ func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) 
 	merged := map[string]string{}
 	if local != nil {
 		values, err := local.SecretValues(cipher).All(ctx)
-		if err != nil && !errors.Is(err, secrets.ErrNoKeyring) {
+		if err != nil {
 			return nil, err
 		}
 		maps.Copy(merged, values)
@@ -241,10 +240,11 @@ func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 // chart's address index is part of sealing a human seat's personal fields, and
 // it arrives with that — together with the rows it would be derived into.
 //
-// NIL IS A REAL CONFIGURATION rather than a missing wire: a company with no
-// fleet backend or no keyring has no store, and the chart's own write path
-// then REFUSES a literal credential by name rather than putting one on a log
-// every node applies. What nil must never mean is "store it in the clear".
+// NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
+// [New] refuses a node without a keyring or a fleet backend — and the chart's
+// own write path then REFUSES a literal credential by name rather than putting
+// one on a log every node applies. What nil must never mean is "store it in
+// the clear".
 func (e *Engine) chartSealer() chart.Sealer {
 	if e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
 		return nil
@@ -282,11 +282,10 @@ func (c *chartSealer) Seal(ctx context.Context, name, value string,
 // would be two key stores that have to agree about which key belongs to whom,
 // with nothing comparing them.
 //
-// NIL ON A NODE WITH NO KEYRING, and that is a legitimate state rather than a
-// wiring mistake: such a node cannot seal or open anything, so a removal there
-// deletes the rows and the key is a peer's to destroy. Returning a sealer over
-// a nil cipher instead would make every shred report success while destroying
-// nothing, which is the failure a removal exists to prevent.
+// NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
+// [New] refuses a node without a keyring or a fleet backend. Returning a
+// sealer over a nil cipher instead would make every shred report success while
+// destroying nothing, which is the failure a removal exists to prevent.
 func (e *Engine) PersonSealer() *iamdomain.Sealer {
 	if e == nil || e.cipher == nil || e.backends.Fleet == nil {
 		return nil
@@ -302,8 +301,8 @@ func (e *Engine) PersonSealer() *iamdomain.Sealer {
 //
 // THE CONVERSION IS EXPLICIT because a typed nil in an interface is not nil:
 // returning the pointer directly would hand the applier a non-nil Shredder
-// wrapping a nil Sealer, and every shred would panic on a node with no
-// keyring — which is exactly the node this is meant to answer nil for.
+// wrapping a nil Sealer, and every shred would panic on exactly the engine
+// this is meant to answer nil for.
 func (e *Engine) personKeys() iamdomain.Shredder {
 	sealer := e.PersonSealer()
 	if sealer == nil {
@@ -320,10 +319,11 @@ func (e *Engine) personKeys() iamdomain.Shredder {
 // every enrolment with an address, every invitation and every sign-in by
 // address was refused for a key that did not exist.
 //
-// NIL IS A DOCUMENTED POSTURE rather than a failure: a node with no company
-// secret store cannot read the blind key, and the writes that need one are
-// refused BY NAME at the call. Returned as the interface with an explicit nil,
-// never a typed one, so a caller's nil check means what it says.
+// NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
+// [New] refuses a node without a keyring or a fleet backend — and the writes
+// that need a blind are then refused BY NAME at the call. Returned as the
+// interface with an explicit nil, never a typed one, so a caller's nil check
+// means what it says.
 func (e *Engine) PersonBlinder() iamdomain.Blinds {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
 		return nil

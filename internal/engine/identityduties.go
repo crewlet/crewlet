@@ -249,9 +249,9 @@ func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 		}),
 	}
 	if e.backends != nil && e.backends.Fleet != nil {
-		// NO KEYRING NEEDED: finding a key and deleting it both work on a
-		// node that cannot decrypt anything, so an off-boarding is never
-		// stuck behind a missing keyring.
+		// NO DECRYPTION NEEDED: finding a key and deleting it open
+		// nothing, so an off-boarding is never stuck behind a keyring that
+		// no longer holds the key a row was sealed under.
 		store := fleetsecrets.New(e.backends.Fleet, e.cipher).Estate()
 		sealer, err := iamdomain.NewSealer(store)
 		if err != nil {
@@ -559,9 +559,10 @@ func (e *Engine) IdentityProvider() *oidc.Provider {
 // directory report list it — which person keys exist — or nil on a node with
 // no fleet store.
 //
-// NO KEYRING NEEDED, which is why this is not [Engine.PersonSealer]: listing a
-// name and deleting it both work without one, so a node that cannot decrypt
-// can still say whose key outlived their removal, and destroy it. Returned as
+// NO DECRYPTION NEEDED, which is why this is not [Engine.PersonSealer]: listing
+// a name and deleting it open nothing, so a node whose keyring no longer holds
+// the key a row was sealed under can still say whose key outlived their
+// removal, and destroy it. Returned as
 // the interface with an explicit nil, never a typed one, so a caller's nil
 // check means what it says.
 func (e *Engine) PersonKeyIndex() iamdomain.KeyIndex {
@@ -572,8 +573,9 @@ func (e *Engine) PersonKeyIndex() iamdomain.KeyIndex {
 }
 
 // RefreshCustody is where an OIDC session's refresh token is kept, or nil on
-// a node with no company secret store or no keyring — which cannot keep one,
-// because custody seals the token and reads it back.
+// an Engine with no company secret store — one built by hand in a test, since
+// [New] refuses a node without a keyring or a fleet backend — which cannot
+// keep one, because custody seals the token and reads it back.
 func (e *Engine) RefreshCustody() *iamdomain.Refreshes {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil || e.cipher == nil ||
 		e.native == nil {
