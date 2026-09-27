@@ -28,8 +28,9 @@
 // So the lock is taken to READ the cache, released, and taken again to write
 // what was fetched. What that opens — several callers deciding to fetch at
 // once — is closed by a SINGLEFLIGHT rather than by holding the lock: the
-// first caller fetches and the rest wait on its result, so one key rotation
-// produces one request however many tokens arrive during it.
+// first caller starts a fetch and every caller waits on its result, so one key
+// rotation produces one request however many tokens arrive during it. The
+// fetch belongs to none of them — see [Set.fetch].
 //
 // # An unknown key id is rate-limited, not free
 //
@@ -237,28 +238,42 @@ func (s *Set) stale(keyID string) (any, bool) {
 //
 // THE LOCK IS HELD ONLY TO JOIN OR START A FLIGHT, never across the request
 // itself — which is the whole of what this package exists to get right.
+//
+// # The flight belongs to nobody's request
+//
+// Whoever finds no flight starts one, and every caller — that one included —
+// then waits on ITS OWN context: a caller with a shorter deadline gives up
+// rather than being held to somebody else's. The request itself runs on a
+// context no caller can cancel, bounded by [FetchTimeout] instead. It used to
+// run on the first caller's, so the first caller hanging up — a browser tab
+// closed mid sign-in, a webhook sender giving up — failed every verification
+// waiting on the same flight, each refused for somebody else's disconnect.
 func (s *Set) fetch(ctx context.Context) (map[string]any, error) {
 	s.mu.Lock()
 	inflight := s.flight
-	leader := inflight == nil
-	if leader {
+	if inflight == nil {
 		inflight = &flight{done: make(chan struct{})}
 		s.flight = inflight
+		go s.fly(context.WithoutCancel(ctx), inflight)
 	}
 	s.mu.Unlock()
 
-	if !leader {
-		// A FOLLOWER WAITS ON ITS OWN CONTEXT TOO. The leader's
-		// deadline is the leader's; a caller with a shorter one gives
-		// up rather than being held to somebody else's.
-		select {
-		case <-inflight.done:
-			return inflight.keys, inflight.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	select {
+	case <-inflight.done:
+		return inflight.keys, inflight.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
+}
 
+// fly performs one flight's request and publishes what it found to everybody
+// waiting on it.
+//
+// ITS LIFETIME IS THE REQUEST'S, bounded by [FetchTimeout] whatever client the
+// set was given, so a flight nobody waits on any more still ends.
+func (s *Set) fly(ctx context.Context, inflight *flight) {
+	ctx, cancel := context.WithTimeout(ctx, FetchTimeout)
+	defer cancel()
 	keys, err := s.read(ctx)
 	s.mu.Lock()
 	if err == nil {
@@ -274,7 +289,6 @@ func (s *Set) fetch(ctx context.Context) (map[string]any, error) {
 	s.flight = nil
 	s.mu.Unlock()
 	close(inflight.done)
-	return keys, err
 }
 
 // document is the subset of a JWK set this reads. Only RSA keys, because every

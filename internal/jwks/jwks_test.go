@@ -478,3 +478,63 @@ func TestAnEncryptionKeyIsNotUsedToVerifySignatures(t *testing.T) {
 		}
 	}
 }
+
+// THE FIRST CALLER HANGING UP FAILS NOBODY ELSE.
+//
+// Every caller waits on one flight, and the flight used to run on the context
+// of whoever started it — so that caller going away, a browser tab closed in
+// the middle of a sign-in or a webhook sender giving up, failed every
+// verification waiting beside it, each refused for somebody else's
+// disconnect. The flight runs on a context no caller can cancel, bounded by
+// the fetch timeout, and each caller waits on its own.
+//
+// Mutation: fetch on the first caller's context and the second caller is
+// answered its cancellation.
+func TestTheFirstCallerHangingUpFailsNobodyElse(t *testing.T) {
+	t.Parallel()
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	var served atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if served.Add(1) == 1 {
+			close(reached)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		_, _ = w.Write([]byte(`{"keys":[{"kid":"k0","kty":"RSA","n":"` +
+			base64.RawURLEncoding.EncodeToString(testKey.PublicKey.N.Bytes()) +
+			`","e":"AQAB"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	set := jwks.New(jwks.Options{URL: server.URL})
+
+	first, hangUp := context.WithCancel(t.Context())
+	firstDone := make(chan error, 1)
+	go func() { _, err := set.Key(first, "k0"); firstDone <- err }()
+	<-reached
+	secondDone := make(chan error, 1)
+	go func() { _, err := set.Key(t.Context(), "k0"); secondDone <- err }()
+	// THE SECOND CALLER IS ON THE FLIGHT before the first goes: give it the
+	// moment it takes to reach the wait, which nothing outside can observe.
+	time.Sleep(50 * time.Millisecond)
+
+	hangUp()
+	if err := <-firstDone; err == nil {
+		t.Fatal("the caller that hung up was answered a key")
+	}
+	close(release)
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Errorf("a caller still waiting was failed by another's hang-up: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second caller was never answered")
+	}
+	if n := served.Load(); n != 1 {
+		t.Errorf("the key set was fetched %d times, want the one flight", n)
+	}
+}
