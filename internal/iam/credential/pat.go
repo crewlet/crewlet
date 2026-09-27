@@ -61,18 +61,19 @@ const (
 	// is the convention every scanner's rules already match on.
 	TokenPrefix = "cwl_pat_"
 
-	// DefaultTokenLifetime and MaxTokenLifetime bound a machine token's life.
-	//
-	// NINETY DAYS AND A YEAR, and the ceiling is the point: "forever" is
-	// unexpressible. A token is a bearer secret that lives in a pipeline's
-	// environment, gets copied into a second pipeline, and outlives
-	// whoever minted it — so the only bound anybody can rely on is one the
-	// mint refuses to exceed. Ninety days is the default because it is the
-	// shortest rotation an ordinary CI schedule absorbs without anybody
-	// noticing, and a year is the longest a credential that nothing
-	// re-proves should be trusted.
+	// DefaultTokenLifetime is how long a machine token lives when its mint
+	// names no lifetime: NINETY DAYS, the shortest rotation an ordinary CI
+	// schedule absorbs without anybody noticing.
 	DefaultTokenLifetime = 90 * 24 * time.Hour
-	MaxTokenLifetime     = 365 * 24 * time.Hour
+
+	// MaxTokenLifetime is the longest a machine token may live: A YEAR, and
+	// the ceiling is the point, because "forever" is unexpressible. A token
+	// is a bearer secret that lives in a pipeline's environment, gets
+	// copied into a second pipeline, and outlives whoever minted it — so
+	// the only bound anybody can rely on is one the mint refuses to exceed,
+	// and a year is the longest a credential that nothing re-proves should
+	// be trusted.
+	MaxTokenLifetime = 365 * 24 * time.Hour
 )
 
 // Token is one presented machine token, taken apart.

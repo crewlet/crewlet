@@ -26,16 +26,16 @@ import (
 type Resolution string
 
 const (
-	// Resolved: the request carried a credential and it named somebody.
+	// Resolved is a request that carried a credential naming somebody.
 	Resolved Resolution = "resolved"
 
-	// Anonymous: the resolver ran and found DEFINITIVELY nobody — no
+	// Anonymous is a resolver that ran and found DEFINITIVELY nobody — no
 	// credential was presented, or the guard is off. A fact about the
 	// request, and a fine answer for a surface an open read posture
 	// serves.
 	Anonymous Resolution = "anonymous"
 
-	// Unknown: the question could not be answered — the identity store
+	// Unknown is a question that could not be answered — the identity store
 	// was unreachable, a session lookup failed, or nothing resolved this
 	// request at all. NOT a denial. A gate that reaches this refuses, but
 	// it refuses as "ask again" rather than as "you are not who you say",
