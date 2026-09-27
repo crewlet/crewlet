@@ -376,8 +376,10 @@ shedding a record no node has applied is exactly the loss the whole gate
 exists to prevent.
 
 A single record larger than the broker takes in one message is a different
-refusal, `record_too_large`: it is the NATS server's `max_payload` that refuses
-it, on a log with room to spare, and no ceiling or trim changes it. See
+refusal, `record_too_large`: a per-message limit refuses it — the NATS
+server's `max_payload`, the stream's own `max_msg_size`, or the file store's
+per-record limit, and the detail says which — on a log with room to spare, and
+no ceiling or trim changes it. See
 [Read consistency](consistency.md#a-writes-refusals).
 
 A full log costs `linearizable` reads, because those append a barrier — which

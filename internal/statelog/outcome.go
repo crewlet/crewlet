@@ -175,10 +175,13 @@ const (
 	ReasonLogFull Reason = "log_full"
 
 	// ReasonRecordTooLarge — the record is larger than the broker takes in
-	// one message, which is the server's max_payload and nothing about
-	// the log. No node can place it and no wait changes it: the writer
-	// splits the change, or an operator raises max_payload on an
-	// external server.
+	// one message, and nothing about the log's size is involved. No node
+	// can place it and no wait changes it. The detail names which limit
+	// refused it, because each has its own remedy: the server's
+	// max_payload (an operator raises it on an external server), the
+	// stream's own max_msg_size (somebody reconfigured the stream; it is
+	// restored), or the file store's per-record limit (nothing raises it)
+	// — and splitting the change answers all three.
 	//
 	// ITS OWN REASON RATHER THAN [ReasonLogFull], which it used to be:
 	// that one tells an operator to raise a ceiling or unblock the trim,

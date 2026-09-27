@@ -285,11 +285,12 @@ func barrierAppendFailed(subject string, err error) error {
 	case faultTooLarge, faultRefused:
 		// A BARRIER IS A FEW HUNDRED BYTES, so a broker that refuses one
 		// as too large is one whose limit refuses every record; either way
-		// it is the broker's decision, with its words as the remedy.
+		// it is the broker's decision, and the detail carries its words —
+		// and, for a limit, which one and what moves it.
 		return &Unavailable{
 			Reason: ReasonBrokerRefused,
-			Detail: fmt.Sprintf("the broker refused to store the barrier on %s "+
-				"(%s)", subject, detail),
+			Detail: fmt.Sprintf("the broker refused to store the barrier on %s: %s",
+				subject, detail),
 		}
 	}
 	return fmt.Errorf("statelog: append a barrier on %s: %w", subject, err)

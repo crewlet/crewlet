@@ -75,6 +75,14 @@ const (
 	// faultTooLarge is a record larger than the broker takes in one
 	// message. Nothing about the log's size is involved, and nothing a
 	// retry does makes the record smaller.
+	//
+	// THREE LIMITS REACH IT, each moved by a different hand, so its detail
+	// names which one refused ([tooLargeDetail]): the NATS server's
+	// max_payload, the stream's own max_msg_size, and the file store's
+	// per-record limit. Folded into one remedy — raise max_payload — the
+	// second sent an operator to a server setting when the stream had been
+	// reconfigured under the engine, and the third to a setting they had
+	// already turned past the limit that refused the record.
 	faultTooLarge
 
 	// faultRefused is any other refusal the broker made and named, and
@@ -174,7 +182,7 @@ func classify(err error) (fault, string) {
 			case storeFailedMaxBytes:
 				return faultFull, apiErr.Description
 			case storeFailedTooLarge:
-				return faultTooLarge, apiErr.Description
+				return faultTooLarge, tooLargeDetail(limitFileStore, apiErr.Description)
 			case storeFailedClosed:
 				// A STORE THAT CLOSED UNDER AN ENTRY RAFT HAD
 				// COMMITTED, on a clustered leader: every member
@@ -190,7 +198,7 @@ func classify(err error) (fault, string) {
 			// its own. No state log declares one, so reaching it means
 			// the stream was reconfigured under the engine — and it is
 			// still a record too large, not a log that is full.
-			return faultTooLarge, apiErr.Description
+			return faultTooLarge, tooLargeDetail(limitStreamMsgSize, apiErr.Description)
 		}
 		// ANY OTHER API ERROR is a refusal the server made and named —
 		// the two that say the record may yet land are settled above —
@@ -209,7 +217,7 @@ func classify(err error) (fault, string) {
 	// a peer that is not there. Nothing about the record changes between
 	// rounds; it is too big now and it will be too big in a millisecond.
 	if errors.Is(err, nats.ErrMaxPayload) {
-		return faultTooLarge, err.Error()
+		return faultTooLarge, tooLargeDetail(limitMaxPayload, err.Error())
 	}
 	// NO ANSWER IS THE THIRD VALUE. The client retries a no-responder
 	// twice on its own before giving up, so reaching here means the
@@ -241,3 +249,50 @@ const (
 	storeFailedTooLarge = "message too large"
 	storeFailedClosed   = "store is closed"
 )
+
+// sizeLimit is which of the three limits refused a record too large.
+type sizeLimit int
+
+const (
+	// limitMaxPayload is the NATS server's max_payload, which the client
+	// refuses against before the append leaves the process. An operator
+	// raises it on an external server; the embedded broker's is the
+	// contract's own ceiling.
+	limitMaxPayload sizeLimit = iota
+
+	// limitStreamMsgSize is the stream's own max_msg_size. No state log
+	// declares one, so meeting it means somebody reconfigured the stream
+	// under the engine, and restoring it is the remedy — raising the
+	// server's max_payload changes nothing about it.
+	limitStreamMsgSize
+
+	// limitFileStore is the file store's per-record limit, which no
+	// setting raises: an external server whose max_payload is above it
+	// accepts the message on the wire and refuses it at the store, so the
+	// operator has already turned the one knob a max_payload refusal
+	// names, and only a smaller record is stored.
+	limitFileStore
+)
+
+// tooLargeDetail is a record too large, told by the limit that refused it and
+// what moves that limit, beside the words the refusal carried.
+//
+// ONE SENTENCE PER LIMIT, and never a generic one naming all three: a
+// refusal that lists every knob sends a reader to try each in turn, which is
+// the wrong-remedy bug with the right remedy somewhere in it.
+func tooLargeDetail(limit sizeLimit, words string) string {
+	switch limit {
+	case limitStreamMsgSize:
+		return fmt.Sprintf("the stream's own max_msg_size refused it (%s) — no "+
+			"state log declares one, so the stream was reconfigured under the "+
+			"engine: restore its max_msg_size to unlimited (-1), or split the "+
+			"change into smaller writes", words)
+	case limitFileStore:
+		return fmt.Sprintf("the broker's file store refused it as larger than one "+
+			"stored record may be (%s) — a limit of the store itself that no "+
+			"server setting raises, so split the change into smaller writes", words)
+	}
+	return fmt.Sprintf("the NATS server's max_payload refused it (%s), so split "+
+		"the change into smaller writes, or raise max_payload on the NATS server "+
+		"this fleet dials", words)
+}

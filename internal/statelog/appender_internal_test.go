@@ -53,7 +53,9 @@ func TestAnOversizedRecordRefusesAtRoundOne(t *testing.T) {
 //
 // The server's one store-failure code, 10077, covers a log at its byte
 // ceiling and a message too large for the file store alike, and carries which
-// only as the text of its own store error. The rows are the server's own
+// only as the text of its own store error. And a record too large meets one
+// of three limits, each moved by a different hand, so its detail names the
+// limit and that limit's remedy and never another's. The rows are the server's own
 // errors, built by the vendored server's own constructors, so what is
 // classified is exactly what a broker sends — and a wording this build does
 // not know is a refusal carrying its words, never a full log.
@@ -69,31 +71,48 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 		name string
 		err  error
 		want fault
+
+		// says and never are what a record too large's detail must and
+		// must not name: the limit that refused it and what moves THAT
+		// limit, and never another limit's knob.
+		says, never []string
 	}{
 		{"the log at its byte ceiling",
 			wire(server.NewJSStreamStoreFailedError(server.ErrMaxBytes,
-				server.Unless(server.ErrMaxBytes))), faultFull},
+				server.Unless(server.ErrMaxBytes))), faultFull, nil, nil},
+		{"a message past the server's max_payload",
+			fmt.Errorf("append: 9000000 bytes exceeds the 8388608-byte limit "+
+				"(the server's max_payload): %w", nats.ErrMaxPayload), faultTooLarge,
+			[]string{"max_payload refused it", "raise max_payload",
+				"split the change", "8388608-byte limit"},
+			[]string{"max_msg_size", "file store"}},
 		{"a message too large for the file store",
-			wire(server.NewJSStreamStoreFailedError(server.ErrMsgTooLarge)), faultTooLarge},
+			wire(server.NewJSStreamStoreFailedError(server.ErrMsgTooLarge)), faultTooLarge,
+			[]string{"file store", "no server setting raises", "split the change",
+				server.ErrMsgTooLarge.Error()},
+			[]string{"max_payload", "max_msg_size"}},
 		{"a message past the stream's own per-message limit",
-			wire(server.NewJSStreamMessageExceedsMaximumError()), faultTooLarge},
+			wire(server.NewJSStreamMessageExceedsMaximumError()), faultTooLarge,
+			[]string{"max_msg_size", "reconfigured", "unlimited (-1)",
+				server.NewJSStreamMessageExceedsMaximumError().Description},
+			[]string{"max_payload", "file store"}},
 		{"a message-count limit nobody declared on a state log",
 			wire(server.NewJSStreamStoreFailedError(server.ErrMaxMsgs,
-				server.Unless(server.ErrMaxMsgs))), faultRefused},
+				server.Unless(server.ErrMaxMsgs))), faultRefused, nil, nil},
 		{"a JetStream store with no resources left",
-			wire(server.NewJSInsufficientResourcesError()), faultRefused},
-		{"a sealed stream", wire(server.NewJSStreamSealedError()), faultRefused},
+			wire(server.NewJSInsufficientResourcesError()), faultRefused, nil, nil},
+		{"a sealed stream", wire(server.NewJSStreamSealedError()), faultRefused, nil, nil},
 		{"a lost race, solo",
-			wire(server.NewJSStreamWrongLastSequenceError(7)), faultRejected},
+			wire(server.NewJSStreamWrongLastSequenceError(7)), faultRejected, nil, nil},
 		{"a lost race, clustered",
-			wire(server.NewJSStreamWrongLastSequenceConstantError()), faultRejected},
+			wire(server.NewJSStreamWrongLastSequenceConstantError()), faultRejected, nil, nil},
 		// NEITHER IS A REFUSAL, though the broker named both: each says
 		// this operation's record may yet land.
 		{"this operation's own record in flight",
-			wire(server.NewJSStreamDuplicateMessageConflictError()), faultUnsettled},
+			wire(server.NewJSStreamDuplicateMessageConflictError()), faultUnsettled, nil, nil},
 		{"a store closed under an entry raft committed",
 			wire(server.NewJSStreamStoreFailedError(server.ErrStoreClosed,
-				server.Unless(server.ErrStoreClosed))), faultUnsettled},
+				server.Unless(server.ErrStoreClosed))), faultUnsettled, nil, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -108,6 +127,17 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 				(!strings.Contains(detail, fmt.Sprint(int(api.ErrorCode))) ||
 					!strings.Contains(detail, api.Description)) {
 				t.Errorf("the detail %q drops the broker's code or words", detail)
+			}
+			for _, want := range c.says {
+				if !strings.Contains(detail, want) {
+					t.Errorf("the detail does not say %q: %s", want, detail)
+				}
+			}
+			for _, wrong := range c.never {
+				if strings.Contains(detail, wrong) {
+					t.Errorf("the detail names %q, another limit's knob: %s",
+						wrong, detail)
+				}
 			}
 		})
 	}

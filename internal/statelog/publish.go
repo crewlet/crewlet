@@ -545,16 +545,14 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		return Result{Rounds: round}, dispDone, &Unavailable{
 			Reason: ReasonRecordTooLarge,
 			// THE RECORD'S OWN SIZE, which the publisher alone knows
-			// before the signature is added, beside the broker's words —
-			// the appender names the bytes it sent and the server's
-			// max_payload. Nothing about the log's ceiling is involved,
-			// so neither the ceiling nor the trim is named: that remedy
-			// was what this refusal used to carry.
+			// before the signature is added, beside the limit that
+			// refused it and what moves that limit — [classify] names
+			// which of the three it was. Nothing about the log's ceiling
+			// is involved, so neither the ceiling nor the trim is named:
+			// that remedy was what this refusal used to carry.
 			Detail: fmt.Sprintf("the record is %d bytes before its signature and "+
-				"the broker takes no message that large: %s — no retry places "+
-				"it, here or on any node, so split the change into smaller "+
-				"writes, or raise max_payload on the NATS server this fleet "+
-				"dials", len(snap.Decision.Payload), detail),
+				"no retry places it, here or on any node: %s",
+				len(snap.Decision.Payload), detail),
 			OpID: req.OpID,
 		}
 
