@@ -6,9 +6,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam/oidc"
 )
 
 // EVERY ROUTE THIS SURFACE REGISTERS IS DELIBERATELY GUARDED OR DELIBERATELY
@@ -98,6 +100,60 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 			t.Errorf("%s is classified here and registered nowhere; delete it",
 				declared)
 		}
+	}
+}
+
+// NOTHING THIS SURFACE ANSWERS MAY BE STORED.
+//
+// Its answers are a second-factor seed and the URI that carries it, recovery
+// codes shown exactly once, who somebody is, the address an invitation was sent
+// to and every sign-in's Set-Cookie — and none carried a Cache-Control, so a
+// browser's disk cache or a shared proxy was free to keep them long after the
+// tab, the session and the step-up that was needed to read them. So every route
+// is mounted behind one wrapper, and this walks EVERY route the surface
+// registers, on a deployment with a provider so the conditional three are
+// mounted too, and holds each answer — whatever its status — to `no-store`.
+//
+// Mutation: mount the routes on the mux directly rather than through the
+// wrapper, and every row fails.
+func TestNothingThisSurfaceAnswersMayBeStored(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	svc := build(t, b, oidc.NewProvider(oidc.Config{
+		Issuer: idp.URL, ClientID: idpClientID,
+		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
+	}, idp.Client(), func() time.Time { return clock }))
+
+	serve := http.NewServeMux()
+	recorded := &recordingMux{}
+	svc.Routes(teeMux{recorded, serve})
+	if len(recorded.patterns) < 15 {
+		t.Fatalf("the surface registered %d routes (%v); this walk is not "+
+			"reading the mux", len(recorded.patterns), recorded.patterns)
+	}
+	for _, pattern := range recorded.patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		path = strings.NewReplacer("{id}", invitationID,
+			"{lineage}", "0192f00d-0000-7000-8000-0000000000aa").Replace(path)
+		rec := httptest.NewRecorder()
+		serve.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s answered %d with Cache-Control %q, want no-store",
+				pattern, rec.Code, got)
+		}
+	}
+}
+
+// teeMux registers every route on each of its muxes: one to read the patterns
+// back, one to serve them.
+type teeMux []auth.Mux
+
+func (m teeMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	for _, each := range m {
+		each.HandleFunc(pattern, handler)
 	}
 }
 

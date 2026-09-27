@@ -502,6 +502,18 @@ configures. A reverse proxy in front of the engine should pass these headers
 through unchanged; one that adds its own `Content-Security-Policy` produces two
 policies, and a browser enforces both.
 
+**Some answers also carry `Cache-Control: no-store`.** Every response under
+`/config`, whose body is the whole company document; a `/secrets` reveal's
+value; and **every response under `/auth`**, a refusal and a redirect included,
+whose
+answers are a second-factor seed and the `otpauth://` URI carrying it, recovery
+codes shown exactly once, who the caller is, the address an invitation was sent
+to, and every sign-in's `Set-Cookie`. Without it a browser's disk cache — or a
+shared proxy, for everybody behind it — keeps those after the tab, the session
+and the step-up that was needed to read them. `no-store` rather than `private`,
+which still lets the browser keep it, or `no-cache`, which only revalidates
+what was kept.
+
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
 `sandbox_runs`, `budgets`, `integrations`, `stream`, `webhooks`,
