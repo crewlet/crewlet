@@ -328,7 +328,12 @@ the row that went stale. The engine derives them on the way out instead; see
 
 **A rename moves the structure and leaves the text alone.** When a unit's key
 changes, every child's parent and every seat's unit follow it in the same
-commit, so no read ever sees a reference to a key nothing answers to. A
+commit, and when a seat's handle changes, so does the lead of every unit it
+leads — so no read ever sees a reference to a key nothing answers to. Each of
+those rows moves **whole**: its columns and the document the company view is
+built from, together, because a row whose column followed and whose document
+did not is one the view reads under the old key (dropping a renamed unit's
+subtree to the org root) and one its next content write puts back. A
 `manages:` entry naming the old key is **not** rewritten: it is what somebody
 typed, the retired key goes on resolving, and editing it here would change a
 document nobody edited — which the next config apply would undo anyway.

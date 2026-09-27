@@ -314,19 +314,26 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 // entry would edit a document nobody edited, and the next config apply would
 // write the old spelling straight back. What moves here is the STRUCTURE: a
 // child's parent and a seat's unit, neither of which anybody authored as text.
+//
+// THE DOCUMENT MOVES WITH THE COLUMN, row by row. A row's typed columns are a
+// projection of its document ([writeUnit]), and it was the columns alone that
+// followed: the company view is built from the documents, so after a unit's
+// rename the view read every child and every member as sitting under a key
+// nothing answered to and dropped the renamed unit's whole subtree to the org
+// root — and the next content write of any of them, which reads the document
+// and writes the whole row back, reverted the column too. See
+// [cascadeUnits].
 func (a *Applier) moveUnitReferences(ctx context.Context, tx *sql.Tx,
 	at applyContext, key, former string) (int, error) {
 
-	children, err := tx.ExecContext(ctx, `
-		UPDATE chart_units SET parent_key = ?, scoped_through = MAX(scoped_through, ?)
-		WHERE parent_key = ?`, key, at.packed, former)
+	children, err := cascadeUnits(ctx, tx, at, `parent_key = ?`, former,
+		func(u *Unit) { u.ParentKey = key })
 	if err != nil {
 		return 0, fmt.Errorf("chart: move the children of %s to %s at %s: %w",
 			former, key, at.position, err)
 	}
-	seats, err := tx.ExecContext(ctx, `
-		UPDATE chart_seats SET unit_key = ?, scoped_through = MAX(scoped_through, ?)
-		WHERE unit_key = ?`, key, at.packed, former)
+	seats, err := cascadeSeats(ctx, tx, at, `unit_key = ?`, former,
+		func(s *Seat) { s.UnitKey = key })
 	if err != nil {
 		return 0, fmt.Errorf("chart: move the seats of %s to %s at %s: %w",
 			former, key, at.position, err)
@@ -337,10 +344,113 @@ func (a *Applier) moveUnitReferences(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("chart: move the lead edge of %s to %s at %s: %w",
 			former, key, at.position, err)
 	}
-	c, _ := children.RowsAffected()
-	s, _ := seats.RowsAffected()
 	l, _ := leads.RowsAffected()
-	return int(c + s + l), nil
+	return children + seats + int(l), nil
+}
+
+// cascadeUnits rewrites every unit row a rename's cascade moves: selected by
+// one predicate over the projection, decoded, changed by edit, and written back
+// COLUMN AND DOCUMENT TOGETHER through [Applier.writeStructure]'s statement.
+//
+// # Why the predicate is on the column and the write is on the document
+//
+// The column is what the predicate can use — it is indexed and a document is
+// not — and the document is what the row IS: every reader that builds the
+// company decodes it. So the rows are found by the projection and rewritten
+// whole, which is the one order that leaves the two agreeing.
+//
+// A ROW THIS RECORD ALREADY WROTE IS LEFT ALONE, and so is one a later record
+// did: the guard is `scoped_through < this position`, the structural write's
+// own. A row the same record placed already states where it sits, in the
+// addresses this record ends with, and a cascade that rewrote it would put
+// back the address the record moved it off.
+//
+// STRUCTURE STAMPS `scoped_through` AND NEVER `version`, for the reason this
+// file's header gives: the record arbitrated on another subject, and a version
+// written from here is an expectation no writer on the row's own subject could
+// ever satisfy.
+func cascadeUnits(ctx context.Context, tx *sql.Tx, at applyContext,
+	where string, arg string, edit func(*Unit)) (int, error) {
+
+	units, err := readUnitsWhere(ctx, tx,
+		where+` AND scoped_through < ?`, arg, at.packed)
+	if err != nil {
+		return 0, err
+	}
+	rows := 0
+	for _, unit := range units {
+		edit(&unit)
+		n, err := restampUnit(ctx, tx, at, unit)
+		if err != nil {
+			return 0, err
+		}
+		rows += n
+	}
+	return rows, nil
+}
+
+// cascadeSeats is [cascadeUnits] for the seat rows a unit's rename moves.
+func cascadeSeats(ctx context.Context, tx *sql.Tx, at applyContext,
+	where string, arg string, edit func(*Seat)) (int, error) {
+
+	seats, err := readSeatsWhere(ctx, tx,
+		where+` AND scoped_through < ?`, arg, at.packed)
+	if err != nil {
+		return 0, err
+	}
+	rows := 0
+	for _, seat := range seats {
+		edit(&seat)
+		n, err := restampSeat(ctx, tx, at, seat)
+		if err != nil {
+			return 0, err
+		}
+		rows += n
+	}
+	return rows, nil
+}
+
+// restampUnit writes a unit's structural columns and its whole document, under
+// the structural guard. [Applier.writeStructure]'s update, for a row the
+// caller has already read.
+func restampUnit(ctx context.Context, tx *sql.Tx, at applyContext, unit Unit) (int, error) {
+	document, err := EncodeUnit(unit)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE chart_units
+		SET parent_key = ?, lead = ?, updated_at = ?,
+		    scoped_through = ?, document = ?
+		WHERE key = ? AND scoped_through < ?`,
+		unit.ParentKey, unit.Lead, store.EncodeTime(unit.UpdatedAt),
+		at.packed, document, unit.Key, at.packed)
+	if err != nil {
+		return 0, fmt.Errorf("chart: restamp unit %s at %s: %w",
+			unit.Key, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// restampSeat is [restampUnit] for a seat.
+func restampSeat(ctx context.Context, tx *sql.Tx, at applyContext, seat Seat) (int, error) {
+	document, err := EncodeSeat(seat)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE chart_seats
+		SET unit_key = ?, updated_at = ?, scoped_through = ?, document = ?
+		WHERE handle = ? AND scoped_through < ?`,
+		seat.UnitKey, store.EncodeTime(seat.UpdatedAt), at.packed,
+		document, seat.Handle, at.packed)
+	if err != nil {
+		return 0, fmt.Errorf("chart: restamp seat %s at %s: %w",
+			seat.Handle, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
@@ -408,23 +518,23 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("chart: move the lead edges of %s to %s at %s: %w",
 			former, handle, at.position, err)
 	}
-	units, err := tx.ExecContext(ctx, `
-		UPDATE chart_units SET lead = ?, scoped_through = MAX(scoped_through, ?)
-		WHERE lead = ?`, handle, at.packed, former)
+	// THE UNITS IT LEADS, column and document together — see
+	// [cascadeUnits] for why the column alone was not a move at all.
+	units, err := cascadeUnits(ctx, tx, at, `lead = ?`, former,
+		func(u *Unit) { u.Lead = handle })
 	if err != nil {
 		return 0, fmt.Errorf("chart: move the led units of %s to %s at %s: %w",
 			former, handle, at.position, err)
 	}
 	m, _ := manages.RowsAffected()
 	l, _ := leads.RowsAffected()
-	u, _ := units.RowsAffected()
 	rows, err := a.writeHistory(ctx, tx, at, ObjectRef{Kind: KindSeat, ID: handle},
 		ChangeRekeyed)
 	if err != nil {
 		return 0, err
 	}
 	a.note(ObjectRef{Kind: KindSeat, ID: handle})
-	return int(n+m+l+u) + rows, nil
+	return int(n+m+l) + units + rows, nil
 }
 
 // rekeyTaken is whether a rekey's apply must DECLINE its new address, which is

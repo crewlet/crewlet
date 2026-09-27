@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -176,6 +178,43 @@ func (h *harness) unit(key string) chart.Unit {
 		h.t.Fatalf("decode unit %s: %v", key, err)
 	}
 	return unit
+}
+
+// seat reads one seat's stored document back.
+func (h *harness) seat(handle string) chart.Seat {
+	h.t.Helper()
+	var document []byte
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(),
+			`SELECT document FROM chart_seats WHERE handle = ?`, handle).Scan(&document)
+	}); err != nil {
+		h.t.Fatalf("read seat %s: %v", handle, err)
+	}
+	seat, err := chart.DecodeSeat(document)
+	if err != nil {
+		h.t.Fatalf("decode seat %s: %v", handle, err)
+	}
+	return seat
+}
+
+// read is the whole chart as the reader serves it, which is what the company
+// view is built from.
+func (h *harness) read() chart.Chart {
+	h.t.Helper()
+	at := statelog.Position{Stream: chart.Domain{}.Stream().Name, Generation: 1, Seq: h.seq}
+	authority, err := statelogtest.LocalReader(chart.Domain{}, h.db.Replicated(), at)
+	if err != nil {
+		h.t.Fatalf("build the read authority: %v", err)
+	}
+	reader, err := chart.NewReader(chart.ReaderOptions{DB: h.db, Log: authority})
+	if err != nil {
+		h.t.Fatalf("build the reader: %v", err)
+	}
+	got, err := reader.Read(h.t.Context(), statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		h.t.Fatalf("read the chart: %v", err)
+	}
+	return got
 }
 
 // --- the records ------------------------------------------------------------ //
@@ -634,6 +673,13 @@ func TestReimportingOneRevisionWritesNothingTheSecondTime(t *testing.T) {
 // somebody WROTE, and the former key goes on resolving — so rewriting it would
 // edit a document nobody edited, and the next config apply would write the old
 // spelling straight back.
+//
+// AND THE STRUCTURE MOVES IN THE DOCUMENT, not only in the column. The columns
+// are a projection of each row's document and the company view is built from
+// the documents: when only the columns followed, the view dropped the renamed
+// unit's whole subtree to the org root, and the next content write of a child
+// or a member — which reads the document and writes the row back whole —
+// reverted its column as well.
 func TestARekeyMovesTheStructureAndNotTheAuthoredText(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -675,11 +721,95 @@ func TestARekeyMovesTheStructureAndNotTheAuthoredText(t *testing.T) {
 	if got := h.one(`SELECT unit_key FROM chart_seats WHERE handle = 'sarah-chen'`); got != "infrastructure" {
 		t.Errorf("the seat's unit is %q, want infrastructure", got)
 	}
+	// THE DOCUMENTS, which are what the company is built from.
+	if got := h.unit("core").ParentKey; got != "infrastructure" {
+		t.Errorf("the child's document still sits under %q — the view is "+
+			"built from documents, so it drops the child to the org root", got)
+	}
+	if got := h.seat("sarah-chen").UnitKey; got != "infrastructure" {
+		t.Errorf("the member's document still sits in %q", got)
+	}
 	if got := h.column(`SELECT target FROM chart_manages WHERE manager = 'ana'`); !slices.Equal(
 		got, []string{"platform"}) {
 		t.Errorf("the authored manages entry is %v, want [platform] — it is "+
 			"what somebody wrote and the retired key still resolves, so "+
 			"rewriting it would edit a document nobody edited", got)
+	}
+
+	// AND THE VIEW PLACES THE SUBTREE UNDER THE RENAMED UNIT.
+	view := org.FromRows(h.read(), org.Settings{Name: "Acme"})
+	infra := view.Org.Unit("infrastructure")
+	if infra == nil {
+		t.Fatal("the view has no infrastructure unit")
+	}
+	if len(infra.Children) != 1 || infra.Children[0].Key() != "core" {
+		t.Errorf("infrastructure holds %d child units in the view, want core — "+
+			"the subtree fell to the org root", len(infra.Children))
+	}
+	if len(infra.Roles) != 1 || infra.Roles[0].Handle() != "sarah-chen" {
+		t.Errorf("infrastructure holds %d seats in the view, want sarah-chen",
+			len(infra.Roles))
+	}
+
+	// AND A CONTENT WRITE AFTER THE RENAME DOES NOT PUT THE OLD KEY BACK.
+	h.must(unitRecord("op-core-content", "core", nil))
+	h.must(seatRecord("op-sarah-content", "sarah-chen", "infrastructure", nil))
+	if got := h.one(`SELECT parent_key FROM chart_units WHERE key = 'core'`); got != "infrastructure" {
+		t.Errorf("a content write reverted the child's parent to %q", got)
+	}
+	if got := h.one(`SELECT unit_key FROM chart_seats WHERE handle = 'sarah-chen'`); got != "infrastructure" {
+		t.Errorf("a content write reverted the member's unit to %q", got)
+	}
+
+	// AND THE RENAMED UNIT IS SEEN TO HOLD WHAT IT HOLDS: its removal is
+	// refused while the child and the member are still in it.
+	_, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		op(chart.OpRemoveObject, chart.KindUnit, "infrastructure", ""),
+	}})
+	if ref := refusal(t, err); ref.Rule != chart.RuleUnitNotEmpty {
+		t.Errorf("rule = %q, want %q", ref.Rule, chart.RuleUnitNotEmpty)
+	}
+}
+
+// A SEAT'S RENAME MOVES THE UNITS IT LEADS, IN THE DOCUMENT TOO.
+//
+// A unit's authored lead names the seat by its handle. When only the column
+// followed a seat's rename, the unit's document still named the old handle, so
+// the view resolved the lead through a retired alias at best — and the unit's
+// next content write, which writes its document back whole, put the old
+// handle into the column as well.
+func TestASeatsRekeyMovesTheUnitsItLeads(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	h.must(place("op-place",
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "design"},
+			Lead: "ana"},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ana"},
+			Parent: "design"}))
+	h.must(seatRecord("op-ana", "ana", "design", func(p *chart.SeatPayload) {
+		p.Manages = []string{"design"}
+	}))
+	h.must(seatRekey("op-rename", "ana-lopez", "ana"))
+
+	if got := h.unit("design").Lead; got != "ana-lopez" {
+		t.Errorf("the led unit's document names %q, want ana-lopez", got)
+	}
+	if got := h.one(`SELECT lead FROM chart_units WHERE key = 'design'`); got != "ana-lopez" {
+		t.Errorf("the led unit's column names %q, want ana-lopez", got)
+	}
+	if got := h.column(`SELECT handle FROM chart_leads WHERE unit_key = 'design'`); !slices.Equal(
+		got, []string{"ana-lopez"}) {
+		t.Errorf("the lead edge is %v, want [ana-lopez]", got)
+	}
+	// THE RENAMED SEAT'S OWN AUTHORED EDGES FOLLOW IT, as their author.
+	if got := h.column(`SELECT target FROM chart_manages WHERE manager = 'ana-lopez'`); !slices.Equal(
+		got, []string{"design"}) {
+		t.Errorf("the renamed seat manages %v, want [design]", got)
+	}
+	h.must(unitRecord("op-design-content", "design", nil))
+	if got := h.one(`SELECT lead FROM chart_units WHERE key = 'design'`); got != "ana-lopez" {
+		t.Errorf("a content write reverted the lead to %q", got)
 	}
 }
 

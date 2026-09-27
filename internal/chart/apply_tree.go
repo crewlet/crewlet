@@ -191,24 +191,12 @@ func (a *Applier) placeOne(ctx context.Context, tx *sql.Tx, at applyContext,
 func (a *Applier) writeStructure(ctx context.Context, tx *sql.Tx, at applyContext,
 	unit Unit, exists bool) (int, error) {
 
+	if exists {
+		return restampUnit(ctx, tx, at, unit)
+	}
 	document, err := EncodeUnit(unit)
 	if err != nil {
 		return 0, err
-	}
-	if exists {
-		res, updateErr := tx.ExecContext(ctx, `
-			UPDATE chart_units
-			SET parent_key = ?, lead = ?, updated_at = ?,
-			    scoped_through = ?, document = ?
-			WHERE key = ? AND scoped_through < ?`,
-			unit.ParentKey, unit.Lead, store.EncodeTime(unit.UpdatedAt),
-			at.packed, document, unit.Key, at.packed)
-		if updateErr != nil {
-			return 0, fmt.Errorf("chart: place unit %s at %s: %w",
-				unit.Key, at.position, updateErr)
-		}
-		n, _ := res.RowsAffected()
-		return int(n), nil
 	}
 	// THE STUB'S OWN `version` IS ZERO, which is the whole reason it is
 	// safe to create one here: the first CONTENT record on this object
@@ -238,23 +226,12 @@ func (a *Applier) writeStructure(ctx context.Context, tx *sql.Tx, at applyContex
 func (a *Applier) writeSeatStructure(ctx context.Context, tx *sql.Tx,
 	at applyContext, seat Seat, exists bool) (int, error) {
 
+	if exists {
+		return restampSeat(ctx, tx, at, seat)
+	}
 	document, err := EncodeSeat(seat)
 	if err != nil {
 		return 0, err
-	}
-	if exists {
-		res, updateErr := tx.ExecContext(ctx, `
-			UPDATE chart_seats
-			SET unit_key = ?, updated_at = ?, scoped_through = ?, document = ?
-			WHERE handle = ? AND scoped_through < ?`,
-			seat.UnitKey, store.EncodeTime(seat.UpdatedAt), at.packed,
-			document, seat.Handle, at.packed)
-		if updateErr != nil {
-			return 0, fmt.Errorf("chart: place seat %s at %s: %w",
-				seat.Handle, at.position, updateErr)
-		}
-		n, _ := res.RowsAffected()
-		return int(n), nil
 	}
 	// A STUB SEAT'S KIND IS `agent`, and that is a real decision rather
 	// than a default falling out of the zero value: `kind` is NOT NULL and
