@@ -217,9 +217,11 @@ func TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt(t *testing.T) {
 	// actually happens: meta assembled from previously decoded JSON carries
 	// json.Number as a matter of course, so anything built from config can
 	// hold one, and an overflowing or malformed number reaches this branch
-	// through ordinary data. Probed: they also take different routes inside
-	// Event.MarshalJSON — the malformed number fails marshalling the
-	// envelope, the overflowing one fails remapping it — so the three
+	// through ordinary data. They also take different routes through the
+	// encode — the malformed number fails marshalling the envelope, and the
+	// overflowing one is refused by the payload bag's own encode, since a
+	// build reading the bag's numbers as float64s could not decode the
+	// event — so the three
 	// together cover the encode failure modes rather than one of them
 	// three times.
 	for _, tc := range []struct {

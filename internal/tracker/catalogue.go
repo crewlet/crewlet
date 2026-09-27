@@ -121,8 +121,9 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 			if held && sameDeclarations(types, current.Types) {
 				// NOTHING TO SAY, on [applyProjectEdit]'s rule: a form
 				// that submits every control restates the list as it
-				// is, and an empty decision publishes nothing.
-				return statelog.Decision{}, nil
+				// is, and an empty decision publishes nothing. The
+				// version it reports is the one it read.
+				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
 			// THE STORED DOCUMENT WITH ITS TYPES REPLACED, so a member a
 			// newer build wrote on the catalogue itself is kept.
@@ -170,7 +171,7 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 				// NOTHING TO SAY, and the policy version does not
 				// move: a task's policy stamp records the declarations
 				// it was validated against, and these are those.
-				return statelog.Decision{}, nil
+				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
 			// THE STORED DOCUMENT WITH ITS FIELDS REPLACED, so a member a
 			// newer build wrote on the catalogue itself is kept.
@@ -441,9 +442,8 @@ func checkOptions(f *FieldDef) error {
 //   - what the caller leaves [FieldDef.Unstated];
 //   - who declared it and when, which a later edit does not change.
 //
-// Everything else is the caller's. The result shares nothing the caller or
-// the stored list can see, since a decide that runs again must find both as
-// it left them.
+// Everything else is the caller's. It writes into neither list, since a
+// decide that runs again must find the caller's as it left it.
 func mergeFields(stored, stated []FieldDef) []FieldDef {
 	prior := make(map[string]FieldDef, len(stored))
 	for _, f := range stored {

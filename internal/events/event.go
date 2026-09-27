@@ -33,10 +33,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +99,12 @@ type Event struct {
 	// stay as they are: raw values would make each writer encode what it
 	// puts in and each reader decode what it takes out, to fix numbers
 	// the decoder can keep exact itself.
+	//
+	// A BUILD THAT PREDATES THE EXACT DECODE reads a number here as a
+	// float64, and nothing this build writes can change that reader: an
+	// integer past 2^53 in the bag reaches such a node rounded. A number
+	// past what a float64 holds at all would fail its decode of the whole
+	// event, so that one is refused at encode ([payloadBag.MarshalJSON]).
 	Payload map[string]any `json:"payload,omitempty"`
 
 	// Trace context, captured at construction from the active span.
@@ -342,9 +351,48 @@ type envelope struct {
 	DelegationChain []string   `json:"delegation_chain,omitempty"`
 }
 
-// payloadBag is [Event.Payload] as the envelope decodes it: every number a
-// [json.Number], for the reason the field gives. It encodes as a plain map.
+// payloadBag is [Event.Payload] as the envelope carries it: every number a
+// [json.Number] on the way in, for the reason the field gives, and written as
+// the plain map it is on the way out.
 type payloadBag map[string]any
+
+// MarshalJSON writes the bag as encoding/json writes the map, and refuses one
+// holding a number past what a float64 holds.
+//
+// REFUSED RATHER THAN WRITTEN, because a build that predates the exact decode
+// reads the bag's numbers as float64s and fails its decode of the WHOLE event
+// on one it cannot hold: the event would be published and lost on every such
+// node, where a refusal here is an error its publisher reads. Checked on the
+// encoded bytes, so a number is caught at any depth and in whatever Go value
+// held it.
+func (b payloadBag) MarshalJSON() ([]byte, error) {
+	out, err := json.Marshal(map[string]any(b))
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	decoder.UseNumber()
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if n, ok := token.(json.Number); ok {
+			if _, err := strconv.ParseFloat(string(n), 64); err != nil {
+				// ITS LENGTH, NOT ITS DIGITS: the number is whatever
+				// size its writer made it, and the error names the one
+				// fact the writer acts on.
+				return nil, fmt.Errorf("events: the payload bag holds a %d-byte number "+
+					"a float64 cannot hold — a build that reads the bag's numbers as "+
+					"float64s could not decode the event at all, so carry it as a "+
+					"string: %w", len(n), err)
+			}
+		}
+	}
+}
 
 // UnmarshalJSON decodes the bag with every number kept as its digits.
 func (b *payloadBag) UnmarshalJSON(data []byte) error {

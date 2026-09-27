@@ -188,7 +188,10 @@ A **project's own** field declarations are the project **lead's**, written with
 `write_project(fields: [...])`. That list REPLACES the project's declarations
 and leaves the workspace's alone — the two are separate scopes and a task's
 effective set is their union — so send the whole set, and read
-`describe_project` first. A project declaration sharing a workspace field's id
+`describe_project` first. A field you name by its id keeps what the tool has no
+argument for — the types it applies to, its default and its configuration beyond
+its options — and a list that restates every field as it is changes nothing and
+moves no policy version. A project declaration sharing a workspace field's id
 **shadows** it, which `describe_project` names so a reader can see which
 definition is in force.
 

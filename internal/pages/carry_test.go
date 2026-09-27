@@ -140,9 +140,9 @@ func TestEveryObjectEncodesAsItAlwaysHas(t *testing.T) {
 //
 // THE TYPED PAYLOADS ARE NOT WALKED, because nothing re-encodes one: a record
 // carries its mutation as the bytes its writer published, so a relay writes
-// back exactly those, and the applier writes rows from the members it reads —
-// a member that changes what the rows hold is a new record shape, and a
-// record above this build's version is retained rather than applied.
+// back exactly those, and the one decode of a payload is the applier's, which
+// writes rows from the members it reads — a carry on a payload would hand
+// what it kept to nothing.
 func TestEveryObjectTheKnowledgeBaseSharesCarries(t *testing.T) {
 	t.Parallel()
 	roots := []reflect.Type{}
