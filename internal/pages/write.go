@@ -334,7 +334,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	if err != nil {
 		return Written{}, err
 	}
-	if err := s.refuseReserved(actor, head.Container, false); err != nil {
+	if err = s.refuseReserved(actor, head.Container, false); err != nil {
 		return Written{}, err
 	}
 	if NormalizeTitle(head.Title) == NormalizeTitle(title) {
