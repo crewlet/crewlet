@@ -54,8 +54,11 @@ func TestTheSeatViewFindsABindingsSeatByItsIdentity(t *testing.T) {
 	t.Parallel()
 	e := bootDirectoryNode(t, nil)
 	view, writer := SeatViewOf(e), e.ChartWriter()
-	if _, err := writer.WriteRekey(t.Context(), "test:rename",
-		chart.ObjectRef{Kind: chart.KindSeat, ID: "dana"}, founderSeat); err != nil {
+	if _, err := writer.WriteBatch(t.Context(), "test:rename", chart.Batch{
+		Operations: []chart.Operation{{Kind: chart.OpRename,
+			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: founderSeat},
+			To:     "dana"}},
+	}); err != nil {
 		t.Fatalf("rename the founder's seat: %v", err)
 	}
 

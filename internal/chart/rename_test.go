@@ -8,17 +8,24 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // applySeatRekey is [writeRig.applyRekey] for a seat.
 func (r *writeRig) applySeatRekey(opID, handle, former string) {
 	r.t.Helper()
-	if _, err := r.writer.WriteRekey(r.t.Context(), opID,
-		chart.ObjectRef{Kind: chart.KindSeat, ID: handle}, former); err != nil {
-
-		r.t.Fatalf("rekey %s to %s: %v", former, handle, err)
+	if _, err := r.publishRename(opID, chart.KindSeat, former, handle); err != nil {
+		r.t.Fatalf("rename %s to %s: %v", former, handle, err)
 	}
 	r.drain()
+}
+
+// publishRename publishes a one-operation rename batch without applying it.
+func (r *writeRig) publishRename(opID string, kind chart.ObjectKind,
+	former, to string) (chart.WriteResult, error) {
+
+	return r.writer.WriteBatch(r.t.Context(), opID, chart.Batch{
+		Operations: []chart.Operation{renameOp(kind, former, to)}})
 }
 
 // A RENAME FREEZES THE ORIGIN ONCE AND NEVER AGAIN.
@@ -207,8 +214,7 @@ func TestAClaimOnALiveHandleIsRefusedAtTheWrite(t *testing.T) {
 	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""),
 		op(chart.OpCreateSeat, chart.KindSeat, "dana-okafor", ""))
 
-	_, err := r.writer.WriteRekey(t.Context(), "op-clash",
-		chart.ObjectRef{Kind: chart.KindSeat, ID: "dana-okafor"}, "sarah-chen")
+	_, err := r.publishRename("op-clash", chart.KindSeat, "sarah-chen", "dana-okafor")
 	if err == nil {
 		t.Fatal("a claim on a handle another seat holds was accepted")
 	}
@@ -217,59 +223,109 @@ func TestAClaimOnALiveHandleIsRefusedAtTheWrite(t *testing.T) {
 	}
 }
 
-// AND THE ONE THE DECIDE CANNOT SEE IS DECLINED BY THE APPLY.
+// A CREATE ORDERED AFTER A RENAME NEVER MOVES THE RENAMED OBJECT.
 //
-// A claim arbitrates on the ADDRESS's subject and a create on the STRUCTURE's,
-// so the two never contend at the broker: a claim decided while an address was
-// free can be applied after a create that took it. That ordering is legal and
-// there is no way to make it not be — which is exactly why the apply asks
-// again rather than trusting the decide.
+// A rename used to be a claim on the new address's own subject, which contends
+// with other claims on that address and with nothing else — so a create of the
+// same address, arbitrated on the tree, was decided against a snapshot that had
+// not applied the claim, both were accepted, and the log applied the create
+// second: it met the renamed unit on its address and moved it under the
+// creator's parent, clearing its lead, while the create itself landed as
+// nothing. A rename is structure now, on the tree's one subject, so the create
+// cannot be published until this node has applied the rename — and once it has,
+// the create is refused, naming the unit that holds the address.
+func TestACreateOrderedAfterARenameNeverMovesTheRenamedObject(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []chart.ObjectKind{chart.KindUnit, chart.KindSeat} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			r := newWriteRig(t)
+			r.batch("op-seed",
+				op(chart.OpCreateUnit, chart.KindUnit, "engineering", ""),
+				op(chart.OpCreateUnit, chart.KindUnit, "product", ""),
+				chart.Operation{Kind: createOf(kind),
+					Object: chart.ObjectRef{Kind: kind, ID: "platform"},
+					Parent: "engineering", Lead: leadFor(kind, "sarah-chen")})
+
+			// PUBLISHED, NOT APPLIED: this node's snapshot has no infra yet.
+			if _, err := r.publishRename("op-rename", kind, "platform", "infra"); err != nil {
+				t.Fatalf("publish the rename: %v", err)
+			}
+			_, err := r.writer.WriteBatch(t.Context(), "op-create", chart.Batch{
+				Operations: []chart.Operation{op(createOf(kind), kind, "infra", "product")}})
+			if !errors.Is(err, statelog.ErrUnavailable) {
+				t.Fatalf("a create of the renamed address was decided against a "+
+					"snapshot that had not applied the rename (%v) — the two "+
+					"arbitrate on one subject, so it must wait for the rename", err)
+			}
+
+			r.drain()
+			_, err = r.writer.WriteBatch(t.Context(), "op-create-again", chart.Batch{
+				Operations: []chart.Operation{op(createOf(kind), kind, "infra", "product")}})
+			if ref := refusal(t, err); ref.Rule != chart.RuleKeyTaken {
+				t.Errorf("rule = %q, want %q", ref.Rule, chart.RuleKeyTaken)
+			}
+			parent, lead := r.structureOf(kind, "infra")
+			if parent != "engineering" || lead != leadFor(kind, "sarah-chen") {
+				t.Errorf("the renamed %s sits under %q led by %q, want engineering "+
+					"and %q", kind, parent, lead, leadFor(kind, "sarah-chen"))
+			}
+		})
+	}
+}
+
+// AND A RENAME ORDERED AFTER A CREATE OF ITS ADDRESS IS REFUSED, NOT DROPPED.
 //
-// What it must NOT do is raise. The key is a primary key, so the UPDATE would
-// fail the constraint on every node, identically, on a record none of them can
-// ever get past — one lost rename becoming a stalled domain across the fleet.
-// So the claim is dropped and everything else on the log goes on applying,
-// which is what this asserts: the record AFTER the collision lands.
-func TestAClaimThatLostTheRaceIsDroppedRatherThanStallingTheDomain(t *testing.T) {
+// The other order used to be accepted and then declined at the apply, so the
+// caller was told their rename had landed and the unit went on answering to
+// its old key. On one subject the rename is decided against the create.
+func TestARenameOntoAnAddressACreateTookIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
-	r.batch("op-a", op(chart.OpCreateUnit, chart.KindUnit, "platform", ""))
-
-	// PUBLISHED, NOT APPLIED: the estate still has no `infra`, so the claim
-	// below is decided against a snapshot in which the address is free.
-	if _, err := r.writer.WriteBatch(t.Context(), "op-b", chart.Batch{
+	r.batch("op-seed", op(chart.OpCreateUnit, chart.KindUnit, "platform", ""))
+	if _, err := r.writer.WriteBatch(t.Context(), "op-create", chart.Batch{
 		Operations: []chart.Operation{
 			op(chart.OpCreateUnit, chart.KindUnit, "infra", ""),
 		}}); err != nil {
 		t.Fatalf("publish the create: %v", err)
 	}
-	if _, err := r.writer.WriteRekey(t.Context(), "op-rename",
-		chart.ObjectRef{Kind: chart.KindUnit, ID: "infra"}, "platform"); err != nil {
-		t.Fatalf("the claim was refused against a snapshot with no infra: %v", err)
-	}
-	// THE DRAIN ITSELF IS THE ASSERTION: it applies every record in turn and
-	// fails the test on the first that raises, which is precisely the state
-	// this guards against. Nothing can be queued BEHIND the claim first — a
-	// second structural write is refused until this node has applied the one
-	// ahead of it, which is the write authority doing its job.
 	r.drain()
 
+	_, err := r.publishRename("op-rename", chart.KindUnit, "platform", "infra")
+	if ref := refusal(t, err); ref.Rule != chart.RuleKeyTaken {
+		t.Errorf("rule = %q, want %q", ref.Rule, chart.RuleKeyTaken)
+	}
 	if got := r.mustUnit("platform"); got.Key != "platform" {
-		t.Errorf("platform = %q, want the claim dropped and the unit as it was",
-			got.Key)
+		t.Errorf("platform = %q after the refused rename", got.Key)
 	}
-	if got := r.mustUnit("infra"); got.Key != "infra" {
-		t.Errorf("infra = %q, want the unit that won the address", got.Key)
+}
+
+// createOf is the create operation for an object of kind.
+func createOf(kind chart.ObjectKind) chart.OperationKind {
+	if kind == chart.KindUnit {
+		return chart.OpCreateUnit
 	}
-	// AND THE DOMAIN TOOK THE NEXT RECORD, which is what tells a dropped
-	// claim from a stopped applier: a stalled domain cannot apply anything
-	// again, ever, on any node.
-	r.batch("op-c", op(chart.OpCreateUnit, chart.KindUnit, "design", ""))
-	if got := r.mustUnit("design"); got.Key != "design" {
-		t.Errorf("design = %q — the record behind the collision never landed, "+
-			"which is the domain stalling rather than one rename being lost",
-			got.Key)
+	return chart.OpCreateSeat
+}
+
+// leadFor is lead where kind has one — a unit — and nothing for a seat.
+func leadFor(kind chart.ObjectKind, lead string) string {
+	if kind == chart.KindUnit {
+		return lead
 	}
+	return ""
+}
+
+// structureOf reads an object's parent and, for a unit, its lead, from the
+// columns and the document both.
+func (r *writeRig) structureOf(kind chart.ObjectKind, key string) (parent, lead string) {
+	r.t.Helper()
+	if kind == chart.KindSeat {
+		seat := r.mustSeat(key)
+		return seat.UnitKey, ""
+	}
+	unit := r.mustUnit(key)
+	return unit.ParentKey, unit.Lead
 }
 
 // A SEAT IS FOUND BY THE HANDLE IT WAS CREATED UNDER, and by nothing else.
@@ -348,14 +404,12 @@ func TestTheIdentityOutlivesTheAliasCap(t *testing.T) {
 		t.Errorf("the origin resolves to %q, want %q — an identity a cap can "+
 			"drop is no identity", got.Handle, current)
 	}
-	_, err := r.writer.WriteRekey(t.Context(), "op-steal",
-		chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}, "dana-okafor")
+	_, err := r.publishRename("op-steal", chart.KindSeat, "dana-okafor", "sarah-chen")
 	if !errors.Is(err, chart.ErrRefused) {
 		t.Errorf("a second seat took the first one's identity (%v)", err)
 	}
 	// THE CONTROL: the seat itself may still go back to it.
-	if _, err := r.writer.WriteRekey(t.Context(), "op-back",
-		chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}, current); err != nil {
+	if _, err := r.publishRename("op-back", chart.KindSeat, current, "sarah-chen"); err != nil {
 		t.Errorf("the seat could not take back the handle it was created "+
 			"under: %v", err)
 	}
@@ -444,8 +498,7 @@ func TestARemovedSeatsIdentityIsNeverIssuedAgain(t *testing.T) {
 		if ref := refusal(t, err); ref.Rule != chart.RuleKeyRemoved {
 			t.Errorf("a seat was created on the removed seat's %q: %+v", address, ref)
 		}
-		_, err = r.writer.WriteRekey(t.Context(), "op-take-"+address,
-			chart.ObjectRef{Kind: chart.KindSeat, ID: address}, "lena")
+		_, err = r.publishRename("op-take-"+address, chart.KindSeat, "lena", address)
 		if !errors.Is(err, chart.ErrRefused) {
 			t.Errorf("a seat was renamed onto the removed seat's %q: %v", address, err)
 		}

@@ -67,7 +67,7 @@
 // # What a reader must not assume
 //
 //   - NOT THAT A KEY IS AN IDENTITY. A unit's key and a seat's handle are
-//     ADDRESSES people type, and both can be reassigned — see [KindRekey] and
+//     ADDRESSES people type, and both can be reassigned — see [OpRename] and
 //     `former_keys_json` — and a key that moved goes on resolving to the object
 //     that used to hold it until something else claims it. The IDENTITY is the
 //     address the object was CREATED under (`origin_key`, `origin_handle`,
@@ -106,8 +106,9 @@ const (
 	// MaxKey bounds a unit's key and a seat's handle.
 	//
 	// SIXTY-FOUR. It is the tightest cap here and it has the most reasons:
-	// a key is a SUBJECT TOKEN on [KindRekey], so the broker keeps it in a
-	// per-member index for the life of the deployment; it is a SEGMENT of
+	// a key is a SUBJECT TOKEN — its object's own content subject is its
+	// address — so the broker keeps it in a per-member index for the life
+	// of the deployment; it is a SEGMENT of
 	// every scope path an object's records are filed under; and it is what
 	// a person types into a `manages:` entry. A handle is a slug derived
 	// from a name, so sixty-four is already several times the longest one

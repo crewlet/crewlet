@@ -61,17 +61,69 @@ func (a *Applier) applyTree(ctx context.Context, tx *sql.Tx, at applyContext) (i
 // FALLBACK is the change kind an edge with no verb records — a placement's
 // "moved", an import's "imported" — and every edge that states its verb
 // records that instead ([changeFor]).
+//
+// # Renames first, then placements
+//
+// Every edge carries the object's FINAL state, under the addresses the batch
+// ends with — a seat moved into a team the same batch renamed names the new
+// key as its parent — so the renames run first and every placement lands on
+// the rows they leave. A rename's cascade may move a row an edge then places;
+// the edge is the later word and wins, which is why the structural guards are
+// open at this position ([cascadeUnits]).
+//
+// # An edge under a unit this record did not make lands nowhere either
+//
+// When a create or a rename is declined here, the address it would have given
+// a unit is not that unit's — it is nobody's, or it is whatever took it on
+// another subject. So an edge placing something under that address is declined
+// in turn (reason `parent`) rather than filing the object under a unit its
+// batch never meant, and a unit so declined declines its own contents: the
+// edges come in the order the batch named them, which puts a container before
+// what it holds.
 func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContext,
 	edges []Edge, fallback ChangeKind) (int, error) {
 
 	rows := 0
-	var first *Edge
+	// missing is every unit address an edge of this record meant to make or
+	// keep and did not.
+	missing := map[string]bool{}
+	renamed := make([]bool, len(edges))
 	for i, edge := range edges {
-		n, landed, err := a.placeEdge(ctx, tx, at, edge, fallback)
+		if edge.Op != OpRename {
+			continue
+		}
+		n, landed, err := a.renameEdge(ctx, tx, at, edge)
 		if err != nil {
 			return 0, err
 		}
 		rows += n
+		renamed[i] = landed
+	}
+	var first *Edge
+	for i, edge := range edges {
+		ref := ObjectRef{Kind: edge.Object.Kind, ID: NormalizeKey(edge.Object.ID)}
+		landed := false
+		switch parent := NormalizeKey(edge.Parent); {
+		case edge.Op == OpRename && !renamed[i]:
+			// DECLINED ALREADY, by the rename itself: the object is
+			// still on the address the batch found it at.
+		case parent != "" && missing[parent]:
+			a.declineChange(at, edgeOp(edge), ref, &addressRefusal{
+				Rule: RuleNoSuchParent, Reason: "parent",
+				Detail: fmt.Sprintf("%s is placed under %q, and the change "+
+					"this record made to that unit was declined, so the "+
+					"address is not the unit its batch meant", ref, parent)})
+		default:
+			n, placed, err := a.placeEdge(ctx, tx, at, edge, fallback)
+			if err != nil {
+				return 0, err
+			}
+			rows += n
+			landed = placed
+		}
+		if !landed && ref.Kind == KindUnit {
+			missing[ref.ID] = true
+		}
 		if landed && first == nil {
 			first = &edges[i]
 		}
@@ -106,9 +158,9 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 //     ALREADY on is declined too, because applied as a placement it would
 //     move whatever holds it. The one exception is the object THIS record
 //     created, met again by a redelivery, which is simply already done.
-//   - A MOVE OR A LEAD CHANGE places an object its batch found in the chart,
-//     and one that is not there any more — removed by a record the log
-//     ordered between — is declined rather than created.
+//   - A MOVE, A LEAD CHANGE OR A RENAME places an object its batch found in
+//     the chart — a rename's once [Applier.renameEdge] has moved it — and one
+//     that is not there any more is declined rather than created.
 //   - NO VERB is what every version-1 edge and every import's edge means: the
 //     object is created where it is absent and placed where it is not.
 func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
@@ -143,7 +195,10 @@ func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 		if declined, refuseErr := a.declineCreate(ctx, tx, at, "create", ref); refuseErr != nil || declined {
 			return 0, false, refuseErr
 		}
-	case OpMove, OpSetLead:
+	case OpMove, OpSetLead, OpRename:
+		// A RENAME'S EDGE IS PLACED ONLY ONCE ITS RENAME LANDED, so its
+		// object is on the address it names: its final parent and lead
+		// are written exactly as a move's are.
 		if !present {
 			refused, readErr := absentRefusal(ctx, tx, ref)
 			if readErr != nil {
@@ -162,6 +217,66 @@ func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	n, err := a.placeOne(ctx, tx, at, edge, changeFor(edge.Op, fallback))
 	return n, err == nil, err
+}
+
+// renameEdge runs one edge's rename, reporting whether the object now answers to
+// the address the edge names.
+//
+// THREE WAYS IT DOES NOT, each declined rather than raised ([Applier.
+// declineChange]): the object is not on the address the batch found it at —
+// removed, or renamed by a record on another subject the log ordered between —
+// or the address it moves onto is one it may not take ([Applier.rekeyRefused]).
+// And ONE WAY IT ALREADY DID: a redelivery finds the object on the new address,
+// stamped at this very position, and that is this record's own work.
+func (a *Applier) renameEdge(ctx context.Context, tx *sql.Tx, at applyContext,
+	edge Edge) (rows int, landed bool, err error) {
+
+	key := NormalizeKey(edge.Object.ID)
+	from := NormalizeKey(edge.From)
+	if from == "" || from == key {
+		return 0, false, fmt.Errorf("chart: the structural record at %s renames "+
+			"%s from %q, and a rename moves an object off one address onto "+
+			"another", at.position, edge.Object, from)
+	}
+	was := ObjectRef{Kind: edge.Object.Kind, ID: from}
+	present, _, err := structuralMark(ctx, tx, was)
+	if err != nil {
+		return 0, false, err
+	}
+	if !present {
+		done, through, err := structuralMark(ctx, tx,
+			ObjectRef{Kind: edge.Object.Kind, ID: key})
+		if err != nil {
+			return 0, false, err
+		}
+		if done && through >= at.packed {
+			return 0, true, nil
+		}
+		refused, err := absentRefusal(ctx, tx, was)
+		if err != nil {
+			return 0, false, err
+		}
+		a.declineChange(at, string(OpRename), was, refused)
+		return 0, false, nil
+	}
+	switch edge.Object.Kind {
+	case KindUnit:
+		return a.rekeyUnit(ctx, tx, at, key, from)
+	case KindSeat:
+		return a.rekeySeat(ctx, tx, at, key, from)
+	}
+	return 0, false, fmt.Errorf("chart: the structural record at %s renames a "+
+		"%s, and only a unit and a seat hold an address", at.position,
+		edge.Object.Kind)
+}
+
+// edgeOp is the word a decline of an edge is counted under: its verb, or
+// `place` for an edge that states none.
+func edgeOp(edge Edge) string {
+	if edge.Op == "" {
+		return "place"
+	}
+	return string(edge.Op)
 }
 
 // declineCreate asks every creation's rules of an edge that would create its
@@ -228,6 +343,8 @@ func changeFor(op OperationKind, fallback ChangeKind) ChangeKind {
 		return ChangeMoved
 	case OpSetLead:
 		return ChangeLed
+	case OpRename:
+		return ChangeRekeyed
 	}
 	return fallback
 }
@@ -303,8 +420,9 @@ func (a *Applier) placeOne(ctx context.Context, tx *sql.Tx, at applyContext,
 //
 // `scoped_through` AND NEVER `version`: see this file's header. A row that
 // already exists is updated in place under a monotone guard on that column
-// alone, so a redelivered placement writes nothing and a content record's own
-// expectation is never poisoned.
+// alone — a later record's write is never reverted, a redelivered placement
+// writes the same values again, and a content record's own expectation is never
+// poisoned.
 func (a *Applier) writeStructure(ctx context.Context, tx *sql.Tx, at applyContext,
 	unit Unit, exists bool) (int, error) {
 

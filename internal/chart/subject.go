@@ -99,6 +99,14 @@ const (
 	// KindRekey is a claim on one KEY — a unit key or a seat handle — and
 	// the maintenance half of this domain.
 	//
+	// VERSION 1 ONLY. Nothing publishes on it any more: a claim on the
+	// address's own subject contended with other claims on that address and
+	// with nothing else, so a create of the same address — arbitrated on the
+	// tree — was decided without seeing it, and the log could order the create
+	// second. A rename is a structural operation on [KindTree] ([OpRename]).
+	// The kind stays DECLARED and its records APPLIED for as long as one can
+	// be replayed; what follows is what it meant.
+	//
 	// ITS SUBJECT IS THE KEY ITSELF, create-only at an expectation of zero,
 	// for the reason a page's create arbitrates on its title: two objects
 	// taking one address must contend, and two objects' own subjects never
@@ -242,6 +250,8 @@ func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
 // being claimed rather than sixteen bytes of hex. [Subject.Validate] is what
 // keeps that true: a key carrying a separator or a wildcard is refused where it
 // is written.
+//
+// VERSION 1 ONLY: see [KindRekey].
 func RekeySubject(key string) Subject {
 	return Subject{Kind: KindRekey, ID: NormalizeKey(key)}
 }

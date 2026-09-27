@@ -634,16 +634,15 @@ func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
 	return verifier
 }
 
-// applyRekey publishes a key claim directly.
+// applyRekey renames one unit through a one-operation batch and applies it.
 //
-// NOT THROUGH A BATCH, because a key claim arbitrates on the KEY's own subject
-// — create-only at an expectation of zero — where a batch arbitrates on the
-// structure's. Two objects taking one address must contend, and two structural
-// batches never would.
+// THROUGH A BATCH, because a rename is structure: it arbitrates on the tree's
+// one subject with every create and every removal, which is what makes a create
+// of the same address see it.
 func (r *writeRig) applyRekey(opID, key, former string) (chart.WriteResult, error) {
 	r.t.Helper()
-	got, err := r.writer.WriteRekey(r.t.Context(), opID,
-		chart.ObjectRef{Kind: chart.KindUnit, ID: key}, former)
+	got, err := r.writer.WriteBatch(r.t.Context(), opID, chart.Batch{
+		Operations: []chart.Operation{renameOp(chart.KindUnit, former, key)}})
 	if err == nil {
 		r.drain()
 	}

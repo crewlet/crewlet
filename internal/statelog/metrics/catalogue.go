@@ -482,7 +482,8 @@ func Catalogue() []Instrument {
 				"declined (`place`, `create`, `move`, `set_lead`, `rename`, " +
 				"`content`) " +
 				"and why (`reserved`, `shape`, `removed`, `taken`, " +
-				"`identity`, `alias`, `present`, `absent`). A decline is how " +
+				"`identity`, `alias`, `present`, `absent`, `parent`). A " +
+				"decline is how " +
 				"a rule the write path could not see is held at the apply " +
 				"without stalling the log — every node reaches it " +
 				"identically — and the change it drops is one its writer was " +

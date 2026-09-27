@@ -61,8 +61,8 @@ const (
 	ClassPrivileged PayloadClass = "privileged"
 
 	// ClassStructure is every record the chart serialises on one subject
-	// for the whole tree — a create, a move, a removal, an import — plus a
-	// rekey, which is per-object and is still the company's: an address is
+	// for the whole tree — a create, a move, a rename, a removal, an import.
+	// A rename is among them for the same reason a create is: an address is
 	// how every other domain refers to an object, so reassigning one in a
 	// namespace the whole company shares is not a fact about one team.
 	ClassStructure PayloadClass = "structure"

@@ -20,8 +20,11 @@ import (
 //   - 1: the first shape.
 //   - 2: a structural edge says what the batch did to its object
 //     ([Edge.Op]), so a create whose address is held is DECLINED at the apply
-//     rather than applied as a move of whatever holds it; and a content record
-//     never creates its object at the apply either.
+//     rather than applied as a move of whatever holds it; a content record
+//     never creates its object at the apply either; and a rename is a
+//     structural edge on the tree's subject ([OpRename], [Edge.From]) rather
+//     than a claim on the address's own ([OpRekey], which only version 1
+//     carries).
 //
 // A LOWER VERSION IS READ FOR EVER, as what it meant when it was written: a
 // version-1 edge carries no verb and is a placement that creates what is
@@ -110,6 +113,11 @@ const (
 
 	// OpRekey moves one KEY onto one object, keeping the old one resolving.
 	// Its subject is [KindRekey] — the key being claimed.
+	//
+	// VERSION 1 ONLY, AND READ FOR EVER. Nothing writes it: a rename is a
+	// structural operation on the tree's subject ([OpRename]), for the reason
+	// that operation's doc gives. A record already on the log is applied as
+	// what it meant ([Applier.applyRekey]).
 	OpRekey OpKind = "rekey"
 
 	// OpBarrier is the read index's payload-free append.

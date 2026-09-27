@@ -374,12 +374,12 @@ func (w *Writer) decidePlacement(subject Subject, opID string, at time.Time,
 
 	terms := make([]ScopeTerm, 0, len(edges))
 	for _, edge := range edges {
-		switch edge.Object.Kind {
-		case KindUnit:
-			terms = append(terms, ScopeTerm{Kind: TermUnit, ID: edge.Object.ID})
-		case KindSeat:
-			terms = append(terms, ScopeTerm{
-				Kind: TermSeat, Unit: edge.Parent, ID: edge.Object.ID})
+		terms = append(terms, scopeTermFor(edge.Object, edge.Parent))
+		// A RENAMED OBJECT UNDER THE ADDRESS IT LEAVES TOO, which is the
+		// one its row is read by until this record lands.
+		if edge.From != "" {
+			terms = append(terms, scopeTermFor(
+				ObjectRef{Kind: edge.Object.Kind, ID: edge.From}, edge.Parent))
 		}
 	}
 	scope := BatchScope(terms)
@@ -497,100 +497,6 @@ func objectsOf(edges []Edge, removed []ObjectRef) []ObjectRef {
 // wire is a subject as the framework addresses it.
 func wire(s Subject) statelog.Subject {
 	return statelog.Subject{Kind: string(s.Kind), ID: s.ID}
-}
-
-// WriteRekey moves one key onto one object, keeping the old one resolving.
-//
-// ON THE KEY'S OWN SUBJECT, create-only at an expectation of zero, for the
-// reason a page's create arbitrates on its title: two objects taking one
-// address must CONTEND, and two objects' own subjects never would. A rekey
-// published on the object's subject would let two renames onto one address
-// both succeed, and the chart would then hold two objects answering to it.
-//
-// THE FORMER KEY IS STATED rather than read, because the apply RETIRES that
-// claim and a retirement the record did not state would be a row rewritten on
-// one node's authority rather than the log's.
-func (w *Writer) WriteRekey(ctx context.Context, opID string, object ObjectRef,
-	former string) (WriteResult, error) {
-
-	if opID == "" {
-		return WriteResult{}, fmt.Errorf("chart: a rekey needs an operation id")
-	}
-	key := NormalizeKey(object.ID)
-	was := NormalizeKey(former)
-	switch {
-	case key == "":
-		return WriteResult{}, fmt.Errorf("chart: a rekey names no new key")
-	case was == "":
-		return WriteResult{}, fmt.Errorf("chart: the rekey onto %q retires "+
-			"nothing — a claim that moves no reference leaves two addresses "+
-			"that both resolve: %w", key, ErrRefused)
-	case was == key:
-		return WriteResult{}, fmt.Errorf("chart: the rekey onto %q retires "+
-			"itself: %w", key, ErrRefused)
-	case object.Kind != KindUnit && object.Kind != KindSeat:
-		return WriteResult{}, fmt.Errorf("chart: only a unit and a seat hold "+
-			"a key, and this rekey names a %s: %w", object.Kind, ErrRefused)
-	}
-	subject := RekeySubject(key)
-	at := w.Now()
-	// THE SCOPE NAMES THE OBJECT, not the key: a claim's subject is an
-	// address and the apply writes the object's row, so a scope built from
-	// the subject would file the record's blast radius under something that
-	// has no row at all.
-	scope := BatchScope([]ScopeTerm{scopeTermFor(object, "")})
-
-	result, err := w.publish(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		// FIRST-WRITER-WINS ON THE NEW ADDRESS, which is what makes two
-		// renames onto one key contend: the second sees the claim and is
-		// refused rather than overwriting it.
-		Pattern: statelog.PatternCreate,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			// THE OBJECT HAS TO BE THERE, read in this snapshot: a
-			// rekey of something that has already been removed would
-			// claim an address for an object the apply then cannot
-			// find, leaving the claim standing and nothing holding it.
-			present, err := objectPresent(ctx, tx, ObjectRef{
-				Kind: object.Kind, ID: was})
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			if !present {
-				return statelog.Decision{}, fmt.Errorf("chart: nothing in the "+
-					"chart answers to %q, so there is no object to move the "+
-					"key %q onto: %w", was, key, ErrRefused)
-			}
-			// AND THE ADDRESS HAS TO BE ONE IT MAY TAKE, which is the half
-			// the broker cannot arbitrate for us: a create files under the
-			// STRUCTURE's subject and a claim under the ADDRESS's, so the two
-			// never contend, and the log will order a create of `infra` after
-			// a claim on `infra` was decided, quite legally. The rules are
-			// every creation's ([refuseCreate]) — a reserved word or a value
-			// outside the kind's grammar, a removed address, one somebody
-			// else answers to as a key, an identity or a retired alias — and
-			// the apply declines what this decide cannot see
-			// ([Applier.rekeyRefused]); this is where an operator is TOLD.
-			refused, err := refuseCreate(ctx, txBook{tx: tx}, object.Kind, key, was)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			if refused != nil {
-				return statelog.Decision{}, fmt.Errorf("chart: %q cannot take "+
-					"the address %q — %s: %s: %w", was, key, refused.Rule,
-					refused.Detail, ErrRefused)
-			}
-			return w.record(subject, OpRekey, opID, at, scope, RekeyPayload{
-				V: DocumentVersion, Key: key, FormerKey: was,
-				Object: ObjectRef{Kind: object.Kind, ID: key},
-			})
-		},
-	})
-	return WriteResult{Result: result,
-		Objects: []ObjectRef{{Kind: object.Kind, ID: key}}}, err
 }
 
 // WriteImport publishes one config revision's whole authored structure.

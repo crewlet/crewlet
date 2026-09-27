@@ -63,11 +63,11 @@ broke, because a batch that applied what it could and skipped the rest would
 produce half a reorganisation with no record of which half — and which half
 would depend on the order you happened to write them in.
 
-The operations are `create_unit`, `create_seat`, `move`, `set_lead` and
-`remove`. Each takes its object and only the fields its kind reads —
+The operations are `create_unit`, `create_seat`, `move`, `set_lead`, `rename`
+and `remove`. Each takes its object and only the fields its kind reads —
 `create_unit` a `parent` and a `lead` (so "add the platform team, led by the
 SRE" is one operation), `create_seat` and `move` a `parent`, `set_lead` a
-`lead`, and `remove` nothing — and one carrying a field its kind does not take
+`lead`, `rename` a `to`, and `remove` nothing — and one carrying a field its kind does not take
 is refused rather than having the field dropped, because a batch that dropped it
 would answer as though it asked for less than it said. An empty `parent` is the
 org root and an empty `lead` clears the unit's own lead, so neither counts as a
@@ -82,6 +82,9 @@ work:
   batch.
 - **A unit emptied by one operation can be removed by the next.** "Move
   everybody out, then dissolve the team" is likewise one gesture.
+- **A renamed object is named by its new address afterwards.** Its members
+  follow it, so "rename the team, then hire into it" names the new key — and an
+  address a rename left may be taken by a create later in the same batch.
 
 And it is the only reading under which the dangerous case is caught:
 
@@ -102,6 +105,8 @@ The rest of the rules:
 | A reserved key — `root`, `tree` and `barrier` for any object, and `none` for a seat | Each already means something: the org root, two of this log's own subject kinds, and the word `integrations.datadog.route_to` uses for nobody |
 | A seat handle outside the handle grammar — one run of lowercase letters, digits and hyphens, at most 64 bytes | A `.` is how a person's login is spelled (`jane.doe`) and a `:` a machine's (`ci:release`, `token:ops`), and every name lookup sends a name of either shape to the identity directory rather than to the chart — so a seat called that could never be reached by name |
 | An operation carrying a field its kind does not take — a `parent` on a `set_lead`, a `lead` on a `move` | Nothing would read it, so the batch would land having done less than it said |
+| A rename onto the address the object already answers to, or of an object the same batch creates | The first moves nothing and would retire the address it keeps; the second would give the object an identity — the address it is created under — nothing ever answered to. Create it under the address you mean |
+| An object named by an address it no longer answers to | A batch names each object by its current address, so a former one is refused naming the address to use |
 | A create whose object is the other kind — a `create_unit` naming a seat | The operation and its object disagree about what is being made, and applying either reading makes something the other half did not ask for |
 | More than 500 operations | One batch is one record, and a record past the broker's maximum payload is refused **permanently** with no retry that can place it. Submit several batches; each is arbitrated on its own |
 

@@ -31,7 +31,7 @@
 //
 // # And structure is neither
 //
-// A create, a move, a removal and a rekey are STRUCTURE, which internal/chart
+// A create, a move, a rename and a removal are STRUCTURE, which internal/chart
 // serialises on one subject for the whole chart — deliberately, because two
 // reparents through a common ancestor can each be locally valid and jointly
 // produce a cycle no node could see from the subject it arbitrated on. A move
@@ -81,7 +81,7 @@ type Reader interface {
 // is this surface's to call. `As` is how a PARTY is chosen, and a route that
 // could choose one would be a route that could act as somebody else; `After`
 // sequences a gesture that writes twice, and every gesture here is one
-// record. Naming the six verbs is what makes both unreachable from a handler.
+// record. Naming the five verbs is what makes both unreachable from a handler.
 type Writer interface {
 	WriteUnit(ctx context.Context, opID string, content chart.UnitContent) (
 		chart.WriteResult, error)
@@ -91,8 +91,6 @@ type Writer interface {
 		chart.WriteResult, error)
 	WriteRemoval(ctx context.Context, opID string, batch chart.Batch) (
 		chart.WriteResult, error)
-	WriteRekey(ctx context.Context, opID string, object chart.ObjectRef,
-		former string) (chart.WriteResult, error)
 	WriteImport(ctx context.Context, opID, revision string, edges []chart.Edge) (
 		chart.WriteResult, error)
 }

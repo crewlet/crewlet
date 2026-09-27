@@ -195,7 +195,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `PATCH` | `/chart/units/{key}` | Edit one unit's content. The **public half** is whoever leads that unit; a body carrying `runtime` takes `config:write` (see [below](#the-two-halves-of-every-object)) |
 | `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same split — decided by whoever leads **that seat** |
 | `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write` |
-| `POST` | `/chart/units/{key}/rename` `/chart/seats/{handle}/rename` | Change an object's **address**. The former one goes on resolving. Takes `config:write` |
+| `POST` | `/chart/units/{key}/rename` `/chart/seats/{handle}/rename` | Change an object's **address**, as a one-operation structural batch. The former one goes on resolving. Takes `config:write` |
 | `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Takes `config:write` |
 | `GET` | `/chart/imports` `/chart/imports/{revision}` | Which revision this company's structure is running, and when it landed |
 | `GET` | `/chart/check` | The **continuous report**: every way the chart and the applied settings disagree (see [below](#the-continuous-report)) |
@@ -610,6 +610,7 @@ that kind reads:
 | `create_seat` | `parent` | The unit the seat sits in |
 | `move` | `parent` | A unit's lead stays with it |
 | `set_lead` | `lead` | The unit stays where it is |
+| `rename` | `to` | The object is named by the address it answers to **at this point in the batch**, and moves onto `to`; its former address goes on resolving. An operation after it uses the new key, and an object the same batch creates cannot be renamed — create it under the address you mean |
 | `remove` | nothing | |
 
 An empty `parent` is the org root and an empty `lead` clears the unit's own
@@ -652,6 +653,13 @@ resolving until something else claims it, and a `manages:` entry somebody wrote
 last year still finds the seat it named. Every read carries `former_keys` /
 `former_handles` so a client rendering a stale reference can say **why** it
 still works rather than reporting it broken.
+
+The route publishes a batch of one `rename` operation, so it is ordered against
+every other structural write: a create of the same address is decided against
+the rename and refused, never applied on top of it. Its refusals are the
+batch's — `400` naming the rule for an address that is taken, reserved, removed,
+somebody's identity or the one the object already answers to — and `rename` is
+equally an operation you can put in a `POST /chart/batch` beside others.
 
 #### The continuous report
 

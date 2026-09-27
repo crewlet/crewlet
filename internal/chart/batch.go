@@ -87,15 +87,28 @@ const (
 	// OpSetLead sets or clears a unit's authored lead.
 	OpSetLead OperationKind = "set_lead"
 
+	// OpRename moves an object onto a new address, and the one it answered
+	// to goes on resolving to it.
+	//
+	// STRUCTURE, ON THE TREE'S ONE SUBJECT, like every other way an object
+	// comes to answer to an address. It used to be a claim on the new
+	// address's own subject, which contends with other claims on that
+	// address and with nothing else — so a create of the same address,
+	// arbitrated on the tree, was decided without seeing the claim, and the
+	// log could order it second: the create then met the renamed object on
+	// its address and moved it. One subject for every address change means
+	// whichever is decided second sees the other.
+	OpRename OperationKind = "rename"
+
 	// OpRemoveObject takes an object out of the chart. A unit that still
 	// holds anything is refused: an orphaned subtree is reachable from
 	// nothing and removable by nothing.
 	OpRemoveObject OperationKind = "remove"
 )
 
-// OperationKinds are the five.
+// OperationKinds are the six.
 var OperationKinds = []OperationKind{
-	OpCreateUnit, OpCreateSeat, OpMove, OpSetLead, OpRemoveObject,
+	OpCreateUnit, OpCreateSeat, OpMove, OpSetLead, OpRename, OpRemoveObject,
 }
 
 // Valid reports whether an operation kind is one this build performs.
@@ -118,6 +131,10 @@ type Operation struct {
 	// the new unit with. Empty CLEARS it, which is the ordinary state of a
 	// unit that inherits its lead from an ancestor.
 	Lead string `json:"lead,omitempty"`
+
+	// To is the address a rename moves the object onto. The object is
+	// named by the address it answers to at this point in the batch.
+	To string `json:"to,omitempty"`
 }
 
 // Batch is one caller-visible structural change.
@@ -207,6 +224,16 @@ const (
 	// RuleTooManyOperations is a batch past [MaxBatchOperations].
 	RuleTooManyOperations = "the batch is too large"
 
+	// RuleRenameUnchanged is a rename onto the address the object already
+	// answers to, which moves nothing and would retire the address it keeps.
+	RuleRenameUnchanged = "the object already answers to the address"
+
+	// RuleRenameCreated is a rename of an object an earlier operation in
+	// the same batch creates. Its identity is the address it is created
+	// under, and an address nothing ever answered to is no identity: the
+	// create names the address meant.
+	RuleRenameCreated = "the object is created in this batch"
+
 	// RuleUnusedField is an operation carrying a field its kind does not
 	// take — a parent on a set_lead, a lead on a move — which nothing would
 	// read, so the batch would answer as though it asked for less.
@@ -252,14 +279,23 @@ const (
 func (b Batch) Scope() ScopeSet {
 	terms := make([]ScopeTerm, 0, len(b.Operations)*2)
 	for _, op := range b.Operations {
-		id := NormalizeKey(op.Object.ID)
 		parent := NormalizeKey(op.Parent)
-		switch op.Object.Kind {
-		case KindUnit:
-			terms = append(terms, ScopeTerm{Kind: TermUnit, ID: id})
-		case KindSeat:
-			terms = append(terms, ScopeTerm{
-				Kind: TermSeat, Unit: parent, ID: id})
+		// A RENAME NAMES THE OBJECT UNDER BOTH ADDRESSES: the row is
+		// read by the one it answers to now and written under the one it
+		// moves onto, and a record deferred across either is a record
+		// this one makes stale.
+		ids := []string{NormalizeKey(op.Object.ID)}
+		if to := NormalizeKey(op.To); to != "" {
+			ids = append(ids, to)
+		}
+		for _, id := range ids {
+			switch op.Object.Kind {
+			case KindUnit:
+				terms = append(terms, ScopeTerm{Kind: TermUnit, ID: id})
+			case KindSeat:
+				terms = append(terms, ScopeTerm{
+					Kind: TermSeat, Unit: parent, ID: id})
+			}
 		}
 		if parent != "" {
 			terms = append(terms, ScopeTerm{Kind: TermUnit, ID: parent})

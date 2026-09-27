@@ -40,8 +40,7 @@ func TestEveryPathThatGivesAnAddressRefusesTheSameNames(t *testing.T) {
 			t.Errorf("a batch created the seat %q: %v", name, err)
 		}
 		// A RENAME.
-		_, err = r.writer.WriteRekey(t.Context(), "op-rename-"+name,
-			chart.ObjectRef{Kind: chart.KindSeat, ID: name}, "sarah-chen")
+		_, err = r.publishRename("op-rename-"+name, chart.KindSeat, "sarah-chen", name)
 		if !errors.Is(err, chart.ErrRefused) {
 			t.Errorf("a rename took the handle %q: %v", name, err)
 		}

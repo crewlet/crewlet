@@ -47,7 +47,7 @@ var seatRowFields = map[string]string{
 	"Name":                 "the row's `name` column",
 	"Kind":                 "the row's `kind` column",
 	"DeclaredHandle":       "the row's primary key",
-	"OriginHandle":         "the row's `origin_handle`, frozen by the first rekey and written by nothing else",
+	"OriginHandle":         "the row's `origin_handle`, frozen by the first rename and written by nothing else",
 	"FormerHandles":        "the row's `former_keys_json`",
 	"Email":                "the row's `email` column, plus the derived `email_index`",
 	"Backstory":            "the row's `backstory` column",
@@ -65,7 +65,7 @@ var seatRowFields = map[string]string{
 var unitRowFields = map[string]string{
 	"Name":            "the row's `name` column",
 	"ID":              "the row's primary key",
-	"OriginKey":       "the row's `origin_key`, frozen by the first rekey and written by nothing else",
+	"OriginKey":       "the row's `origin_key`, frozen by the first rename and written by nothing else",
 	"FormerKeys":      "the row's `former_keys_json`",
 	"Type":            "the row's `type` column",
 	"Purpose":         "the row's `purpose` column",

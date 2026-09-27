@@ -196,7 +196,14 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	return rows + edges + n, nil
 }
 
-// applyRekey moves one key onto one object and retires the old one.
+// applyRekey moves one key onto one object and retires the old one: a VERSION-1
+// rename, arbitrated on the new key's own subject ([KindRekey]).
+//
+// THE PERMANENT READER. Nothing writes this record any more — a rename is a
+// structural operation on the tree's subject ([OpRename]), because a claim on
+// the address's own subject was decided without seeing a create of the same
+// address, and the log could order the create second — but a record already on
+// the log is applied as what it meant for as long as one can be replayed.
 //
 // THE FORMER KEY GOES ON RESOLVING, in `former_keys_json`, until something else
 // claims it: a key is pasted into chat and typed into `manages:` entries, so a
@@ -231,30 +238,52 @@ func (a *Applier) applyRekey(ctx context.Context, tx *sql.Tx, at applyContext) (
 			"and leaves two addresses that both resolve", at.position, former, key)
 	}
 
+	var (
+		rows   int
+		landed bool
+	)
 	switch move.Object.Kind {
 	case KindUnit:
-		return a.rekeyUnit(ctx, tx, at, key, former)
+		rows, landed, err = a.rekeyUnit(ctx, tx, at, key, former)
 	case KindSeat:
-		return a.rekeySeat(ctx, tx, at, key, former)
+		rows, landed, err = a.rekeySeat(ctx, tx, at, key, former)
+	default:
+		return 0, fmt.Errorf("chart: the rekey at %s moves a key onto a %s, "+
+			"and only a unit and a seat hold one", at.position, move.Object.Kind)
 	}
-	return 0, fmt.Errorf("chart: the rekey at %s moves a key onto a %s, and "+
-		"only a unit and a seat hold one", at.position, move.Object.Kind)
+	if err != nil || !landed {
+		return rows, err
+	}
+	n, err := a.writeHistory(ctx, tx, at, ObjectRef{Kind: move.Object.Kind, ID: key},
+		ChangeRekeyed)
+	if err != nil {
+		return 0, err
+	}
+	return rows + n, nil
 }
 
+// rekeyUnit moves a unit from one address onto another, and every reference to
+// it by key with it, reporting whether it did.
+//
+// THE BODY OF BOTH RENAMES — a version-1 rekey record's and a structural
+// record's [OpRename] edge — and it writes no history row: each record writes
+// its own, the rekey one for itself and the structural one for its first edge
+// that landed.
 func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
-	key, former string) (int, error) {
+	key, former string) (int, bool, error) {
 
 	unit, found, err := readUnit(ctx, tx, former)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if !found {
 		// NOT AN ERROR. The object may have been removed, or this may be
 		// a redelivery arriving after the move already landed — and both
 		// are ordinary traffic on a log. Failing here would stall the
 		// whole fleet on a record every node reaches identically and
-		// none of them can act on.
-		return 0, nil
+		// none of them can act on. A structural rename asks first and
+		// says which ([Applier.renameEdge]).
+		return 0, false, nil
 	}
 	// AND THE ADDRESS IS STILL FREE, asked HERE and not only at the decide.
 	//
@@ -264,16 +293,16 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 	// is not one node's problem. Every node reads the same record, fails the
 	// same way and cannot get past it, so one lost rename would take the
 	// chart domain down across the fleet. The decide refuses this case where
-	// an operator can be told ([Writer.WriteRekey]); it cannot refuse ALL of
-	// it, because a create arbitrates on a different subject from a claim, so
-	// the log may legally order a create of this address after the claim on
-	// it was decided.
+	// an operator can be told ([Batch.Validate]); it cannot refuse ALL of it,
+	// because a record on another subject — a version-1 claim, or a
+	// version-1 content write that creates its row — can be ordered between
+	// the decide and this apply ([Applier.rekeyRefused]).
 	//
 	// Every node reaches the same verdict from the same rows, which is what
 	// keeps the copies identical — the same reason [Applier.rekeyUnit]'s
 	// absent-object case above returns nothing rather than raising.
 	if refused, takenErr := a.rekeyRefused(ctx, tx, at, KindUnit, key, former); takenErr != nil || refused {
-		return 0, takenErr
+		return 0, false, takenErr
 	}
 	// THE ORIGIN IS FROZEN BY THE FIRST REKEY AND NEVER AGAIN, which is the
 	// one moment the create address is still known: a unit that has been
@@ -288,44 +317,44 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 	unit.LastChange = a.change(at, ObjectRef{Kind: KindUnit, ID: key}, ChangeRekeyed)
 	document, err := EncodeUnit(unit)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	formerJSON, err := json.Marshal(unit.FormerKeys)
 	if err != nil {
-		return 0, fmt.Errorf("chart: encode the retired keys of %s: %w", key, err)
+		return 0, false, fmt.Errorf("chart: encode the retired keys of %s: %w", key, err)
 	}
 	// ONE STATEMENT, and it is an UPDATE of the primary key rather than an
 	// insert-and-delete: the two would leave the object absent between
 	// them, and every foreign reference this domain keeps — the edges, the
 	// children, the seats — is by key.
+	//
+	// AT OR BELOW THIS POSITION, not strictly below: a structural record
+	// renames before it places, and an earlier rename in the same record
+	// may already have moved this row by its cascade (a unit renamed after
+	// its parent was). Only a LATER record's write is one to leave alone.
 	res, err := tx.ExecContext(ctx, `
 		UPDATE chart_units
 		SET key = ?, former_keys_json = ?, updated_at = ?,
 		    scoped_through = MAX(scoped_through, ?), document = ?
-		WHERE key = ? AND scoped_through < ?`,
+		WHERE key = ? AND scoped_through <= ?`,
 		key, string(formerJSON), store.EncodeTime(at.brokerAt), at.packed,
 		document, former, at.packed)
 	if err != nil {
-		return 0, fmt.Errorf("chart: rekey unit %s to %s at %s: %w",
+		return 0, false, fmt.Errorf("chart: rekey unit %s to %s at %s: %w",
 			former, key, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	// EVERY REFERENCE BY KEY MOVES WITH IT, in the same transaction, so no
 	// read ever sees a child pointing at a key nothing answers to.
 	moved, err := a.moveUnitReferences(ctx, tx, at, key, former)
 	if err != nil {
-		return 0, err
-	}
-	rows, err := a.writeHistory(ctx, tx, at, ObjectRef{Kind: KindUnit, ID: key},
-		ChangeRekeyed)
-	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	a.note(ObjectRef{Kind: KindUnit, ID: key})
-	return int(n) + moved + rows, nil
+	return int(n) + moved, true, nil
 }
 
 // moveUnitReferences repoints everything that names a unit by its key.
@@ -380,11 +409,15 @@ func (a *Applier) moveUnitReferences(ctx context.Context, tx *sql.Tx,
 // company decodes it. So the rows are found by the projection and rewritten
 // whole, which is the one order that leaves the two agreeing.
 //
-// A ROW THIS RECORD ALREADY WROTE IS LEFT ALONE, and so is one a later record
-// did: the guard is `scoped_through < this position`, the structural write's
-// own. A row the same record placed already states where it sits, in the
-// addresses this record ends with, and a cascade that rewrote it would put
-// back the address the record moved it off.
+// A ROW A LATER RECORD WROTE IS LEFT ALONE, and one THIS record wrote is not:
+// the guard is `scoped_through <= this position`. A structural record runs
+// every rename before any placement ([Applier.applyPlacement]), so what it has
+// written by the time a cascade runs is only other renames and their cascades
+// — a unit renamed after the seat that leads it, a team renamed after one of
+// its members — and those compose: each cascade moves one reference and
+// leaves the row's others as it found them. Strictly below, the second of two
+// cascades onto one row was skipped, and a child whose lead's rename landed
+// first kept pointing at its parent's retired key.
 //
 // STRUCTURE STAMPS `scoped_through` AND NEVER `version`, for the reason this
 // file's header gives: the record arbitrated on another subject, and a version
@@ -394,7 +427,7 @@ func cascadeUnits(ctx context.Context, tx *sql.Tx, at applyContext,
 	where string, arg string, edit func(*Unit)) (int, error) {
 
 	units, err := readUnitsWhere(ctx, tx,
-		where+` AND scoped_through < ?`, arg, at.packed)
+		where+` AND scoped_through <= ?`, arg, at.packed)
 	if err != nil {
 		return 0, err
 	}
@@ -415,7 +448,7 @@ func cascadeSeats(ctx context.Context, tx *sql.Tx, at applyContext,
 	where string, arg string, edit func(*Seat)) (int, error) {
 
 	seats, err := readSeatsWhere(ctx, tx,
-		where+` AND scoped_through < ?`, arg, at.packed)
+		where+` AND scoped_through <= ?`, arg, at.packed)
 	if err != nil {
 		return 0, err
 	}
@@ -434,6 +467,11 @@ func cascadeSeats(ctx context.Context, tx *sql.Tx, at applyContext,
 // restampUnit writes a unit's structural columns and its whole document, under
 // the structural guard. [Applier.writeStructure]'s update, for a row the
 // caller has already read.
+//
+// AT OR BELOW THIS POSITION, for the reason [cascadeUnits] gives: an edge's
+// placement lands after the record's own renames, which may have moved the row
+// already, and the edge is the object's final state. A redelivery writes the
+// same values again, which is what makes the guard safe to open that far.
 func restampUnit(ctx context.Context, tx *sql.Tx, at applyContext, unit Unit) (int, error) {
 	document, err := EncodeUnit(unit)
 	if err != nil {
@@ -443,7 +481,7 @@ func restampUnit(ctx context.Context, tx *sql.Tx, at applyContext, unit Unit) (i
 		UPDATE chart_units
 		SET parent_key = ?, lead = ?, updated_at = ?,
 		    scoped_through = ?, document = ?
-		WHERE key = ? AND scoped_through < ?`,
+		WHERE key = ? AND scoped_through <= ?`,
 		unit.ParentKey, unit.Lead, store.EncodeTime(unit.UpdatedAt),
 		at.packed, document, unit.Key, at.packed)
 	if err != nil {
@@ -463,7 +501,7 @@ func restampSeat(ctx context.Context, tx *sql.Tx, at applyContext, seat Seat) (i
 	res, err := tx.ExecContext(ctx, `
 		UPDATE chart_seats
 		SET unit_key = ?, updated_at = ?, scoped_through = ?, document = ?
-		WHERE handle = ? AND scoped_through < ?`,
+		WHERE handle = ? AND scoped_through <= ?`,
 		seat.UnitKey, store.EncodeTime(seat.UpdatedAt), at.packed,
 		document, seat.Handle, at.packed)
 	if err != nil {
@@ -474,22 +512,23 @@ func restampSeat(ctx context.Context, tx *sql.Tx, at applyContext, seat Seat) (i
 	return int(n), nil
 }
 
+// rekeySeat is [Applier.rekeyUnit] for a seat.
 func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
-	handle, former string) (int, error) {
+	handle, former string) (int, bool, error) {
 
 	seat, found, err := readSeat(ctx, tx, former)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if !found {
-		return 0, nil
+		return 0, false, nil
 	}
 	// AND THE HANDLE IS STILL FREE, declined rather than raised, for the
 	// reason [Applier.rekeyUnit] gives at the same point: `handle` is this
 	// table's PRIMARY KEY, and an apply that raises is a record every node
 	// fails on identically and for ever.
 	if refused, takenErr := a.rekeyRefused(ctx, tx, at, KindSeat, handle, former); takenErr != nil || refused {
-		return 0, takenErr
+		return 0, false, takenErr
 	}
 	// FROZEN BY THE FIRST REKEY, for the reason [Applier.rekeyUnit] gives —
 	// and here it is what keeps the seat's mailbox, lease, diary and
@@ -503,26 +542,29 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	seat.LastChange = a.change(at, ObjectRef{Kind: KindSeat, ID: handle}, ChangeRekeyed)
 	document, err := EncodeSeat(seat)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	formerJSON, err := json.Marshal(seat.FormerHandles)
 	if err != nil {
-		return 0, fmt.Errorf("chart: encode the retired handles of %s: %w", handle, err)
+		return 0, false, fmt.Errorf("chart: encode the retired handles of %s: %w",
+			handle, err)
 	}
+	// AT OR BELOW THIS POSITION, for [Applier.rekeyUnit]'s reason: a unit's
+	// rename earlier in the same record moves its members by cascade.
 	res, err := tx.ExecContext(ctx, `
 		UPDATE chart_seats
 		SET handle = ?, former_keys_json = ?, updated_at = ?,
 		    scoped_through = MAX(scoped_through, ?), document = ?
-		WHERE handle = ? AND scoped_through < ?`,
+		WHERE handle = ? AND scoped_through <= ?`,
 		handle, string(formerJSON), store.EncodeTime(at.brokerAt), at.packed,
 		document, former, at.packed)
 	if err != nil {
-		return 0, fmt.Errorf("chart: rekey seat %s to %s at %s: %w",
+		return 0, false, fmt.Errorf("chart: rekey seat %s to %s at %s: %w",
 			former, handle, at.position, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	// THE AUTHORED EDGE'S OWNER MOVES, which is not the same as rewriting
 	// what somebody wrote: the `manages:` list stays as authored, and what
@@ -530,43 +572,40 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	manages, err := tx.ExecContext(ctx,
 		`UPDATE chart_manages SET manager = ? WHERE manager = ?`, handle, former)
 	if err != nil {
-		return 0, fmt.Errorf("chart: move the manages edges of %s to %s at "+
-			"%s: %w", former, handle, at.position, err)
+		return 0, false, fmt.Errorf("chart: move the manages edges of %s to %s "+
+			"at %s: %w", former, handle, at.position, err)
 	}
 	leads, err := tx.ExecContext(ctx,
 		`UPDATE chart_leads SET handle = ? WHERE handle = ?`, handle, former)
 	if err != nil {
-		return 0, fmt.Errorf("chart: move the lead edges of %s to %s at %s: %w",
-			former, handle, at.position, err)
+		return 0, false, fmt.Errorf("chart: move the lead edges of %s to %s at "+
+			"%s: %w", former, handle, at.position, err)
 	}
 	// THE UNITS IT LEADS, column and document together — see
 	// [cascadeUnits] for why the column alone was not a move at all.
 	units, err := cascadeUnits(ctx, tx, at, `lead = ?`, former,
 		func(u *Unit) { u.Lead = handle })
 	if err != nil {
-		return 0, fmt.Errorf("chart: move the led units of %s to %s at %s: %w",
-			former, handle, at.position, err)
+		return 0, false, fmt.Errorf("chart: move the led units of %s to %s at "+
+			"%s: %w", former, handle, at.position, err)
 	}
 	m, _ := manages.RowsAffected()
 	l, _ := leads.RowsAffected()
-	rows, err := a.writeHistory(ctx, tx, at, ObjectRef{Kind: KindSeat, ID: handle},
-		ChangeRekeyed)
-	if err != nil {
-		return 0, err
-	}
 	a.note(ObjectRef{Kind: KindSeat, ID: handle})
-	return int(n+m+l) + units + rows, nil
+	return int(n+m+l) + units, true, nil
 }
 
-// rekeyRefused is whether a rekey's apply must DECLINE its new address, which
+// rekeyRefused is whether a rename's apply must DECLINE its new address, which
 // is [refuseCreate] asked again at the apply for the object being renamed.
 //
-// ASKED AGAIN because the decide cannot refuse all of it: a create files under
-// the tree's subject, a removal too, and a claim under the address's own, so
-// the log may legally order either after the claim was decided. Declined
-// rather than raised — see [Applier.declineChange] — and a removed address is
-// declined because its tombstone would drop every later record on the object's
-// own subject as a record about the removed one.
+// ASKED AGAIN because the decide cannot refuse all of it. A version-1 claim
+// filed under the address's own subject while a create and a removal filed
+// under the tree's, so the log could order either after the claim was decided;
+// a structural rename contends with both, and what it still cannot see is a
+// record on another subject — a version-1 claim or content write from a build
+// mid-upgrade. Declined rather than raised — see [Applier.declineChange] — and a
+// removed address is declined because its tombstone would drop every later
+// record on the object's own subject as a record about the removed one.
 func (a *Applier) rekeyRefused(ctx context.Context, tx *sql.Tx, at applyContext,
 	kind ObjectKind, key, former string) (bool, error) {
 

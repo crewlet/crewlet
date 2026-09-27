@@ -723,13 +723,13 @@ func TestARekeyMovesTheStructureAndNotTheAuthoredText(t *testing.T) {
 		p.Manages = []string{"platform"}
 	}))
 
-	h.must(record(chart.RekeySubject("infrastructure"), chart.OpRekey, "op-rekey",
+	h.must(v1(record(chart.RekeySubject("infrastructure"), chart.OpRekey, "op-rekey",
 		chart.RekeyPayload{V: chart.DocumentVersion, Key: "infrastructure",
 			FormerKey: "platform",
 			Object:    chart.ObjectRef{Kind: chart.KindUnit, ID: "infrastructure"}},
 		chart.BatchScope([]chart.ScopeTerm{
 			{Kind: chart.TermUnit, ID: "infrastructure"},
-		})))
+		}))))
 
 	if got := h.column(`SELECT key FROM chart_units ORDER BY key`); !slices.Equal(
 		got, []string{"core", "infrastructure"}) {
@@ -980,13 +980,14 @@ func TestAUnitWithNoAuthoredLeadHoldsNoLeadRow(t *testing.T) {
 	}
 }
 
-// seatRekey is a rekey record moving one seat onto a new handle.
+// seatRekey is a VERSION-1 rekey record moving one seat onto a new handle —
+// the record no build writes any more and every build still applies.
 func seatRekey(opID, handle, former string) chart.MutationRecord {
-	return record(chart.RekeySubject(handle), chart.OpRekey, opID,
+	return v1(record(chart.RekeySubject(handle), chart.OpRekey, opID,
 		chart.RekeyPayload{V: chart.DocumentVersion, Key: handle,
 			FormerKey: former,
 			Object:    chart.ObjectRef{Kind: chart.KindSeat, ID: handle}},
-		chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermSeat, ID: handle}}))
+		chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermSeat, ID: handle}})))
 }
 
 // A CREATION THE DECIDE COULD NOT SEE IS DECLINED BY THE APPLY, and so is a

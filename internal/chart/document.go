@@ -68,11 +68,12 @@ type Unit struct {
 	// reaches the same origin.
 	//
 	// IN THE DOCUMENT AND NOT A COLUMN, deliberately. Nothing queries by it
-	// and nothing has to hold it unique — a chart address is unclaimable for
-	// ever once used, because a create arbitrates on the object's own subject
-	// and a rekey on the address's, so no second object can ever reach an
-	// origin another one holds. A column would be an index bought for a read
-	// nobody makes and a uniqueness rule something else already keeps.
+	// and nothing has to hold it unique — an identity is never issued
+	// twice, because every create and every rename arbitrates on the tree's
+	// one subject and refuses another object's identity ([refuseCreate]),
+	// so no second object can ever reach an origin another one holds. A
+	// column would be an index bought for a read nobody makes and a
+	// uniqueness rule something else already keeps.
 	OriginKey string `json:"origin_key,omitempty"`
 
 	Name    string   `json:"name,omitempty"`
@@ -353,7 +354,8 @@ func (s Seat) Validate() error {
 // checkKey refuses a key that could not address an object.
 //
 // IT REFUSES THE SCOPE SEPARATOR AND THE BROKER'S WILDCARDS, because a key is
-// both a subject token on [KindRekey] and a segment of every scope path the
+// both a subject token — its object's own content subject ([UnitSubject],
+// [SeatSubject]) — and a segment of every scope path the
 // object's records are filed under — so a key carrying one of them publishes
 // somewhere nobody consumes, or files a deferral under a path no probe reaches.
 // [Subject.Validate] states the same rule from the other end, and both have to,

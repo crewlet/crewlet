@@ -95,6 +95,7 @@ type writer struct {
 	outcome statelog.Outcome
 	err     error
 	opIDs   []string
+	batches []chart.Batch
 }
 
 func (w *writer) result(verb, opID string) (chart.WriteResult, error) {
@@ -122,19 +123,15 @@ func (w *writer) WriteSeat(_ context.Context, opID string, _ chart.SeatContent) 
 	return w.result("seat", opID)
 }
 
-func (w *writer) WriteBatch(_ context.Context, opID string, _ chart.Batch) (
+func (w *writer) WriteBatch(_ context.Context, opID string, batch chart.Batch) (
 	chart.WriteResult, error) {
+	w.batches = append(w.batches, batch)
 	return w.result("batch", opID)
 }
 
 func (w *writer) WriteRemoval(_ context.Context, opID string, _ chart.Batch) (
 	chart.WriteResult, error) {
 	return w.result("removal", opID)
-}
-
-func (w *writer) WriteRekey(_ context.Context, opID string, _ chart.ObjectRef,
-	_ string) (chart.WriteResult, error) {
-	return w.result("rekey", opID)
 }
 
 func (w *writer) WriteImport(_ context.Context, opID, _ string, _ []chart.Edge) (
@@ -853,23 +850,65 @@ func TestAReadRefusalSaysWhetherAndWhenToComeBack(t *testing.T) {
 	}
 }
 
-// A RENAME NAMES THE ADDRESS IT IS ADDRESSED BY, and refuses the one that
-// changes nothing.
-func TestARenameGoesToTheRekeyVerb(t *testing.T) {
+// A RENAME IS A ONE-OPERATION STRUCTURAL BATCH, naming the object by the
+// address the route is addressed by and the address the body asks for.
+//
+// On the tree's one subject, because that is what makes a create of the same
+// address see it (internal/chart's rename tests hold that ordering).
+func TestARenameIsPublishedAsAStructuralBatch(t *testing.T) {
 	t.Parallel()
 	r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
 	if rec := post(r.mux, "/chart/units/engineering/rename",
 		`{"to":"platform"}`); rec.Code != http.StatusOK {
 		t.Fatalf("answered %d: %s", rec.Code, rec.Body)
 	}
-	if len(r.writer.calls) != 1 || r.writer.calls[0] != "rekey" {
-		t.Fatalf("reached %v, want the rekey verb", r.writer.calls)
+	want := chart.Batch{Operations: []chart.Operation{{Kind: chart.OpRename,
+		Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"},
+		To:     "platform"}}}
+	if len(r.writer.batches) != 1 || !slices.Equal(r.writer.batches[0].Operations,
+		want.Operations) {
+		t.Fatalf("published %+v, want %+v", r.writer.batches, want)
 	}
-	// THE SAME ADDRESS IS THE FORM THAT DID NOTHING, and the message a
-	// caller can act on is here rather than in the domain's.
-	rec := post(r.mux, "/chart/units/engineering/rename", `{"to":"engineering"}`)
+}
+
+// AND A BATCH CARRIES A RENAME'S NEW ADDRESS, so a rename can ride beside the
+// moves it goes with. Dropped, the domain would refuse it as naming no address.
+func TestABatchCarriesARenamesNewAddress(t *testing.T) {
+	t.Parallel()
+	r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	rec := post(r.mux, "/chart/batch", `{"operations":[
+		{"kind":"rename","object":{"kind":"unit","id":"engineering"},"to":"platform"},
+		{"kind":"move","object":{"kind":"seat","id":"cto"},"parent":"platform"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", rec.Code, rec.Body)
+	}
+	if len(r.writer.batches) != 1 || len(r.writer.batches[0].Operations) != 2 ||
+		r.writer.batches[0].Operations[0].To != "platform" {
+		t.Fatalf("published %+v, want the rename's new address carried", r.writer.batches)
+	}
+}
+
+// AND IT ANSWERS THE DOMAIN'S REFUSAL, NOT 200.
+//
+// A rename used to be decided on the new address's own subject, so one that
+// lost to a create of the same address was accepted and then dropped at the
+// apply — and this route answered 200 for a rename that never happened. On the
+// tree's subject the decide refuses it, and the refusal is what comes back.
+func TestARenameAnswersTheRefusalRatherThan200(t *testing.T) {
+	t.Parallel()
+	r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	r.writer.err = &chart.RefusalError{Index: 0, Rule: chart.RuleKeyTaken,
+		Operation: chart.Operation{Kind: chart.OpRename,
+			Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"},
+			To:     "platform"},
+		Detail: `unit "platform" is already in the chart`}
+
+	rec := post(r.mux, "/chart/units/engineering/rename", `{"to":"platform"}`)
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("renaming to the current address answered %d, want 400", rec.Code)
+		t.Fatalf("a refused rename answered %d, want 400: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), chart.RuleKeyTaken) {
+		t.Errorf("the answer does not carry the rule it broke: %s", rec.Body)
 	}
 }
 

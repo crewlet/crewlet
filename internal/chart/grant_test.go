@@ -170,9 +170,12 @@ func TestStructureIsNeverOneTeamsToChange(t *testing.T) {
 			})
 			return err
 		}},
-		{"a rekey", func() error {
-			_, err := lead.WriteRekey(t.Context(), "op-rekey",
-				chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"}, "eng")
+		{"a rename", func() error {
+			_, err := lead.WriteBatch(t.Context(), "op-rename", chart.Batch{
+				Operations: []chart.Operation{
+					renameOp(chart.KindUnit, "eng", "engineering"),
+				},
+			})
 			return err
 		}},
 		{"an import", func() error {

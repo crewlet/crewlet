@@ -79,6 +79,17 @@ type Edge struct {
 	// structure and decides nothing about which of its objects exist.
 	// Version 2 of the record.
 	Op OperationKind `json:"op,omitempty"`
+
+	// From is the address a RENAMED object answered to before this record,
+	// set exactly when Op is [OpRename]; Object names the address it
+	// answers to after it. Empty on every other edge.
+	//
+	// ONE EDGE, FROM THE ADDRESS THE BATCH FOUND TO THE ONE IT LEFT, however
+	// many renames the batch made of the object on the way: an address the
+	// object held only between two operations of one record was never one
+	// anybody could have referred to, so retiring it would put an alias on
+	// the object that nothing ever answered to. Version 2 of the record.
+	From string `json:"from,omitempty"`
 }
 
 // PlacementPayload states edges. Its subject is [KindTree].
@@ -249,6 +260,8 @@ type SeatPayload struct {
 }
 
 // RekeyPayload moves one key onto one object. Its subject is the NEW key.
+//
+// VERSION 1 ONLY: see [KindRekey]. A rename is an [OpRename] edge now.
 //
 // It carries the FORMER key because the apply retires that claim, and a
 // retirement the record did not state would be a row rewritten on one node's

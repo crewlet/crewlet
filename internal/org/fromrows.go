@@ -339,7 +339,7 @@ func seatFrom(row chart.Seat, manages []string) *Role {
 	seat.Kind = RoleKind(row.Kind)
 	seat.DeclaredHandle = row.Handle
 	// THE ORIGIN IS RESOLVED HERE, so nothing above the view has to know the
-	// row's zero-value rule: a seat that has never been rekeyed carries its
+	// row's zero-value rule: a seat that has never been renamed carries its
 	// own handle as its origin.
 	seat.OriginHandle = row.Origin()
 	seat.FormerHandles = slices.Clone(row.FormerHandles)

@@ -35,6 +35,7 @@ type batchOp struct {
 	} `json:"object"`
 	Parent string `json:"parent,omitempty"`
 	Lead   string `json:"lead,omitempty"`
+	To     string `json:"to,omitempty"`
 }
 
 // postBatch applies one structural change.
@@ -74,7 +75,7 @@ func (s *Service) postBatch(w http.ResponseWriter, r *http.Request) {
 		ops = append(ops, chart.Operation{
 			Kind:   kind,
 			Object: chart.ObjectRef{Kind: chart.ObjectKind(op.Object.Kind), ID: op.Object.ID},
-			Parent: op.Parent, Lead: op.Lead,
+			Parent: op.Parent, Lead: op.Lead, To: op.To,
 		})
 	}
 	batch := chart.Batch{Operations: ops, Reason: body.Reason}

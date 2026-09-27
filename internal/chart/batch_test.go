@@ -721,3 +721,142 @@ func TestACreateNamingTheOtherKindIsRefused(t *testing.T) {
 		t.Errorf("a well-formed create was refused: %v", err)
 	}
 }
+
+// renameOp is one rename: the object by the address it answers to, and the one
+// it moves onto.
+func renameOp(kind chart.ObjectKind, id, to string) chart.Operation {
+	return chart.Operation{Kind: chart.OpRename,
+		Object: chart.ObjectRef{Kind: kind, ID: id}, To: to}
+}
+
+// A RENAME IS REPLAYED LIKE EVERY OTHER OPERATION: what follows it in the batch
+// sees the chart it leaves.
+//
+// The renamed unit's members follow it in the replay exactly as the apply's
+// cascade will move them, so a later operation names the unit by its new key,
+// a later create may take the address it left as an alias, and the record
+// states one edge for the renamed object — from the address the batch found it
+// at to the one it ends on, however many renames it made on the way.
+func TestARenameIsReplayedForTheOperationsAfterIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.must(create("op-eng", chart.KindUnit, "engineering", ""))
+	h.must(place("op-platform", chart.Edge{
+		Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
+		Parent: "engineering", Lead: "sarah-chen", Op: chart.OpCreateUnit}))
+	h.must(create("op-bob", chart.KindSeat, "bob", "platform"))
+
+	edges, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		renameOp(chart.KindUnit, "platform", "infra"),
+		renameOp(chart.KindUnit, "infra", "core"),
+		op(chart.OpCreateSeat, chart.KindSeat, "ana", "core"),
+		op(chart.OpCreateUnit, chart.KindUnit, "infra", ""),
+	}})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	want := []chart.Edge{
+		{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "core"},
+			Parent: "engineering", Lead: "sarah-chen", Op: chart.OpRename,
+			From: "platform"},
+		{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ana"},
+			Parent: "core", Op: chart.OpCreateSeat},
+		{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "infra"},
+			Op: chart.OpCreateUnit},
+	}
+	if !slices.Equal(edges, want) {
+		t.Fatalf("the batch published\n  %+v\nwant\n  %+v", edges, want)
+	}
+
+	// AND A LATER OPERATION SEES THE MEMBERS THE RENAME CARRIED: the team is
+	// not empty under its new key.
+	_, _, err = h.validate(chart.Batch{Operations: []chart.Operation{
+		renameOp(chart.KindUnit, "platform", "infra"),
+		op(chart.OpRemoveObject, chart.KindUnit, "infra", ""),
+	}})
+	if ref := refusal(t, err); ref.Rule != chart.RuleUnitNotEmpty {
+		t.Errorf("removing the renamed team: rule = %q, want %q — the replay "+
+			"lost the members its rename carried", ref.Rule, chart.RuleUnitNotEmpty)
+	}
+
+	// AND IT LANDS AS THE REPLAY SAID: bob followed the unit by cascade, ana
+	// was created in it, and the address it left belongs to a new unit.
+	h.must(place("op-batch", edges...))
+	if got := h.one(`SELECT unit_key FROM chart_seats WHERE handle = 'bob'`); got != "core" {
+		t.Errorf("bob sits in %q, want core", got)
+	}
+	if got := h.one(`SELECT unit_key FROM chart_seats WHERE handle = 'ana'`); got != "core" {
+		t.Errorf("ana sits in %q, want core", got)
+	}
+	if got := h.unit("core"); got.Origin() != "platform" ||
+		!slices.Equal(got.FormerKeys, []string{"platform"}) {
+		t.Errorf("core carries origin %q and former keys %v, want platform "+
+			"alone — infra was an address only between two operations of "+
+			"one record, which nothing could ever have referred to",
+			got.Origin(), got.FormerKeys)
+	}
+	if got := h.column(`SELECT key FROM chart_units ORDER BY key`); !slices.Equal(got,
+		[]string{"core", "engineering", "infra"}) {
+		t.Errorf("the units are %v, want [core engineering infra]", got)
+	}
+}
+
+// WHAT A RENAME MAY NOT DO, each refused on its own rule.
+func TestARenameIsRefusedWhereItCouldNotLand(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.must(create("op-platform", chart.KindUnit, "platform", ""))
+	h.must(create("op-design", chart.KindUnit, "design", ""))
+
+	for _, c := range []struct {
+		name string
+		ops  []chart.Operation
+		rule string
+	}{
+		{"onto the address it has", []chart.Operation{
+			renameOp(chart.KindUnit, "platform", "platform"),
+		}, chart.RuleRenameUnchanged},
+		{"onto another unit's key", []chart.Operation{
+			renameOp(chart.KindUnit, "platform", "design"),
+		}, chart.RuleKeyTaken},
+		{"onto a reserved word", []chart.Operation{
+			renameOp(chart.KindUnit, "platform", "tree"),
+		}, chart.RuleReservedKey},
+		{"an object the batch creates", []chart.Operation{
+			op(chart.OpCreateUnit, chart.KindUnit, "sales", ""),
+			renameOp(chart.KindUnit, "sales", "revenue"),
+		}, chart.RuleRenameCreated},
+		{"with no address to move onto", []chart.Operation{
+			renameOp(chart.KindUnit, "platform", ""),
+		}, chart.RuleBadKey},
+		{"by the address a rename earlier in the batch left", []chart.Operation{
+			renameOp(chart.KindUnit, "platform", "infra"),
+			op(chart.OpMove, chart.KindUnit, "platform", "design"),
+		}, chart.RuleNoSuchObject},
+		{"onto the alias another rename left", []chart.Operation{
+			renameOp(chart.KindUnit, "platform", "infra"),
+			renameOp(chart.KindUnit, "design", "platform"),
+		}, chart.RuleKeyTaken},
+	} {
+		_, _, err := h.validate(chart.Batch{Operations: c.ops})
+		if ref := refusal(t, err); ref.Rule != c.rule {
+			t.Errorf("%s: rule = %q, want %q (%s)", c.name, ref.Rule, c.rule, ref.Detail)
+		}
+	}
+
+	// THE CONTROL: a rename onto a free address, and back again, are each
+	// accepted — and the pair together publishes nothing, because it leaves
+	// the unit exactly where it was.
+	if _, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		renameOp(chart.KindUnit, "platform", "infra"),
+	}}); err != nil {
+		t.Errorf("a rename onto a free address was refused: %v", err)
+	}
+	edges, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		renameOp(chart.KindUnit, "platform", "infra"),
+		renameOp(chart.KindUnit, "infra", "platform"),
+	}})
+	if err != nil || len(edges) != 0 {
+		t.Errorf("a rename there and back published %+v (%v), want nothing", edges, err)
+	}
+}

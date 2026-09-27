@@ -436,12 +436,13 @@ var rules = map[Action]rule{
 	// jointly produce a cycle — so a move is never a fact about one unit
 	// and is not one lead's to make.
 	ActionChartStructure: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	// A RENAME IS THE COMPANY'S although the domain arbitrates it per
-	// object rather than on the structure's one subject. An address is how
-	// every other domain refers to a thing — a `manages:` entry, a lead, a
-	// channel binding, the account name a vendor holds — so reassigning one
-	// inside a namespace the whole company shares is not a fact about one
-	// team, whatever subject it contends on.
+	// A RENAME IS THE COMPANY'S, as every structural change is — the domain
+	// publishes it as a one-operation batch on the structure's one subject.
+	// Its own verb because its route is its own, and the reason it takes
+	// the company's grant is not the subject: an address is how every other
+	// domain refers to a thing — a `manages:` entry, a lead, a channel
+	// binding, the account name a vendor holds — so reassigning one inside
+	// a namespace the whole company shares is not a fact about one team.
 	ActionChartRename:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
 	ActionChartRuntime: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
 	ActionChartImport:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},

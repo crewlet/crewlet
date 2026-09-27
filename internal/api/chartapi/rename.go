@@ -2,13 +2,11 @@ package chartapi
 
 import (
 	"net/http"
-	"strconv"
 
-	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/chart"
 )
 
-// A RENAME IS ITS OWN GESTURE, and the route says so rather than hiding it
+// A RENAME IS ITS OWN ROUTE, and the route says so rather than hiding it
 // inside a content write.
 //
 // internal/chart makes the same separation and for a reason a surface
@@ -18,6 +16,15 @@ import (
 // answers to TODAY, and the body names what it should answer to next, because
 // a caller that had to address the new key would be addressing something that
 // does not exist yet.
+//
+// IT IS A ONE-OPERATION STRUCTURAL BATCH, published exactly as `POST
+// /chart/batch` would publish `{"kind":"rename"}`: a rename arbitrates on the
+// tree's one subject with every create and every removal, so a create of the
+// same address is decided against it and never the other way round. The
+// domain's refusals — an address that is taken, reserved, removed, somebody's
+// identity or the one the object already answers to — come back through the
+// same answer every write here gives, so this route checks nothing a batch
+// would not.
 //
 // THE FORMER ADDRESS GOES ON RESOLVING. A key is not an identity: the
 // object's row is, so the old address keeps resolving until something else
@@ -50,25 +57,12 @@ func (s *Service) rename(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	to := chart.NormalizeKey(body.To)
-	if to == "" {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "this rename names no new address: " +
-				"send {\"to\": \"...\"}"})
-		return
-	}
-	// THE SAME ADDRESS IS REFUSED HERE rather than published and refused
-	// there, because it is the one case the caller can fix from the message
-	// alone and the one the domain's own wording is least clear about: a
-	// normalised key that happens to equal the current one is what a client
-	// sends when its form did nothing.
-	if to == chart.NormalizeKey(former) {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": strconv.Quote(to) +
-				" is the address this object already answers to"})
-		return
-	}
-	result, err := s.writerFor(r).WriteRekey(r.Context(), s.opID(r),
-		chart.ObjectRef{Kind: kind, ID: to}, former)
+	result, err := s.writerFor(r).WriteBatch(r.Context(), s.opID(r), chart.Batch{
+		Operations: []chart.Operation{{
+			Kind:   chart.OpRename,
+			Object: chart.ObjectRef{Kind: kind, ID: former},
+			To:     body.To,
+		}},
+	})
 	s.answerWrite(w, result, err)
 }

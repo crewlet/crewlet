@@ -45,10 +45,10 @@ This is the one place the chart departs from the shape the tracker and the
 knowledge base share, and it is worth understanding because it is what you will
 see in a contention error.
 
-**Structure** — who sits under whom, who leads what, and what the chart no
-longer names — arbitrates on **one subject for the whole chart**. Every
-reparent, every placement, every removal and every import contends there, and
-exactly one wins.
+**Structure** — who sits under whom, who leads what, what each object is
+called, and what the chart no longer names — arbitrates on **one subject for
+the whole chart**. Every reparent, every placement, every rename, every removal
+and every import contends there, and exactly one wins.
 
 **Content** — a backstory, a goal, a purpose, a channel, a model chain —
 arbitrates **per object**, on that unit's or that seat's own subject. Two leads
@@ -95,7 +95,8 @@ and the seat is nowhere, with their own document saying it exists.
 
 **It has its own routes instead.** `GET`/`PATCH /chart/units/{key}` and
 `/chart/seats/{handle}` for content, `POST /chart/batch` for structure,
-`POST /chart/units/{key}/rename` for an address, `POST /chart/import` for a
+`POST /chart/units/{key}/rename` for an address (a one-operation batch),
+`POST /chart/import` for a
 whole revision's authored placement, and `GET /company/export` for the document
 back out. What decides them is **which half of an object you are writing**: the
 public half is whoever leads that object, and anything under `runtime` — a
@@ -265,8 +266,8 @@ what the batch did to that object — `create_unit`, `create_seat`, `move` or
 `set_lead` — beside the object's whole structural post-state, and the apply
 decides by it. Without the verb an edge is only a placement, and a placement of
 an object the chart already holds is a move: so a create that met an address
-somebody had taken since its decide — a rename arbitrated on the address's own
-subject, a record from a build still on the old version — moved whatever held
+somebody had taken since its decide — a rename or a content record from a
+build still on the old version, on a subject of its own — moved whatever held
 it under the creator's parent and cleared its lead, while the create itself
 landed as nothing. With it:
 
@@ -318,14 +319,27 @@ before the first one moved. Renaming *back* is not a collision: an object
 claiming an address it used to answer to is claiming something that already
 resolves to it, which is the undo an operator is most likely to want.
 
-The rule is enforced twice, and the second place is the important one. A claim
-arbitrates on the **address's** own subject and a create on the **structure's**,
-so the two never contend at the broker: a claim decided while an address was
-free can be applied after a create that took it. That ordering is legal and
-cannot be made otherwise, so the apply asks again and **drops** the claim
-rather than raising — the key is a primary key, and an apply that raised would
-fail on every node identically, on a record none of them can ever get past,
-turning one lost rename into a stalled domain across the fleet.
+**A rename is structure**, a `rename` operation in a batch on the tree's one
+subject — `POST /chart/units/{key}/rename` publishes exactly that. It used to be
+a claim on the new address's own subject, which contended with other claims on
+that address and with nothing else: a create of the same address was decided
+without seeing the claim, the log could apply it second, and it then met the
+renamed unit on its address and moved it. On one subject whichever of the two is
+decided second sees the other and is refused, so a rename that loses is a `400`
+naming the rule rather than a `200` for a change that never happened. A batch
+names each object by the address it has **at that point**, so an operation after
+a rename uses the new key, and a unit renamed twice in one batch retires only the
+address the batch found it at — an address it held between two operations of
+one record was never one anybody could have referred to.
+
+The rule is still asked again at the apply, and **dropped** rather than raised
+there: a build mid-upgrade still writes renames and content records on subjects
+of their own, so the log can order one of those between a batch's decide and
+its apply. The key is a primary key, and an apply that raised would fail on
+every node identically, on a record none of them can ever get past, turning one
+lost rename into a stalled domain across the fleet. What the batch placed under
+an address its own create or rename did not get is declined with it (reason
+`parent`), rather than filed under whatever unit answers to that address now.
 
 **An unchanged revision is a no-op.** Re-activating a config revision the chart
 has already imported — which is the credential-rotation gesture, and therefore

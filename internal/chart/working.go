@@ -65,16 +65,29 @@ type wnode struct {
 	// lead is a unit's AUTHORED lead, "" where it inherits one.
 	lead string
 
-	// op is what this batch did to the object, by [opRank], or "" while no
-	// operation has named it.
+	// origin is the address the object was CREATED under — its identity,
+	// which no rename moves.
+	origin string
+
+	// op is the highest-ranked of what this batch did to the object's place
+	// in the tree ([opRank]), or "" while nothing has. A rename is not among
+	// them: it is recorded in `from`.
 	op OperationKind
+
+	// from is the address the object answered to when the batch began, set
+	// by its first rename and "" while nothing has renamed it.
+	from string
+
+	// named marks an object an operation in this batch named, so its edge
+	// is considered for the record.
+	named bool
 
 	// removed marks an object an operation in this batch took out.
 	removed bool
 }
 
-// opRank orders what a batch can do to one object, for the one verb its edge
-// is published under.
+// opRank orders what a batch can do to one object's place in the tree, for the
+// one verb its edge is published under.
 //
 // ONE VERB PER EDGE, because the record states one edge per object — a second
 // edge for the same object would leave the applied result dependent on which
@@ -83,6 +96,11 @@ type wnode struct {
 // rank is the one that decides what the apply does: a create must be applied as
 // a create even when the batch also moved the object afterwards, because only
 // a create is declined when its address turns out to be held.
+//
+// A RENAME OUTRANKS A MOVE AND A LEAD CHANGE and never meets a create (a batch
+// may not rename what it creates — [RuleRenameCreated]), so it is not ranked
+// here: an object whose `from` differs from its key is published as a rename
+// whatever else the batch did to it ([working.edges]).
 var opRank = map[OperationKind]int{
 	OpSetLead:    1,
 	OpMove:       2,
@@ -90,14 +108,26 @@ var opRank = map[OperationKind]int{
 	OpCreateSeat: 3,
 }
 
-// named records that op named this object, and raises its verb.
-func (w *working) named(n *wnode, op OperationKind) {
-	if n.op == "" {
+// touch records that an operation named this object.
+func (w *working) touch(n *wnode) {
+	if !n.named {
+		n.named = true
 		w.touched = append(w.touched, n)
 	}
+}
+
+// did records that op changed this object's place in the tree, and raises its
+// verb.
+func (w *working) did(n *wnode, op OperationKind) {
+	w.touch(n)
 	if opRank[op] > opRank[n.op] {
 		n.op = op
 	}
+}
+
+// created reports whether an earlier operation in this batch created n.
+func (n *wnode) created() bool {
+	return n.op == OpCreateUnit || n.op == OpCreateSeat
 }
 
 // refKey composes an object reference into the replay's own key.
@@ -145,7 +175,7 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 		if refused := w.checkParent(refuse, parent); refused != nil {
 			return refused
 		}
-		n := &wnode{kind: ref.Kind, key: id, parent: parent}
+		n := &wnode{kind: ref.Kind, key: id, origin: id, parent: parent}
 		if ref.Kind == KindUnit {
 			// A UNIT MAY BE CREATED LED, which is one gesture — "add the
 			// platform team, led by the SRE" — and the lead a set_lead
@@ -153,7 +183,7 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			n.lead = NormalizeKey(op.Lead)
 		}
 		w.live[refKey(ref)] = n
-		w.named(n, op.Kind)
+		w.did(n, op.Kind)
 		return nil
 
 	case OpMove:
@@ -169,7 +199,7 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			return refused
 		}
 		n.parent = parent
-		w.named(n, op.Kind)
+		w.did(n, op.Kind)
 		return nil
 
 	case OpSetLead:
@@ -181,7 +211,37 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			return refused
 		}
 		n.lead = NormalizeKey(op.Lead)
-		w.named(n, op.Kind)
+		w.did(n, op.Kind)
+		return nil
+
+	case OpRename:
+		n, refused := w.checkPresent(refuse, ref)
+		if refused != nil {
+			return refused
+		}
+		if n.created() {
+			return refuse(RuleRenameCreated, "%q is created by an earlier "+
+				"operation in this batch, and the address an object is created "+
+				"under is its identity for ever — create it under the address "+
+				"it should answer to", n.key)
+		}
+		to := NormalizeKey(op.To)
+		if to == "" {
+			return refuse(RuleBadKey, "a rename names no new address: state `to`")
+		}
+		if to == n.key {
+			return refuse(RuleRenameUnchanged, "%q is the address this %s "+
+				"already answers to, so the rename would move nothing", to, n.kind)
+		}
+		// [refuseCreate]'s rules, with the object as SELF: a rename may take
+		// back an address it used to answer to, and never another object's
+		// alias or identity. See the function for why the two differ.
+		if refused, _ := refuseCreate(ctx, w, n.kind, to, n.key); refused != nil {
+			return refuse(refused.Rule, "%q cannot take the address %q — %s",
+				n.key, to, refused.Detail)
+		}
+		w.rename(n, to)
+		w.touch(n)
 		return nil
 
 	case OpRemoveObject:
@@ -229,9 +289,11 @@ func unusedField(refuse refuseFunc, op Operation) *RefusalError {
 		OpCreateSeat:   {"parent"},
 		OpMove:         {"parent"},
 		OpSetLead:      {"lead"},
+		OpRename:       {"to"},
 		OpRemoveObject: nil,
 	}[op.Kind]
-	for field, value := range map[string]string{"parent": op.Parent, "lead": op.Lead} {
+	for field, value := range map[string]string{
+		"parent": op.Parent, "lead": op.Lead, "to": op.To} {
 		if value != "" && !slices.Contains(takes, field) {
 			return refuse(RuleUnusedField, "%s takes %s and no %q — nothing "+
 				"would read it, and a batch that dropped it would answer as "+
@@ -316,7 +378,40 @@ func (w *working) holder(_ context.Context, kind ObjectKind, key string) (
 	return "", heldByNothing, nil
 }
 
+// rename moves n onto to, and advances every reference the apply's cascade will
+// move with it ([Applier.moveUnitReferences], [Applier.rekeySeat]) — so an
+// operation later in the batch, and the cycle walk, see the chart the rename
+// leaves rather than the one it found.
+func (w *working) rename(n *wnode, to string) {
+	old := n.key
+	delete(w.live, refKey(ObjectRef{Kind: n.kind, ID: old}))
+	// THE ADDRESS IT LEAVES GOES ON RESOLVING TO IT, as a retired alias —
+	// and the one it was created under as its identity, which is how the
+	// apply's rows will answer from here on.
+	w.aliases[refKey(ObjectRef{Kind: n.kind, ID: old})] = n
+	w.identities[refKey(ObjectRef{Kind: n.kind, ID: n.origin})] = n
+	if n.from == "" {
+		n.from = old
+	}
+	n.key = to
+	w.live[refKey(ObjectRef{Kind: n.kind, ID: to})] = n
+	for _, other := range w.live {
+		switch {
+		case n.kind == KindUnit && other.parent == old:
+			other.parent = to
+		case n.kind == KindSeat && other.kind == KindUnit && other.lead == old:
+			other.lead = to
+		}
+	}
+}
+
 // checkPresent refuses an operation on an object the chart does not hold.
+//
+// AN ADDRESS THE OBJECT USED TO ANSWER TO IS NOT ITS NAME HERE. A batch names
+// each object by the address it has at that point — an earlier operation's
+// rename included — because a structural record states current addresses and
+// nothing else, and resolving a retired one would make "which object" depend on
+// how many renames ago the caller last looked.
 func (w *working) checkPresent(refuse refuseFunc, ref ObjectRef) (*wnode, *RefusalError) {
 	key := refKey(ref)
 	if w.removedKeys[key] {
@@ -324,6 +419,11 @@ func (w *working) checkPresent(refuse refuseFunc, ref ObjectRef) (*wnode, *Refus
 	}
 	n, held := w.live[key]
 	if !held {
+		if renamed, alias := w.aliases[key]; alias && !renamed.removed {
+			return nil, refuse(RuleNoSuchObject, "%q is a former address of %s "+
+				"%q — name the object by the address it answers to now",
+				ref.ID, renamed.kind, renamed.key)
+		}
 		return nil, refuse(RuleNoSuchObject, "%q is not in the chart", ref.ID)
 	}
 	return n, nil
@@ -342,6 +442,11 @@ func (w *working) checkParent(refuse refuseFunc, parent string) *RefusalError {
 		return refuse(RuleNoSuchParent, "%q was removed", parent)
 	}
 	if _, held := w.live[key]; !held {
+		if renamed, alias := w.aliases[key]; alias && !renamed.removed {
+			return refuse(RuleNoSuchParent, "%q is a former address of unit "+
+				"%q — name the parent by the address it answers to now",
+				parent, renamed.key)
+		}
 		return refuse(RuleNoSuchParent, "%q is not a unit in the chart — a "+
 			"parent may be created by an earlier operation in this batch, and "+
 			"nothing in this one creates it", parent)
@@ -414,10 +519,24 @@ func (w *working) edges() []Edge {
 			// is on itself.
 			continue
 		}
+		verb := n.op
+		if n.from != "" && n.from != n.key {
+			verb = OpRename
+		}
+		if verb == "" {
+			// RENAMED AND RENAMED BACK, and nothing else: the batch
+			// leaves the object exactly as it found it, so it states
+			// nothing about it. An edge with no verb would be read as a
+			// placement that creates what is absent.
+			continue
+		}
 		edge := Edge{
 			Object: ObjectRef{Kind: n.kind, ID: n.key},
 			Parent: n.parent,
-			Op:     n.op,
+			Op:     verb,
+		}
+		if verb == OpRename {
+			edge.From = n.from
 		}
 		if n.kind == KindUnit {
 			edge.Lead = n.lead
@@ -504,7 +623,7 @@ func (w *working) scan(ctx context.Context, tx *sql.Tx, kind ObjectKind,
 		if err := rows.Scan(&key, &parent, &lead, &formerJSON, &document); err != nil {
 			return fmt.Errorf("chart: read a %s row: %w", kind, err)
 		}
-		n := &wnode{kind: kind, key: key, parent: parent, lead: lead}
+		n := &wnode{kind: kind, key: key, origin: key, parent: parent, lead: lead}
 		w.live[refKey(ObjectRef{Kind: kind, ID: key})] = n
 		if formerJSON == "" || formerJSON == "[]" {
 			continue
@@ -521,6 +640,7 @@ func (w *working) scan(ctx context.Context, tx *sql.Tx, kind ObjectKind,
 		if err != nil {
 			return fmt.Errorf("chart: decode the renamed %s %s: %w", kind, key, err)
 		}
+		n.origin = identity
 		if identity != key {
 			w.identities[refKey(ObjectRef{Kind: kind, ID: identity})] = n
 		}

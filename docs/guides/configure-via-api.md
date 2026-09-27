@@ -320,6 +320,11 @@ identity, so a `manages:` entry somebody wrote last year still finds what it
 named. Reads carry `former_keys` / `former_handles` so a client can say why a
 stale reference still works.
 
+A rename is structure — the route publishes a one-operation batch — so it can
+also ride in a `POST /chart/batch` beside the moves it goes with, as
+`{"kind":"rename","object":{"kind":"unit","id":"engineering"},"to":"platform"}`.
+Operations after it name the unit by its new key.
+
 ### What a `200` means, and what a `202` does not
 
 `200` means the record is durable **and this node has applied it**, so your next
