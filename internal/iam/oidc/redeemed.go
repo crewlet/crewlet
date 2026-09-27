@@ -18,6 +18,21 @@ import (
 // this one. So the node that finishes a flight remembers it, and a flight it
 // has seen is refused before anything reaches the provider.
 //
+// # Asked twice: before the turn, and spent inside it
+//
+// A flight is SPENT ([Redemptions.Redeem]) only once it holds its turn at the
+// token endpoint ([Provider.Admit]), because a flight spent before the wait was
+// spent on a request that may never reach the provider — a browser that left
+// mid-wave, whose reload was then refused as a replay. And it is ASKED
+// ([Redemptions.Seen]) before the wait as well, because a flight this node has
+// already finished has nothing to wait for: waiting, it took one of the
+// provider's [ExchangeSlots] to learn it would be refused, and whoever
+// stockpiled a spent cookie could keep every slot queued with presentations
+// that ask the provider nothing, shutting out every sign-in and every
+// deactivation probe on the node. The first question keeps a known replay out
+// of the queue; the second is what settles two first presentations racing for
+// the turn to one exchange, since both pass the first.
+//
 // # Named by its verifier, which every flight has always carried
 //
 // A flight is remembered by a digest of its PKCE [Flight.Verifier]: thirty-two
@@ -95,9 +110,27 @@ func newRedemptions(max int) *Redemptions {
 		order: list.New()}
 }
 
+// Seen reports whether a flight is remembered as redeemed and has not yet
+// expired — the replay the caller refuses — and records nothing. Ask it after
+// [Open] has accepted the flight and before waiting for a turn at the token
+// endpoint, so a known replay never queues for one; a flight it answers false
+// for is still spent only by [Redemptions.Redeem], inside the turn.
+func (r *Redemptions) Seen(f Flight, now time.Time) bool {
+	name := nameOf(f)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	held, seen := r.flights[name]
+	// EXPIRED, it is a different flight of the same name — [Redemptions.Redeem]
+	// makes way for it — so it is not a replay.
+	return seen && now.Before(held.Value.(*redemption).expires)
+}
+
 // Redeem records a flight as redeemed, reporting false when it already was —
-// the replay the caller refuses. Call it after [Open] has accepted the flight
-// and before the provider is asked anything.
+// the replay the caller refuses. Call it after [Open] has accepted the flight,
+// once its turn at the token endpoint is held ([Provider.Admit]) and before
+// the provider is asked anything — and give the turn back before refusing,
+// since a refusal waits out its pad and the turn is one of the provider's
+// [ExchangeSlots].
 func (r *Redemptions) Redeem(f Flight, now time.Time) bool {
 	name := nameOf(f)
 	r.mu.Lock()

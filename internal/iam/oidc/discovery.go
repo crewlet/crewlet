@@ -186,6 +186,16 @@ type discovery struct {
 // legitimate callback is REFUSED for it: a caller waits for a slot on its own
 // request's context, for as long as that lives, and a browser that gives up
 // has asked for nothing more.
+//
+// A SLOT IS HELD FOR THE PROVIDER'S ANSWER AND NOTHING ELSE, which is what the
+// arithmetic above assumes. A refusal waits out the sign-in pad before it
+// answers (internal/iam/credential's PadDeadline, 400 ms — four exchanges at
+// the figure above), so one padded inside a slot held it that long having asked
+// the provider nothing — and a refusal is what anybody can cause: eight
+// replays of one spent cookie at a time held every slot for as long as they
+// were sent, and every sign-in and deactivation probe on the node queued
+// behind them. So the slot is given back before any refusal, and a flight this
+// node already finished is refused before it waits for one ([Redemptions.Seen]).
 const ExchangeSlots = 8
 
 // NewProvider builds one. A nil client takes the identity provider's own from
@@ -238,7 +248,9 @@ func (p *Provider) Config() Config { return p.config }
 //
 // A caller waits on its own context; one that ends first is answered its
 // context's error, having taken no slot and asked the provider nothing. The
-// caller gives the slot back with [Admission.Release].
+// caller gives the slot back with [Admission.Release] AS SOON AS THE PROVIDER
+// HAS ANSWERED, or as soon as it decides not to ask — never after anything
+// that waits on something else, a refusal's pad above all ([ExchangeSlots]).
 func (p *Provider) Admit(ctx context.Context) (*Admission, error) {
 	release, err := p.slot(ctx)
 	if err != nil {

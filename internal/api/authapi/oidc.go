@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -177,6 +178,17 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		s.refuseSignIn(w, r, adm, attempt, "no authorization code")
 		return
 	}
+	// A FLIGHT THIS NODE HAS ALREADY FINISHED IS REFUSED HERE, before it
+	// asks for the discovery document or waits for a turn at the token
+	// endpoint: it would be refused inside the turn anyway, and whoever
+	// stockpiled a spent cookie could otherwise keep the provider's slots
+	// queued with presentations that ask it nothing — see
+	// [oidc.Redemptions]. This records nothing; the flight is spent inside
+	// the turn, by [Service.exchange].
+	if s.redeemed.Seen(flight, s.now()) {
+		s.refuseSignIn(w, r, adm, attempt, "flight already redeemed on this node")
+		return
+	}
 
 	metadata, err := s.provider.Metadata(r.Context())
 	if err != nil {
@@ -184,38 +196,25 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
-	// A TURN AT THE PROVIDER'S TOKEN ENDPOINT FIRST ([oidc.ExchangeSlots]),
-	// waited for on this request. A browser that leaves while it waits
-	// has asked the provider nothing and spent nothing: it is answered 503,
-	// counted as no attempt, and the reload the answer invites presents
-	// the same flight to be exchanged then.
-	admission, err := s.provider.Admit(r.Context())
-	if err != nil {
-		abandoned(w, r, source, err)
-		return
-	}
-	defer admission.Release()
-	// ONE EXCHANGE PER FLIGHT, decided once the provider WILL be asked and
-	// before it is: whoever started a flight holds its cookie and its
-	// state, and could otherwise make this node exchange a code at the
-	// provider once per request for the flight's whole ten minutes. Spent
-	// before the turn came, a flight whose browser left during the wait
-	// was refused as a replay on the reload, having reached nobody.
-	if !s.redeemed.Redeem(flight, s.now()) {
+	tokens, err := s.exchange(r.Context(), flight, metadata.TokenEndpoint, code)
+	switch {
+	case errors.Is(err, errFlightSpent):
+		// ANOTHER PRESENTATION OF THIS FLIGHT held the turn first, and
+		// both had passed the check above. Refused exactly as that check
+		// refuses — and only now, with the turn already given back, so
+		// the pad below holds nothing the provider's next caller needs.
 		s.refuseSignIn(w, r, adm, attempt, "flight already redeemed on this node")
 		return
-	}
-	tokens, err := admission.Exchange(r.Context(),
-		metadata.TokenEndpoint, code, flight.Verifier)
-	admission.Release()
-	if err != nil && r.Context().Err() != nil {
-		// THE BROWSER WENT AWAY DURING THE EXCHANGE ITSELF: nothing was
-		// refused, so nothing is counted as a failed attempt — and the
-		// flight stays spent, since the provider may have been asked.
+	case err != nil && r.Context().Err() != nil:
+		// THE BROWSER WENT AWAY, while it waited for its turn or during
+		// the exchange itself: nothing was refused, so nothing is counted
+		// as a failed attempt. A wait that ended spent nothing, and the
+		// reload the 503 invites presents the same flight to be exchanged
+		// then; an exchange that was cut off stays spent, since the
+		// provider may have been asked.
 		abandoned(w, r, source, err)
 		return
-	}
-	if err != nil {
+	case err != nil:
 		log.WarnContext(r.Context(), "api_oidc_exchange_failed", "error", err)
 		s.refuseSignIn(w, r, adm, attempt, "code exchange failed")
 		return
@@ -308,6 +307,48 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		how.absolute = replaced.Bearer.AbsoluteExpiresAt
 	}
 	s.completeSignIn(w, r, held, how)
+}
+
+// errFlightSpent is [Service.exchange]'s answer for a flight another
+// presentation spent while this one waited for its turn.
+var errFlightSpent = errors.New("authapi: the flight was already redeemed on " +
+	"this node")
+
+// exchange redeems a flight's authorization code at the provider: a turn at
+// its token endpoint, the flight spent inside it, the code exchanged — and the
+// turn given back BEFORE IT RETURNS, on every outcome.
+//
+// # Admitted, then spent, then asked
+//
+// The TURN comes first ([oidc.ExchangeSlots]), waited for on the request's own
+// context, so a browser that leaves while it waits has asked the provider
+// nothing and spent nothing: the answer is its context's error. The flight is
+// SPENT once the provider WILL be asked and before it is ([oidc.Redemptions]):
+// whoever started a flight holds its cookie and its state, and could otherwise
+// make this node exchange a code at the provider once per request for the
+// flight's whole ten minutes — while spent before the turn came, a flight
+// whose browser left during the wait was refused as a replay on the reload,
+// having reached nobody. A flight another presentation spent while this one
+// waited answers [errFlightSpent] having asked the provider nothing.
+//
+// # The turn never outlives the provider's answer
+//
+// Every refusal the caller writes waits out the sign-in pad first, and a turn
+// held across one is one of the provider's eight slots held for 400 ms having
+// asked the provider nothing. So the turn is this function's alone and ends
+// with it: the caller cannot refuse from inside one, whichever arm it adds.
+func (s *Service) exchange(ctx context.Context, flight oidc.Flight,
+	tokenEndpoint, code string) (oidc.Tokens, error) {
+
+	admission, err := s.provider.Admit(ctx)
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	defer admission.Release()
+	if !s.redeemed.Redeem(flight, s.now()) {
+		return oidc.Tokens{}, errFlightSpent
+	}
+	return admission.Exchange(ctx, tokenEndpoint, code, flight.Verifier)
 }
 
 // stepUpFlight is what a provider STEP-UP start seals: the window the provider

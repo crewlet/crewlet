@@ -108,3 +108,37 @@ func TestAFlightAnyBuildSealedIsExchangedOnce(t *testing.T) {
 			"authorization request carried in a URL")
 	}
 }
+
+// ASKING WHETHER A FLIGHT WAS REDEEMED SPENDS NOTHING.
+//
+// The sign-in surface asks before it waits for a turn at the token endpoint,
+// so a known replay never queues for one — and asks for every flight, the
+// first presentation of each included. So the question must record nothing: a
+// flight it was asked about is still redeemed once, inside its turn, and it
+// answers true only for a flight redeemed and not yet expired — past its
+// expiry a flight of that name is a different one, which [Redemptions.Redeem]
+// makes way for.
+//
+// Mutation: record the flight in Seen and its own first redemption is refused;
+// answer from the name alone and an expired entry reads as a replay.
+func TestAskingWhetherAFlightWasRedeemedSpendsNothing(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
+	flight := Flight{Verifier: "a-verifier", ExpiresAt: at.Add(FlightTTL)}
+
+	r := NewRedemptions()
+	if r.Seen(flight, at) {
+		t.Fatal("a flight nobody redeemed was seen as redeemed")
+	}
+	if !r.Redeem(flight, at) {
+		t.Fatal("a flight that was only asked about was refused its " +
+			"redemption, so asking spent it")
+	}
+	if !r.Seen(flight, at.Add(time.Minute)) {
+		t.Error("a flight redeemed a minute earlier was not seen as redeemed")
+	}
+	if r.Seen(flight, at.Add(FlightTTL)) {
+		t.Error("a flight past its expiry was seen as redeemed, though Open " +
+			"refuses it and a flight of that name is a different one")
+	}
+}

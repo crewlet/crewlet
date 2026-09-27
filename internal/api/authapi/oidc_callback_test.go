@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -509,14 +511,7 @@ func TestACallbackThatGivesUpWaitingForATurnSpendsNoFlight(t *testing.T) {
 	cookies := started.Result().Cookies()
 
 	// THE WAVE: every slot held by somebody else's exchange.
-	held := make([]*oidc.Admission, 0, oidc.ExchangeSlots)
-	for range oidc.ExchangeSlots {
-		admission, err := rig.provider.Admit(t.Context())
-		if err != nil {
-			t.Fatalf("hold a slot: %v", err)
-		}
-		held = append(held, admission)
-	}
+	held := holdEverySlot(t, rig.provider)
 	gone, leave := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer leave()
 	abandoned := rig.callbackWithin(gone, t, cookies, code, state)
@@ -545,6 +540,200 @@ func TestACallbackThatGivesUpWaitingForATurnSpendsNoFlight(t *testing.T) {
 	if _, failures := audit.snapshot(); len(failures) != 0 {
 		t.Errorf("the trail holds %d failed attempts, want none: nobody "+
 			"presented anything wrong", len(failures))
+	}
+}
+
+// A SPENT FLIGHT IS REFUSED WITHOUT WAITING FOR A TURN.
+//
+// Whoever called back once holds a spent cookie for its ten minutes, and a
+// presentation of it asks the provider nothing — so it has nothing to wait for
+// at the token endpoint. Queued for a turn, it took one of the eight to learn
+// it would be refused: eight replays at a time kept every slot, and every
+// legitimate callback and deactivation probe on the node waited behind them
+// for as long as the replays were sent. Here every slot is held by somebody
+// else's exchange, and the replay is still refused at once, as the one failed
+// sign-in, having asked the provider nothing.
+//
+// Mutation: drop the check before the turn and the replay waits for a slot it
+// never gets, answering 503 when its request ends.
+func TestASpentFlightIsRefusedWithoutWaitingForATurn(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	audit := &recordingAudit{}
+	rig := newProviderRig(t, idp, b, func(o *authapi.Options) { o.Audit = audit })
+
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	cookies := started.Result().Cookies()
+	if first := rig.callback(t, cookies, code, state); first.Code != http.StatusFound {
+		t.Fatalf("the first callback answered %d (%s), want the sign-in",
+			first.Code, first.Body)
+	}
+
+	held := holdEverySlot(t, rig.provider)
+	defer func() {
+		for _, admission := range held {
+			admission.Release()
+		}
+	}()
+	// BOUNDED, so the mutation answers rather than hanging the case: a
+	// replay refused before the turn never waits at all.
+	within, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	replayed := rig.callbackWithin(within, t, cookies, code, state)
+	if replayed.Code != http.StatusUnauthorized {
+		t.Errorf("a spent flight presented while every turn was held answered "+
+			"%d (%s), want the one sign-in refusal at once", replayed.Code,
+			replayed.Body)
+	}
+	if n := idp.exchanges.Load(); n != 1 {
+		t.Errorf("the provider's token endpoint was asked %d times for one "+
+			"flight, want once", n)
+	}
+	if _, failures := audit.snapshot(); len(failures) != 1 {
+		t.Errorf("the trail holds %d failed attempts, want the replay", len(failures))
+	}
+}
+
+// A REFUSAL GIVES ITS TURN BACK BEFORE IT WAITS OUT ITS PAD.
+//
+// Two presentations of one flight that arrive before either is exchanged both
+// pass the check before the turn, and the second to hold a turn finds the
+// flight spent. It is refused — and every refusal waits out the sign-in pad
+// first, four times an exchange, so one refused from inside its turn held one
+// of the provider's eight slots for the whole pad having asked the provider
+// nothing, which anybody can do as often as they start a flight and call back
+// twice at once. Here both presentations wait while every slot is held; one is
+// exchanged and signs the person in, the other is parked in its refusal's pad,
+// and while it is parked another caller is admitted at once.
+//
+// NOT PARALLEL, because it knows both presentations are past the check and
+// waiting by counting the goroutines parked for a turn in this process, and a
+// parallel case's callback waiting beside them would be counted too.
+//
+// Mutation: give the turn back only once the refusal has answered (the
+// deferred release this replaced) and the caller beside the pad is never
+// admitted.
+func TestARefusalGivesItsTurnBackBeforeItsPad(t *testing.T) {
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	padding := make(chan struct{}, 2)
+	resume := make(chan struct{})
+	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
+		Now: func() time.Time { return clock },
+		// THE PAD, parked until the case has looked beside it.
+		Sleep: func(ctx context.Context, _ time.Duration) {
+			padding <- struct{}{}
+			select {
+			case <-resume:
+			case <-ctx.Done():
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("credential.NewThrottle: %v", err)
+	}
+	audit := &recordingAudit{}
+	rig := newProviderRig(t, idp, b, func(o *authapi.Options) {
+		o.Throttle = throttle
+		o.Audit = audit
+	})
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	cookies := started.Result().Cookies()
+
+	held := holdEverySlot(t, rig.provider)
+	answers := make([]*httptest.ResponseRecorder, 2)
+	var presented sync.WaitGroup
+	for i := range answers {
+		presented.Go(func() { answers[i] = rig.callback(t, cookies, code, state) })
+	}
+	// BOTH ARE PAST THE CHECK BEFORE THE TURN, which nothing can spend the
+	// flight ahead of while every turn is held.
+	waitUntil(t, func() bool { return waitingForATurn() == len(answers) })
+	held[0].Release()
+	select {
+	case <-padding:
+	case <-time.After(5 * time.Second):
+		t.Fatal("neither presentation of the flight was refused")
+	}
+	beside, cancel := context.WithTimeout(t.Context(), time.Second)
+	admission, err := rig.provider.Admit(beside)
+	cancel()
+	if err != nil {
+		t.Error("a caller beside a refusal's pad waited for the turn the " +
+			"refusal still held, having asked the provider nothing")
+	} else {
+		admission.Release()
+	}
+	close(resume)
+	presented.Wait()
+	for _, admission := range held[1:] {
+		admission.Release()
+	}
+
+	codes := []int{answers[0].Code, answers[1].Code}
+	slices.Sort(codes)
+	if !slices.Equal(codes, []int{http.StatusFound, http.StatusUnauthorized}) {
+		t.Errorf("two presentations of one flight answered %v, want one "+
+			"sign-in and one refusal", codes)
+	}
+	if n := idp.exchanges.Load(); n != 1 {
+		t.Errorf("the provider's token endpoint was asked %d times for one "+
+			"flight, want once", n)
+	}
+	if _, failures := audit.snapshot(); len(failures) != 1 {
+		t.Errorf("the trail holds %d failed attempts, want the refused "+
+			"presentation", len(failures))
+	}
+}
+
+// holdEverySlot takes every one of a provider's turns at its token endpoint,
+// as a wave of somebody else's exchanges would. The caller releases them.
+func holdEverySlot(t *testing.T, provider *oidc.Provider) []*oidc.Admission {
+	t.Helper()
+	held := make([]*oidc.Admission, 0, oidc.ExchangeSlots)
+	for range oidc.ExchangeSlots {
+		admission, err := provider.Admit(t.Context())
+		if err != nil {
+			t.Fatalf("hold a slot: %v", err)
+		}
+		held = append(held, admission)
+	}
+	return held
+}
+
+// waitingForATurn counts the goroutines in this process parked waiting for a
+// turn at a provider's token endpoint. A request gives no other sign that it
+// has reached the wait, and the wait is the one place a case about the order
+// around it has to know a request is.
+func waitingForATurn() int {
+	stacks := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(stacks, true)
+		if n < len(stacks) {
+			stacks = stacks[:n]
+			break
+		}
+		stacks = make([]byte, 2*len(stacks))
+	}
+	return strings.Count(string(stacks), "/internal/iam/oidc.(*Provider).Admit(")
+}
+
+// waitUntil polls a condition for up to five seconds.
+func waitUntil(t *testing.T, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatal("the condition was never reached")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

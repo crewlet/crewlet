@@ -1342,6 +1342,19 @@ clears in about 37 seconds, and a browser that gives up waiting is answered
 having spent nothing either: the reload of that same callback, once a turn is
 free, is exchanged then.
 
+A turn is held **for the provider's answer and nothing else**. Every refused
+sign-in answers at one deadline measured from admission — see
+[A sign-in endpoint is not a roster](#a-sign-in-endpoint-is-not-a-roster) —
+about four times as long as an exchange takes, so a refusal that waited out
+that deadline inside a turn would hold one of the eight having asked the
+provider nothing, and a refusal is what anybody can cause: eight at a time
+would keep every turn, and every sign-in and every
+[deactivation probe](#the-deactivation-probe) on the node would wait behind
+them. So a callback gives its turn back the moment the provider has answered,
+or the moment it knows it will not ask, and is refused only after that — and a
+flight the node has already finished (see below) is refused without waiting
+for a turn at all.
+
 Everything a node sends the provider — the discovery document, the key set,
 every exchange and every probe — goes through one HTTP client with a
 transport of its own, holding **at most ten connections** to that host: the
@@ -1370,12 +1383,16 @@ browser left while it waited was never spent — until the flight would have
 expired anyway — up to 8,192 of them, about a megabyte, far more than a
 morning's wave finishes inside ten minutes — so a cookie presented a second
 time to that node is refused as a failed sign-in before the provider hears of
-it. A flight is remembered by a digest of its **PKCE verifier**, the random
-secret it has always carried sealed, rather than by a field added for the
-purpose: a flight is sealed by one node and opened by whichever node the
-callback reaches, which during a rolling upgrade may be a different build, and
-a field the older build never sealed would have refused every sign-in whose two
-halves straddled the upgrade. The record is per node: a fleet's load balancer
+it, and before it waits for a turn: it has nothing to wait for. Two
+presentations of one flight that both arrive before either is exchanged are
+settled inside the turn — the first to hold one is exchanged, and the second
+finds the flight spent and gives its turn straight back. A flight is
+remembered by a digest of its **PKCE verifier**, the random secret it has
+always carried sealed, rather than by a field added for the purpose: a flight
+is sealed by one node and opened by whichever node the callback reaches, which
+during a rolling upgrade may be a different build, and a field the older build
+never sealed would have refused every sign-in whose two halves straddled the
+upgrade. The record is per node: a fleet's load balancer
 can hand the same cookie to each node once, which bounds the replay rather than
 removing it, and a coordination write per callback would put a fleet-wide write
 on a path anybody can drive.
