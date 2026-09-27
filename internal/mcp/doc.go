@@ -18,8 +18,31 @@
 //     which names must come back out of the shared registry when that server
 //     stops, restarts thinner, or fails to come back at all.
 //
-// Four decisions here are load-bearing, and each replaced a real incident:
+// Five decisions here are load-bearing, and each replaced a real incident:
 //
+//   - A STDIO CHILD GETS AN ALLOWLIST, NEVER THE ENGINE'S ENVIRONMENT. Its
+//     environment is [hostbox]'s allowlist, the engine user's HOME, TMPDIR
+//     and XDG directories ([hostbox.HostUserEnv], because a server started
+//     through `npx` or `uvx` keeps its package cache there), and what its
+//     `env:` and the seat's `mcp_env` declare, the declaration winning — and,
+//     for a server whose command is `docker` or `podman`, the runtime's own
+//     settings besides ([hostbox.ContainerRuntime]), because that server IS
+//     the runtime's CLI. It is never os.Environ(). That was the obvious shape and it
+//     was this package's for a long time, on the reasoning that servers read
+//     undeclared conventional variables and narrowing the set would break
+//     them — and it handed every tool server the company declared the
+//     engine's keyring (which signs every session cookie and state-log
+//     record), every Tier A token value and the identity provider's client
+//     secret: to a process pulled off a package registry that logs its
+//     environment on a crash, forwards it to its own children and reports
+//     it in telemetry. A server that needs anything else says so in `env:`,
+//     where a `${VAR}` passes the host's value on by name. IT IS NOT
+//     ISOLATION, and nothing here claims it is: the child runs as the
+//     engine's user and can read what that user can, the Tier A file and the
+//     engine's own /proc/<pid>/environ among it. What the allowlist removes
+//     is the engine HANDING its secrets to code that never asked for them;
+//     keeping a hostile server away from them takes a different user or a
+//     container. See mergedEnv.
 //   - REGISTRATION HAPPENS ONLY ON SUCCESS. A server recorded before its tools
 //     were discovered, whose discovery then failed, is a live subprocess with
 //     no tools that answers "yes" to Has: a live config edit reads it as
