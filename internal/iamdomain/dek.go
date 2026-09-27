@@ -15,7 +15,7 @@ import (
 // THE PER-PERSON KEY, and why removing somebody is a key deletion rather than
 // a row deletion.
 //
-// # A removal has to reach an artefact taken before it
+// # A removal has to reach copies that already exist
 //
 // Deleting a person's row removes them from every node's current database and
 // from nothing else. The backups still hold them, the donated snapshots still
@@ -25,10 +25,25 @@ import (
 // estate cannot keep.
 //
 // So a person's NAME and ADDRESS are sealed under a key that belongs to them
-// alone, and removing them DESTROYS THAT KEY. Every copy of the ciphertext,
-// wherever it already is, becomes unreadable at once, and nothing has to be
-// found or rewritten. The row and the id survive, because the audit trail
-// names them: a history whose authors evaporate is not an audit trail.
+// alone, and removing them DESTROYS THAT KEY. Every copy of the ciphertext that
+// is not also a copy of the key becomes unreadable at once — the log, every
+// node's rows, every snapshot a node donates, every backup taken afterwards —
+// and nothing has to be found or rewritten. The row and the id survive,
+// because the audit trail names them: a history whose authors evaporate is not
+// an audit trail.
+//
+// A BACKUP TAKEN BEFORE THE REMOVAL IS NOT SUCH A COPY, and nothing here can
+// make it one. The key lives in the fleet secret store, which is a
+// coordination bucket, and a backup snapshots every bucket: the artefact holds
+// the sealed name and address AND the key that opens them, the key sealed
+// under the keyring its operator holds. A removal reaches everything live and
+// cannot reach a file that already sits somewhere else, so the erasure there
+// ends when the operator deletes that backup. SECURITY.md and
+// docs/concepts/identity-and-access.md say so where somebody answering an
+// erasure request will read it, beside the two other copies that outlive a
+// purge: a raw copy of the broker's own files (the broker marks a purged
+// message deleted rather than overwriting it) and an external cluster's own
+// backups.
 //
 // # Why the key lives in the fleet secret store and not in a column
 //
@@ -39,8 +54,11 @@ import (
 //
 // It is also why the DEK is not in the replicated estate: the replicated
 // tables are byte-identical across the fleet BY CLAIM, and a key that rode
-// them would be copied into every snapshot a node donates, which is the one
-// artefact a removal cannot reach.
+// them would be copied into every snapshot every node takes and donates,
+// beside the ciphertext it opens — copies the snapshotter makes on its own
+// schedule, on every node's disk, that no removal could reach. The bucket's
+// copy outlives a removal only in a copy somebody took of it, and — until the
+// broker rewrites the file a purge marked — in the broker's own files.
 //
 // # Sealing happens at the WRITER, before publication
 //

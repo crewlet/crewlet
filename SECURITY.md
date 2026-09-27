@@ -156,25 +156,43 @@ A few things worth knowing when deploying Crewlet:
   [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
 - **Removing a person destroys their key, not only their row.** Each person's
   name and address are sealed under a data key that is theirs alone, and
-  removing them destroys it — so those values become unrecoverable at once
-  from every copy that already exists: the identity log, donated snapshots,
-  backups and every node. What outlives the removal is deliberate: their id,
-  the tombstone (who removed them, when, and which claims they held — an
-  address as its blind, never its value), and the audit trail's rows naming
-  them, because a history whose authors evaporate is not an audit trail.
-  **Their login outlives it too, in the clear**, and nothing destroys it: it
-  is on the removal record in the identity log (so in every backup and
-  donated snapshot), in the tombstone's `iam_removed.claims_json`, and in the
-  audit rows that record an unbound person's changes under it. A login is
-  deliberately not sealed — it is printed beside everything its holder does —
-  and the one the sign-up form proposes is derived from the address
-  (`jane.doe@example.com` proposes `jane.doe`), so after a removal the
-  address's local part is usually still readable. If a person's login has to
-  be erasable, do not derive it from a personal address: give them one that
-  names nothing about them. The rows commit before the key is destroyed; a key deletion that fails — a
-  coordination outage — is retried by the identity key duty, and `crewlet iam
-  check` (`GET /iam/check`) names every removed person whose key still lives
-  as `removal_key_live` until it is gone. See
+  removing them destroys it — so those values become unreadable at once
+  wherever the key is not also kept: the identity log, every snapshot a node
+  donates (the key never enters one), everything a node serves, and every
+  `crewlet backup` taken after the removal. **A backup taken *before* the
+  removal is not reached.** The key lives in the coordination store's secrets
+  bucket, and a backup's coordination snapshot carries that bucket, sealed
+  under the keyring — so the artefact holds the person's sealed name and
+  address and the key that opens them side by side. Whoever holds it and the
+  keyring can still read both, and restoring it brings the person back whole.
+  The erasure finishes there only when that backup is deleted or ages out — a
+  fortnight on the
+  [tiered schedule](docs/guides/backup.md#where-to-put-it-and-how-often) the
+  backup guide suggests — so when an erasure has to be complete, delete or
+  expire every backup taken before it. A raw copy of `stream.store_dir` — the
+  cold runbook's copy, a filesystem snapshot — is no better, even one taken
+  after the removal: the broker purges the key by marking it deleted in its
+  own files rather than overwriting it, so its sealed bytes can stay on disk
+  until the broker rewrites the file that holds them. On a node that dials an
+  external NATS cluster the bucket is that cluster's, so the key is in that
+  cluster's own backups, on that cluster's retention. What outlives the
+  removal is deliberate: their id, the tombstone (who removed them, when, and
+  which claims they held — an address as its blind, never its value), and the
+  audit trail's rows naming them, because a history whose authors evaporate is
+  not an audit trail. **Their login outlives it too, in the clear**, and
+  nothing destroys it: it is on the removal record in the identity log (so in
+  every backup and donated snapshot), in the tombstone's
+  `iam_removed.claims_json`, and in the audit rows that record an unbound
+  person's changes under it. A login is deliberately not sealed — it is
+  printed beside everything its holder does — and the one the sign-up form
+  proposes is derived from the address (`jane.doe@example.com` proposes
+  `jane.doe`), so after a removal the address's local part is usually still
+  readable. If a person's login has to be erasable, do not derive it from a
+  personal address: give them one that names nothing about them. The rows
+  commit before the key is destroyed; a key deletion that fails — a
+  coordination outage — is retried by the identity key duty, and
+  `crewlet iam check` (`GET /iam/check`) names every removed person whose key
+  still lives as `removal_key_live` until it is gone. See
   [Removing somebody destroys a key, not a row](docs/concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row).
 - **Personal data in configuration revisions written before this release.**
   Every node keeps its own copy of every company-config revision it has ever

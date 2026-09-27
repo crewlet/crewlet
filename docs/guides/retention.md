@@ -859,35 +859,36 @@ names the ones a node armed and each interval — the only way to tell a duty
 that is running and finding nothing from one that was never armed.
 
 **The key duty exists because a removal is a key deletion.** The removal's rows
-commit first and the person's key is destroyed after, on every node that
-applies it — so a coordination store that blinks at that instant leaves a row
-that says *removed* and a key that still exists. Until the key goes, the
-person's name and address are readable from every backup taken before the
-removal. Fifteen minutes is the maintenance sweep's own interval: a pending key
-exists only because a write failed, so the useful retry is "soon after the store
-is back", and every minute is a minute somebody off-boarded is still readable.
+commit first and the person's key is destroyed after, on every node that applies
+it — so a coordination store that blinks at that instant leaves a row that says
+*removed* and a key that still exists. Until the key goes, the person's name and
+address can still be opened wherever their ciphertext is — the log, every
+donated snapshot — and every backup taken meanwhile carries the key too. Fifteen
+minutes is the maintenance sweep's own interval: a pending key exists only
+because a write failed, so the useful retry is "soon after the store is back",
+and every minute is a minute somebody off-boarded is still readable.
 `crewlet iam check` names each one as `removal_key_live` while it waits.
 
 **It also destroys a key nobody owns.** An enrolment mints a person's key before
 it claims their address, and an invitation mints its own before it publishes —
 so an enrolment or an invitation refused on its address leaves a key for
-somebody who never existed, and an invitation the sweep collects leaves its
-key behind. Nothing else would ever name those keys, and what they sealed would
-stay readable from every backup for the life of the deployment. The duty
-destroys one only once it is **an hour old** — the gestures that mint a key
-finish within one request, so an hour is long past any of them — and only on a
-node whose rows have **applied everything the identity log held** when it asked,
-because on a node that has not, somebody whose enrolment has not been applied
-owns nothing there either, and destroying their key would be an irreversible
-shred of a person nobody removed. *Applied* is the word that matters: a node
-holding a record it cannot apply yet — a newer build's during a rollout, or one
-signed under a keyring key it was not restarted with during a key rotation —
-has consumed the log past that record while its rows lack it, and it judges no
-unowned key until it can apply it. Such a node, and one that is simply behind,
-says so (`iam_keys_unjudged`) and leaves them for a pass that can; a removal's
-key does not wait for that, because a removal is definitive wherever it has been
-applied. `crewlet iam check` names each unowned key past the hour as
-`key_unowned`.
+somebody who never existed, and an invitation the sweep collects leaves its key
+behind. Nothing else would ever name those keys, and what they sealed — wherever
+it landed — would stay readable for the life of the deployment, with every
+backup carrying the key to it. The duty destroys one only once it is **an hour
+old** — the gestures that mint a key finish within one request, so an hour is
+long past any of them — and only on a node whose rows have **applied everything
+the identity log held** when it asked, because on a node that has not, somebody
+whose enrolment has not been applied owns nothing there either, and destroying
+their key would be an irreversible shred of a person nobody removed. *Applied*
+is the word that matters: a node holding a record it cannot apply yet — a newer
+build's during a rollout, or one signed under a keyring key it was not restarted
+with during a key rotation — has consumed the log past that record while its
+rows lack it, and it judges no unowned key until it can apply it. Such a node,
+and one that is simply behind, says so (`iam_keys_unjudged`) and leaves them for
+a pass that can; a removal's key does not wait for that, because a removal is
+definitive wherever it has been applied. `crewlet iam check` names each unowned
+key past the hour as `key_unowned`.
 
 **An hour counts from the last gesture that used a key, not the first.** A
 retried redemption names the same person — the id is derived from the

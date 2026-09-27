@@ -90,9 +90,14 @@ So the chart makes its own trade, and states it rather than inheriting one:
   matched against, one indexed read. The place a *person's* name and address
   live under a key that can be deleted is the
   [identity directory](identity-and-access.md): removing somebody there
-  destroys that key, which makes every copy unreadable at once — the only
-  erasure a write-ahead log can actually offer. A leaver's seat still names
-  them until the seat's own `name` and `email` are cleared.
+  destroys that key, which makes every copy of them that does not also hold
+  the key unreadable at once — the only erasure a write-ahead log can actually
+  offer. A backup taken before the removal does hold it, because this store's
+  bucket is in every backup, so that backup goes on opening their name and
+  address for whoever holds it and the keyring until it is deleted
+  ([what a removal reaches](identity-and-access.md#removing-somebody-destroys-a-key-not-a-row)).
+  A leaver's seat still names them until the seat's own `name` and `email`
+  are cleared.
 
 At boot the engine loads every record into a process-local snapshot and installs it as the **secret source**. From then on `${VAR}` resolution asks the store first and falls back to the process environment:
 
@@ -464,7 +469,7 @@ activate`](../reference/cli.md#crewlet-config-activate).
 ## Operational notes
 
 - **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. `sandbox_env_unresolved` warns (names only) when a sandbox launch references something nothing answers, and the sandbox credential check refuses to launch a coding agent on an empty credential.
-- **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point.
+- **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a coordination backup opens everything the bucket held when it was taken — including the data key of every person removed since, whose name and address that same backup still carries. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before it is gone ([what a removal reaches](identity-and-access.md#removing-somebody-destroys-a-key-not-a-row)).
 - **Key rotation.** Add the new key to `secrets.keys` **on every node**, set `active_key_id`, then run **both** `crewlet config rekey` and `crewlet secrets rekey` before dropping the old key. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a removed person's key in particular stays destroyed rather than being written back as the value the pass read before the removal.
 - **The `_secrets` bucket is created on demand** by the first node to open coordination, and it is durable: on the embedded topology it lives under `stream.store_dir` like every other bucket, so a restart does not lose it. Back that directory up alongside the keyring.
 - **Rows left in a node's own `secret_values` table** — written before this change, or while its engine was stopped — are migrated onto the fleet at that node's next start and removed locally. The pass copies before it deletes and never overwrites a name the fleet already holds, because the fleet's copy is by definition the newer write. A failure leaves the local rows in place and logs `secret_migration_incomplete`; the node keeps serving from them and retries at the next start.

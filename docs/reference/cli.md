@@ -521,7 +521,7 @@ variable at all.
 | `unlink ID` | Take the provider link back: their provider sign-in resolves to nobody from then on |
 | `grant ID` | Change what somebody carries: `-grants`, `-colleague` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way |
-| `remove ID` | Tombstone them and destroy their key, which makes their name and address unrecoverable everywhere |
+| `remove ID` | Tombstone them and destroy their key, which makes their name and address unreadable on the log, on every node and in every `crewlet backup` taken from then on. A backup taken **before** the removal still holds the key, so it goes on opening them until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody destroys a key, not a row](../concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row) |
 | `revoke ID` | End every session and token they hold, by bumping their revocation epoch |
 | `sessions ID` | Their sessions, newest first, ended ones included |
 | `credentials` | What somebody proves themselves with. `-person` names them; without it, yourself |
@@ -591,7 +591,7 @@ repairs: each finding is somebody's decision.
 | `grant_clamped_by_ceiling` | A grant somebody's row declares and this node's `api.auth.max_grants` withholds | Legal while a fleet rolls out a ceiling change; otherwise align the row and the ceiling |
 | `claim_duplicated` | An address, a login or a seat more than one person holds. `WHO` is the claim and every holder; an address is named by its kind alone, because the report carries no form of it | Decide who keeps it, and release it from the others |
 | `claim_orphaned` | Claims an enrolment took before it stopped, held for over an hour by nobody who can use them | `remove` the id, which releases them |
-| `removal_key_live` | Somebody removed whose key still exists, so their name and address are readable from every backup taken before the removal | Nothing — the key duty retries every fifteen minutes; a finding that stands says the company's secret store is refusing the delete |
+| `removal_key_live` | Somebody removed whose key still exists, so their name and address can still be opened wherever their ciphertext is — the log, every donated snapshot, every backup — and not only from a backup taken before the removal | Nothing — the key duty retries every fifteen minutes; a finding that stands says the company's secret store is refusing the delete |
 | `key_unowned` | A key no person, reservation, invitation or removal owns, over an hour old: minted for an enrolment or an invitation refused after the mint, or left by an invitation the sweep collected. `WHO` is the id it was minted for | Nothing — the key duty destroys it on its next pass; a finding that stands says the company's secret store is refusing the delete |
 
 A duplicate cannot come from ordinary traffic — the broker arbitrates every

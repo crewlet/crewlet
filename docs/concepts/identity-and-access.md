@@ -2075,8 +2075,41 @@ cannot keep.
 
 So each person's name and address are sealed under a key that is **theirs
 alone**, kept in the company's sealed secret store, and removing them
-**destroys that key**. Every copy of the ciphertext, wherever it already is,
-becomes unreadable at once — nothing has to be found or rewritten.
+**destroys that key**. Every copy of the ciphertext that is not also a copy of
+the key becomes unreadable at once — the log's records, every node's rows and
+everything a node serves, every snapshot a node has donated or will donate (a
+donation is a copy of the replicated estate, which the key never enters), and
+every `crewlet backup` taken after the removal — and nothing has to be found or
+rewritten.
+
+**A backup taken before the removal is the copy it does not reach.** The key
+lives in the secret store, which is a coordination bucket, and a backup's
+coordination snapshot carries every bucket — this one included, sealed under
+the keyring exactly as every other credential in it is. So an artefact taken
+before the removal holds the person's sealed name and address *and* the key
+that opens them, side by side: whoever holds the artefact and the keyring —
+which you, the operator, hold by design — can still read both, and
+[restoring it](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)
+brings the person back whole. Nothing the removal does can reach a file that
+already sits somewhere else, so the erasure finishes in each such backup only
+when it is deleted or ages out: on the
+[tiered schedule](../guides/backup.md#where-to-put-it-and-how-often), a
+fortnight after the removal. When an erasure has to be complete — a request
+you must answer, not a leaver you are tidying up after — delete or expire every
+backup taken before the removal rather than waiting for the rotation. Two more
+copies behave the same way:
+
+- **A raw copy of `stream.store_dir`** — the cold runbook's copy, or a
+  filesystem or volume snapshot. The broker purges the key by marking it
+  deleted in its own files rather than overwriting it, so the key's sealed
+  bytes can stay on disk until the broker rewrites the file that holds them,
+  and a raw copy can carry them *even when it was taken after the removal*.
+  `crewlet backup` does not have this problem: its stream snapshot holds the
+  messages a stream still has, and never one it purged.
+- **An external NATS cluster's own backups**, on a node that dials one
+  (`stream.type: nats`). The bucket is that cluster's, so the key is in
+  whatever copy of it the cluster's operator took before the removal, on that
+  cluster's retention rather than yours.
 
 The id survives on purpose, and the row does not. A removal deletes the
 person's row, their sessions, their credentials and their revocation epoch, and

@@ -423,9 +423,20 @@ construction. A machine token never can: it never carries `people:manage`.
 
 Then read `crewlet iam check`: a restore under a different keyring reports
 every person as *sealed under a key this deployment does not have* rather than
-as somebody with no name, and a restore of an artefact taken before a removal
-brings back the tombstone and the ciphertext while the key stays destroyed —
-so the removed person's name does not come back with the backup.
+as somebody with no name.
+
+A removal comes back exactly as far as the artefact had seen it. Somebody
+removed **before** it was taken stays removed: the artefact holds their
+tombstone and their ciphertext and not the key the removal destroyed — and if
+that key's deletion had not landed when the copy was made, `removal_key_live`
+names it and the key duty destroys it. Somebody removed **after** it was
+taken comes back whole: their row, their credentials and the key their name
+and address are sealed under, because the coordination snapshot carries the
+secret store's bucket as it stood. `invalidate-all` ends their sessions and
+not their password, so **remove them again**. That is also why a backup is
+what an erasure has to outlast: until every backup taken before a removal is
+deleted, the person it removed can be read — and restored — from it. See
+[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row).
 
 ## What not to do
 
