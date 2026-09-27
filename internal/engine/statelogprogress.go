@@ -49,6 +49,12 @@ type progress struct {
 	appliedThrough uint64
 	movedAt        time.Time
 
+	// behind is whether the last look found work this domain owes — the
+	// log's head past its checkpoint. It is what makes [progress.frozenFor]
+	// a stall rather than a quiet company, and it is KEPT across a look
+	// that could not read the log: see [progress.owed].
+	behind bool
+
 	// deferredSince is when the record this node cannot decode first
 	// appeared, and held whether it still holds one.
 	//
@@ -73,6 +79,7 @@ func (p *progress) observe(now time.Time, appliedThrough uint64, behind, deferre
 	if p.movedAt.IsZero() || appliedThrough != p.appliedThrough {
 		p.appliedThrough, p.movedAt = appliedThrough, now
 	}
+	p.behind = behind
 	// AND WHEN IT IS NOT BEHIND THE CLOCK RESTARTS, because the stall
 	// question is "is this node failing to make progress it owes", and a
 	// node that owes none is not failing to make it. Without this an idle
@@ -99,6 +106,55 @@ func (p *progress) stalled(now time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return !p.movedAt.IsZero() && now.Sub(p.movedAt) > statelog.StallGrace
+}
+
+// frozenFor is how long this domain's applied prefix has not moved while it
+// owed work, as of now — zero when the last look found nothing to apply, and
+// zero before the first look.
+//
+// # It is the request path's half of a stall
+//
+// [progress.stalled] feeds [statelog.Health.Stalled], which a health read and
+// the serviceability gate take. The REQUEST path — every session this node
+// validates, every seat a bound credential acts as, every login's record —
+// reads [runningDomain.Lag] instead and compares it against the same
+// [statelog.StallGrace], and that figure was a backlog divided by the drain
+// rate alone. The drain rate is measured over APPLY time and nothing moves it
+// while no batch runs, so an applier that wedged with a small backlog kept the
+// rate it last had and reported milliseconds of lag for as long as it stayed
+// wedged: the session table's `stalled` row never fired, a read of a session
+// this node had not seen was served indefinitely, and a revocation stuck in the
+// backlog was never honoured here. How long the prefix has been frozen is the
+// one figure a wedged applier cannot hold down, so the lag is the larger of
+// the two.
+//
+// GATED ON behind, as the stall is: a caught-up node's prefix does not move
+// because nothing moves it, and a lag that grew between two writes would
+// refuse every read on a quiet company.
+func (p *progress) frozenFor(now time.Time) time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.movedAt.IsZero() || !p.behind {
+		return 0
+	}
+	return max(now.Sub(p.movedAt), 0)
+}
+
+// owed is whether the last look found work this domain owes, which is what a
+// look that could not read the log carries forward.
+//
+// # Unreadable is not caught up
+//
+// A heartbeat whose stream statistics failed does not know whether the log
+// moved. Reading that as "nothing to apply" restarted the stall clock on every
+// failed look, so an applier and a broker connection that failed together —
+// which is the ordinary shape of a wedge — never read as stalled at all. The
+// lag figure beside it already keeps its last value on the same failure, for
+// the same reason; this keeps the half the stall is judged on.
+func (p *progress) owed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.behind
 }
 
 // deferredSinceValue is what [statelog.Health.Healthy] takes as its second

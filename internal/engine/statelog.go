@@ -166,6 +166,11 @@ type runningDomain struct {
 	// sequence every interval for the stall observation beside it, and
 	// the request path reads a number.
 	//
+	// IT IS ONE OF TWO TERMS: [runningDomain.Lag] answers the larger of
+	// this and how long the applied prefix has been frozen while it owed
+	// work, because a drain rate nothing re-measures while no batch runs
+	// holds this figure down for exactly as long as an applier is wedged.
+	//
 	// UNREADABLE IS NOT ZERO. A heartbeat whose stream stats failed
 	// leaves the last value standing rather than storing a figure that
 	// reads as caught up — the same view the lag gauges take, for the
@@ -179,6 +184,20 @@ type runningDomain struct {
 // observeLag stores this applier's distance behind the log as a duration.
 func (d *runningDomain) observeLag(last, applied uint64) {
 	d.lagNanos.Store(int64(lagDurationOf(last, applied, d.runner.Drain())))
+}
+
+// backlogOf is whether a domain owes work, from one read of its log's
+// statistics — and, when that read failed, the answer the last look gave.
+//
+// AN UNREADABLE LOG CARRIES THE LAST LOOK FORWARD rather than reading as
+// caught up: see [progress.owed] for what the other reading cost.
+func backlogOf(stats jetstream.LogStats, err error, applied uint64,
+	previously bool) bool {
+
+	if err != nil {
+		return previously
+	}
+	return stats.LastSeq > applied
 }
 
 // lagDurationOf is how long behind a backlog of (last - applied) records is at a
@@ -204,9 +223,21 @@ func lagDurationOf(last, applied uint64, drain float64) time.Duration {
 		time.Duration(max(int64(drain), 1))
 }
 
-// Lag is how far behind the log this applier was at the last heartbeat.
-func (d *runningDomain) Lag() time.Duration {
-	return time.Duration(d.lagNanos.Load())
+// Lag is how far behind the log this applier is: the backlog at the last
+// heartbeat over its drain rate, or how long its applied prefix has been
+// frozen while it owed work, whichever is larger.
+//
+// THE SECOND TERM IS WHAT MAKES A WEDGE VISIBLE. The first is a record count
+// divided by a rate measured over apply time, and nothing moves that rate
+// while no batch runs — so a wedged applier with a small backlog read as
+// milliseconds behind for ever, and every table that compares this against
+// [statelog.StallGrace] served it as a caught-up node. See
+// [progress.frozenFor].
+func (d *runningDomain) Lag() time.Duration { return d.lagAt(time.Now()) }
+
+// lagAt is [runningDomain.Lag] at an instant a case chooses.
+func (d *runningDomain) lagAt(now time.Time) time.Duration {
+	return max(time.Duration(d.lagNanos.Load()), d.progress.frozenFor(now))
 }
 
 // stateLog is this node's whole state-log runtime.
@@ -2494,9 +2525,9 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		// from the consumer's backlog: an idle node's applied prefix does
 		// not move because there is nothing to move it, and a stall is
 		// only a stall when there is work it owes.
-		behind := false
-		if stats, err := running.log.Stats(ctx); err == nil {
-			behind = stats.LastSeq > at.Seq
+		stats, statsErr := running.log.Stats(ctx)
+		behind := backlogOf(stats, statsErr, at.Seq, running.progress.owed())
+		if statsErr == nil {
 			// AND HOW LONG BEHIND, for the request path. See
 			// [runningDomain.lagNanos]: this is the one loop that
 			// already holds both the stream's last sequence and

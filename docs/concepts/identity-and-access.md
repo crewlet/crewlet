@@ -1422,6 +1422,17 @@ honestly serve — reads of a session it has not yet seen — and it ends at the
 same sixty seconds the alarm table already calls a stall, so a node serving
 stale identity is by definition a node already alarmed.
 
+**How far behind a node is, is the larger of two figures**: its backlog at the
+rate its applier has been draining it, and how long its applier has made no
+progress while records were waiting. The first alone cannot see a wedge — the
+drain rate is measured while batches run, so an applier that stops with a
+handful of records outstanding keeps the rate it last had and would read as a
+fraction of a second behind for as long as it stayed stopped, serving sessions
+it has not seen and never honouring a revocation stuck in that backlog. With
+the second, it reads as stalled a minute after it stops. Both tables above
+read it, as does a Tier A token's seat binding. A heartbeat that cannot read
+the log's head keeps its last answer rather than reading as caught up.
+
 A node holding a record about the person it **cannot apply** — a newer build's
 during a rollout, or one signed under a keyring key it was not restarted with
 during a key rotation — answers 503 for the same reason, however current its

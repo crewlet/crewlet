@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -190,5 +191,112 @@ func TestACancelledApplierIsNotAHaltedOne(t *testing.T) {
 				t.Errorf("halted = %v, want %v for %v", got, tc.want, tc.err)
 			}
 		})
+	}
+}
+
+// A WEDGED APPLIER READS AS STALLED ON THE REQUEST PATH, AND NOT ONLY ON A
+// HEALTH READ.
+//
+// The request path — every session validated, every seat a bound credential
+// acts as — compares [runningDomain.Lag] against [statelog.StallGrace], and
+// the lag was a backlog over a drain rate alone. That rate is measured over
+// apply time and nothing re-measures it while no batch runs, so an applier
+// that wedged with five records outstanding kept reading as a fraction of a
+// second behind for as long as it stayed wedged: the session table's
+// `stalled` row never fired and a revocation stuck in that backlog was never
+// honoured on this node. How long the prefix has been frozen is the figure a
+// wedge cannot hold down.
+func TestAWedgedApplierReadsAsStalledOnTheRequestPath(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	var d runningDomain
+	// Five records behind at the rate this applier last drained at: a
+	// fraction of a second, and the figure a wedge leaves standing.
+	d.lagNanos.Store(int64(lagDurationOf(105, 100, 20)))
+	d.progress.observe(at, 100, true, false)
+	d.progress.observe(at.Add(PositionHeartbeat), 100, true, false)
+
+	if got := d.lagAt(at.Add(statelog.StallGrace - time.Second)); got > statelog.StallGrace {
+		t.Errorf("lag %s inside the grace: a node behind for less than it "+
+			"must still be served", got)
+	}
+	if got := d.lagAt(at.Add(statelog.StallGrace + time.Second)); got <= statelog.StallGrace {
+		t.Errorf("an applier frozen with work outstanding for %s reads %s "+
+			"behind, inside the %s grace — so every table on the request path "+
+			"serves it as a caught-up node", statelog.StallGrace+time.Second,
+			got, statelog.StallGrace)
+	}
+
+	// PROGRESS CLEARS IT at the next look, without waiting anything out.
+	moved := at.Add(statelog.StallGrace + 2*time.Second)
+	d.progress.observe(moved, 104, true, false)
+	if got := d.lagAt(moved.Add(time.Second)); got > statelog.StallGrace {
+		t.Errorf("an applier that applied a record still reads %s behind", got)
+	}
+}
+
+// A QUIET COMPANY IS NOT A WEDGE: nothing owed, nothing frozen.
+//
+// The frozen term is gated on the last look having found work outstanding.
+// Without the gate every node's lag would climb between two writes, and a
+// company nobody had filed anything in for a minute would answer 503 to every
+// session on every node.
+func TestACaughtUpNodeCarriesNoFrozenLag(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	var d runningDomain
+	d.progress.observe(at, 100, false, false)
+	if got := d.lagAt(at.Add(statelog.StallGrace * 3)); got != 0 {
+		t.Errorf("a caught-up node reads %s behind after a quiet spell", got)
+	}
+	// And the backlog term is still the whole answer where it is larger.
+	d.lagNanos.Store(int64(90 * time.Second))
+	if got := d.lagAt(at.Add(time.Minute)); got != 90*time.Second {
+		t.Errorf("lag %s, want the 90s backlog term", got)
+	}
+}
+
+// A LOOK THAT CANNOT READ THE LOG CARRIES THE LAST ONE FORWARD.
+//
+// Read as "nothing owed", a failed statistics read restarted the stall clock
+// on every heartbeat — and an applier and its broker connection failing
+// together is the ordinary shape of a wedge, so exactly that wedge never read
+// as stalled.
+func TestAnUnreadableLogKeepsTheLastBacklogAnswer(t *testing.T) {
+	t.Parallel()
+	unreadable := errors.New("stream info: nats: timeout")
+	for _, tc := range []struct {
+		name       string
+		stats      jetstream.LogStats
+		err        error
+		previously bool
+		want       bool
+	}{
+		{"behind, read", jetstream.LogStats{LastSeq: 105}, nil, false, true},
+		{"caught up, read", jetstream.LogStats{LastSeq: 100}, nil, true, false},
+		{"unreadable after a look that found work", jetstream.LogStats{}, unreadable, true, true},
+		{"unreadable after a look that found none", jetstream.LogStats{}, unreadable, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := backlogOf(tc.stats, tc.err, 100, tc.previously); got != tc.want {
+				t.Errorf("backlogOf = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// And through the tracker: a wedge whose every later look fails is
+	// still frozen from the last look that could see it.
+	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	var p progress
+	p.observe(at, 100, true, false)
+	for beat := range 8 {
+		p.observe(at.Add(time.Duration(beat+1)*PositionHeartbeat), 100,
+			backlogOf(jetstream.LogStats{}, unreadable, 100, p.owed()), false)
+	}
+	if got := p.frozenFor(at.Add(statelog.StallGrace + time.Second)); got <= statelog.StallGrace {
+		t.Errorf("frozen %s after failed looks, want past the %s grace: an "+
+			"unreadable log restarted the stall clock", got, statelog.StallGrace)
 	}
 }
