@@ -694,14 +694,16 @@ func TestReimportingOneRevisionWritesNothingTheSecondTime(t *testing.T) {
 	}
 }
 
-// A REKEY MOVES EVERY STRUCTURAL REFERENCE AND LEAVES THE AUTHORED ONES ALONE.
+// A VERSION-1 REKEY MOVES EVERY STRUCTURAL REFERENCE AND LEAVES THE AUTHORED
+// ENTRIES AS IT FOUND THEM.
 //
 // The two halves are different in kind. A child's `parent_key` and a seat's
-// `unit_key` are STRUCTURE nobody typed, so they follow the key or a read sees
-// a child pointing at a unit that no longer answers. A `manages:` entry is what
-// somebody WROTE, and the former key goes on resolving — so rewriting it would
-// edit a document nobody edited, and the next config apply would write the old
-// spelling straight back.
+// `unit_key` are STRUCTURE, so they follow the key or a read sees a child
+// pointing at a unit that no longer answers. A `manages:` entry naming the unit
+// is left as typed, because that is what a version-1 rekey did and it is read
+// for ever as what it meant — the former key goes on resolving. A version-2
+// rename moves the entry as well:
+// [TestARenameMovesTheManagesEntriesThatNamedItsObject].
 //
 // AND THE STRUCTURE MOVES IN THE DOCUMENT, not only in the column. The columns
 // are a projection of each row's document and the company view is built from
@@ -762,9 +764,9 @@ func TestARekeyMovesTheStructureAndNotTheAuthoredText(t *testing.T) {
 	}
 	if got := h.column(`SELECT target FROM chart_manages WHERE manager = 'ana'`); !slices.Equal(
 		got, []string{"platform"}) {
-		t.Errorf("the authored manages entry is %v, want [platform] — it is "+
-			"what somebody wrote and the retired key still resolves, so "+
-			"rewriting it would edit a document nobody edited", got)
+		t.Errorf("the authored manages entry is %v, want [platform] — a "+
+			"version-1 rekey left it as typed, and the retired key still "+
+			"resolves", got)
 	}
 
 	// AND THE VIEW PLACES THE SUBTREE UNDER THE RENAMED UNIT.

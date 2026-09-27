@@ -362,11 +362,12 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 
 // moveUnitReferences repoints everything that names a unit by its key.
 //
-// THE AUTHORED EDGES ARE NOT AMONG THEM, deliberately. A `manages:` entry is
-// what somebody WROTE, and a retired key goes on resolving — so rewriting the
-// entry would edit a document nobody edited, and the next config apply would
-// write the old spelling straight back. What moves here is the STRUCTURE: a
-// child's parent and a seat's unit, neither of which anybody authored as text.
+// THE AUTHORED `manages:` ENTRIES ARE NOT MOVED HERE, and that is a version
+// rule rather than a claim about text. This body is both renames' — a
+// version-1 rekey's and a structural record's — and a version-1 rekey left the
+// entries as authored, which is what it meant; a version-2 rename moves them
+// itself ([Applier.moveManages]). What moves here, for both, is the STRUCTURE:
+// a child's parent and a seat's unit.
 //
 // THE DOCUMENT MOVES WITH THE COLUMN, row by row. A row's typed columns are a
 // projection of its document ([writeUnit]), and it was the columns alone that
@@ -575,9 +576,10 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	if n == 0 {
 		return 0, false, nil
 	}
-	// THE AUTHORED EDGE'S OWNER MOVES, which is not the same as rewriting
-	// what somebody wrote: the `manages:` list stays as authored, and what
-	// changes is which seat is recorded as having authored it.
+	// THE AUTHORED EDGES' OWNER MOVES: the seat's own `manages:` rows are
+	// keyed on its handle. The entries OTHER seats wrote naming it are a
+	// version-2 rename's to move ([Applier.moveManages]); a version-1 rekey
+	// left them as authored.
 	manages, err := tx.ExecContext(ctx,
 		`UPDATE chart_manages SET manager = ? WHERE manager = ?`, handle, former)
 	if err != nil {

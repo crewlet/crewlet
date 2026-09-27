@@ -99,14 +99,14 @@ func (o *Organization) AllUnits() iter.Seq[*Unit] {
 // wherever an operator declared a handle.
 //
 // A RETIRED HANDLE RESOLVES TOO, and only after every live one has missed.
-// The chart moves the STRUCTURE a rename touches — a seat's unit, a unit's
-// children, who is recorded as leading what — but it deliberately does not
-// rewrite the authored text of a `manages:` list, because that is a document
-// somebody wrote and the next apply would put the old spelling straight back.
-// So the alias is what keeps that entry pointing at the person it named. The
-// order is the rule rather than an optimisation: a live handle must never
-// lose to some other seat's retired one, which is exactly what one merged
-// pass over both would allow.
+// The chart moves what a rename touches by key — a seat's unit, a unit's
+// children, who leads what and the `manages:` entries that named it — but not
+// every reference to a seat is one it can reach: a unit's `lead:` typed with a
+// handle the seat had given up, an entry a version-1 rekey left as typed, a
+// handle pasted into chat. The alias is what keeps each of those pointing at
+// the person it named. The order is the rule rather than an optimisation: a
+// live handle must never lose to some other seat's retired one, which is
+// exactly what one merged pass over both would allow.
 //
 // AND THE HANDLE A SEAT WAS CREATED UNDER NEVER STOPS, ahead of any alias.
 // It is the seat's IDENTITY ([Role.Origin]): the chart never issues it to

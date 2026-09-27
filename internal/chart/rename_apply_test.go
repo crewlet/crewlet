@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // A STRUCTURAL RENAME AT THE APPLY: one record, renames first, then every
@@ -146,5 +147,73 @@ func TestARedeliveredRenameIsNotDeclined(t *testing.T) {
 	}
 	if got := h.unit("infra"); !slices.Equal(got.FormerKeys, []string{"platform"}) {
 		t.Errorf("infra's former keys are %v, want [platform] once", got.FormerKeys)
+	}
+}
+
+// A RENAME MOVES THE `manages:` ENTRIES THAT NAMED ITS OBJECT.
+//
+// An entry naming a renamed object used to be left as typed and kept working
+// only through the retired alias — which is capped, so sixteen renames later it
+// named nobody, and which a creation may take, so a `create_seat` on the old
+// handle silently gave the manager the newcomer. An entry is one more reference
+// by key, and it moves with the rest of the cascade: every entry that reached
+// the object before the rename — by the address it left, a retired one or the
+// one it was created under — reaches it by its new address after.
+//
+// WHERE THE ORGANISATION READS AN ENTRY AS SOMETHING ELSE, it is left: a seat
+// reading of a spelling wins over a unit's, so an entry naming a key some seat
+// also answers to names the seat; and a unit renamed onto a key a seat answers
+// to would hand every entry to the seat, so they stay on the unit's retired key,
+// which still reaches it.
+func TestARenameMovesTheManagesEntriesThatNamedItsObject(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.must(create("op-platform", chart.KindUnit, "platform", ""))
+	h.must(create("op-design", chart.KindUnit, "design", ""))
+	h.must(create("op-ops", chart.KindUnit, "ops", ""))
+	for _, handle := range []string{"ana", "design", "omar", "vee"} {
+		h.must(create("op-"+handle, chart.KindSeat, handle, ""))
+	}
+	// ANA WAS RENAMED BY AN OLDER BUILD, whose rekey left the entries naming
+	// her as typed: `ana` is her origin now, and still reaches her.
+	h.must(seatRekey("op-old-rename", "ana-lopez", "ana"))
+	h.must(seatRecord("op-vee", "vee", "", func(p *chart.SeatPayload) {
+		p.Manages = []string{"ana", "ana-l", "design", "ops", "platform"}
+	}))
+
+	h.must(place("op-batch",
+		renameEdge(chart.KindSeat, "ana-lopez", "ana-l", "", ""),
+		renameEdge(chart.KindUnit, "platform", "infra", "", ""),
+		renameEdge(chart.KindUnit, "design", "ux", "", ""),
+		renameEdge(chart.KindUnit, "ops", "omar", "", "")))
+
+	// `ana` and the dangling `ana-l` both now name her: one entry. `design`
+	// names the seat, not the unit renamed ux. `ops` stays, because `omar`
+	// is a seat's handle and the entry would have named him.
+	if got := h.column(`SELECT target FROM chart_manages WHERE manager = 'vee'
+		ORDER BY target`); !slices.Equal(got,
+		[]string{"ana-l", "design", "infra", "ops"}) {
+		t.Errorf("vee's entries are %v, want [ana-l design infra ops]", got)
+	}
+
+	// AND THE ORGANISATION READS THEM AS THE SAME PEOPLE AND TEAMS.
+	view := org.FromRows(h.read(), org.Settings{Name: "Acme"})
+	ana := view.Org.Role("ana-l")
+	if ana == nil {
+		t.Fatal("the view has no ana-l")
+	}
+	if got := view.Org.Manager(ana); got == nil || got.Handle() != "vee" {
+		t.Errorf("ana-l's manager is %v, want vee", got)
+	}
+
+	// THE CONTROL: a version-1 rekey is read for ever as what it meant, and
+	// it left an entry as typed.
+	h.must(seatRecord("op-vee-2", "vee", "", func(p *chart.SeatPayload) {
+		p.Manages = []string{"omar"}
+	}))
+	h.must(seatRekey("op-old-rekey", "omar-h", "omar"))
+	if got := h.column(`SELECT target FROM chart_manages WHERE manager = 'vee'`); !slices.Equal(
+		got, []string{"omar"}) {
+		t.Errorf("a version-1 rekey moved vee's entry to %v", got)
 	}
 }

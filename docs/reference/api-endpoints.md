@@ -658,10 +658,19 @@ decode, answers the same however often it is asked.
 
 `POST /chart/units/{key}/rename` with `{"to": "..."}` changes an object's
 address. A key is not an identity — the row is — so the former address goes on
-resolving until something else claims it, and a `manages:` entry somebody wrote
-last year still finds the seat it named. Every read carries `former_keys` /
+resolving until something else claims it, and a reference somebody typed last
+year — a chat mention, a unit's `lead:` naming a handle the seat has since given
+up — still finds what it named. Every read carries `former_keys` /
 `former_handles` so a client rendering a stale reference can say **why** it
 still works rather than reporting it broken.
+
+The **`manages:` entries** naming the object move with it: every entry that
+reached it before the rename names its new address after, so it does not hang
+on an alias a new object may take or sixteen further renames retire. An entry
+the organisation reads as naming something else is left — one naming a unit by
+a key some seat also answers to names the seat, and a unit renamed onto a key a
+seat answers to keeps its entries on the retired key, which still reaches it.
+See [The org chart](../concepts/chart-domain.md).
 
 The route publishes a batch of one `rename` operation, so it is ordered against
 every other structural write: a create of the same address is decided against

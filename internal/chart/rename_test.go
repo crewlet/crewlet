@@ -518,6 +518,38 @@ func TestARemovedSeatsIdentityIsNeverIssuedAgain(t *testing.T) {
 	r.applySeatRekey("op-free", "lena-ops", "lena")
 }
 
+// A MANAGER GOES ON MANAGING THE SEAT IT NAMED, WHOEVER TAKES THE OLD HANDLE.
+//
+// A creation may take a renamed seat's retired handle. While a rename left the
+// `manages:` entries naming the seat as typed, the entry reached the seat only
+// through that alias — so the moment a new seat took it, the manager managed
+// the newcomer instead, with nothing to say so.
+func TestAManagerGoesOnManagingTheSeatItNamedWhoeverTakesTheOldHandle(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "ana", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "vee", ""))
+	// A HANDLE THAT IS NOBODY'S IDENTITY, which is the one a creation may
+	// take: the seat was created as ana and answers to ana-2 when vee's
+	// entry is written.
+	r.applySeatRekey("op-rename-1", "ana-2", "ana")
+	if _, err := r.seat("op-vee", chart.SeatContent{Handle: "vee", Name: "Vee",
+		Manages: []string{"ana-2"}}); err != nil {
+		t.Fatalf("write vee: %v", err)
+	}
+	r.applySeatRekey("op-rename-2", "ana-lopez", "ana-2")
+	r.batch("op-newcomer", op(chart.OpCreateSeat, chart.KindSeat, "ana-2", ""))
+
+	got, err := r.reader().Seat(t.Context(), "vee", session())
+	if err != nil {
+		t.Fatalf("read vee: %v", err)
+	}
+	if !slices.Equal(got.Manages, []string{"ana-lopez"}) {
+		t.Errorf("vee manages %v, want [ana-lopez] — the seat the entry named, "+
+			"not the newcomer who took its old handle", got.Manages)
+	}
+}
+
 // A BATCH THAT RENAMES AN OBJECT AND THEN REMOVES IT REMOVES THE OBJECT.
 //
 // The removal is a record of its own, published without the batch's rename,

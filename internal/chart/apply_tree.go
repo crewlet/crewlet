@@ -263,6 +263,10 @@ func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 // or the address it moves onto is one it may not take ([Applier.rekeyRefused]).
 // And ONE WAY IT ALREADY DID: a redelivery finds the object on the new address,
 // stamped at this very position, and that is this record's own work.
+//
+// A RENAME THAT LANDS MOVES THE `manages:` ENTRIES NAMING ITS OBJECT too
+// ([Applier.moveManages]), which a version-1 rekey — the other caller of the
+// same bodies — never did.
 func (a *Applier) renameEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 	edge Edge) (rows int, landed bool, err error) {
 
@@ -294,15 +298,30 @@ func (a *Applier) renameEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 		a.declineChange(at, declinedRename, was, refused)
 		return 0, false, nil
 	}
+	// THE ENTRIES NAMING IT, read before the rename moves anything: which
+	// object an address reaches is a question about the rows as they were.
+	named, err := managesNaming(ctx, tx, edge.Object.Kind, from)
+	if err != nil {
+		return 0, false, err
+	}
 	switch edge.Object.Kind {
 	case KindUnit:
-		return a.rekeyUnit(ctx, tx, at, key, from)
+		rows, landed, err = a.rekeyUnit(ctx, tx, at, key, from)
 	case KindSeat:
-		return a.rekeySeat(ctx, tx, at, key, from)
+		rows, landed, err = a.rekeySeat(ctx, tx, at, key, from)
+	default:
+		return 0, false, fmt.Errorf("chart: the structural record at %s renames "+
+			"a %s, and only a unit and a seat hold an address", at.position,
+			edge.Object.Kind)
 	}
-	return 0, false, fmt.Errorf("chart: the structural record at %s renames a "+
-		"%s, and only a unit and a seat hold an address", at.position,
-		edge.Object.Kind)
+	if err != nil || !landed {
+		return rows, landed, err
+	}
+	moved, err := a.moveManages(ctx, tx, at, edge.Object.Kind, key, named)
+	if err != nil {
+		return 0, false, err
+	}
+	return rows + moved, true, nil
 }
 
 // checkVerb fails a record whose edge states a verb this build does not apply.
@@ -794,10 +813,11 @@ func (a *Applier) tombstoneIdentity(ctx context.Context, tx *sql.Tx,
 // deleteObject removes one object's row and every edge it owns.
 //
 // THE EDGES IT OWNS, never the edges that name it. A `manages:` entry pointing
-// at a removed seat is what somebody WROTE, and the organisation model already
-// reads a dangling reference as a warning rather than an error — so deleting
-// the other end here would silently edit a document nobody edited, and the next
-// config apply would write it straight back.
+// at a removed object names an address a tombstone keeps from ever resolving
+// again, and the organisation model reports a dangling reference as a warning
+// — which is where somebody decides whether the entry goes or names someone
+// else. Deleting it here would take that decision for whoever wrote it, out of
+// sight, with no record of which seat managed whom.
 func (a *Applier) deleteObject(ctx context.Context, tx *sql.Tx, at applyContext,
 	kind ObjectKind, id string) (int, error) {
 

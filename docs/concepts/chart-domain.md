@@ -420,17 +420,27 @@ nothing to recompute it, because the change that moved the ancestor never named
 the row that went stale. The engine derives them on the way out instead; see
 [Organization Model](organization-model.md).
 
-**A rename moves the structure and leaves the text alone.** When a unit's key
+**A rename moves every reference to its object by key.** When a unit's key
 changes, every child's parent and every seat's unit follow it in the same
 commit, and when a seat's handle changes, so does the lead of every unit it
 leads — so no read ever sees a reference to a key nothing answers to. Each of
 those rows moves **whole**: its columns and the document the company view is
 built from, together, because a row whose column followed and whose document
 did not is one the view reads under the old key (dropping a renamed unit's
-subtree to the org root) and one its next content write puts back. A
-`manages:` entry naming the old key is **not** rewritten: it is what somebody
-typed, the retired key goes on resolving, and editing it here would change a
-document nobody edited — which the next config apply would undo anyway.
+subtree to the org root) and one its next content write puts back.
+
+The **`manages:` entries** that named the object move with it: every entry that
+reached it before the rename — by the address it left, a retired one, or the
+one it was created under — names its new address after. Left as typed, an entry
+reached the object only through the retired alias, which is capped at sixteen
+(so it named nobody after enough renames) and which a new object may take (so a
+`create_seat` on the old handle silently gave the manager the newcomer). Two
+entries are left, because the organisation reads them as naming something else:
+one naming a unit by a key some **seat** also answers to names that seat, since
+a seat reading of a spelling wins; and a unit renamed onto a key a seat answers
+to keeps the entries on its retired key, which still reaches it, rather than
+handing them to the seat. A version-1 rekey on the log left every entry as
+typed, and is read for ever as that.
 
 Both edge tables store **what was authored**, including an entry that resolves
 to nothing. A `manages:` naming a seat nobody has added yet is kept as written:

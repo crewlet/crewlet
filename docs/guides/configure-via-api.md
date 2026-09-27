@@ -322,9 +322,10 @@ curl -X POST $CREWLET_URL/chart/units/engineering/rename \
 ```
 
 The former address goes on resolving: a key is an ADDRESS and the row is the
-identity, so a `manages:` entry somebody wrote last year still finds what it
-named. Reads carry `former_keys` / `former_handles` so a client can say why a
-stale reference still works.
+identity, so a reference somebody typed last year still finds what it named.
+Reads carry `former_keys` / `former_handles` so a client can say why a stale
+reference still works. The `manages:` entries naming the object move to its new
+address in the same record, so they never depend on the old one.
 
 A rename is structure — the route publishes a one-operation batch — so it can
 also ride in a `POST /chart/batch` beside the moves it goes with, as

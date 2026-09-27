@@ -50,9 +50,10 @@ func TestARenameKeepsTheIDTheLeaseTheMailboxAndTheDiary(t *testing.T) {
 
 // A RETIRED ADDRESS GOES ON RESOLVING, AND NEVER OVER A LIVE ONE.
 //
-// The chart moves the structure a rename touches, but it deliberately leaves
-// the authored text of a `manages:` list alone — so the alias is the only
-// thing keeping an entry somebody typed pointing at the person it named.
+// A rename moves what names its seat by key, but not every reference can be
+// reached — a handle typed after the seat gave it up, an entry a version-1
+// rekey left as typed — and the alias is what keeps each of those pointing at
+// the person it named.
 func TestARetiredHandleResolvesAndALiveOneAlwaysWins(t *testing.T) {
 	t.Parallel()
 	renamed := &Role{Name: "Sarah Okonkwo", DeclaredHandle: "sarah-okonkwo",
