@@ -657,7 +657,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// normal, which is what every caller that does not know about
 	// maintenance gets; the incarnation is minted here rather than at the
 	// lease, because the capacity barrier compares it and a second mint
-	// would be a second identity for one process.
+	// would be a second identity for one process. It is the owner of every
+	// lease this process holds for itself — the seat host's presence, seats
+	// and duties (node.New below) and the object store's membership alike.
 	//
 	// AND THE NODE ID ONCE TOO. It was resolved here and then AGAIN a
 	// hundred lines below, from the same bootstrap through the same
@@ -932,8 +934,22 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// INCARNATION. A restarted process that reused its owner id would
 		// be indistinguishable from the one that died, and would inherit
 		// leases it never renewed.
+		//
+		// THE ENGINE'S OWN, minted once above — never a mint of its own.
+		// This was `config.NewIncarnation(nodeID)` a second time, so the
+		// coordination store held one process under two owners: its
+		// presence, its seats, every fleet duty and the meter id its token
+		// report is filed under on one, and its object-store membership,
+		// its publish admission and its capacity acknowledgements on the
+		// other. Two owners under one node id is exactly what a second
+		// process running under that id looks like, which is the one thing
+		// a refused membership tells an operator to look for. Every lease
+		// this process holds for ITSELF is under e.incarnation; the one
+		// deliberate exception is the mailbox retirement's, which claims a
+		// seat lease as a separate party and must lose to this host — see
+		// [Engine.buildMailboxes].
 		NodeID: nodeID,
-		Owner:  config.NewIncarnation(nodeID),
+		Owner:  e.incarnation,
 		// Read FRESH through the epoch, never bound to the company this
 		// engine started on: an apply replaces the seat set, and a
 		// method value captured here would keep claiming seats a
