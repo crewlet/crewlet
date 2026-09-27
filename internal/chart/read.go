@@ -859,27 +859,34 @@ func (r *Reader) Removed(ctx context.Context, ref ObjectRef,
 	var found bool
 	served, err := r.log.Read(ctx, fresh.Query(ReadScope("", ""), false),
 		func(tx *sql.Tx) error {
-			err := tx.QueryRowContext(ctx, `
-				SELECT at, record_id, actor, actor_kind, reason
-				FROM chart_removed WHERE object_kind = ? AND object_id = ?`,
-				string(ref.Kind), NormalizeKey(ref.ID)).
-				Scan(&out.At, &out.RecordID, &out.Actor, &out.ActorKind,
-					&out.Reason)
-			switch {
-			case errors.Is(err, sql.ErrNoRows):
-				found = false
-				return nil
-			case err != nil:
-				return fmt.Errorf("chart: read the removal of %s: %w", ref, err)
-			}
-			out.Object = ObjectRef{Kind: ref.Kind, ID: NormalizeKey(ref.ID)}
-			found = true
-			return nil
+			var err error
+			out, found, err = readRemoval(ctx, tx, ref)
+			return err
 		})
 	if err != nil {
 		return Removal{}, false, Answer{}, err
 	}
 	return out, found, answerFrom(served), nil
+}
+
+// readRemoval is one address's tombstone, inside a transaction the caller
+// holds — the read [Reader.Removed] serves, and the one a content write's
+// decide asks before it tells somebody why their object is not there.
+func readRemoval(ctx context.Context, tx *sql.Tx, ref ObjectRef) (Removal, bool, error) {
+	var out Removal
+	err := tx.QueryRowContext(ctx, `
+		SELECT at, record_id, actor, actor_kind, reason
+		FROM chart_removed WHERE object_kind = ? AND object_id = ?`,
+		string(ref.Kind), NormalizeKey(ref.ID)).
+		Scan(&out.At, &out.RecordID, &out.Actor, &out.ActorKind, &out.Reason)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Removal{}, false, nil
+	case err != nil:
+		return Removal{}, false, fmt.Errorf("chart: read the removal of %s: %w", ref, err)
+	}
+	out.Object = ObjectRef{Kind: ref.Kind, ID: NormalizeKey(ref.ID)}
+	return out, true, nil
 }
 
 // Removal is what a tombstone holds.

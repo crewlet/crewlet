@@ -241,16 +241,27 @@ alias has fallen off the capped list — and nothing else may take it:
 
 - **No rename onto it.** Another seat renamed onto a retired identity would
   answer to the address the first one's mailbox and diary are named by.
-- **No creation onto it**, through any of the three paths that create an object:
-  a structural batch refuses it at its decide (`the key is taken`, naming the
-  seat that holds it), a lone content write refuses it at its decide, and an
-  import — which decides nothing at its decide — has the placement **declined**
-  at the apply (`chart_apply_declined`, counted on
-  `crewlet.chart.apply.declined`). A new object's identity is the address it is
-  created under, so a seat created on another's identity would be a second seat
-  sharing the first one's mailbox, lease and diary.
+- **No creation onto it**, through either path that creates an object: a
+  structural batch refuses it at its decide (`the key is taken`, naming the
+  seat that holds it), and an import — which decides nothing at its decide —
+  has the placement **declined** at the apply (`chart_apply_declined`, counted
+  on `crewlet.chart.apply.declined`). A new object's identity is the address it
+  is created under, so a seat created on another's identity would be a second
+  seat sharing the first one's mailbox, lease and diary.
 
-Every one of those paths — and a rename — asks **one** set of rules, so none of
+**A content write never creates its object.** A creation takes an address, and
+an address is exact only where every structural change contends; a content
+write contends with nobody but writers of its own object, so one that created
+would put a seat in the chart that no structural write ever arbitrated. It is
+refused instead, naming `POST /chart/batch` — or, where the rows already say
+why the object is not there, naming its removal and the reason given, or the
+address it was renamed to. It **waits first**: the batch that created the
+object may have been answered `202` and not be applied on this node yet, which
+is the ordinary shape of a hire, so the write waits for this node to apply
+everything the structure had been written by and decides once more.
+
+Every path that gives an address — a create, an import and a rename — asks
+**one** set of rules, so none of
 them can forget one: a reserved word (`root`, `tree`, `barrier`, and `none` for
 a seat), a seat handle outside the handle grammar (a `.` or a `:` is a login's
 shape, which every name lookup sends to the identity directory), a removed

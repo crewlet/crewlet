@@ -298,6 +298,12 @@ curl -X POST $CREWLET_URL/chart/batch \
       ]}'
 ```
 
+A hire is **two** writes, in this order: the batch that creates the seat, then
+a `PATCH` with its content. A content write never creates its object — a
+`PATCH` naming a seat the chart does not hold is refused, pointing here — and
+it waits for a `202` batch this node has not applied yet, so the second write
+can follow the first straight away.
+
 Removals go in a batch of their own and carry a `reason`, which rides into the
 tombstone so somebody asking where their team went reads "merged into
 infrastructure" rather than an absence.

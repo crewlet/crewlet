@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/redact"
@@ -39,6 +40,24 @@ import (
 // restore it from, so the only alternatives are storing the literal — the
 // outage above — or storing an empty value, which would silently clear a
 // credential the caller believed they were leaving alone.
+//
+// # A content write never creates its object
+//
+// A creation is STRUCTURE: it takes an address, and an address is exact only
+// where every structural change contends — on [KindTree], where a batch's
+// create is refused over a taken, reserved, removed or retired address against
+// every other structural write. A content write arbitrates on its object's own
+// subject and contends with nobody else's, so one that could create would put
+// an object in the chart outside that arbitration entirely: a seat at the org
+// root nobody placed, on an address a concurrent create could take as well —
+// and, since a seat's kind is structure too, one with no kind at all.
+//
+// So a content write on an address this node's rows do not hold is REFUSED,
+// after one wait: the create may be on the log and not applied here yet —
+// answered `pending` to the caller who now writes its content, which is the
+// ordinary shape of a hire and of an import. [Writer.publishContent] waits for
+// this node to apply everything the structure has been written by, and asks
+// once more.
 
 // UnitContent is one unit's own content, as a caller states it.
 //
@@ -131,7 +150,7 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 	// enumeration.
 	scope := ScopeSet{Subject: true}
 
-	result, err := w.publish(ctx, statelog.Request{
+	result, err := w.publishContent(ctx, object, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
@@ -147,11 +166,10 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if found {
-				if err = w.mayReplace(prior.Runtime); err != nil {
-					return statelog.Decision{}, err
-				}
-			} else if err = refuseContentCreate(ctx, tx, object); err != nil {
+			if !found {
+				return statelog.Decision{}, notPlaced(ctx, tx, object)
+			}
+			if err = w.mayReplace(prior.Runtime); err != nil {
 				return statelog.Decision{}, err
 			}
 			payload := UnitPayload{
@@ -198,7 +216,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 	unit := NormalizeKey(content.Unit)
 	scope := ScopeSet{Subject: true, Unit: unit}
 
-	result, err := w.publish(ctx, statelog.Request{
+	result, err := w.publishContent(ctx, object, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
@@ -223,14 +241,13 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			// WHAT IS BEING REPLACED, which the payload cannot say:
 			// a content write is full post-state, so one that omits
 			// the opaque half CLEARS it. See [Writer.mayReplace].
-			if found {
-				if err = w.mayReplace(prior.Runtime); err != nil {
-					return statelog.Decision{}, err
-				}
-			} else if err = refuseContentCreate(ctx, tx, object); err != nil {
+			if !found {
+				return statelog.Decision{}, notPlaced(ctx, tx, object)
+			}
+			if err = w.mayReplace(prior.Runtime); err != nil {
 				return statelog.Decision{}, err
 			}
-			if found && prior.UnitKey != unit {
+			if prior.UnitKey != unit {
 				return statelog.Decision{}, fmt.Errorf("chart: the write on "+
 					"%s states that it sits in %q and the chart has it in %q "+
 					"— re-read the seat and write it again, because the "+
@@ -247,7 +264,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 				Runtime: content.Runtime,
 			}
 			email, err := w.resolveMasked(ctx, object, "email",
-				content.Email, priorEmail(prior, found))
+				content.Email, prior.Email)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -261,22 +278,90 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 	return WriteResult{Result: result, Objects: []ObjectRef{object}}, err
 }
 
-// refuseContentCreate refuses a content write that would CREATE an object on
-// an address it may not take.
+// errNotPlaced is a content write whose object this node's rows do not hold,
+// and that nothing yet says will never arrive. [Writer.publishContent] turns it
+// into one wait and one more attempt, and then into a refusal.
+var errNotPlaced = errors.New("chart: the object is not in this node's rows")
+
+// notPlaced is why a content write's decide found no row: a refusal where the
+// rows already say why — the address was removed, or the object answers to
+// another one now — and [errNotPlaced] where a create may still be arriving.
 //
-// ASKED ONLY WHEN THE ROW IS ABSENT, because only then is the write a creation,
-// and a creation is held to every creation's rules ([refuseCreate]). The apply
-// declines the same case; this is where the caller is told.
-func refuseContentCreate(ctx context.Context, tx *sql.Tx, object ObjectRef) error {
-	refused, err := refuseCreate(ctx, txBook{tx: tx}, object.Kind, object.ID, "")
+// READ IN THE DECIDE'S OWN SNAPSHOT, like everything a decide acts on.
+func notPlaced(ctx context.Context, tx *sql.Tx, object ObjectRef) error {
+	removal, removed, err := readRemoval(ctx, tx, object)
 	if err != nil {
 		return err
 	}
-	if refused != nil {
-		return fmt.Errorf("chart: %s cannot be created by a content write — %s: "+
-			"%s: %w", object, refused.Rule, refused.Detail, ErrRefused)
+	if removed {
+		reason := ""
+		if removal.Reason != "" {
+			reason = fmt.Sprintf(" (%q)", removal.Reason)
+		}
+		return fmt.Errorf("chart: %s was removed from the chart by %s%s, and a "+
+			"removed object is never written again — a content write on it would "+
+			"be dropped by the removal gate on every node: %w",
+			object, removal.Actor, reason, ErrRefused)
 	}
-	return nil
+	holder, how, err := txBook{tx: tx}.holder(ctx, object.Kind, object.ID)
+	if err != nil {
+		return err
+	}
+	if how == heldAsAlias || how == heldAsIdentity {
+		return fmt.Errorf("chart: %s was renamed and answers to %q now — a "+
+			"content write is made to the address an object holds, because that "+
+			"is the subject it contends on: write %s %s instead: %w",
+			object, holder, object.Kind, holder, ErrRefused)
+	}
+	return errNotPlaced
+}
+
+// publishContent publishes one content write, and when its object is not in
+// this node's rows, waits for the structure once and asks again.
+//
+// # Why one wait, and why for the STRUCTURE
+//
+// The ordinary way an object gets content is straight after the batch that
+// created it — a hire, an import — and that batch may have been answered
+// `pending`: durable, and not yet applied on this node. A content write decided
+// then finds no row, and refusing it would refuse every hire whose two halves
+// landed a moment apart. What makes an object exist is a structural record, so
+// this node waits until it has applied everything the structure's subject had
+// been written by when the refusal was reached ([statelog.Publisher.SubjectEnd])
+// and decides again. A second miss is a real one, and refused.
+//
+// THE WAIT IS THE WRITER'S SESSION MARK, raised for this call alone, so the
+// framework's own resolve budget bounds it and a node that cannot catch up
+// answers `behind` rather than refusing an object it has not seen yet.
+func (w *Writer) publishContent(ctx context.Context, object ObjectRef,
+	req statelog.Request) (statelog.Result, error) {
+
+	result, err := w.publish(ctx, req)
+	if !errors.Is(err, errNotPlaced) {
+		return result, err
+	}
+	end, found, endErr := w.publisher.SubjectEnd(ctx, wire(TreeSubject()))
+	if endErr != nil {
+		return result, fmt.Errorf("chart: %s is not in this node's rows, and the "+
+			"log could not be asked whether a create of it is still arriving: "+
+			"%w: %w", object, statelog.ErrUnavailable, endErr)
+	}
+	// A MARK ALREADY AT OR PAST THE STRUCTURE'S END waited for it the first
+	// time, so the miss was real. The zero mark is below everything; any
+	// other is this stream's own, which is what makes the packed comparison
+	// the whole of the question.
+	if found && (w.after.IsZero() || w.after.Packed() < end.Packed()) {
+		result, err = w.After(end).publish(ctx, req)
+	}
+	if errors.Is(err, errNotPlaced) {
+		return result, fmt.Errorf("chart: %s is not in the chart, and a content "+
+			"write never creates an object — a creation is structure, refused "+
+			"over a taken, reserved or removed address against every other "+
+			"structural change. Create it with a structural batch "+
+			"(`create_%s`, POST /chart/batch) first: %w",
+			object, object.Kind, ErrRefused)
+	}
+	return result, err
 }
 
 // resolveMasked settles one field that may have arrived masked.
@@ -304,12 +389,4 @@ func (w *Writer) resolveMasked(ctx context.Context, object ObjectRef,
 	// would put a pointer inside the store under a second name, and the
 	// first would then be a key nothing overwrites and nothing deletes.
 	return prior, nil
-}
-
-// priorEmail is the stored seat's email, or empty where there is no row.
-func priorEmail(prior Seat, found bool) string {
-	if !found {
-		return ""
-	}
-	return prior.Email
 }

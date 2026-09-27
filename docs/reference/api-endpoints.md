@@ -566,6 +566,15 @@ the rows they asked for are rows they may read. Every answer says which it got:
 Without that flag a company whose seats declare no runtime at all renders
 exactly like a caller who was silently stripped.
 
+**A content write never creates its object.** A `PATCH` naming a unit or a seat
+the chart does not hold is refused (`400`) naming `POST /chart/batch`, which is
+where an object is created — or, where the chart knows why it is not there, the
+removal that took it (with who made it and the reason given) or the address it
+was renamed to. The write first waits for this node to apply everything the
+structure had been written by, so a `PATCH` straight after the `202` of the
+batch that created its object lands rather than being refused; a node that
+cannot catch up in time answers `503` as it does for any write it is behind on.
+
 The same rules are enforced a second time **inside the domain**, against the
 grants the authoring party holds — so a surface that skipped its own check
 still cannot write a seat's credentials, and a write that would CLEAR the

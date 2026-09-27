@@ -95,8 +95,10 @@ The rest of the rules:
 | More than 500 operations | One batch is one record, and a record past the broker's maximum payload is refused **permanently** with no retry that can place it. Submit several batches; each is arbitrated on its own |
 
 **Every path that gives an object an address asks the same rules** — a
-batch's create, a rename, an import and a content write alike — so a name
-refused here is refused on each of them. An import decides nothing up front,
+batch's create, a rename and an import alike — so a name refused here is
+refused on each of them. A content write gives none: it never creates its
+object, and one naming an object the chart does not hold is refused, naming
+this batch. An import decides nothing up front,
 so the chart holds it at the apply instead: an object it names on an address
 it may not take is **declined** there, logged as `chart_apply_declined` and
 counted on `crewlet.chart.apply.declined`, and the rest of the import lands.

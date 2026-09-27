@@ -96,7 +96,10 @@ func newWriteRig(t *testing.T) *writeRig {
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address.
 	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
-	waiter := &rigWaiter{}
+	// THE STREAM IS NAMED FROM THE START, as a runner's cursor is: a
+	// position with no stream cannot be compared with one the broker
+	// answered, and a caller's session mark is one of those.
+	waiter := &rigWaiter{at: statelog.Position{Stream: spec.Name}}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: chart.Domain{}, Log: log, Rows: rows, Fence: fence,
 		Signer: testSigner(t, chart.Domain{}),
