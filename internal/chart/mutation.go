@@ -58,6 +58,27 @@ type Edge struct {
 	// recompute, because the record that changed the ancestor never named
 	// this unit.
 	Lead string `json:"l,omitempty"`
+
+	// Op is what the batch did to this object — the one verb its edge is
+	// published under, the highest-ranked of every operation that named it
+	// — and it is what tells the apply a CREATE from a placement.
+	//
+	// # Why a create has to say so
+	//
+	// Without it an edge is only a placement, and a placement of an object
+	// the chart already holds is a MOVE: so a create that met an address
+	// something else had taken — an import deciding nothing at its decide,
+	// or a record the log ordered behind another — moved that object under
+	// the creator's parent and cleared its lead, while the create itself
+	// "landed" as nothing. Marked, the apply DECLINES a create whose address
+	// is held, and the object that holds it stays where it is.
+	//
+	// EMPTY IS A PLACEMENT — create the object where it is absent, place it
+	// where it is not — which is what every version-1 record meant and what
+	// an import's edge still means: an import states a revision's complete
+	// structure and decides nothing about which of its objects exist.
+	// Version 2 of the record.
+	Op OperationKind `json:"op,omitempty"`
 }
 
 // PlacementPayload states edges. Its subject is [KindTree].
@@ -385,7 +406,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V:       RecordVersion,
+			V:       BaseRecordVersion,
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			// THE BARRIER'S OWN SCOPE IS THE SENTINEL, which resolves

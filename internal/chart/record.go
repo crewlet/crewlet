@@ -9,12 +9,38 @@ import (
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
-// RecordVersion is the record shape THIS BUILD can decode.
+// RecordVersion is the record shape THIS BUILD writes and reads.
 //
 // A record above it is RETAINED rather than skipped — see the deferral contract
 // in [statelog] — which is what makes a rolling upgrade a period of reduced
 // coverage rather than an outage.
-const RecordVersion = 1
+//
+// # What each version means
+//
+//   - 1: the first shape.
+//   - 2: a structural edge says what the batch did to its object
+//     ([Edge.Op]), so a create whose address is held is DECLINED at the apply
+//     rather than applied as a move of whatever holds it; and a content record
+//     never creates its object at the apply either.
+//
+// A LOWER VERSION IS READ FOR EVER, as what it meant when it was written: a
+// version-1 edge carries no verb and is a placement that creates what is
+// absent, and a version-1 content record may create its row. Nothing rewrites a
+// record on the log, and the fleet mid-upgrade still has version-1 writers, so
+// every change of meaning is read off the record itself at the apply — an
+// edge's verb, a content record's own version — and never off this constant.
+//
+// A HIGHER ONE IS WHAT KEEPS AN OLDER PEER HONEST. A version-1 build reading a
+// version-2 edge would apply a create as a move — the very thing version 2
+// exists to stop — so it retains the record instead, and applies it once
+// upgraded.
+const RecordVersion = 2
+
+// BaseRecordVersion is the version a record that has never changed shape is
+// written at, so every build still on the stream reads it: the read index's
+// payload-free barrier, which an older node would otherwise retain once per
+// linearizable read anywhere in the fleet.
+const BaseRecordVersion = 1
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER.

@@ -479,7 +479,8 @@ func Catalogue() []Instrument {
 			Name: ChartApplyDeclined, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"op", "reason"},
 			Shows: "Chart changes an apply declined to write, by what was " +
-				"declined (`place`, `create`, `move`, `rename`, `content`) " +
+				"declined (`place`, `create`, `move`, `set_lead`, `rename`, " +
+				"`content`) " +
 				"and why (`reserved`, `shape`, `removed`, `taken`, " +
 				"`identity`, `alias`, `present`, `absent`). A decline is how " +
 				"a rule the write path could not see is held at the apply " +

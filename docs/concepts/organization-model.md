@@ -113,6 +113,10 @@ this batch. An import decides nothing up front,
 so the chart holds it at the apply instead: an object it names on an address
 it may not take is **declined** there, logged as `chart_apply_declined` and
 counted on `crewlet.chart.apply.declined`, and the rest of the import lands.
+The same happens to a batch's own create whose address something took after
+the batch was decided: the batch publishes each object's edge marked with what
+it did to it, so the apply declines the create and leaves the object holding
+the address where it is, rather than moving it.
 `crewlet validate` refuses the same names in a file first.
 
 A **removal is its own record** and cannot ride with a placement, because a

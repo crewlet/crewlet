@@ -222,7 +222,7 @@ func TestACreateOntoARemovedAddressIsRefusedOnItsOwnRule(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
-	h.must(unitRecord("op-content", "platform", nil))
+	h.must(create("op-create", chart.KindUnit, "platform", ""))
 	h.must(record(chart.TreeSubject(), chart.OpRemove, "op-remove",
 		chart.RemovePayload{V: chart.GateRecordVersion,
 			Objects: []chart.ObjectRef{{Kind: chart.KindUnit, ID: "platform"}}},
@@ -245,7 +245,7 @@ func TestACreateOntoATakenAddressIsRefused(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
-	h.must(unitRecord("op-content", "platform", nil))
+	h.must(create("op-create", chart.KindUnit, "platform", ""))
 	_, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
 		op(chart.OpCreateUnit, chart.KindUnit, "platform", ""),
 	}})
@@ -271,13 +271,13 @@ func TestAReservedKeyIsRefused(t *testing.T) {
 	h := newHarness(t)
 
 	for _, kind := range []chart.ObjectKind{chart.KindUnit, chart.KindSeat} {
-		create := chart.OpCreateUnit
+		verb := chart.OpCreateUnit
 		if kind == chart.KindSeat {
-			create = chart.OpCreateSeat
+			verb = chart.OpCreateSeat
 		}
 		for _, key := range chart.ReservedKeys(kind) {
 			_, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
-				op(create, kind, key, ""),
+				op(verb, kind, key, ""),
 			}})
 			if ref := refusal(t, err); ref.Rule != chart.RuleReservedKey {
 				t.Errorf("%s %q: rule = %q, want %q — it names the org root, one "+
@@ -591,6 +591,58 @@ func TestACreatedUnitIsLedByTheLeadItNames(t *testing.T) {
 	if got := h.column(`SELECT handle FROM chart_leads WHERE unit_key = 'platform'`); !slices.Equal(
 		got, []string{"sre"}) {
 		t.Errorf("the created unit's lead edge is %v, want [sre]", got)
+	}
+}
+
+// EVERY EDGE SAYS WHAT ITS BATCH DID TO THE OBJECT, AND CARRIES ITS WHOLE
+// POST-STATE.
+//
+// The verb is what the apply decides by — a create is declined where its
+// address turned out to be held, a move or a lead change where its object is
+// gone — and there is one per edge because there is one edge per object: a
+// create the batch then moved is still a create, since only a create may make
+// the row.
+func TestABatchMarksEachEdgeWithWhatItDid(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.must(create("op-eng", chart.KindUnit, "engineering", ""))
+	h.must(create("op-product", chart.KindUnit, "product", ""))
+	h.must(place("op-platform", chart.Edge{
+		Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
+		Parent: "engineering", Lead: "sarah-chen", Op: chart.OpCreateUnit}))
+
+	edges, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		{Kind: chart.OpCreateUnit, Object: chart.ObjectRef{Kind: chart.KindUnit,
+			ID: "design"}, Lead: "ana"},
+		op(chart.OpMove, chart.KindUnit, "platform", "product"),
+		{Kind: chart.OpSetLead, Object: chart.ObjectRef{Kind: chart.KindUnit,
+			ID: "engineering"}, Lead: "omar"},
+		op(chart.OpCreateSeat, chart.KindSeat, "bob", "design"),
+		op(chart.OpMove, chart.KindSeat, "bob", "product"),
+	}})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	want := []chart.Edge{
+		{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "design"},
+			Lead: "ana", Op: chart.OpCreateUnit},
+		{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
+			Parent: "product", Lead: "sarah-chen", Op: chart.OpMove},
+		{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"},
+			Lead: "omar", Op: chart.OpSetLead},
+		{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "bob"},
+			Parent: "product", Op: chart.OpCreateSeat},
+	}
+	if !slices.Equal(edges, want) {
+		t.Errorf("the batch published\n  %+v\nwant\n  %+v", edges, want)
+	}
+
+	// AND THE CREATE LANDS AS ONE: design exists, led by ana.
+	h.must(place("op-batch", edges...))
+	if got := h.column(`SELECT handle FROM chart_leads WHERE unit_key = 'design'`); !slices.Equal(
+		got, []string{"ana"}) {
+		t.Errorf("the created unit's lead edge is %v, want [ana] — a create_unit "+
+			"that names its lead makes the unit led", got)
 	}
 }
 

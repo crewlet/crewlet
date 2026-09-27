@@ -65,19 +65,38 @@ type wnode struct {
 	// lead is a unit's AUTHORED lead, "" where it inherits one.
 	lead string
 
-	// named marks an object an operation in this batch named, so its edge
-	// is published.
-	named bool
+	// op is what this batch did to the object, by [opRank], or "" while no
+	// operation has named it.
+	op OperationKind
 
 	// removed marks an object an operation in this batch took out.
 	removed bool
 }
 
-// named records that an operation named this object.
-func (w *working) named(n *wnode) {
-	if !n.named {
-		n.named = true
+// opRank orders what a batch can do to one object, for the one verb its edge
+// is published under.
+//
+// ONE VERB PER EDGE, because the record states one edge per object — a second
+// edge for the same object would leave the applied result dependent on which
+// the applier wrote last — and the edge carries the object's whole post-state
+// whatever the verb. The verb says what KIND of change it was, and the highest
+// rank is the one that decides what the apply does: a create must be applied as
+// a create even when the batch also moved the object afterwards, because only
+// a create is declined when its address turns out to be held.
+var opRank = map[OperationKind]int{
+	OpSetLead:    1,
+	OpMove:       2,
+	OpCreateUnit: 3,
+	OpCreateSeat: 3,
+}
+
+// named records that op named this object, and raises its verb.
+func (w *working) named(n *wnode, op OperationKind) {
+	if n.op == "" {
 		w.touched = append(w.touched, n)
+	}
+	if opRank[op] > opRank[n.op] {
+		n.op = op
 	}
 }
 
@@ -134,7 +153,7 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			n.lead = NormalizeKey(op.Lead)
 		}
 		w.live[refKey(ref)] = n
-		w.named(n)
+		w.named(n, op.Kind)
 		return nil
 
 	case OpMove:
@@ -150,7 +169,7 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			return refused
 		}
 		n.parent = parent
-		w.named(n)
+		w.named(n, op.Kind)
 		return nil
 
 	case OpSetLead:
@@ -162,7 +181,7 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			return refused
 		}
 		n.lead = NormalizeKey(op.Lead)
-		w.named(n)
+		w.named(n, op.Kind)
 		return nil
 
 	case OpRemoveObject:
@@ -398,6 +417,7 @@ func (w *working) edges() []Edge {
 		edge := Edge{
 			Object: ObjectRef{Kind: n.kind, ID: n.key},
 			Parent: n.parent,
+			Op:     n.op,
 		}
 		if n.kind == KindUnit {
 			edge.Lead = n.lead

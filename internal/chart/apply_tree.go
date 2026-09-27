@@ -29,7 +29,9 @@ import (
 // publishes the structure FIRST and the content follows on each object's own
 // subject, so the ordinary case is a placement landing before the row it places.
 // The apply creates a stub — the key, the placement, and nothing else — which
-// the content record then fills in without touching the placement back.
+// the content record then fills in without touching the placement back. What
+// may create one is an edge that states a create, an import's edge and a
+// version-1 edge; a move or a lead change never does ([Applier.placeEdge]).
 
 // applyTree dispatches the three structural ops.
 func (a *Applier) applyTree(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
@@ -55,35 +57,32 @@ func (a *Applier) applyTree(ctx context.Context, tx *sql.Tx, at applyContext) (i
 // An object absent from the set is untouched, which is what makes a placement
 // composable with a content record on the same object: neither carries the
 // other's half, so neither can revert it.
+//
+// FALLBACK is the change kind an edge with no verb records — a placement's
+// "moved", an import's "imported" — and every edge that states its verb
+// records that instead ([changeFor]).
 func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContext,
-	edges []Edge, kind ChangeKind) (int, error) {
+	edges []Edge, fallback ChangeKind) (int, error) {
 
 	rows := 0
-	for _, edge := range edges {
-		// AN OBJECT THE CHART DOES NOT HOLD IS CREATED BY ITS PLACEMENT,
-		// and a creation is held to every creation's rules here, where
-		// the payload is in hand. The envelope gate cannot answer for a
-		// structural record — it names its objects inside a payload a
-		// gate may not be able to decode — and an import decides nothing
-		// at its decide (the ledger is read here), so this is the one
-		// place every placement passes. Declined rather than raised: see
-		// [Applier.declineChange].
-		refused, err := placementRefused(ctx, tx, edge.Object)
-		if err != nil {
-			return 0, err
-		}
-		if refused != nil {
-			a.declineChange(at, "place", edge.Object, refused)
-			continue
-		}
-		n, err := a.placeOne(ctx, tx, at, edge, kind)
+	var first *Edge
+	for i, edge := range edges {
+		n, landed, err := a.placeEdge(ctx, tx, at, edge, fallback)
 		if err != nil {
 			return 0, err
 		}
 		rows += n
+		if landed && first == nil {
+			first = &edges[i]
+		}
 	}
-	if len(edges) > 0 {
-		n, err := a.writeHistory(ctx, tx, at, edges[0].Object, kind)
+	// THE HISTORY NAMES AN EDGE THAT LANDED, and a record none of whose
+	// edges did writes none: a row saying a unit was created, beside a
+	// decline saying the create never happened, is a history of something
+	// that did not occur.
+	if first != nil {
+		n, err := a.writeHistory(ctx, tx, at, first.Object,
+			changeFor(first.Op, fallback))
 		if err != nil {
 			return 0, err
 		}
@@ -92,21 +91,145 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 	return rows, nil
 }
 
-// placementRefused reports why a placement may not CREATE its object, or nil
-// where it may — including where it creates nothing, because the object is
-// already there and placing it is a move.
+// placeEdge applies one edge, by what its batch did to the object.
 //
-// A REMOVED OBJECT IS AMONG THE REFUSED: the row went with the removal, so a
-// placement naming it is a creation on a tombstoned address, and a redelivery
-// of an old one would otherwise write the dissolved unit straight back — on
-// one node, in a table that claims identity.
-func placementRefused(ctx context.Context, tx *sql.Tx, ref ObjectRef) (*addressRefusal, error) {
-	id := NormalizeKey(ref.ID)
-	present, err := objectPresent(ctx, tx, ObjectRef{Kind: ref.Kind, ID: id})
-	if err != nil || present {
+// # Three answers, all read here, where the payload is in hand
+//
+// The envelope gate cannot answer for a structural record — it names its
+// objects inside a payload a gate may not be able to decode — and an import
+// decides nothing at its decide, so this is the one place every placement
+// passes and every rule a creation is held to is asked again. Each is DECLINED
+// rather than raised: see [Applier.declineChange].
+//
+//   - A CREATE ([OpCreateUnit], [OpCreateSeat]) makes its object, held to
+//     every creation's rules ([refuseCreate]); an address the object is
+//     ALREADY on is declined too, because applied as a placement it would
+//     move whatever holds it. The one exception is the object THIS record
+//     created, met again by a redelivery, which is simply already done.
+//   - A MOVE OR A LEAD CHANGE places an object its batch found in the chart,
+//     and one that is not there any more — removed by a record the log
+//     ordered between — is declined rather than created.
+//   - NO VERB is what every version-1 edge and every import's edge means: the
+//     object is created where it is absent and placed where it is not.
+func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
+	edge Edge, fallback ChangeKind) (rows int, landed bool, err error) {
+
+	ref := ObjectRef{Kind: edge.Object.Kind, ID: NormalizeKey(edge.Object.ID)}
+	present, through, err := structuralMark(ctx, tx, ref)
+	if err != nil {
+		return 0, false, err
+	}
+	switch edge.Op {
+	case "":
+		if !present {
+			if declined, refuseErr := a.declineCreate(ctx, tx, at, "place", ref); refuseErr != nil || declined {
+				return 0, false, refuseErr
+			}
+		}
+	case OpCreateUnit, OpCreateSeat:
+		if present {
+			if through >= at.packed {
+				// THIS RECORD'S OWN CREATE, met again: a redelivery,
+				// which already landed and writes nothing more.
+				return 0, true, nil
+			}
+			a.declineChange(at, "create", ref, &addressRefusal{
+				Rule: RuleKeyTaken, Reason: "present",
+				Detail: fmt.Sprintf("%s is already in the chart, so a record "+
+					"creating it would move it: the create is declined and "+
+					"the object stays where it is", ref)})
+			return 0, false, nil
+		}
+		if declined, refuseErr := a.declineCreate(ctx, tx, at, "create", ref); refuseErr != nil || declined {
+			return 0, false, refuseErr
+		}
+	case OpMove, OpSetLead:
+		if !present {
+			refused, readErr := absentRefusal(ctx, tx, ref)
+			if readErr != nil {
+				return 0, false, readErr
+			}
+			a.declineChange(at, string(edge.Op), ref, refused)
+			return 0, false, nil
+		}
+	default:
+		// A VERB THIS BUILD DOES NOT KNOW, on a record at a version it
+		// reads: a writer publishing an operation it never declared. Failing
+		// is what makes that mistake visible, for [Applier.Apply]'s reason.
+		return 0, false, fmt.Errorf("chart: the structural record at %s "+
+			"states %s on %s, which is not an operation this build applies "+
+			"at version %d", at.position, edge.Op, ref, at.record.V)
+	}
+	n, err := a.placeOne(ctx, tx, at, edge, changeFor(edge.Op, fallback))
+	return n, err == nil, err
+}
+
+// declineCreate asks every creation's rules of an edge that would create its
+// object, and declines it when they refuse. It reports whether it declined.
+func (a *Applier) declineCreate(ctx context.Context, tx *sql.Tx, at applyContext,
+	op string, ref ObjectRef) (bool, error) {
+
+	refused, err := refuseCreate(ctx, txBook{tx: tx}, ref.Kind, ref.ID, "")
+	if err != nil || refused == nil {
+		return false, err
+	}
+	a.declineChange(at, op, ref, refused)
+	return true, nil
+}
+
+// absentRefusal is why an object a change named is not in the rows: a removal,
+// or nothing this node holds.
+func absentRefusal(ctx context.Context, tx *sql.Tx, ref ObjectRef) (*addressRefusal, error) {
+	gone, err := objectRemoved(ctx, tx, ref)
+	if err != nil {
 		return nil, err
 	}
-	return refuseCreate(ctx, txBook{tx: tx}, ref.Kind, id, "")
+	if gone {
+		return &addressRefusal{Rule: RuleKeyRemoved, Reason: "removed",
+			Detail: fmt.Sprintf("%s was removed by a record the log ordered "+
+				"before this one, and a removed object is never written again", ref)}, nil
+	}
+	return &addressRefusal{Rule: RuleNoSuchObject, Reason: "absent",
+		Detail: fmt.Sprintf("%s is not in the chart, and nothing but a create "+
+			"makes an object", ref)}, nil
+}
+
+// structuralMark reports whether the chart holds an object, and the position
+// its structure was last written through.
+func structuralMark(ctx context.Context, tx *sql.Tx, ref ObjectRef) (bool, int64, error) {
+	var table, column string
+	switch ref.Kind {
+	case KindUnit:
+		table, column = "chart_units", "key"
+	case KindSeat:
+		table, column = "chart_seats", "handle"
+	default:
+		return false, 0, nil
+	}
+	var through int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT scoped_through FROM `+table+` WHERE `+column+` = ?`, ref.ID).Scan(&through)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, 0, nil
+	case err != nil:
+		return false, 0, fmt.Errorf("chart: read %s: %w", ref, err)
+	}
+	return true, through, nil
+}
+
+// changeFor is the change kind an edge records: its verb's, or the record's
+// own where the edge states none.
+func changeFor(op OperationKind, fallback ChangeKind) ChangeKind {
+	switch op {
+	case OpCreateUnit, OpCreateSeat:
+		return ChangeCreated
+	case OpMove:
+		return ChangeMoved
+	case OpSetLead:
+		return ChangeLed
+	}
+	return fallback
 }
 
 // placeOne writes one object's placement.

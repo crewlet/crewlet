@@ -257,6 +257,24 @@ func place(opID string, edges ...chart.Edge) chart.MutationRecord {
 		chart.BatchScope(terms))
 }
 
+// create is a structural record creating one object — from record version 2
+// the only record that makes one, since a content record never does.
+func create(opID string, kind chart.ObjectKind, id, parent string) chart.MutationRecord {
+	verb := chart.OpCreateSeat
+	if kind == chart.KindUnit {
+		verb = chart.OpCreateUnit
+	}
+	return place(opID, chart.Edge{
+		Object: chart.ObjectRef{Kind: kind, ID: id}, Parent: parent, Op: verb})
+}
+
+// v1 is rec as a version-1 writer published it: the cases that hold the
+// permanent reader to what version 1 meant.
+func v1(rec chart.MutationRecord) chart.MutationRecord {
+	rec.V = 1
+	return rec
+}
+
 // unitRecord is one unit's content.
 func unitRecord(opID, key string, edit func(*chart.UnitPayload)) chart.MutationRecord {
 	payload := chart.UnitPayload{V: chart.DocumentVersion, Key: key,
@@ -342,6 +360,7 @@ func TestAStructuralWriteLeavesTheObjectsOwnExpectationAlone(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindUnit, "platform", ""))
 	h.must(unitRecord("op-content", "platform", nil))
 	before := h.one(`SELECT version FROM chart_units WHERE key = 'platform'`)
 
@@ -380,6 +399,7 @@ func TestAnAuthoredEdgeSetIsFoldedAndDeduplicated(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindSeat, "sarah-chen", "engineering"))
 	h.must(seatRecord("op-seat", "sarah-chen", "engineering", func(p *chart.SeatPayload) {
 		p.Manages = []string{"zoe", "Platform", "adam", "platform", "", "bob"}
 	}))
@@ -412,6 +432,7 @@ func TestAnAuthoredEdgeSetIsWrittenSorted(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindSeat, "sarah-chen", "engineering"))
 	h.must(seatRecord("op-seat", "sarah-chen", "engineering", func(p *chart.SeatPayload) {
 		p.Manages = []string{"zoe", "Platform", "adam", "platform", "", "bob"}
 	}))
@@ -435,6 +456,7 @@ func TestRewritingAnEdgeSetRemovesWhatTheRecordNoLongerNames(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindSeat, "sarah-chen", "engineering"))
 	h.must(seatRecord("op-one", "sarah-chen", "engineering", func(p *chart.SeatPayload) {
 		p.Manages = []string{"adam", "bob"}
 	}))
@@ -462,6 +484,7 @@ func TestAnUnknownFieldFromANewerBuildSurvivesInTheDocument(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindUnit, "platform", ""))
 	h.must(unitRecord("op-one", "platform", nil))
 
 	// A newer build's field, injected the way one would actually arrive:
@@ -519,6 +542,7 @@ func TestATombstoneHoldsTheObjectTheRecordAndTheReason(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindUnit, "platform", ""))
 	h.must(unitRecord("op-content", "platform", nil))
 	h.must(record(chart.TreeSubject(), chart.OpRemove, "op-remove",
 		chart.RemovePayload{
@@ -551,6 +575,7 @@ func TestARecordAboutARemovedObjectIsGated(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindUnit, "platform", ""))
 	h.must(unitRecord("op-content", "platform", nil))
 	h.must(record(chart.TreeSubject(), chart.OpRemove, "op-remove",
 		chart.RemovePayload{V: chart.GateRecordVersion,
@@ -595,9 +620,11 @@ func TestARedeliveredRecordWritesOneHistoryRow(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindUnit, "platform", ""))
 	h.must(unitRecord("op-one", "platform", nil))
-	if got := h.count("chart_history"); got != 1 {
-		t.Fatalf("%d history rows after one record, want 1", got)
+	if got := h.count("chart_history"); got != 2 {
+		t.Fatalf("%d history rows after the create and one content record, "+
+			"want 2", got)
 	}
 
 	// THE SAME RECORD AT THE SAME POSITION, which is what a redelivery is.
@@ -611,8 +638,8 @@ func TestARedeliveredRecordWritesOneHistoryRow(t *testing.T) {
 	if rows != 0 {
 		t.Errorf("a redelivered record wrote %d rows, want none", rows)
 	}
-	if got := h.count("chart_history"); got != 1 {
-		t.Errorf("%d history rows after the same record arrived twice, want 1 — "+
+	if got := h.count("chart_history"); got != 2 {
+		t.Errorf("%d history rows after the same record arrived twice, want 2 — "+
 			"the entry is keyed on the operation id precisely so a redelivery "+
 			"is free", got)
 	}
@@ -684,12 +711,14 @@ func TestARekeyMovesTheStructureAndNotTheAuthoredText(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
+	h.must(create("op-create", chart.KindUnit, "platform", ""))
 	h.must(unitRecord("op-unit", "platform", nil))
 	h.must(place("op-place",
 		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "core"},
 			Parent: "platform"},
 		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"},
 			Parent: "platform"}))
+	h.must(create("op-create-ana", chart.KindSeat, "ana", "engineering"))
 	h.must(seatRecord("op-seat", "ana", "engineering", func(p *chart.SeatPayload) {
 		p.Manages = []string{"platform"}
 	}))
@@ -827,7 +856,7 @@ func TestAnEvictedNodesRecordsAreDroppedUntilItIsReadmitted(t *testing.T) {
 		chart.Eviction{V: chart.GateRecordVersion, NodeID: "node-b", By: "ana"},
 		chart.ScopeSet{Subject: true}))
 
-	fromNodeB := unitRecord("op-b", "platform", nil)
+	fromNodeB := create("op-b", chart.KindUnit, "platform", "")
 	fromNodeB.Writer = "node-b"
 	_, gate, err := h.apply(fromNodeB)
 	if err != nil {
@@ -852,7 +881,7 @@ func TestAnEvictedNodesRecordsAreDroppedUntilItIsReadmitted(t *testing.T) {
 		t.Errorf("%d eviction rows after a readmission, want 1 — a readmission "+
 			"that deleted the row would lose the fact that it ever happened", got)
 	}
-	back := unitRecord("op-b2", "platform", nil)
+	back := create("op-b2", chart.KindUnit, "platform", "")
 	back.Writer = "node-b"
 	h.must(back)
 	if got := h.count("chart_units"); got != 1 {
@@ -963,26 +992,34 @@ func seatRekey(opID, handle, former string) chart.MutationRecord {
 // A CREATION THE DECIDE COULD NOT SEE IS DECLINED BY THE APPLY, and so is a
 // rename onto a removed address.
 //
-// A content record can create a seat, and a rename arbitrates on the address's
-// own subject rather than the structure's — so a node whose view lagged the log
-// can decide either against a snapshot in which a renamed seat's identity, or a
-// removed seat's address, looked free. Applied, the first is a second seat with
-// the first one's identity; the second is a seat whose every later record the
-// removal gate drops. Declined — not raised, because every node reaches the
+// An import decides nothing about which objects exist, a version-1 content
+// record could create its seat, and a rename arbitrates on the address's own
+// subject rather than the structure's — so a node whose view lagged the log can
+// decide any of them against a snapshot in which a renamed seat's identity, or
+// a removed seat's address, looked free. Applied, the first is a second seat
+// with the first one's identity; the second is a seat whose every later record
+// the removal gate drops. Declined — not raised, because every node reaches the
 // same verdict and an apply error would stall the domain on all of them.
 func TestTheApplyDeclinesAnIdentityOrARemovedAddressItIsHandedAnyway(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	h.must(seatRecord("op-founder", "founder", "", nil))
-	h.must(seatRecord("op-lena", "lena", "", nil))
+	h.must(create("op-founder", chart.KindSeat, "founder", ""))
+	h.must(create("op-lena", chart.KindSeat, "lena", ""))
 	h.must(seatRekey("op-rename", "dana", "founder"))
 
-	// ONTO THE RENAMED SEAT'S IDENTITY: nothing is created.
-	h.must(seatRecord("op-stranger", "founder", "", nil))
+	// ONTO THE RENAMED SEAT'S IDENTITY, by an import's placement and by a
+	// version-1 content record — the two that can still create an object
+	// without a batch having decided it: nothing is created.
+	h.must(record(chart.TreeSubject(), chart.OpImport, "op-import",
+		chart.ImportPayload{V: chart.DocumentVersion, Revision: "rev-1",
+			Edges: []chart.Edge{{
+				Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "founder"}}}},
+		chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermSeat, ID: "founder"}})))
+	h.must(v1(seatRecord("op-stranger", "founder", "", nil)))
 	if got := h.column(`SELECT handle FROM chart_seats ORDER BY handle`); !slices.Equal(
 		got, []string{"dana", "lena"}) {
-		t.Errorf("the seats are %v, want [dana lena] — a content record created "+
-			"a second seat with dana's identity", got)
+		t.Errorf("the seats are %v, want [dana lena] — a creation took dana's "+
+			"identity", got)
 	}
 
 	// ONTO A REMOVED ADDRESS: the rename is dropped.
@@ -997,13 +1034,15 @@ func TestTheApplyDeclinesAnIdentityOrARemovedAddressItIsHandedAnyway(t *testing.
 			"address, where the removal gate drops every record about it", got)
 	}
 
-	// THE CONTROL: a content record on a free handle still creates, and a
-	// rename onto a free address still lands.
-	h.must(seatRecord("op-new", "omar", "", nil))
+	// THE CONTROL: on a free handle a create still creates and so does a
+	// version-1 content record, and a rename onto a free address still
+	// lands.
+	h.must(create("op-new", chart.KindSeat, "omar", ""))
+	h.must(v1(seatRecord("op-old-writer", "noor", "", nil)))
 	h.must(seatRekey("op-free", "lena-ops", "lena"))
 	if got := h.column(`SELECT handle FROM chart_seats ORDER BY handle`); !slices.Equal(
-		got, []string{"lena-ops", "omar"}) {
-		t.Errorf("the seats are %v, want [lena-ops omar]", got)
+		got, []string{"lena-ops", "noor", "omar"}) {
+		t.Errorf("the seats are %v, want [lena-ops noor omar]", got)
 	}
 }
 
@@ -1012,7 +1051,7 @@ func TestTheApplyDeclinesAnIdentityOrARemovedAddressItIsHandedAnyway(t *testing.
 func TestARemovalTombstonesTheIdentityBesideTheAddress(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	h.must(seatRecord("op-omar", "omar", "", nil))
+	h.must(create("op-omar", chart.KindSeat, "omar", ""))
 	h.must(seatRekey("op-rename", "ops-head", "omar"))
 	h.must(record(chart.TreeSubject(), chart.OpRemove, "op-remove",
 		chart.RemovePayload{V: chart.GateRecordVersion, Reason: "left",

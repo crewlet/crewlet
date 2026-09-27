@@ -57,7 +57,10 @@ import (
 // answered `pending` to the caller who now writes its content, which is the
 // ordinary shape of a hire and of an import. [Writer.publishContent] waits for
 // this node to apply everything the structure has been written by, and asks
-// once more.
+// once more. The apply holds the same line from its side: from record version
+// 2 a content record that meets no row is declined rather than creating one
+// ([Applier.declineContent]), since its decide found the row and only a record
+// the log ordered between can have taken it.
 
 // UnitContent is one unit's own content, as a caller states it.
 //

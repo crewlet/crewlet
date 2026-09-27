@@ -260,6 +260,38 @@ object may have been answered `202` and not be applied on this node yet, which
 is the ordinary shape of a hire, so the write waits for this node to apply
 everything the structure had been written by and decides once more.
 
+**A create says it is one.** Every edge a batch publishes carries the verb of
+what the batch did to that object — `create_unit`, `create_seat`, `move` or
+`set_lead` — beside the object's whole structural post-state, and the apply
+decides by it. Without the verb an edge is only a placement, and a placement of
+an object the chart already holds is a move: so a create that met an address
+somebody had taken since its decide — a rename arbitrated on the address's own
+subject, a record from a build still on the old version — moved whatever held
+it under the creator's parent and cleared its lead, while the create itself
+landed as nothing. With it:
+
+- a **create** whose address is held when it applies is **declined**, and the
+  object holding it stays exactly where it is;
+- a **move** or a **lead change** whose object a removal took in between is
+  declined rather than written back as a new object;
+- and a **content** record that meets no row is declined as well, because its
+  write refused an object the chart did not hold, so an absent row means a
+  removal or a rename the log ordered first.
+
+Each is logged as `chart_apply_declined` and counted on
+`crewlet.chart.apply.declined` by what was declined and why, and none writes a
+history row: a row saying a unit was created beside a decline saying it was not
+would be a history of something that never happened. An import's edges carry no
+verb and keep meaning what they always have — create what is absent, place what
+is present — because an import states a revision's complete structure and
+decides nothing about which of its objects exist.
+
+These are **version 2** of the chart's record. A record a version-1 build wrote
+is read for ever as what it meant: its edges are placements, and its content
+records may create their row. A version-1 build meeting a version-2 record
+retains it rather than applying a create as a move, and applies it once it is
+upgraded.
+
 Every path that gives an address — a create, an import and a rename — asks
 **one** set of rules, so none of
 them can forget one: a reserved word (`root`, `tree`, `barrier`, and `none` for

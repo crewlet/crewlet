@@ -66,19 +66,9 @@ func (a *Applier) applyUnit(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return 0, err
 	}
 	if !found {
-		// A CONTENT RECORD CAN CREATE A ROW — an import's content follows
-		// its structure, and a lone content write is legal — so it is
-		// held to every creation's rules ([refuseCreate]). Declined rather
-		// than raised: see [Applier.declineChange]. [Writer.WriteUnit] is
-		// where an operator is told.
-		ref := ObjectRef{Kind: KindUnit, ID: key}
-		refused, refuseErr := refuseCreate(ctx, txBook{tx: tx}, KindUnit, key, "")
-		if refuseErr != nil {
-			return 0, refuseErr
-		}
-		if refused != nil {
-			a.declineChange(at, "content", ref, refused)
-			return 0, nil
+		if declined, declineErr := a.declineContent(ctx, tx, at,
+			ObjectRef{Kind: KindUnit, ID: key}); declineErr != nil || declined {
+			return 0, declineErr
 		}
 		unit = Unit{V: DocumentVersion, Key: key, CreatedAt: at.brokerAt}
 	}
@@ -112,6 +102,31 @@ func (a *Applier) applyUnit(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	return rows + n, nil
 }
 
+// declineContent decides a content record whose object this node's rows do
+// not hold, and reports whether it declined it.
+//
+// FROM VERSION 2 A CONTENT RECORD NEVER CREATES ITS OBJECT, and one that meets
+// no row is declined: its decide found the row, so what removed it between —
+// a removal, a rename the log ordered first — is a record this one never
+// contended with, and creating the object back would be writing a seat into
+// the chart that no structural write arbitrated. A VERSION-1 RECORD CREATES
+// the row, as its writer meant, held to every creation's rules
+// ([refuseCreate]) — which is what it met at the apply when it was written.
+// Declined rather than raised either way: see [Applier.declineChange].
+func (a *Applier) declineContent(ctx context.Context, tx *sql.Tx, at applyContext,
+	ref ObjectRef) (bool, error) {
+
+	if at.record.V >= 2 {
+		refused, err := absentRefusal(ctx, tx, ref)
+		if err != nil {
+			return false, err
+		}
+		a.declineChange(at, "content", ref, refused)
+		return true, nil
+	}
+	return a.declineCreate(ctx, tx, at, "content", ref)
+}
+
 // applySeat writes one seat's own CONTENT. It never touches `unit_key`.
 func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	payload, err := DecodeMutation(at.record)
@@ -135,15 +150,9 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return 0, err
 	}
 	if !found {
-		// Held to every creation's rules, for [Applier.applyUnit]'s reason.
-		ref := ObjectRef{Kind: KindSeat, ID: handle}
-		refused, refuseErr := refuseCreate(ctx, txBook{tx: tx}, KindSeat, handle, "")
-		if refuseErr != nil {
-			return 0, refuseErr
-		}
-		if refused != nil {
-			a.declineChange(at, "content", ref, refused)
-			return 0, nil
+		if declined, declineErr := a.declineContent(ctx, tx, at,
+			ObjectRef{Kind: KindSeat, ID: handle}); declineErr != nil || declined {
+			return 0, declineErr
 		}
 		seat = Seat{V: DocumentVersion, Handle: handle, CreatedAt: at.brokerAt}
 	}

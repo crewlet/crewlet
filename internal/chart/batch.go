@@ -277,7 +277,8 @@ func (b Batch) Scope() ScopeSet {
 // record are one pass rather than two that can disagree.
 //
 // EACH EDGE IS ONE OBJECT'S WHOLE STRUCTURAL POST-STATE, read off the replay
-// once every operation has run. A batch that moves one seat twice publishes its
+// once every operation has run, under the one verb that says what kind of
+// change it was ([Edge.Op]). A batch that moves one seat twice publishes its
 // final placement, a move publishes the lead the unit has, and a create_unit
 // the lead it named.
 func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
