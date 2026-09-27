@@ -141,14 +141,32 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	// THE ID IS MINTED ONCE, outside the apply: the decide may run again
 	// against a fresh snapshot, and an id minted inside it would be a
 	// different credential on each run — and a different one again in the
-	// event that says which was enrolled.
+	// event that says which was enrolled. It is also what the seed is
+	// sealed AS, so it has to exist before the seal.
 	id := uuid.New().String()
+	// THE SEED IS SEALED BEFORE IT ENTERS ANY RECORD, under the person's
+	// own key and bound to this credential: the record is replicated to
+	// every node, snapshotted, backed up and donated to joining peers, and
+	// a seed in the clear there is a second factor everybody with a copy
+	// holds. Nothing past this line carries it in the clear.
+	sealed, err := s.sealer.SealCredential(r.Context(), person, id,
+		iamdomain.FieldTOTP, in.Secret)
+	if err != nil {
+		// THE PERSON'S KEY COULD NOT BE REACHED, which no retry of
+		// this caller's typing fixes and a moment of the key store
+		// usually does. Nothing was stored, and the code proved the
+		// seed, so presenting both again enrols it.
+		log.ErrorContext(r.Context(), "api_totp_seal_failed",
+			"person", person, "error", err)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		return
+	}
 	const reason = "enrolled a second factor"
 	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			return append(without(held, iamdomain.MethodTOTP),
-				totpCredential(id, in.Secret, step))
+				totpCredential(id, sealed, step))
 		},
 		OpID:   "totp:" + person + ":" + id,
 		Reason: reason,
@@ -335,12 +353,14 @@ func without(held []iamdomain.Credential, method iamdomain.CredentialMethod) []i
 	return out
 }
 
-// totpCredential builds the stored second factor.
-func totpCredential(id, secret string, step int64) iamdomain.Credential {
+// totpCredential builds the stored second factor around a seed ALREADY SEALED
+// ([iamdomain.Sealer.SealCredential] under this id): the one argument that
+// could carry the seed in the clear is named for what it must hold instead.
+func totpCredential(id, sealedSeed string, step int64) iamdomain.Credential {
 	raw, _ := json.Marshal(step)
 	return iamdomain.Credential{
 		V: iamdomain.DocumentVersion, ID: id,
-		Method: iamdomain.MethodTOTP, Verifier: secret,
+		Method: iamdomain.MethodTOTP, Verifier: sealedSeed,
 		// THE LAST ACCEPTED STEP RIDES IN Extra, so a replay inside the
 		// same thirty-second window is refused: the enrolment's own code
 		// counts as spent, which is what stops somebody watching the

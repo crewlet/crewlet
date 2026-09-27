@@ -29,7 +29,7 @@ import (
 // real start and the real callback against a provider in a TLS test server.
 
 // invitedAddress is the address the redemption cases' invitation was issued
-// to, opened by [addressOpener].
+// to, opened by [stubSealer].
 const invitedAddress = "dana.sre@example.com"
 
 // offeredInvitation is a live invitation carrying grants and a sealed address,
@@ -96,7 +96,7 @@ func roundTrip(t *testing.T, idp *provider, directory authapi.Directory,
 	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
 		o.Directory = directory
 		o.Writer = writer
-		o.Opener = addressOpener{address: invitedAddress}
+		o.Sealer = stubSealer{address: invitedAddress}
 		o.Cipher = cipher
 		o.Audit = audit
 	})
@@ -519,7 +519,7 @@ func TestTheInvitationOffersTheProviderOnlyWhereThereIsOne(t *testing.T) {
 			mux := http.NewServeMux()
 			buildWith(t, bootstrapFor(t), provider, func(o *authapi.Options) {
 				o.Directory = offeredInvitation{id: invitationID}
-				o.Opener = addressOpener{address: invitedAddress}
+				o.Sealer = stubSealer{address: invitedAddress}
 			}).Routes(mux)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,

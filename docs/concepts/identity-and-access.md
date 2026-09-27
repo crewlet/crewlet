@@ -708,7 +708,7 @@ would be a credential every operator with a backup holds.
 | Credential | What is stored | Why that and not something else |
 |---|---|---|
 | Password | argon2id, 64 MiB, t=3, p=1, as a PHC string | A person chose it, so the space it came from is small enough to grind — and memory is the cost a GPU cannot buy its way around |
-| Second factor | The TOTP shared secret, sealed under the credential's own key | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
+| Second factor | The TOTP shared secret, sealed under the **person's own key** and bound to the person, the credential it was enrolled as and the field — see [below](#what-is-in-the-clear-and-what-is-not) | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
 | Recovery code | SHA-256 | Minted here from `crypto/rand`, so there is no dictionary to grind and no memory cost to buy |
 | Machine token | SHA-256 over the prefix, the credential id and the secret — everything but the log position the value carries, which is a hint about *when* to look and proves nothing | The same, plus: this is presented on *every* request a pipeline makes, and a hundred milliseconds of argon2id on each is a different kind of outage |
 
@@ -1938,6 +1938,28 @@ the audit trail names them.
 Sealing happens at the **writer** rather than on each node, which is what keeps
 the fleet's byte-for-byte identity claim meaningful: every node writes the same
 ciphertext.
+
+An authenticator app's **seed** is sealed under the same key. It is the one
+credential this estate keeps as a secret rather than a verifier — TOTP is
+symmetric, so an engine holding only a digest could check nothing — and the
+enrolment seals it before the write is formed, so the person's document, their
+credential row and the trail entry all carry ciphertext. Its associated data is
+the person, **the credential it was enrolled as**, and the field: every seed a
+person ever enrolled is sealed under their one key, so without the credential a
+replaced seed sitting in an old backup could be pasted over the current one and
+would open. It is opened only to check a code, at a sign-in and a step-up. A
+seed that does not open is never a match: one that is not this credential's is
+refused like a wrong code (and logged, `api_totp_seed_unopenable`, naming the
+person and the credential), a key a removal destroyed is refused too, and a key
+store this node cannot reach is `503` with a `Retry-After`, never a wrong code.
+
+**A seed enrolled before seeds were sealed was stored in the clear**, and it is
+in the identity log, every snapshot and every backup taken since. Such a seed no
+longer verifies; treat it as disclosed rather than sealing it after the fact,
+which would leave every copy already written readable. The person signs in with
+a recovery code and enrols their app again, or an administrator resets their
+second factor (`crewlet iam reset-mfa`), which ends their sessions and has them
+enrol afresh.
 
 A **login** is in the clear, and the asymmetry is deliberate — a login is a
 name the company chose, printed beside every change an operator reads. Blinding

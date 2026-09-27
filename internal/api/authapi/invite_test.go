@@ -35,13 +35,6 @@ func (liveInvitation) InvitationByID(context.Context, string) (iamdomain.Invitat
 	}, nil
 }
 
-// addressOpener opens an invitation's address as one fixed value.
-type addressOpener struct{ address string }
-
-func (o addressOpener) Open(context.Context, string, iamdomain.Field, string) (string, error) {
-	return o.address, nil
-}
-
 // sealedInvitation is [liveInvitation] with an address sealed on it, so the
 // view has something to open.
 type sealedInvitation struct{ liveInvitation }
@@ -66,7 +59,7 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 	mux := http.NewServeMux()
 	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
 		o.Directory = sealedInvitation{}
-		o.Opener = addressOpener{address: "Dana.SRE+invites@example.com"}
+		o.Sealer = stubSealer{address: "Dana.SRE+invites@example.com"}
 	}).Routes(mux)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/invite/"+invitationID, nil))

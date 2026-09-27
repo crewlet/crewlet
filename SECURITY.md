@@ -59,6 +59,21 @@ A few things worth knowing when deploying Crewlet:
   from `crypto/rand`, so there is no dictionary to grind and the memory cost
   would buy nothing while adding a hundred milliseconds to every request a CI
   job makes.
+- **A second factor's seed is sealed, under the person's own key.** TOTP is
+  symmetric, so the seed is the one credential the identity estate has to keep
+  as a secret rather than a verifier — and that estate is replicated to every
+  node, snapshotted, backed up and donated to joining peers. The seed is sealed
+  when it is enrolled, bound to the person *and* the credential it was enrolled
+  as, and opened only to check a code; removing the person destroys the key it
+  is sealed under. **Builds before this change stored it in the clear**, so a
+  deployment running one holds every enrolled seed in its identity log, its
+  snapshots and every backup taken since. Treat those seeds as disclosed: a
+  seed stored in the clear no longer verifies (the node logs
+  `api_totp_seed_unopenable` naming the person and credential), so have each
+  such person sign in with a recovery code and enrol their app again, or reset
+  their second factor (`crewlet iam reset-mfa`, `POST
+  /iam/people/{id}/mfa/reset`) so they re-enrol at their next sign-in —
+  re-sealing the old value would leave the copies already written readable.
 - **An identity provider's assertion is never a link by address.** A person is
   bound to a provider subject by an invitation somebody issued or by an
   administrator — never because the provider asserted an address that matches

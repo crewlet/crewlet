@@ -271,13 +271,30 @@ func unresolved(w http.ResponseWriter, r *http.Request, event string,
 		})
 }
 
-// Opener opens one sealed value under the key of whatever it belongs to.
+// Sealer is the sealing this surface does, and nothing else of the estate's
+// key machinery.
 //
-// CONSUMER-DEFINED AND ONE METHOD, like every other seam here: this surface
-// opens an invitation's address and nothing else, so it takes the ability to
-// open one value rather than a sealer that could reach every person's.
-type Opener interface {
+// CONSUMER-DEFINED AND THREE METHODS, like every other seam here: it opens an
+// invitation's address, and seals and opens a second factor's seed — the one
+// credential this estate keeps as a secret rather than a verifier. It takes no
+// mint, no shred and no listing, so a sign-in route can reach a value it was
+// handed and never a key.
+//
+// [iamdomain.Sealer] is what a running node hands in.
+type Sealer interface {
+	// Open opens one of an owner's values — here, an invitation's address,
+	// under the invitation's own key.
 	Open(ctx context.Context, owner string, field iamdomain.Field, sealed string) (string, error)
+
+	// SealCredential and OpenCredential seal and open a credential secret
+	// under its PERSON's key, bound to the credential it belongs to — see
+	// [iamdomain.Sealer.SealCredential] for why both halves, and
+	// [iamdomain.Sealer.OpenCredential] for the three answers the second
+	// one gives.
+	SealCredential(ctx context.Context, person, credential string,
+		field iamdomain.Field, plaintext string) (string, error)
+	OpenCredential(ctx context.Context, person, credential string,
+		field iamdomain.Field, sealed string) (string, error)
 }
 
 // Blinds is where the keyed blind an address or a provider subject is matched
@@ -362,15 +379,20 @@ type Options struct {
 	// somewhere else.
 	Cipher secrets.Cipher
 
-	// Opener opens a sealed value under its own key. REQUIRED.
+	// Sealer seals and opens the values this surface handles. REQUIRED.
 	//
-	// AN INVITATION'S ADDRESS is what this surface opens and the only
-	// thing: a form has to show which address a link was sent to, or the
-	// person guesses which of theirs it was. It is sealed under the
-	// INVITATION's key rather than a person's, because there is no person
-	// yet — minting one for an invitation that may never be redeemed
-	// would leave a key behind for every address anybody ever typed.
-	Opener Opener
+	// AN INVITATION'S ADDRESS is one: a form has to show which address a
+	// link was sent to, or the person guesses which of theirs it was. It
+	// is sealed under the INVITATION's key rather than a person's, because
+	// there is no person yet — minting one for an invitation that may
+	// never be redeemed would leave a key behind for every address anybody
+	// ever typed.
+	//
+	// A SECOND FACTOR'S SEED is the other, sealed when it is enrolled and
+	// opened only to check a code: it is a secret the replicated estate
+	// would otherwise hold in the clear on every node, in every snapshot
+	// and every backup.
+	Sealer Sealer
 
 	// Sessions is what one bearer is validated against. REQUIRED.
 	//
@@ -429,7 +451,7 @@ type Service struct {
 	throttle  *credential.Throttle
 	blinder   Blinds
 	sessions  session.Directory
-	opener    Opener
+	sealer    Sealer
 	cipher    secrets.Cipher
 	clients   *auth.Clients
 	provider  *oidc.Provider
@@ -465,7 +487,7 @@ func New(opts Options) (*Service, error) {
 		{"Throttle", opts.Throttle == nil},
 		{"Blinder", opts.Blinder == nil},
 		{"Sessions", opts.Sessions == nil},
-		{"Opener", opts.Opener == nil},
+		{"Sealer", opts.Sealer == nil},
 		// THE CIPHER ONLY WHERE A PROVIDER IS. A deployment signing in
 		// with passwords seals no flight, so requiring it would refuse
 		// a wiring that is complete.
@@ -492,7 +514,7 @@ func New(opts Options) (*Service, error) {
 		// Tier A — see [Service.directoryFor] for what the bare estate
 		// cost a token's own sign-out.
 		sessions: auth.SessionSubjects(opts.Bootstrap, opts.Sessions),
-		opener:   opts.Opener,
+		sealer:   opts.Sealer,
 		cipher:   opts.Cipher,
 		provider: opts.Provider,
 		custody:  opts.Custody,

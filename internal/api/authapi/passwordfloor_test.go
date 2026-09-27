@@ -82,7 +82,7 @@ func TestTheDeploymentsPasswordFloorIsTheOneEnforcedAndReported(t *testing.T) {
 			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
 				withFloor(o, tc.floor)
 				o.Directory = sealedInvitation{}
-				o.Opener = addressOpener{address: "dana@example.com"}
+				o.Sealer = stubSealer{address: "dana@example.com"}
 			}).Routes(mux)
 			redeemed := postJSON(t, mux, "/auth/invite/"+invitationID,
 				map[string]string{"login": "dana.sre", "name": "Dana",

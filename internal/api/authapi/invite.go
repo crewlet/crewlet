@@ -377,7 +377,7 @@ func (s *Service) openSealed(r *http.Request, held iamdomain.InvitationRow) (str
 	if held.Sealed == "" {
 		return "", nil
 	}
-	email, err := s.opener.Open(r.Context(), held.ID, iamdomain.FieldEmail, held.Sealed)
+	email, err := s.sealer.Open(r.Context(), held.ID, iamdomain.FieldEmail, held.Sealed)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_unseal_failed",
 			"error", err, "invitation", held.ID)

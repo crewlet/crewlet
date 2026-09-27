@@ -228,13 +228,16 @@ func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
 	}
 	stepRaw, _ := json.Marshal(int64(0))
 	verifiersRaw, _ := json.Marshal(verifiers)
+	const person = "0192f00d-0000-7000-8000-00000000000a"
 	e := &estate{person: iamdomain.Sighting{
-		ID: "0192f00d-0000-7000-8000-00000000000a", Kind: iam.KindPerson,
+		ID: person, Kind: iam.KindPerson,
 		Stage: iam.StageActive, Login: "jane.doe",
 		Credentials: []iamdomain.Credential{
 			{ID: "pw", Method: iamdomain.MethodPassword, Verifier: verifier},
-			{ID: "app", Method: iamdomain.MethodTOTP, Verifier: totpSeed,
-				Extra: map[string]json.RawMessage{"last_step": stepRaw}},
+			// THE SEED SEALED, as enrolment stores it.
+			{ID: "app", Method: iamdomain.MethodTOTP,
+				Verifier: sealedSeed(t, person, "app", totpSeed),
+				Extra:    map[string]json.RawMessage{"last_step": stepRaw}},
 			{ID: "codes", Method: iamdomain.MethodRecovery,
 				Extra: map[string]json.RawMessage{"verifiers": verifiersRaw}},
 		},
