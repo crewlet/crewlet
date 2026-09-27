@@ -268,7 +268,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in stepUpRequest
-	if err := json.Unmarshal(body, &in); err != nil {
+	if err = json.Unmarshal(body, &in); err != nil {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}

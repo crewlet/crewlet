@@ -215,7 +215,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in bootstrapRequest
-	if err := json.Unmarshal(body, &in); err != nil {
+	if err = json.Unmarshal(body, &in); err != nil {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
@@ -229,7 +229,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	if !live {
 		return
 	}
-	if err := credential.CheckStrength(in.Password); err != nil {
+	if err = credential.CheckStrength(in.Password); err != nil {
 		// SPECIFIC, because the caller has already proved they hold the
 		// code and the remedy is theirs to act on: a password refused
 		// with the generic sign-in message would send the first
@@ -370,7 +370,7 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 		// wrong. CONSTANT TIME, like every credential comparison here:
 		// an early exit makes the time taken depend on how much of the
 		// code was right, which is a file read one character at a time.
-		if held, err := s.readBootstrapCode(); err == nil &&
+		if held, ok := s.heldCode(); ok &&
 			subtle.ConstantTimeCompare([]byte(held), []byte(presented)) == 1 {
 			s.refuseStaleCode(w, r, arrived, source, presented, "unpublished")
 			return iamdomain.BootstrapCode{}, false
@@ -533,8 +533,8 @@ func (s *Service) Founding(ctx context.Context) (Founding, error) {
 	if held {
 		return Founding{Claimed: true}, nil
 	}
-	code, err := s.readBootstrapCode()
-	if err != nil {
+	code, ok := s.heldCode()
+	if !ok {
 		return Founding{}, nil
 	}
 	row, err := s.directory.BootstrapCode(ctx, bootstrapCodeID(code))
@@ -557,6 +557,19 @@ func (s *Service) Founding(ctx context.Context) (Founding, error) {
 // requirement, and a code somewhere else would be one more path to explain.
 func (s *Service) bootstrapCodePath() string {
 	return filepath.Join(filepath.Dir(s.boot.Store.Path), BootstrapCodeFile)
+}
+
+// heldCode is the code in this node's file, or false where the file holds
+// none this node can read — missing, empty and unreadable alike.
+//
+// FOR A READER THAT ONLY REPORTS OR COMPARES THE FILE, for which those three
+// are one answer: there is no code here to point at or to match. The boot
+// path, which REPLACES the file, reads [Service.readBootstrapCode]'s error
+// instead, because a missing file is its ordinary first boot and an
+// unreadable one is a fault it has to log.
+func (s *Service) heldCode() (string, bool) {
+	code, err := s.readBootstrapCode()
+	return code, err == nil
 }
 
 // readBootstrapCode reads the code this node wrote.
@@ -621,9 +634,9 @@ func (s *Service) OfferBootstrapCode(ctx context.Context, nodeID string) (string
 		return "", nil
 	}
 	path := s.bootstrapCodePath()
-	held, err := s.readBootstrapCode()
+	held, readErr := s.readBootstrapCode()
 	switch {
-	case err == nil:
+	case readErr == nil:
 		code, err := s.directory.BootstrapCode(ctx, bootstrapCodeID(held))
 		if err != nil {
 			return "", fmt.Errorf("authapi: read whether the code in %s is "+
@@ -637,10 +650,10 @@ func (s *Service) OfferBootstrapCode(ctx context.Context, nodeID string) (string
 			"state", string(state),
 			"detail", "the code in this file is not one the log honours, "+
 				"so a fresh one replaces it")
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(readErr, fs.ErrNotExist):
 	default:
 		log.WarnContext(ctx, "api_bootstrap_code_replaced", "path", path,
-			"error", err)
+			"error", readErr)
 	}
 	return s.mintCodeFile(ctx, nodeID, s.writer.MintBootstrap)
 }

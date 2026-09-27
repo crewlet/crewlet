@@ -37,16 +37,6 @@ func (r *signInRig) signInCookie(t *testing.T, login, pass, code string) *httpte
 	return rec
 }
 
-// sessionCookie is the bearer a response set, or "".
-func sessionCookie(rec *httptest.ResponseRecorder) string {
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == session.HostCookieName || c.Name == session.CookieBaseName {
-			return c.Value
-		}
-	}
-	return ""
-}
-
 // A SIGN-IN IS A PROOF, AND A STEP-UP SURFACE ACCEPTS A FRESH ONE.
 //
 // Every session opened by a sign-in records when its holder proved who they

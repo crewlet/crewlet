@@ -82,6 +82,22 @@ type totpRecoveryResponse struct {
 	Codes []string `json:"codes"`
 }
 
+// offerTOTPSeed is enrolment's FIRST LEG: a seed, and nothing written. A
+// person who never completes the second leg has enrolled nothing, which is
+// the correct outcome rather than a half-enrolled factor.
+func (s *Service) offerTOTPSeed(w http.ResponseWriter, r *http.Request, login string) {
+	secret, err := credential.NewTOTPSecret()
+	if err != nil {
+		log.ErrorContext(r.Context(), "api_totp_secret_failed", "error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, totpEnrolResponse{
+		Secret: secret,
+		URI:    credential.TOTPURI(s.issuerLabel(), login, secret),
+	})
+}
+
 // EnrolTOTP mints a seed, or stores one a code has proved.
 func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	principal, ok := s.mayChangeProof(w, r)
@@ -95,26 +111,14 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var in totpEnrolRequest
 	if len(body) > 0 {
-		if err := json.Unmarshal(body, &in); err != nil {
+		if err = json.Unmarshal(body, &in); err != nil {
 			httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 			return
 		}
 	}
 
 	if in.Secret == "" || in.Code == "" {
-		// THE FIRST LEG: a seed, and nothing written. A person who
-		// never completes the second leg has enrolled nothing, which is
-		// the correct outcome rather than a half-enrolled factor.
-		secret, err := credential.NewTOTPSecret()
-		if err != nil {
-			log.ErrorContext(r.Context(), "api_totp_secret_failed", "error", err)
-			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-			return
-		}
-		httpjson.Write(w, http.StatusOK, totpEnrolResponse{
-			Secret: secret,
-			URI:    credential.TOTPURI(s.issuerLabel(), principal.Login, secret),
-		})
+		s.offerTOTPSeed(w, r, principal.Login)
 		return
 	}
 

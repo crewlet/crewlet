@@ -125,11 +125,11 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in inviteRedeem
-	if err := json.Unmarshal(body, &in); err != nil {
+	if err = json.Unmarshal(body, &in); err != nil {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
-	if err := credential.CheckStrength(in.Password); err != nil {
+	if err = credential.CheckStrength(in.Password); err != nil {
 		// SPECIFIC, because holding the link is already evidence this
 		// invitation was issued to them and the remedy is theirs.
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
