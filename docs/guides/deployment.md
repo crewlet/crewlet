@@ -512,6 +512,14 @@ limit leaves the node nothing to size against but its own disk, and a server's
 own cap then refuses what does not fit, by name. See
 [Replication](replication.md#how-the-byte-ceilings-are-sized).
 
+**And a `max_payload` of at least 8 MiB.** That is the largest single message
+the engine promises to carry — an event, a webhook delivery, a state-log record
+— and the embedded broker is configured at exactly that; nats-server's own
+default is 1 MiB. A server below it refuses a message between its limit and
+8 MiB that the default topology would have carried, permanently, and the
+refusal names the message's size and the server's `max_payload`. Set
+`max_payload: 8MB` in the server's configuration.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it
