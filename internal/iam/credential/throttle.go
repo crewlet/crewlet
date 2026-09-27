@@ -148,6 +148,14 @@ import (
 // round-robin run was admitted once per node per thirty seconds rather than
 // once.
 //
+// EVERY INSTANT IN IT IS THE WRITING NODE'S CLOCK, and a node whose clock runs
+// fast stamps its failures into every reader's future. So a reader takes none
+// of the fleet's failures as later than its own now, and none of its own as
+// later than the start it could have scheduled — each re-dated once, where it
+// is first found past that — and no clock anywhere can stretch a wait past the
+// ceiling: taken as written, one failure on a node ten minutes fast was a
+// ten-minute 429 for that login on every other node. See [standing.weight].
+//
 // Nothing the fleet holds is what was typed: a pair is a keyed digest, and the
 // key never leaves the deployment's keyring.
 //
@@ -640,6 +648,16 @@ func (t *Throttle) Now() time.Time { return t.now() }
 
 // waitLocked is how long an attempt on pair must wait at now. Held under the
 // lock.
+//
+// NEVER MORE THAN [DelayCeiling] PAST THE LATER OF NOW AND THIS NODE'S NEWEST
+// ADMITTED ATTEMPT, whatever any clock says — so never more than
+// [InlineDelay] plus [DelayCeiling] in all, and never more than the ceiling on
+// the fleet's word alone: the curve measures from the newest failure it knows,
+// the fleet's is taken to be no later than now, and this node's own no later
+// than the start it could have scheduled ([standing.weight]). That start may
+// be ahead of now, because it is when this node scheduled the attempt to
+// begin; the lead is what serialises a burst at one pair, and an admission
+// never schedules one further ahead than [InlineDelay].
 func (t *Throttle) waitLocked(pair string, now time.Time) time.Duration {
 	return max(t.pairs.next(pair, now).Sub(now), 0)
 }
@@ -903,6 +921,11 @@ type standing struct {
 	readAt    time.Time
 	reads     uint64
 
+	// fleetRaw is the newest instant the fleet's record carried as it
+	// was written, before [standing.weight] re-dated one it found ahead —
+	// kept so a record re-read unchanged keeps its first dating.
+	fleetRaw time.Time
+
 	// seq numbers this node's failures, so a write acknowledged after the
 	// lock was let go can find the one it recorded.
 	seq uint64
@@ -924,6 +947,26 @@ type failure struct {
 // weight is how many failures count against this pair at now, pending
 // attempts included, and the latest instant among them.
 //
+// NO FAILURE IS FURTHER AHEAD OF THIS NODE'S CLOCK THAN IT COULD HAVE BEEN.
+// The curve measures its wait from the newest instant it knows, and an instant
+// ahead of where it could be is a clock that was wrong — a peer's that runs
+// fast, or this node's own before it stepped back: taken as recorded, one
+// failure from a node ten minutes fast owed ten minutes here, which is no
+// ceiling at all. How far ahead an instant may be is where it came from:
+//
+//   - THE FLEET'S: not at all. A peer's failure had happened by the time the
+//     store answered, so one dated after now is the peer's clock.
+//   - THIS NODE'S OWN: up to [InlineDelay]. An attempt is dated no earlier
+//     than the start this node scheduled for it ([Ticket.Fail]), which is up
+//     to [InlineDelay] ahead of the clock at its admission, and an admitted
+//     attempt still pending counts from that start.
+//
+// An instant past its bound is RE-DATED to the bound the first time it is
+// found there, in place, and not merely capped on each look: capped afresh
+// every time, it would stay "just now" for as long as the skew lasted, and a
+// pair at the ceiling would owe thirty seconds on every attempt for ten
+// minutes. Together that is [Throttle.waitLocked]'s bound.
+//
 // THE FLEET'S RECORD PLUS THIS NODE'S FAILURES IT CANNOT HOLD YET, never the
 // larger of the two: the record is every node's failures, this node's that it
 // had acknowledged before the read was issued among them, so those are
@@ -934,13 +977,21 @@ type failure struct {
 func (s *standing) weight(now time.Time) (int, time.Time) {
 	cut := now.Add(-coord.AttemptWindow)
 	s.prune(cut)
+	if s.fleet.Last.After(now) {
+		s.fleet.Last = now
+	}
 	var count int
 	var last time.Time
 	if s.readIndex > 0 && s.fleet.Count > 0 && s.fleet.Last.After(cut) {
 		count, last = s.fleet.Count, s.fleet.Last
 	}
-	for _, f := range s.fails {
-		if !s.holds(f) {
+	lead := now.Add(InlineDelay)
+	for i := range s.fails {
+		f := &s.fails[i]
+		if f.at.After(lead) {
+			f.at = lead
+		}
+		if !s.holds(*f) {
 			count++
 		}
 		if f.at.After(last) {
@@ -949,6 +1000,9 @@ func (s *standing) weight(now time.Time) (int, time.Time) {
 	}
 	for _, at := range s.pending {
 		count++
+		if at.After(lead) {
+			at = lead
+		}
 		if at.After(last) {
 			last = at
 		}
@@ -973,10 +1027,24 @@ func (s *standing) clean(now time.Time) bool {
 // learn folds a read that landed into the pair: the newest answer wins, and a
 // local failure that answer already counts is forgotten here, since the
 // record holds it and its instant.
+//
+// A RECORD READ BACK UNCHANGED KEEPS THE DATING IT WAS GIVEN. Every instant
+// in the fleet's record is the WRITING node's clock, and one a fast writer
+// stamped into this node's future is re-dated to the moment it is first
+// found ahead ([standing.weight]); the next read carries the same instant
+// again, and taken as written it would be found ahead — and re-dated to that
+// later moment — on every read, so the wait it earns would never run out
+// while the skew lasted. A writer running SLOW needs nothing: its failures
+// fall inside the window and count, and only their wait has already passed.
 func (s *standing) learn(window coord.Attempted, index uint64, at time.Time) {
 	if index <= s.readIndex {
 		return
 	}
+	raw := window.Last
+	if s.readIndex > 0 && raw.Equal(s.fleetRaw) {
+		window.Last = s.fleet.Last
+	}
+	s.fleetRaw = raw
 	s.fleet, s.readIndex, s.readAt = window, index, at
 	kept := s.fails[:0]
 	for _, f := range s.fails {

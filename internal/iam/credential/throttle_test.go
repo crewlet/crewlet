@@ -158,8 +158,31 @@ func newThrottle(t *testing.T, a *attempts) (*credential.Throttle, *clockOf, *co
 func onClock(t *testing.T, a *attempts, clock *clockOf) (*credential.Throttle, *clockOf, *counting) {
 	t.Helper()
 	pad := &counting{}
+	return withSleep(t, a, clock, pad.sleep), clock, pad
+}
+
+// onTime is [onClock] for a node whose waits TAKE the time they are for: a
+// wait served inside the request moves the shared clock by its length, as it
+// does on a real node. A case whose nodes read each other's failures needs it:
+// a failure is dated no earlier than the start its admission scheduled, so a
+// served wait that took no time leaves its failure dated ahead of the clock the
+// other node reads — where no correct clock ever puts a peer's failure.
+func onTime(t *testing.T, a *attempts, clock *clockOf) *credential.Throttle {
+	t.Helper()
+	return withSleep(t, a, clock, func(_ context.Context, d time.Duration) {
+		if d > 0 {
+			clock.advance(d)
+		}
+	})
+}
+
+// withSleep builds a node of the rig's fleet with its own sleep.
+func withSleep(t *testing.T, a *attempts, clock *clockOf,
+	sleep func(context.Context, time.Duration)) *credential.Throttle {
+
+	t.Helper()
 	deps := credential.ThrottleDeps{
-		Now: clock.now, Sleep: pad.sleep,
+		Now: clock.now, Sleep: sleep,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	if a != nil {
@@ -169,7 +192,7 @@ func onClock(t *testing.T, a *attempts, clock *clockOf) (*credential.Throttle, *
 	if err != nil {
 		t.Fatalf("build a throttle: %v", err)
 	}
-	return th, clock, pad
+	return th
 }
 
 // failOnce admits one attempt and fails it, reporting what the admission
@@ -582,8 +605,7 @@ func TestAnAlternatingRunReachesTheCeilingAsFastAsOneThatStaysPut(t *testing.T) 
 	t.Parallel()
 	store := newAttempts()
 	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
-	a, _, _ := onClock(t, store, clock)
-	b, _, _ := onClock(t, store, clock)
+	a, b := onTime(t, store, clock), onTime(t, store, clock)
 	nodes := []*credential.Throttle{a, b}
 	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
 	for i := range credential.CurveSteps {
@@ -641,6 +663,126 @@ func TestTheCeilingsFailuresAreSharedToo(t *testing.T) {
 		t.Errorf("b owes %s (%v) the instant after a's failure at the ceiling, "+
 			"want the whole %s from it", got, err, credential.DelayCeiling)
 	}
+}
+
+// A NODE'S CLOCK NEVER STRETCHES THE CURVE PAST ITS CEILING — AND A SLOW ONE'S
+// FAILURES STILL COUNT.
+//
+// Every failure is written to the fleet stamped with the WRITING node's clock,
+// and every other node measures the pair's wait from the newest of them. A
+// writer ten minutes fast stamped its failure ten minutes into the reader's
+// future, and the reader owed a ten-minute wait for one mistyped password —
+// no ceiling at all, and a lockout by another name on every node but the one
+// that was wrong. A peer's failure had happened by the time the store answered,
+// so none is taken as later than now; this node's own is taken no later than
+// the start its admission could have scheduled, which is how a clock that
+// stepped back is caught: the wait the fleet's word alone earns is never more
+// than the ceiling. And an instant found ahead is dated ONCE, when it is first
+// seen, so the wait it earns runs out: dated afresh on every look, it stays
+// "just now" for as long as the skew lasts and a pair at the ceiling owes
+// thirty seconds on every attempt — the same lockout, sliding. A writer ten
+// minutes SLOW has the opposite effect and is harmless: its failures are
+// inside the window, so they count, and the next failure anywhere is the next
+// step of the curve.
+//
+// Mutations: take the fleet's newest instant as it came and the fast writer's
+// one failure owes the reader ten minutes; take a local instant as it was
+// recorded and the stepped-back clock owes ten minutes; cap either at now on
+// every look instead of re-dating it once, and the attempt after the wait
+// owes the wait again; drop instants from a clock that is behind and the slow
+// writer's three failures owe nothing.
+func TestANodesClockNeverStretchesTheCurve(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+
+	t.Run("a writer whose clock is fast", func(t *testing.T) {
+		t.Parallel()
+		store := newAttempts()
+		reader, clock, sleeps := onClock(t, store, &clockOf{at: start})
+		fast, _, _ := onClock(t, store, &clockOf{at: start.Add(10 * time.Minute)})
+		if err := failOnce(t, fast, who); err != nil {
+			t.Fatal(err)
+		}
+		clock.advance(2 * time.Second)
+		if owed := owedBy(t, reader, sleeps, who); owed > credential.DelayCeiling {
+			t.Fatalf("one failure on a node ten minutes fast owes %s here, past "+
+				"the %s ceiling", owed, credential.DelayCeiling)
+		}
+		// AND AT FULL STRENGTH, the ceiling and never a minute more.
+		fastClock := &clockOf{at: start.Add(10 * time.Minute)}
+		fast, _, _ = onClock(t, store, fastClock)
+		for range credential.CurveSteps {
+			if err := failOnce(t, fast, who); err != nil {
+				fastClock.advance(credential.RetryAfter(err))
+				if err := failOnce(t, fast, who); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		clock.advance(time.Second)
+		_, err := reader.Admit(t.Context(), who)
+		got := credential.RetryAfter(err)
+		if got == 0 || got > credential.DelayCeiling {
+			t.Fatalf("a pair at its ceiling on a fast node owes %s (%v) here, "+
+				"want a wait of at most %s", got, err, credential.DelayCeiling)
+		}
+		// NEVER A LOCKOUT: the attempt after the wait is admitted, although
+		// the fleet's record still reads ten minutes ahead.
+		clock.advance(got)
+		ticket, err := reader.Admit(t.Context(), who)
+		if err != nil {
+			t.Fatalf("the attempt after the %s wait was refused (%v): a fast "+
+				"node's failure was dated afresh on the next read", got, err)
+		}
+		ticket.Release()
+	})
+
+	t.Run("this node's own clock stepping back", func(t *testing.T) {
+		t.Parallel()
+		th, clock, sleeps := onClock(t, nil, &clockOf{at: start})
+		if err := failOnce(t, th, who); err != nil {
+			t.Fatal(err)
+		}
+		clock.advance(-10 * time.Minute)
+		owed := owedBy(t, th, sleeps, who)
+		if owed > credential.DelayCeiling {
+			t.Fatalf("after the clock stepped back ten minutes one failure owes "+
+				"%s, past the %s ceiling", owed, credential.DelayCeiling)
+		}
+		clock.advance(owed)
+		if again := owedBy(t, th, sleeps, who); again != 0 {
+			t.Errorf("the attempt after the %s wait owes %s more: the failure "+
+				"was dated afresh on every look", owed, again)
+		}
+	})
+
+	t.Run("a writer whose clock is slow", func(t *testing.T) {
+		t.Parallel()
+		store := newAttempts()
+		reader, clock, sleeps := onClock(t, store, &clockOf{at: start})
+		slowClock := &clockOf{at: start.Add(-10 * time.Minute)}
+		slow, _, _ := onClock(t, store, slowClock)
+		for range 3 {
+			if err := failOnce(t, slow, who); err != nil {
+				slowClock.advance(credential.RetryAfter(err))
+				if err := failOnce(t, slow, who); err != nil {
+					t.Fatal(err)
+				}
+			}
+			slowClock.advance(10 * time.Second)
+		}
+		clock.advance(time.Second)
+		if err := failOnce(t, reader, who); err != nil {
+			t.Fatalf("the reader's first attempt was refused: %v", err)
+		}
+		sleeps.take()
+		// Three failures elsewhere and one here: the next owes eight.
+		if owed := owedBy(t, reader, sleeps, who); owed != 8*time.Second {
+			t.Errorf("after three failures on a slow node and one here the next "+
+				"attempt owes %s, want the 8s four failures earn", owed)
+		}
+	})
 }
 
 // A STORE THAT DOES NOT ANSWER IS LEFT ALONE FOR A WHILE — AND A CALLER HANGING

@@ -1038,7 +1038,12 @@ than five seconds is refused with a map lookup and no round trip, so a pair
 costs at most one read per attempt its curve lets through; a clean pair is read
 once a window, so an honest sign-in pays one read and its second-factor step
 none; and a store that fails to answer is left alone for thirty seconds rather
-than timed out on every sign-in. What the fleet holds is a digest of the pair under a key
+than timed out on every sign-in. Each failure is dated by the clock of the node
+that saw it, and **no node's clock can stretch a wait past the ceiling**: a
+reader takes none of the fleet's failures as later than its own clock, so a
+node ten minutes fast costs a mistyped password the ordinary second elsewhere
+rather than ten minutes, and a node ten minutes slow still counts toward the
+curve — its failures are inside the window, only their wait has passed. What the fleet holds is a digest of the pair under a key
 derived from the active keyring entry, never what was typed — a password typed
 into the login box is what lands in that field often enough to matter. A node
 whose coordination store is unreachable goes on throttling on its own curve.
