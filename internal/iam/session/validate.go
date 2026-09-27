@@ -55,6 +55,12 @@ type Identity struct {
 	// lag is zero and the answer is still unknown.
 	Deferred bool
 
+	// Credential is the configured secret this bearer's subject answers to
+	// NOW — a Tier A token's value, for a session exchanged from one — or
+	// zero for a person, who answers to rows. A bearer bound to another
+	// value is a session that is over; see credential.go.
+	Credential Credential
+
 	// Session and Person are the rows, each three-valued in its own right
 	// through its Found field.
 	Session LineageRow
@@ -140,7 +146,8 @@ const (
 
 	// RowEnded is a session that is over: the row says ended, or the
 	// person's epoch has moved past the bearer's, or the fleet-wide
-	// generation has.
+	// generation has, or the configured credential it was exchanged from
+	// has a new value.
 	RowEnded Row = "ended"
 
 	// RowGone is no row, on a node whose applied position COVERS the
@@ -410,7 +417,7 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	// AND ONLY THEN THE ROWS. Nothing above this line reads anything, so
 	// an unauthenticated caller cannot price a request by sending rubbish.
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
-	v := standing(b, identity, err)
+	v := s.standing(b, identity, err)
 	if v.Row == RowValid || v.Row == RowBehind {
 		// THROUGH served, BOTH OF THEM. Both serve reads on the bearer's
 		// own proof, so both must move the idle deadline: an arm that
@@ -423,8 +430,9 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 }
 
 // Standing is the row a bearer's ROWS put it on, with its own deadlines set
-// aside: what this node's copy of the estate says about the
-// session, and nothing the bearer says about itself.
+// aside: what this node's copy of the estate — and, for a session exchanged
+// from a Tier A token, the value configured under the token's name — says
+// about the session, and nothing the bearer says about when it ends.
 //
 // # It exists for one question, and answers it three ways
 //
@@ -440,16 +448,18 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 //
 //   - [RowValid]: the session was live until its own deadline, which is the
 //     whole of what ended it.
-//   - [RowEnded] or [RowGone]: a record ended it, or the sweep has already
-//     collected it; either way the ending was not the deadline's to announce.
+//   - [RowEnded] or [RowGone]: a record ended it, the sweep has already
+//     collected it, or the token it was exchanged from has a new value;
+//     either way the ending was not the deadline's to announce.
 //   - [RowBehind] or [RowStalled]: this node cannot say, and a fact nobody
 //     could confirm is not one to announce.
 //
-// NO RE-ISSUE: the answer is about the rows alone, and a bearer past its
-// deadline is never served.
-func Standing(ctx context.Context, directory Directory, b Bearer) Validation {
+// NO RE-ISSUE: a bearer past its deadline is never served.
+func (s *Signer) Standing(ctx context.Context, directory Directory,
+	b Bearer) Validation {
+
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
-	v := standing(b, identity, err)
+	v := s.standing(b, identity, err)
 	if v.Row == RowValid || v.Row == RowBehind {
 		v.Person, v.Session = identity.Person, identity.Session
 	}
@@ -458,11 +468,31 @@ func Standing(ctx context.Context, directory Directory, b Bearer) Validation {
 
 // standing is the row one read of the estate puts a bearer on — the half of
 // the table that is about the ROWS, shared by [Signer.Validate] and
-// [Standing] so the two can never disagree about what a row means.
+// [Signer.Standing] so the two can never disagree about what a row means —
+// and, on a row that would serve, whether the bearer still stands for the
+// credential its subject answers to.
+//
+// THE BINDING IS ASKED ONLY OF A SERVING ROW, and on BOTH of them: a node that
+// has not applied the session's row still holds the configuration, so a
+// rotated token's session is over there too rather than served for reads
+// until the row arrives.
+func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
+	v := rowsStanding(b, identity, err)
+	if v.Row != RowValid && v.Row != RowBehind {
+		return v
+	}
+	if ok, why := s.bound(b, identity.Credential); !ok {
+		return Validation{Row: RowEnded, Bearer: b, Person: identity.Person,
+			Detail: why}
+	}
+	return v
+}
+
+// rowsStanding is [Signer.standing] without the binding: the rows alone.
 //
 // A SERVING ROW comes back bare, for its caller to finish: Validate re-issues
 // through [Signer.served] and Standing only reports it.
-func standing(b Bearer, identity Identity, err error) Validation {
+func rowsStanding(b Bearer, identity Identity, err error) Validation {
 	if err != nil {
 		return Validation{Row: RowStalled, Bearer: b, Err: err,
 			Detail: "this node could not read the identity estate"}
@@ -545,7 +575,7 @@ func (s *Signer) served(row Row, b Bearer, identity Identity,
 	if !stale {
 		return out
 	}
-	fresh, err := s.issue(b, now)
+	fresh, err := s.issue(b, identity.Credential, now)
 	if err != nil {
 		// A RE-ISSUE THAT CANNOT BE SIGNED DOES NOT REFUSE THE REQUEST.
 		// The bearer in hand has already verified and has not expired,

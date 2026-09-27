@@ -15,13 +15,14 @@ import (
 
 // THE BEARER'S WIRE FORMAT, and what each field is doing there.
 //
-//	v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
+//	v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>][.cred:<binding>].<mac>
 //
 // NINE FIELDS, dot-separated, with the session's own pair joined by `~` so
 // that the two values a node needs before it reads anything travel as one
-// token — and a TENTH, the scope, on a session that may do less than
-// everything. Every one of them is here because a node has to answer with it
-// and has no other way to know it:
+// token — and up to two more, each present only where it says something: the
+// scope, on a session that may do less than everything, and the binding, on a
+// session that stands for a configured credential. Every one of them is here
+// because a node has to answer with it and has no other way to know it:
 //
 //   - the KEY TAG, so a verifier knows which keyring entry to look up rather
 //     than trying each one — which is what makes adding a key zero-downtime;
@@ -40,7 +41,10 @@ import (
 //   - the IDLE expiry, which every re-issue does, with no store write at all;
 //   - the SCOPE, present only on a session that may do less than everything:
 //     `enrol`, one its sign-in opened on a password alone where a second
-//     factor is required ([Bearer.EnrolmentOnly]).
+//     factor is required ([Bearer.EnrolmentOnly]);
+//   - the BINDING, present only on a session exchanged from a Tier A token: a
+//     MAC over the token's value, so rotating the value ends the sessions the
+//     old one opened ([Bearer.Binding], and credential.go for why a MAC).
 //
 // # There is no rotation index, and v2 had one
 //
@@ -89,7 +93,10 @@ import (
 // part-way through enrolling asked to sign in again on that node, for a
 // session that could do nothing but enrol. And a scope this build cannot NAME
 // is refused the same way, for the same reason: a newer build narrowing a
-// session in a way this one would serve whole.
+// session in a way this one would serve whole. A binding is an attribute of
+// the same kind, and it is refused by a build that does not know it for the
+// same reason — such a build would serve an exchanged session whatever value
+// its token has now.
 //
 // NOTHING HERE IS SECRET and nothing here grants anything on its own: a bearer
 // in a proxy log discloses a lineage, a person id, two deadlines and whether
@@ -129,11 +136,21 @@ type Bearer struct {
 	// applied the session's row. See the format's doc above, and
 	// [Validation.EnrolmentOnly] for the one reading of it.
 	EnrolmentOnly bool
+
+	// Binding is the MAC over the configured credential a session stands
+	// for, under a key derived from the one this bearer is signed with, or
+	// empty for a person's session. See credential.go.
+	Binding string
 }
 
 // scopeEnrolment is the scope a bearer of a session that may only enrol a
 // second factor carries — see [Bearer.EnrolmentOnly].
 const scopeEnrolment = "enrol"
+
+// bindingPrefix opens the attribute that carries [Bearer.Binding]. A PREFIX
+// AND A VALUE, where a scope is a bare word, because the value is a MAC and
+// the prefix is what tells the two kinds of attribute apart.
+const bindingPrefix = "cred:"
 
 // ErrMalformed reports a cookie that is not a bearer of this format at all.
 //
@@ -170,6 +187,12 @@ type Mint struct {
 	// once by the sign-in — see [Bearer.EnrolmentOnly] for why the bearer
 	// carries it too.
 	EnrolmentOnly bool
+
+	// Credential is the configured secret a session stands for — the value
+	// of the Tier A token `POST /auth/token` exchanged — or zero for a
+	// person's session. The bearer carries a binding to it and never the
+	// value: see credential.go.
+	Credential Credential
 }
 
 // Mint issues a bearer for a session that has just started.
@@ -193,17 +216,18 @@ func (s *Signer) Mint(m Mint) (string, error) {
 		StartPosition:     m.StartPosition,
 		AbsoluteExpiresAt: m.AbsoluteExpiresAt,
 		EnrolmentOnly:     m.EnrolmentOnly,
-	}, now)
+	}, m.Credential, now)
 }
 
-// issue signs one bearer, stamping the idle deadline.
+// issue signs one bearer, stamping the idle deadline and binding it to cred
+// under the key it is signed with.
 //
 // IT ALWAYS SIGNS UNDER THE ACTIVE KEY, including when it is re-issuing a
 // cookie that arrived under an older one. That is what makes a keyring
 // rotation drain: every live session moves to the new key the first time it is
 // used, so by the time the old key is dropped the sessions still on it are the
 // ones that have been idle longer than the re-issue window.
-func (s *Signer) issue(b Bearer, now time.Time) (string, error) {
+func (s *Signer) issue(b Bearer, cred Credential, now time.Time) (string, error) {
 	key, held := s.keys[s.activeTag]
 	if !held {
 		return "", fmt.Errorf("%w: the active key is not in this signer's "+
@@ -211,6 +235,10 @@ func (s *Signer) issue(b Bearer, now time.Time) (string, error) {
 	}
 	b.KeyTag = s.activeTag
 	b.IdleExpiresAt = now.Add(Idle)
+	b.Binding = ""
+	if !cred.IsZero() {
+		b.Binding = bindingUnder(key, cred)
+	}
 	payload := b.payload()
 	return payload + "." + sign(key, payload), nil
 }
@@ -232,12 +260,18 @@ func (b Bearer) payload() string {
 	if b.EnrolmentOnly {
 		parts = append(parts, scopeEnrolment)
 	}
+	if b.Binding != "" {
+		parts = append(parts, bindingPrefix+b.Binding)
+	}
 	return strings.Join(parts, ".")
 }
 
 // fields is how many dot-separated parts a WHOLE session's bearer has,
-// signature included; a scoped one has one more — see the format's doc.
+// signature included; each attribute adds one — see the format's doc.
 const fields = 9
+
+// attributes is how many a bearer may carry: a scope and a binding.
+const attributes = 2
 
 // parse reads a cookie's structure and verifies its signature.
 //
@@ -253,7 +287,7 @@ const fields = 9
 // the drop do nothing at all.
 func (s *Signer) parse(cookie string) (Bearer, error) {
 	parts := strings.Split(cookie, ".")
-	if (len(parts) != fields && len(parts) != fields+1) || parts[0] != Version {
+	if len(parts) < fields || len(parts) > fields+attributes || parts[0] != Version {
 		return Bearer{}, fmt.Errorf("%w: %d fields at version %q",
 			ErrMalformed, len(parts), firstField(parts))
 	}
@@ -274,15 +308,8 @@ func (s *Signer) parse(cookie string) (Bearer, error) {
 
 	var b Bearer
 	b.KeyTag = parts[1]
-	if len(parts) == fields+1 {
-		// A SCOPE THIS BUILD CANNOT NAME IS REFUSED, never served whole:
-		// it is a newer build saying this session may do less, and
-		// reading it as nothing would be reading it as everything.
-		if parts[fields-1] != scopeEnrolment {
-			return Bearer{}, fmt.Errorf("%w: scope %q is not one this build "+
-				"knows", ErrMalformed, parts[fields-1])
-		}
-		b.EnrolmentOnly = true
+	if err := b.readAttributes(parts[fields-1 : len(parts)-1]); err != nil {
+		return Bearer{}, err
 	}
 	pair := strings.Split(parts[3], "~")
 	if len(pair) != 2 {
@@ -328,6 +355,31 @@ func (s *Signer) parse(cookie string) (Bearer, error) {
 		*field.into = time.Unix(seconds, 0).UTC()
 	}
 	return b, nil
+}
+
+// readAttributes reads what a bearer carries past its fixed fields: a scope,
+// then a binding, each at most once and in that order — the order
+// [Bearer.payload] writes them in, so a bearer this engine minted always
+// reads.
+//
+// AN ATTRIBUTE THIS BUILD CANNOT NAME IS REFUSED, never served whole: it is a
+// newer build saying this session may do less, or answers to something this
+// build would not check, and reading it as nothing would be reading it as
+// everything.
+func (b *Bearer) readAttributes(attrs []string) error {
+	for i, attr := range attrs {
+		switch {
+		case attr == scopeEnrolment && i == 0:
+			b.EnrolmentOnly = true
+		case strings.HasPrefix(attr, bindingPrefix) && i == len(attrs)-1 &&
+			len(attr) > len(bindingPrefix):
+			b.Binding = strings.TrimPrefix(attr, bindingPrefix)
+		default:
+			return fmt.Errorf("%w: attribute %q is not one this build knows "+
+				"in that place", ErrMalformed, attr)
+		}
+	}
+	return nil
 }
 
 // firstField is the version a malformed value claimed, for the message, with

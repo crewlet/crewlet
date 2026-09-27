@@ -816,7 +816,7 @@ func TestStandingIsWhatTheRowsSayPastADeadline(t *testing.T) {
 				t.Fatalf("validation landed on %q (%q), want the absolute deadline",
 					refused.Row, refused.Deadline)
 			}
-			got := session.Standing(t.Context(), rig.dir, refused.Bearer)
+			got := rig.signer.Standing(t.Context(), rig.dir, refused.Bearer)
 			if got.Row != tc.want {
 				t.Errorf("standing is %q, want %q (%s)", got.Row, tc.want, got.Detail)
 			}

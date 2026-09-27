@@ -666,6 +666,10 @@ func (t tierATokens) byLogin(login string) (config.APIToken, bool) {
 // read as for anybody, and the one fact about its SUBJECT is whether this node
 // still holds the entry.
 //
+// A HELD ENTRY ANSWERS WITH ITS VALUE ([session.Identity.Credential]), which
+// the bearer was bound to when it was exchanged, so a token rotated to a new
+// value under the same id has ended every session the old value opened.
+//
 // A GONE ENTRY IS A SUBJECT THAT MAY NOT ACT, answered as a retired principal:
 // validation then ends the session wherever this node stands against its start
 // record, and the cookie is cleared. Answered as ABSENT instead, a node below
@@ -694,7 +698,8 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 	// token's session bumps it under the token's login, which is what ends
 	// every session exchanged from that token.
 	epoch := identity.Person.Epoch
-	if _, held := d.tokens(person); !held {
+	entry, held := d.tokens(person)
+	if !held {
 		identity.Person = session.PersonRow{Found: true, Stage: iam.StageRetired,
 			Login: person, Epoch: epoch}
 		return identity, nil
@@ -703,6 +708,12 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 	// composed from the entry by the guard, on every request.
 	identity.Person = session.PersonRow{Found: true, Stage: iam.StageActive,
 		Login: person, Epoch: epoch}
+	// AND THE VALUE the entry holds now, which the bearer was bound to when
+	// it was exchanged: a session is the token it was exchanged FROM, and
+	// a new value under the same id is a different token. Answered by the
+	// id alone, rotating a leaked value left every session exchanged from
+	// it working for the rest of its hour.
+	identity.Credential = session.CredentialOf(entry.Token)
 	return identity, nil
 }
 
@@ -896,7 +907,7 @@ func (s *Sessions) ended(r *http.Request, v session.Validation,
 // cookie on Tuesday. Whoever wrote that record already announced the ending,
 // and a second row naming `idle` or `absolute` would name the wrong cause for
 // a session that was over a day earlier. So the rows are asked
-// ([session.Standing]) — the same directory validation read through, a token's
+// ([session.Signer.Standing]) — the same directory validation read through, a token's
 // exchanged session included — and the ending is announced only when they
 // say the session was live. A node that cannot say HANDS THE CLAIM BACK and
 // announces nothing: a fact nobody could confirm is not one to announce, and
@@ -910,7 +921,7 @@ func (s *Sessions) deadline(r *http.Request, v session.Validation,
 	if !claimed {
 		return
 	}
-	standing := session.Standing(ctx, directory, v.Bearer)
+	standing := s.signer.Standing(ctx, directory, v.Bearer)
 	switch standing.Row {
 	case session.RowValid:
 		reason := types.EndIdle

@@ -1282,7 +1282,7 @@ database read for every forged cookie an attacker sends, and has nothing to say
 at all until the row it names has been applied on the node the request reached.
 
 ```
-__Host-crewlet_session=v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
+__Host-crewlet_session=v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>][.cred:<binding>].<mac>
                         Path=/; HttpOnly; Secure; SameSite=Lax
 ```
 
@@ -1329,10 +1329,13 @@ to know it:
 | absolute expiry | Never moved by a re-issue |
 | idle expiry | Moved by every re-issue, with no store write at all |
 | scope | **Present only on a session that may do less than everything**: `enrol`, one that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else). Signed with the rest and carried through every re-issue, so a node that has not applied the session's row still knows what it may reach. Absent on a whole session, which is why an ordinary cookie is the same nine fields every build reads, and a scoped one — or a scope a build cannot name — is refused by any build that does not know it rather than served whole |
+| binding | **Present only on a session exchanged from a Tier A token** (`cred:<binding>`): a MAC over the token's value under a key derived from the one that signs the cookie, checked on every request against the value configured under the token's id — so a new value ends the session. Recomputed at every re-issue under the new signing key, so a keyring rotation drains an exchanged session onto the new key like any other. A build that does not know the attribute refuses the cookie rather than serving it whatever value the token has now |
 
 Nothing in it is secret and nothing in it grants anything alone: a bearer in a
-proxy log discloses a lineage, a person id, two deadlines and whether the
-session may only enrol a second factor, and is worthless without the mac. It deliberately carries nothing *about* the person — no login,
+proxy log discloses a lineage, a person id, two deadlines, whether the
+session may only enrol a second factor and — for an exchanged token's — a MAC
+nobody without the keyring can test a guess against, and is worthless without
+the mac. It deliberately carries nothing *about* the person — no login,
 no address, no grants — because a cookie is the value most likely to end up
 somewhere nobody meant it to.
 
@@ -1486,9 +1489,13 @@ closes it like any other session — the sign-in surface reads a token's session
 the way the guard does, from the entry, where the bare estate holds no row for
 a token's login and read it as already over; `POST /auth/logout/all` from it
 ends every session that token opened; and `crewlet iam invalidate-all` ends it
-with everybody else's. Rotating the token's *value* under the same id keeps
-its exchanged sessions to their hour, so a rotation that answers a leak
-renames the entry or invalidates.
+with everybody else's. So does **putting a new value under the same id**: the
+cookie carries a binding to the value it was exchanged with — a MAC under a key
+derived from the keyring, never the value or a bare digest of it, which in a
+cookie would be an offline guessing oracle for the break-glass credential — and
+every node checks it against the value it holds under that id, applied or not.
+Rotating a leaked token's value therefore ends every session the leaked value
+opened, on the next request, everywhere.
 
 **The ceiling applies to a person too.** `api.auth.max_grants` is intersected
 into every principal at the moment the request is resolved, so a node whose
