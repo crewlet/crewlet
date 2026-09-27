@@ -297,8 +297,6 @@ func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
 	}
 }
 
-// blindOf is the keyed blind this rig's writer derives an address's subject
-// from, which is what an invitation's spend arbitrates on.
 // operationKey is a fresh operation key, which a create's id is derived from:
 // a uuid7, as every one the surfaces mint is.
 func operationKey() string { return uuid.Must(uuid.NewV7()).String() }
@@ -318,6 +316,8 @@ func invitationIDOf(t *testing.T, key string) string {
 	return id
 }
 
+// blindOf is the keyed blind this rig's writer derives an address's subject
+// from, which is what an invitation's spend arbitrates on.
 func blindOf(t *testing.T, address string) string {
 	t.Helper()
 	blinder, err := iamdomain.NewBlinder(testBlindKey)
