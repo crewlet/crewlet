@@ -84,15 +84,15 @@ const maxKeyIDLen = 64
 type Verdict string
 
 const (
-	// Verified: the frame's MAC matches under the key it names.
+	// Verified is a frame whose MAC matches under the key it names.
 	Verified Verdict = "verified"
 
-	// KeyUnknown: the frame names a key this node does not hold. The
+	// KeyUnknown is a frame naming a key this node does not hold. The
 	// record is retained and reprocessed when the key arrives.
 	KeyUnknown Verdict = "key_unknown"
 
-	// Tampered: the frame names a key this node holds and the MAC does not
-	// match under it, or the frame is not a frame at all. Permanent.
+	// Tampered is a frame naming a key this node holds whose MAC does not
+	// match under it, or bytes that are not a frame at all. Permanent.
 	Tampered Verdict = "tampered"
 )
 

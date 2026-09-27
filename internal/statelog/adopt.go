@@ -337,7 +337,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 			"is that everything still in it is fleet-visible",
 			offer.Manifest.Scrubbed, empty)
 	}
-	if err := a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
+	if err = a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: record the adoption: %w", err)
 	}
 
