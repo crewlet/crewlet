@@ -124,8 +124,8 @@ type runningDomain struct {
 	// eviction gate, which answers "not evicted" rather than refusing.
 	evicted func(ctx context.Context) (bool, error)
 
-	// progress is what a snapshot cannot see — whether the applied prefix
-	// is moving, and how long an undecodable record has been held. See
+	// progress is what a snapshot cannot see — whether the checkpoint is
+	// moving, and how long an undecodable record has been held. See
 	// [progress] for why it lives beside the runner rather than inside
 	// [statelog.Health].
 	progress progress
@@ -167,7 +167,7 @@ type runningDomain struct {
 	// the request path reads a number.
 	//
 	// IT IS ONE OF TWO TERMS: [runningDomain.Lag] answers the larger of
-	// this and how long the applied prefix has been frozen while it owed
+	// this and how long the checkpoint has been frozen while it owed
 	// work, because a drain rate nothing re-measures while no batch runs
 	// holds this figure down for exactly as long as an applier is wedged.
 	//
@@ -224,8 +224,10 @@ func lagDurationOf(last, applied uint64, drain float64) time.Duration {
 }
 
 // Lag is how far behind the log this applier is: the backlog at the last
-// heartbeat over its drain rate, or how long its applied prefix has been
-// frozen while it owed work, whichever is larger.
+// heartbeat over its drain rate, or how long its checkpoint has been frozen
+// while it owed work, whichever is larger. A record it RETAINS moves the
+// checkpoint like any other, so a deferral is never a lag: the readers it
+// withholds from ask their own scope.
 //
 // THE SECOND TERM IS WHAT MAKES A WEDGE VISIBLE. The first is a record count
 // divided by a rate measured over apply time, and nothing moves that rate
@@ -2566,7 +2568,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 						"reanchor")
 			}
 		}
-		running.progress.observe(row.At, pos.AppliedThrough, behind, held)
+		running.progress.observe(row.At, pos, behind)
 		row.Domains[name] = pos
 	}
 	if below {

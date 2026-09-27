@@ -1554,6 +1554,11 @@ it has not seen and never honouring a revocation stuck in that backlog. With
 the second, it reads as stalled a minute after it stops. Both tables above
 read it, as does a Tier A token's seat binding. A heartbeat that cannot read
 the log's head keeps its last answer rather than reading as caught up.
+"Progress" is the applier's **checkpoint**, which moves past a record the node
+holds but cannot apply exactly as past one it applied — so holding a newer
+build's record during a rollout is never read as a stalled node, which would
+answer 503 for everybody on it; it is answered for the people that record is
+about, below.
 
 A node holding a record about the person it **cannot apply** — a newer build's
 during a rollout, or one signed under a keyring key it was not restarted with

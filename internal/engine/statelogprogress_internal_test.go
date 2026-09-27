@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -97,8 +98,8 @@ func TestAnIdleNodeIsNotAStalledOne(t *testing.T) {
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 
 	// Caught up, nothing to do, for well past the grace.
-	p.observe(at, 100, false, false)
-	p.observe(at.Add(statelog.StallGrace*3), 100, false, false)
+	p.observe(at, seen(100, false), false)
+	p.observe(at.Add(statelog.StallGrace*3), seen(100, false), false)
 	if p.stalled(at.Add(statelog.StallGrace * 3)) {
 		t.Error("an idle caught-up node reported itself stalled")
 	}
@@ -106,7 +107,7 @@ func TestAnIdleNodeIsNotAStalledOne(t *testing.T) {
 	// Behind and not moving for the same span IS a stall: this node owes
 	// progress it is not making.
 	var q progress
-	q.observe(at, 100, true, false)
+	q.observe(at, seen(100, false), true)
 	if q.stalled(at.Add(statelog.StallGrace - time.Second)) {
 		t.Error("a node behind for less than the grace reported itself stalled")
 	}
@@ -115,7 +116,7 @@ func TestAnIdleNodeIsNotAStalledOne(t *testing.T) {
 	}
 
 	// And progress clears it, without waiting out anything.
-	q.observe(at.Add(statelog.StallGrace+time.Second), 101, true, false)
+	q.observe(at.Add(statelog.StallGrace+time.Second), seen(101, false), true)
 	if q.stalled(at.Add(statelog.StallGrace + 2*time.Second)) {
 		t.Error("a node that applied a record was still reported stalled")
 	}
@@ -146,15 +147,15 @@ func TestTheDeferralClockStartsOnceAndClearsAtOnce(t *testing.T) {
 	var p progress
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 
-	p.observe(at, 10, true, true)
-	p.observe(at.Add(time.Minute), 10, true, true)
+	p.observe(at, seen(10, true), true)
+	p.observe(at.Add(time.Minute), seen(10, true), true)
 	got := p.deferredSinceValue()
 	if !got.Held || !got.Since.Equal(at) {
 		t.Errorf("deferredSince = %+v, want held since the FIRST observation %v — "+
 			"a clock that restarts every tick never reaches the grace", got, at)
 	}
 
-	p.observe(at.Add(2*time.Minute), 11, true, false)
+	p.observe(at.Add(2*time.Minute), seen(11, false), true)
 	if got := p.deferredSinceValue(); got.Held {
 		t.Errorf("deferredSince = %+v after the record applied, so an upgraded "+
 			"node stays shed", got)
@@ -214,8 +215,8 @@ func TestAWedgedApplierReadsAsStalledOnTheRequestPath(t *testing.T) {
 	// Five records behind at the rate this applier last drained at: a
 	// fraction of a second, and the figure a wedge leaves standing.
 	d.lagNanos.Store(int64(lagDurationOf(105, 100, 20)))
-	d.progress.observe(at, 100, true, false)
-	d.progress.observe(at.Add(PositionHeartbeat), 100, true, false)
+	d.progress.observe(at, seen(100, false), true)
+	d.progress.observe(at.Add(PositionHeartbeat), seen(100, false), true)
 
 	if got := d.lagAt(at.Add(statelog.StallGrace - time.Second)); got > statelog.StallGrace {
 		t.Errorf("lag %s inside the grace: a node behind for less than it "+
@@ -230,7 +231,7 @@ func TestAWedgedApplierReadsAsStalledOnTheRequestPath(t *testing.T) {
 
 	// PROGRESS CLEARS IT at the next look, without waiting anything out.
 	moved := at.Add(statelog.StallGrace + 2*time.Second)
-	d.progress.observe(moved, 104, true, false)
+	d.progress.observe(moved, seen(104, false), true)
 	if got := d.lagAt(moved.Add(time.Second)); got > statelog.StallGrace {
 		t.Errorf("an applier that applied a record still reads %s behind", got)
 	}
@@ -246,7 +247,7 @@ func TestACaughtUpNodeCarriesNoFrozenLag(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	var d runningDomain
-	d.progress.observe(at, 100, false, false)
+	d.progress.observe(at, seen(100, false), false)
 	if got := d.lagAt(at.Add(statelog.StallGrace * 3)); got != 0 {
 		t.Errorf("a caught-up node reads %s behind after a quiet spell", got)
 	}
@@ -290,13 +291,69 @@ func TestAnUnreadableLogKeepsTheLastBacklogAnswer(t *testing.T) {
 	// still frozen from the last look that could see it.
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	var p progress
-	p.observe(at, 100, true, false)
+	p.observe(at, seen(100, false), true)
 	for beat := range 8 {
-		p.observe(at.Add(time.Duration(beat+1)*PositionHeartbeat), 100,
-			backlogOf(jetstream.LogStats{}, unreadable, 100, p.owed()), false)
+		p.observe(at.Add(time.Duration(beat+1)*PositionHeartbeat), seen(100, false),
+			backlogOf(jetstream.LogStats{}, unreadable, 100, p.owed()))
 	}
 	if got := p.frozenFor(at.Add(statelog.StallGrace + time.Second)); got <= statelog.StallGrace {
 		t.Errorf("frozen %s after failed looks, want past the %s grace: an "+
 			"unreadable log restarted the stall clock", got, statelog.StallGrace)
+	}
+}
+
+// seen is the register row's position for a domain at checkpoint seq, holding
+// a record it cannot decode or not — as the position heartbeat publishes it.
+func seen(seq uint64, deferred bool) coord.DomainPosition {
+	pos := coord.DomainPosition{Seq: seq, AppliedThrough: seq}
+	if deferred {
+		pos.Deferred = 1
+	}
+	return pos
+}
+
+// A RECORD THIS NODE HOLDS IS NOT A WEDGE.
+//
+// A node holding a record it cannot decode — a newer peer's during a rolling
+// upgrade, one signed under a key it was not restarted with — publishes its
+// applied-through pinned below that record for as long as it holds it, while
+// its checkpoint moves past it and on through everything after. The stall
+// used to be measured on applied-through, so a node catching up, or on a busy
+// log with a record in flight at every look, read as frozen a minute after
+// the record arrived: every session, machine token and seat binding on it
+// answered 503 and `Health.Stalled` shed its seats — the whole-node outage
+// [statelog.Health.Healthy] says a deferral must never cause inside its own
+// grace, and one no reader needed, since what the record withholds is scoped.
+//
+// Mutation: measure movement on AppliedThrough and both halves read stalled.
+func TestAHeldRecordIsNotAWedge(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	var d runningDomain
+	checkpoint := uint64(100)
+	for beat := range 12 {
+		pos := coord.DomainPosition{
+			Seq: checkpoint, AppliedThrough: 99, Deferred: 1,
+		}
+		d.progress.observe(at.Add(time.Duration(beat)*PositionHeartbeat), pos, true)
+		checkpoint += 3
+	}
+	end := at.Add(11 * PositionHeartbeat)
+	if end.Sub(at) <= statelog.StallGrace {
+		t.Fatalf("the looks span %s, inside the %s grace: the case proves nothing",
+			end.Sub(at), statelog.StallGrace)
+	}
+	if got := d.lagAt(end.Add(time.Second)); got > statelog.StallGrace {
+		t.Errorf("a node whose checkpoint moved at every look while it held one "+
+			"record reads %s behind, past the %s grace — every session on it "+
+			"answers 503", got, statelog.StallGrace)
+	}
+	if d.progress.stalled(end.Add(time.Second)) {
+		t.Error("a node whose checkpoint moved at every look while it held one " +
+			"record reported itself stalled, and sheds its seats")
+	}
+	// AND THE DEFERRAL IS STILL AGED, for the shed that is its own.
+	if got := d.progress.deferredSinceValue(); !got.Held || !got.Since.Equal(at) {
+		t.Errorf("deferral clock %+v, want held since the first look %v", got, at)
 	}
 }
