@@ -51,24 +51,32 @@ linters:
       # the block to dodge the report is strictly worse code. Every
       # production site of those shapes carries a //nolint:govet naming
       # this paragraph, so a reader can see which were reviewed; new ones
-      # are reported and have to be looked at rather than inherited.
+      # are reported and have to be looked at rather than inherited. Two
+      # code-level answers need no directive and say as much: a closure
+      # that owns its err can declare it as its named result, `(err
+      # error)`, and assign it; and an inner `x, err :=` can name the
+      # error for its step (`claimErr`, `updateErr`) where that reads true.
       enable:
         - shadow
     staticcheck:
-      # The SA (correctness) and ST (style) families are on, which is the
-      # default. The QF family is NOT: it is quickfix SUGGESTIONS — "you
-      # could remove the embedded field from this selector", "you could use
-      # a tagged switch" — and this tree writes `db.Conn.Begin` rather than
-      # `db.Begin` on purpose, because naming the embedded type is what says
-      # which of two Begins a reader is looking at. A refactoring assistant's
-      # opinions are not a gate.
+      # `all` is every check, which is more than staticcheck's default: the
+      # SA (correctness) and ST (style) families including the ST checks it
+      # leaves off unless asked (a receiver named two ways, ST1016, among
+      # them), and the QF quickfix suggestions. Two QF checks are off
+      # because they argue with how this tree writes code on purpose:
+      # QF1008 ("you could remove the embedded field from this selector")
+      # — it writes `db.Conn.Begin` rather than `db.Begin`, because naming
+      # the embedded type is what says which of two Begins a reader is
+      # looking at — and QF1002 ("you could use a tagged switch"). Every
+      # other suggestion is a gate, and a new exception is named here with
+      # its reason rather than by switching the family off.
       checks:
         - all
         - -QF1008
         - -QF1002
     misspell:
-      # Three words this tree spells "wrong" ON PURPOSE, and correcting any
-      # of them would break what it is for:
+      # Words this tree spells "wrong" ON PURPOSE, and correcting any of
+      # them would break what it is for:
       #   noteable — GitLab's own wire field (`noteable_type`). The parser
       #              must spell it the way the vendor sends it.
       #   requred  — the typo in a doc comment ABOUT typos, and the fixture
