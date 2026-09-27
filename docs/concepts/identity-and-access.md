@@ -2086,6 +2086,20 @@ naming the id, because a history whose authors evaporate is not an audit
 trail: "who suspended this person, and when" has to keep answering after they
 have gone.
 
+**The login is not sealed, and it outlives the removal in the clear.** A
+login is printed beside everything its holder does, so it is deliberately a
+plain value rather than a sealed one, and destroying the key does nothing to
+it. It stays on the removal record in the identity log — and so in every
+backup and donated snapshot for as long as retention keeps the log — in the
+tombstone's `iam_removed.claims_json`, and in the audit rows that recorded an
+unbound person's changes under it. The login an invitation or the first-person
+form **proposes** is derived from the address (`jane.doe@example.com` proposes
+`jane.doe`, and `jane@example.com` proposes `jane.example`), so a removed
+person's address is, more often than not, still partly readable from their
+login. If an erasure request has to reach the login too, the only way is not
+to have put personal data in it: give such a person a login that names
+nothing about them, and do not accept the proposed one.
+
 Two consequences worth knowing before you see them:
 
 - **A removal is durable before the key is destroyed.** The rows commit first;

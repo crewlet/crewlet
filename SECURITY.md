@@ -158,8 +158,17 @@ A few things worth knowing when deploying Crewlet:
   backups and every node. What outlives the removal is deliberate: their id,
   the tombstone (who removed them, when, and which claims they held — an
   address as its blind, never its value), and the audit trail's rows naming
-  them, because a history whose authors evaporate is not an audit trail. The
-  rows commit before the key is destroyed; a key deletion that fails — a
+  them, because a history whose authors evaporate is not an audit trail.
+  **Their login outlives it too, in the clear**, and nothing destroys it: it
+  is on the removal record in the identity log (so in every backup and
+  donated snapshot), in the tombstone's `iam_removed.claims_json`, and in the
+  audit rows that record an unbound person's changes under it. A login is
+  deliberately not sealed — it is printed beside everything its holder does —
+  and the one the sign-up form proposes is derived from the address
+  (`jane.doe@example.com` proposes `jane.doe`), so after a removal the
+  address's local part is usually still readable. If a person's login has to
+  be erasable, do not derive it from a personal address: give them one that
+  names nothing about them. The rows commit before the key is destroyed; a key deletion that fails — a
   coordination outage — is retried by the identity key duty, and `crewlet iam
   check` (`GET /iam/check`) names every removed person whose key still lives
   as `removal_key_live` until it is gone. See
