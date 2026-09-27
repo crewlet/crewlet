@@ -41,8 +41,9 @@ func (a *Applier) applyTree(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	}
 	switch p := payload.(type) {
 	case PlacementPayload:
-		return a.applyPlacement(ctx, tx, at, p.Edges, ChangeMoved)
+		return a.applyPlacement(ctx, tx, at, readAt(at, p.Edges), ChangeMoved)
 	case ImportPayload:
+		p.Edges = readAt(at, p.Edges)
 		return a.applyImport(ctx, tx, at, p)
 	case RemovePayload:
 		return a.applyRemoval(ctx, tx, at, p)
@@ -50,6 +51,25 @@ func (a *Applier) applyTree(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	return 0, fmt.Errorf("chart: the structural record at %s carries a %T "+
 		"payload, and the structure's three ops are %s, %s and %s",
 		at.position, payload, OpPlace, OpImport, OpRemove)
+}
+
+// readAt is edges as the record's own version reads them.
+//
+// A VERSION-1 EDGE IS AN OBJECT, A PARENT AND A LEAD, and nothing else: the
+// verb, a rename's source and a seat's kind are version-2 fields, which the
+// build a version-1 record was written for had no field to read them into. No
+// version-1 writer states one, and a record that did meant nothing by it to the
+// build that first applied it — so it means nothing here either, or a replay
+// would decline a "create" that build applied as the placement it was.
+func readAt(at applyContext, edges []Edge) []Edge {
+	if at.exact() {
+		return edges
+	}
+	out := make([]Edge, len(edges))
+	for i, edge := range edges {
+		out[i] = Edge{Object: edge.Object, Parent: edge.Parent, Lead: edge.Lead}
+	}
+	return out
 }
 
 // applyPlacement writes a set of edges as FULL POST-STATE.

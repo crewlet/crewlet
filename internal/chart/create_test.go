@@ -116,6 +116,22 @@ func TestAVersionOnePlacementStillMovesWhatItFinds(t *testing.T) {
 		t.Errorf("the seats are %v, want [omar] — a version-1 placement "+
 			"creates what is absent", got)
 	}
+
+	// AND A VERSION-2 FIELD ON A VERSION-1 EDGE MEANS NOTHING: the build it
+	// was written for had nowhere to read a verb or a kind into, so it moved
+	// platform back and left omar's kind alone — and so does a replay here.
+	h.must(v1(place("op-odd-writer",
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
+			Parent: "engineering", Op: chart.OpCreateUnit},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "omar"},
+			Kind: chart.SeatHuman})))
+	if parent, _, _ := h.placement("platform"); parent != "engineering" {
+		t.Errorf("platform sits under %q, want engineering — a version-1 edge "+
+			"stating a create was declined as one", parent)
+	}
+	if got := h.one(`SELECT kind FROM chart_seats WHERE handle = 'omar'`); got != "agent" {
+		t.Errorf("omar is %q, want agent — a version-1 edge set a seat's kind", got)
+	}
 }
 
 // A VERSION-1 RECORD LANDS WHERE ITS FIRST APPLY PUT IT.
