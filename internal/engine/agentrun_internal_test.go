@@ -410,7 +410,7 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	}
 	q := memory.New()
 	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
-	bridge := mcpbridge.New(mcpbridge.Options{
+	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
 	// Mounted, as serveAPI mounts it on a node with a listener: a bridge no
@@ -445,7 +445,7 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	t.Parallel()
 	c, seat := splitLoginCompany(t, "api", "codex")
 	e := launchReadyEngine(t, c)
-	e.bridge = mcpbridge.New(mcpbridge.Options{
+	e.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
 	launcher := &agentLauncher{
@@ -623,4 +623,14 @@ func TestARunRecordsTheAgentIDOfItsPinnedTurn(t *testing.T) {
 	if got := launcher.runTurnRef(t.Context()).AgentID; got != want.String() {
 		t.Errorf("the run records agent id %q, want %q: the id of the turn's own organization", got, want)
 	}
+}
+
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
 }

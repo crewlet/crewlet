@@ -130,22 +130,21 @@ func nodeAPIToken(surface string) (string, error) {
 
 // signInSurface builds /auth, or reports that this node serves none.
 //
-// # Two postures produce a nil, and neither is a fault
+// # One posture produces a nil, and it is not a fault
 //
-//   - THIS NODE RUNS NO IAM DOMAIN. It is the first domain in the register
-//     that narrows: a seats-only satellite does not apply it, because no turn
-//     reads identity and shedding a company's seats because a human cannot
-//     sign in would be an outage caused by the wrong subsystem. Such a node
-//     serves seats and no sign-in, which is what its `node.roles` asked for.
-//   - THE KEYRING CANNOT SIGN FOR THE FLEET. A cookie minted under a
-//     per-process key is one every other ingress node rejects, so a person
-//     would be signed in on whichever node their request happened to reach.
-//     Refusing to mint is the only honest answer, and `crewlet validate`
-//     refuses that keyring by name — on a laptop, long before a bind.
+// THIS NODE RUNS NO IAM DOMAIN. It is the first domain in the register that
+// narrows: a seats-only satellite does not apply it, because no turn reads
+// identity and shedding a company's seats because a human cannot sign in
+// would be an outage caused by the wrong subsystem. Such a node serves seats
+// and no sign-in, which is what its `node.roles` asked for, and the routes
+// are ABSENT rather than answering an error: a 404 says this deployment does
+// not sign in that way, where a 503 would say it does and is broken and send
+// an operator looking for an outage.
 //
-// In both, the routes are ABSENT rather than answering an error. A 404 says
-// this deployment does not sign in that way; a 503 would say it does and is
-// broken, and send an operator looking for an outage.
+// A keyring that cannot sign for the fleet USED TO BE a second such posture,
+// and it is not any more: Tier A refuses a file without a usable keyring and
+// the engine refuses to start without one, so a session signer this function
+// cannot build is a fault it returns rather than a node it quietly narrows.
 func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 	cipher secrets.Cipher) (*authapi.Service, *auth.Sessions, error) {
 
@@ -163,15 +162,6 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		RotateAfter: boot.API.Auth.Session.RotateAfter(),
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrNoKeyring) {
-			logging.Get("cli").Warn("api_sign_in_absent",
-				"reason", "this node's keyring cannot sign for the fleet",
-				"error", err,
-				"hint", "set secrets.keys and secrets.active_key; a cookie "+
-					"signed under a per-process key is one every other node "+
-					"rejects")
-			return nil, nil, nil
-		}
 		return nil, nil, fmt.Errorf("api: the session signer: %w", err)
 	}
 	throttle, err := credential.NewThrottle(credential.ThrottleDeps{

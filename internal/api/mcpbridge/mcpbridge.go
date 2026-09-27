@@ -171,7 +171,8 @@ type Bridge struct {
 type Options struct {
 	// Material is the fleet's keyring. The per-run tokens are signed under
 	// its active key and name it, so a rotation leaves a live run's token
-	// valid. See [runtoken.Options].
+	// valid. One that cannot sign for the fleet is refused. See
+	// [runtoken.Options].
 	Material runtoken.Material
 
 	// Now is the clock, for the token expiry. Nil takes wall-clock time.
@@ -199,20 +200,25 @@ type Options struct {
 // LEAKED token could match a still-running session.
 const DefaultTTL = 4 * time.Hour
 
-// New builds a bridge.
-func New(opts Options) *Bridge {
+// New builds a bridge, or refuses a keyring that cannot sign for the fleet
+// ([runtoken.ErrNoKeyring]).
+func New(opts Options) (*Bridge, error) {
 	ttl := opts.TTL
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
+	signer, err := runtoken.New(runtoken.Options{
+		Domain: KeyDomain, Material: opts.Material, Now: opts.Now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mcpbridge: %w", err)
+	}
 	return &Bridge{
-		signer: runtoken.New(runtoken.Options{
-			Domain: KeyDomain, Material: opts.Material, Now: opts.Now,
-		}),
+		signer:   signer,
 		base:     strings.TrimSuffix(opts.BaseURL, "/"),
 		ttl:      ttl,
 		sessions: map[string]*Session{},
-	}
+	}, nil
 }
 
 // Open registers a run's session and returns the URL its box should dial.

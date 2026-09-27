@@ -288,12 +288,10 @@ type Engine struct {
 	// nothing from inside a box, which is the ordinary configuration.
 	//
 	// Held here and handed OUT to the API this process serves rather than
-	// built twice: that API verifies the tokens this engine minted, and two
-	// receivers would sign with two per-process keys unless a keyring
-	// happens to be configured, which is exactly the case that must not
-	// depend on happening to be configured. A peer verifies them with its
-	// own receiver, which is why the key is derived from the fleet's
-	// keyring rather than held.
+	// built twice: that API verifies the tokens this engine minted, and one
+	// object is the only arrangement that cannot drift from its twin. A
+	// peer verifies them with its own receiver, which is why the key is
+	// derived from the fleet's keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
 	// bridge serves a running seat's tool surface to a coding agent over
@@ -644,10 +642,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
 	// receiver above is built here: a fleet mints on one node and may
 	// verify on another, so every node derives its key from the fleet's
-	// keyring rather than from a per-process random.
+	// keyring — which the keyring check above has already required.
 	bridge := opts.Bridge
 	if bridge == nil {
-		bridge = mcpbridge.Build(os.Getenv, tokenMaterial(opts.Bootstrap))
+		if bridge, err = mcpbridge.Build(os.Getenv, tokenMaterial(opts.Bootstrap)); err != nil {
+			return nil, fmt.Errorf("engine: tool bridge: %w", err)
+		}
 	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is

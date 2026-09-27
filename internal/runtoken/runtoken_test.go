@@ -1,6 +1,7 @@
 package runtoken_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,11 @@ var (
 
 func signer(t *testing.T, domain string, m runtoken.Material) *runtoken.Signer {
 	t.Helper()
-	return runtoken.New(runtoken.Options{Domain: domain, Material: m})
+	s, err := runtoken.New(runtoken.Options{Domain: domain, Material: m})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
 }
 
 // TestARotationDoesNotInvalidateAnOutstandingToken is the whole point.
@@ -129,9 +134,12 @@ func TestAForgedMalformedOrExpiredTokenIsRefused(t *testing.T) {
 	t.Parallel()
 	const domain = "crewlet.test.v1"
 	now := time.Unix(1_700_000_000, 0)
-	s := runtoken.New(runtoken.Options{
+	s, err := runtoken.New(runtoken.Options{
 		Domain: domain, Material: ring("k1", k1), Now: func() time.Time { return now },
 	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	valid := s.Mint("subject", time.Hour)
 	if got := s.Validate(valid); got != "subject" {
 		t.Fatalf("a freshly minted token did not validate: %q", got)
@@ -170,29 +178,43 @@ func TestAMintIsFlooredAwayFromZero(t *testing.T) {
 	}
 }
 
-// TestAKeyringThatNamesNoActiveKeyIsPerProcess. It is a real deployment — a
-// node with no secrets.keys — so it works, alone, and the caller is the one
-// that says what it costs.
-func TestAKeyringThatNamesNoActiveKeyIsPerProcess(t *testing.T) {
+// A KEYRING THAT CANNOT SIGN FOR THE FLEET IS REFUSED, naming what is wrong.
+//
+// It used to take a per-process random key, which validates at the node that
+// minted and nowhere else — so on a fleet, a box exporting to any other node
+// was refused as forged with its configuration looking complete. That was the
+// posture of a node with no keyring, and there is no such node any more: Tier
+// A refuses a file without one and the engine refuses to start. What reaches
+// here unusable is a caller's mistake, and it is refused by name, the two
+// halves of which need different edits: an empty keyring is a missing block,
+// an active id naming nothing is a typo in one line of one that exists.
+//
+// Mutation: fall back to a key of this process's own and every row validates.
+func TestAKeyringThatCannotSignForTheFleetIsRefused(t *testing.T) {
 	t.Parallel()
 	const domain = "crewlet.test.v1"
-	for name, material := range map[string]runtoken.Material{
-		"empty":            {},
-		"no active id":     ring("", k1),
-		"active id unheld": ring("k9", k1),
+	for name, tc := range map[string]struct {
+		material runtoken.Material
+		says     string
+	}{
+		"empty":            {runtoken.Material{}, "secrets.keys is empty"},
+		"no active id":     {ring("", k1), "names none of"},
+		"active id unheld": {ring("k9", k1), `"k9" names none of`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if material.Usable() {
+			t.Parallel()
+			if tc.material.Usable() {
 				t.Fatal("a material that cannot sign for the fleet reported that it could")
 			}
-			one := signer(t, domain, material)
-			token := one.Mint("subject", time.Hour)
-			if got := one.Validate(token); got != "subject" {
-				t.Errorf("a per-process signer refused its own token: %q", got)
+			s, err := runtoken.New(runtoken.Options{Domain: domain, Material: tc.material})
+			if !errors.Is(err, runtoken.ErrNoKeyring) {
+				t.Fatalf("New = %v, want ErrNoKeyring", err)
 			}
-			// AND ONLY ITSELF, which is what the caller's warning is about.
-			if got := signer(t, domain, material).Validate(token); got != "" {
-				t.Errorf("a second process validated a per-process token: %q", got)
+			if s != nil {
+				t.Error("a refused keyring still produced a signer")
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("the refusal does not say %q: %v", tc.says, err)
 			}
 		})
 	}

@@ -175,12 +175,10 @@ func (c *chartView) Position(context.Context) (uint64, time.Duration, error) {
 
 // A DEPLOYMENT WITH NO FLEET KEYRING IS REFUSED, NEVER GIVEN A PER-PROCESS KEY.
 //
-// internal/runtoken falls back to a random key per process, which is correct
-// for an endpoint only that process verifies. Here it is catastrophic: every
-// ingress node would derive a different key and reject every other node's
-// cookies, so a browser would be signed in on whichever node its request
-// happened to reach and signed out on the next one — with nothing in the
-// config looking wrong.
+// A key of this process's own would be catastrophic here: every ingress node
+// would derive a different key and reject every other node's cookies, so a
+// browser would be signed in on whichever node its request happened to reach
+// and signed out on the next one — with nothing in the config looking wrong.
 //
 // And the refusal names the FIELD to edit, by the name Tier A spells it: it
 // named `secrets.active_key`, a key no configuration has, so an operator
@@ -231,9 +229,12 @@ func TestASessionBearerDoesNotValidateAtTheOtlpReceiver(t *testing.T) {
 	rig := newSignedIn(t)
 
 	// The receiver's own signer, over the same keyring.
-	receiver := runtoken.New(runtoken.Options{
+	receiver, err := runtoken.New(runtoken.Options{
 		Domain: otlpDomain, Material: keyring(),
 	})
+	if err != nil {
+		t.Fatalf("runtoken.New: %v", err)
+	}
 	if subject := receiver.Validate(rig.cookie); subject != "" {
 		t.Errorf("the session cookie validated at the telemetry receiver as %q",
 			subject)

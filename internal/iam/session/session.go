@@ -34,15 +34,16 @@
 // which is the same sixty seconds the alarm table already calls a stall: a
 // node serving stale identity is by definition a node already alarmed.
 //
-// # The keyring is required, and the per-process fallback is refused
+// # The keyring is required, and a per-process key is refused
 //
-// [runtoken] falls back to a per-process random key when a deployment has no
-// keyring, which is correct for an endpoint only that process ever verifies.
-// It is catastrophic here: every ingress node would derive a different key and
-// reject every peer's cookies, so a browser would be signed in on whichever
-// node its request happened to reach. So [New] REFUSES a keyring that cannot
-// sign for the fleet, by name, rather than minting cookies nobody else can
-// read.
+// A key of this process's own would be catastrophic here: every ingress node
+// would derive a different key and reject every peer's cookies, so a browser
+// would be signed in on whichever node its request happened to reach. So [New]
+// REFUSES a keyring that cannot sign for the fleet, by name, rather than
+// minting cookies nobody else can read — as [runtoken.New] does for a per-run
+// token, which once took a per-process key and no longer does. Tier A refuses
+// a file without a usable keyring and the engine refuses to start without one,
+// so what reaches here unusable is a caller's mistake rather than a posture.
 //
 // What it does share with [runtoken] is the KEY TAG: a bearer names the key
 // that signed it, a verifier looks that tag up, and a tag it does not hold is
@@ -259,8 +260,9 @@ func Clears(externalURL string) []*http.Cookie {
 //
 // ITS OWN SENTINEL because the caller's move is specific and nothing else
 // produces it: an operator has to set `secrets.keys`, and until they do the
-// honest thing is to refuse to serve sign-ins rather than to mint cookies each
-// node rejects on the next request that lands somewhere else.
+// honest thing is to refuse rather than to mint cookies each node rejects on
+// the next request that lands somewhere else. A validated Tier A never
+// produces it, so a caller treats it as the fault it is.
 var ErrNoKeyring = errors.New("session: no fleet keyring")
 
 // Options configure [New].

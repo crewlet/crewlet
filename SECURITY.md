@@ -25,9 +25,10 @@ A few things worth knowing when deploying Crewlet:
   identities (Atlassian/GitLab/Slack tokens) are separate service accounts —
   scope them minimally; the engine never needs a personal admin token at
   runtime (provisioning CLIs do need an admin credential, once).
-- **Session cookies are signed with the Tier A keyring, and a deployment
-  without one cannot serve sign-ins.** The engine refuses to build a session
-  signer from a keyring that cannot sign for the fleet, rather than falling
+- **Session cookies are signed with the Tier A keyring, and a node without
+  one does not start.** Every node needs a keyring (`crewlet validate`
+  refuses a file without one), and the engine refuses to build a session
+  signer from a keyring that cannot sign for the fleet rather than falling
   back to a per-process key: with a fallback, every ingress node would accept
   only cookies it minted itself, so a browser would be signed in on whichever
   node its request happened to reach. The cookie is `HttpOnly`, `Secure`,

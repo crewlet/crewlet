@@ -1720,9 +1720,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// how a person at the dashboard learns they have work.
 		Inbox: e,
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
-		// verifies tokens this process's engine minted, and two receivers
-		// would sign with two per-process keys unless a keyring happened
-		// to be configured.
+		// verifies tokens this process's engine minted, and a second
+		// receiver is a second construction of one decision that nothing
+		// compares with the first.
 		OtelReceiver: e.OtelReceiver(),
 		// THE ENGINE'S OWN, not a second one. A run's session lives in
 		// the object that opened it, so an API holding a different
@@ -1900,9 +1900,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// THE SAME ANSWER /chart/check reads, so a gauge on /health and
 		// the screen that renders the report cannot disagree.
 		SeatHeld: seatHeld(e),
-		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that cannot
-		// serve one — see [signInSurface] for the two postures that
-		// produce a nil and why each is honest rather than a fault.
+		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that runs no
+		// identity domain — see [signInSurface] for why that is honest
+		// rather than a fault.
 		Auth: authSurface,
 		// AND THE OTHER END OF THE COOKIE IT MINTS. Nil exactly when
 		// Auth is: a node that cannot sign one has none to check.

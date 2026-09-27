@@ -60,9 +60,10 @@ package runtoken
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -85,11 +86,18 @@ const minTTL = time.Second
 // path beside the subject and the signature.
 const tagLen = 8
 
-// ephemeralTag names the per-process key a deployment with no keyring signs
-// under. It is a constant rather than a random value so that one process's
-// own tokens validate at itself, which is the whole of what an ephemeral key
-// can promise.
-const ephemeralTag = "ephemeral"
+// ErrNoKeyring reports a keyring that cannot sign for the fleet: empty, or
+// with an active id that names none of its keys.
+//
+// IT USED TO TAKE A PER-PROCESS RANDOM KEY INSTEAD, which works for one process
+// and nothing else: a fleet mints on one node and verifies on another, so every
+// token a box presented to any node but the one that minted it was refused as
+// forged, with nothing in the configuration looking wrong. That fallback was
+// the posture of a node with no keyring, and there is no such node any more —
+// Tier A refuses a file without one, and the engine refuses to start — so a
+// Material that reaches here unusable is a caller's mistake, refused by name
+// rather than papered over with a key nobody else holds.
+var ErrNoKeyring = errors.New("runtoken: no keyring to sign per-run tokens under")
 
 // KeyMaterial is one keyring entry: an id every node agrees on, and the
 // material behind it.
@@ -108,9 +116,9 @@ type KeyMaterial struct {
 // Material is the fleet's keyring as a token issuer sees it.
 type Material struct {
 	// ActiveID names the key new tokens are signed under. A Material whose
-	// ActiveID names no entry is ephemeral, the same as an empty one —
-	// Tier A refuses that combination before a node reaches here, and a
-	// signer cannot mint under a key nobody named.
+	// ActiveID names no entry cannot sign, the same as an empty one — Tier A
+	// refuses that combination before a node reaches here, and [New]
+	// refuses it too.
 	ActiveID string
 
 	// Keys is every key a token may have been signed under, including the
@@ -119,9 +127,8 @@ type Material struct {
 	Keys []KeyMaterial
 }
 
-// Usable reports whether this material can sign for the fleet rather than for
-// one process. The caller logs what an unusable one costs, because only the
-// caller knows which endpoint is about to be unverifiable.
+// Usable reports whether this material can sign for the fleet: whether its
+// active id names one of its keys.
 func (m Material) Usable() bool {
 	for _, key := range m.Keys {
 		if key.ID == m.ActiveID {
@@ -151,8 +158,7 @@ type Options struct {
 	Domain string
 
 	// Material is the fleet's keyring. One that cannot sign for the fleet
-	// takes a per-process key, which is correct for a single process and
-	// cannot work across two.
+	// is refused ([ErrNoKeyring]).
 	Material Material
 
 	// Now is the clock. Nil takes wall-clock time.
@@ -163,8 +169,19 @@ type Options struct {
 	Now func() time.Time
 }
 
-// New builds a signer.
-func New(opts Options) *Signer {
+// New builds a signer, or refuses a keyring that cannot sign for the fleet.
+func New(opts Options) (*Signer, error) {
+	if !opts.Material.Usable() {
+		if len(opts.Material.Keys) == 0 {
+			return nil, fmt.Errorf("%w: secrets.keys is empty, and a %s token "+
+				"signed under a key of this process's own would be refused by "+
+				"every other node — run `crewlet secrets keygen`", ErrNoKeyring,
+				opts.Domain)
+		}
+		return nil, fmt.Errorf("%w: secrets.active_key_id %q names none of "+
+			"secrets.keys, so a %s token has no key to be signed under",
+			ErrNoKeyring, opts.Material.ActiveID, opts.Domain)
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -177,19 +194,7 @@ func New(opts Options) *Signer {
 			s.activeTag = tag
 		}
 	}
-	if s.activeTag == "" {
-		// EPHEMERAL, and only itself can verify it. A key that silently
-		// stayed zero would make every token forgeable, and a read from
-		// crypto/rand cannot fail on any platform this runs on — so the
-		// error is not ignored, it is impossible.
-		key := make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			panic("runtoken: no randomness for the signing key: " + err.Error())
-		}
-		s.activeTag = ephemeralTag
-		s.keys[ephemeralTag] = key
-	}
-	return s
+	return s, nil
 }
 
 // Mint returns a token scoped to one subject, valid for ttl, signed under the

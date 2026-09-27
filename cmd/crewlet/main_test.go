@@ -373,7 +373,7 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	port := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
+	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	})
 	e := testEngineWithBridge(t, bridge)
@@ -454,7 +454,7 @@ func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	port := freePort(t)
-	e := testEngineWithBridge(t, mcpbridge.New(mcpbridge.Options{
+	e := testEngineWithBridge(t, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	}))
 	boot := bootstrapFor(t, port)
@@ -1885,4 +1885,14 @@ func concatLiterals(e ast.Expr) (string, bool) {
 		return left + right, okL && okR
 	}
 	return "", false
+}
+
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
 }

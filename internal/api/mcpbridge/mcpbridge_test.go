@@ -133,6 +133,16 @@ type fixture struct {
 	byName  map[string]*stubTool
 }
 
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
+}
+
 // newFixture wires a bridge over a two-tool surface and serves it.
 func newFixture(t *testing.T, offer ...string) *fixture {
 	t.Helper()
@@ -167,7 +177,7 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		offer = []string{"read_page", "post_message"}
 	}
 	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer).ForTurn(seatTurn())
-	f.bridge = mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
+	f.bridge = bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
 	f.session = &mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
 		Surface: f.surface, Ledger: f.ledger,
@@ -183,7 +193,7 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 // open registers the session and returns the URL a box would dial.
 func (f *fixture) open(t *testing.T) string {
 	t.Helper()
-	f.bridge = mcpbridge.New(mcpbridge.Options{
+	f.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,
 	})
 	mux := http.NewServeMux()
@@ -322,6 +332,51 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 	}
 }
 
+// A KEYRING THAT CANNOT SIGN FOR THE FLEET BUILDS NO BRIDGE. It used to take a
+// per-process key and log that it had, which kept a single node working and
+// cost a fleet the one diagnosis the fleet's key buys: a peer a misrouted call
+// reaches could no longer tell a token its fleet signed from a forged one.
+// Every node holds a keyring now, so a caller arriving without one is a wiring
+// mistake, refused by name at both entrances — and [mcpbridge.Build] with no
+// base URL still builds nothing and refuses nothing, because most deployments
+// bridge nothing and that is not a keyring question.
+//
+// Mutation: restore the per-process fallback in runtoken.New and every row
+// builds a bridge.
+func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
+	t.Parallel()
+	env := func(name string) string {
+		if name == mcpbridge.BaseURLVar {
+			return "https://engine.example.com"
+		}
+		return ""
+	}
+	for name, material := range map[string]runtoken.Material{
+		"no keys":             {},
+		"an active id unheld": {ActiveID: "k9", Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "m"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if b, err := mcpbridge.New(mcpbridge.Options{Material: material}); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
+				t.Errorf("New = %v, %v, want ErrNoKeyring and no bridge", b, err)
+			}
+			if b, err := mcpbridge.Build(env, material); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
+				t.Errorf("Build = %v, %v, want ErrNoKeyring and no bridge", b, err)
+			}
+			// THE CONTROL: with no base URL nothing is built, whatever the
+			// keyring, and that is a configuration rather than a refusal.
+			if b, err := mcpbridge.Build(func(string) string { return "" }, material); err != nil || b != nil {
+				t.Errorf("Build with no base URL = %v, %v, want nothing and no error", b, err)
+			}
+		})
+	}
+	// And a usable keyring builds one, so the rows above are refused for the
+	// keyring and not for something else Build dislikes.
+	if b, err := mcpbridge.Build(env, runtoken.OneKey("k1", "m")); err != nil || b == nil {
+		t.Fatalf("Build with a usable keyring = %v, %v, want a bridge", b, err)
+	}
+}
+
 // A DEPLOYMENT WHOSE API IS NOT REACHABLE FROM A BOX cannot bridge, and the
 // honest answer is an empty endpoint the caller can refuse agent mode on —
 // not a run that starts and fails on its first tool call.
@@ -332,7 +387,7 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // launches the run whose end would have closed it.
 func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k")})
+	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k")})
 	// Mounted, so the missing base URL is the only reason to refuse.
 	_ = b.Handler()
 	if url := b.Open(&mcpbridge.Session{
@@ -349,7 +404,7 @@ func TestAnExpiredTokenIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	clock := time.Now()
-	f.bridge = mcpbridge.New(mcpbridge.Options{
+	f.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL, TTL: time.Minute,
 		Now: func() time.Time { return clock },
 	})
@@ -760,7 +815,7 @@ func literal(v any) string {
 // tools/list — one seat's wiring mistake becoming a fleet node's crash.
 func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
+	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
 	// Mounted, so the incomplete session is the only reason to refuse.
 	_ = b.Handler()
 	for _, tc := range []struct {
@@ -794,7 +849,7 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 // or a bridge that always refused would pass.
 func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	t.Parallel()
-	b := mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
+	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
 	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}
 	if b.Mounted() {
 		t.Fatal("a bridge nothing mounted reports itself mounted")
@@ -849,7 +904,7 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	endpoint := f.open(t)
 	token := endpoint[strings.LastIndex(endpoint, "/")+1:]
 
-	peer := mcpbridge.New(mcpbridge.Options{
+	peer := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
 	runID, reason := peer.Miss(token)
