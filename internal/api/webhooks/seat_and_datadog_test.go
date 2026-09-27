@@ -324,7 +324,7 @@ func TestDatadog_RefusesAShortSharedToken(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body["error"] != string(httpjson.CodeWeakWebhookSecret) {
+	if body["error"] != string(httpjson.CodeUnusableWebhookSecret) {
 		t.Errorf("error = %q, which does not tell a weak token from a missing one",
 			body["error"])
 	}

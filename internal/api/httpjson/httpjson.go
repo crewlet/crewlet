@@ -588,11 +588,14 @@ const (
 	// configuration, so the sender holds the delivery rather than dropping
 	// it.
 	CodeNoWebhookSecret Code = "no_webhook_secret"
-	// CodeWeakWebhookSecret is a route whose provider signs nothing, whose
-	// shared token is therefore the whole check, and whose token is too
-	// short to be it. The same 503 as an absent secret, because the truth is
-	// the same, under its own code because the fix is not.
-	CodeWeakWebhookSecret Code = "weak_webhook_secret"
+	// CodeUnusableWebhookSecret is a route whose configured secret cannot
+	// do the check it is for: a shared token too short to be the whole of
+	// the authentication a provider that signs nothing leaves, or a GitLab
+	// signing key in a form GitLab never signs with. The same 503 as an
+	// absent secret, because the truth is the same — this route cannot check
+	// a delivery — under its own code because the fix is not: an operator
+	// told no secret is set goes looking for one they can see.
+	CodeUnusableWebhookSecret Code = "unusable_webhook_secret"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -744,9 +747,10 @@ var codes = map[Code]string{
 	CodeNoWebhookSecret: "This route has no secret configured to check a " +
 		"delivery against, so it accepts none until one is set. The sender is " +
 		"asked to retry, so nothing is lost in the meantime.",
-	CodeWeakWebhookSecret: "This route's provider signs nothing, so its shared " +
-		"token is the whole check, and the configured token is too short to be " +
-		"it. Set a longer one; the sender is asked to retry meanwhile.",
+	CodeUnusableWebhookSecret: "The secret configured for this route cannot " +
+		"do the check it is for, so the route accepts nothing until it is " +
+		"replaced. The engine's log says why; the sender is asked to retry " +
+		"meanwhile.",
 
 	CodeUnknownKind: "This build does not know that integration.",
 	CodeSeatRequired: "Name the seat this is for. The detail says why one is " +

@@ -691,13 +691,22 @@ func weakSecret(w http.ResponseWriter, source string, why error) {
 			"whole check and this one is not strong enough to be it; answering 503 "+
 			"so the sender retries rather than discards. Set a stronger token, or "+
 			"press Generate in the setup form")
-	// ITS OWN REASON, not the absent-secret one. The status is the same
-	// because the truth is the same — this route cannot check a delivery —
-	// but the two are different misconfigurations with different fixes, and
-	// a caller correlating logs or a person reading the body should not have
-	// to guess which of them they hit. Sharing the string also made the
-	// distinction this function exists for invisible on the wire.
-	httpjson.Unavailable(w, httpjson.CodeWeakWebhookSecret,
+	unusableSecret(w)
+}
+
+// unusableSecret answers a route whose configured secret cannot do the check
+// it is for — a shared token too weak to be the authentication, a signing key
+// in a form the provider never signs with. The caller has already logged
+// which, because only it knows.
+//
+// ITS OWN CODE, not the absent-secret one. The status is the same because the
+// truth is the same — this route cannot check a delivery — but the two are
+// different misconfigurations with different fixes, and a person reading the
+// body should not have to guess which they hit: told no secret is set, an
+// operator goes looking for a value they can already see. GitLab's malformed
+// key answered exactly that, and logged the absent-secret line beside its own.
+func unusableSecret(w http.ResponseWriter) {
+	httpjson.Unavailable(w, httpjson.CodeUnusableWebhookSecret,
 		httpjson.RetrySeconds(NoSecretRetryAfter))
 }
 

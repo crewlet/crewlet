@@ -196,7 +196,7 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 				"whsec_<standard base64> value, so it cannot be the HMAC key "+
 				"GitLab signs with and no delivery can ever verify. Re-run "+
 				"`crewlet gitlab provision` or set the value GitLab was given")
-		noSecret(w, "gitlab")
+		unusableSecret(w)
 		return
 	}
 	v, ok := r.authenticate(w, "gitlab", secret,

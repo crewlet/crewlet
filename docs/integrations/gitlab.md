@@ -356,12 +356,15 @@ base64 payload, compared in constant time against any of the header's
 space-separated `v1,…` entries, with a ±5-minute timestamp tolerance in both
 directions.
 
-- **No signature, or a wrong one → `401`.** There is no fallback. GitLab's
-  other secret — the plaintext `X-Gitlab-Token` — is not a credential here.
-- **A delivery before `signing_secret` is configured, or one whose value is
-  not a usable key → `503`** with a `Retry-After`, so the delivery is held
-  for retry rather than discarded. The request was fine; what is missing is
-  on this side.
+- **No signature, or a wrong one → `401 invalid_signature`.** There is no
+  fallback. GitLab's other secret — the plaintext `X-Gitlab-Token` — is not a
+  credential here.
+- **A delivery before `signing_secret` is configured → `503
+  no_webhook_secret`, and one whose value is not a usable `whsec_` key →
+  `503 unusable_webhook_secret`**, each with a `Retry-After`, so the delivery
+  is held for retry rather than discarded. The request was fine; what is
+  wrong is on this side — and the two codes differ because the fixes do: one
+  says to set the secret, the other that the one set is the problem.
 
 > **GitLab signs when the hook has a signing token, not when the version is
 > new enough.** These are two different secrets on the same hook and they are
