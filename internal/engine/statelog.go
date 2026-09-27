@@ -562,13 +562,15 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// which reads as "nothing was trimmed" for a log the fleet has been
 	// writing to for months.
 	// ONE CEILING OVER THE WHOLE STATE-LOG BRING-UP, for
-	// [jsprovision.SequenceBudget]'s reason: this is three replicated stream
-	// creates AND three durable consumer creates, each of which would
-	// otherwise discover a wedged cluster on its own per-create budget. The
-	// queue's own sequence ceiling covers the engine's streams and not
-	// these, so without it the state log added six more full budgets after
-	// that ceiling had already been spent — and the package's claim to bound
-	// a whole bring-up was not true of all of it.
+	// [jsprovision.SequenceBudget]'s reason: this is a replicated stream
+	// create for EVERY REGISTERED DOMAIN — whatever this node's roles, since
+	// a stream keeps its creator's ceiling — and a durable consumer create
+	// for every domain it runs, each of which would otherwise discover a
+	// wedged cluster on its own per-create budget. The queue's own sequence
+	// ceiling covers the engine's streams and not these, so without it the
+	// state log added a full budget per create after that ceiling had
+	// already been spent — and the package's claim to bound a whole
+	// bring-up was not true of all of it.
 	//
 	// The consumer each start creates is a replicated object on the same
 	// metadata group, and gets a ceiling of its own below — after the join,
@@ -795,9 +797,10 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		return nil, err
 	}
 	// THE SEQUENCE'S CONTEXT, not the caller's: this is a replicated create
-	// like the stream above it, and the three domains share one ceiling so
-	// a wedged metadata group cannot spend a full per-create budget three
-	// times over. Everything else here takes the ordinary boot context.
+	// like the stream above it, and every domain this node runs shares the
+	// one consumer ceiling it is handed, so a wedged metadata group cannot
+	// spend a full per-create budget once per domain. Everything else here
+	// takes the ordinary boot context.
 	consumer, err := host.DomainConsumer(provisionCtx, spec.Name, s.nodeID, at.Seq)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open %s's consumer: %w", domain.Name(), err)
