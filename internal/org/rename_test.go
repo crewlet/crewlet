@@ -191,3 +191,47 @@ func TestAManagesEntryNamingARetiredHandleLandsOnTheLiveOne(t *testing.T) {
 		t.Errorf("reports = %v, want the renamed seat", got)
 	}
 }
+
+// A `manages:` ENTRY NAMING THE ADDRESS AN OBJECT WAS CREATED UNDER RESOLVES
+// FOR EVER, as every lookup resolves it.
+//
+// [Organization.Role] and [Organization.Unit] answer an object's origin after
+// its capped alias list has let it go, and the manages index did not: an entry
+// naming a seat's origin sixteen renames later stood for nobody — or for a team
+// keyed on that spelling — so its manager managed nobody while every lookup of
+// the same address answered the seat. And the dangling report called a unit's
+// `lead:` naming a seat by its origin a misspelling, where Role resolves it.
+func TestAManagesEntryNamingAnObjectsOriginResolvesPastTheAliasCap(t *testing.T) {
+	t.Parallel()
+	// THE ALIAS LISTS NO LONGER HOLD THE ORIGINS, which is what a cap of
+	// sixteen leaves after one rename too many.
+	report := &Role{Name: "Sarah O", DeclaredHandle: "sarah-o",
+		OriginHandle: "sarah-chen", FormerHandles: []string{"sarah-okonkwo"}}
+	member := &Role{Name: "Dev", DeclaredHandle: "dev"}
+	core := &Unit{Name: "Core", ID: "core", OriginKey: "platform",
+		FormerKeys: []string{"infra"}, Lead: "sarah-chen", Roles: []*Role{member}}
+	boss := &Role{Name: "Vee", DeclaredHandle: "vee",
+		Manages: []string{"sarah-chen", "platform"}}
+	o := &Organization{Name: "Acme", Roles: []*Role{boss, report},
+		Units: []*Unit{core}}
+	o.Normalize()
+
+	if !slices.Equal(boss.Manages, []string{"sarah-o", "dev"}) {
+		t.Errorf("manages = %v, want [sarah-o dev] — each entry names an "+
+			"object by the address it was created under", boss.Manages)
+	}
+	if got := o.Manager(report); got != boss {
+		t.Errorf("the renamed seat's manager is %v, want vee", got)
+	}
+	if refs := o.DanglingRefs(); len(refs) != 0 {
+		t.Errorf("references that resolve are reported as dangling: %v", refs)
+	}
+
+	// THE CONTROL: an entry naming neither dangles, and is reported.
+	stray := &Role{Name: "Wes", DeclaredHandle: "wes", Manages: []string{"sarah-c"}}
+	control := &Organization{Name: "Acme", Roles: []*Role{stray}}
+	control.Normalize()
+	if refs := control.DanglingRefs(); len(refs) != 1 {
+		t.Errorf("a manages entry naming nobody was not reported: %v", refs)
+	}
+}

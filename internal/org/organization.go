@@ -375,8 +375,9 @@ func (o *Organization) inheritMCPEnv() {
 // because neither step moves a seat between units, so the membership it
 // captures is the membership both of them see.
 type managesIndex struct {
-	// seats maps every address a seat answers to — its handle and each of
-	// its retired ones — to the handle it answers to NOW.
+	// seats maps every address a seat answers to — its handle, the handle it
+	// was created under and each of its retired ones — to the handle it
+	// answers to NOW, in [Organization.Role]'s order.
 	//
 	// THE VALUE IS THE CURRENT HANDLE, not a presence marker, and that is
 	// what makes a rename keep a roster intact. [Organization.expandManages]
@@ -387,7 +388,11 @@ type managesIndex struct {
 	//
 	// A LIVE HANDLE ALWAYS WINS over another seat's retired one, for
 	// [Organization.Role]'s reason: the live pass is written first and the
-	// alias pass may not overwrite it.
+	// later passes may not overwrite it. THE ORIGIN COMES BEFORE AN ALIAS
+	// and outlives the capped alias list, again as Role reads it: an entry
+	// naming the handle a seat was created under, sixteen renames ago, was
+	// read as naming nobody here while every lookup resolved it — so the
+	// manager managed nobody, or a team keyed on that spelling.
 	seats map[string]string
 	// unitSeats is each unit KEY's seat handles, descendants included, in
 	// [Unit.AllRoles] order, under the unit's current key and each retired
@@ -407,8 +412,13 @@ func (o *Organization) managesIndex() managesIndex {
 		index.seats[r.Handle()] = r.Handle()
 	}
 	for r := range o.AllRoles() {
+		if _, taken := index.seats[r.Origin()]; !taken {
+			index.seats[r.Origin()] = r.Handle()
+		}
+	}
+	for r := range o.AllRoles() {
 		for _, was := range r.FormerHandles {
-			if _, live := index.seats[was]; !live {
+			if _, taken := index.seats[was]; !taken {
 				index.seats[was] = r.Handle()
 			}
 		}
@@ -428,6 +438,9 @@ func (o *Organization) managesIndex() managesIndex {
 	}
 	for u := range o.AllUnits() {
 		claim(u.Key(), u)
+	}
+	for u := range o.AllUnits() {
+		claim(u.Origin(), u)
 	}
 	for u := range o.AllUnits() {
 		for _, was := range u.FormerKeys {
@@ -713,6 +726,9 @@ func (o *Organization) DanglingRefs() []DanglingRef {
 	seats := make(map[string]struct{})
 	for r := range o.AllRoles() {
 		seats[r.Handle()] = struct{}{}
+		// AND THE HANDLE IT WAS CREATED UNDER, which Role resolves after
+		// the capped alias list has let it go.
+		seats[r.Origin()] = struct{}{}
 		for _, was := range r.FormerHandles {
 			seats[was] = struct{}{}
 		}
