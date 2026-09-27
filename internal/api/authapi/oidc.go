@@ -165,6 +165,14 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
+	// ONE EXCHANGE PER FLIGHT, decided before the provider is asked
+	// anything: whoever started a flight holds its cookie and its state,
+	// and could otherwise make this node exchange a code at the provider
+	// once per request for the flight's whole ten minutes.
+	if !s.redeemed.Redeem(flight, s.now()) {
+		s.refuseSignIn(w, r, adm, attempt, "flight already redeemed on this node")
+		return
+	}
 	tokens, err := s.provider.Exchange(r.Context(),
 		metadata.TokenEndpoint, code, flight.Verifier)
 	if err != nil && r.Context().Err() != nil {

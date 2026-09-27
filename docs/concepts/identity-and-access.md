@@ -1322,6 +1322,18 @@ no single browser owns, so a node restarted in the middle of the morning's
 wave asks the provider for its metadata once rather than once per person, and
 one person closing their tab fails nobody else's sign-in.
 
+And a flight is exchanged **once**. Whoever started a flight holds its cookie
+and its `state`, and a made-up code is free, so the same cookie presented over
+and over would be an exchange at the provider per request for its whole ten
+minutes. Every flight carries a random id, and the node that finishes one
+remembers it until the flight would have expired anyway — up to 8,192 of them,
+about a megabyte, far more than a morning's wave finishes inside ten minutes
+— so a cookie presented a second time to that node is refused as a failed
+sign-in before the provider hears of it. The record is per node: a fleet's
+load balancer can hand the same cookie to each node once, which bounds the
+replay rather than removing it, and a coordination write per callback would
+put a fleet-wide write on a path anybody can drive.
+
 ### What is checked in an ID token, and what each check is for
 
 An ID token is a bearer assertion by a third party. Every check is invisible

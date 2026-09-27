@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,6 +62,9 @@ type provider struct {
 	mu     sync.Mutex
 	nonces map[string]string // code -> nonce
 
+	// exchanges counts every request the token endpoint was sent.
+	exchanges atomic.Int64
+
 	// groups is the groups claim every ID token carries, or none.
 	groups []string
 
@@ -98,6 +102,7 @@ func newProvider(t *testing.T) *provider {
 		}}})
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		p.exchanges.Add(1)
 		_ = r.ParseForm()
 		p.mu.Lock()
 		nonce := p.nonces[r.Form.Get("code")]
@@ -396,6 +401,45 @@ func TestASignInLandsOnThisDeploymentWhateverTheFlightCarries(t *testing.T) {
 	if got := finished.Header().Get("Location"); got != auth.PathDashboard {
 		t.Errorf("the sign-in redirected to %q, which a browser follows off "+
 			"this deployment; want %s", got, auth.PathDashboard)
+	}
+}
+
+// A FLIGHT IS EXCHANGED AT THE PROVIDER ONCE, HOWEVER OFTEN IT IS PRESENTED.
+//
+// Whoever started a flight holds its cookie and its state, and a made-up code
+// is free — so without a record of which flights a node has finished, each
+// presentation of one cookie was an exchange at somebody else's token
+// endpoint, for the flight's whole ten minutes. The second presentation here
+// is refused as a failed sign-in, and the provider never hears of it.
+//
+// Mutation: drop the redemption check and the token endpoint counts two.
+func TestARedeemedFlightIsRefusedOnReplay(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	audit := &recordingAudit{}
+	rig := newProviderRig(t, idp, b, func(o *authapi.Options) { o.Audit = audit })
+
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	cookies := started.Result().Cookies()
+	if first := rig.callback(t, cookies, code, state); first.Code != http.StatusFound {
+		t.Fatalf("the first callback answered %d (%s), want the sign-in",
+			first.Code, first.Body)
+	}
+	replayed := rig.callback(t, cookies, code, state)
+	if replayed.Code != http.StatusUnauthorized {
+		t.Errorf("the replayed flight answered %d (%s), want the one sign-in "+
+			"refusal", replayed.Code, replayed.Body)
+	}
+	if n := idp.exchanges.Load(); n != 1 {
+		t.Errorf("the provider's token endpoint was asked %d times for one "+
+			"flight, want once", n)
+	}
+	if _, failures := audit.snapshot(); len(failures) != 1 {
+		t.Errorf("the trail holds %d failed attempts, want the replay", len(failures))
 	}
 }
 

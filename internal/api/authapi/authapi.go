@@ -481,6 +481,11 @@ type Service struct {
 	custody   Custody
 	now       func() time.Time
 
+	// redeemed is every provider round trip this node has finished, so a
+	// flight cookie is exchanged at the provider once however often it is
+	// presented — see [oidc.Redemptions].
+	redeemed *oidc.Redemptions
+
 	// codeMu serialises every change to this node's founder-code FILE —
 	// the boot offer, a re-issue and the removal after a redemption — so
 	// two re-issues arriving at once cannot each withdraw, each write and
@@ -555,6 +560,7 @@ func New(opts Options) (*Service, error) {
 		provider: opts.Provider,
 		custody:  opts.Custody,
 		clients:  opts.Clients, audit: opts.Audit, now: opts.Now,
+		redeemed: oidc.NewRedemptions(),
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
