@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -35,22 +36,7 @@ func TestAStagedChartIsPublishedOnceAndThenGone(t *testing.T) {
 			Kind: chart.SeatAgent, Name: "Staged Seat",
 		}},
 	}
-	body, err := json.Marshal(authored)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// SEALED WITH NOTHING, which is a real configuration: company_config
-	// supports a plaintext mode, and Open answers the bytes back.
-	payload, err := secrets.Seal(nil, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := chart.ImportKey(authored)
-	if err := staged.Stage(t.Context(), store.StagedChart{
-		ID: key, Payload: payload, SourcePath: "company.yaml", StagedBy: "ops",
-	}); err != nil {
-		t.Fatalf("Stage: %v", err)
-	}
+	stageChart(t, e, authored)
 
 	if err := e.PublishStagedChartForTest(t.Context()); err != nil {
 		t.Fatalf("publish the staged chart: %v", err)
@@ -76,6 +62,80 @@ func TestAStagedChartIsPublishedOnceAndThenGone(t *testing.T) {
 	// the take and the publish cost a re-run rather than a wrong company.
 	if err := e.PublishStagedChartForTest(t.Context()); err != nil {
 		t.Errorf("publishing with nothing staged failed: %v", err)
+	}
+}
+
+// A STAGED FILE THAT DECLARES NO RUNTIME FOR AN OBJECT TAKES THE OBJECT'S AWAY.
+//
+// A content write that leaves the runtime half out KEEPS the one the object
+// has, which is what lets a lead correct a goal they may not send the half back
+// with. A staged file is not that: it is an operator's "this file is the chart
+// again", so an object it declares no runtime for is an object with none, and
+// the seed clears the half rather than leaving it out — for a unit and for a
+// seat alike, since each is its own content write. Carried instead, an
+// offline import that removed a seat's model chain and credentials, or a
+// team's `mcp_env`, would publish, report success, and leave the object
+// running on what the operator took away. Mutation: drop either of the seed's
+// clears and that object keeps its half.
+func TestAStagedChartThatDeclaresNoRuntimeClearsTheObjects(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	if len(seatRuntime(t, e, "ceo")) == 0 {
+		t.Fatal("the fixture's ceo holds no runtime half, so this proves nothing")
+	}
+
+	// FIRST, THE COMPANY'S OWN FILE WITH A TEAM THAT HAS A RUNTIME HALF, so
+	// both kinds of object hold one before the file that takes them away.
+	authored := config.AuthoredChart(parsedCompany(t, companyDoc))
+	teamRuntime, err := org.UnitRuntime(&org.Unit{MCPEnv: org.MCPEnv{
+		"tracker": {"TRACKER_TOKEN": "${TRACKER_TOKEN_PLATFORM}"},
+	}})
+	if err != nil || len(teamRuntime) == 0 {
+		t.Fatalf("encode a unit's runtime half: %v (%s)", err, teamRuntime)
+	}
+	authored.Units = append(authored.Units, chart.AuthoredUnit{
+		Key: "platform", Name: "Platform", Runtime: teamRuntime,
+	})
+	stageChart(t, e, authored)
+	if err := e.PublishStagedChartForTest(t.Context()); err != nil {
+		t.Fatalf("publish the staged chart: %v", err)
+	}
+	if len(unitRuntime(t, e, "platform")) == 0 {
+		t.Fatal("the first staged file left platform with no runtime half, so " +
+			"the clear below would prove nothing")
+	}
+
+	// THEN THE SAME FILE, declaring no runtime for the team or for ceo and
+	// every other object exactly as before.
+	authored.Units[len(authored.Units)-1].Runtime = nil
+	var declared bool
+	for i := range authored.Seats {
+		if authored.Seats[i].Handle == "ceo" {
+			authored.Seats[i].Runtime = nil
+			declared = true
+		}
+	}
+	if !declared {
+		t.Fatal("the fixture's file declares no ceo, so this proves nothing")
+	}
+	stageChart(t, e, authored)
+	if err := e.PublishStagedChartForTest(t.Context()); err != nil {
+		t.Fatalf("publish the staged chart: %v", err)
+	}
+
+	if got := unitRuntime(t, e, "platform"); len(got) != 0 {
+		t.Errorf("a file declaring no runtime for platform left the unit's own "+
+			"in place: %s", got)
+	}
+	if got := seatRuntime(t, e, "ceo"); len(got) != 0 {
+		t.Errorf("a file declaring no runtime for ceo left the seat's own in "+
+			"place: %s", got)
+	}
+	// AND A SEAT THE FILE DOES DECLARE ONE FOR KEEPS IT, which is what says
+	// the staged content was published rather than that every runtime half
+	// was lost on the way.
+	if len(seatRuntime(t, e, "cto")) == 0 {
+		t.Error("the staged publish cleared cto's runtime half, which the file declares")
 	}
 }
 
@@ -144,6 +204,57 @@ func TestTheStagedPayloadRoundTripsAsAnAuthoredChart(t *testing.T) {
 		t.Error("the round trip changed the chart's content key, so the " +
 			"ledger would treat it as a different structure")
 	}
+}
+
+// stageChart stages authored as an offline `crewlet config import` would.
+func stageChart(t *testing.T, e *engine.Engine, authored chart.Authored) {
+	t.Helper()
+	body, err := json.Marshal(authored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SEALED WITH NOTHING, which is a real configuration: company_config
+	// supports a plaintext mode, and Open answers the bytes back.
+	payload, err := secrets.Seal(nil, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backends().Store.StagedCharts().Stage(t.Context(), store.StagedChart{
+		ID: chart.ImportKey(authored), Payload: payload,
+		SourcePath: "company.yaml", StagedBy: "ops",
+	}); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+}
+
+// seatRuntime is the runtime half the chart's rows hold for one seat.
+func seatRuntime(t *testing.T, e *engine.Engine, handle string) json.RawMessage {
+	t.Helper()
+	detail, err := e.Chart().Seat(t.Context(), handle, statelog.Freshness{
+		Level: statelog.ReadLinearizable,
+	})
+	if err != nil {
+		t.Fatalf("read the seat %s: %v", handle, err)
+	}
+	if detail.Seat.Handle == "" {
+		t.Fatalf("the chart holds no seat %s", handle)
+	}
+	return detail.Seat.Runtime
+}
+
+// unitRuntime is the runtime half the chart's rows hold for one unit.
+func unitRuntime(t *testing.T, e *engine.Engine, key string) json.RawMessage {
+	t.Helper()
+	detail, err := e.Chart().Unit(t.Context(), key, statelog.Freshness{
+		Level: statelog.ReadLinearizable,
+	})
+	if err != nil {
+		t.Fatalf("read the unit %s: %v", key, err)
+	}
+	if detail.Unit.Key == "" {
+		t.Fatalf("the chart holds no unit %s", key)
+	}
+	return detail.Unit.Runtime
 }
 
 func holdsUnit(c chart.Chart, key string) bool {

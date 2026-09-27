@@ -2,12 +2,14 @@ package engine_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -106,6 +108,102 @@ func TestASeatIsReadAndWrittenThroughTheChart(t *testing.T) {
 
 		t.Errorf("the write cleared the seat's public half: %s", back)
 	}
+}
+
+// A WHOLE SEAT DOCUMENT HOLDING NO RUNTIME TAKES THE SEAT'S AWAY.
+//
+// Slack's disconnect reads the seat's document, deletes its `slack` block and
+// writes the rest back. On a seat whose runtime half held nothing else, what is
+// left encodes as NO runtime at all — and a content write that leaves the half
+// out KEEPS the one the seat has, which is right for a lead editing a goal and
+// wrong for a caller writing the seat back whole. So SetSeatDocument clears the
+// half a document does not state; carried instead, the disconnect reported
+// the app's credentials removed while the seat went on holding the bot token.
+// Mutation: drop that clear and the seat keeps its `slack` block.
+func TestASeatDocumentHoldingNoRuntimeClearsTheSeats(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	const handle = "ceo"
+	by := iam.Actor{Name: "ops", Kind: iam.ActorOperator}
+	write := func(doc any, summary string) {
+		t.Helper()
+		body, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.SetSeatDocument(t.Context(), handle, body, summary, by); err != nil {
+			t.Fatalf("SetSeatDocument (%s): %v", summary, err)
+		}
+	}
+
+	// FIRST, A SEAT WHOSE RUNTIME HALF IS A SLACK APP AND NOTHING ELSE: the
+	// document the engine serves for the seat's own row, with the half
+	// swapped for one holding the block alone.
+	if len(seatRuntime(t, e, handle)) == 0 {
+		t.Fatalf("the fixture's %s holds no runtime half, so the clear below "+
+			"would prove nothing", handle)
+	}
+	slackOnly, err := org.SeatRuntime(&org.Role{
+		Slack: org.SlackIdentity{BotToken: "${SLACK_BOT_TOKEN_CEO}"},
+	})
+	if err != nil || len(slackOnly) == 0 {
+		t.Fatalf("encode a slack-only runtime half: %v (%s)", err, slackOnly)
+	}
+	detail, err := e.Chart().Seat(t.Context(), handle, statelog.Freshness{
+		Level: statelog.ReadLinearizable,
+	})
+	if err != nil {
+		t.Fatalf("read the seat: %v", err)
+	}
+	row := detail.Seat
+	row.Runtime = slackOnly
+	body, err := json.Marshal(org.SeatFrom(row, detail.Manages))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(json.RawMessage(body), "connect slack")
+	if got := seatRuntime(t, e, handle); !sameJSON(t, got, slackOnly) {
+		t.Fatalf("the seat's runtime half is %s, want the slack block alone: %s",
+			got, slackOnly)
+	}
+
+	// THEN THE DISCONNECT'S OWN EDIT: the block deleted, the rest sent back.
+	doc := seatDocumentOf(t, e, handle)
+	if _, held := doc["slack"]; !held {
+		t.Fatalf("the seat's document carries no slack block to delete: %v", doc)
+	}
+	delete(doc, "slack")
+	write(doc, "disconnect slack")
+	if got := seatRuntime(t, e, handle); len(got) != 0 {
+		t.Errorf("a document holding no runtime left the seat's own in place: %s", got)
+	}
+}
+
+// sameJSON reports whether two JSON values are equal as values.
+func sameJSON(t *testing.T, a, b json.RawMessage) bool {
+	t.Helper()
+	var left, right any
+	if err := json.Unmarshal(a, &left); err != nil {
+		t.Fatalf("decode %s: %v", a, err)
+	}
+	if err := json.Unmarshal(b, &right); err != nil {
+		t.Fatalf("decode %s: %v", b, err)
+	}
+	return reflect.DeepEqual(left, right)
+}
+
+// seatDocumentOf is one seat's whole document, decoded.
+func seatDocumentOf(t *testing.T, e *engine.Engine, handle string) map[string]any {
+	t.Helper()
+	body, err := e.SeatDocument(t.Context(), handle)
+	if err != nil {
+		t.Fatalf("SeatDocument: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("decode: %v: %s", err, body)
+	}
+	return doc
 }
 
 // A SEAT NOBODY HOLDS IS NAMED, rather than answered with an empty document.
