@@ -13,19 +13,20 @@ import (
 // THE ROWS A COLLECTION PRODUCES DO NOT DEPEND ON HOW MANY STATEMENTS WROTE
 // THEM.
 //
-// Every child collection an applied task carries — watchers, collaborators,
-// tags, relations, dependents, checklists, dependency edges and the key
-// directory — is written as a MULTI-ROW insert chunked to the estate's
-// parameter limit. That limit is a property of the engine and of nothing the
-// record says, so it is exactly the input a correct applier's OUTPUT cannot
-// see: one row per statement, six rows per statement and the whole collection
-// in one must leave byte-identical tables.
+// The child collections an applied task carries are written as MULTI-ROW
+// inserts chunked to the estate's parameter limit. That limit is a property
+// of the engine and of nothing the record says, so it is exactly the input a
+// correct applier's OUTPUT cannot see: one row per statement, six rows per
+// statement and the whole collection in one must leave byte-identical tables.
 //
-// It is the guard [store.InsertRows] needs and gets nowhere else. Every other case in this package runs at the probed limit,
-// where the caps put every collection inside a single statement — so a bind
-// that drifted one column at a chunk boundary, or a row template that is only
-// valid when it appears once, would pass the whole suite. Here the SAME record
-// is applied at five limits and the tables are compared against each other.
+// What only this case guards is THIS APPLIER'S row templates and bind columns
+// at a chunk boundary — the chunking itself is [store.InsertRows]' own, and
+// its own tests hold it. Every other case in this package runs at the probed
+// limit, where the caps put every collection inside a single statement — so a
+// bind that drifted one column at a chunk boundary, or a row template that is
+// only valid when it appears once, would pass the whole suite. Here the SAME
+// record is applied at five limits and the tables are compared against each
+// other.
 //
 // Zero is one of them deliberately: an [statelog.ApplyOptions] with no probed
 // limit degrades to a row per statement, the shape with no chunk boundary at

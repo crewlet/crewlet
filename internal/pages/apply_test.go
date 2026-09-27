@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -306,6 +307,86 @@ func TestAPurgedPageStaysPurgedHoweverLateARecordArrives(t *testing.T) {
 			"acknowledgement tells its caller the destruction never happened",
 			gate)
 	}
+}
+
+// A RECORD THE DELETION GATE DROPS WRITES NOTHING, ITS MARKER INCLUDED.
+//
+// A gate is a rule under which an accepted record produces rows on no node,
+// and the framework asks it inside the apply transaction so the answer comes
+// from committed state. A gate that counted its drops on the marker would make
+// a dropped record change a row after all, one nothing reads: what an
+// operator sees of the drop is the framework's own log line, counter and
+// alarm, the same for every gate — and the marker holds no tally column for a
+// gate to write.
+//
+// Mutation: make the deletion gate UPDATE the marker when it drops a record,
+// and the marker row changes.
+func TestARecordTheDeletionGateDropsWritesNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	if _, _, err := h.apply(create("page-1", "ENG", "Deploy Runbook", "# a\n")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	purge := record(pages.PageSubject("page-1"), pages.OpPurge, "op-purge",
+		pages.StatusPayload{V: pages.DocumentVersion, Reason: "wrong space"},
+		pages.ScopeSet{Subject: true, Container: "ENG"})
+	if _, gate, err := h.apply(purge); err != nil || gate != "" {
+		t.Fatalf("purge: %v (gate %q)", err, gate)
+	}
+	before := h.markerRow("page-1")
+	if strings.Contains(before, "reject") {
+		t.Fatalf("the deletion marker carries a tally of what its gate drops: %s",
+			before)
+	}
+
+	save := record(pages.PageSubject("page-1"), pages.OpPatch, "op-save",
+		pages.PagePatch{V: pages.DocumentVersion, Labels: &[]string{"x"}},
+		pages.ScopeSet{Subject: true, Container: "ENG"})
+	if _, gate, err := h.apply(save); err != nil || gate != statelog.ReasonDeleted {
+		t.Fatalf("a record about a purged page answered %v (gate %q), want "+
+			"it dropped by the deletion gate", err, gate)
+	}
+	if after := h.markerRow("page-1"); after != before {
+		t.Fatalf("the gate dropped a record and wrote the marker:\n before %s\n after  %s",
+			before, after)
+	}
+}
+
+// markerRow is a page's deletion marker, every column of it, as one string —
+// by `*` rather than by name, so the comparison covers whatever the table
+// carries.
+func (h *harness) markerRow(id string) string {
+	h.t.Helper()
+	var row string
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(h.t.Context(),
+			`SELECT * FROM pages_deletions WHERE page_id = ?`, id)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		columns, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		if !rows.Next() {
+			return fmt.Errorf("page %s has no deletion marker", id)
+		}
+		values := make([]any, len(columns))
+		for i := range values {
+			values[i] = new(any)
+		}
+		if err := rows.Scan(values...); err != nil {
+			return err
+		}
+		for i, v := range values {
+			row += fmt.Sprintf("%s=%v ", columns[i], *(v.(*any)))
+		}
+		return rows.Err()
+	}); err != nil {
+		h.t.Fatalf("read the marker: %v", err)
+	}
+	return row
 }
 
 // TestAnEvictedNodesRecordsApplyNowhere, and a readmission takes it back.

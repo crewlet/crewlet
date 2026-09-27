@@ -88,7 +88,7 @@ func (p *Parser) Source() string { return Source }
 // change with no page id, and every page notification in the company was
 // silently dropped one line later.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) ([]notify.Routed, error) {
-	record, err := recordFromBody(w.Body)
+	record, err := recordFromBody(w)
 	if err != nil {
 		return nil, err
 	}
@@ -255,18 +255,31 @@ func withVia(base notify.Inbound, via string) notify.Inbound {
 
 // recordFromBody recovers the record the feed relayed.
 //
-// THROUGH THE DOMAIN'S OWN DECODER, so a record a newer build wrote reaches
-// this parser with everything it carried: the body is exactly the record,
-// unknown fields included, and re-encoding it later must not strip them.
-func recordFromBody(body map[string]any) (MutationRecord, error) {
-	if len(body) == 0 {
-		return MutationRecord{}, fmt.Errorf("pages: the delivery carries no record")
+// FROM THE DELIVERY'S EXACT BYTES WHEN IT CARRIES THEM, which the change feed
+// sets to the body's own encoding ([changefeed.Wake]): the record, with every
+// number as its writer's digits. The map beside them decodes every number as a
+// float64, so an integer past 2^53 read out of it — the version a record was
+// decided against, or a number a newer build wrote — is a different integer
+// than the writer's. A record relayed by a feed on a build that predates those
+// bytes carries only the map, and is read from it, rounded.
+//
+// Either way THROUGH THE DOMAIN'S OWN DECODER, so a record a newer build wrote
+// reaches this parser with everything it carried: the body is exactly the
+// record, unknown fields included, and re-encoding it later must not strip
+// them.
+func recordFromBody(w types.RawWebhook) (MutationRecord, error) {
+	raw := w.BodyRaw
+	if len(raw) == 0 {
+		if len(w.Body) == 0 {
+			return MutationRecord{}, fmt.Errorf("pages: the delivery carries no record")
+		}
+		encoded, err := json.Marshal(w.Body)
+		if err != nil {
+			return MutationRecord{}, fmt.Errorf("pages: read the delivery: %w", err)
+		}
+		raw = encoded
 	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return MutationRecord{}, fmt.Errorf("pages: read the delivery: %w", err)
-	}
-	return Decode(data)
+	return Decode(raw)
 }
 
 // AddressedKinds are the routing reasons that mean somebody is waiting.

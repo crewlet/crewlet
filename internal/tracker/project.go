@@ -162,8 +162,9 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 
 // applyProjectEdit is the whole rule, as a pure function over one project.
 //
-// PURE for [applyTagEdit]'s reason: the one refusal a lead actually meets — an
-// un-archive of a field — is a comparison between two lists, and a rule only
+// PURE for [applyTagEdit]'s reason: the refusals a lead meets here — an
+// un-archive of a field, and a declaration the merge with the stored one
+// leaves invalid — are each a comparison between two lists, and a rule only
 // reachable through a published record is a rule nobody re-measures.
 func applyProjectEdit(current Project, edit ProjectEdit, at time.Time) (
 	Project, bool, error) {
@@ -189,6 +190,13 @@ func applyProjectEdit(current Project, edit ProjectEdit, at time.Time) (
 		// version and erase it.
 		merged := mergeFields(current.Fields, *edit.Fields)
 		if !sameDeclarations(merged, current.Fields) {
+			// AND THE MERGE IS WHAT IS VALIDATED, for [Writer.WriteFields]'
+			// reason: it is the declaration every node stores, and it
+			// holds what the stored one kept beside what the caller
+			// stated.
+			if err := checkFields(merged); err != nil {
+				return Project{}, false, err
+			}
 			next.Fields = merged
 			changed, policy = true, true
 		}

@@ -212,10 +212,10 @@ func TestABlockerThatCannotTakeTheEdgeRefusesItFirst(t *testing.T) {
 
 // AN UNMIRRORED EDGE IS FLAGGED, AND THE DUTY WRITES WHAT DID NOT LAND.
 //
-// The flag had no producer: it was carried through from whatever the record
-// said, and no record ever said anything — so the partial index the schema
-// ships "for the relations repair duty's selection" was over a column that was
-// zero on every row in the company.
+// The flag is a fact about the OTHER end's rows, so the applier derives it
+// rather than a record carrying it — and the partial index the schema ships
+// for the relations repair duty's selection is over this column, so a flag
+// nothing raised would leave that duty with nothing to select.
 func TestAnUnmirroredEdgeIsFlaggedAndRepaired(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

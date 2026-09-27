@@ -688,6 +688,10 @@ func (f *FleetStore) eachUnder(ctx context.Context, kv jetstream.KeyValue, keys,
 // rateRecord is one window's count.
 type rateRecord struct {
 	Count int `json:"count"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Allow increments a bucket's window and reports whether it stayed in limit.
@@ -719,7 +723,11 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 			// Create, not Put: the first caller in a window must be
 			// distinguishable from a caller racing it, or two nodes both
 			// write "1" and the window counts one.
-			_, created := f.rate.Create(ctx, key, mustEncodeRate(1))
+			raw, encoded := encodeRate(rateRecord{Count: 1})
+			if encoded != nil {
+				return false, encoded
+			}
+			_, created := f.rate.Create(ctx, key, raw)
 			switch {
 			case created == nil:
 				return true, nil
@@ -739,7 +747,14 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 		if record.Count >= limit {
 			return false, nil
 		}
-		_, err = f.rate.Update(ctx, key, mustEncodeRate(record.Count+1), entry.Revision())
+		// THE DECODED ROW, incremented, so a member a newer build keeps
+		// on the window is written back rather than dropped by this CAS.
+		record.Count++
+		raw, encoded := encodeRate(record)
+		if encoded != nil {
+			return false, encoded
+		}
+		_, err = f.rate.Update(ctx, key, raw, entry.Revision())
 		switch {
 		case err == nil:
 			return true, nil
@@ -756,10 +771,12 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	return false, contended("increment", bucket)
 }
 
-func mustEncodeRate(count int) []byte {
-	// A two-field object with an int cannot fail to encode.
-	raw, _ := json.Marshal(rateRecord{Count: count})
-	return raw
+func encodeRate(record rateRecord) ([]byte, error) {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("coord/kv: encode the rate window: %w", err)
+	}
+	return raw, nil
 }
 
 // ---- the delivery claims ----------------------------------------------- //
@@ -807,6 +824,10 @@ func (f *FleetStore) Release(ctx context.Context, key string) error {
 type ledgerRecord struct {
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Worked returns the subset of keys already recorded under scope.
@@ -930,20 +951,21 @@ func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.
 
 // budgetRecord is one scope's spend.
 //
-// RefusedAt is omitted when zero, so a record no refusal has touched encodes
-// exactly as it did before the field existed, and a build that predates it
-// reads a stamped record by ignoring the key.
+// RefusedAt is omitted when zero, so a scope nothing has refused carries no
+// stamp at all rather than a zero instant every reader would have to recognise.
 //
-// Such a build also DROPS the key when it writes the record, because it
-// re-encodes only the fields it knows: during a rolling upgrade, a charge an
-// older node makes clears the stamp whether or not the scope had room. That is
-// the harmless direction, and the only one available without a second key: the
-// stamp is what a dashboard shows, never what the gate decides with, and the
-// next refusal by an upgraded node writes it again.
+// A build that predates the carry (carry.go) re-encodes only the members it
+// knows when it charges a scope, so its next charge drops a member a newer
+// build added to the row. This build writes back what it does not know, since
+// every write here changes the row it decoded.
 type budgetRecord struct {
 	Used      int       `json:"used"`
 	At        time.Time `json:"at"`
 	RefusedAt time.Time `json:"refused_at,omitzero"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Charge checks and increments the org's counter and the seat's.
@@ -1374,6 +1396,10 @@ type activationRecord struct {
 	RevisionID string    `json:"revision_id"`
 	At         time.Time `json:"at"`
 	Summary    string    `json:"summary,omitempty"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Activate publishes a new target revision.
@@ -1535,6 +1561,10 @@ func isWrongLastSequence(err error) bool {
 type payloadRecord struct {
 	RevisionID string `json:"revision_id"`
 	Payload    []byte `json:"payload"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Payload returns the current revision's sealed payload.
@@ -1592,6 +1622,10 @@ type applyRecord struct {
 	Status     string    `json:"status"`
 	Error      string    `json:"error,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // RecordApply publishes this node's status for an epoch.
@@ -1665,6 +1699,10 @@ type secretRecord struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	UpdatedBy string    `json:"updated_by,omitempty"`
 	Source    string    `json:"source,omitempty"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Secret reads one sealed value.
@@ -1791,12 +1829,20 @@ type channelRecord struct {
 	OpenedAt  time.Time  `json:"opened_at"`
 	LastAt    time.Time  `json:"last_at"`
 	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
-func encodeChannel(ch coord.Channel) ([]byte, error) {
+// encodeChannel writes a channel onto the row it was decoded from, keeping
+// what that row carries for a newer build; a new channel is written onto an
+// empty one.
+func encodeChannel(ch coord.Channel, onto channelRecord) ([]byte, error) {
 	record := channelRecord{
 		Requester: ch.Requester, Target: ch.Target, Messages: ch.Messages,
 		OpenedAt: ch.OpenedAt.UTC(), LastAt: ch.LastAt.UTC(),
+		Extra: onto.Extra,
 	}
 	if !ch.ClosedAt.IsZero() {
 		closed := ch.ClosedAt.UTC()
@@ -1809,10 +1855,12 @@ func encodeChannel(ch coord.Channel) ([]byte, error) {
 	return raw, nil
 }
 
-func decodeChannel(id string, raw []byte) (coord.Channel, error) {
+// decodeChannel reads a row as the channel it is, and the row itself, which a
+// write of the channel back is laid onto ([encodeChannel]).
+func decodeChannel(id string, raw []byte) (coord.Channel, channelRecord, error) {
 	var record channelRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return coord.Channel{}, unavailable("decode the channel", err)
+		return coord.Channel{}, channelRecord{}, unavailable("decode the channel", err)
 	}
 	ch := coord.Channel{
 		ID: id, Requester: record.Requester, Target: record.Target,
@@ -1821,7 +1869,7 @@ func decodeChannel(id string, raw []byte) (coord.Channel, error) {
 	if record.ClosedAt != nil {
 		ch.ClosedAt = *record.ClosedAt
 	}
-	return ch, nil
+	return ch, record, nil
 }
 
 // OpenChannel records a new channel, ignoring an id that already exists.
@@ -1833,7 +1881,7 @@ func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 	if ch.ID == "" {
 		return errors.New("coord/kv: a channel needs an id")
 	}
-	raw, err := encodeChannel(ch)
+	raw, err := encodeChannel(ch, channelRecord{})
 	if err != nil {
 		return err
 	}
@@ -1855,7 +1903,7 @@ func (f *FleetStore) Channel(ctx context.Context, id string) (coord.Channel, boo
 	if err != nil {
 		return coord.Channel{}, false, unavailable("read the channel", err)
 	}
-	ch, err := decodeChannel(id, entry.Value())
+	ch, _, err := decodeChannel(id, entry.Value())
 	if err != nil {
 		return coord.Channel{}, false, err
 	}
@@ -1898,12 +1946,12 @@ func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply f
 		if err != nil {
 			return coord.Channel{}, false, unavailable("read the channel", err)
 		}
-		ch, err := decodeChannel(id, entry.Value())
+		ch, stored, err := decodeChannel(id, entry.Value())
 		if err != nil {
 			return coord.Channel{}, false, err
 		}
 		next := apply(ch)
-		raw, err := encodeChannel(next)
+		raw, err := encodeChannel(next, stored)
 		if err != nil {
 			return coord.Channel{}, false, err
 		}
@@ -1944,7 +1992,7 @@ func (f *FleetStore) listChannels(ctx context.Context, keep func(coord.Channel) 
 		if !ok {
 			return nil
 		}
-		ch, err := decodeChannel(id, kve.Value())
+		ch, _, err := decodeChannel(id, kve.Value())
 		if err != nil {
 			return err
 		}
@@ -1979,7 +2027,7 @@ func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64
 		if !ok {
 			return nil
 		}
-		ch, err := decodeChannel(id, kve.Value())
+		ch, _, err := decodeChannel(id, kve.Value())
 		if err != nil {
 			return err
 		}
@@ -2043,6 +2091,10 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 // reads it out of the bucket — and nothing branches on it.
 type fireRecord struct {
 	At time.Time `json:"at"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // ---- the detached sandbox runs ----------------------------------------- //

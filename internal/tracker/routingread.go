@@ -118,8 +118,9 @@ type RoutingAnswer struct {
 	At        time.Time  `json:"at,omitzero"`
 
 	// Notified is the history row's own flag: what the applier concluded
-	// at the time it routed. It is what [Recipients] replaces, and it is
-	// kept because the two disagreeing is meaningful — see Swept.
+	// at the time it routed. [Recipients] says who the change reached, and
+	// this is kept beside it because the two disagreeing is meaningful —
+	// see Swept.
 	Notified bool `json:"notified"`
 
 	// Recipients is everybody the change reached, ordered as a reader

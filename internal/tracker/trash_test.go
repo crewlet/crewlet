@@ -278,8 +278,8 @@ func TestTheTrashIsOrderedByRemoval(t *testing.T) {
 // AND A READER MAY ASK FOR THE OTHER END OF IT.
 //
 // The default above is what an unsorted trash gets. `sort=removed` is the
-// column asked for by name, and it was REFUSED by the parser for as long as
-// the trash had no tab: the order existed, and nothing could name it.
+// column asked for by name — an order that exists and that nothing could name
+// if the parser refused the key.
 //
 // Both directions, because only one of them can be wrong at a time and each
 // is wrong in a way that reads as working. A key the parser admits and

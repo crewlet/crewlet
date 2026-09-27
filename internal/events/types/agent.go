@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
 // The agent turn: its phases, its live progress, and its two completion
@@ -148,9 +149,14 @@ type AgentTurnCompleted struct {
 	OutputTokens   int             `json:"output_tokens"`
 	TotalTokens    int             `json:"total_tokens"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
-	// A2AContext is set when the turn answered an agent-to-agent ask. Absent
-	// and empty are the same fact — not an A2A turn — so no pointer.
-	A2AContext map[string]any `json:"a2a_context,omitempty"`
+	// A2AContext names the agent-to-agent channel a turn answered, under
+	// `channel_id`: the summary line names the channel, and the event
+	// store's writer files it as the row's `a2a_channel_id` tag. Absent and
+	// empty are the same fact — not an A2A turn — so no pointer.
+	//
+	// A [jsoncarry.Bag], so a number in it reaches every reader as its
+	// writer's digits rather than as a float64.
+	A2AContext jsoncarry.Bag `json:"a2a_context,omitempty"`
 
 	// The turn engine's own summary of the loop.
 	TurnID string `json:"turn_id"`
@@ -785,8 +791,13 @@ type AgentTurnProgress struct {
 	// once it commits, and each abandoned attempt, and the last attempt at a
 	// round the phase failed or panicked in, among its
 	// [AgentPhaseCompleted.AbandonedAttempts].
-	PartialRound map[string]any `json:"partial_round,omitempty"`
-	A2AContext   map[string]any `json:"a2a_context,omitempty"`
+	//
+	// A [jsoncarry.Bag], so `round` and any other number in it reaches every
+	// reader as its writer's digits rather than as a float64.
+	PartialRound jsoncarry.Bag `json:"partial_round,omitempty"`
+	// A2AContext is [AgentTurnCompleted.A2AContext], for the phase still
+	// running.
+	A2AContext jsoncarry.Bag `json:"a2a_context,omitempty"`
 }
 
 // EventType is the "agent_turn_progress" wire type. Live only — nothing

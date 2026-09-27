@@ -160,6 +160,18 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 			}
 			post := goal
 			post.V = DocumentVersion
+			if held {
+				// THE CALLER'S GOAL LAID ONTO THE STORED ONE. Every
+				// member this build knows is the caller's to state —
+				// the save is a whole post-state — but what a newer
+				// build wrote on the goal and on each target, which
+				// this build carries ([Goal.Extra], [GoalTarget.Extra])
+				// and `write_work_goal` has no argument for, is the
+				// stored goal's: taken from the caller it would be
+				// erased from every node's row on every save.
+				post.Extra = carriedOnto(current.Extra, goal.Extra)
+				post.Targets = carriedTargets(goal.Targets, current.Targets)
+			}
 			// THE UPDATE HISTORY IS CARRIED FORWARD, never taken from
 			// the caller. A goal save is a whole post-state replace, and
 			// `write_work_goal` builds its Goal from the tool's own
@@ -190,6 +202,28 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 				post, goalWake(current, held, post), at)
 		},
 	})
+}
+
+// carriedTargets is a caller's targets, each laid onto the stored target with
+// the same id on [carriedEntries]' rule: the list and every member the caller
+// states are its own, and what a newer build wrote on the target is kept.
+//
+// A NEW LIST, so a decide that runs again finds the caller's as it left it.
+func carriedTargets(stated, stored []GoalTarget) []GoalTarget {
+	if stated == nil {
+		return nil
+	}
+	held := make(map[string]GoalTarget, len(stored))
+	for _, target := range stored {
+		held[target.ID] = target
+	}
+	out := slices.Clone(stated)
+	for i, target := range out {
+		if was, named := held[target.ID]; named {
+			out[i].Extra = carriedOnto(was.Extra, target.Extra)
+		}
+	}
+	return out
 }
 
 // goalWake is what a goal save announces, or nil when it announces nothing.

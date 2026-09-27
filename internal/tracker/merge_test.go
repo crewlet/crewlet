@@ -1024,8 +1024,8 @@ func TestAMergeMarkerWithoutItsTargetIsRefused(t *testing.T) {
 // subtasks the walk had not reached onto the duplicate's own parent, and there
 // is no row left to close. The close, finding the task purged, writes nothing
 // and the call reports the merge ended by another writer — with what it moved
-// standing. Refused as a task this node does not hold instead, the call told
-// its caller the tracker duty would finish a merge no node holds any more.
+// standing. Refused as a task this node does not hold instead, the call would
+// tell its caller the tracker duty will finish a merge no node holds any more.
 //
 // Mutation: drop the marked case from mergeStep.purged and the call answers
 // that the duty finishes it.

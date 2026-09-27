@@ -46,6 +46,10 @@ const followsClass = "follow"
 type followRecord struct {
 	Reason string    `json:"reason"`
 	At     time.Time `json:"at"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // followKey composes one follow's key.

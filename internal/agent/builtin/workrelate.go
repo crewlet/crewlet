@@ -16,8 +16,8 @@ import (
 // A collection on a work item is carried WHOLE by the record that touches it,
 // so `waiting_on: ["ENG-7"]` read as the whole set replaces every other
 // blocker the item had — silently, and with a wake announcing the removal of
-// edges nobody meant to touch. That exact shape is what `watchers: [me]` did
-// to the watcher set before the watch gesture existed.
+// edges nobody meant to touch. `watchers: [me]` read the same way would drop
+// every other watcher, which is why watching is a gesture too.
 //
 // So these arguments take ONE of two explicit shapes and never a bare list:
 //
@@ -343,12 +343,12 @@ func (d WorkDeps) parentParty(ctx context.Context, task tracker.Task,
 // resolveThread reads the conversation a comment is joining, or returns the
 // model-facing refusal.
 //
-// THE PARTICIPANTS ARE BEST EFFORT AND THE ANSWER IS NOT, which is the reader's
-// own split: a participant list that came up short wakes somebody as a watcher
-// instead of under `thread`, while an `answers` resolved wrongly closes
-// somebody else's question. So a read failure here empties the first and
-// refuses the second — and the refusal is the reader's own text, which already
-// names the candidates when the ask is ambiguous.
+// A COMMENT THAT NAMES A THREAD, AN ASK OR AN ANSWER IS REFUSED ON ANY READ
+// FAILURE — a deferred or behind refusal included — because the reader fails
+// the whole resolution ([tracker.Reader.Thread]) and an `answers` resolved
+// wrongly closes somebody else's question. Only a bare remark's INFERRED answer
+// is best effort ([WorkDeps.inferOnly]): nobody asked for it. An ambiguous ask
+// is refused with the reader's own list of the candidates.
 func (d WorkDeps) resolveThread(ctx context.Context,
 	q tracker.ThreadQuery) (tracker.ResolvedThread, string) {
 
@@ -398,11 +398,10 @@ func (d WorkDeps) inferOnly(ctx context.Context,
 // ambiguousText is the refusal that lists the open questions, because "which
 // one" is the whole of what the caller has to decide.
 func ambiguousText(e *tracker.ErrAmbiguousAnswer) string {
-	// "AT LEAST N" WHERE THE READ STOPPED, never a number nobody counted.
-	// This printed len(e.Asks) over a slice that carried the reader's probe
-	// row, so a seat with nine open asks was told "6 open questions" — not
-	// the five it then listed, and not the nine that exist. A model has no
-	// way to check that number and picks its next move against it.
+	// "AT LEAST N" WHERE THE READ STOPPED, never a number nobody counted:
+	// the reader's slice stops at its bound, so past it the length is not
+	// the number of open asks. A model has no way to check that number and
+	// picks its next move against it.
 	count := strconv.Itoa(len(e.Asks))
 	if e.More {
 		count = "At least " + count

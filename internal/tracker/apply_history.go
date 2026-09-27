@@ -25,9 +25,9 @@ import (
 //
 // EVERYTHING DERIVED HANGS OFF THIS WRITE RATHER THAN OFF THE OBJECT ROW, and
 // the reason is the version guard: a reprocessed record whose position is
-// below an applied successor is SKIPPED on the object row, so a recompute
-// hanging there would leave that record out of the spans entirely. A missing
-// span is strictly worse than a slightly wrong instant.
+// below an applied successor is SKIPPED on the object row, so a derivation
+// hanging there would leave that record out of its successors' effective
+// instants and out of the inbox.
 func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	keys subjectKeys, applied map[string]Delta) (int, error) {
 
@@ -75,11 +75,12 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	//
 	// Taken from the NOTIFICATION instead, "what changed" would be a
 	// property of what was ANNOUNCED: a quiet status change would write
-	// `{}` here and produce no span, so every report derived from the
-	// spans would silently omit it. The two are the same function of the
-	// same two documents — see [TaskDeltas] — so nothing is lost by taking
-	// the applier's, and what is gained is that a record nobody was told
-	// about is still a record of what happened.
+	// `{}` here, and both readers of a status delta — the entered stamp
+	// ([Applier.stampStatusEntered]) and the missed-unblocked scan
+	// ([ScanUnblocked]) — would never see it. The two are the same
+	// function of the same two documents — see [TaskDeltas] — so nothing
+	// is lost by taking the applier's, and what is gained is that a record
+	// nobody was told about is still a record of what happened.
 	if len(applied) > 0 {
 		fields = jsonOf(applied)
 	} else if notify != nil {
@@ -191,14 +192,13 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 // on `tracker_history_subject_idx` rather than a walk of the task's status
 // history — and an apply that maintained a row per historical status change
 // would pay that walk on every status change of every task, for rows no read
-// selects from. Any span between two status changes is a function of
+// selects from. The time between any two status changes is a function of
 // `tracker_history`, which nothing deletes a row from.
 //
-// THE STATUS'S OWN VALIDITY IS NOT CHECKED, deliberately. A span needs a
-// status group for a report to read it, so a span over an unknown status
-// would have to be skipped; this column is an INSTANT, it needs no group, and
-// skipping would leave it naming an older change than the one the task
-// actually last made.
+// THE STATUS'S OWN VALIDITY IS NOT CHECKED, deliberately. This column is an
+// INSTANT and needs no status group, so a status this build cannot name is
+// still the newest change the task made, and skipping it would leave the
+// column naming an older one.
 func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID string) (int, error) {
 	var at int64
 	switch err := tx.QueryRowContext(ctx, `
@@ -385,8 +385,9 @@ func batchOf(rec MutationRecord) any {
 // thing that can ever read one.
 //
 // BY WHAT MOVED, in a fixed precedence, because the kind is what every feed
-// filter selects on. The order puts `status` first for the same reason the
-// spans read the delta: it is the change other tables are derived from.
+// filter selects on. The order puts `status` first because it is the change
+// other columns are derived from — the entered stamp reads the status delta
+// ([Applier.stampStatusEntered]).
 //
 // # AND IT ANSWERS ONLY IN [ChangeKind]s, never in the operation cast
 //

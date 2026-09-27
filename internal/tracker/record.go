@@ -842,14 +842,11 @@ type TaskPatch struct {
 //
 // # Why it is reflection rather than a list of the fields
 //
-// Because the list is what broke. A hand-written conjunction of every pointer
-// on this struct is correct only until somebody adds the next field, and it
-// fails SILENTLY when they do not: the caller sees a successful write, the
-// item is unchanged, and nothing anywhere says a patch was dropped. That is
-// exactly what happened — the version that counted fourteen of these fields
-// missed `Fields` and `RoutingUnit` among others, so `update_work_item` with
-// a custom-field value as its only argument reported success and wrote
-// nothing.
+// Because a hand-written conjunction of every pointer on this struct is
+// correct only until somebody adds the next field, and it fails SILENTLY when
+// they do not: a patch carrying only the field the list forgot reads as empty,
+// the caller sees a successful write, the item is unchanged, and nothing
+// anywhere says a patch was dropped.
 //
 // Every field here is a pointer, a slice or a map, precisely so that the zero
 // value means "not set" (see the type's own doc), which makes "no field is
@@ -1276,11 +1273,11 @@ type ViewType string
 // is what a client picks a renderer by, so these spellings are read by the
 // dashboard as well as by this package.
 //
-// [ViewTimeline] draws the same rows against a DATE AXIS, which is the one
-// arrangement the other three cannot express: a list orders by a column, a
-// board groups by one, and a calendar puts a task on the day it is due — none
-// of them can show that a task spans three weeks, or that it cannot start
-// until another finishes. It is what [TaskRow.Start], [TaskRow.Due] and
+// [ViewTimeline] draws the same rows against a DATE AXIS, which is an
+// arrangement no other type expresses: a list orders by a column, a board
+// groups by one, a calendar puts a task on the day it is due and a table lays
+// its fields out in columns — none of them can show that a task spans three
+// weeks, or that it cannot start until another finishes. It is what [TaskRow.Start], [TaskRow.Due] and
 // [TaskRow.WaitingOn] are on the row for.
 //
 // [ViewTable] is the one read by COLUMN rather than by row. A list draws each

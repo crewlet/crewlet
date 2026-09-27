@@ -76,6 +76,10 @@ type leaseValue struct {
 	// Layout is the storage layout of the build that wrote the record; see
 	// layoutDutyLane. Zero on a record from a build that predates it.
 	Layout int `json:"layout,omitempty"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 func (v leaseValue) ttl() time.Duration { return time.Duration(v.TTLNanos) }
@@ -94,6 +98,10 @@ type resourceValue struct {
 	Resource  string `json:"resource"`
 	Epoch     int64  `json:"epoch"`
 	Preferred string `json:"preferred,omitempty"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // entry is one decoded lease record plus the store metadata every write needs:

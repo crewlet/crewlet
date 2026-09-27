@@ -80,7 +80,7 @@ func (p *Parser) Source() string { return Source }
 
 // Parse reports which seats a record concerns.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) ([]notify.Routed, error) {
-	record, err := recordFromBody(w.Body)
+	record, err := recordFromBody(w)
 	if err != nil {
 		return nil, err
 	}
@@ -246,16 +246,26 @@ func withVia(base map[string]string, via string) map[string]string {
 
 // recordFromBody reads the record back out of a delivery.
 //
-// THROUGH JSON AND THEN THE RECORD'S OWN DECODER. The body arrives as a map
-// because that is what every other parser's webhook carries, and re-marshalling
-// it is what lets the record's own two-pass decode run — which is what makes a
-// body relayed by a build that did not understand every field still yield
-// everything the writer wrote.
-func recordFromBody(body map[string]any) (MutationRecord, error) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return MutationRecord{}, fmt.Errorf("tracker: render a delivery back "+
-			"into a record: %w", err)
+// FROM THE DELIVERY'S EXACT BYTES WHEN IT CARRIES THEM, which the change feed
+// sets to the body's own encoding ([changefeed.Wake]): the record, with every
+// number as its writer's digits. The map beside them decodes every number as a
+// float64, so an integer past 2^53 read out of it — the version a record was
+// decided against, or a number a newer build wrote — is a different integer
+// than the writer's. A record relayed by a feed on a build that predates those
+// bytes carries only the map, and is read from it, rounded.
+//
+// Either way THROUGH THE RECORD'S OWN DECODER, whose two-pass decode is what
+// makes a record relayed by a build that did not understand every field still
+// yield everything the writer wrote.
+func recordFromBody(w types.RawWebhook) (MutationRecord, error) {
+	raw := w.BodyRaw
+	if len(raw) == 0 {
+		encoded, err := json.Marshal(w.Body)
+		if err != nil {
+			return MutationRecord{}, fmt.Errorf("tracker: render a delivery back "+
+				"into a record: %w", err)
+		}
+		raw = encoded
 	}
 	record, err := Decode(raw)
 	if err != nil {

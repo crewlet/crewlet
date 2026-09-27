@@ -61,3 +61,80 @@ func TestADeferredReadIsNotAnInvitationToTryAgain(t *testing.T) {
 		})
 	}
 }
+
+// EVERY REFUSAL TELLS THE MODEL WHAT IT MEANS, AND ONLY A RETRYABLE ONE SAYS
+// TRY AGAIN.
+//
+// The framework states which codes clear by coming back to this node
+// ([statelog.ReadRefusal.Retryable]); each of those is an invitation, and each
+// of the others names its own cause in its own sentence — an eviction is not a
+// trimmed log, and a model told either that "trying again" helps sends the
+// same call to the same node until its rounds run out. Driven off
+// [statelog.ReadRefusals], so a code the framework adds fails here until it is
+// given a sentence.
+//
+// Mutation: answer every non-retryable code with the deferred sentence, and
+// the distinctness check fails; drop a case from unservedAdvice and that
+// code's check fails.
+func TestEveryReadRefusalTellsTheModelWhatItMeans(t *testing.T) {
+	t.Parallel()
+	// `too_stale` and `log_full` clear by WAITING, which is a different
+	// statement from "ask this node again now" and is made as one.
+	waits := map[statelog.ReadRefusal]string{
+		statelog.RefuseTooStale: "Try again in a moment",
+		statelog.RefuseLogFull:  "try again later",
+	}
+	seen := map[string]statelog.ReadRefusal{}
+	for _, code := range statelog.ReadRefusals {
+		trk := newFakeTracker()
+		trk.readErr = &statelog.Refused{Code: code, Level: statelog.ReadLinearizable}
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+		got := callWork(t, reg, builtin.GetWorkItemTool, map[string]any{"item": "ENG-1"})
+		if !got.Failed || !strings.Contains(got.Output, "NOT an empty result") {
+			t.Errorf("a %s refusal gave %q", code, got.Output)
+			continue
+		}
+		if code.Retryable() {
+			if !strings.Contains(got.Output, "Try again, or say you could not check.") {
+				t.Errorf("a %s refusal clears by coming back and does not say so: %q",
+					code, got.Output)
+			}
+			continue
+		}
+		if want, ok := waits[code]; ok {
+			if !strings.Contains(got.Output, want) {
+				t.Errorf("a %s refusal clears by waiting and does not say %q: %q",
+					code, want, got.Output)
+			}
+		} else if strings.Contains(strings.ToLower(got.Output), "try again") {
+			t.Errorf("a %s refusal does not clear by coming back and still "+
+				"invites it: %q", code, got.Output)
+		}
+		// ITS OWN SENTENCE: the explanation between the error and the
+		// empty-result warning is this code's, and no other code's.
+		why := explanation(got.Output)
+		if why == "" || strings.Contains(why, "with no advice here") {
+			t.Errorf("a %s refusal carries no explanation of its own: %q",
+				code, got.Output)
+			continue
+		}
+		if other, dup := seen[why]; dup {
+			t.Errorf("%s and %s are explained by the same sentence %q", other, code, why)
+		}
+		seen[why] = code
+	}
+}
+
+// explanation is the sentence a refusal's text carries between the error in
+// parentheses and the empty-result warning.
+func explanation(output string) string {
+	_, after, found := strings.Cut(output, "). ")
+	if !found {
+		return ""
+	}
+	why, _, found := strings.Cut(after, " This is NOT an empty result")
+	if !found {
+		return ""
+	}
+	return why
+}

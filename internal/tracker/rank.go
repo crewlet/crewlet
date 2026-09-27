@@ -25,11 +25,11 @@ import (
 // character: A..Z count downward and a..z upward, so "Zz" < "a0" < "azz" <
 // "b100" all hold as plain byte comparisons.
 //
-// The alternative — one flat digit string, decremented at the front for a
-// head placement — is what this replaces, and it had a hard capacity of
-// THIRTY head placements per project, ever. The integer part borrows and
+// NOT one flat digit string decremented at the front for a head placement:
+// that shape exhausts its alphabet, which caps a project at a fixed number of
+// head placements for the life of the project. The integer part borrows and
 // carries instead, so a head placement grows the key by about one character
-// per sixty-two insertions rather than exhausting an alphabet.
+// per sixty-two insertions and never runs out.
 //
 // # Two minting rules, and both are about the fractional part
 //
@@ -119,8 +119,8 @@ func (r Rank) Valid() bool {
 //
 // This is what makes the two minting sets provably disjoint without mentioning
 // a counter, a high-water mark, staleness or an in-flight create — so the
-// proof survives out-of-order create landings and head placements, which is
-// exactly where the bound this replaces failed with no concurrency at all.
+// proof survives out-of-order create landings and head placements, both of
+// which put a key somewhere a bound stated over a counter does not expect it.
 
 // FromCreate reports a key only a create can have minted: a pure integer at or
 // above the origin.

@@ -347,6 +347,35 @@ func TestWriteProjectIsDeclaredDestructive(t *testing.T) {
 	}
 }
 
+// WRITE_PROJECT TELLS A MODEL WHAT A FIELD IT NAMES BY ID KEEPS, and what a
+// retype does not.
+//
+// `fields` replaces the project's declarations, and the tool has no argument
+// for a field's applies-to types, default or configuration beyond its options:
+// the writer keeps those from the stored declaration, and keeps the default
+// and the configuration only while the type is unchanged. A model that did
+// not know would either restate a field believing it cleared them or retype
+// one believing its settings travel with it.
+func TestWriteProjectSaysWhatAFieldNamedByItsIDKeeps(t *testing.T) {
+	t.Parallel()
+	reg := projectRegistry(t, newFakeTracker(), nil)
+	entry, ok := reg.Snapshot().Lookup(tracker.WriteProjectTool)
+	if !ok {
+		t.Fatal("write_project is not registered")
+	}
+	description := entry.Tool.Description()
+	for _, want := range []string{
+		"by its id keeps the types it applies to",
+		"unless you change its type, its default and its configuration",
+		"Restating the fields as they are changes nothing",
+	} {
+		if !strings.Contains(description, want) {
+			t.Errorf("write_project's description does not say %q: %s",
+				want, description)
+		}
+	}
+}
+
 // ---- helpers ------------------------------------------------------------ //
 
 func leadAlways(context.Context, string, string) bool { return true }

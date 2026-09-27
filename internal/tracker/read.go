@@ -456,8 +456,8 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 	}
 	// THE FRAMEWORK'S OWN VERDICT, never the query's. `Level` here is what
 	// the read was SERVED at, which is the level asked for or a refusal —
-	// and assigning the request's level to it, which is what this function
-	// did, is exactly how a level becomes a label.
+	// and the request's level assigned to it is exactly how a level
+	// becomes a label.
 	answer.Level = served.Level
 	answer.Complete = served.Complete
 	answer.LogLag = served.Lag
@@ -468,7 +468,8 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 }
 
 // incompleteFrom renders the framework's coverage gap in this domain's own
-// shape, which is the one every tracker answer's JSON carries.
+// shape: the `incomplete` member of every tracker answer over a SET. A point
+// read has none to carry — it refuses instead ([Reader.Task]).
 func incompleteFrom(in *statelog.Incomplete) *Incomplete {
 	if in == nil {
 		return nil

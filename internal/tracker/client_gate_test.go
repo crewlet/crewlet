@@ -24,8 +24,7 @@ import (
 // renderer by the row's `type`. A shape the engine mints that the client does
 // not name is a TAB THAT DRAWS NOTHING: the strip shows it, a reader clicks it
 // and the body is blank, with no error anywhere — the switch simply has no
-// arm. That is what would have happened the day `table` landed if this file
-// had not come with it.
+// arm.
 //
 // The other direction is quieter still: a shape the client names and the
 // engine refuses is a branch nothing can reach, carrying a renderer somebody

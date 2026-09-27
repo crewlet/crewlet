@@ -21,8 +21,8 @@ import (
 // the position the writer was holding all along, having spent a snapshot, a
 // decide and a round trip to discover it.
 //
-// [tracker.Writer.After] is that wait moved ahead of all of it, and until
-// something called it [statelog.Request.Session] had no producer at all.
+// [tracker.Writer.After] is that wait moved ahead of all of it, and it is
+// what hands [statelog.Request.Session] the position to wait for.
 func TestASecondWriteOnOneSubjectWaitsBeforeItSnapshots(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

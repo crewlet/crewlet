@@ -14,10 +14,10 @@ import (
 // # Why the tests do not open a real one
 //
 // Every case in this package is about the FEED's rules — the claim, the
-// dedupe, the wake ids, which outcomes ack and which nak — and none of them is
-// about an estate. The document families these tests were written against are
-// gone; the two that replaced them are domain LOGS, which would need a broker
-// per test to exercise a rule that has nothing to do with a broker.
+// dedupe, the wake ids, the body's exact bytes, which outcomes ack and which
+// nak — and none of them is about an estate. Every real estate is a domain's
+// LOG, which would need a broker per test to exercise a rule that has nothing
+// to do with a broker.
 //
 // So the seam is filled directly, which is what the seam is for: `Opener` is
 // one method and `Records` is two, and a fixture that implements them

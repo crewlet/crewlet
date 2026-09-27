@@ -175,14 +175,13 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 	if author.Valid && author.String == rec.OpID {
 		return "", false, nil
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE pages_deletions
-		SET rejects = rejects + 1, last_reject_at = ?
-		WHERE page_id = ?`,
-		store.EncodeTime(rec.StoredAt), pageID); err != nil {
-		return "", false, fmt.Errorf("pages: count a gate hit on the purged "+
-			"page %s: %w", pageID, err)
-	}
+	// A READ AND NOTHING ELSE, as both gates here are: a gated record
+	// produces no rows ([statelog.Applier]'s Gated contract), the marker
+	// included. What an operator sees of the drop is the framework's own
+	// signal for every gate — the `statelog_record_gated` log line naming
+	// the gate, the position and the writer, the
+	// `crewlet.statelog.records_gated` counter, and the `records_gated`
+	// alarm that counter feeds.
 	return statelog.ReasonDeleted, true, nil
 }
 

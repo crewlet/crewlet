@@ -162,7 +162,8 @@ func TestAnUnwatchIsNeverRefusedHoweverManyAreWatching(t *testing.T) {
 		t.Error("a sixty-fifth explicit watch was accepted")
 	}
 
-	// AND LEAVING IS NOT, which is the half that was broken.
+	// AND LEAVING IS NOT: an unwatch only shrinks the set, which is the one
+	// direction a cap on growth has no reason to refuse.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-unwatch", "t-1", "ENG",
 		tracker.NoIfMatch,
 		tracker.TaskPatch{Watch: &tracker.WatchIntent{

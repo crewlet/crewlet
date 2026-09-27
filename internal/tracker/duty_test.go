@@ -1389,8 +1389,8 @@ func TestAPurgeDuringTheDutysMergeIsSeenByItsNextStep(t *testing.T) {
 // row alone cannot tell a walk whose holder died from one still running — the
 // merge's claim can. A sweep landing in the middle of a merge on this node
 // leaves it, and the merge finishes as if alone. Run beside it instead, the
-// sweep re-read the subtasks the walk had not moved yet and published a second
-// close of the duplicate.
+// sweep would re-read the subtasks the walk has not moved yet and publish a
+// second close of the duplicate.
 func TestTheSweepPassesOverAMergeThatIsStillWalking(t *testing.T) {
 	t.Parallel()
 	r, hooked := newHookedRoundTrip(t)
@@ -1758,8 +1758,8 @@ func TestAnAbandonedMergeIntoAnItemInTheTrashIsGivenUp(t *testing.T) {
 // own claim, on its own subjects — nothing one does depends on another. So a
 // merge whose step fails is logged, counted and left marked for the next
 // sweep, and the sweep goes on to the next one. Returning at the first failure
-// instead held every abandoned merge sorting after a merge that fails on every
-// tick for as long as it kept failing, with nothing but that one error to say
+// would hold every abandoned merge sorting after a merge that fails on every
+// tick for as long as it keeps failing, with nothing but that one error to say
 // so.
 //
 // Mutation: return at the first failure and m-b and m-c stay marked.
@@ -1889,8 +1889,8 @@ func TestALaggingSweepDoesNotActOnAMergeThatClosedBeforeIt(t *testing.T) {
 // The mark states its target on the task, and that is what the sweep reads —
 // not the `duplicates` relation, which can say something else by the time a
 // merge is found abandoned: an edit to the relations while the merge runs
-// replaces the edge the mark added. Read off the relations, the sweep folded
-// the duplicate into whatever the last edit named.
+// replaces the edge the mark added. Read off the relations, the sweep would
+// fold the duplicate into whatever the last edit named.
 //
 // Mutation: read the target off the relations in abandonedMerge and the
 // subtask ends under `other`.

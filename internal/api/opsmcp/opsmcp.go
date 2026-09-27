@@ -421,18 +421,24 @@ func (s *Server) Handler() http.Handler {
 
 // WorkActor and PageActor read the operator off the request's context.
 //
-// # An unbound token identifies as itself
+// # A token is recorded as `operator:` and its name
 //
-// A Tier A token has a NAME — the key in `api.auth.tokens` — and that name is
-// what lands on the record: `founder`, `ci`, `ops-bot`. It is not a seat and
-// must not look like one, so the actor KIND is [tracker.AuthorOperator] — the
-// discriminator every renderer and every recipient rule already reads — and
-// the credential is recorded again in `OperatorID` so an audit can ask what
-// one token did without reasoning about kinds.
+// A Tier A token has a NAME — the key in `api.auth.tokens` — and both halves
+// record a write under `operator:` and that name: `operator:founder`,
+// `operator:ci`. The author KIND is `operator`, and the credential is recorded
+// again in `OperatorID` so an audit can ask what one token did without
+// reasoning about kinds.
 //
-// The name goes in the author field rather than being left empty because the
-// tracker requires one: a record carrying no author is a history row nobody
-// can attribute, which is the single thing this surface exists to prevent.
+// NOT THE BARE NAME, because a token's name can be a seat's handle and each
+// half compares the recorded author with seats' handles: the wake that leaves
+// out whoever wrote a record drops the seat so named, and whatever a create
+// subscribes under the actor's handle subscribes that seat. A seat's handle
+// carries no colon, so neither can happen to a name with one
+// ([tracker.OperatorActor], [pages.SystemName]).
+//
+// An author rather than an empty field, because both halves require one: a
+// record carrying no author is a history row nobody can attribute, which is
+// the single thing this surface exists to prevent.
 //
 // The alternative — asking the caller to name a seat to act as — was rejected:
 // it lets anybody with the token write as anybody, and a tracker whose author
@@ -442,12 +448,14 @@ func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 	if !ok || id == "" {
 		return builtin.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
 	}
-	// THE OPERATOR'S OWN NAME IS THE HANDLE, and the kind says it is not a
-	// seat. A tracker whose author field is chosen by the writer is not an
-	// audit trail, so there is deliberately no way for a caller to name a
-	// seat to act as.
+	// THE TRACKER'S SPELLING OF THE OPERATOR IS THE HANDLE, because the
+	// work tools use the handle as the author AND as the reporter and the
+	// first watcher a create records. The tracker refuses an operator
+	// writer under any other name, and refuses an operator its own inbox
+	// and pins: an operator holds no seat.
 	return builtin.Actor{
-		Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
+		Handle: tracker.OperatorActor(id), Kind: tracker.AuthorOperator,
+		OperatorID: id,
 	}, nil
 }
 
@@ -455,16 +463,11 @@ func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 // token they presented, and no seat.
 //
 // NO HANDLE, which is where the two differ. A page actor's handle is a SEAT'S
-// handle to the knowledge base: a create makes it the page's watcher,
-// [pages.Actor.Name] records it as the author, and the change feed wakes
-// nobody whose handle equals the author it recorded — neither a watcher nor a
-// container's lead. A token's name in that field would subscribe a seat that
-// happens to share it to every page the operator creates, so that seat is
-// woken by every later save of them; would keep that seat from hearing about
-// the operator's own changes, its container's included; and would record
-// each change as the seat's. With the handle empty the author is recorded as
-// `operator:<token name>`, which no seat handle can spell ([pages.SystemName]
-// says why), and OperatorID carries the token for an audit to ask about.
+// handle to the knowledge base: a create makes it the page's watcher, and a
+// page with a seat's handle among its watchers wakes that seat on every later
+// save. With the handle empty, [pages.Actor.Name] records the author as
+// `operator:` and the token's name — the tracker's spelling — and OperatorID
+// carries the token for an audit to ask about.
 func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
 	id, ok := auth.OperatorFrom(ctx)
 	if !ok || id == "" {

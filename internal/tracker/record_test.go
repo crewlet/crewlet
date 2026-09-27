@@ -394,13 +394,14 @@ func TestTheBarrierRecordIsItsMeasuredLiteral(t *testing.T) {
 //
 // # The failure this exists to catch
 //
-// The decoder kept a newer build's unknown fields in Extra and the encoder
-// dropped them: `json:"-"` on the field and `json.Marshal(r)` on the struct.
-// So a record relayed by an older node lost everything the writer wrote that
-// the relay had no field for — which is the exact contract that makes a
-// rolling upgrade possible, and it was false in the one direction that
-// matters. The change feed is where it showed: a parser on a newer node reads
-// a record an older node relayed and sees only the half its relay understood.
+// A decoder that keeps a newer build's unknown fields in Extra is half the
+// contract: `json:"-"` on the field and a plain `json.Marshal(r)` on the
+// struct drop them again on the way out. A record relayed by an older node
+// then loses everything the writer wrote that the relay has no field for —
+// which is the exact contract that makes a rolling upgrade possible, broken in
+// the one direction that matters. The change feed is where it shows: a parser
+// on a newer node reads a record an older node relayed and sees only the half
+// its relay understood.
 func TestARecordFromANewerBuildReEncodesWithItsUnknownFields(t *testing.T) {
 	t.Parallel()
 	original := tracker.MutationRecord{

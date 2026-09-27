@@ -2,29 +2,27 @@ package types
 
 import "github.com/crewlet/crewlet/internal/events"
 
-// The inbound edge's envelope: one provider delivery, verified at the API and
-// republished for the transports to route.
+// The inbound envelope: one delivery for the transports to route — a
+// provider's, verified at the API, or a record a change feed relayed.
 
 func init() {
 	events.Register[RawWebhook]()
 }
 
-// RawWebhook is one authenticated provider delivery, on its way from the API's
-// webhook edge to the transport that understands it.
+// RawWebhook is one delivery on its way to the transport that understands it:
+// a provider's, authenticated at the API's webhook edge, or a record a change
+// feed relayed from one of the engine's own logs.
 //
-// The BODY AND THE BYTES BOTH TRAVEL, and neither is redundant. The parsed
-// body is what routing reads; the raw bytes are what a transport re-verifies
-// against, and re-serializing the parsed form would not reproduce them — key
-// order, whitespace and number formatting are all free in JSON and all inside
-// the provider's HMAC. A transport handed only the parsed body could never
-// check a signature again.
+// THE BODY AND ITS BYTES BOTH TRAVEL, and neither is redundant. The map is
+// what routing reads, and every number in it decodes as a float64, the type a
+// parser reading a number out of it asserts. The bytes are the delivery exactly as
+// its publisher had it, a number among them as its writer's digits — which a
+// parser reading an id or a version needs, and which re-encoding the map
+// cannot give back once a float64 has rounded it.
 //
-// Verification has ALREADY happened when this is published: the API refuses an
-// unsigned delivery at the edge, before anything is persisted or published.
-// Nothing downstream checks again — an earlier version of this comment claimed
-// the transports did, and no consumer reads a signature at all. The raw bytes
-// are kept because a parser needs the delivery exactly as sent, not because a
-// second verification runs on them.
+// Verification has ALREADY happened when a provider's delivery is published:
+// the API refuses an unsigned one at the edge, before anything is persisted or
+// published, and nothing downstream checks a signature again.
 type RawWebhook struct {
 	// Body is the delivery's JSON, always an object.
 	Body map[string]any `json:"body"`
@@ -35,7 +33,14 @@ type RawWebhook struct {
 	// sent it.
 	Headers map[string]string `json:"headers"`
 
-	// BodyRaw is the exact bytes signed. Marshals as base64.
+	// BodyRaw is the delivery's exact bytes, where its publisher had them:
+	// what the provider sent, for a delivery the webhook edge took — which
+	// for one Forge relayed is Forge's own envelope around Body rather than
+	// Body itself — and Body's own encoding, for a record a change feed
+	// relayed. Empty for a delivery a chat socket read, and for a record
+	// relayed by a change feed on a build that predates the feed's bytes:
+	// a parser that needs the bytes then encodes Body, whose numbers are
+	// float64s. Marshals as base64.
 	BodyRaw []byte `json:"body_raw"`
 
 	// Handle names the seat a per-seat delivery was addressed to. Slack

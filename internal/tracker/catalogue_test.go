@@ -377,3 +377,163 @@ func TestAMilestoneIsABuiltinType(t *testing.T) {
 			"description, exactly as it chooses a status", milestone)
 	}
 }
+
+// declaringSurface is one of the two writes that publish field declarations,
+// with where each stores what it published: the workspace catalogue and a
+// project's own policy take the same merge and the same validation.
+type declaringSurface struct {
+	seed  func(r *roundTrip, fields []tracker.FieldDef)
+	write func(r *roundTrip, op string, fields []tracker.FieldDef) (tracker.WriteResult, error)
+
+	// field reads one member of the first stored declaration, and the
+	// empty string when it holds none.
+	field func(r *roundTrip, path string) string
+}
+
+func declaringSurfaces() map[string]declaringSurface {
+	read := func(table, column, key string) func(*roundTrip, string) string {
+		return func(r *roundTrip, path string) string {
+			got := r.strings(`SELECT COALESCE(json_extract(CAST(document AS TEXT),
+				'$.fields[0]`+path+`'), '') FROM `+table+` WHERE `+column+` = ?`, key)
+			if len(got) != 1 {
+				r.t.Fatalf("%s holds %d rows for %s", table, len(got), key)
+			}
+			return got[0]
+		}
+	}
+	return map[string]declaringSurface{
+		"the workspace catalogue": {
+			seed: func(r *roundTrip, fields []tracker.FieldDef) {
+				if _, err := r.writer.WriteDocument(r.t.Context(), "op-seed",
+					tracker.CatalogueSubject(tracker.CatalogueFields), "",
+					tracker.FieldCatalogue{
+						V: tracker.DocumentVersion, PolicyVersion: 1,
+						Fields: fields, UpdatedAt: wednesday,
+					}, tracker.ChangeCatalogue, nil); err != nil {
+					r.t.Fatalf("seed the catalogue: %v", err)
+				}
+			},
+			write: func(r *roundTrip, op string, fields []tracker.FieldDef) (tracker.WriteResult, error) {
+				return r.writer.WriteFields(r.t.Context(), op, fields)
+			},
+			field: read("tracker_catalogues", "name",
+				tracker.CatalogueSubject(tracker.CatalogueFields).ID),
+		},
+		"a project's own policy": {
+			seed: func(r *roundTrip, fields []tracker.FieldDef) {
+				if _, err := r.writer.WriteDocument(r.t.Context(), "op-seed",
+					tracker.ProjectSubject("ENG"), "", tracker.Project{
+						V: 1, Key: "ENG", Name: "Engineering", PolicyVersion: 1,
+						Fields: fields, CreatedAt: wednesday, UpdatedAt: wednesday,
+					}, tracker.ChangeProjectUpdated, nil); err != nil {
+					r.t.Fatalf("seed the project: %v", err)
+				}
+			},
+			write: func(r *roundTrip, op string, fields []tracker.FieldDef) (tracker.WriteResult, error) {
+				return r.writer.WriteProject(r.t.Context(), op, "ENG",
+					tracker.ProjectEdit{Fields: &fields}, tracker.ProjectAuthority{Lead: true})
+			},
+			field: read("tracker_projects", "key", "ENG"),
+		},
+	}
+}
+
+// A RETYPE STARTS THE FIELD'S OWN SETTINGS EMPTY.
+//
+// A tool has no argument for a field's default or its configuration beyond its
+// options, so a field it names by id keeps both from the stored declaration —
+// while the type is the stored one. They describe a value of THAT type: a
+// dropdown's `multi` laid onto a number is a setting the number cannot read,
+// which the validator refuses stated outright, and a value would be coerced
+// against it. So a retype publishes the new type with neither, while what is
+// not a setting of the type — the types it applies to, who declared it, and a
+// member a newer build wrote on the declaration — is kept as on any edit.
+//
+// Mutation: carry the default and the configuration across a retype in
+// mergeFields and the retype is refused naming `multi`; take the post-image
+// check out of both decides as well and a number carrying `multi` and an
+// option-id default is published.
+func TestARetypeStartsTheFieldsOwnSettingsEmpty(t *testing.T) {
+	t.Parallel()
+	for name, surface := range declaringSurfaces() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			surface.seed(r, []tracker.FieldDef{storedDeclaration()})
+			r.drain()
+
+			retyped := statedDeclaration()
+			retyped.Type = tracker.FieldNumber
+			retyped.Config.Options = nil
+			result, err := surface.write(r, "op-retype", []tracker.FieldDef{retyped})
+			if err != nil {
+				t.Fatalf("a dropdown retyped as a number was refused: %v", err)
+			}
+			if result.Position.Seq == 0 {
+				t.Fatal("a retype published nothing")
+			}
+			r.drain()
+			for path, want := range map[string]string{
+				".type":          string(tracker.FieldNumber),
+				".config.multi":  "",
+				".config.lane":   "",
+				".default":       "",
+				".applies_to[0]": "bug",
+				".created_by":    "bo",
+				".lane":          "field",
+			} {
+				if got := surface.field(r, path); got != want {
+					t.Errorf("after the retype the declaration holds %s = %q, want %q",
+						path, got, want)
+				}
+			}
+		})
+	}
+}
+
+// WHAT A FIELDS WRITE PUBLISHES IS WHAT THE VALIDATOR ACCEPTED — the merged
+// declaration, not the caller's list.
+//
+// The check before the snapshot sees only what the caller stated, and the
+// merge adds what the stored declaration kept. A stored declaration the
+// validator refuses — a number carrying a dropdown's `multi`, as a writer that
+// bypassed the validation leaves it — is kept by every edit that restates the
+// field, so a rename would publish the refused setting under a new name.
+//
+// Mutation: take the post-image check out of WriteFields' decide and
+// applyProjectEdit, and the rename publishes.
+func TestAFieldsWriteDoesNotPublishWhatTheValidatorRefuses(t *testing.T) {
+	t.Parallel()
+	for name, surface := range declaringSurfaces() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			refused := tracker.FieldDef{
+				ID: "f-effort", Slug: "effort", Name: "Effort", Type: tracker.FieldNumber,
+				Config: tracker.FieldConfig{Multi: true},
+			}
+			surface.seed(r, []tracker.FieldDef{refused})
+			r.drain()
+
+			renamed := tracker.FieldDef{
+				ID: "f-effort", Slug: "effort", Name: "Effort points",
+				Type:     tracker.FieldNumber,
+				Unstated: tracker.Unstated{AppliesTo: true, Default: true, Config: true},
+			}
+			result, err := surface.write(r, "op-rename", []tracker.FieldDef{renamed})
+			if err == nil {
+				t.Fatalf("a rename published a number carrying `multi` at %+v",
+					result.Position)
+			}
+			for _, want := range []string{"effort", "multi flag"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal %q does not name %q", err, want)
+				}
+			}
+			r.drain()
+			if got := surface.field(r, ".name"); got != "Effort" {
+				t.Errorf("the refused rename reached the stored declaration: %q", got)
+			}
+		})
+	}
+}

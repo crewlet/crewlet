@@ -1044,8 +1044,11 @@ const bridgeCallCutMarker = "…"
 // encodeBridgeCall is a call's bytes as the store holds them, and the bytes
 // its record's size is measured on against [MaxBridgeCallBytes]: those of
 // [BridgeCall.MarshalJSON], which writes through encoding/json with <, > and &
-// escaped as \u003c, \u003e and \u0026. An encoder's own escaping setting does
-// not reach inside what a MarshalJSON returns, so it has no say in these bytes.
+// escaped as \u003c, \u003e and \u0026. Because the method has
+// already escaped all three, the encoder's escaping setting has no say in these
+// bytes: escaping on, it escapes what a MarshalJSON returns as it escapes
+// anything else, and finds nothing left to escape; escaping off, it writes
+// those bytes as returned, and an encoder un-escapes nothing.
 func encodeBridgeCall(call BridgeCall) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

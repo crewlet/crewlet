@@ -544,3 +544,91 @@ func TestDecodingIntoAHeldValueMerges(t *testing.T) {
 		t.Errorf("the decode wrote into a carry another value holds: %v", shared)
 	}
 }
+
+// ---- the exact bag ------------------------------------------------------ //
+
+// AN INTEGER PAST 2^53 IN A BAG IS WRITTEN BACK AS ITS WRITER WROTE IT, at the
+// top, inside an object and inside a list — each decoded as a json.Number, the
+// one type a reader of a number in a bag asserts.
+//
+// Mutation: decode the bag without UseNumber and every one comes back rounded.
+func TestAnIntegerPast2To53SurvivesABagAtEveryDepth(t *testing.T) {
+	t.Parallel()
+	const raw = `{"top":9007199254740993,"object":{"n":1152921504606846977},` +
+		`"list":[18446744073709551615,{"n":-9007199254740993}],"text":"t","flag":true}`
+	var bag jsoncarry.Bag
+	if err := json.Unmarshal([]byte(raw), &bag); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if n, ok := bag["top"].(json.Number); !ok || n.String() != "9007199254740993" {
+		t.Errorf("the top number decoded as %#v, want the json.Number of its digits", bag["top"])
+	}
+	if bag["text"] != "t" || bag["flag"] != true {
+		t.Errorf("a string or a bool decoded other than into `any`: %#v", bag)
+	}
+	out, err := json.Marshal(bag)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	for _, exact := range []string{`"top":9007199254740993`, `"n":1152921504606846977`,
+		`[18446744073709551615,`, `"n":-9007199254740993`} {
+		if !strings.Contains(string(out), exact) {
+			t.Errorf("the bag written back lost %s: %s", exact, out)
+		}
+	}
+	var held struct {
+		Bag jsoncarry.Bag `json:"bag"`
+	}
+	if err := json.Unmarshal([]byte(`{"bag":`+raw+`}`), &held); err != nil {
+		t.Fatalf("decode a bag held by a struct: %v", err)
+	}
+	if n, ok := held.Bag["object"].(map[string]any)["n"].(json.Number); !ok || n.String() != "1152921504606846977" {
+		t.Errorf("a bag held by a struct decoded its nested number as %#v", held.Bag["object"])
+	}
+}
+
+// A NUMBER NO FLOAT64 HOLDS IS REFUSED AT THE WRITE, at any depth, because a
+// build reading the bag as a plain map fails its decode of the whole value on
+// it — and one a float64 does hold, however rounded, is written.
+//
+// Mutation: drop the float check in Bag.MarshalJSON and both refused bags encode.
+func TestANumberNoFloat64HoldsIsRefusedAtTheWrite(t *testing.T) {
+	t.Parallel()
+	for name, bag := range map[string]jsoncarry.Bag{
+		"top":    {"n": json.Number("1e1000")},
+		"nested": {"list": []any{map[string]any{"n": json.Number("-1e400")}}},
+	} {
+		if out, err := json.Marshal(bag); err == nil {
+			t.Errorf("%s: a bag holding a number past a float64 encoded as %s", name, out)
+		} else if !strings.Contains(err.Error(), "float64") {
+			t.Errorf("%s: the refusal does not name what cannot hold it: %v", name, err)
+		}
+	}
+	if _, err := json.Marshal(jsoncarry.Bag{"n": json.Number("9007199254740993"), "f": 1.5}); err != nil {
+		t.Errorf("a bag every float64 reader can decode was refused: %v", err)
+	}
+}
+
+// DECODING INTO A HELD BAG MERGES as encoding/json merges a map, `null` leaves
+// no map, and a bag sharing its map with another value does not change the
+// other's.
+func TestDecodingIntoAHeldBagMergesIntoACopy(t *testing.T) {
+	t.Parallel()
+	shared := map[string]any{"old": "kept", "count": json.Number("1")}
+	bag := jsoncarry.Bag(shared)
+	if err := json.Unmarshal([]byte(`{"count":2,"new":"added"}`), &bag); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if bag["old"] != "kept" || bag["count"] != json.Number("2") || bag["new"] != "added" {
+		t.Errorf("the bag merged to %#v", bag)
+	}
+	if len(shared) != 2 || shared["count"] != json.Number("1") {
+		t.Errorf("the decode wrote into the map another value holds: %#v", shared)
+	}
+	if err := json.Unmarshal([]byte(`null`), &bag); err != nil || bag != nil {
+		t.Errorf("null decoded to %#v (%v), want no map", bag, err)
+	}
+	if err := bag.UnmarshalJSON([]byte(`{"a":1} {"b":2}`)); err == nil {
+		t.Errorf("two values decoded as one bag, to %#v", bag)
+	}
+}
