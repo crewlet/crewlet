@@ -342,21 +342,36 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 		noSecret(w, "slack")
 		return
 	}
+	timestamp := req.Header.Get("X-Slack-Request-Timestamp")
+	signature := req.Header.Get("X-Slack-Signature")
+	now := r.now()
+	check := signed(func(body []byte, key, presented string) bool {
+		return verifySlack(body, key, presented, timestamp, now)
+	})
 	secret, known := secrets[handle]
 	if !known || secret == "" {
-		// 401, not 503: the map is populated, so this is a delivery
-		// addressed to a seat that has no Slack app rather than a node
-		// with nothing to check against.
-		log.Warn("slack_webhook_unknown_handle", "handle", handle)
-		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeUnknownHandle)
+		// A SEAT WITH NO APP IS ANSWERED EXACTLY AS A SIGNATURE THAT DID
+		// NOT MATCH — the same 401, the same code, and the same HMAC paid
+		// first. The map is populated, so this is not a node with nothing
+		// to check against (that is the 503 above); but a code of its own
+		// here was a roster: an unsigned POST to every name a company
+		// might use answered one code where a seat has a Slack app and
+		// another where it does not, and a check that skipped the HMAC
+		// said the same thing in its timing. So the decoy is checked on
+		// the path the known seat's key is — an empty signature pays
+		// nothing on either — and its answer is DISCARDED: no delivery to
+		// a seat with no app is ever accepted, whatever it was signed
+		// with. The log is where an operator learns which check failed,
+		// as it is for every other refusal on this edge.
+		_ = signature != "" && check.verify(raw, slackDecoy(), signature)
+		log.Warn("slack_webhook_unknown_handle", "handle", handle,
+			"detail", "no seat by this handle has a Slack signing secret here; "+
+				"refused as an invalid signature so the answer does not say which "+
+				"handles have an app")
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 		return
 	}
-	timestamp := req.Header.Get("X-Slack-Request-Timestamp")
-	now := r.now()
-	v0 := func(body []byte, secret, signature string) bool {
-		return verifySlack(body, secret, signature, timestamp, now)
-	}
-	v, ok := r.authenticate(w, "slack", secret, req.Header.Get("X-Slack-Signature"), raw, signed(v0))
+	v, ok := r.authenticate(w, "slack", secret, signature, raw, check)
 	if !ok {
 		return
 	}

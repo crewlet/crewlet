@@ -396,16 +396,52 @@ func TestAnEmptySlackMapIsCannotVerifyNotNothingToVerify(t *testing.T) {
 	}
 }
 
-func TestAnUnknownSlackSeatIsRefusedWithoutHoldingTheDelivery(t *testing.T) {
+// A SEAT WITH NO SLACK APP IS ANSWERED EXACTLY AS A BAD SIGNATURE.
+//
+// 401, not 503: the map is populated, so this is a delivery addressed to a
+// seat with no Slack app rather than a node with nothing to check against,
+// and a 503 would tell the sender to keep retrying something that can never
+// succeed. And the SAME 401 a wrong signature on a real seat gets, byte for
+// byte: the route answered `unknown_handle` here and `invalid_signature`
+// there, so an unsigned POST to every name a company might use read back
+// which of its seats have a Slack app. A delivery signed with a REAL seat's
+// key but addressed to a handle with none is refused too, and reaches
+// nothing — the key selects the seat, never the other way round.
+func TestASlackSeatWithNoAppIsAnsweredAsABadSignature(t *testing.T) {
 	t.Parallel()
-	// 401, not 503: the map is populated, so this is a delivery addressed
-	// to a seat with no Slack app rather than a node with nothing to check
-	// against. A 503 would tell the sender to keep retrying something that
-	// can never succeed.
-	e := newEdge(t)
-	res := e.post(t, "/webhooks/slack/nobody", []byte(`{"type":"event_callback"}`), nil)
-	if res.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want 401", res.Code)
+	body := []byte(`{"type":"event_callback","event_id":"Ev1"}`)
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"unsigned", nil},
+		{"signed with a key nobody holds", slackDelivery(body, "not-the-secret", pinned)},
+		{"signed with another seat's key", slackDelivery(body, "slack-secret", pinned)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEdge(t)
+			unknown := e.post(t, "/webhooks/slack/nobody", body, tc.headers)
+			if unknown.Code != http.StatusUnauthorized {
+				t.Fatalf("got %d, want 401: %s", unknown.Code, unknown.Body)
+			}
+			// The control: the same request to the seat that HAS an app,
+			// signed with a key that is not its own.
+			known := e.post(t, "/webhooks/slack/ceo", body,
+				slackDelivery(body, "not-the-secret", pinned))
+			if known.Code != http.StatusUnauthorized {
+				t.Fatalf("control: a wrong signature on a real seat got %d: %s",
+					known.Code, known.Body)
+			}
+			if unknown.Body.String() != known.Body.String() {
+				t.Errorf("a seat with no app answers %s, a bad signature on a real "+
+					"seat %s — the difference says which handles have an app",
+					unknown.Body, known.Body)
+			}
+			if e.published.count() != 0 {
+				t.Error("a delivery to a seat with no Slack app reached the queue")
+			}
+		})
 	}
 }
 

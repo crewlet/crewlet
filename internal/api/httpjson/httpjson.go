@@ -574,15 +574,13 @@ const (
 	// take is [CodeUnavailable]: the same facts other surfaces answer with.
 
 	// CodeInvalidSignature is a delivery whose credential did not verify: an
-	// HMAC signature, a shared token, or a Forge invocation token. 401. The
-	// log says which check failed; the body never does, because that is what
-	// somebody probing the route would read.
+	// HMAC signature, a shared token, or a Forge invocation token — and a
+	// delivery to a per-seat route naming a seat with no app here, which is
+	// the same answer for the same reason. 401. The log says which check
+	// failed; the body never does, because that is what somebody probing the
+	// route would read, and a code of its own for the seat with no app was a
+	// roster of which handles have one.
 	CodeInvalidSignature Code = "invalid_signature"
-	// CodeUnknownHandle is a delivery to a per-seat route naming a seat that
-	// has no app configured here, while other seats have one. 401 rather
-	// than 503: this node can verify deliveries on the route, and this one
-	// is addressed to nothing it can verify against.
-	CodeUnknownHandle Code = "unknown_handle"
 	// CodeNoWebhookSecret is a route with no secret to verify a delivery
 	// against. 503 with a Retry-After sized to a person editing the
 	// configuration, so the sender holds the delivery rather than dropping
@@ -741,9 +739,6 @@ var codes = map[Code]string{
 	CodeInvalidSignature: "This delivery's signature or token did not match " +
 		"what this route checks, so it was not accepted. Make the secret at the " +
 		"sender match the one this deployment holds for the integration.",
-	CodeUnknownHandle: "This delivery is addressed to a seat that has no app " +
-		"configured on this route, so there is nothing to check it against and " +
-		"it was not accepted.",
 	CodeNoWebhookSecret: "This route has no secret configured to check a " +
 		"delivery against, so it accepts none until one is set. The sender is " +
 		"asked to retry, so nothing is lost in the meantime.",

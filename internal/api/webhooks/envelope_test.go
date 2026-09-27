@@ -36,7 +36,7 @@ func TestEveryWebhookRefusalIsTheEnginesEnvelope(t *testing.T) {
 		{name: "a Forge delivery with no invocation token", path: "/webhooks/forge",
 			status: http.StatusUnauthorized, code: httpjson.CodeInvalidSignature},
 		{name: "a per-seat delivery to a seat with no app", path: "/webhooks/slack/nobody",
-			status: http.StatusUnauthorized, code: httpjson.CodeUnknownHandle},
+			status: http.StatusUnauthorized, code: httpjson.CodeInvalidSignature},
 		{name: "a node with no active revision", path: "/webhooks/github",
 			headers: githubDelivery(issueBody, "gh-secret"),
 			arrange: func(e *edge) { *e.configured = false },

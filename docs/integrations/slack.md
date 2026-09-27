@@ -316,7 +316,7 @@ identity.
 2. Slack sends webhook to `https://your-server.com/webhooks/slack/{handle}`
 3. The API verifies the `X-Slack-Signature` v0 HMAC **at the edge**, against that handle's own signing secret, before the payload is persisted, streamed to a dashboard or published. The timestamp is part of the signed string and is checked against a replay window, which is what stops a captured request from working for ever. This is the **only** verification: nothing downstream checks again, which is why the route is exempt from the API's bearer token and why the check has to be here.
    - No signing secret for **any** seat → `503`. "Cannot verify" is not "nothing to verify": a node with no secrets loaded must not accept an unsigned POST addressed at any handle.
-   - A secret map that is populated but does not name this handle → `401`. That is a delivery for a seat with no Slack app, not a node that cannot check.
+   - A secret map that is populated but does not name this handle → `401 invalid_signature`. That is a delivery for a seat with no Slack app, not a node that cannot check — and it is answered exactly as a wrong signature on a real seat is, after the same signature check, so a request from outside cannot tell which handles have an app. The engine's log names it `slack_webhook_unknown_handle`.
 4. The delivery is claimed fleet-wide on Slack's own `event_id`, which is stable across its retries — so a redelivery, or a message that arrives twice because the app subscribes to both `message.*` and `app_mention`, wakes the seat once.
 5. The API publishes to `crewlet.notifications.inbound` on the EventQueue.
 6. The notification service resolves the handle to its seat and publishes to that seat's own mailbox, `crewlet.agent.{seat-id}.inbox`.
