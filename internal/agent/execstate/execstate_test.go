@@ -3,6 +3,7 @@ package execstate_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -82,7 +83,7 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	}
 	// WHICH MODEL SERVED THEM, beside the tokens: the resumed record is the
 	// phase's only one, and it splits the pre-suspend rounds from this.
-	if got.Model != "sonnet" || len(got.Models) != 2 || got.Models[1] != want.Models[1] {
+	if got.Model != "sonnet" || len(got.Models) != 2 || !reflect.DeepEqual(got.Models[1], want.Models[1]) {
 		t.Fatalf("the pre-suspend split was lost: model %q, %+v", got.Model, got.Models)
 	}
 	if len(got.ActiveTools) != 2 || len(got.LoadedSkills) != 1 {
@@ -112,7 +113,7 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	// record the phase finally publishes.
 	runs, wantRuns := got.CollectedRuns, want.CollectedRuns
 	if runs == nil || runs.CostUSD != wantRuns.CostUSD || runs.Collected != wantRuns.Collected ||
-		runs.Whole != wantRuns.Whole || len(runs.Models) != 1 || runs.Models[0] != wantRuns.Models[0] ||
+		runs.Whole != wantRuns.Whole || len(runs.Models) != 1 || !reflect.DeepEqual(runs.Models[0], wantRuns.Models[0]) ||
 		len(runs.DeliveredRefs) != 1 || runs.DeliveredRefs[0] != wantRuns.DeliveredRefs[0] {
 		t.Fatalf("the collected runs did not survive: %+v, want %+v", runs, wantRuns)
 	}
