@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -252,11 +253,7 @@ type stepUpRequest struct {
 // person the authority they stepped up to use — or, copied onto a fresh
 // deadline, let group-derived authority outlive the provider's assertion.
 func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailPassword) {
-		return
-	}
 	principal, resolution := iam.From(r.Context())
 	if resolution != iam.Resolved {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -288,6 +285,15 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
+	// THE CURVE ON WHO THEY SIGNED IN AS, which is the subject here: the
+	// same pair a password sign-in by that login climbs, so a stolen cookie
+	// is not a way round the curve on the password it guards.
+	adm, ok := s.admit(w, r, credential.Attempt{
+		Source: source, Subject: principal.Login}, types.FailPassword)
+	if !ok {
+		return
+	}
+	defer adm.ticket.Release()
 
 	held, err := s.directory.PersonByLogin(r.Context(), principal.Login)
 	if err != nil {
@@ -302,26 +308,26 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		Person: held.ID,
 	}
 	if held.ID == "" || !stageAdmits(held.Stage) {
-		s.refuseSignIn(w, r, arrived, attempt, "step-up subject not active")
+		s.refuseSignIn(w, r, adm, attempt, "step-up subject not active")
 		return
 	}
 	verifier, found := firstCredential(held.Credentials, iamdomain.MethodPassword)
 	if !found {
 		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, attempt, "step-up: no password credential")
+		s.refuseSignIn(w, r, adm, attempt, "step-up: no password credential")
 		return
 	}
-	ok, stale := s.hasher.Verify(verifier.Verifier, in.Password)
-	if !ok {
-		s.refuseSignIn(w, r, arrived, attempt, "step-up: password mismatch")
+	proved, stale := s.hasher.Verify(verifier.Verifier, in.Password)
+	if !proved {
+		s.refuseSignIn(w, r, adm, attempt, "step-up: password mismatch")
 		return
 	}
 	var factor factorUse
 	if holdsSecondFactor(held) {
 		attempt.Method = types.FailSecondFactor
-		var proved bool
-		if factor, proved = s.proveSecondFactor(w, r, arrived, attempt, held,
-			in.Code); !proved {
+		var factored bool
+		if factor, factored = s.proveSecondFactor(w, r, adm, attempt, held,
+			in.Code); !factored {
 			return
 		}
 	}
@@ -340,7 +346,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	// fresh reauth instant on the row every node reads. A field written
 	// locally would be proof on ONE node, and the surface that asks for it
 	// is reached through whichever node a request lands on.
-	s.throttle.Flush(r.Context(), source)
+	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
 		stepUp:      true,

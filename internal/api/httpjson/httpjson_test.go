@@ -6,8 +6,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // A JSON SURFACE ANSWERS AS JSON, headers included.
@@ -504,6 +507,105 @@ func TestAnUnavailableAnswerWithADetailCarriesBoth(t *testing.T) {
 	if bare.Code != http.StatusServiceUnavailable || bare.Header().Get("Retry-After") != "2" {
 		t.Errorf("the bare form answered %d with Retry-After %q",
 			bare.Code, bare.Header().Get("Retry-After"))
+	}
+}
+
+// A 429 ALWAYS SAYS WHEN TO COME BACK, rounded up and never below a second.
+//
+// A throttled answer with no Retry-After is refused and not told when it may
+// try again, so a client retries at once and is refused again, and a person at
+// a form reads a lockout where there is a wait of seconds. Rounded to the
+// nearest second, a 6.2s wait went out as 6 and the client came back before
+// the curve could admit it; and zero is "do not retry", which a curve never
+// means.
+func TestAThrottledAnswerAlwaysSaysWhenToComeBack(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		wait time.Duration
+		want string
+	}{
+		{0, "1"},
+		{200 * time.Millisecond, "1"},
+		{time.Second, "1"},
+		{6200 * time.Millisecond, "7"},
+		{30 * time.Second, "30"},
+	} {
+		rec := httptest.NewRecorder()
+		httpjson.Throttled(rec, tc.wait)
+		if rec.Code != http.StatusTooManyRequests {
+			t.Errorf("a %s wait answered %d, want 429", tc.wait, rec.Code)
+		}
+		if got := rec.Header().Get("Retry-After"); got != tc.want {
+			t.Errorf("a %s wait carried Retry-After %q, want %q", tc.wait, got, tc.want)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil ||
+			body["error"] != string(httpjson.CodeThrottled) {
+			t.Errorf("a %s wait answered %s (%v), want the throttled envelope",
+				tc.wait, rec.Body, err)
+		}
+	}
+}
+
+// EVERY 429 ON THE API IS WRITTEN BY [httpjson.Throttled], because nothing
+// else spells one.
+//
+// The Retry-After above is only as good as the number of writers that carry
+// it, and the sign-in surface answered `throttled` with no header at all while
+// its one writer was a Fail anybody could call. A behavioural case per route
+// says nothing about the next route, so the gate is over the source: outside
+// this package, no file under internal/api names the status or the code.
+func TestNothingButThrottledAnswersA429(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	checked := 0
+	err := sourcetree.Walk("..", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") ||
+			filepath.Base(filepath.Dir(path)) == "httpjson" {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		checked++
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.SelectorExpr:
+				pkg, ok := n.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				if (pkg.Name == "http" && n.Sel.Name == "StatusTooManyRequests") ||
+					(pkg.Name == "httpjson" && n.Sel.Name == "CodeThrottled") {
+					t.Errorf("%s spells a 429 itself; answer it with "+
+						"httpjson.Throttled, which carries the Retry-After",
+						fset.Position(n.Pos()))
+				}
+			case *ast.BasicLit:
+				if n.Kind == token.INT && n.Value == "429" {
+					t.Errorf("%s spells a 429 as a literal", fset.Position(n.Pos()))
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// THE CONTROL: a walk that found nothing would pass every rule.
+	if checked < 50 {
+		t.Fatalf("checked %d source files, which is not internal/api", checked)
 	}
 }
 

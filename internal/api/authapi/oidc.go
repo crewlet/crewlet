@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -121,18 +122,21 @@ func (s *Service) launch(w http.ResponseWriter, r *http.Request, want oidc.Fligh
 // that is the same decision written as a field, and a field is how it ends up
 // on by accident.
 func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailOIDC) {
+	// ON THE SOURCE ALONE: before an ID token verifies nothing here names
+	// anybody, and afterwards the provider has already proved who it is.
+	adm, ok := s.admit(w, r, credential.Attempt{Source: source}, types.FailOIDC)
+	if !ok {
 		return
 	}
+	defer adm.ticket.Release()
 	// A ROUND TRIP THAT ENDS IN NOBODY is one failed attempt, whichever
 	// check refused it. The subject is the provider's own, once an ID
 	// token verified and there is one; before that nothing names anybody.
 	attempt := authevents.Failure{Client: source, Method: types.FailOIDC}
 	cookie, err := r.Cookie(flightCookieName)
 	if err != nil || cookie.Value == "" {
-		s.refuseSignIn(w, r, arrived, attempt, "no flight cookie")
+		s.refuseSignIn(w, r, adm, attempt, "no flight cookie")
 		return
 	}
 	// THE FLIGHT IS CLEARED WHATEVER HAPPENS NEXT. A login that failed
@@ -142,19 +146,19 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	flight, err := oidc.Open(s.cipher, cookie.Value, s.now())
 	if err != nil {
-		s.refuseSignIn(w, r, arrived, attempt, "flight: "+err.Error())
+		s.refuseSignIn(w, r, adm, attempt, "flight: "+err.Error())
 		return
 	}
 	// THE STATE COMPARISON, and it is what stops a callback link somebody
 	// was SENT from completing a login in their browser: the attacker
 	// cannot know the value sealed in the cookie beside it.
 	if r.URL.Query().Get("state") != flight.State {
-		s.refuseSignIn(w, r, arrived, attempt, "state mismatch")
+		s.refuseSignIn(w, r, adm, attempt, "state mismatch")
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		s.refuseSignIn(w, r, arrived, attempt, "no authorization code")
+		s.refuseSignIn(w, r, adm, attempt, "no authorization code")
 		return
 	}
 
@@ -168,7 +172,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		metadata.TokenEndpoint, code, flight.Verifier)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_exchange_failed", "error", err)
-		s.refuseSignIn(w, r, arrived, attempt, "code exchange failed")
+		s.refuseSignIn(w, r, adm, attempt, "code exchange failed")
 		return
 	}
 	keys, err := s.provider.Keys(r.Context())
@@ -181,7 +185,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		tokens.IDToken, flight.Nonce, s.now())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_id_token_refused", "error", err)
-		s.refuseSignIn(w, r, arrived, attempt, "id token: "+err.Error())
+		s.refuseSignIn(w, r, adm, attempt, "id token: "+err.Error())
 		return
 	}
 
@@ -191,11 +195,11 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	provedAt, err := flight.ProvedAt(claims, s.now())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_step_up_unconfirmed", "error", err)
-		s.refuseSignIn(w, r, arrived, attempt, "step-up: "+err.Error())
+		s.refuseSignIn(w, r, adm, attempt, "step-up: "+err.Error())
 		return
 	}
 	if flight.Invite != "" {
-		s.redeemThroughProvider(w, r, arrived, attempt, flight, claims,
+		s.redeemThroughProvider(w, r, adm, attempt, flight, claims,
 			tokens.Refresh, provedAt)
 		return
 	}
@@ -223,10 +227,10 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		// NO LINK, NO SIGN-IN. See this function's doc: an address the
 		// provider asserts is not a link, and this is where that rule
 		// is enforced rather than merely stated.
-		s.refuseSignIn(w, r, arrived, attempt, "no linked credential for this subject")
+		s.refuseSignIn(w, r, adm, attempt, "no linked credential for this subject")
 		return
 	}
-	s.throttle.Flush(r.Context(), source)
+	adm.ticket.Succeed(r.Context())
 
 	// BACK TO WHERE THE LOGIN BEGAN, by redirect. The callback is a
 	// browser following the provider's redirect, and it used to answer the

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -106,18 +107,18 @@ const formEncoding = "application/x-www-form-urlencoded"
 // walk of ids the others are throttled against. The form is read first,
 // because the secret the lookup is checked against is in it.
 func (s *Service) StartProviderRedemption(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
-	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailInvite) {
+	adm, ok := s.admit(w, r, credential.Attempt{Source: s.sourceOf(r)},
+		types.FailInvite)
+	if !ok {
 		return
 	}
+	defer adm.ticket.Release()
 	form, ok := readForm(w, r)
 	if !ok {
 		return
 	}
 	secret := form.Get("secret")
-	held, ok := s.presentedInvitation(w, r, arrived, source, r.PathValue("id"),
-		secret)
+	held, ok := s.presentedInvitation(w, r, adm, r.PathValue("id"), secret)
 	if !ok {
 		return
 	}
@@ -141,6 +142,9 @@ func (s *Service) StartProviderRedemption(w http.ResponseWriter, r *http.Request
 				"is recorded under while you hold no seat."})
 		return
 	}
+	// THE LINK PROVED ITSELF, which is what this admission was for; the
+	// redemption it starts is admitted again at the callback.
+	adm.ticket.Succeed(r.Context())
 	s.launch(w, r, oidc.Flight{
 		Return: returnPath(form.Get("return_to")),
 		Invite: held.ID, InviteSecret: secret, Login: login,
@@ -183,11 +187,11 @@ func readForm(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 // redeemThroughProvider finishes a redemption the flight carried, once the ID
 // token has verified.
 func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, attempt authevents.Failure, flight oidc.Flight,
+	adm admission, attempt authevents.Failure, flight oidc.Flight,
 	claims oidc.Claims, refresh string, provedAt time.Time) {
 
-	held, ok := s.presentedInvitation(w, r, arrived, attempt.Client,
-		flight.Invite, flight.InviteSecret)
+	held, ok := s.presentedInvitation(w, r, adm, flight.Invite,
+		flight.InviteSecret)
 	if !ok {
 		return
 	}
@@ -217,7 +221,7 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 		if holder.ID == person {
 			s.spendInvitation(r, held, person, opID)
 		}
-		s.refuseSpentInvitationID(w, r, arrived, attempt.Client, held.ID)
+		s.refuseInvitation(w, r, adm, held.ID, true)
 		return
 	}
 	email, err := s.openSealed(r, held)
@@ -282,7 +286,7 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 	log.InfoContext(r.Context(), "api_invite_redeemed",
 		"invitation", held.ID, "person", person, "login", flight.Login,
 		"through", "oidc")
-	s.throttle.Flush(r.Context(), attempt.Client)
+	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, iamdomain.Sighting{
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: flight.Login, Grants: held.Grants, Colleague: held.Colleague,

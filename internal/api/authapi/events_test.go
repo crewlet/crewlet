@@ -438,21 +438,36 @@ func TestACodeSpentConcurrentlyIsRefusedToTheLoser(t *testing.T) {
 	}
 }
 
-// A THROTTLED ATTEMPT IS COUNTED AS ONE THE CEILING TURNED AWAY.
+// A THROTTLED ATTEMPT IS COUNTED AS ONE THE CURVE TURNED AWAY, AND SAYS WHEN
+// TO COME BACK.
+//
+// The curve on one login from one address: a wait served inside the request
+// after the first failure and the second, and the fourth attempt — owing seven
+// seconds, past what a request is held open for — answered 429 with those
+// seconds in `Retry-After`. It used to be answered with no header at all, so a
+// client retried at once and was refused again. Mutation: write the 429
+// without the header and the wait is unreadable.
 func TestAThrottledAttemptIsCountedAsThrottled(t *testing.T) {
 	t.Parallel()
 	r := newSignInRig(t)
-	for range credential.AdmitLimit {
-		r.login(t, "nobody.here", password, "")
+	for i := range 3 {
+		if got := r.login(t, "nobody.here", password, ""); got != http.StatusUnauthorized {
+			t.Fatalf("attempt %d answered %d, want the ordinary refusal after "+
+				"a wait served in the request", i+1, got)
+		}
 	}
-	if got := r.login(t, "nobody.here", password, ""); got != http.StatusTooManyRequests {
-		t.Fatalf("past the limit answered %d, want 429", got)
+	rec := r.signIn(t, "nobody.here", password, "")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the fourth attempt answered %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "7" {
+		t.Errorf("Retry-After %q, want the 7 seconds the curve owes", got)
 	}
 	_, failures := r.audit.snapshot()
 	last := failures[len(failures)-1]
 	if !last.Throttled || last.Method != types.FailPassword || last.Subject != "" {
 		t.Errorf("throttled failure = %+v: want it marked throttled, on the "+
 			"route's method, and naming nobody — it was refused before the "+
-			"body was read", last)
+			"login was looked up", last)
 	}
 }

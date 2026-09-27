@@ -949,18 +949,14 @@ func (f *FleetStore) Release(ctx context.Context, key string) error {
 
 // ---- the authentication attempts ---------------------------------------- //
 
-// Fail records one failed authentication and reports how many are in the
-// window.
+// Fail records one failed authentication.
 //
-// TWO ROUND TRIPS, and the second is the answer rather than a courtesy: a
-// throttle decides on the count its own failure produced ("that was the
-// fifth"), and making the caller read it back on the NEXT request would give
-// it a number from before the attempt it is judging. The path is a failed
-// authentication, which is rare by construction — the cost lands on the
-// caller getting it wrong.
-func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) (int, error) {
+// ONE ROUND TRIP. The count a caller would read back is the throttle's own to
+// keep: it decides on its local curve and reads this window only to seed it,
+// so a second trip reading the record back is a cost nobody reads.
+func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) error {
 	if subject == "" {
-		return 0, errors.New("coord/kv: an attempt needs a subject")
+		return errors.New("coord/kv: an attempt needs a subject")
 	}
 	// PUT, NOT CREATE: every attempt is a new REVISION of the subject's
 	// record, which is what makes the bucket's own history the cap. Create
@@ -968,38 +964,38 @@ func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) (i
 	// the attempts it exists to count is no throttle at all.
 	if _, err := f.attempts.Put(ctx, encodeKey(subject),
 		[]byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
-		return 0, unavailable("record the failed attempt", err)
+		return unavailable("record the failed attempt", err)
 	}
-	return f.Failures(ctx, subject, now)
+	return nil
 }
 
-// Failures reports how many attempts against subject are still in the window.
-func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time) (int, error) {
+// Failures reports what the window holds against subject.
+func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time) (coord.Attempted, error) {
 	if subject == "" {
-		return 0, errors.New("coord/kv: an attempt needs a subject")
+		return coord.Attempted{}, errors.New("coord/kv: an attempt needs a subject")
 	}
 	// HISTORY, which is an ephemeral ordered consumer over ONE subject —
 	// two metadata proposals on a clustered bucket, the cost this package's
 	// doc names for a listing. It is paid here because the alternative
 	// answers a different question: a stream's per-subject message count is
 	// one request and no consumer, but it carries no instants, so the
-	// window could only ever be the broker's reaping and the `now` a caller
+	// window could only ever be the broker's reaping, the `now` a caller
 	// passes would be a parameter one backend honoured and the other
-	// ignored — which is the defect the whole of this file's claim handling
-	// was just rid of. The contract keeps it off the path of every request
-	// instead; see [coord.Attempts.Failures].
+	// ignored, and there would be no newest instant to answer. The contract
+	// keeps it off the path of every request instead; see
+	// [coord.Attempts.Failures].
 	history, err := f.attempts.History(ctx, encodeKey(subject))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		// NOTHING RECORDED, which is the ordinary answer: a clean
 		// caller, or one whose attempts have all aged out of the
 		// bucket.
-		return 0, nil
+		return coord.Attempted{}, nil
 	}
 	if err != nil {
-		return 0, unavailable("read the failed attempts", err)
+		return coord.Attempted{}, unavailable("read the failed attempts", err)
 	}
 	cutoff := now.Add(-f.attemptWindow)
-	live := 0
+	var out coord.Attempted
 	for _, entry := range history {
 		// A PURGE MARKER IS NOT AN ATTEMPT. Flush rolls the record up
 		// and the marker it leaves is a message on the same subject, so
@@ -1013,8 +1009,10 @@ func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time
 			// UNREADABLE IS STILL AN ATTEMPT. Something wrote a
 			// record here, and the direction that cannot be
 			// defended is the one where a value nobody can parse
-			// un-throttles the caller it was written against.
-			live++
+			// un-throttles the caller it was written against. It
+			// is dated by the broker's own receipt instead.
+			out.Count++
+			out.Last = latest(out.Last, entry.Created())
 			continue
 		}
 		// THE INSTANT DECIDES, the way a cooldown's does: the bucket's
@@ -1025,10 +1023,19 @@ func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time
 		// each deciding a record has lapsed would both win it; a count
 		// has nothing to win.
 		if at.After(cutoff) {
-			live++
+			out.Count++
+			out.Last = latest(out.Last, at)
 		}
 	}
-	return live, nil
+	return out, nil
+}
+
+// latest is the later of two instants.
+func latest(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // Flush forgets every attempt against subject.

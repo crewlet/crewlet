@@ -188,11 +188,14 @@ type bootstrapRequest struct {
 // is nobody to authenticate as. What bounds it is the code's own entropy, the
 // throttle, and the fact that it stops existing the moment it has been used.
 func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
-	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailBootstrap) {
+	// ON THE SOURCE ALONE: a code names nobody, so there is no subject to
+	// key a curve on, and the source's own curve is what bounds a walk.
+	adm, ok := s.admit(w, r, credential.Attempt{Source: s.sourceOf(r)},
+		types.FailBootstrap)
+	if !ok {
 		return
 	}
+	defer adm.ticket.Release()
 	closed, err := s.bootstrapClosed(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_bootstrap_estate_unreadable", "error", err)
@@ -225,7 +228,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	// trims it, so a code pasted with the newline it was copied with is
 	// the code in the file.
 	presented := strings.TrimSpace(in.Code)
-	code, live := s.liveCode(w, r, arrived, source, presented)
+	code, live := s.liveCode(w, r, adm, presented)
 	if !live {
 		return
 	}
@@ -278,7 +281,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		OpID:          opID, Reason: "the first operator",
 	})
 	if err != nil {
-		s.refuseFounder(w, r, arrived, source, presented, err)
+		s.refuseFounder(w, r, adm, presented, err)
 		return
 	}
 	if !landed(enrolled) {
@@ -307,7 +310,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 
 	log.InfoContext(r.Context(), "api_bootstrap_redeemed",
 		"person", person, "login", in.Login)
-	s.throttle.Flush(r.Context(), source)
+	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, iamdomain.Sighting{
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: in.Login, Grants: s.boot.API.Auth.MaxGrants,
@@ -336,7 +339,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 //   - NOTHING — no row, an expiry still to come, and not this node's file —
 //     is a wrong code, and is refused exactly as every failed sign-in is.
 func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, source, presented string) (iamdomain.BootstrapCode, bool) {
+	adm admission, presented string) (iamdomain.BootstrapCode, bool) {
 
 	code, err := s.directory.BootstrapCode(r.Context(), bootstrapCodeID(presented))
 	if err != nil {
@@ -350,7 +353,7 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 	case iamdomain.CodeRedeemed:
 		httpjson.Fail(w, http.StatusConflict, httpjson.CodeBootstrapClosed)
 	case iamdomain.CodeAgedOut, iamdomain.CodeWithdrawn:
-		s.refuseStaleCode(w, r, arrived, source, presented, string(state))
+		s.refuseStaleCode(w, r, adm, presented, string(state))
 	default:
 		// A CODE THAT SAYS ITS OWN TIME HAS PASSED is stale whether or
 		// not its row is still on the log: the sweep collects a row a
@@ -360,7 +363,7 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 		// it discloses nothing.
 		if expires, ok := bootstrapCodeExpiry(presented); ok &&
 			!s.now().Before(expires) {
-			s.refuseStaleCode(w, r, arrived, source, presented,
+			s.refuseStaleCode(w, r, adm, presented,
 				string(iamdomain.CodeAgedOut))
 			return iamdomain.BootstrapCode{}, false
 		}
@@ -372,14 +375,14 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 		// code was right, which is a file read one character at a time.
 		if held, ok := s.heldCode(); ok &&
 			subtle.ConstantTimeCompare([]byte(held), []byte(presented)) == 1 {
-			s.refuseStaleCode(w, r, arrived, source, presented, "unpublished")
+			s.refuseStaleCode(w, r, adm, presented, "unpublished")
 			return iamdomain.BootstrapCode{}, false
 		}
 		// THE CODE TRIED IS THE SUBJECT, keyed in memory and never
 		// kept: how many DIFFERENT codes one client tried in a minute is
 		// the difference between a typo and somebody guessing.
-		s.refuseSignIn(w, r, arrived, authevents.Failure{
-			Client: source, Method: types.FailBootstrap, Subject: presented,
+		s.refuseSignIn(w, r, adm, authevents.Failure{
+			Client: adm.source, Method: types.FailBootstrap, Subject: presented,
 		}, "bootstrap code matches nothing on the log")
 	}
 	return iamdomain.BootstrapCode{}, false
@@ -399,23 +402,24 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 //
 // # A failed attempt like every other
 //
-// Counted against the SOURCE, reaching the failure tally and padded to the
-// deadline, as an invitation's 410 is — a refusal is a refusal whichever arm
-// produced it, and the specificity is safe because presenting a code whose
-// digest is on the log, or in this node's own file, is proof of holding one,
-// and a code whose own expiry has passed is answered alike whoever minted it.
+// Counted against the SOURCE's curve, reaching the failure tally and padded
+// to the deadline — a refusal is a refusal whichever arm produced it, and a
+// code that does not work is one the curve bounds however it stopped working.
+// The specificity is safe because presenting a code whose digest is on the
+// log, or in this node's own file, is proof of holding one, and a code whose
+// own expiry has passed is answered alike whoever minted it.
 func (s *Service) refuseStaleCode(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, source, presented, state string) {
+	adm admission, presented, state string) {
 
-	s.throttle.Fail(r.Context(), source)
+	adm.ticket.Fail(r.Context())
 	s.audit.Failed(r.Context(), authevents.Failure{
-		Client: source, Method: types.FailBootstrap, Subject: presented,
+		Client: adm.source, Method: types.FailBootstrap, Subject: presented,
 	})
 	log.WarnContext(r.Context(), "api_bootstrap_code_stale",
-		"state", state, "source", source,
+		"state", state, "source", adm.source,
 		"hint", "`crewlet iam bootstrap-code` mints a fresh one, and a "+
 			"restart replaces a dead file on the node that holds it")
-	s.throttle.Pad(r.Context(), arrived)
+	s.throttle.Pad(r.Context(), adm.at)
 	httpjson.Fail(w, http.StatusGone, httpjson.CodeBootstrapCodeStale)
 }
 
@@ -428,7 +432,7 @@ func (s *Service) refuseStaleCode(w http.ResponseWriter, r *http.Request,
 // progress is its own, and any other refusal of the node's own writer is a
 // wiring fault no caller can clear.
 func (s *Service) refuseFounder(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, source, presented string, err error) {
+	adm admission, presented string, err error) {
 
 	var inProgress *iamdomain.FoundingInProgress
 	switch {
@@ -445,7 +449,7 @@ func (s *Service) refuseFounder(w http.ResponseWriter, r *http.Request,
 				"until": inProgress.Until.UTC().Format(time.RFC3339),
 			})
 	case errors.Is(err, iamdomain.ErrBootstrapCodeDead):
-		s.refuseStaleCode(w, r, arrived, source, presented, "dead at the record")
+		s.refuseStaleCode(w, r, adm, presented, "dead at the record")
 	case errors.Is(err, iamdomain.ErrBootstrapClosed):
 		log.InfoContext(r.Context(), "api_bootstrap_closed_at_the_record",
 			"error", err)

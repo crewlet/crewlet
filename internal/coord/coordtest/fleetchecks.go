@@ -140,15 +140,15 @@ func CheckUnnamedRecordsAreRefused(ctx context.Context, f coord.Fleet, at time.T
 			"answered %t rather than an error: false there refuses a callback "+
 			"nobody has spent", ok))
 	}
-	if n, err := f.Fail(ctx, "", at); err == nil {
-		errs = append(errs, fmt.Errorf("an empty subject reached Fail, which "+
-			"answered %d rather than an error: an attempt nobody can be throttled "+
-			"by reads as a caller with a clean record", n))
+	if err := f.Fail(ctx, "", at); err == nil {
+		errs = append(errs, errors.New("an empty subject reached Fail, which "+
+			"answered no error: an attempt nobody can be throttled by reads as "+
+			"a caller with a clean record"))
 	}
-	if n, err := f.Failures(ctx, "", at); err == nil {
+	if got, err := f.Failures(ctx, "", at); err == nil {
 		errs = append(errs, fmt.Errorf("an empty subject reached Failures, which "+
-			"answered %d rather than an error — the answer a throttle lets "+
-			"through", n))
+			"answered %+v rather than an error — the answer a throttle lets "+
+			"through", got))
 	}
 	if err := f.Flush(ctx, ""); err == nil {
 		errs = append(errs, errors.New("an empty subject reached Flush, which "+

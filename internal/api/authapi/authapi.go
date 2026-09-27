@@ -18,20 +18,23 @@
 // # The rule that shapes every refusal on this surface
 //
 // A SIGN-IN SURFACE MUST NOT BE A ROSTER. Every failed sign-in answers one
-// code, at one wall-clock deadline measured from arrival, whatever actually
+// code, at one wall-clock deadline measured from admission, whatever actually
 // went wrong — no such login, wrong password, wrong second factor, a person
 // suspended, a person removed. A caller that could tell those apart has a list
 // of who works here and a way to test it.
 //
 // Both halves are needed and neither works alone: a distinguishing code makes
 // the timing pad pointless, and a distinguishing delay makes the single code
-// pointless. internal/iam/credential owns the timing half — admission per
-// source BEFORE the subject resolves, a fixed-cost decoy on the miss, both
-// arms padded to one deadline — and this package owns the shape half.
+// pointless. internal/iam/credential owns the timing half — a delay curve
+// decided BEFORE the subject resolves, on the source and on the subject as it
+// was TYPED, a fixed-cost decoy on the miss, both arms padded to one deadline —
+// and this package owns the shape half.
 //
 // The exceptions are named rather than assumed, and each discloses nothing a
-// stranger did not already have: a throttle refusal is keyed on the SOURCE, so
-// it tells somebody they are rate-limited, which they knew; a second-factor
+// stranger did not already have: a throttle refusal names only the caller's
+// own recent failures from where they are, on what they typed — a name nobody
+// holds climbs the curve exactly as a real one does — so it tells somebody
+// they are rate-limited, which they knew; a second-factor
 // prompt is reached only by somebody who already passed the first; an
 // invitation's refusal is read by somebody holding the link; and a STALE
 // founder code (`bootstrap_code_stale`) is answered only to somebody presenting
@@ -87,7 +90,7 @@
 // Some routes here are unguarded, because requiring a credential to obtain one
 // is a deployment nobody can enter: the posture read, the login itself, the
 // first operator's bootstrap, the OIDC pair and the invitation pair. Each that
-// touches the store is admitted per SOURCE by the throttle, and each that
+// touches the store is admitted by the throttle first, and each that
 // changes state is origin-checked like every other write (internal/api/auth's
 // CSRF gate) — the guard is what they are exempt from, not the cross-site
 // rule, and that gate exempting them too is what left login CSRF open.
@@ -372,9 +375,9 @@ type Options struct {
 	// rather than a refusal at boot.
 	Hasher *credential.Hasher
 
-	// Throttle is the fleet's failed-attempt window with the two timing
-	// defences around it. REQUIRED — without it every refusal on this
-	// surface is an oracle with a stopwatch.
+	// Throttle is the sign-in delay curve with the two timing defences
+	// around it. REQUIRED — without it every refusal on this surface is an
+	// oracle with a stopwatch, and a password is guessed at line rate.
 	Throttle *credential.Throttle
 
 	// Blinder is where the address and subject blinds come from. REQUIRED.
@@ -569,17 +572,18 @@ func joinNames(names []string) string {
 // the caller must not.
 //
 // THE ATTEMPT IS COUNTED, NEVER PUBLISHED. A failed sign-in is authored by
-// whoever can reach this listener, so it goes to the audit trail's counter and
-// its per-client, per-minute tally — the engine's own loop decides when a row
-// is written, and the row carries counts rather than what was typed.
+// whoever can reach this listener, so it goes to the throttle's curve, the
+// audit trail's counter and its per-client, per-minute tally — the engine's
+// own loop decides when a row is written, and the row carries counts rather
+// than what was typed.
 //
-// IT PADS BEFORE IT ANSWERS. The pad is measured from when the request
-// ARRIVED rather than from here, so a slow arm and a fast one leave at the
+// IT PADS BEFORE IT ANSWERS. The pad is measured from when the request was
+// ADMITTED rather than from here, so a slow arm and a fast one leave at the
 // same instant — which is the only shape in which a stopwatch learns nothing.
 func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, attempt authevents.Failure, why string) {
+	in admission, attempt authevents.Failure, why string) {
 
-	s.throttle.Fail(r.Context(), attempt.Client)
+	in.ticket.Fail(r.Context())
 	s.audit.Failed(r.Context(), attempt)
 	log.WarnContext(r.Context(), "api_sign_in_refused",
 		// THE ARM, for the log only. Never the login, never the
@@ -588,42 +592,62 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 		// operator's screen renders.
 		"reason", why, "method", string(attempt.Method), "route", r.URL.Path,
 		"source", attempt.Client)
-	s.throttle.Pad(r.Context(), arrived)
+	s.throttle.Pad(r.Context(), in.at)
 	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSignInRefused)
 }
 
-// admit runs the per-source throttle, answering false once it has written the
-// refusal.
-//
-// BEFORE ANYTHING IS LOOKED UP, which is what keying on the source rather than
-// on the subject buys: a caller cannot learn that a login exists by watching
-// which requests get rate-limited.
-//
-// A THROTTLED REQUEST IS A FAILED ATTEMPT TOO, counted apart as one the
-// ceiling turned away: a client that keeps going after it was stopped is the
-// part of a guessing run an operator most wants to see, and the method names
-// which door it was pushing on.
-func (s *Service) admit(w http.ResponseWriter, r *http.Request, source string,
-	method types.FailureMethod) bool {
+// admission is one attempt the throttle let through: its ticket, the instant a
+// refusal is padded from, and where it came from.
+type admission struct {
+	ticket *credential.Ticket
+	at     time.Time
+	source string
+}
 
-	err := s.throttle.Admit(r.Context(), source)
+// admit runs the throttle's curve for one attempt, answering its [admission]
+// or false once it has written the refusal.
+//
+// BEFORE ANYTHING IS LOOKED UP, on the source and on the subject as the caller
+// TYPED it (empty for a credential that names nobody): keyed on what it
+// resolved to, the curve would be one only real people could climb, and the
+// roster again. A wait of up to [credential.InlineDelay] is served inside this
+// call; a longer one is `429 throttled` naming the time left.
+//
+// THE CALLER RESOLVES THE TICKET — [credential.Ticket.Fail] through
+// [Service.refuseSignIn] or its siblings, [credential.Ticket.Succeed] where
+// the credential proved itself — and DEFERS [credential.Ticket.Release], so an
+// attempt that reached no verdict counts as nothing.
+//
+// THE PAD RUNS FROM ADMISSION, not from arrival: the curve's own wait is the
+// same for a name that exists and one that does not, and a deadline it had
+// already spent would leave the verification after it unpadded.
+//
+// A THROTTLED REQUEST IS A FAILED ATTEMPT TOO, counted apart as one the curve
+// turned away: a client that keeps going after it was stopped is the part of
+// a guessing run an operator most wants to see, and the method names which
+// door it was pushing on.
+func (s *Service) admit(w http.ResponseWriter, r *http.Request,
+	attempt credential.Attempt, method types.FailureMethod) (admission, bool) {
+
+	ticket, err := s.throttle.Admit(r.Context(), attempt)
 	if err == nil {
-		return true
+		return admission{ticket: ticket, at: s.throttle.Now(),
+			source: attempt.Source}, true
 	}
 	if errors.Is(err, credential.ErrThrottled) {
 		s.audit.Failed(r.Context(), authevents.Failure{
-			Client: source, Method: method, Throttled: true,
+			Client: attempt.Source, Method: method, Throttled: true,
 		})
-		// THE ONE SPECIFIC REFUSAL HERE, and it is safe because it is
-		// keyed on the source: a stranger learns they are rate-limited,
-		// which they already knew.
-		httpjson.Fail(w, http.StatusTooManyRequests, httpjson.CodeThrottled)
-		return false
+		httpjson.Throttled(w, credential.RetryAfter(err))
+		return admission{}, false
 	}
-	log.WarnContext(r.Context(), "api_sign_in_admission_failed",
-		"error", err, "source", source)
+	// THE WAIT ENDED WITH THE REQUEST — the caller went away, or this node
+	// is shutting down. Nothing was attempted; the answer is for a node
+	// that will take it later.
+	log.DebugContext(r.Context(), "api_sign_in_wait_abandoned",
+		"error", err, "source", attempt.Source)
 	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
-	return false
+	return admission{}, false
 }
 
 // stageAdmits reports whether a person's enrolment stage lets them act.

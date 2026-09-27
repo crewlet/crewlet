@@ -2,9 +2,13 @@ package credential_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,43 +19,57 @@ import (
 
 // --- the rig ----------------------------------------------------------------- //
 
-// attempts is a coord.Attempts that can be made unreachable.
+// attempts is a coord.Attempts that counts what it is asked and can be made
+// unreachable.
 type attempts struct {
-	mu     sync.Mutex
-	counts map[string]int
-	err    error
-	reads  int
+	mu      sync.Mutex
+	records map[string][]time.Time
+	err     error
+	reads   int
+	writes  int
+	flushes int
 }
 
-func newAttempts() *attempts { return &attempts{counts: map[string]int{}} }
+func newAttempts() *attempts { return &attempts{records: map[string][]time.Time{}} }
 
-func (a *attempts) Fail(_ context.Context, subject string, _ time.Time) (int, error) {
+func (a *attempts) Fail(_ context.Context, subject string, now time.Time) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.writes++
 	if a.err != nil {
-		return 0, a.err
+		return a.err
 	}
-	a.counts[subject]++
-	return a.counts[subject], nil
+	a.records[subject] = append(a.records[subject], now)
+	return nil
 }
 
-func (a *attempts) Failures(_ context.Context, subject string, _ time.Time) (int, error) {
+func (a *attempts) Failures(_ context.Context, subject string, now time.Time) (coord.Attempted, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.reads++
 	if a.err != nil {
-		return 0, a.err
+		return coord.Attempted{}, a.err
 	}
-	return a.counts[subject], nil
+	var out coord.Attempted
+	for _, at := range a.records[subject] {
+		if at.After(now.Add(-coord.AttemptWindow)) {
+			out.Count++
+			if at.After(out.Last) {
+				out.Last = at
+			}
+		}
+	}
+	return out, nil
 }
 
 func (a *attempts) Flush(_ context.Context, subject string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.flushes++
 	if a.err != nil {
 		return a.err
 	}
-	delete(a.counts, subject)
+	delete(a.records, subject)
 	return nil
 }
 
@@ -59,6 +77,24 @@ func (a *attempts) breaks(err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.err = err
+}
+
+// io is how many round trips the fleet window has been asked for.
+func (a *attempts) io() (reads, writes int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reads, a.writes
+}
+
+// subjects is every key the fleet window holds.
+func (a *attempts) subjects() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, 0, len(a.records))
+	for s := range a.records {
+		out = append(out, s)
+	}
+	return out
 }
 
 // clockOf is a movable clock shared by a throttle and its test.
@@ -79,9 +115,11 @@ func (c *clockOf) advance(d time.Duration) {
 	c.at = c.at.Add(d)
 }
 
-// counting records what each Pad was asked to sleep, so the timing properties
-// are asserted on the DECISION rather than on the wall clock — a test that
-// measured real sleeps would be the flakiest thing in this tree.
+// counting records what each sleep was asked for — the pad's and the curve's
+// — so the timing properties are asserted on the DECISION rather than on the
+// wall clock, and a test that measured real sleeps would be the flakiest thing
+// in this tree. It does not move the clock: a case moves it itself where the
+// time a wait took is the point.
 type counting struct {
 	mu    sync.Mutex
 	slept []time.Duration
@@ -99,90 +137,568 @@ func (c *counting) all() []time.Duration {
 	return append([]time.Duration(nil), c.slept...)
 }
 
-func newThrottle(t *testing.T, a coord.Attempts) (*credential.Throttle, *clockOf, *counting) {
+func (c *counting) take() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.slept
+	c.slept = nil
+	return out
+}
+
+// fleetKey is the digest key every node of a rig's fleet shares.
+var fleetKey = []byte("a-key-every-node-of-this-fleet-shares-32")
+
+func newThrottle(t *testing.T, a *attempts) (*credential.Throttle, *clockOf, *counting) {
 	t.Helper()
 	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
+	return onClock(t, a, clock)
+}
+
+// onClock builds a node of the rig's fleet on a clock another node may share.
+func onClock(t *testing.T, a *attempts, clock *clockOf) (*credential.Throttle, *clockOf, *counting) {
+	t.Helper()
 	pad := &counting{}
-	th, err := credential.NewThrottle(credential.ThrottleDeps{
-		Attempts: a, Now: clock.now, Sleep: pad.sleep,
+	deps := credential.ThrottleDeps{
+		Now: clock.now, Sleep: pad.sleep,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
+	}
+	if a != nil {
+		deps.Attempts, deps.Key = a, fleetKey
+	}
+	th, err := credential.NewThrottle(deps)
 	if err != nil {
 		t.Fatalf("build a throttle: %v", err)
 	}
 	return th, clock, pad
 }
 
-// --- the cases --------------------------------------------------------------- //
+// failOnce admits one attempt and fails it, reporting what the admission
+// waited or refused with.
+func failOnce(t *testing.T, th *credential.Throttle, a credential.Attempt) error {
+	t.Helper()
+	ticket, err := th.Admit(t.Context(), a)
+	if err != nil {
+		return err
+	}
+	ticket.Fail(t.Context())
+	return nil
+}
 
-// ADMISSION IS KEYED ON THE SOURCE AND HAPPENS BEFORE THE SUBJECT RESOLVES.
+// --- the curve --------------------------------------------------------------- //
+
+// A FAILURE COSTS DELAY, NEVER REFUSAL — AND NEVER A LOCKOUT.
 //
-// THE ORACLE THIS WHOLE FILE EXISTS FOR. A throttle keyed on who you CLAIM to
-// be is one only real subjects can trigger, so the 429 becomes the roster: an
-// attacker submits six attempts per name and reads off which names start
-// refusing. Keyed on the source, every name refuses at the same point and the
-// answer says nothing about anybody.
-func TestAdmissionRefusesBeforeTheSubjectIsResolved(t *testing.T) {
+// Each failure on a (subject, source) pair doubles the wait before the pair's
+// next attempt, from one second to a ceiling of thirty. Up to five seconds it
+// is served inside the request; past that the answer is a 429 naming the time
+// left, and once that time has passed the attempt is admitted. It used to be a
+// refusal at the sixth failure lasting the whole fifteen-minute window, which
+// is a lockout anybody who can type a login can cause. Mutation: refuse at a
+// count, and the attempt after the wait is still refused.
+func TestAFailureCostsDelayAndNeverALockout(t *testing.T) {
 	t.Parallel()
-	store := newAttempts()
-	th, _, _ := newThrottle(t, store)
-	ctx := t.Context()
+	th, clock, sleeps := newThrottle(t, newAttempts())
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
 
-	// Six failures from one source, every one against a DIFFERENT name.
-	for _, name := range []string{
-		"sarah.chen", "nobody.here", "also.nobody", "jane.doe",
-		"not.a.person", "still.nobody",
+	// The curve's own waits, each attempt made the moment the last was
+	// refused or failed: 1s and 2s and 4s served in-process, the next
+	// three refused with the time left.
+	want := []time.Duration{0, time.Second, 2 * time.Second, 4 * time.Second}
+	for i, wait := range want {
+		if err := failOnce(t, th, who); err != nil {
+			t.Fatalf("attempt %d was refused (%v), want a %s wait served in "+
+				"the request", i+1, err, wait)
+		}
+		got := sleeps.take()
+		switch {
+		case wait == 0 && len(got) != 0:
+			t.Errorf("attempt %d waited %v, want none", i+1, got)
+		case wait > 0 && (len(got) != 1 || got[0] != wait):
+			t.Errorf("attempt %d waited %v, want %s", i+1, got, wait)
+		}
+		clock.advance(wait)
+	}
+	for _, left := range []time.Duration{8 * time.Second, 16 * time.Second,
+		credential.DelayCeiling, credential.DelayCeiling} {
+
+		_, err := th.Admit(t.Context(), who)
+		if !errors.Is(err, credential.ErrThrottled) {
+			t.Fatalf("an attempt owed %s answered %v, want throttled", left, err)
+		}
+		if got := credential.RetryAfter(err); got != left {
+			t.Errorf("Retry-After %s, want the %s left", got, left)
+		}
+		// NEVER A LOCKOUT: the attempt after the wait is admitted.
+		clock.advance(left)
+		if err := failOnce(t, th, who); err != nil {
+			t.Fatalf("the attempt after a %s wait was refused: %v — a "+
+				"curve an outsider can drive must never close", left, err)
+		}
+	}
+	// And a correct credential after the wait is simply admitted and
+	// clears the pair.
+	clock.advance(credential.DelayCeiling)
+	ticket, err := th.Admit(t.Context(), who)
+	if err != nil {
+		t.Fatalf("the right password after the wait was refused: %v", err)
+	}
+	ticket.Succeed(t.Context())
+	if _, err := th.Admit(t.Context(), who); err != nil {
+		t.Errorf("a pair that just succeeded owes a wait: %v", err)
+	}
+}
+
+// A NAME NOBODY HOLDS CLIMBS THE CURVE EXACTLY AS A REAL ONE DOES.
+//
+// The throttle is keyed on what was TYPED and never on what it resolved to,
+// so there is nothing for it to answer differently about somebody who exists:
+// a curve only real subjects could climb would make the curve itself the
+// roster. Two spellings that reach one person — an address with a plus tag and
+// in another case — are one curve, because the identity estate folds them to
+// one person.
+func TestTheCurveNeverDependsOnWhoExists(t *testing.T) {
+	t.Parallel()
+	for _, pair := range [][2]string{
+		{"sarah.chen", "nobody.here"},
+		{"Sarah.Chen@Example.com", "sarah.chen+work@example.com"},
 	} {
-		if err := th.Admit(ctx, "203.0.113.7"); err != nil {
-			t.Fatalf("admission refused too early while trying %s: %v", name, err)
+		th, _, _ := newThrottle(t, newAttempts())
+		first := credential.Attempt{Source: "203.0.113.7", Subject: pair[0]}
+		second := credential.Attempt{Source: "203.0.113.7", Subject: pair[1]}
+		for range 5 {
+			if err := failOnce(t, th, first); err != nil &&
+				!errors.Is(err, credential.ErrThrottled) {
+				t.Fatal(err)
+			}
 		}
-		th.Fail(ctx, "203.0.113.7")
-	}
-
-	// The source is now refused, whoever it claims to be next.
-	for _, name := range []string{"sarah.chen", "a.name.that.does.not.exist"} {
-		if err := th.Admit(ctx, "203.0.113.7"); !errors.Is(err, credential.ErrThrottled) {
-			t.Errorf("after six failures the source was admitted for %s: %v",
-				name, err)
+		_, a := th.Admit(t.Context(), first)
+		if pair[0] == "sarah.chen" {
+			// Two different names: the second owes nothing.
+			ticket, err := th.Admit(t.Context(), second)
+			if err != nil {
+				t.Errorf("%s owes a wait for %s's failures: %v", pair[1], pair[0], err)
+			}
+			ticket.Release()
+			if credential.RetryAfter(a) == 0 {
+				t.Errorf("%s owes no wait after five failures", pair[0])
+			}
+			continue
 		}
-	}
-	// And a different source is untouched, which is what makes the
-	// throttle a throttle rather than a company-wide lockout.
-	if err := th.Admit(ctx, "198.51.100.4"); err != nil {
-		t.Errorf("a second source was refused for the first's failures: %v", err)
-	}
-	// THE STORE WAS NEVER ASKED ABOUT A SUBJECT. Every read it saw was
-	// keyed on the source; a subject reaching it at all would be the
-	// oracle back again one layer down.
-	if store.reads == 0 {
-		t.Error("the fleet window was never read, so this case is asserting " +
-			"about a throttle that is not consulting it")
-	}
-	for subject := range store.counts {
-		if subject != "203.0.113.7" && subject != "198.51.100.4" {
-			t.Errorf("the fleet window holds a record for %q, which is not a "+
-				"source — a throttle that counts subjects is the roster it "+
-				"exists to hide", subject)
+		_, b := th.Admit(t.Context(), second)
+		if credential.RetryAfter(a) == 0 || credential.RetryAfter(a) != credential.RetryAfter(b) {
+			t.Errorf("%s owes %s and %s owes %s: two spellings of one person "+
+				"are two curves, so a plus tag is a fresh set of guesses",
+				pair[0], credential.RetryAfter(a), pair[1], credential.RetryAfter(b))
 		}
 	}
 }
 
-// A SUCCESSFUL AUTHENTICATION LIFTS THE LOCKOUT, FLEET-WIDE.
-func TestASuccessfulAuthenticationFlushesTheWindow(t *testing.T) {
+// A SUCCESS CLEARS ITS OWN PAIR AND NOTHING ELSE.
+//
+// A success used to flush the whole SOURCE, so anybody holding an account could
+// guess at somebody else's five times, sign in as themselves, and guess again
+// with a clean record — for ever. Their own sign-in clears their own pair, and
+// the target's pair keeps every failure; and a spray across many names from the
+// same address keeps the source's count however often the insider signs in
+// between. Mutation: clear the source, or every pair from it, on a success and
+// either half owes nothing.
+func TestASuccessClearsOnlyItsOwnPair(t *testing.T) {
+	t.Parallel()
+	th, _, sleeps := newThrottle(t, newAttempts())
+	target := credential.Attempt{Source: "198.51.100.9", Subject: "the.cfo"}
+	self := credential.Attempt{Source: "198.51.100.9", Subject: "an.insider"}
+	signIn := func() {
+		t.Helper()
+		ticket, err := th.Admit(t.Context(), self)
+		if err != nil {
+			t.Fatalf("the insider's own sign-in was refused: %v", err)
+		}
+		ticket.Succeed(t.Context())
+	}
+	for range 3 {
+		if err := failOnce(t, th, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	signIn()
+	if owed := owedBy(t, th, sleeps, target); owed == 0 {
+		t.Error("after the insider's own sign-in their fourth guess at the " +
+			"CFO owed nothing — a success wiped somebody else's record")
+	}
+
+	// THE SPRAY: a new name each time, the insider signing in between.
+	spray, _, sleeps := newThrottle(t, newAttempts())
+	th = spray
+	for i := range credential.SourceAllowance + 2 {
+		if err := failOnce(t, spray, credential.Attempt{Source: "198.51.100.9",
+			Subject: fmt.Sprintf("colleague.%d", i)}); err != nil &&
+			!errors.Is(err, credential.ErrThrottled) {
+			t.Fatal(err)
+		}
+		signIn()
+	}
+	if owed := owedBy(t, spray, sleeps, credential.Attempt{
+		Source: "198.51.100.9", Subject: "colleague.next"}); owed == 0 {
+		t.Error("a spray across names from one address owed nothing because " +
+			"the sprayer signed in as themselves between names")
+	}
+}
+
+// owedBy admits one attempt and reports the wait it owed — served in the
+// request or named by a refusal — releasing it.
+func owedBy(t *testing.T, th *credential.Throttle, sleeps *counting,
+	a credential.Attempt) time.Duration {
+
+	t.Helper()
+	sleeps.take()
+	ticket, err := th.Admit(t.Context(), a)
+	if err != nil {
+		return credential.RetryAfter(err)
+	}
+	ticket.Release()
+	var owed time.Duration
+	for _, d := range sleeps.take() {
+		owed += d
+	}
+	return owed
+}
+
+// A SOURCE'S FAILURES THAT ITS OWN PEOPLE THEN FIXED DO NOT CATCH UP WITH IT.
+//
+// Many people share one address — an office, a VPN. Each success strikes that
+// pair's own mistakes from the source, so twelve people who each mistyped once
+// and then signed in leave the thirteenth nothing to wait for; twelve names
+// that never signed in put the source on its curve. The first is the control
+// the second is measured against.
+func TestASourceCarriesOnlyTheMistakesNobodyFixed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		fixed bool
+		owes  bool
+	}{
+		{"twelve people who mistyped and got in", true, false},
+		{"twelve names that never got in", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			th, clock, sleeps := newThrottle(t, newAttempts())
+			for i := range 12 {
+				who := credential.Attempt{Source: "192.0.2.10",
+					Subject: fmt.Sprintf("person.%d", i)}
+				if err := failOnce(t, th, who); err != nil &&
+					!errors.Is(err, credential.ErrThrottled) {
+					t.Fatal(err)
+				}
+				if tc.fixed {
+					clock.advance(time.Second)
+					ticket, err := th.Admit(t.Context(), who)
+					if err != nil {
+						t.Fatalf("person %d's correct password was refused: %v", i, err)
+					}
+					ticket.Succeed(t.Context())
+				}
+			}
+			clock.advance(time.Second)
+			next := credential.Attempt{Source: "192.0.2.10", Subject: "person.new"}
+			owes := owedBy(t, th, sleeps, next) > 0
+			if owes != tc.owes {
+				t.Errorf("the thirteenth person's first attempt owes a wait: %v, "+
+					"want %v", owes, tc.owes)
+			}
+		})
+	}
+}
+
+// A RUN ACROSS MANY NAMES FROM ONE SOURCE MEETS THE SOURCE'S CURVE.
+//
+// Every pair is fresh, so the pair curve alone never slows a spray: one
+// password against every login in the company. The source allows ten failures
+// and then climbs the same curve, until a wait past five seconds is a 429 with
+// the time left — decided on this node's own count.
+func TestASprayAcrossNamesMeetsTheSourceCurve(t *testing.T) {
+	t.Parallel()
+	th, _, _ := newThrottle(t, newAttempts())
+	var refused error
+	for i := range credential.SourceAllowance + credential.CurveSteps {
+		err := failOnce(t, th, credential.Attempt{Source: "203.0.113.50",
+			Subject: fmt.Sprintf("name.%d", i)})
+		if err != nil {
+			refused = err
+			if i < credential.SourceAllowance {
+				t.Fatalf("name %d was refused inside the allowance: %v", i, err)
+			}
+			break
+		}
+	}
+	if !errors.Is(refused, credential.ErrThrottled) || credential.RetryAfter(refused) <= credential.InlineDelay {
+		t.Errorf("a spray across %d names was never refused (%v), want a 429 "+
+			"with more than %s left", credential.SourceAllowance+credential.CurveSteps,
+			refused, credential.InlineDelay)
+	}
+	// And another source is untouched, which is what makes it a throttle
+	// rather than a company-wide lockout.
+	if err := failOnce(t, th, credential.Attempt{Source: "198.51.100.4",
+		Subject: "name.0"}); err != nil {
+		t.Errorf("a second source paid for the first's spray: %v", err)
+	}
+}
+
+// A SOURCE THIS NODE ALREADY REFUSES COSTS THE FLEET NOTHING.
+//
+// The source is decided on this node's own count before anything is read, so a
+// flood from a source past its curve is refused with no round trip at all. It
+// used to read the fleet's window on every attempt — refused ones included — so
+// an unauthenticated caller priced a coordination read per request. Mutation:
+// seed the pair before deciding the source, and the refused attempts read.
+func TestARefusedSourceCostsTheFleetNothing(t *testing.T) {
 	t.Parallel()
 	store := newAttempts()
 	th, _, _ := newThrottle(t, store)
-	ctx := t.Context()
-	for range 6 {
-		th.Fail(ctx, "203.0.113.7")
+	for i := 0; ; i++ {
+		if err := failOnce(t, th, credential.Attempt{Source: "203.0.113.66",
+			Subject: fmt.Sprintf("name.%d", i)}); err != nil {
+			break
+		}
 	}
-	if err := th.Admit(ctx, "203.0.113.7"); !errors.Is(err, credential.ErrThrottled) {
-		t.Fatalf("the source was not throttled: %v", err)
+	reads, writes := store.io()
+	for i := range 200 {
+		if _, err := th.Admit(t.Context(), credential.Attempt{Source: "203.0.113.66",
+			Subject: fmt.Sprintf("another.%d", i)}); !errors.Is(err, credential.ErrThrottled) {
+			t.Fatalf("attempt %d from a refused source answered %v", i, err)
+		}
 	}
-	th.Flush(ctx, "203.0.113.7")
-	if err := th.Admit(ctx, "203.0.113.7"); err != nil {
-		t.Errorf("the lockout survived the credential that proves the caller "+
-			"is not who it was protecting against: %v", err)
+	if r, w := store.io(); r != reads || w != writes {
+		t.Errorf("200 refused attempts cost %d reads and %d writes of the "+
+			"fleet window, want none", r-reads, w-writes)
+	}
+}
+
+// A PAIR IS READ ONCE, AND WRITTEN ONLY WHILE ITS CURVE IS CLIMBING.
+//
+// A node seeds a pair from the fleet the first time it meets it and never again
+// while it holds it, and writes a failure only while the curve still moves:
+// past [credential.CurveSteps] a failure changes no node's answer, and a write
+// per attempt is a broker denial of service a stranger would be pricing.
+func TestAPairIsReadOnceAndWrittenOnlyWhileItClimbs(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	th, clock, _ := newThrottle(t, store)
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+	for range 20 {
+		if err := failOnce(t, th, who); err != nil {
+			clock.advance(credential.RetryAfter(err))
+			if err := failOnce(t, th, who); err != nil {
+				t.Fatal(err)
+			}
+		}
+		clock.advance(time.Second)
+	}
+	reads, writes := store.io()
+	if reads != 1 {
+		t.Errorf("twenty attempts on one pair read the fleet %d times, want once", reads)
+	}
+	if writes != credential.CurveSteps {
+		t.Errorf("twenty failures wrote the fleet %d times, want %d — one per "+
+			"step the curve climbs", writes, credential.CurveSteps)
+	}
+}
+
+// A RUN MOVED TO ANOTHER NODE STARTS WHERE THE FLEET LEFT IT.
+//
+// A load balancer puts a guessing run on whichever node it likes. The second
+// node meets the pair for the first time, reads the fleet's window, and owes
+// the wait the first node's failures earned — from the newest of them, which
+// is why the window answers it. Mutation: seed from a count alone and date it
+// to the read, and the second node's wait runs from now instead.
+func TestARunMovedToAnotherNodeStartsWhereTheFleetLeftIt(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
+	first, _, _ := onClock(t, store, clock)
+	second, _, _ := onClock(t, store, clock)
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+	for range 4 {
+		if err := failOnce(t, first, who); err != nil {
+			clock.advance(credential.RetryAfter(err))
+			if err := failOnce(t, first, who); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Four failures: the next attempt owes eight seconds from the last.
+	clock.advance(2 * time.Second)
+	_, err := second.Admit(t.Context(), who)
+	if got := credential.RetryAfter(err); got != 6*time.Second {
+		t.Errorf("the second node owes %s (%v), want the 6s left of the 8s "+
+			"the first node's four failures earned", got, err)
+	}
+}
+
+// THE FLEET NEVER HOLDS WHAT WAS TYPED.
+//
+// A password typed into the login box is what lands in the subject often
+// enough to matter. Held in the clear, or hashed without a key, it is
+// recoverable from the coordination store against the company's own roster in
+// one pass.
+func TestTheFleetNeverHoldsWhatWasTyped(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	th, _, _ := newThrottle(t, store)
+	typed := "correct horse battery staple"
+	if err := failOnce(t, th, credential.Attempt{Source: "203.0.113.7",
+		Subject: typed}); err != nil {
+		t.Fatal(err)
+	}
+	unkeyed := sha256.Sum256([]byte(typed))
+	for _, subject := range store.subjects() {
+		if strings.Contains(subject, "correct") || strings.Contains(subject, "203.0.113.7") ||
+			strings.Contains(subject, hex.EncodeToString(unkeyed[:8])) {
+			t.Errorf("the fleet window holds %q, which carries what was typed "+
+				"or where from", subject)
+		}
+	}
+	if len(store.subjects()) != 1 {
+		t.Errorf("the fleet holds %d records for one failed pair", len(store.subjects()))
+	}
+}
+
+// A BURST AT ONE PAIR IS SERVED ONE AFTER ANOTHER.
+//
+// An attempt admitted and not yet resolved counts as a failure until it is, so
+// four guesses fired at once are not four guesses before the curve notices:
+// the first proceeds, the second waits a second behind it, the third two more
+// behind that, and the fourth — four more — is refused with the seven seconds
+// it would have waited. Mutation: count only resolved failures and all four
+// proceed at once.
+func TestABurstAtOnePairIsServedOneAfterAnother(t *testing.T) {
+	t.Parallel()
+	th, _, sleeps := newThrottle(t, newAttempts())
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+	var tickets []*credential.Ticket
+	for range 3 {
+		ticket, err := th.Admit(t.Context(), who)
+		if err != nil {
+			t.Fatalf("a burst's attempt was refused: %v", err)
+		}
+		tickets = append(tickets, ticket)
+	}
+	if got := sleeps.take(); len(got) != 2 || got[0] != time.Second ||
+		got[1] != 3*time.Second {
+		t.Errorf("a burst of three waited %v, want the second a second and "+
+			"the third three behind the first", got)
+	}
+	_, err := th.Admit(t.Context(), who)
+	if got := credential.RetryAfter(err); got != 7*time.Second {
+		t.Errorf("the fourth of a burst answered %v, want a 429 naming the "+
+			"7s it would have waited", err)
+	}
+	for _, ticket := range tickets {
+		ticket.Fail(t.Context())
+	}
+}
+
+// A WAIT PAST THE CAP ON SLEEPERS IS ANSWERED AT ONCE.
+//
+// A waiting request is a goroutine and an open connection; past
+// [credential.DelayedCap] of them the wait is answered 429 with the time left
+// rather than slept.
+func TestSleepersAreCapped(t *testing.T) {
+	t.Parallel()
+	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
+	release := make(chan struct{})
+	asleep := make(chan struct{}, credential.DelayedCap+1)
+	th, err := credential.NewThrottle(credential.ThrottleDeps{
+		Now: clock.now,
+		Sleep: func(ctx context.Context, _ time.Duration) {
+			asleep <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := range credential.DelayedCap {
+		who := credential.Attempt{Source: fmt.Sprintf("198.51.100.%d", i),
+			Subject: "sarah.chen"}
+		if err := failOnce(t, th, who); err != nil {
+			t.Fatal(err)
+		}
+		wg.Go(func() {
+			if ticket, err := th.Admit(t.Context(), who); err == nil {
+				ticket.Release()
+			}
+		})
+		<-asleep
+	}
+	late := credential.Attempt{Source: "203.0.113.200", Subject: "sarah.chen"}
+	if err := failOnce(t, th, late); err != nil {
+		t.Fatal(err)
+	}
+	_, err = th.Admit(t.Context(), late)
+	if !errors.Is(err, credential.ErrThrottled) || credential.RetryAfter(err) != time.Second {
+		t.Errorf("a wait past the sleeper cap answered %v, want a 429 naming "+
+			"the second left", err)
+	}
+	close(release)
+	wg.Wait()
+}
+
+// A RELEASED ATTEMPT COUNTS AS NOTHING.
+//
+// An attempt that never reached a verdict — a body that did not parse, a store
+// that could not be read — neither fails nor succeeds, and must not leave the
+// pair owing a wait for a guess nobody made.
+func TestAReleasedAttemptCountsAsNothing(t *testing.T) {
+	t.Parallel()
+	th, _, sleeps := newThrottle(t, newAttempts())
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+	for range 3 {
+		ticket, err := th.Admit(t.Context(), who)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ticket.Release()
+		// And a release after a verdict is a no-op, which is what makes
+		// it safe to defer.
+		ticket.Release()
+	}
+	if got := sleeps.all(); len(got) != 0 {
+		t.Errorf("three released attempts cost waits %v", got)
+	}
+}
+
+// AN IPv6 HOST IS ONE SOURCE ACROSS ITS /64.
+//
+// One customer is given a /64 and every address in it is theirs to use: keyed
+// per address, a run rotates through fresh sources and the source curve never
+// starts. Mutation: key an IPv6 source by its full address and the spray below
+// is never refused.
+func TestAnIPv6HostIsOneSourceAcrossItsSlash64(t *testing.T) {
+	t.Parallel()
+	th, _, _ := newThrottle(t, newAttempts())
+	var refused error
+	for i := range credential.SourceAllowance + credential.CurveSteps {
+		if err := failOnce(t, th, credential.Attempt{
+			Source:  fmt.Sprintf("2001:db8:1:2::%x", i+1),
+			Subject: fmt.Sprintf("name.%d", i),
+		}); err != nil {
+			refused = err
+			break
+		}
+	}
+	if !errors.Is(refused, credential.ErrThrottled) {
+		t.Errorf("a spray rotating through one /64 was never throttled")
+	}
+	// A neighbouring /64 is somebody else.
+	if err := failOnce(t, th, credential.Attempt{Source: "2001:db8:1:3::1",
+		Subject: "name.0"}); err != nil {
+		t.Errorf("another /64 paid for the first one's spray: %v", err)
 	}
 }
 
@@ -190,41 +706,137 @@ func TestASuccessfulAuthenticationFlushesTheWindow(t *testing.T) {
 //
 // Failing closed would lock every operator out of /config, /secrets and the
 // dashboard — the one surface an incident is fixed from — at the moment
-// coordination is already unwell. What is left is this node's own count, which
-// is not nothing: a guessing run against ONE node still meets the same limit,
-// and one spread across N nodes gets N times the attempts rather than
-// unlimited ones.
+// coordination is already unwell. What is left is this node's own curve, which
+// is still a curve.
 func TestAnUnreachableStoreKeepsTheLocalCurve(t *testing.T) {
 	t.Parallel()
 	store := newAttempts()
-	th, clock, _ := newThrottle(t, store)
-	ctx := t.Context()
-
 	store.breaks(errors.New("the coordination store is unreachable"))
+	th, clock, sleeps := newThrottle(t, store)
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
 
-	// It fails OPEN: the first attempt is admitted although nothing can
-	// be read.
-	if err := th.Admit(ctx, "203.0.113.7"); err != nil {
+	if err := failOnce(t, th, who); err != nil {
 		t.Fatalf("the first attempt was refused while the store was down: %v", err)
 	}
-	// And the local curve still counts.
-	for range 6 {
-		th.Fail(ctx, "203.0.113.7")
+	if err := failOnce(t, th, who); err != nil {
+		t.Fatalf("the second attempt was refused: %v", err)
 	}
-	if err := th.Admit(ctx, "203.0.113.7"); !errors.Is(err, credential.ErrThrottled) {
-		t.Errorf("with the store down a source made six failures and was "+
-			"still admitted: %v — an unreachable coordination store would be "+
-			"an unlimited guessing run", err)
+	if got := sleeps.take(); len(got) != 1 || got[0] != time.Second {
+		t.Errorf("with the store down the second attempt waited %v, want the "+
+			"local curve's second", got)
 	}
-	// The window still ends. An attempt that aged out stops counting
-	// locally exactly as it would in the fleet.
+	// The window still ends.
 	clock.advance(coord.AttemptWindow + time.Minute)
-	if err := th.Admit(ctx, "203.0.113.7"); err != nil {
-		t.Errorf("the local lockout outlived the window: %v", err)
+	if got := owedBy(t, th, sleeps, who); got != 0 {
+		t.Errorf("the local curve outlived the window: owed %s", got)
 	}
 }
 
-// BOTH ARMS LAND ON ONE DEADLINE, MEASURED FROM ARRIVAL.
+// A FLEET WINDOW WITH NO DIGEST KEY IS REFUSED.
+//
+// Every node has to keep one pair under one name, or each keeps it under its
+// own and seeds nothing from the others — a fleet that looks like it shares a
+// curve and does not.
+func TestAFleetWindowNeedsASharedKey(t *testing.T) {
+	t.Parallel()
+	if _, err := credential.NewThrottle(credential.ThrottleDeps{
+		Attempts: newAttempts(),
+	}); err == nil {
+		t.Error("a throttle over the fleet window with no shared key was built")
+	}
+}
+
+// THE LOCAL CURVE IS BOUNDED, SO THE THROTTLE IS NOT ITSELF A MEMORY
+// EXHAUSTION.
+//
+// An unauthenticated caller can otherwise grow it one key per address they can
+// reach it from, through the very mechanism that is supposed to bound them —
+// and the map it replaced was walked whole on every failure.
+func TestTheLocalCurveIsBounded(t *testing.T) {
+	t.Parallel()
+	th, _, _ := newThrottle(t, nil)
+	for i := range credential.LocalKeys + 500 {
+		source := fmt.Sprintf("10.%d.%d.%d", i>>16&0xff, i>>8&0xff, i&0xff)
+		if err := failOnce(t, th, credential.Attempt{Source: source,
+			Subject: "sarah.chen"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sources, pairs := credential.LocalKeysHeld(th)
+	if sources > credential.LocalKeys || pairs > credential.LocalKeys {
+		t.Errorf("the local curve holds %d sources and %d pairs, past its "+
+			"bound of %d each", sources, pairs, credential.LocalKeys)
+	}
+}
+
+// A SUCCESS ON A PAIR THIS NODE HAS FORGOTTEN STILL CLEARS THE FLEET.
+//
+// Admission always takes the pair, so a success that finds nothing here means
+// the bound forgot it in between, and what the fleet holds under it is then
+// unknown rather than nothing. Left, those failures would delay this person's
+// next attempt on every other node for a mistake their success has answered.
+// Mutation: flush only a pair this node still holds, and the fleet keeps the
+// record.
+func TestASuccessOnAPairThisNodeForgotStillClearsTheFleet(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
+	elsewhere, _, _ := onClock(t, store, clock)
+	here, _, _ := onClock(t, store, clock)
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+	if err := failOnce(t, elsewhere, who); err != nil {
+		t.Fatal(err)
+	}
+
+	ticket, err := here.Admit(t.Context(), who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range credential.LocalKeys {
+		source := fmt.Sprintf("10.%d.%d.%d", i>>16&0xff, i>>8&0xff, i&0xff)
+		if err := failOnce(t, here, credential.Attempt{Source: source,
+			Subject: "somebody.else"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ticket.Succeed(t.Context())
+
+	// A node meeting the pair for the first time reads what the fleet
+	// holds under it, at the instant of the failure: nothing, or the
+	// second that failure would still cost.
+	third, _, sleeps := onClock(t, store, clock)
+	if _, err := third.Admit(t.Context(), who); err != nil {
+		t.Fatal(err)
+	}
+	if waited := sleeps.all(); len(waited) != 0 {
+		t.Errorf("a person who signed in still owes the fleet %v on another "+
+			"node, for a failure their success answered", waited)
+	}
+}
+
+// AN UNIDENTIFIABLE SOURCE IS ADMITTED, NOT REFUSED.
+//
+// Refusing would mean a misconfigured proxy — one that strips the header the
+// source is derived from — locks every person in the company out at once,
+// which is an outage the throttle caused. What still bounds that caller is the
+// password cost and the verify cap. Its ticket is nil, and does nothing.
+func TestAnUnidentifiableSourceIsAdmitted(t *testing.T) {
+	t.Parallel()
+	th, _, _ := newThrottle(t, newAttempts())
+	for range 20 {
+		ticket, err := th.Admit(t.Context(), credential.Attempt{Subject: "sarah.chen"})
+		if err != nil {
+			t.Fatalf("a request with no identifiable source was refused: %v — "+
+				"a proxy that stops setting the header would lock the company "+
+				"out", err)
+		}
+		ticket.Fail(t.Context())
+	}
+}
+
+// --- the timing defences ----------------------------------------------------- //
+
+// BOTH ARMS LAND ON ONE DEADLINE, MEASURED FROM ADMISSION.
 //
 // The decoy makes the two arms do the same SHAPE of work; only the pad makes
 // them indistinguishable in TIME, because argon2id's own cost varies with load
@@ -269,13 +881,13 @@ func TestTheDecoyAndTheRealPathLandInsideOneDeadline(t *testing.T) {
 	}
 }
 
-// THE PAD IS MEASURED FROM ARRIVAL, WHICH IS THE ONLY INSTANT BOTH ARMS SHARE.
+// THE PAD IS MEASURED FROM ADMISSION, THE LAST INSTANT BOTH ARMS SHARE.
 //
 // A fixed sleep added after the work leaks the work's duration unchanged. A
 // deadline measured from when verification STARTED leaks how long the lookup
 // before it took — which on the arm where the subject does not exist is a
 // different lookup entirely.
-func TestThePadIsMeasuredFromArrivalAndNotFromTheWork(t *testing.T) {
+func TestThePadIsMeasuredFromAdmissionAndNotFromTheWork(t *testing.T) {
 	t.Parallel()
 	th, clock, pad := newThrottle(t, newAttempts())
 	arrived := clock.now()
@@ -312,53 +924,6 @@ func TestAnOverrunRequestIsNotPaddedFurther(t *testing.T) {
 	th.Pad(t.Context(), arrived)
 	if slept := pad.all(); len(slept) != 1 || slept[0] > 0 {
 		t.Errorf("an overrun request was asked to sleep %v", slept)
-	}
-}
-
-// AN UNIDENTIFIABLE SOURCE IS ADMITTED, NOT REFUSED.
-//
-// Refusing would mean a misconfigured proxy — one that strips the header the
-// source is derived from — locks every person in the company out at once,
-// which is an outage the throttle caused. What still bounds that caller is the
-// password cost and the verify cap.
-func TestAnUnidentifiableSourceIsAdmitted(t *testing.T) {
-	t.Parallel()
-	th, _, _ := newThrottle(t, newAttempts())
-	for range 20 {
-		th.Fail(t.Context(), "")
-	}
-	if err := th.Admit(t.Context(), ""); err != nil {
-		t.Errorf("a request with no identifiable source was refused: %v — a "+
-			"proxy that stops setting the header would lock the company out",
-			err)
-	}
-}
-
-// THE LOCAL CURVE IS BOUNDED, SO THE THROTTLE IS NOT ITSELF A MEMORY
-// EXHAUSTION.
-//
-// An unauthenticated caller can otherwise grow the map one entry per address
-// they can spoof, reached through the very mechanism that is supposed to bound
-// them.
-func TestTheLocalCurveDoesNotGrowWithoutBound(t *testing.T) {
-	t.Parallel()
-	store := newAttempts()
-	store.breaks(errors.New("down"))
-	th, clock, _ := newThrottle(t, store)
-	ctx := t.Context()
-
-	for i := range 500 {
-		th.Fail(ctx, "203.0.113."+string(rune('a'+i%26))+string(rune('a'+i/26)))
-	}
-	// Every one of those ages out, and the next write is what collects
-	// them: the map is bounded by pruning rather than by a cap somebody
-	// had to choose.
-	clock.advance(coord.AttemptWindow + time.Minute)
-	th.Fail(ctx, "198.51.100.4")
-	if n := credential.LocalSources(th); n > 2 {
-		t.Errorf("the local curve holds %d sources after every one of 500 "+
-			"aged out — an unauthenticated caller grows this one entry per "+
-			"address they can spoof", n)
 	}
 }
 

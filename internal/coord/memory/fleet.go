@@ -230,11 +230,10 @@ func (f *Fleet) Release(_ context.Context, key string) error {
 	return nil
 }
 
-// Fail records one failed authentication and reports how many are in the
-// window.
-func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) (int, error) {
+// Fail records one failed authentication.
+func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) error {
 	if subject == "" {
-		return 0, errors.New("coord/memory: an attempt needs a subject")
+		return errors.New("coord/memory: an attempt needs a subject")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -248,29 +247,27 @@ func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) (int, err
 	if over := len(f.attempts[subject]) - coord.AttemptCap; over > 0 {
 		f.attempts[subject] = slices.Delete(f.attempts[subject], 0, over)
 	}
-	return f.live(subject, now), nil
+	return nil
 }
 
-// Failures reports how many attempts against subject are in the window.
-func (f *Fleet) Failures(_ context.Context, subject string, now time.Time) (int, error) {
+// Failures reports what the window holds against subject.
+func (f *Fleet) Failures(_ context.Context, subject string, now time.Time) (coord.Attempted, error) {
 	if subject == "" {
-		return 0, errors.New("coord/memory: an attempt needs a subject")
+		return coord.Attempted{}, errors.New("coord/memory: an attempt needs a subject")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.live(subject, now), nil
-}
-
-// live counts the attempts still inside the window. Held under the lock.
-func (f *Fleet) live(subject string, now time.Time) int {
 	cutoff := now.Add(-f.ages.Attempt)
-	count := 0
+	var out coord.Attempted
 	for _, at := range f.attempts[subject] {
 		if at.After(cutoff) {
-			count++
+			out.Count++
+			if at.After(out.Last) {
+				out.Last = at
+			}
 		}
 	}
-	return count
+	return out, nil
 }
 
 // Flush forgets every attempt against subject.

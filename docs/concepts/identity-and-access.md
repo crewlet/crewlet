@@ -943,18 +943,21 @@ attacker learning **who works here**, in as many requests as they care to make,
 from nothing but which requests were throttled or how long each took. Three
 mechanisms close it and none is sufficient alone:
 
-1. **Admission is keyed on the source and happens before the subject is
-   resolved.** A throttle keyed on who you claim to be is one that only *real*
-   subjects can trigger, so the 429 becomes the oracle it was added to prevent.
+1. **The throttle is keyed on what was typed, never on what it resolved to,**
+   and decides before anything is looked up. A throttle keyed on the person a
+   login turned out to be is one that only *real* people can trigger, so its
+   delay becomes the oracle it was added to prevent. Keyed on the typed value,
+   a name nobody holds climbs the curve exactly as a real one does.
 2. **A subject that does not exist is still verified against**, with a
    fixed-cost decoy, so the two arms do the same shape of work rather than one
    of them returning immediately. It is an HMAC and not a real argon2id
    derivation: a decoy that ran the password cost would let a stranger spend
    64 MiB and a hundred milliseconds of the node's budget per request against
    names that do not exist.
-3. **Both arms answer at one deadline measured from arrival.** That is the
-   only one of the three that equalises the *timing*, because argon2id's cost
-   varies with load and a decoy's does not.
+3. **Both arms answer at one deadline measured from admission** — the instant
+   the throttle let the attempt through, which is the last instant both arms
+   share. That is the only one of the three that equalises the *timing*,
+   because argon2id's cost varies with load and a decoy's does not.
 
 Under enough load to push a real verification past the deadline the arms
 separate again. That is stated rather than hidden: at that point every request
@@ -965,6 +968,68 @@ The refusal itself is **one generic error for every arm** — no such login,
 wrong password, wrong code, code already spent. The one exception is choosing a
 *new* password, which is answered to somebody who has already proved who they
 are and must say what is wrong, or they will type variations until one sticks.
+
+### A failure costs a wait, never a lockout
+
+A hard refusal after N failures is a lockout an outsider can cause. Keyed on a
+login, anybody who can type an administrator's name shuts them out for as long
+as they keep typing it; keyed on an address, one guesser shuts out everybody
+behind it — an office, or the whole company behind a proxy nobody named in
+`api.trusted_proxies`. So a failure costs **time**:
+
+```mermaid
+flowchart LR
+    A[attempt] --> W{wait owed<br/>by its keys}
+    W -- none --> V[verify]
+    W -- "up to 5 s" --> S[held inside<br/>the request] --> V
+    W -- "longer" --> T["429 throttled<br/>Retry-After: the wait"]
+    V -- proved --> OK[success clears<br/>its own pair]
+    V -- refused --> F[failure doubles<br/>the next wait]
+```
+
+Each failure past a key's allowance doubles the wait before that key's next
+attempt — 1, 2, 4, 8, 16, then 30 seconds, and never more — and a correct
+credential after the wait always succeeds. Two keys, because they catch two
+different runs:
+
+- **The pair** — the subject as typed (an address folded the way the directory
+  folds one, anything else by case), from one source. It catches a run at one
+  account, and has no allowance: the first failure already costs a second.
+  **A success clears this pair and nothing else.** Clearing the source was the
+  bypass: anybody holding an account could sign in as themselves between
+  guesses at somebody else's and wipe the record of every one.
+- **The source** alone — the client's address as the trusted proxies resolve
+  it, an IPv6 client by its `/64`, since every address in it is one
+  customer's. It catches a run across many accounts, and it is the only key a
+  credential that names nobody has: an invitation link, a founder code. Ten
+  failures in the window are free, because many people share an address; past
+  them it climbs the same curve. A success strikes its **own** pair's failures
+  from it, so somebody who mistyped and then got in leaves nothing behind for
+  their neighbours to pay for.
+
+An attempt still being checked counts as a failure until it resolves, so a
+burst of concurrent guesses at one pair is served one after another along the
+curve rather than all at once; and at most sixty-four requests are held waiting
+at once on a node — past that, a wait is answered `429` straight away rather
+than parked on an open connection an attacker chose to open.
+
+**The fleet shares the pair and not the source.** The window is fifteen
+minutes. A node meeting a pair for the first time reads the fleet's record of
+it once, and writes a failure only while the curve is still climbing — a
+seventh failure changes no node's answer — so a run the load balancer moves to
+another node starts that node's curve where the fleet left it, and the
+coordination store is never on the path of every attempt. The source is each
+node's own: a source already being refused costs a map lookup, not a round
+trip. What the fleet holds is a digest of the pair under a key derived from the
+active keyring entry, never what was typed — a password typed into the login
+box is what lands in that field often enough to matter. A node whose
+coordination store is unreachable goes on throttling on its own curve.
+
+A spent invitation link that **proved itself** — redeemed, expired, its
+address already enrolled — is refused like every other `410` and is **not** a
+failure: that is the link's holder, or a mail scanner re-reading it. Counted, a
+scanner re-fetching one old link put the address it scans from on the curve.
+A guesser who does not hold the link can never reach the difference.
 
 ---
 

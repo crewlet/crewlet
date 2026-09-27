@@ -42,14 +42,23 @@ A few things worth knowing when deploying Crewlet:
   one generic error for every arm — no such login, wrong password, wrong
   second-factor code, code already spent — because telling a caller which one
   applies tells an attacker the same, and the first of them is the company's
-  roster. Three mechanisms keep the timing from saying it instead: admission
-  is keyed on the request's SOURCE and happens before the subject is resolved
-  (a throttle keyed on who you claim to be is one only real people can
-  trigger, so the 429 becomes the oracle); a subject that does not exist is
-  still verified against, with a fixed-cost decoy; and both arms answer at one
-  deadline measured from the instant the request arrived. Under enough load to
-  push a real verification past that deadline the arms separate again — stated
-  rather than hidden, and at that point every request on the node is slow.
+  roster. Three mechanisms keep the timing from saying it instead: the
+  throttle is keyed on the request's SOURCE and on the subject as TYPED, and
+  decides before anything is looked up (a throttle keyed on who the subject
+  resolved to is one only real people can trigger, so its delay becomes the
+  oracle); a subject that does not exist is still verified against, with a
+  fixed-cost decoy; and both arms answer at one deadline measured from the
+  instant the attempt was admitted. Under enough load to push a real
+  verification past that deadline the arms separate again — stated rather than
+  hidden, and at that point every request on the node is slow.
+- **A failed sign-in costs a wait, never a lockout.** Each failure doubles the
+  wait before the next attempt on its key, one second to thirty, and a correct
+  credential after the wait always succeeds — a lockout is something an
+  outsider can cause, against any login they can type. A success clears only
+  its own (subject, source) pair, so holding one account never wipes the
+  record of guesses at another. Behind a proxy, name it in
+  `api.trusted_proxies`: otherwise every caller is the proxy, and one
+  guesser's failures slow the whole company.
 - **Passwords are argon2id at 64 MiB, t=3, p=1, with a twelve-character
   minimum and no composition rules.** The parameters are in the stored
   verifier, so raising the cost re-hashes each person's on their next

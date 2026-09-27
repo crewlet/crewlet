@@ -385,7 +385,7 @@ func TestARedemptionIsNeverStartedByALink(t *testing.T) {
 //
 // The id in the link is the credential, so the start is throttled per source
 // like the invitation's own routes — and the admission comes first, or a
-// source at the ceiling could still walk ids through this door and learn
+// source past its curve could still walk ids through this door and learn
 // which are live from the answers it was refused on.
 //
 // Mutation: drop the start's admission and the directory is read.
@@ -396,11 +396,20 @@ func TestARedemptionStartIsAdmittedBeforeTheInvitationIsRead(t *testing.T) {
 	b.API.Auth.Backend = config.AuthBackendOIDC
 	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
 	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
-		Limit: 1, Now: func() time.Time { return clock },
-		Sleep: func(context.Context, time.Duration) {},
+		Now: func() time.Time { return clock }, Sleep: func(context.Context, time.Duration) {},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// THE SOURCE PAST ITS CURVE: its allowance spent and the curve climbed
+	// until the next attempt owes more than a request is held open for.
+	for {
+		ticket, err := throttle.Admit(context.Background(),
+			credential.Attempt{Source: "198.51.100.7"})
+		if err != nil {
+			break
+		}
+		ticket.Fail(context.Background())
 	}
 	start := redemptionStart(invitationID, url.Values{"login": {"dana.ops"}})
 	directory := &countingInvitations{offeredInvitation: offeredInvitation{
@@ -413,16 +422,15 @@ func TestARedemptionStartIsAdmittedBeforeTheInvitationIsRead(t *testing.T) {
 		o.Directory = directory
 		o.Throttle = throttle
 	}).Routes(mux)
-	throttle.Fail(context.Background(), "198.51.100.7")
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, start)
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("a source at the ceiling answered %d (%s), want 429", rec.Code,
+		t.Fatalf("a source the curve owes a long wait answered %d (%s), want 429", rec.Code,
 			rec.Body)
 	}
 	if directory.reads.Load() != 0 {
-		t.Errorf("a source at the ceiling had %d invitations read for it",
+		t.Errorf("a source the curve owes a long wait had %d invitations read for it",
 			directory.reads.Load())
 	}
 	if flight := flightSet(rec); flight != "" {

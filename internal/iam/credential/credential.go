@@ -21,17 +21,32 @@
 // that list is worth more than any single password. Three separate mechanisms
 // close it and none of them is sufficient alone:
 //
-//   - ADMISSION HAPPENS BEFORE THE SUBJECT RESOLVES. A throttle keyed on who
-//     you claim to be is one that only real people can trigger, so the 429
-//     itself becomes the oracle. [Throttle.Admit] takes the SOURCE and knows
-//     nothing about the subject.
+//   - THE THROTTLE IS KEYED ON WHAT WAS TYPED, NEVER ON WHAT IT RESOLVED TO,
+//     and decides before anything is looked up. A throttle keyed on who the
+//     subject turned out to be is one only real people can trigger, so its
+//     delay itself becomes the oracle. [Throttle.Admit] takes the SOURCE and
+//     the subject as the caller typed it, and a name nobody holds climbs the
+//     curve exactly as a real one does.
 //   - A SUBJECT THAT DOES NOT EXIST IS STILL VERIFIED AGAINST, with a decoy of
 //     fixed cost, so the two arms do the same work rather than one of them
 //     doing none.
 //   - BOTH ARMS ARE PADDED TO ONE DEADLINE measured from the instant the
-//     request ARRIVED. The first two make the two arms similar; only this
+//     attempt was ADMITTED. The first two make the two arms similar; only this
 //     makes them indistinguishable, because argon2id's own cost varies with
 //     load and a decoy's does not.
+//
+// # A failure costs delay, never a lockout
+//
+// A hard refusal after N failures is a lockout an outsider can cause — keyed
+// on a login, of that person; keyed on an address, of everybody behind it. So
+// each failure doubles the wait before its key's next attempt, one second to
+// thirty, and a correct credential after the wait always succeeds. Two keys
+// catch two runs: the (typed subject, source) PAIR a run at one account, and
+// the SOURCE a run across many; a success clears its own pair and strikes
+// that pair's failures from its source, and nothing else, because clearing a
+// whole source let anybody holding an account wipe the record of their
+// guesses at somebody else's by signing in as themselves. throttle.go carries
+// the whole argument.
 //
 // # No new modules
 //

@@ -98,11 +98,11 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 // AN INVITATION ID THAT RESOLVES TO NOTHING IS A FAILED ATTEMPT, COUNTED.
 //
 // The id in the link is the credential. Admission ran before the lookup, but a
-// 410 recorded nothing, so the per-source ceiling that stops a guessing run at
-// a password never filled here: a source could present a new invitation id on
-// every request for ever. Each 410 now counts against the source and reaches
-// the audit trail's failure tally, so the walk is turned away at the same
-// ceiling as any other guess.
+// 410 recorded nothing, so the curve that slows a guessing run at a password
+// never climbed here: a source could present a new invitation id on every
+// request for ever. Each 410 now counts against the source and reaches the
+// audit trail's failure tally, so the walk meets the source's curve — its
+// allowance, then waits, then a 429 — like any other guess.
 func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
 	t.Parallel()
 	audit := &recordingAudit{}
@@ -110,22 +110,25 @@ func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
 	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
 		o.Audit = audit
 	}).Routes(mux)
-	var statuses []int
-	for i := range credential.AdmitLimit + 1 {
+	walked := 0
+	for i := range credential.SourceAllowance + credential.CurveSteps {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 			fmt.Sprintf("/auth/invite/018f3a9c-4d2e-7000-8000-0000000002%02d", i),
 			nil))
-		statuses = append(statuses, rec.Code)
-	}
-	for i, status := range statuses[:credential.AdmitLimit] {
-		if status != http.StatusGone {
-			t.Errorf("attempt %d answered %d, want 410", i+1, status)
+		if rec.Code == http.StatusTooManyRequests {
+			break
 		}
+		if rec.Code != http.StatusGone {
+			t.Fatalf("attempt %d answered %d, want 410", i+1, rec.Code)
+		}
+		walked++
 	}
-	if last := statuses[credential.AdmitLimit]; last != http.StatusTooManyRequests {
-		t.Errorf("after %d ids that resolved to nothing the source was answered "+
-			"%d, want 429 — the walk was never counted", credential.AdmitLimit, last)
+	if walked < credential.SourceAllowance ||
+		walked == credential.SourceAllowance+credential.CurveSteps {
+		t.Errorf("a walk of ids was answered 410 %d times before a 429, want "+
+			"the allowance of %d and then the curve — the walk was never "+
+			"counted", walked, credential.SourceAllowance)
 	}
 	_, failures := audit.snapshot()
 	counted := 0
@@ -134,9 +137,74 @@ func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
 			counted++
 		}
 	}
-	if counted != credential.AdmitLimit {
+	if counted != walked {
 		t.Errorf("the trail tallied %d refused invitation ids, want %d", counted,
-			credential.AdmitLimit)
+			walked)
+	}
+}
+
+// spentInvitation is [liveInvitation] redeemed an hour ago.
+type spentInvitation struct{ liveInvitation }
+
+func (spentInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	row, err := liveInvitation{}.InvitationByID(ctx, id)
+	row.RedeemedAt = clock.Add(-time.Hour)
+	return row, err
+}
+
+// A SPENT LINK THAT PROVES ITSELF IS NOT A FAILED ATTEMPT.
+//
+// Its holder — or the mail scanner that re-fetches every link in their inbox —
+// presents the link's own secret for an invitation already redeemed. That is
+// nobody guessing, and counted it put the address the scanner reads from on
+// the source's curve: behind one proxy address, the whole company. The answer
+// is still the one 410 every refusal gets. THE CONTROL is the same link with a
+// secret that is not its own, which IS a guess and meets the curve.
+func TestASpentLinkThatProvesItselfIsNotAFailedAttempt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		secret  string
+		counted bool
+	}{
+		{"the link's own secret", invitationSecret, false},
+		{"a secret that is not the link's", "a-guess-at-the-secret", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			audit := &recordingAudit{}
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+				o.Directory, o.Audit = spentInvitation{}, audit
+			}).Routes(mux)
+			throttled := false
+			for range credential.SourceAllowance + credential.CurveSteps {
+				r := httptest.NewRequest(http.MethodGet, "/auth/invite/"+invitationID, nil)
+				r.Header.Set(secretHeader, tc.secret)
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, r)
+				switch rec.Code {
+				case http.StatusGone:
+				case http.StatusTooManyRequests:
+					throttled = true
+				default:
+					t.Fatalf("a spent link answered %d, want 410", rec.Code)
+				}
+				if throttled {
+					break
+				}
+			}
+			if throttled != tc.counted {
+				t.Errorf("met the curve: %v, want %v", throttled, tc.counted)
+			}
+			_, failures := audit.snapshot()
+			if counted := len(failures) > 0; counted != tc.counted {
+				t.Errorf("the trail tallied %d failures, want some: %v",
+					len(failures), tc.counted)
+			}
+		})
 	}
 }
 

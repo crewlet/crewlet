@@ -192,14 +192,16 @@ const (
 	// FailBootstrap is a wrong one-time founder code.
 	FailBootstrap FailureMethod = "bootstrap"
 
-	// FailInvite is an invitation link refused: one nobody issued, one
-	// already redeemed or aged out, one whose address somebody is already
-	// enrolled under — each a 410 — and a view or a redemption the
-	// throttle turned away. THE ID IN THE LINK IS THE CREDENTIAL, so a
-	// source presenting ids that resolve to nothing is guessing at one;
-	// counted, the per-source ceiling stops the walk as it stops a guessed
-	// password. It used to count only the throttle's own refusals, so a
-	// source could present a new id on every request for ever.
+	// FailInvite is an invitation link that did not prove itself: an id
+	// nobody issued, or a secret that is not the id's link's — each a
+	// 410 — and a view or a redemption the throttle turned away. THE ID
+	// IN THE LINK IS THE CREDENTIAL, so a source presenting ids that
+	// resolve to nothing is guessing at one; counted, the source's curve
+	// slows the walk as it slows a guessed password. A link that DID prove
+	// itself and is spent — redeemed, aged out, its address enrolled — is
+	// the same 410 and NOT a failure: it is the link's holder, or a mail
+	// scanner re-reading it, and counting it put a scanner's address on
+	// the curve.
 	FailInvite FailureMethod = "invite"
 
 	// FailBearer is a credential presented on a request and refused: an
@@ -378,10 +380,11 @@ type IAMLoginFailures struct {
 	// Attempts is how many attempts were verified and refused.
 	Attempts int `json:"attempts"`
 
-	// Throttled is how many were refused at the throttle's ceiling before
-	// anything was verified — the source had already failed too often.
-	// It is the "ceiling reached" of the design, expressed as the count of
-	// requests the ceiling actually turned away.
+	// Throttled is how many were answered 429 before anything was
+	// verified: the throttle's curve owed their key a longer wait than a
+	// request is held open for. A wait short enough to serve inside the
+	// request is not counted here — the attempt went on to be verified,
+	// and is in Attempts if it failed.
 	Throttled int `json:"throttled"`
 
 	// Subjects is how many DISTINCT names or bearers the attempts

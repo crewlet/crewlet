@@ -111,11 +111,11 @@ const (
 //
 // # UNGUARDED, and what stands in for the guard
 //
-// A login cannot require a login. What bounds it instead is the per-SOURCE
-// throttle, run before anything is looked up, and the pad that makes every
-// refusal leave at one deadline. It is origin-checked like every other state
-// change — being exempt from the credential guard is not being exempt from the
-// cross-site rule.
+// A login cannot require a login. What bounds it instead is the throttle's
+// curve — on the source and on the login as it was typed, run before anything
+// is looked up — and the pad that makes every refusal leave at one deadline.
+// It is origin-checked like every other state change — being exempt from the
+// credential guard is not being exempt from the cross-site rule.
 //
 // # One refusal, and why the shape is the whole of it
 //
@@ -125,11 +125,7 @@ const (
 // arms are distinguishable only in this node's log. See the package doc for
 // why both halves are needed.
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
 	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailPassword) {
-		return
-	}
 	if s.backend() != config.AuthBackendLocal {
 		// A DEPLOYMENT THAT SIGNS IN THROUGH A PROVIDER SERVES NO
 		// PASSWORD ROUTE, and it says so rather than refusing as though
@@ -155,6 +151,14 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
+	// THE CURVE, ON WHAT WAS TYPED — before it is looked up, so a login
+	// nobody holds climbs it exactly as a real one does.
+	adm, ok := s.admit(w, r, credential.Attempt{
+		Source: source, Subject: in.Login}, types.FailPassword)
+	if !ok {
+		return
+	}
+	defer adm.ticket.Release()
 
 	held, method := s.resolve(r.Context(), in.Login)
 	// THE ATTEMPT AS THE AUDIT TRAIL COUNTS IT: the value typed goes in as
@@ -172,7 +176,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	// spends it.
 	if held.ID == "" {
 		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, attempt, "no such "+method)
+		s.refuseSignIn(w, r, adm, attempt, "no such "+method)
 		return
 	}
 	if !stageAdmits(held.Stage) {
@@ -181,7 +185,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		// would learn from the timing alone which accounts had been
 		// turned off, which is the roster again in a different shape.
 		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, attempt, "stage "+string(held.Stage))
+		s.refuseSignIn(w, r, adm, attempt, "stage "+string(held.Stage))
 		return
 	}
 
@@ -191,12 +195,12 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		// invited and not yet redeemed. The decoy again, for the same
 		// reason the stage arm pays it.
 		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, arrived, attempt, "no password credential")
+		s.refuseSignIn(w, r, adm, attempt, "no password credential")
 		return
 	}
-	ok, stale := s.hasher.Verify(verifier.Verifier, in.Password)
-	if !ok {
-		s.refuseSignIn(w, r, arrived, attempt, "password mismatch")
+	proved, stale := s.hasher.Verify(verifier.Verifier, in.Password)
+	if !proved {
+		s.refuseSignIn(w, r, adm, attempt, "password mismatch")
 		return
 	}
 
@@ -206,15 +210,20 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	var factor factorUse
 	if holdsSecondFactor(held) {
 		if in.Code == "" {
-			s.throttle.Pad(r.Context(), arrived)
+			// NEITHER A SUCCESS NOR A FAILURE, and the ticket is released
+			// as one: the password proved itself and the sign-in is not
+			// complete. Counted as a success it would clear the pair, and
+			// somebody holding the password would clear their curve
+			// between every guess at the code.
+			s.throttle.Pad(r.Context(), adm.at)
 			httpjson.Fail(w, http.StatusUnauthorized,
 				httpjson.CodeSecondFactorRequired)
 			return
 		}
 		attempt.Method = types.FailSecondFactor
-		var proved bool
-		if factor, proved = s.proveSecondFactor(w, r, arrived, attempt, held,
-			in.Code); !proved {
+		var factored bool
+		if factor, factored = s.proveSecondFactor(w, r, adm, attempt, held,
+			in.Code); !factored {
 			return
 		}
 	}
@@ -226,7 +235,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		defer s.rehashPassword(r, held.ID, verifier, in.Password)
 	}
 
-	s.throttle.Flush(r.Context(), source)
+	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
 	})
@@ -699,7 +708,7 @@ func withExtra(c iamdomain.Credential, key string, value any) iamdomain.Credenti
 // once. A recovery code spent here is ALSO its own event, because a person
 // down to their last one is one lost phone away from needing an administrator.
 func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, attempt authevents.Failure, held iamdomain.Sighting,
+	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
 	code string) (factorUse, bool) {
 
 	use, ok, err := s.checkSecondFactor(r.Context(), held, code)
@@ -716,13 +725,13 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		// STILL THE GENERIC REFUSAL, because a wrong CODE and a wrong
 		// password must not be distinguishable to somebody who has
 		// stolen one of the two.
-		s.refuseSignIn(w, r, arrived, attempt, "second factor mismatch")
+		s.refuseSignIn(w, r, adm, attempt, "second factor mismatch")
 		return factorUse{}, false
 	}
 	use, spend, err := s.spendSecondFactor(r.Context(), held.ID, use)
 	switch {
 	case errors.Is(err, errFactorSpent):
-		s.refuseSignIn(w, r, arrived, attempt, "second factor already spent")
+		s.refuseSignIn(w, r, adm, attempt, "second factor already spent")
 		return factorUse{}, false
 	case err != nil:
 		// NOT A REFUSAL: the code was right, and this node could not
@@ -1069,12 +1078,11 @@ func (s *Service) backend() config.AuthBackend {
 // twelve, and none read the setting.
 func (s *Service) passwordFloor() int { return s.boot.API.Auth.Local.Passwords() }
 
-// sourceOf is what the throttle keys on.
+// sourceOf is the source the throttle keys on, beside what was typed.
 //
-// THE CLIENT, RESOLVED THROUGH THE TRUSTED PROXIES, and never the login: keyed
-// on the subject a throttle is an oracle — "this account exists and I can lock
-// it" — and keyed on a client the only thing it discloses is a rate limit the
-// caller already met.
+// THE CLIENT, RESOLVED THROUGH THE TRUSTED PROXIES — the half of the key that
+// says where an attempt came from, so a run at one account from one address is
+// slowed without anybody else sharing its curve.
 //
 // THROUGH THE GUARD, because resolving it is the one place `api.trusted_proxies`
 // is read: keyed on a proxy's own address this throttle would bucket the whole

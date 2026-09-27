@@ -54,7 +54,7 @@ import (
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
 // may still have, the [PositionRegister] and its neighbours the state log
 // trims against, the [SetupClaims] that spend a setup callback exactly once,
-// and the [Attempts] a login throttle counts. The list above is the migration,
+// and the [Attempts] the sign-in throttle seeds its curve from. The list above is the migration,
 // not the estate.
 //
 // # Every contract here fails in a stated direction
@@ -125,8 +125,9 @@ const (
 	// Fifteen minutes is the interval a throttle actually has to reason
 	// over: long enough that a guessing run cannot wait it out between
 	// attempts and still make progress at any useful rate, short enough
-	// that an operator who fat-fingered a token is not locked out of the
-	// one surface an incident is fixed from for the rest of the hour.
+	// that an honest mistake stops costing anything inside the quarter
+	// hour. A failure costs only a wait, never a refusal — see
+	// internal/iam/credential's throttle.
 	AttemptWindow = 15 * time.Minute
 
 	// LedgerRetention is how long a turn completion is remembered. It has
@@ -219,12 +220,13 @@ const (
 // one by one, and the caller would be un-throttled in the middle of exactly
 // the flood the cap was reached by.
 //
-// Sixteen is comfortably above any threshold a throttle would refuse at (a
-// lockout that tolerates more than a handful of failures in a quarter of an
-// hour is not a throttle), so the count a caller reads is a real count rather
-// than a saturation, and it is small enough that the whole estate an
-// unauthenticated stranger can grow is sixteen instants per name they can
-// reach. The broker's own ceiling on a per-record history is 64.
+// Sixteen is comfortably above the six failures that take the sign-in curve to
+// its ceiling, so the count a caller reads is a real count rather than a
+// saturation — and the throttle stops writing a pair once its curve stops
+// climbing, so a record rarely holds more than six — and it is small enough
+// that the whole estate an unauthenticated stranger can grow is sixteen
+// instants per name they can reach. The broker's own ceiling on a per-record
+// history is 64.
 //
 // A constant rather than a field on either backend's config: the twin and the
 // KV must cap identically or the contract suite certifies two different
@@ -315,15 +317,17 @@ type SetupClaims interface {
 }
 
 // Attempts is the fleet's failed-authentication window, behind the API's
-// login throttle.
+// sign-in throttle.
 //
 // # Why the company has to agree on it
 //
 // A guessing run reaches whichever ingress node a load balancer picks, so a
 // per-process counter is one the attacker divides by the number of nodes
-// without knowing it: five tries per node is twenty per fleet, and the fleet
-// counted five. It is the notification valve's lesson on a surface where the
-// cost of getting it wrong is a credential rather than a duplicate message.
+// without knowing it. The throttle keeps its curve per node and SEEDS it from
+// here — reading a (subject, source) pair's window once when the node first
+// meets it, and writing a failure only while the curve is still climbing — so
+// a guessing run moved to another node starts that node's curve where the
+// fleet left it, and the store is never on the path of every attempt.
 //
 // # Both bounds are the bucket's
 //
@@ -336,46 +340,59 @@ type SetupClaims interface {
 // # It fails OPEN, and the asymmetry is deliberate
 //
 // Every read here answers what it could see; an unreachable store yields the
-// error and a caller that treats it as "not throttled". That is the opposite
-// of [Counter], whose valve fails closed, and the reason is what the two
-// refusals cost: a valve that opens delays a notification, while a throttle
-// that closes locks every operator out of /config, /secrets and the dashboard
-// — the one surface an incident is fixed from — at the moment the
-// coordination store is already unwell. What the open window leaves is a
-// guessing run against a constant-time comparison with a high-entropy token
-// on the other side of it, which is the protection the throttle is defence in
-// depth over rather than a replacement for.
+// error and a caller that treats it as "nothing recorded elsewhere". That is
+// the opposite of [Counter], whose valve fails closed, and the reason is what
+// the two refusals cost: a valve that opens delays a notification, while a
+// throttle that closes locks every operator out of /config, /secrets and the
+// dashboard — the one surface an incident is fixed from — at the moment the
+// coordination store is already unwell. What the open window leaves is each
+// node's own curve, which is still a curve.
 type Attempts interface {
-	// Fail records one failed authentication against subject and reports
-	// how many are still inside the window ending at now, this one
-	// included — saturating at [AttemptCap], which is what the record
-	// keeps.
+	// Fail records one failed authentication against subject at now.
+	//
+	// ONE WRITE AND NO ANSWER. The throttle decides on its own curve and
+	// reads the window only to seed it, so a count read back here would
+	// be a second round trip nobody reads.
 	//
 	// An empty subject is an error for [Claims.Claim]'s reason: a count
 	// nobody can be throttled by reads exactly like a caller with a clean
 	// record.
-	Fail(ctx context.Context, subject string, now time.Time) (int, error)
+	Fail(ctx context.Context, subject string, now time.Time) error
 
-	// Failures reports how many attempts against subject are still inside
-	// the window, WITHOUT recording one — what a caller asks to decide
-	// whether a subject is locked out.
+	// Failures reports what the window holds against subject at now —
+	// how many attempts, saturating at [AttemptCap], and the newest of
+	// them — WITHOUT recording one.
+	//
+	// THE NEWEST AND NOT ONLY THE COUNT, because a throttle's delay runs
+	// from the last failure: a node seeding its curve from a count alone
+	// would have to date every failure somebody made elsewhere to the
+	// moment it asked, and a pair re-read on each attempt would then never
+	// see its delay end.
 	//
 	// NOT ON THE PATH OF EVERY REQUEST. This is a round trip, and on the
 	// KV backend it is an ephemeral consumer over the subject's own record
 	// (internal/coord/kv's package doc says what that costs on a clustered
-	// bucket). The comparison a guard makes first is a constant-time one
-	// against bytes it already holds, so a credential that matches is
-	// answered without asking this at all; reading it in front of every
-	// request would put the coordination store's latency under every API
-	// call and its availability under the whole surface — which is the
-	// trade [Cooldowns.Since] refuses for the same reason one layer down.
-	Failures(ctx context.Context, subject string, now time.Time) (int, error)
+	// bucket). The throttle reads a pair once, when a node first meets it,
+	// and a source it has already refused locally never reaches here at
+	// all — the trade [Cooldowns.Since] refuses for the same reason one
+	// layer down.
+	Failures(ctx context.Context, subject string, now time.Time) (Attempted, error)
 
 	// Flush forgets every attempt against subject — what a SUCCESSFUL
-	// authentication does, fleet-wide, so the lockout a caller earned on
-	// one node is lifted on all of them by the credential that proves the
-	// caller is who the throttle was protecting against.
+	// authentication does, fleet-wide, so the delay a pair earned on one
+	// node is lifted on all of them by the credential that proves the
+	// caller is who the throttle was protecting.
 	Flush(ctx context.Context, subject string) error
+}
+
+// Attempted is what [Attempts] holds against one subject.
+type Attempted struct {
+	// Count is how many attempts are inside the window, saturating at
+	// [AttemptCap].
+	Count int
+
+	// Last is the newest of them, and the zero instant when Count is zero.
+	Last time.Time
 }
 
 // Ledger is the fleet's record of work already done, behind the

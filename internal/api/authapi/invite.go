@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -43,10 +42,11 @@ import (
 // and access log and opens nothing; what the estate keeps of the secret is its
 // verifier ([iamdomain.InvitationRow.Admits]).
 //
-// A WRONG SECRET IS AN ABSENT INVITATION: one refusal, counted and padded,
-// for every way a link fails to open ([Service.refuseSpentInvitationID]) —
-// answered differently, a guessed secret against a real id would say the id
-// exists, and the id is the half that leaks.
+// A WRONG SECRET IS AN ABSENT INVITATION: one refusal, padded, for every way a
+// link fails to open ([Service.refuseInvitation]), and counted as a failed
+// attempt exactly as an id nobody issued is — answered differently, a guessed
+// secret against a real id would say the id exists, and the id is the half
+// that leaks.
 
 // inviteSecretHeader carries an invitation link's secret to the view.
 //
@@ -133,12 +133,13 @@ type inviteRedeem struct {
 // [inviteSecretHeader] — and throttled per source, because an id and a secret
 // are values somebody could otherwise walk.
 func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
-	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailInvite) {
+	adm, ok := s.admit(w, r, credential.Attempt{Source: s.sourceOf(r)},
+		types.FailInvite)
+	if !ok {
 		return
 	}
-	held, ok := s.presentedInvitation(w, r, arrived, source, r.PathValue("id"),
+	defer adm.ticket.Release()
+	held, ok := s.presentedInvitation(w, r, adm, r.PathValue("id"),
 		r.Header.Get(inviteSecretHeader))
 	if !ok {
 		return
@@ -170,11 +171,12 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 // nothing in it is answered until the invitation has opened: a password too
 // short is the invited person's to fix, told to nobody else.
 func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
-	arrived := s.now()
-	source := s.sourceOf(r)
-	if !s.admit(w, r, source, types.FailInvite) {
+	adm, ok := s.admit(w, r, credential.Attempt{Source: s.sourceOf(r)},
+		types.FailInvite)
+	if !ok {
 		return
 	}
+	defer adm.ticket.Release()
 	body, err := httpjson.ReadBody(w, r, maxLoginBody)
 	if err != nil {
 		httpjson.Refuse(w, err)
@@ -185,8 +187,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
-	held, ok := s.presentedInvitation(w, r, arrived, source, r.PathValue("id"),
-		in.Secret)
+	held, ok := s.presentedInvitation(w, r, adm, r.PathValue("id"), in.Secret)
 	if !ok {
 		return
 	}
@@ -233,7 +234,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			// as the first attempt's, so the ledger collapses the two.
 			s.spendInvitation(r, held, person, opID)
 		}
-		s.refuseSpentInvitationID(w, r, arrived, source, held.ID)
+		s.refuseInvitation(w, r, adm, held.ID, true)
 		return
 	}
 	email, err := s.openSealed(r, held)
@@ -299,7 +300,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	s.spendInvitation(r, held, person, opID)
 	log.InfoContext(r.Context(), "api_invite_redeemed",
 		"invitation", held.ID, "person", person, "login", in.Login)
-	s.throttle.Flush(r.Context(), source)
+	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, iamdomain.Sighting{
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: in.Login, Grants: held.Grants, Colleague: held.Colleague,
@@ -372,9 +373,10 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err e
 // telling them apart would say "this was already used" to somebody whose link
 // merely aged out, sending them to find out who used it; and the fourth told
 // apart would say which ids exist to anybody guessing secrets against them.
-// A counted one, padded to one deadline: see [Service.refuseSpentInvitationID].
+// Padded to one deadline, and counted only where the link did not prove
+// itself: see [Service.refuseInvitation].
 func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, source, id, secret string) (iamdomain.InvitationRow, bool) {
+	adm admission, id, secret string) (iamdomain.InvitationRow, bool) {
 
 	held, err := s.directory.InvitationByID(r.Context(), id)
 	if err != nil {
@@ -382,42 +384,50 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return iamdomain.InvitationRow{}, false
 	}
-	if held.ID == "" || held.Spent(s.now()) || !held.Admits(secret) {
-		s.refuseSpentInvitationID(w, r, arrived, source, id)
+	switch {
+	case held.ID == "" || !held.Admits(secret):
+		s.refuseInvitation(w, r, adm, id, false)
+		return iamdomain.InvitationRow{}, false
+	case held.Spent(s.now()):
+		s.refuseInvitation(w, r, adm, id, true)
 		return iamdomain.InvitationRow{}, false
 	}
 	return held, true
 }
 
-// refuseSpentInvitationID is every 410 this surface answers: an invitation
-// nobody issued, one redeemed, one aged out, and one whose address somebody is
+// refuseInvitation is every 410 this surface answers: an invitation nobody
+// issued, one redeemed, one aged out, and one whose address somebody is
 // already enrolled under — and one presented with a secret that is not its
-// link's. ONE ANSWER for all of them, for [Service.presentedInvitation]'s
-// reason.
+// link's. ONE ANSWER for all of them, in the same bytes at the same deadline,
+// for [Service.presentedInvitation]'s reason.
 //
-// # It is a FAILED ATTEMPT, counted like every other
+// # A failed attempt only where the link did not prove itself
 //
 // The link is the credential, and walking ids and secrets is how somebody
-// without one looks for one. Admission ran before the lookup, but a 410 used to
-// record nothing, so the per-source ceiling that stops a guessing run at a
-// password never filled here: a source could present a new invitation id on
-// every request for as long as it liked. So the refusal is counted against the
-// SOURCE — which is what fills the ceiling — reaches the audit trail's
-// failure tally, and is padded to the deadline measured from arrival, because
-// an absent id, a spent one and a wrong secret are one refusal and must not be
-// three timings.
-func (s *Service) refuseSpentInvitationID(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, source, id string) {
+// without one looks for one — so an id nobody issued and a secret that is not
+// its link's are FAILED ATTEMPTS: the source's curve, the audit trail's
+// failure tally. A link that DID prove itself and no longer works — redeemed,
+// aged out, its address enrolled — is not a guess: it is the link's holder, or
+// a mail scanner that fetched it for them, and those fetch the same link again
+// and again. Counted, a scanner re-reading one spent link put the address it
+// scans from on the curve, and on a deployment behind one proxy address, that
+// was the whole company. The difference is invisible to a caller who does not
+// hold the link — every one of them is refused the same way — so it tells a
+// guesser nothing.
+func (s *Service) refuseInvitation(w http.ResponseWriter, r *http.Request,
+	adm admission, id string, proved bool) {
 
-	s.throttle.Fail(r.Context(), source)
-	s.audit.Failed(r.Context(), authevents.Failure{
-		Client: source, Method: types.FailInvite,
-		// THE ID PRESENTED, keyed in memory and never kept: how many
-		// DIFFERENT links one client tried in a minute is the difference
-		// between a stale bookmark and a walk.
-		Subject: id,
-	})
-	s.throttle.Pad(r.Context(), arrived)
+	if !proved {
+		adm.ticket.Fail(r.Context())
+		s.audit.Failed(r.Context(), authevents.Failure{
+			Client: adm.source, Method: types.FailInvite,
+			// THE ID PRESENTED, keyed in memory and never kept: how many
+			// DIFFERENT links one client tried in a minute is the
+			// difference between a stale bookmark and a walk.
+			Subject: id,
+		})
+	}
+	s.throttle.Pad(r.Context(), adm.at)
 	httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 }
 

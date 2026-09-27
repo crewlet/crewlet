@@ -145,10 +145,11 @@ type Failure struct {
 	// a wrong password for a real login — or empty.
 	Person string
 
-	// Throttled says the attempt was refused at the throttle's ceiling
-	// before anything was verified. It is counted apart, because "this
-	// client kept going after it was stopped" is a different fact from
-	// "this client guessed wrong".
+	// Throttled says the attempt was answered 429 before anything was
+	// verified — the throttle's curve owed its key a longer wait than a
+	// request is held open for. It is counted apart, because "this client
+	// came back before its wait was over" is a different fact from "this
+	// client guessed wrong".
 	Throttled bool
 }
 
@@ -173,23 +174,24 @@ const (
 	//
 	// 256, well past any honest caller and past what the throttle lets a
 	// guesser reach: somebody mistyping their own login presents one or
-	// two, and a client the throttle admits presents at most
-	// credential.AdmitLimit VERIFIED attempts a window. The one arm
-	// that can present hundreds of distinct values in a minute from one
-	// client is a bearer spray, which nothing throttles — and for that,
-	// "at least 256" is already all an operator does anything with. At
-	// eight bytes a digest it bounds the counting to about 130 KiB across
-	// every tally a minute can hold.
+	// two, and one node's source curve admits one client sixteen VERIFIED
+	// attempts in its first minute (credential.SourceAllowance free, then
+	// a wait that doubles) and two a minute after that. The one arm that
+	// can present hundreds of distinct values in a minute from one client
+	// is a bearer spray, which nothing throttles — and for that, "at least
+	// 256" is already all an operator does anything with. At eight bytes a
+	// digest it bounds the counting to about 130 KiB across every tally a
+	// minute can hold.
 	MaxSubjectsCounted = 256
 
 	// MaxPeopleNamed is how many resolved people one row names.
 	//
-	// SIXTEEN. The throttle admits six verified attempts per client per
-	// window, so more than a handful of distinct real people from one
-	// client in one minute arrives only through a fleet whose
-	// coordination store is down (each node then throttles on its own
-	// count); sixteen covers that with room. Past it, an attempt is
-	// still COUNTED — only the name list stops growing.
+	// SIXTEEN, which is every verified attempt one node's source curve
+	// admits one client in its first minute — credential.SourceAllowance
+	// free, then 1, 2, 4, 8 and 16 seconds — so a row from one node names
+	// everybody that client tried. A client a load balancer spreads across
+	// nodes gets a curve on each and a row from each. Past it, an attempt
+	// is still COUNTED — only the name list stops growing.
 	MaxPeopleNamed = 16
 
 	// MaxFoldedClients is how many distinct clients the "*" row counts

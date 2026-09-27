@@ -172,12 +172,22 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		}
 		return nil, nil, fmt.Errorf("api: the session signer: %w", err)
 	}
+	// THE KEY A PAIR IS DIGESTED UNDER, the same on every node because it
+	// is derived from the keyring's active entry — which the signer above
+	// has just proved this node holds.
+	pairKey, ok := credential.PairKey(boot.Secrets.TokenMaterial())
+	if !ok {
+		return nil, nil, errors.New("api: the sign-in throttle: the keyring " +
+			"names no active key to derive its digest key from")
+	}
 	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
-		// THE FLEET'S OWN WINDOW, so a caller guessing against three
-		// ingress nodes is one attacker rather than three. Nil is a real
-		// deployment — a single node with no coordination backend — and
-		// it throttles on the local curve alone.
+		// THE FLEET'S OWN WINDOW, so a guessing run the load balancer
+		// moves to another ingress node starts that node's curve where
+		// the fleet left it. Nil is a real deployment — a single node
+		// with no coordination backend — and it throttles on its own
+		// curve alone.
 		Attempts: e.Backends().Fleet,
+		Key:      pairKey,
 		Logger:   logging.Get("api.auth"),
 	})
 	if err != nil {

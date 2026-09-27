@@ -383,13 +383,16 @@ const (
 	// works alone.
 	CodeSignInRefused Code = "sign_in_refused"
 
-	// CodeThrottled is too many failed attempts from one source.
+	// CodeThrottled is an attempt the throttle's curve says must wait
+	// longer than it will hold a request open for. It is a 429 carrying
+	// the time left in `Retry-After`, and [Throttled] is its one writer.
 	//
-	// THE ONE SPECIFIC REFUSAL ON THIS SURFACE, and it is safe precisely
-	// because it is keyed on the SOURCE rather than on the subject: a
-	// stranger learns they have been rate-limited, which they already
-	// knew. Keyed on a login it would be an oracle — "this account
-	// exists and I can lock it".
+	// THE ONE SPECIFIC REFUSAL ON A SIGN-IN SURFACE, and it is safe
+	// precisely because the curve is keyed on the SOURCE and on what was
+	// TYPED, never on what it resolved to: a stranger learns they have
+	// failed recently from where they are, which they already knew, and a
+	// name nobody holds is throttled exactly as a real one is. Keyed on a
+	// resolved login it would be an oracle — "this account exists".
 	CodeThrottled Code = "throttled"
 
 	// CodeSecondFactorRequired is a first factor that checked out where a
@@ -651,8 +654,8 @@ var codes = map[Code]string{
 	// oracle the single code exists to close, written out in the body.
 	CodeSignInRefused: "Those sign-in details were not accepted. Check them " +
 		"and try again.",
-	CodeThrottled: "There have been too many failed sign-in attempts from " +
-		"here. Wait a little and try again.",
+	CodeThrottled: "There have been too many failed attempts from here. " +
+		"Wait for the time this answer names, then try again.",
 	CodeSecondFactorRequired: "Enter the code from your authenticator app, or " +
 		"one of your recovery codes.",
 	CodeStepUpRequired: "This action needs you to have confirmed who you are " +
@@ -1002,6 +1005,20 @@ func RetrySeconds(hint time.Duration) int {
 		return 0
 	}
 	return int((hint + time.Second - 1) / time.Second)
+}
+
+// Throttled writes `429 throttled` carrying the wait left as a Retry-After.
+//
+// ONE WRITER, for [Unavailable]'s reason: a 429 with no Retry-After tells a
+// client it was refused and not when it may try again, so it retries at once,
+// is refused again, and a person at a form reads a lockout where there is a
+// wait of seconds. ROUNDED UP and never below a second, because a hint of
+// 0.2s sent as 0 is a client told to come back before the curve could have
+// admitted it — and zero here would read as "do not retry", which is never
+// what a curve means.
+func Throttled(w http.ResponseWriter, retryAfter time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(max(RetrySeconds(retryAfter), 1)))
+	Fail(w, http.StatusTooManyRequests, CodeThrottled)
 }
 
 // UnavailableWith is [Unavailable] carrying a detail: what could not be read,

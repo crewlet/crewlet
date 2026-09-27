@@ -191,22 +191,26 @@ func (h *fleetHarness) claimSetup(key string, at time.Time) bool {
 	return ok
 }
 
-func (h *fleetHarness) fail(subject string, at time.Time) int {
+func (h *fleetHarness) fail(subject string, at time.Time) {
 	h.t.Helper()
-	n, err := h.f.Fail(h.ctx, subject, at)
-	if err != nil {
+	if err := h.f.Fail(h.ctx, subject, at); err != nil {
 		h.t.Fatalf("Fail(%s): %v", subject, err)
 	}
-	return n
+}
+
+// window is what the attempts window holds against a subject.
+func (h *fleetHarness) window(subject string, at time.Time) coord.Attempted {
+	h.t.Helper()
+	got, err := h.f.Failures(h.ctx, subject, at)
+	if err != nil {
+		h.t.Fatalf("Failures(%s): %v", subject, err)
+	}
+	return got
 }
 
 func (h *fleetHarness) failures(subject string, at time.Time) int {
 	h.t.Helper()
-	n, err := h.f.Failures(h.ctx, subject, at)
-	if err != nil {
-		h.t.Fatalf("Failures(%s): %v", subject, err)
-	}
-	return n
+	return h.window(subject, at).Count
 }
 
 func (h *fleetHarness) flush(subject string) {
@@ -544,16 +548,46 @@ var attemptCases = []fleetCase{{
 	name: "a failed attempt counts for every node",
 	fn: func(h *fleetHarness) {
 		at := h.now()
-		if got := h.fail("token:op-1", at); got != 1 {
-			h.t.Fatalf("Fail returned %d for the first attempt, want 1", got)
+		h.fail("token:op-1", at)
+		if got := h.failures("token:op-1", at); got != 1 {
+			h.t.Fatalf("Failures after one attempt = %d, want 1", got)
 		}
-		if got := h.fail("token:op-1", at); got != 2 {
-			h.t.Fatalf("Fail returned %d for the second attempt, want 2", got)
-		}
+		h.fail("token:op-1", at)
 		if got := h.failures("token:op-1", at); got != 2 {
-			h.t.Fatalf("Failures = %d, want the 2 that Fail just reported — a throttle "+
-				"reads this BEFORE it validates anything, so a count only the "+
-				"writer can see throttles nobody", got)
+			h.t.Fatalf("Failures = %d, want the 2 just recorded — a node seeds "+
+				"its curve from this, so a count only the writer can see "+
+				"throttles nobody on the next node", got)
+		}
+	},
+}, {
+	// THE NEWEST ATTEMPT IS ANSWERED BESIDE THE COUNT, because a delay
+	// runs from the last failure: a node seeding its curve from a count
+	// alone has to date every failure made elsewhere to the moment it
+	// asked, and one that re-read on each attempt would never see its
+	// delay end.
+	name: "the window answers its newest attempt",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		later := at.Add(h.ages.Attempt / 4)
+		h.fail("token:op-1", at)
+		h.fail("token:op-1", later)
+		h.fail("token:op-1", at.Add(time.Second))
+		got := h.window("token:op-1", later)
+		if got.Count != 3 || !got.Last.Equal(later) {
+			h.t.Fatalf("window = %+v, want 3 attempts, the newest at %v",
+				got, later)
+		}
+		if empty := h.window("token:never-seen", later); empty.Count != 0 ||
+			!empty.Last.IsZero() {
+			h.t.Fatalf("an untouched subject's window = %+v, want the zero one",
+				empty)
+		}
+		// AND AN ATTEMPT THAT AGED OUT IS NOT THE NEWEST.
+		h.fail("token:op-2", at)
+		if got := h.window("token:op-2", at.Add(h.ages.Attempt+time.Second)); //
+		got.Count != 0 || !got.Last.IsZero() {
+			h.t.Fatalf("a window whose only attempt aged out = %+v, want the "+
+				"zero one", got)
 		}
 	},
 }, {
@@ -568,10 +602,10 @@ var attemptCases = []fleetCase{{
 	},
 }, {
 	// A FLUSH IS FLEET-VISIBLE, which is the half a per-process throttle
-	// cannot do: the credential that proves the caller is not who the
-	// lockout was protecting against has to lift the lockout everywhere,
-	// or an operator who has just authenticated is still refused by the
-	// next node the balancer picks.
+	// cannot do: the credential that proves the caller is who the throttle
+	// was protecting has to lift the wait everywhere, or a person who has
+	// just signed in is still made to wait by the next node the balancer
+	// picks.
 	name: "a successful authentication flushes the window for every reader",
 	fn: func(h *fleetHarness) {
 		at := h.now()
@@ -585,8 +619,9 @@ var attemptCases = []fleetCase{{
 		// nothing could write past would make the next failed attempt
 		// uncountable — the throttle switched off by the one gesture
 		// that is supposed to reset it.
-		if got := h.fail("token:op-1", at); got != 1 {
-			h.t.Fatalf("Fail after a flush returned %d, want 1", got)
+		h.fail("token:op-1", at)
+		if got := h.failures("token:op-1", at); got != 1 {
+			h.t.Fatalf("Failures after a flush and one attempt = %d, want 1", got)
 		}
 	},
 }, {
@@ -664,8 +699,7 @@ var attemptCases = []fleetCase{{
 		errs := make(chan error, 8)
 		for range 8 {
 			wg.Go(func() {
-				_, err := h.f.Fail(h.ctx, "token:concurrent", at)
-				errs <- err
+				errs <- h.f.Fail(h.ctx, "token:concurrent", at)
 			})
 		}
 		wg.Wait()
