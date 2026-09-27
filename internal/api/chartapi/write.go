@@ -1,6 +1,7 @@
 package chartapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -222,6 +223,12 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 }
 
 // readBody decodes one request body at this surface's bound.
+//
+// A FIELD THE ROUTE DOES NOT READ IS REFUSED, naming it, rather than dropped.
+// Every write here is full post-state or a structural gesture, so a dropped
+// field answers 200 for a request that asked for more than landed: a
+// misspelled `backstroy` left the backstory empty, and a field a route stopped
+// reading went on being sent and ignored with nothing to say so.
 func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var out T
 	raw, err := httpjson.ReadBody(w, r, MaxBodyBytes)
@@ -232,9 +239,18 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 		httpjson.Refuse(w, err)
 		return out, false
 	}
-	if err := json.Unmarshal(raw, &out); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&out); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": "the body does not decode as this " +
+				"route's: " + err.Error()})
+		return out, false
+	}
+	if dec.More() {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": "the body holds more than one JSON " +
+				"value, and this route reads exactly one"})
 		return out, false
 	}
 	return out, true

@@ -912,6 +912,42 @@ func TestARenameAnswersTheRefusalRatherThan200(t *testing.T) {
 	}
 }
 
+// A FIELD A ROUTE DOES NOT READ IS REFUSED, NAMING IT, AND NOTHING IS WRITTEN.
+//
+// Every write here is full post-state or a structural gesture, so a dropped
+// field answers 200 for a request that asked for more than landed — a
+// misspelled `purpse` left the purpose empty with nothing to say so.
+func TestAFieldARouteDoesNotReadIsRefused(t *testing.T) {
+	t.Parallel()
+	r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	for _, c := range []struct{ name, method, path, body string }{
+		{"a unit's content", http.MethodPatch, "/chart/units/engineering",
+			`{"name":"E","purpse":"x"}`},
+		{"a batch", http.MethodPost, "/chart/batch",
+			`{"operations":[{"kind":"move","object":{"kind":"seat","id":"cto"},"parnet":"eng"}]}`},
+		{"a rename", http.MethodPost, "/chart/units/engineering/rename",
+			`{"to":"platform","from":"engineering"}`},
+	} {
+		var rec *httptest.ResponseRecorder
+		if c.method == http.MethodPatch {
+			rec = patch(r.mux, c.path, c.body)
+		} else {
+			rec = post(r.mux, c.path, c.body)
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s with a field the route does not read answered %d, "+
+				"want 400: %s", c.name, rec.Code, rec.Body)
+		}
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("a refused body reached the writer: %v", r.writer.calls)
+	}
+	// THE CONTROL: the same unit body without the stray field is written.
+	if rec := patch(r.mux, "/chart/units/engineering", `{"name":"E"}`); rec.Code != http.StatusOK {
+		t.Errorf("a well-formed unit body answered %d: %s", rec.Code, rec.Body)
+	}
+}
+
 // --- the surface itself ----------------------------------------------- //
 
 // EVERY ROUTE THIS SURFACE MOUNTS IS DECIDED, and the walk is what says so.

@@ -635,6 +635,11 @@ Retrying an `unknown` under a *fresh* id would write the change twice if the
 first had in fact landed, which is the one thing the operation ledger exists to
 prevent.
 
+A body carrying a field the route does not read is refused `400 invalid_body`,
+naming the field, rather than having it dropped — every write here is full
+post-state or a structural gesture, so a dropped field would answer `200` for a
+request that asked for more than landed.
+
 A refusal by the chart's own rules is `400`, a contention another writer won is
 `409 stale` (re-read and write again — nothing about the request was wrong), and
 a node that cannot decide **authority** is `503` rather than `403`: a node that
