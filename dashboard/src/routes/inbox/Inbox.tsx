@@ -7,11 +7,21 @@
  * is the queue itself: what the engine needs decided, and what reached this
  * person and why.
  *
- * # Two bands on one screen, never two tabs
+ * # Three bands on one screen, never three tabs
  *
- * **Needs a decision** is what the engine derived — every condition in
- * `lib/attention.ts`, over the subjects it declares. **Notices** is the
- * person's own inbox — what reached them, and why.
+ * **Waiting on your decision** is what only this person can settle — the open
+ * asks put to them and the coding runs parked on a question to them (the
+ * engine's `decisions`), each answered on its row with the `DecisionRow` Home
+ * draws. **Needs a decision** is what the engine derived — every condition in
+ * `lib/attention.ts`, over the subjects it declares, a seat stopped on its
+ * budget among them. **Notices** is the person's own inbox — what reached
+ * them, and why.
+ *
+ * `?reason=decisions` (`DECISIONS_VIEW`) is where Home's "Review" lands, and
+ * it is a VIEW rather than a chip: it sets the notices aside and leaves the
+ * two decision bands. It is not one of the eighteen notice reasons, so it
+ * never filters the notice page — it did, and a reader told that a decision
+ * waited on them landed on an empty list under a "decisions 0" chip.
  *
  * NEITHER LIST IS RESTATED HERE, and the quiet band's sentence is why. The band
  * named three of twelve conditions as though they were all of them, and this
@@ -79,6 +89,12 @@ import { WATCHED, type Attention } from "~/lib/attention.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { MarkReadButton } from "~/components/writes.tsx";
+import {
+  DECISIONS_VIEW,
+  DecisionRow,
+  decisionSubjects,
+  subjectKey,
+} from "~/components/DecisionRow.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import type { WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
@@ -121,7 +137,11 @@ export function Inbox() {
   // option unchosen and ran the query with both flags false, which is "all"
   // under a fourth name nothing on screen gives.
   const state: Scope = isScope(stateParam) ? stateParam : "unread";
-  const [reason, setReason] = useParam("reason", "");
+  const [reasonParam, setReason] = useParam("reason", "");
+  // THE DECISIONS VIEW IS NOT A NOTICE REASON: it sets the notices aside, and
+  // the reason the notice page is filtered on is none.
+  const decisionsView = reasonParam === DECISIONS_VIEW;
+  const reason = decisionsView ? "" : reasonParam;
   const [open, setOpen] = useParam("row", "");
 
   const inbox = useQuery(
@@ -140,6 +160,16 @@ export function Inbox() {
     { enabled: viewer.handle !== "", pollMs: 30_000 },
   );
   usePageCoverage(inbox.data);
+
+  // WHAT WAITS ON THIS PERSON — the read Home's "Waiting on your decision"
+  // counts, so the figure that sent a reader here and the band they land on
+  // are one answer.
+  const decisions = useQuery("decisions", undefined, {
+    enabled: viewer.handle !== "",
+    pollMs: 30_000,
+  });
+  const decisionRows = decisionSubjects(decisions.data, []);
+  const decisionsTotal = decisions.data?.total ?? 0;
 
   const loaded = inbox.data?.notices ?? [];
   // THE REASON NARROWS CLIENT-SIDE, which is what makes the chips honest. Sent
@@ -214,6 +244,44 @@ export function Inbox() {
 
       <div className="inbox-panes" data-open={selected ? "true" : undefined}>
         <div className="inbox-list">
+          {viewer.handle && (
+            <Band
+              title="Waiting on your decision"
+              count={decisions.data ? decisionRows.length : null}
+              more={Boolean(decisions.data?.capped) || decisionsTotal > decisionRows.length}
+              note="Questions put to you and coding runs parked on one — each answered on its row."
+              empty={
+                decisions.data && !decisions.error
+                  ? {
+                      title: "Nothing waits on your decision",
+                      hint: "No question is put to you and no coding run is waiting on your answer. A seat stopped on its budget is listed under Needs a decision.",
+                    }
+                  : null
+              }
+            >
+              {decisions.loading && !decisions.data && (
+                <Skeleton variant="text" rows={3} label="Loading what waits on you" />
+              )}
+              <QueryState error={decisions.error} loading={decisions.loading}>
+                <ul className="decision-list">
+                  {decisionRows.map((subject) => (
+                    <DecisionRow
+                      key={subjectKey(subject)}
+                      subject={subject}
+                      viewerHandle={viewer.handle}
+                      now={now}
+                    />
+                  ))}
+                </ul>
+              </QueryState>
+              {decisionsTotal > decisionRows.length && (
+                <p className="t-caption">
+                  {`${(decisionsTotal - decisionRows.length).toLocaleString()}${decisions.data?.capped ? "+" : ""} more beyond the ${decisionRows.length} newest shown here.`}
+                </p>
+              )}
+            </Band>
+          )}
+
           <Band
             title="Needs a decision"
             count={attention.length}
@@ -241,7 +309,19 @@ export function Inbox() {
             ))}
           </Band>
 
-          {viewer.handle && (
+          {viewer.handle && decisionsView && (
+            <PageNote>
+              Your notices are set aside while you look at what waits on your decision.{" "}
+              <a
+                className="prose-link"
+                href={href(["inbox"], state === "unread" ? undefined : { state })}
+              >
+                Show notices
+              </a>
+            </PageNote>
+          )}
+
+          {viewer.handle && !decisionsView && (
             <Band
               title="Notices"
               count={inbox.data ? notices.length : null}
@@ -470,7 +550,7 @@ function Band({
   /** How many rows are drawn, or null where nothing has answered — the head
    *  draws an em dash for that, never a `0`. "No notices" is a claim and it is
    *  a false one for as long as the read is in flight, which is the rule the
-   *  pulse strip's own figures follow one component up. */
+   *  landing screen's own figures follow. */
   count: number | null;
   /** More rows lie past this page, so `count` is a floor and draws as "50+". */
   more?: boolean;

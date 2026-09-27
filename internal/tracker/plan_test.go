@@ -548,3 +548,49 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 		})
 	}
 }
+
+// THE COMPANY-WIDE HISTORY READS SEARCH THEIR PARTIAL INDEX.
+//
+// `work_flow`'s backward walk and `company_feed`'s tracker page select on the
+// instant a change took effect and on nothing that narrows them first, over a
+// table nothing sweeps. Replicated 0029's `tracker_history_moves_idx` is a
+// partial index whose WHERE the two statements state word for word
+// ([historyMoves]); a planner that cannot prove the implication falls back to
+// a scan of the company's whole history on every landing-screen poll, and
+// nothing else would ever say so.
+func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	at := time.Date(2031, 4, 16, 0, 0, 0, 0, time.UTC)
+	statements := map[string]struct {
+		sql  string
+		args []any
+	}{
+		"the flow's walk": {flowRowsStatement, []any{store.EncodeTime(at)}},
+	}
+	for name, q := range map[string]FeedQuery{
+		"the newest feed page":   {Limit: 20},
+		"a later feed page":      {Limit: 20, Before: &FeedCursor{At: at, Seq: 9}},
+		"one writer's hand-offs": {Limit: 20, Actor: "ana", Kinds: []FeedKind{FeedHandoff}},
+	} {
+		kinds := q.Kinds
+		if len(kinds) == 0 {
+			kinds = FeedKinds
+		}
+		sql, args := companyFeedStatement(q, kinds)
+		statements[name] = struct {
+			sql  string
+			args []any
+		}{sql, args}
+	}
+	for name, statement := range statements {
+		t.Run(name, func(t *testing.T) {
+			plan := explain(t, db, statement.sql, statement.args)
+			if !slices.Contains(indexesIn(plan), "tracker_history_moves_idx") ||
+				scansHeap(plan, "tracker_history") {
+				t.Errorf("this read does not search tracker_history_moves_idx:\n%s",
+					strings.Join(plan, "\n"))
+			}
+		})
+	}
+}

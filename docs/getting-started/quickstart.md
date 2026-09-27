@@ -367,9 +367,12 @@ to go.
 ## 4. Watch the first turn
 
 Open the dashboard at <http://localhost:8000/>. It lands on **Home**, which is
-what a person opening this wants first: whether anything needs them, and what
-the company is doing. With no company activity yet it says so, and lists any
-condition the engine itself raised.
+what a person opening this wants first: how the company is (who is working,
+what waits on you, the work in progress and finished, the tokens spent), the
+decisions only you can make — answered right there, an option of an agent's
+question is a button — who is working now, and what the company has done. With
+no company activity yet each card says so, and a condition the engine itself
+raised takes over the sentence under the greeting.
 
 The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
 Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in

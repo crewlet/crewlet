@@ -67,6 +67,23 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
   RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/ },
   PinButton: { props: { view: "v1", name: "Triage", pinned: false }, name: /^Pin$/ },
   MarkReadButton: { props: { recordId: "r-1" }, name: /^Mark read$/ },
+  AnswerAskButtons: {
+    props: {
+      item: "LEAD-12",
+      comment: "c-1",
+      options: [{ id: "hold", label: "Hold release" }],
+      recommended: "hold",
+    },
+    name: /^Hold release$/,
+  },
+  AnswerRunButton: {
+    props: { turnId: "run-1", seat: "Frontend SWE", question: "Drop the fallback?" },
+    name: /^Answer$/,
+  },
+  ReplyAskButton: {
+    props: { item: "LEAD-12", comment: "c-2", asker: "CEO", question: "Which vendor?" },
+    name: /^Reply$/,
+  },
 };
 
 /** The tool each control makes its change through, so a reader the engine does not serve it is refused. */
@@ -75,6 +92,9 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   RestoreButton: "restore_work_item",
   PinButton: "set_pins",
   MarkReadButton: "mark_inbox",
+  AnswerAskButtons: "comment_on_work_item",
+  AnswerRunButton: "answer_run",
+  ReplyAskButton: "comment_on_work_item",
 };
 
 const EVERY_TOOL = Object.values(TOOLS);

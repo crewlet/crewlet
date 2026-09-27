@@ -105,7 +105,12 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// THROUGH THE ACCESSOR, because nothing rewrites a parked row: a
 		// run suspended before the identities were split carries the key
 		// in its turn id instead. Empty when the run genuinely has none.
-		"work_key":     run.UnitOfWork(),
+		"work_key": run.UnitOfWork(),
+		// THE ITEM THE LAUNCHING TURN WAS CHARGED TO, which the row has
+		// carried since runs named one and this answer never served — so a
+		// parked run's question reached a person with no task beside it.
+		// Null on a run launched by a turn charged to no item.
+		"work_item":    run.WorkItem,
 		"agent_handle": run.AgentHandle,
 		"role":         run.Role,
 		"status":       run.Status,

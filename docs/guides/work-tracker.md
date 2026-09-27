@@ -1174,6 +1174,43 @@ busy, and a total alone cannot tell them apart.
 `GET /work/workload`, optionally narrowed to one `unit` — the people whose open
 work sits in projects that unit owns.
 
+## How the work has moved
+
+**The flow** (`GET /work/flow`, `work_flow`) is the company's work as a series:
+for each of the last N days or weeks on the company's clock, how many tasks sat
+in each status group at the window's end, and how many were **completed** in it
+— a change that took a task from not delivered to delivered, so a cancellation
+is not a completion and moving done work to closed is not a second one. It is
+computed by walking the task history BACKWARD from today's census, undoing each
+status change, create, removal, restore, purge and project move, so what it
+costs is the window's changes rather than the company's whole history. Home's
+"Tasks in progress", "Completed" and "Tasks completed per day" all read it.
+
+**Blocked has no history.** Whether a task is blocked depends on its blockers'
+rows, and nothing records the moment it became so; the answer says
+`blocked_history: false` and carries today's blocked and overdue counts only.
+
+## What the company did
+
+**The company feed** (`GET /feed`, `company_feed`) is one feed of what the
+company did, newest first: work **completed** (with the task's tokens and
+turns, and whether a reviewer ever sent it back), work **filed**, work **handed
+on** (the task's hand-off count against its budget), pages published and
+schedules run. A create says where it was filed from — its **origin**, the chat
+surface and conversation the filing turn was woken on ("from Slack") — which
+the create record states for itself (record version 9), so an older build
+holds such a create back rather than applying it without the field. One
+cursor resumes every source exactly where the last page stopped.
+
+A schedule's entries are its **runs** — the ticks the scheduler dispatched. A
+tick it deliberately skipped (a missed run outside the catch-up window, or one
+that came due while its seat was paused) is not something the company did, so
+the feed leaves it out; it stays in the schedule's own ledger
+(`GET /schedules/{scope_type}/{scope_id}/{name}/runs`, Agents › Schedules),
+which is where "why did the standup not run" is answered. And runs of one schedule for one runner that nothing else
+falls between are **one row** ("ran 12 times since 02:40"), so a sweep every
+ten minutes is a line rather than every line of the page.
+
 ## What a person can do
 
 **The dashboard** renders the same queries a seat's tools use, against this
@@ -1432,6 +1469,13 @@ A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without
 replying. The result says so in a `warnings` line, because a commenter
 expecting an answer otherwise gets silence with nothing to explain it.
+
+**What waits on a person** is one question (`GET /work/decisions`,
+`decisions`): the open asks put to any of their identities — their seat and the
+token bound to it — beside the coding runs parked on a question to them, with
+how many there are in all and when the longest one began. The dashboard's Home
+answers them in place: each option of a structured ask is a button that sends
+the choice as the answer, and a parked run is answered by its turn.
 
 ### What an answer may weigh
 

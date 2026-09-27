@@ -1,7 +1,7 @@
 /**
  * The Inbox: where a person acts on what reached them.
  *
- * It was the landing screen, opened by the pulse strip; the strip is Home's
+ * It was the landing screen, opened by a strip of company figures; those are Home's
  * now (`routes/home/Home.test.tsx` holds it), and what is left here is the
  * place a person acts. Two claims below were real defects:
  *
@@ -15,9 +15,9 @@
  *     the others without hunting for a clear button somewhere else.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { EMPTY_VALUE } from "@crewlethq/ui";
+import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Inbox } from "./Inbox.tsx";
 import { SUBJECTS } from "~/lib/attention.ts";
@@ -116,19 +116,25 @@ function mount(answers: Record<string, unknown> = {}) {
       });
     }
     if (what === "sandbox_runs") return Promise.resolve({ runs: [] });
+    if (what === "decisions")
+      return Promise.resolve({ handle: "ada", items: [], total: 0, capped: false });
     if (what === "work_projects")
       return Promise.resolve({ projects: [], total: 0, complete: true });
     if (what === "work_workload") return Promise.resolve({ rows: [] });
     return Promise.resolve({});
   };
   render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <FrameReadings>
-        <Router>
-          <Inbox />
-        </Router>
-      </FrameReadings>
-    </ClientContext.Provider>,
+    <ToastProvider>
+      <LayerHost>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>
+              <Inbox />
+            </Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>,
   );
   return { store, socket };
 }
@@ -143,9 +149,11 @@ async function settle() {
 
 // A QUIET INBOX SAYS WHAT ITS BANDS ARE, rather than disappearing with their
 // rows — an empty box is what a broken dashboard looks like too.
-test("an inbox with nothing waiting still names both bands", async () => {
+test("an inbox with nothing waiting still names every band", async () => {
   mount();
   await settle();
+  expect(screen.getByText("Waiting on your decision")).toBeTruthy();
+  expect(screen.getByText("Nothing waits on your decision")).toBeTruthy();
   expect(screen.getByText("Needs a decision")).toBeTruthy();
   expect(screen.getByText("Notices")).toBeTruthy();
   expect(screen.getByText("Nothing needs a decision")).toBeTruthy();
@@ -315,8 +323,8 @@ test("a reason that matches nothing keeps the chip that would lift it", async ()
 // A BAND WHOSE READ HAS NOT ANSWERED COUNTS NOTHING AND CLAIMS NOTHING.
 //
 // `count={notices.length}` showed a literal `0` in the head before anything had
-// answered — the exact claim the pulse strip's own figures are forbidden from
-// making one component up — and the empty state asserted a read history over an
+// answered — the exact claim Home's own figures are forbidden from
+// making — and the empty state asserted a read history over an
 // answer nobody had.
 test("a band whose read has not answered counts nothing and claims nothing", async () => {
   mount({ work_inbox: () => new Promise(() => {}) });
@@ -534,7 +542,13 @@ test("a refusal for one notice is not carried to the next", async () => {
   });
   await settle();
   fireEvent.click(await screen.findByRole("button", { name: "Mark read" }));
-  expect((await screen.findByRole("alert")).textContent).toContain("read: r-x is no record");
+  // The refusal drawn under the button — the toast host is an alert region
+  // too, now that the rows the decisions band draws need one.
+  await waitFor(() =>
+    expect(
+      screen.getAllByRole("alert").some((a) => a.textContent?.includes("read: r-x is no record")),
+    ).toBe(true),
+  );
   // Notice 2's excerpt is in the list only, until the pane moves to it.
   const second = () => screen.queryAllByText(/something happened, assignee 2/).length;
   const listed = second();
@@ -547,4 +561,76 @@ test("a refusal for one notice is not carried to the next", async () => {
   expect(second()).toBeGreaterThan(listed);
   expect(screen.getByRole("button", { name: "Mark read" })).toBeTruthy();
   expect(document.querySelector(".write-refusal")).toBeNull();
+});
+
+function waitingAsk() {
+  return {
+    kind: "ask",
+    at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    ask: {
+      id: "t-12",
+      key: "LEAD-12",
+      project: "LEAD",
+      title: "2.4 release",
+      type: "task",
+      status: "todo",
+      comment: "c-12",
+      asked_by: "cto",
+      asked_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      body: "Hold the release?",
+      decision: {
+        question: "Hold the 2.4 release?",
+        options: [
+          { id: "hold", label: "Hold release" },
+          { id: "ship", label: "Ship anyway" },
+        ],
+        recommended: "hold",
+        role: "approver",
+      },
+      answer_with: "",
+    },
+  };
+}
+
+// WHAT WAITS ON THIS PERSON IS ON THEIR INBOX, answerable on its row — the
+// same read Home's "Waiting on your decision" counts, so the figure that sent
+// a reader here and the band they land on cannot disagree.
+test("the asks put to the reader are listed and answered on their rows", async () => {
+  mount({ decisions: { handle: "ada", items: [waitingAsk()], total: 1, capped: false } });
+  await settle();
+  expect(screen.getByText(/asks: Hold the 2\.4 release\?/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Hold release" })).toBeTruthy();
+  // The notices are still here: this is the whole inbox, not the view.
+  expect(screen.getByText("Notices")).toBeTruthy();
+});
+
+// `?reason=decisions` IS A VIEW, NOT A NOTICE REASON. As a reason it filtered
+// the notice page on a value no notice carries and drew "decisions 0" with
+// "Nothing on this page carries that reason" — under a Home figure that had
+// just said a decision was waiting.
+test("the decisions view sets the notices aside and never filters them on it", async () => {
+  location.hash = "#/inbox?reason=decisions";
+  mount({
+    decisions: { handle: "ada", items: [waitingAsk()], total: 1, capped: false },
+    work_inbox: {
+      handle: "ada",
+      notices: [notice("assignee", 1)],
+      primary_reasons: ["assignee"],
+      unread: 1,
+      primary: 1,
+    },
+  });
+  await settle();
+  expect(screen.getByText(/asks: Hold the 2\.4 release\?/)).toBeTruthy();
+  expect(screen.queryByText("Nothing on this page carries that reason")).toBeNull();
+  expect(screen.queryByText("Notices")).toBeNull();
+  expect(screen.queryByText("something happened, assignee 1")).toBeNull();
+  expect(screen.getByRole("link", { name: "Show notices" })).toBeTruthy();
+});
+
+// A PAGE THAT FILLED IS A FLOOR, and the band says how many lie past it.
+test("more decisions than the page holds are counted as a floor and named", async () => {
+  mount({ decisions: { handle: "ada", items: [waitingAsk()], total: 4, capped: false } });
+  await settle();
+  expect(screen.getByText("3 more beyond the 1 newest shown here.")).toBeTruthy();
 });

@@ -99,7 +99,9 @@ describe("the shell", () => {
     // It is not a footnote in a popover: the page cannot tell the truth about
     // anything else while the socket is down, so it leads.
     mount();
-    expect(screen.getByText("No connection to the engine")).toBeDefined();
+    expect(
+      screen.getByText("Not connected to the engine. What is shown is the last state it sent."),
+    ).toBeDefined();
   });
 
   test("every workspace is in the sidebar, Settings included", () => {

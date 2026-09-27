@@ -171,6 +171,14 @@ type Turn struct {
 	// never read, and matched on it the person's answer reached nobody.
 	PartitionKey string
 
+	// Transport is the chat backend the trigger arrived on (`slack`,
+	// `mattermost`) — the [notify.TransportField] stamp — and empty for a
+	// turn no chat message woke. It travels beside the conversation so a
+	// task this turn files can say which surface it came from: the
+	// conversation identity names a thread, and only this names the
+	// product a person would recognise it by.
+	Transport string
+
 	// Task is the ask this turn is working on, and Reply says who is
 	// waiting for it — [turn.Reply]'s wire value, carried as a plain
 	// string so this package does not import the turn engine it is

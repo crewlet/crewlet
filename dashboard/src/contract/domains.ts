@@ -32,6 +32,9 @@ export const SESSION_QUERIES = {
     "work_my_work",
     "work_inbox",
     "work_routing",
+    "work_flow",
+    "company_feed",
+    "decisions",
   ],
   pages: ["pages", "page", "containers", "page_activity", "page_revision"],
 } as const;

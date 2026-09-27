@@ -17,19 +17,20 @@
  *      `isolated`) — it is running a configuration nobody else is;
  *   6. no health push yet — connected, and nothing to report on, which is
  *      not "healthy";
- *   7. serving — "Engine healthy", a success dot, and the detail "3 nodes ·
- *      config epoch 42" (or "node count unavailable" where the presence read
- *      failed, never a zero).
+ *   7. serving — a success dot, the detail "3 nodes · config epoch 42" (or
+ *      "node count unavailable" where the presence read failed, never a
+ *      zero), and the title "Engine healthy" ONLY when the alarm table was
+ *      evaluated and nothing in it fires; otherwise "Engine serving".
  *
- * THE DOT AND THE TITLE ARE THE POSTURE, AND ONLY THE POSTURE. The alarm line
- * is a second fact with its OWN tone and glyph, drawn beneath: a serving node
- * with a standing alarm is healthy AND has an alarm, and the card says both
- * rather than recolouring the one to carry the other. Borrowing the dot for
- * the alarms is what drew "Engine healthy" beside an amber dot — a title and a
- * colour contradicting each other — and retitling it "Engine serving, with
- * alarms" to match only moved the contradiction: the posture line then said
- * something about the alarms and nothing a reader could act on differently
- * from the line under it.
+ * THE DOT IS THE POSTURE, AND ONLY THE POSTURE. The alarm line is a second
+ * fact with its OWN tone and glyph, drawn beneath, rather than a recoloured
+ * dot: borrowing the dot drew a green title beside an amber dot, a title and
+ * a colour contradicting each other. But "HEALTHY" IS A CLAIM THE ALARMS CAN
+ * REFUTE, and "Engine healthy" directly above "5 alarms · oldest: backup age"
+ * was the same contradiction in words. So the title says what the posture
+ * says — the node is serving — and keeps "healthy" for the one state that
+ * earns it. It never repeats the alarm line ("serving, with alarms"), which
+ * would say nothing the line under it does not.
  *
  * Every word comes off the ONE health push (`useEngineHealth`) and the
  * connection; nothing here polls. The ALARM LINE is `health.alarms`, the same
@@ -119,7 +120,9 @@ export function healthReading(input: {
   const epoch = health.applied_epoch;
   return {
     tone: "success",
-    title: "Engine healthy",
+    // HEALTHY ONLY WITH NOTHING TO REFUTE IT: an alarm line — standing, or a
+    // table not evaluated yet — is exactly what the word would contradict.
+    title: alarms ? "Engine serving" : "Engine healthy",
     detail:
       epoch !== undefined
         ? `${nodeCountLabel(health.nodes)} · config epoch ${epoch}`
@@ -150,7 +153,9 @@ export function HealthCard({
     <>
       {/* ON THE TITLE'S LINE, because it is the title's tone: centred on
           the card it drifted down beside the alarm line once there was one,
-          and read as that line's colour. */}
+          and read as that line's colour. The card is a grid whose first row
+          is the title's, so the dot is centred on that line's own box — see
+          `.health-card` in frame.css. */}
       <span className="health-card-dot">
         <StatusDot tone={reading.tone} />
       </span>

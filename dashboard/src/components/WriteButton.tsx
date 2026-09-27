@@ -38,6 +38,14 @@ export interface WriteButtonProps<T extends ActionTool> extends Omit<
    * itself, beside the field it names.
    */
   showRefusal?: boolean;
+  /**
+   * Whether THIS button's press is the one in flight, where several buttons
+   * send through one write (the options of one ask): only that one shows it
+   * is sending. Defaults to the write's own `busy`, for a button that is the
+   * write's only control. Every button of the write still refuses a press
+   * while any press is out.
+   */
+  pressing?: boolean;
 }
 
 export function WriteButton<T extends ActionTool>({
@@ -46,6 +54,7 @@ export function WriteButton<T extends ActionTool>({
   children,
   showRefusal = true,
   blocked,
+  pressing,
   ...rest
 }: WriteButtonProps<T>) {
   const { access, busy } = write;
@@ -54,7 +63,7 @@ export function WriteButton<T extends ActionTool>({
     <span className="write-button">
       <Button
         {...rest}
-        loading={busy}
+        loading={pressing ?? busy}
         disabledReason={reason}
         onClick={(event) => {
           // A ROW OR A CARD IS OFTEN AN ANCHOR: the press is this button's,

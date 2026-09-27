@@ -57,6 +57,13 @@ type stubWork struct {
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
 
+	flowQuery      tracker.FlowQuery
+	flow           tracker.FlowAnswer
+	feedQuery      tracker.FeedQuery
+	feed           tracker.FeedPage
+	decisionsQuery tracker.DecisionsQuery
+	decisions      tracker.DecisionsAnswer
+
 	catalogueQuery tracker.CatalogueQuery
 	taskLevel      statelog.ReadLevel
 	taskFresh      statelog.Freshness
@@ -133,6 +140,25 @@ func (s *stubWork) Person(_ context.Context, q tracker.PersonQuery, _ time.Time)
 func (s *stubWork) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (tracker.InboxAnswer, error) {
 	s.inboxQuery = q
 	return s.inbox, s.err
+}
+
+func (s *stubWork) Flow(_ context.Context, q tracker.FlowQuery, _ time.Time,
+	_ *time.Location) (tracker.FlowAnswer, error) {
+
+	s.flowQuery = q
+	return s.flow, s.err
+}
+
+func (s *stubWork) CompanyFeed(_ context.Context, q tracker.FeedQuery) (tracker.FeedPage, error) {
+	s.feedQuery = q
+	return s.feed, s.err
+}
+
+func (s *stubWork) Decisions(_ context.Context, q tracker.DecisionsQuery, _ time.Time,
+	_ *time.Location) (tracker.DecisionsAnswer, error) {
+
+	s.decisionsQuery = q
+	return s.decisions, s.err
 }
 
 func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Time) (
@@ -228,17 +254,18 @@ func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 	return s.revision, s.revisionHeld, s.err
 }
 
-// personalQuestions are the four scoped by the caller's own seat — see
+// personalQuestions are the five scoped by the caller's own seat — see
 // Sources.viewerParty. They refuse an anonymous caller who names somebody
 // else, so a sweep that walks every native question has to present a
-// credential for these four. Named once rather than per sweep: the set grew
-// from one to four, and each sweep that spelled it as `== "work_my_work"`
+// credential for these five. Named once rather than per sweep: the set grew
+// from one to five, and each sweep that spelled it as `== "work_my_work"`
 // silently stopped covering the rest.
 var personalQuestions = map[string]bool{
 	"work_my_work":  true,
 	"work_person":   true,
 	"work_inbox":    true,
 	"conversations": true,
+	"decisions":     true,
 }
 
 // askNative runs one question against a registry built from these sources,
@@ -954,6 +981,12 @@ var sessionQuestions = []sessionQuestion{
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }, nil},
 	{"work_routing", "tracker", map[string]any{"record_id": "r-1"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.routingQuery.Level }, nil},
+	{"work_flow", "tracker", map[string]any{},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.flowQuery.Level }, nil},
+	{"company_feed", "tracker", map[string]any{"kinds": "completed"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.feedQuery.Level }, nil},
+	{"decisions", "tracker", map[string]any{"handle": "ana"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.decisionsQuery.Level }, nil},
 	{"pages", "pages", map[string]any{},
 		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
 	{"page", "pages", map[string]any{"id": "p1"},

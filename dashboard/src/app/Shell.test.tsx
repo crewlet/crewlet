@@ -438,6 +438,27 @@ describe("the sidebar's figures", () => {
     ).toHaveLength(1);
   });
 
+  // A SCREEN OPENS THE PALETTE THROUGH THE FRAME, on the scope it names:
+  // Home's "New task" files through the palette's "Create task", so it opens
+  // the one palette the frame mounts, on Actions — not a second palette, and
+  // not on All, where the reader would have to find the action first.
+  test("Home's New task opens the frame's palette on Actions", async () => {
+    location.hash = "#/home";
+    const { store, socket } = answering({
+      work_workload: { rows: [] },
+      sandbox_runs: { runs: [] },
+    });
+    mountShell(store, socket, <Home key="home" />);
+    await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    });
+    const selected = screen
+      .getAllByRole("tab")
+      .filter((t) => t.getAttribute("aria-selected") === "true");
+    expect(selected.map((t) => t.textContent)).toEqual(["Actions"]);
+  });
+
   // SETTINGS IS NEVER HIDDEN; the lock is what changes.
   test("Settings is a row for an operator without the lock", async () => {
     const { store, socket } = answering({});
@@ -610,6 +631,9 @@ test("the page header's controls slot spaces a screen's controls at the kit's co
   const slot = document.getElementById(PAGE_ACTIONS_SLOT);
   expect(slot?.classList.contains("gap-2")).toBe(true);
   expect(slot?.classList.contains("gap-1")).toBe(false);
+  // AND THEY END THE BAR: a screen's primary action is the last control, after
+  // the frame's star and link, as the approved designs order it.
+  expect(slot?.parentElement?.lastElementChild).toBe(slot);
 });
 
 // WHERE THE PEEK IS A COLUMN IS A WIDTH PER FRAME, not one per window.

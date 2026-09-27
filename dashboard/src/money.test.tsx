@@ -510,7 +510,7 @@ describe("the screens", () => {
   // Each case waits for the fixture's TOKEN count first: a screen that never
   // read the answer draws no price either, and that pass would prove nothing.
   test.each([
-    ["the landing screen", "#/home", <Home />, {}],
+    ["the landing screen", "#/home", <Home />, { token_series: series() }],
     ["spend", "#/spend", <Spend />, { token_series: series() }],
     [
       "the task page",

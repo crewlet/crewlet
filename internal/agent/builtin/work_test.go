@@ -670,6 +670,41 @@ func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 	}
 }
 
+// A TASK FILED BY A TURN A CHAT MESSAGE WOKE SAYS WHERE IT CAME FROM — the
+// surface and the conversation, off the turn and never off an argument — and
+// one filed by a turn nothing on a chat surface woke says nothing.
+func TestAWriteCarriesTheChatSurfaceTheTurnWasWokenOn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		transport string
+		want      *tracker.Origin
+	}{
+		{"slack", &tracker.Origin{Surface: "slack", Conversation: "slack:C1:171.2"}},
+		{"", nil},
+	} {
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+		turn := workTurn(t)
+		turn.Transport, turn.ConversationKey = tc.transport, "slack:C1:171.2"
+		entry, _ := reg.Lookup(builtin.CreateWorkItemTool)
+		got, err := entry.Tool.(tools.SeatCallable).CallForTurn(t.Context(), turn,
+			map[string]any{"title": "from the thread", "project": "ENG",
+				"origin": map[string]any{"surface": "forged"}})
+		if err != nil || got.Failed {
+			t.Fatalf("create: %v %s", err, got.Output)
+		}
+		origin := trk.actors[0].Origin
+		if (origin == nil) != (tc.want == nil) ||
+			(origin != nil && *origin != *tc.want) {
+			t.Errorf("a turn woken on %q filed with origin %+v, want %+v",
+				tc.transport, origin, tc.want)
+		}
+		if provenance := trk.actors[0].Provenance(); provenance.Origin != origin {
+			t.Error("the writer's provenance does not carry the actor's origin")
+		}
+	}
+}
+
 // A WRITE'S ANSWER NAMES WHERE IT LANDED, in the form every read grammar
 // takes back as `min_position` — which is the whole of read-your-writes for a
 // caller outside the engine: an operator's assistant that created a task

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -65,8 +66,11 @@ type turnTelemetry struct {
 	// so a detached coding run's row can also state the batch it was
 	// launched from, which is all a peer predating the identity can match
 	// on.
-	convKey   string
-	partKey   string
+	convKey string
+	partKey string
+	// transport is the chat surface the trigger arrived on — see
+	// [turnctx.Turn.Transport] — and empty for a turn no chat woke.
+	transport string
 	startedAt time.Time
 	trace     events.TraceContext
 
@@ -152,7 +156,11 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		// conversation reached the sandbox row as "" for the whole life of
 		// that feature. The identity has no such source: a resumed turn
 		// has no events at all, so it has to travel.
-		partKey:   partitionKeyOf(req.Events),
+		partKey: partitionKeyOf(req.Events),
+		// THE CHAT SURFACE, read off the same metadata the working
+		// indicator raises on — see [chatMetadataOf] — so "was this turn
+		// woken by a chat message" has one answer.
+		transport: chatMetadataOf(req.Events)[notify.TransportField],
 		startedAt: time.Now().UTC(),
 	}
 	t.role, t.agentID = seatIdentity(company, req.Handle)
@@ -239,6 +247,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// the conversation field has to match on.
 			ConversationKey: t.convKey,
 			PartitionKey:    t.partKey,
+			// AND THE SURFACE, so a task this turn files says where it
+			// came from — see [turnctx.Turn.Transport].
+			Transport: t.transport,
 			// The brief and the delivery obligation, carried for the
 			// same reason: a resumed turn sees neither its trigger nor
 			// this frame, so both have to reach the row from here.

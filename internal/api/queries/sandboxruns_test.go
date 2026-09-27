@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -414,4 +415,22 @@ func keysOf(m map[string]map[string]any) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// A RUN SAYS WHICH ITEM IT IS ON. The row has carried the item the launching
+// turn was charged to since runs named one; the answer dropped it, so a parked
+// run's question reached a person with no task beside it.
+func TestARunNamesTheItemItIsOn(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+		WorkItem: &types.WorkItem{Backend: "native", ID: "task-1", Key: "ENG-415", Project: "ENG"},
+	})
+	rows := askRuns(t, store)
+	if len(rows) != 1 {
+		t.Fatalf("the board holds %d runs, want 1", len(rows))
+	}
+	item, _ := rows[0]["work_item"].(*types.WorkItem)
+	if item == nil || item.Key != "ENG-415" {
+		t.Errorf("the run's work_item is %#v, want ENG-415", rows[0]["work_item"])
+	}
 }

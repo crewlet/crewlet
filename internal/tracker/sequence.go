@@ -640,6 +640,12 @@ func checkCreateAsk(task *Task, ask *Comment) error {
 type TaskCreate struct {
 	Task
 	Comment *Comment `json:"comment,omitempty"`
+
+	// Origin is the chat surface and conversation the filing turn was woken
+	// on — see [Origin]. Stated by the writer from its provenance
+	// ([Writer.Origin]); absent for a create nothing on a chat surface
+	// caused.
+	Origin *Origin `json:"origin,omitempty"`
 }
 
 // writeTask is sequence 1's second append and 1a's second, shared because they
@@ -670,7 +676,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 				return statelog.Decision{}, statelog.ErrExists
 			}
 			return w.decide(stamp, subject, OpCreate, ChangeCreated, scope, opID,
-				TaskCreate{Task: task, Comment: ask}, notify, at)
+				TaskCreate{Task: task, Comment: ask, Origin: w.origin()}, notify, at)
 		},
 	})
 	return WriteResult{

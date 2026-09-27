@@ -174,6 +174,10 @@ describe("a sidebar section that throws", () => {
   // A project whose name arrived as an object is a React child React refuses —
   // the same shape of failure as the per-phase model mapping.
   test("costs its own list and never the navigation above it", async () => {
+    // ON A SCREEN THAT DOES NOT READ THE PROJECTS ITSELF: Home draws a
+    // projects card from the same answer, and its own boundary is the
+    // screen's, which is the case below this one.
+    location.hash = "#/live";
     await mount({
       work_projects: {
         projects: [

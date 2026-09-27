@@ -424,6 +424,12 @@ type Actor struct {
 
 	Chain []string
 
+	// Origin is the chat surface and conversation the turn was woken on,
+	// which every task it files states — see [tracker.Origin]. Nil outside
+	// a turn and for a turn no chat message woke: a person at the
+	// dashboard files from no thread.
+	Origin *tracker.Origin
+
 	// Written is the turn's own record of the work items its writes
 	// committed to — see [turnctx.Written]. The writer reports each
 	// committed task into it, which is what lets the engine charge a turn
@@ -553,8 +559,18 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		WorkKey:   turn.WorkKey,
 		WorkSince: turn.WorkSince,
 		Chain:     turn.Chain,
+		Origin:    originOf(turn),
 		Written:   turn.Written,
 	}, nil
+}
+
+// originOf is where a turn was woken, as a create states it: the chat surface
+// and the conversation on it, or nil for a turn no chat message woke.
+func originOf(turn *turnctx.Turn) *tracker.Origin {
+	if turn == nil || strings.TrimSpace(turn.Transport) == "" {
+		return nil
+	}
+	return &tracker.Origin{Surface: turn.Transport, Conversation: turn.ConversationKey}
 }
 
 // Provenance is the trail this actor's writes carry, and where they report
@@ -567,6 +583,7 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 func (a Actor) Provenance() tracker.Provenance {
 	provenance := tracker.Provenance{
 		OperatorID: a.OperatorID, Seat: a.Seat, TurnID: a.TurnID, Chain: a.Chain,
+		Origin: a.Origin,
 	}
 	// NIL STAYS NIL. A nil *Written in the interface is a non-nil log that
 	// reports into nothing, and the writer would do the work of naming an

@@ -556,16 +556,20 @@ asks for another), reconnecting, draining, no configuration, a posture that
 diverged from the fleet (`shed`, `stuck`, `isolated`), no health push yet
 ("Waiting for the engine" — nothing reported is not healthy), and serving —
 "3 nodes · config epoch 42", or "node count unavailable" where the presence
-read failed. The dot and the title are the POSTURE and nothing else: a
-serving node is "Engine healthy" with a success dot whatever its alarms say.
+read failed. The dot is the POSTURE and nothing else: a serving node has a
+success dot whatever its alarms say — and the dot sits on the TITLE's line,
+sharing its grid row, rather than centred on a card whose height the alarm line
+grows. The title is "Engine healthy" only when the alarm table was evaluated
+and nothing in it fires, and "Engine serving" otherwise, because "healthy"
+directly above "5 alarms" is a claim the line under it refutes.
 The alarm line beneath is a second fact with its own tone and glyph — the
 health push's `alarms`, a count and the alarm that has stood longest ("5
 alarms · oldest: backup age") in warning ink beside a warning triangle, never
 the rows, because the push is public; a push with no alarm table says "Alarms
 not evaluated yet" in plain text, because an unevaluated table is neither an
-empty one nor a fault. Recolouring the dot for an alarm drew "Engine healthy"
-beside an amber dot, and retitling the posture to match only repeated the
-alarm line. Everything comes off the one health push; nothing polls.
+empty one nor a fault. Recolouring the dot for an alarm drew a green title
+beside an amber dot, and a title such as "serving, with alarms" only repeats
+the alarm line. Everything comes off the one health push; nothing polls.
 
 **The user block** is who this browser is — a person (bound: their name and
 seat, linking to it), a token no seat claims (unbound: the token's id, and what
@@ -1222,7 +1226,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), the screen's own controls (portalled in by `PageActions`), who is working now, the star and Copy link; then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now, the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
@@ -1372,9 +1376,13 @@ must not also open the grid row behind the field.
 
 ### The page bar wraps by what it holds
 
-The bar holds the trail, the screen's own controls (portalled in by
-`PageActions`), who is working now, the star and Copy link. On a busy screen
-they do not all fit on one line.
+The bar holds the trail, who is working now, the star and Copy link, and LAST
+the screen's own controls (portalled in by `PageActions`), so a screen's
+primary action ("New task") ends the row where the approved designs put it.
+On a phone, where the controls take a line of their own that scrolls from its
+start, the screen's controls lead that line instead, so the action a screen
+most wants pressed is never the one past the edge. On a busy screen they do
+not all fit on one line.
 
 **A wrapping flex container assigns lines BEFORE it shrinks**, so a trail at its
 content width broke the line as soon as a long title and the controls exceeded
@@ -1448,33 +1456,108 @@ whether anything needs them — but a home that is ONLY that queue has a failure
 mode that arrives on the first day: a company where nothing is wrong renders as
 a blank page, and a reader cannot tell that from a dashboard that is broken.
 
-**So the first fold is the company, and what needs a decision is under it.**
-The greeting is the company's day (on `org.timezone`, the one clock every due
-date and budget window is cut on) and the reader's morning, and one sentence of
-the engine's: "Nimbus is running on 3 nodes. 2 conditions need a decision, and
-4 agents are working right now" — which an engine condition takes over (a
-refused token, a lost connection, no configuration) rather than sitting beside.
-Under it the pulse strip is seven facts on one line — seats working, runs
-parked, open, overdue, blocked, tokens, alarms — each a link into the workspace
-that owns it, each carrying the scope of its own claim in its title. Every one
-of them is true whatever the queue holds, so an empty band below then MEANS
-something: nothing needs a decision, on a company that is visibly running. A
-figure whose query has not answered draws an em dash, never a `0`. `tokens` is
-deliberately not labelled "today" — the window is the engine's and the screen
-was not given one, so the strip names the figure and puts the window it covers
-on hover. Then the engine's conditions, the first few, each a way into the
-Inbox row that holds it.
+**So the first fold is the company, then what needs the reader, then what the
+company did.** Top to bottom:
+
+- **The greeting.** The company's day (on `org.timezone`, the one clock every
+  due date and budget window is cut on), the reader's morning, and one sentence
+  of the engine's: "Nimbus is running on 3 nodes. **3 decisions** are waiting on
+  you, 1 condition needs a look, and 4 agents are working right now." The
+  decisions figure is weighted; an engine condition — a refused token, a lost
+  connection, no configuration, a node that shed its seats — takes the sentence
+  over rather than sitting beside it. **Prose never prints a zero as a digit or
+  a wrong plural**: "nothing needs your decision", "no agents are working right
+  now", "1 condition needs", "2 conditions need" — and a fleet the presence
+  read counted as none is "Nimbus is running.", never "on 0 nodes". "N
+  conditions need a look" is a link to where they are listed, the Inbox's
+  "Needs a decision" band (opened on the one when there is one). A reader
+  nobody bound is told nothing about decisions at all. The **Today · 7 days · 30 days** control
+  (`range=`) sets the window the figures below read over; Today is one company
+  day, cut at the company's midnight by the engine.
+- **Five figures** (kit `StatCard`s): *Agents working now* (`working / total`
+  from the engine's `activity`, with the state bar of working, waiting,
+  stopped and idle, and a sub-line naming only the states somebody is in);
+  *Waiting on your decision* (the engine's `decisions` count plus the seats
+  stopped on their budget that THIS reader can act on — raise the ceiling, a
+  `/config` write any presented token may make, or hand the item on with
+  `update_work_item` — the oldest wait in the warning ink, and **Review**
+  into the Inbox's decisions view; a stopped seat the reader can do neither
+  about is one of the conditions that "need a look" instead — an em dash and "Not bound to a person" for a reader who is
+  nobody); *Tasks in progress* (`work_flow.now.active`, its change over the
+  week and what is blocked or overdue, with the fortnight's sparkline);
+  *Completed* over the window, against the window before it; and *Tokens* over
+  the window, with the **week's** budget meter captioned as the week's ("63% of
+  this week's budget · resets Mon") in the engine's own state — or "No weekly
+  budget", which links to Spend › Budgets for an operator and is plain text for
+  anybody the screen behind it would refuse. The Tokens tile draws no delta:
+  its second line is the budget's, and a bare change in front of it read as a
+  claim about the budget. A second line is whole FACTS, so a narrow tile breaks
+  between them ("+17 vs last week" / "· 2 blocked"), never inside one. Each
+  figure waits for its own answer and says so; one whose answer has not
+  arrived is never a `0`.
+- **Needs your decision**, the first three, newest first, each answerable IN
+  PLACE. A structured ask draws each option as a button that sends the choice
+  as the answer (`comment_on_work_item{answers, choice}`), the recommended one
+  primary, with who asked (the person behind a token, never the token), the
+  role the reader is asked in, "reports to you" where the chart says so, and
+  the line saying what the answer sets off — "CTO is woken with your answer and
+  posts it to #releases" when the ask promised a channel, "CTO continues from
+  your answer" when it did not. A coding run parked on a question is answered
+  by its turn (`answer_run`), with how long its box is still held. A seat the
+  engine stopped on a spent budget offers **Raise budget** (the one budgets
+  address) and **Reassign** of the item it was on. An ask with no options is
+  answered in words on its row: **Reply** opens the same dialog a parked run's
+  **Answer** does and sends `comment_on_work_item{answers, body}`. Every
+  control is drawn for every reader and disabled with its reason where this
+  browser cannot act. **Open inbox** and **Review** both land on
+  `#/inbox?reason=decisions`, which draws every one of them.
+- **Live now**: every seat the engine says is working — what it is on (the
+  item the turn is charged to, never a work key), how long, where it is in
+  context → execute → review ("Execute · round 7 of 25"), and the last call it
+  made — each a way into its turn.
+- **Tasks completed** per company day over the last fourteen (today in the
+  accent), **Tokens by team** over the window (tokens, never money), and
+  **Projects**: each project's done, active and to-do work as one bar, its
+  lead and its target date.
+- **Recent activity** (`company_feed`): work delivered ("approved on first
+  review", "1 turn · 38.2k tokens"), filed ("from Slack", off the create's own
+  origin), handed on ("hand-off 1 of 8"), pages published and schedules run —
+  Everything, Completed, Hand-offs or Schedules (`feed=`) — with Load older,
+  and the full event log a link away. A schedule's rows are its RUNS, and the
+  engine folds a schedule's consecutive runs into one ("Schedule backlog-sweep
+  ran 12 times for PM", "since 02:40"): a tick it skipped is never a row that
+  says "ran", and a frequent schedule never buries the work under a page of
+  itself. Each row's sentence comes from ONE table (`FEED_PHRASES` in
+  `routes/home/model.ts`) keyed on the feed's own kinds. On a phone a row is a
+  three-column grid — time, mark, sentence — whose sentence wraps inside its
+  own column with the aside under it, so a row that wraps and one that does not
+  keep the same alignment.
+
+Five tiles sit in a row while the page column holds them — five tiles at their
+176px floor and four gaps, 928px — three a row under that, one on a phone; the
+paired cards stack below the same width. Every one of those is measured from
+the SCREEN's column (`@container page`), which the shell declares on its
+content as well as on its header, because the sidebar and an open peek take
+their share of the window first.
 
 ### The Inbox is where you act
 
 The Inbox is the place a person acts on what reached them: the queue itself,
 with no company summary above it — Home carries that, one click away.
 
-**Two bands, stacked on one screen, never two tabs.** **Needs a decision** is
+**Three bands, stacked on one screen, never three tabs.** **Waiting on your
+decision** is what only this person can settle — the asks put to them and the
+coding runs parked on a question to them (`decisions`, the read Home's figure
+counts), each answered on its row exactly as on Home. **Needs a decision** is
 what the engine derived, over the four subjects `lib/attention.ts` declares: the
 engine and this node's link to it, the token budgets, the coding runs waiting on
 an answer, and the seats themselves. **Notices** is the person's own inbox:
-what reached them, and why. They are never interleaved, because one fused list
+what reached them, and why. `?reason=decisions` — where Home's **Review** and
+**Open inbox** land — is a VIEW rather than a reason chip: it sets the notices
+aside (with **Show notices** back to them) and leaves the two decision bands.
+It is not one of the eighteen notice reasons, so it never filters the notice
+page; as a filter it drew "decisions 0" under a Home figure that had just said
+a decision was waiting. They are never interleaved, because one fused list
 ordered by time would eventually rank a backup-age alarm above the CEO seat
 asking whether to hold a release. And they are never a toggle: a tab hides the
 engine's state behind a control the reader has to press, which is exactly what
@@ -1498,7 +1581,7 @@ and absent until they have marked something, so the copy claims the watermark
 and not more than it. A band also draws its own filters whether or not anything
 survives them — a reason chip matching nothing is exactly when it is the only
 way back — and its count is an em dash before the first answer, for the same
-reason the pulse strip's figures are.
+reason Home's figures are.
 
 **Unread, all and snoozed is a scope, not a facet.** Each is a different
 question put to `work_inbox` — `unread` and `snoozed` (`exclude`, or `only`
@@ -1593,6 +1676,12 @@ and each lived in a different screen:
 Ordered by what it costs to ignore, then newest first inside a severity. Every
 row says what happened AND what it costs to leave it, and carries a link to
 where the answer is.
+
+On Home the queue is COUNTED, not drawn: the conditions that are nobody's
+decision — a seat stopped for a reason other than its budget, a stalled round,
+a company budget near or at its ceiling — are the status sentence's "N
+conditions need a look", and the engine's own conditions take the sentence
+over. What the reader can settle is the decisions card beside it.
 
 **What the band says when it is EMPTY is derived, not written.** Every condition
 names one of four subjects, `SUBJECTS` maps each to the phrase a reader sees,

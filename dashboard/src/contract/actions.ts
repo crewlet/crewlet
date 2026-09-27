@@ -72,6 +72,24 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  comment_on_work_item: {
+    // A DECISION ANSWERED IN PLACE: the option button sends the choice as an
+    // answer to the ask it belongs to, which closes the ask and wakes the
+    // asker with what was chosen.
+    args: ["item", "answers", "choice", "body"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
+  answer_run: {
+    // A PARKED CODING RUN ANSWERED BY ITS TURN. It lands on the seat's
+    // inbox rather than in a log a question reads, so it raises no floor;
+    // the run's record moves when the node holding the seat resumes it.
+    args: ["turn_id", "answer"],
+    domain: null,
+    refreshes: ["sandbox_runs", "decisions"],
+    scope: "person",
+  },
   mark_inbox: {
     args: ["read", "unread", "snooze", "unsnooze", "read_through"],
     domain: "tracker",

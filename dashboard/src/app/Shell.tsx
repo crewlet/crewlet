@@ -50,6 +50,8 @@ import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./palette/Palette.tsx";
+import { PaletteOpener } from "./palette/opener.ts";
+import type { ScopeId } from "./palette/hits.ts";
 import { PaletteBoundary } from "./boundaries.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
@@ -225,7 +227,11 @@ function Frame({ children }: { children: ReactNode }) {
   // and re-renders with it.
   const prefs = useViewerPrefs();
 
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  // OPEN, AND ON WHICH SCOPE: ⌘K opens it on All, and a screen that asks
+  // for it through `useOpenPalette` names the scope it wants.
+  const [palette, setPalette] = useState<ScopeId | null>(null);
+  const paletteOpen = palette !== null;
+  const setPaletteOpen = useCallback((open: boolean) => setPalette(open ? "all" : null), []);
   // A SCREEN THAT ASKED FOR THE HEIGHT INSTEAD OF THE SCROLL — see
   // `app/fill.tsx` for why this is a request and not a selector. The kit's
   // `fill` is what honours it: the scroller stops scrolling and the content
@@ -315,6 +321,7 @@ function Frame({ children }: { children: ReactNode }) {
   const page: PageContext = useMemo(() => ({ setLabels, setCoverage, setCounts }), []);
 
   const openToken = useCallback(() => setTokenOpen(true), []);
+  const openPaletteOn = useCallback((scope: ScopeId = "all") => setPalette(scope), []);
   const degraded = degradationOf({
     authRejected,
     connected,
@@ -333,7 +340,9 @@ function Frame({ children }: { children: ReactNode }) {
 
   const screen = (
     <FillRequest.Provider value={setFilling}>
-      <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+      <PaletteOpener.Provider value={openPaletteOn}>
+        <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+      </PaletteOpener.Provider>
     </FillRequest.Provider>
   );
 
@@ -384,9 +393,10 @@ function Frame({ children }: { children: ReactNode }) {
       {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
           open, so a palette that threw is a dialog saying so — closed the
           way the palette closes — and the next ⌘K is a fresh palette. */}
-      {paletteOpen && (
+      {palette !== null && (
         <PaletteBoundary onClose={() => setPaletteOpen(false)}>
           <CommandPalette
+            scope={palette}
             onClose={() => setPaletteOpen(false)}
             onShowKeys={() => setLegendOpen(true)}
           />

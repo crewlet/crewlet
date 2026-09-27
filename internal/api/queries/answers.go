@@ -493,6 +493,15 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_routing", s.workRouting)
 		r.Register("work_catalogue", s.workCatalogue)
 		r.Register("work_person", s.workPerson)
+		// THE LANDING SCREEN'S THREE. The series is the tracker's history
+		// replayed backward from today's census; the feed merges the
+		// tracker's completions, creates and hand-offs with the pages'
+		// and the schedules' where this node keeps them; and what is
+		// waiting on a person is their open asks beside the coding runs
+		// parked on a question to them. See home.go.
+		r.Register("work_flow", s.workFlow)
+		r.Register("company_feed", s.companyFeed)
+		r.Register("decisions", s.decisions)
 	}
 	if s.Pages != nil {
 		r.Register("pages", s.pageList)

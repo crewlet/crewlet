@@ -79,6 +79,14 @@ type AskRow struct {
 	AskedAt time.Time `json:"asked_at"`
 	Body    string    `json:"body"`
 
+	// AskedBySeat is the person behind an operator token that asked — the
+	// seat the credential was bound to when the ask was written, off the
+	// history row that recorded it ([ActivityRecord.ActorSeat]) — and empty
+	// where the asker already IS a seat. [AskRow.AskedBy] stays the author,
+	// because a tracker whose author field is chosen by the writer is not an
+	// audit trail; this is who a screen draws.
+	AskedBySeat string `json:"asked_by_seat,omitempty"`
+
 	// Decision is the structure the ask carries when it asks somebody to
 	// choose — the options, the recommendation and the evidence — so the
 	// person or the model answering it decides from the same read.
@@ -287,7 +295,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, who Party, now time.Time,
 	}
 
 	if out.AskedOfMe, out.Totals.AskedOfMe, err = readAsks(ctx, tx, who,
-		dayStart); err != nil {
+		dayStart, MyWorkRows); err != nil {
 		return err
 	}
 
@@ -453,20 +461,28 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, who Party,
 	return out, live, nil
 }
 
+// openAsksFrom and openAsksWhere are the open asks put to a party: every
+// reader of "what is waiting on this person" states them through here.
+const openAsksFrom = `tracker_comments c
+		JOIN tracker_tasks t ON t.id = c.task_id`
+
+func openAsksWhere(who Party) string {
+	return `c.ask IN (` + placeholders(len(who.Handles())) + `)
+		  AND c.resolved = 0 AND c.answered_by IS NULL
+		  AND c.removed = 0 AND t.removed_at IS NULL`
+}
+
 // readAsks reads the questions waiting on this person.
 //
 // THE OPEN ONES ONLY, which is the shipped partial index's own predicate: an
 // ask is open until somebody answers it or resolves it, and a removed comment
 // is not an ask at all.
 func readAsks(ctx context.Context, tx *sql.Tx, who Party,
-	dayStart time.Time) ([]AskRow, ClaimTotal, error) {
+	dayStart time.Time, limit int) ([]AskRow, ClaimTotal, error) {
 
-	// ONE FROM-AND-WHERE for the page and the count — see [taskBlock].
-	const from = `tracker_comments c
-		JOIN tracker_tasks t ON t.id = c.task_id`
-	where := `c.ask IN (` + placeholders(len(who.Handles())) + `)
-		  AND c.resolved = 0 AND c.answered_by IS NULL
-		  AND c.removed = 0 AND t.removed_at IS NULL`
+	// ONE FROM-AND-WHERE for the page and the count — see [taskBlock] —
+	// and for the oldest ask's instant [Reader.Decisions] reads beside them.
+	from, where := openAsksFrom, openAsksWhere(who)
 	total, capped, err := countCapped(ctx, tx, from, where, who.args())
 	if err != nil {
 		return nil, ClaimTotal{}, fmt.Errorf("tracker: count the asks "+
@@ -475,7 +491,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 	claim := ClaimTotal{Total: total, Capped: capped}
 
 	args := who.args()
-	args = append(args, MyWorkRows)
+	args = append(args, limit)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT c.id, c.task_id, c.author, c.body, c.created_at, c.document
 		FROM `+from+`
@@ -513,8 +529,14 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 	}
 
 	ids := make([]any, 0, len(pending))
+	comments := make([]any, 0, len(pending))
 	for _, a := range pending {
 		ids = append(ids, a.task)
+		comments = append(comments, a.comment)
+	}
+	seats, err := askSeats(ctx, tx, comments)
+	if err != nil {
+		return nil, ClaimTotal{}, err
 	}
 	tasks, _, err := readTasks(ctx, tx,
 		"t.id IN ("+placeholders(len(ids))+")", ids,
@@ -542,10 +564,11 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 		}
 		out = append(out, AskRow{
 			TaskRow: row, Comment: a.comment, AskedBy: a.author,
-			AskedAt:  store.DecodeTime(a.at),
-			Body:     textcut.Within(a.body, MaxExcerpt),
-			Decision: stored.Decision,
-			Open:     true,
+			AskedBySeat: seats[a.comment],
+			AskedAt:     store.DecodeTime(a.at),
+			Body:        textcut.Within(a.body, MaxExcerpt),
+			Decision:    stored.Decision,
+			Open:        true,
 			// THE LITERAL CALL, composed here rather than described.
 			// A model handed a comment id still has to compose the
 			// answer, and every one it composes differently is a
@@ -554,6 +577,31 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 		})
 	}
 	return out, claim, nil
+}
+
+// askSeats is the seat behind each ask a bound operator token wrote, off the
+// history rows that recorded them (`tracker_history_comment_idx`).
+func askSeats(ctx context.Context, tx *sql.Tx, comments []any) (map[string]string, error) {
+	out := map[string]string{}
+	if len(comments) == 0 {
+		return out, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT comment_id, actor_seat FROM tracker_history
+		WHERE comment_id IN (`+placeholders(len(comments))+`) AND actor_seat <> ''`,
+		comments...)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read who asked: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var comment, seat string
+		if err := rows.Scan(&comment, &seat); err != nil {
+			return nil, fmt.Errorf("tracker: scan who asked: %w", err)
+		}
+		out[comment] = seat
+	}
+	return out, rows.Err()
 }
 
 // answerCall is the literal call that answers an ask.

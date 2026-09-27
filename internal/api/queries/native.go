@@ -119,6 +119,11 @@ type WorkReader interface {
 	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
 	Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
 		tracker.RoutingAnswer, error)
+	Flow(ctx context.Context, q tracker.FlowQuery, now time.Time,
+		loc *time.Location) (tracker.FlowAnswer, error)
+	CompanyFeed(ctx context.Context, q tracker.FeedQuery) (tracker.FeedPage, error)
+	Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.Time,
+		loc *time.Location) (tracker.DecisionsAnswer, error)
 }
 
 // PageReader is the knowledge read side this surface calls.

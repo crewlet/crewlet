@@ -159,10 +159,13 @@ function noticeClass(notice: Notice): string {
 export function CommandPalette({
   onClose,
   onShowKeys,
+  scope: initialScope = "all",
 }: {
   onClose: () => void;
   /** Open the key legend; the palette closes on the way, as for every row. */
   onShowKeys: () => void;
+  /** The scope it opens on — Home's "New task" opens on Actions. */
+  scope?: ScopeId;
 }) {
   const nav = useNavigator();
   const route = useRoute();
@@ -174,7 +177,7 @@ export function CommandPalette({
   const tools = useTools();
   const index = useMemo(() => indexOrg(org), [org]);
 
-  const [scope, setScope] = useState<ScopeId>("all");
+  const [scope, setScope] = useState<ScopeId>(initialScope);
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState<Pick | null>(null);
   const [pickQuery, setPickQuery] = useState("");

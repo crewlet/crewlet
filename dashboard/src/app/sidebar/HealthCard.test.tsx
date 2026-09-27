@@ -78,10 +78,13 @@ describe("which state the card says", () => {
   // on its own line with its own tone: borrowing the dot for it drew "Engine
   // healthy" beside an amber dot, and retitling the posture to match made the
   // title a copy of the alarm line.
-  test("a standing alarm keeps the posture's dot and title, and is its own warning line", () => {
+  //
+  // AND "HEALTHY" IS A CLAIM THE ALARMS REFUTE: over a standing alarm the
+  // title says the posture — serving — and never "healthy".
+  test("a standing alarm keeps the posture's dot, and is its own warning line", () => {
     const r = read({ health: { ...healthy, alarms: { count: 2, worst: "trim_stalled" } } });
     expect(r.tone).toBe("success");
-    expect(r.title).toBe("Engine healthy");
+    expect(r.title).toBe("Engine serving");
     expect(r.detail).toBe("3 nodes · config epoch 42");
     expect(r.alarms).toEqual({ tone: "warning", text: "2 alarms · oldest: trim stalled" });
     expect(read({ health: { ...healthy, alarms: { count: 1 } } }).alarms?.text).toBe("1 alarm");
@@ -93,6 +96,7 @@ describe("which state the card says", () => {
     const r = read({ health: { ...healthy, alarms: undefined } });
     expect(r.alarms).toEqual({ tone: "neutral", text: "Alarms not evaluated yet" });
     expect(r.tone).toBe("success");
+    expect(r.title).toBe("Engine serving");
   });
 
   test("a diverged posture still carries the alarm line beneath its own state", () => {

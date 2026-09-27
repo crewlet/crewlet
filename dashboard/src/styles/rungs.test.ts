@@ -159,10 +159,6 @@ describe("the faint rung is decoration", () => {
         "rung paints the glyph and nothing else.",
     },
     { selector: ".work-hist-row > svg", why: "The history row's icon — an SVG, never a word." },
-    {
-      selector: ".pulse-glyph",
-      why: "The pulse row's leading icon, likewise: a drawing beside the sentence that says what happened.",
-    },
   ];
 
   const faint = SHEETS.flatMap((name) => {

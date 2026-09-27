@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -437,5 +438,28 @@ func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 	})
 	if got := resumed.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Requester; got != "ceo" {
 		t.Errorf("a resumed turn's requester = %q, want the one its row recorded", got)
+	}
+}
+
+// THE CHAT SURFACE A TURN WAS WOKEN ON REACHES THE TURN CONTEXT, which is where
+// a task it files reads its origin from — and a turn no chat message woke
+// names none.
+func TestTheWakingChatSurfaceReachesTheTurnContext(t *testing.T) {
+	t.Parallel()
+	e, _ := starting(t, refusingModels(t))
+	company := e.Company()
+	for _, tc := range []struct {
+		wake *events.Event
+		want string
+	}{
+		{chatTrigger("C0PRODUCT"), slack.Backend},
+		{trackerWake(), ""},
+	} {
+		tel := e.describeTurn(t.Context(), company, Request{
+			RunID: "run-1", Handle: "swe", Events: []*events.Event{tc.wake},
+		})
+		if got := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Transport; got != tc.want {
+			t.Errorf("a turn woken by %s carries transport %q, want %q", tc.wake.Source, got, tc.want)
+		}
 	}
 }

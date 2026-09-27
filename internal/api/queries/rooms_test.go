@@ -184,6 +184,20 @@ func (emptyWork) Routing(context.Context, tracker.RoutingQuery, time.Time) (
 	return tracker.RoutingAnswer{}, nil
 }
 
+func (emptyWork) Flow(context.Context, tracker.FlowQuery, time.Time, *time.Location) (
+	tracker.FlowAnswer, error) {
+	return tracker.FlowAnswer{Points: []tracker.FlowPoint{}}, nil
+}
+
+func (emptyWork) CompanyFeed(context.Context, tracker.FeedQuery) (tracker.FeedPage, error) {
+	return tracker.FeedPage{Rows: []tracker.FeedRow{}}, nil
+}
+
+func (emptyWork) Decisions(context.Context, tracker.DecisionsQuery, time.Time, *time.Location) (
+	tracker.DecisionsAnswer, error) {
+	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}}, nil
+}
+
 func (emptyWork) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
 	return tracker.SearchAnswer{}, nil
 }

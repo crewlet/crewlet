@@ -172,6 +172,10 @@ type Writer struct {
 	// bound. See [Provenance.Seat] and [Writer.Record].
 	Seat string
 
+	// Origin is where the turn behind this writer was woken — see
+	// [Provenance.Origin] — and what every task it creates states.
+	Origin *Origin
+
 	// metrics is where the counters this package owns are recorded. Nil
 	// records nothing, which is what a writer built for a test gets: the
 	// instruments are the engine's, and a nil check here is cheaper than
@@ -304,7 +308,19 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	clone.Chain = provenance.Chain
 	clone.Seat = provenance.Seat
 	clone.written = provenance.Written
+	clone.Origin = provenance.Origin
 	return &clone
+}
+
+// origin is the origin a create states: the writer's own, and none where the
+// writer names no surface — a conversation with no surface names nothing a
+// reader can render.
+func (w *Writer) origin() *Origin {
+	if w.Origin == nil || strings.TrimSpace(w.Origin.Surface) == "" {
+		return nil
+	}
+	origin := *w.Origin
+	return &origin
 }
 
 // Record is whose OWN STATE this writer's person writes belong to: the seat
@@ -447,6 +463,11 @@ type Provenance struct {
 	// delegation path that reached it.
 	TurnID string
 	Chain  []string
+
+	// Origin is the chat surface and conversation the turn behind this
+	// writer was woken on, stated on every task it creates — see [Origin].
+	// Nil for a writer no chat message caused.
+	Origin *Origin
 
 	// Written is where the tasks this writer's records COMMIT to are
 	// reported — the turn's own set, so the engine can charge a turn that

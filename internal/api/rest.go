@@ -82,6 +82,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
 	{method: "GET", pattern: "/work/projects", what: "work_projects"},
 	{method: "GET", pattern: "/work/workload", what: "work_workload"},
+	// THE LANDING SCREEN'S SERIES AND WHAT WAITS ON THE CALLER, both
+	// literal segments above /work/{id} for the reason given there.
+	{method: "GET", pattern: "/work/flow", what: "work_flow"},
+	{method: "GET", pattern: "/work/decisions", what: "decisions"},
 	{method: "GET", pattern: "/work/activity", what: "work_activity"},
 	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
 	{method: "GET", pattern: "/work/inbox", what: "work_inbox"},
@@ -103,6 +107,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/pages", what: "pages"},
 	{method: "GET", pattern: "/containers", what: "containers"},
+	// WHAT THE COMPANY DID, merged across the tracker, the pages and the
+	// schedules — not under /work/, since two of its three sources are
+	// not the tracker's.
+	{method: "GET", pattern: "/feed", what: "company_feed"},
 	// WHO IS ASKING. Not under /work/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
 	// native tracker still has a viewer.

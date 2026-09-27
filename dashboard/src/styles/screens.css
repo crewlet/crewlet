@@ -3811,14 +3811,14 @@ a.work-cal-chip {
 .wl-track {
   position: relative;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-circle);
   background: var(--color-surface-inset);
   overflow: hidden;
 }
 .wl-bar {
   position: absolute;
   inset: 0 auto 0 0;
-  border-radius: 999px;
+  border-radius: var(--radius-circle);
   /* A SEAT HOLDING NOTHING DRAWS NO BAR AT ALL — see the neutral note below
      — so this floor only ever applies to a real queue, where one open item
      against a heaviest of forty is still worth two pixels rather than none. */
@@ -3865,15 +3865,38 @@ a.work-cal-chip {
 
 /* ---- Home --------------------------------------------------------------- */
 
-/* THE GREETING: the company's day, whose morning it is, and one sentence of
-   the engine's — the design's display step over the body's secondary ink.
-   A heading at level 2, because the page bar's last crumb is the page's `h1`. */
-.home-head {
+/* THE LANDING SCREEN, the design's Main board: a head, five figures, the
+   decisions beside who is working, three cards of how the work is going, and
+   the feed. Rows are grids so each card keeps its column at every width, and
+   each collapses on its own breakpoint rather than the page reflowing as one. */
+.home {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
+  gap: var(--spacing-5);
+  min-width: 0;
 }
 
+/* THE GREETING: the company's day, whose morning it is, and one sentence of
+   the engine's, with the range control at the head's end. A heading at level
+   2, because the page bar's last crumb is the page's `h1`. */
+.home-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--spacing-3) var(--spacing-4);
+}
+.home-head-text {
+  display: flex;
+  flex: 1 1 28rem;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.home-date {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
 .home-greeting {
   margin: 0;
   font-size: var(--font-size-2xl);
@@ -3882,85 +3905,489 @@ a.work-cal-chip {
   line-height: var(--font-line-height-snug);
   color: var(--color-text-primary);
 }
-
 .home-status {
   margin: 0;
   font-size: var(--font-size-md);
   color: var(--color-text-secondary);
-  max-width: var(--size-measure);
+}
+.home-status-figure {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
 }
 
-/* THE QUIET BAND ON HOME sits on the card's own inset rather than the
-   Inbox's list inset. */
-.home-quiet {
+/* FIVE FIGURES IN A ROW where the page column holds them, three over two
+   where it does not, one column on a phone — MEASURED FROM THE PAGE COLUMN
+   (`@container page`), not the window, because the sidebar and the peek take
+   their share of the window first. */
+.home-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--spacing-3);
+}
+
+/* A second line's facts stay whole — see `Parts` in Kpis.tsx. */
+.home-kpi-part {
+  white-space: nowrap;
+}
+
+.home-row {
+  display: grid;
+  gap: var(--spacing-4);
+  align-items: start;
+}
+/* The decisions are the wider of the pair: the design's 1.62 : 1. */
+.home-row-main {
+  grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
+}
+.home-row-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.home-row > .home-card {
+  height: 100%;
+}
+
+/* 928px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
+   kit's 96px trend slot inside 16px of padding each side, 176px, and five of
+   them take four 12px gaps. Below it the figures fold to three a row and the
+   paired cards stack, since the decisions card's buttons need the width the
+   live column would take. */
+@container page (width < 928px) {
+  .home-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .home-row-main,
+  .home-row-three {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@container page (width < 640px) {
+  .home-kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A CARD'S COUNT sits beside its title, in the state it counts. */
+.home-card-count {
+  margin-inline-start: var(--spacing-2);
+  vertical-align: middle;
+}
+.home-card-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.home-card-caption {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.home-card-note {
+  margin: 0;
   padding: var(--spacing-3) var(--spacing-4);
-}
-
-/* ---- The Inbox ---------------------------------------------------------- */
-
-/* THE PULSE STRIP. The first fold of the landing screen, and the reason a
-   healthy company does not render as a blank page — see `routes/home/Pulse.tsx`
-   for the argument. It is a row that WRAPS rather than a grid: these are eight
-   facts read left to right, and a grid would change their reading order with
-   the viewport. */
-.pulse {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
-  gap: var(--spacing-1) var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-}
-.pulse-fact {
-  display: flex;
-  align-items: baseline;
-  gap: var(--spacing-1);
-  padding: var(--spacing-1) var(--spacing-2);
-  border-radius: var(--radius-sm);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-  /* THE ONLY TRANSITION ON THIS STRIP, and it is on colour. The figures
-     re-render on every push, and a transition on anything geometric would
-     make a number arriving look like the strip moving. */
-  transition: background var(--motion-duration-fast) var(--motion-easing-default);
 }
-.pulse-fact:hover {
-  background: var(--color-surface-hover);
-}
-.pulse-fact:focus-visible {
-  /* A TRANSPARENT OUTLINE, not none: forced-colors mode drops the
-     shadow and paints this outline in the system colour, which is the kit
-     baseline's own pairing (tokens/css/base.css). */
-  outline: 2px solid transparent;
-  box-shadow: var(--shadow-focus);
-}
-.pulse-glyph {
+.home-card-foot {
   display: flex;
-  align-self: center;
-  color: var(--color-text-muted);
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
-.pulse-value {
+.home-card-foot > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.home-card-more {
+  display: block;
+  padding: var(--spacing-2) var(--spacing-4) var(--spacing-3);
+  font-size: var(--font-size-xs);
+}
+.home-decisions-icon {
+  color: var(--color-feedback-warning-ink);
+}
+
+/* THE QUIET BAND sits on the card's own inset. */
+.home-quiet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* ---- A decision -------------------------------------------------------- */
+
+.decision-list,
+.live-list,
+.project-list,
+.home-feed-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.decision-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+.decision-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.decision-title {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
-  /* TABULAR, AND WITH A FLOOR. A figure going from 9 to 10 on a poll would
-     otherwise widen its own cell and shove the seven facts to its right along
-     by a character. Two digits of room is where the jitter stops being
-     visible; a wider number simply grows, once. */
-  font-variant-numeric: tabular-nums;
-  min-width: 2ch;
-  text-align: right;
+  overflow-wrap: anywhere;
 }
-.pulse-value[data-tone="caution"] {
-  color: var(--color-feedback-warning-ink);
-}
-.pulse-value[data-tone="critical"] {
-  color: var(--color-feedback-danger-ink);
-}
-.pulse-label {
+.decision-sub,
+.decision-line {
   font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
 }
+.decision-sub strong {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+.decision-key,
+.home-feed-key {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+}
+.decision-key:hover,
+.home-feed-key:hover {
+  text-decoration: underline;
+}
+.decision-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 50%;
+}
+.answer-run-question {
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border-inline-start: 2px solid var(--color-border-strong);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+/* A NARROW LIST STACKS the buttons under the words, which keep the whole
+   width. KEYED ON THE LIST, not the page: the same row sits in Home's half-
+   width card and in the Inbox's list column beside its pane, and a page
+   query left the Inbox's question a hundred and fifty pixels wide beside two
+   buttons on a page that was nowhere near a phone. */
+.decision-list {
+  container: decision-list / inline-size;
+}
+@container decision-list (width < 480px) {
+  .decision-row {
+    flex-wrap: wrap;
+  }
+  .decision-body {
+    flex-basis: calc(100% - 3rem);
+  }
+  .decision-actions {
+    flex: 1 1 100%;
+    max-width: none;
+    justify-content: flex-start;
+    padding-inline-start: calc(32px + var(--spacing-3));
+  }
+}
+
+/* ---- Live now ---------------------------------------------------------- */
+
+.live-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+  color: inherit;
+  text-decoration: none;
+}
+a.live-row:hover {
+  background: var(--color-surface-hover);
+}
+a.live-row:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus);
+}
+.live-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.live-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+.live-name {
+  flex: none;
+  font-weight: var(--font-weight-medium);
+}
+.live-doing {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.live-elapsed {
+  flex: none;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.live-call {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* ---- The charts and the projects -------------------------------------- */
+
+.home-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+/* TODAY'S COLUMN IN THE ACCENT: the chart is one series (see
+   CompletedChart.tsx) and its last column is always today. */
+.home-chart .crewlet-stacked-columns__slot:last-child .crewlet-stacked-columns__segment {
+  background: var(--color-brand-accent);
+}
+.home-chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+.home-chart-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.home-chart-figure {
+  flex: none;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+.home-chart-figure-unit {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+.home-legend {
+  display: flex;
+  gap: 10px;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+.home-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.project-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+  color: inherit;
+  text-decoration: none;
+}
+.project-row:hover {
+  background: var(--color-surface-hover);
+}
+.project-row:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus);
+}
+.project-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+.project-key {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+}
+.project-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+}
+.project-pct {
+  flex: none;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.project-row-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.project-row-when {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* ---- The feed ---------------------------------------------------------- */
+
+/* THE TITLE AND ITS FILTER SHARE THE CARD HEAD beside "Full event log", as
+   the approved card draws them; where the head is too narrow for all three
+   (a phone) the filter wraps under the title and, still too wide, scrolls
+   inside its own box rather than being cut off by the head. `min-width: 0`
+   is what lets the group shrink to the head at all. */
+.home-feed-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  min-width: 0;
+}
+.home-feed-title > [role="radiogroup"] {
+  max-width: 100%;
+}
+.home-feed-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: 10px var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+.home-feed-time {
+  flex: none;
+  width: 3.25rem;
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.home-feed-mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-circle);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+}
+.home-feed-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.home-feed-text strong {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.home-feed-aside {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.home-feed-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+}
+/* ON A PHONE A ROW IS A GRID, never a wrapping flex line: time and mark keep
+   their columns and the sentence wraps inside its own, with the aside under
+   it. A wrapping flex line dropped a long sentence to the row's left edge,
+   under the time, while a short one stayed inline — two layouts alternating
+   down one list. The time and the sentence start a few pixels down, so their
+   first line sits on the mark's centre whether or not the sentence wraps. */
+@container page (width < 640px) {
+  /* THE HEAD WRAPS: the title and its filter take the head's whole width
+     and "Full event log" the line under them, rather than squeezing the
+     filter into what the link leaves. */
+  .home-feed .crewlet-card__header {
+    flex-wrap: wrap;
+  }
+  .home-feed .crewlet-card__header-main {
+    flex: 1 1 100%;
+  }
+  .home-feed-row {
+    display: grid;
+    grid-template-columns: 3.25rem 26px minmax(0, 1fr);
+    align-items: start;
+    gap: 2px var(--spacing-3);
+  }
+  .home-feed-time {
+    grid-row: 1;
+    grid-column: 1;
+    width: auto;
+    padding-block-start: 5px;
+  }
+  .home-feed-mark {
+    grid-row: 1 / span 2;
+    grid-column: 2;
+  }
+  .home-feed-text {
+    grid-row: 1;
+    grid-column: 3;
+    padding-block-start: 3px;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .home-feed-aside {
+    grid-row: 2;
+    grid-column: 3;
+  }
+}
+
+/* ---- The Inbox ---------------------------------------------------------- */
 
 /* TWO PANES. The list keeps its width when the detail changes, because the
    detail column is present from the first paint — a pane that appears on the

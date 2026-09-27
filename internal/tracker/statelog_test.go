@@ -148,6 +148,30 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Kind: tracker.ChangeCreated, Mutation: body,
 			Actor: "dev", ActorKind: tracker.AuthorAgent,
 		}.Encode()
+	case "TaskCreate.Origin":
+		// A TASK FILED FROM A CHAT THREAD: the create says where.
+		body, err := json.Marshal(tracker.TaskCreate{
+			Task: tracker.Task{
+				V: tracker.DocumentVersion, ID: "suite-task", Key: "SUITE-1",
+				Project: "SUITE", Title: "from the thread", Type: "task",
+				Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
+				Priority: tracker.PriorityNone, Reporter: "dev",
+				CreatedAt: at, UpdatedAt: at,
+			},
+			Origin: &tracker.Origin{Surface: "slack", Conversation: "slack:C1:1.2"},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpCreate, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeCreated, Mutation: body,
+			Actor: "dev", ActorKind: tracker.AuthorAgent,
+		}.Encode()
 	case "MutationRecord.ActorSeat":
 		// AN OPERATOR'S WRITE THROUGH A BOUND TOKEN: the author stays the
 		// credential and the seat rides beside it, which is the value the

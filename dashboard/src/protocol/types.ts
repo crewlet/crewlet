@@ -493,6 +493,8 @@ export interface SandboxRun {
   started_at: string;
   updated_at: string;
   answerable_in_chat: boolean;
+  /** The item the launching turn was charged to; null when it was on none. */
+  work_item?: WorkItemRef | null;
 
   /**
    * What this run called through the MCP bridge, in order.
@@ -3424,6 +3426,10 @@ export interface WorkDecisionEvidence {
 export interface WorkAskRow extends WorkSummary {
   comment: string;
   asked_by: string;
+  /** The person behind an operator token that asked — the seat it was bound
+   *  to — and absent where the asker already is a seat. Who a row draws;
+   *  `asked_by` stays the author. */
+  asked_by_seat?: string;
   asked_at: string;
   body: string;
   /** Present when the ask asks somebody to choose. */
@@ -3792,6 +3798,138 @@ export interface ColleagueAnswer {
   candidates: ColleagueCandidate[];
 }
 
+/** One window of the `work_flow` series: the census at its end (at now for
+ *  the window now falls in) and how many tasks were delivered in it. */
+export interface WorkFlowPoint {
+  /** The window's label on the company calendar: `2026-09-23`, `2026-W39`. */
+  window: string;
+  start: string;
+  end: string;
+  not_started: number;
+  active: number;
+  done: number;
+  closed: number;
+  /** Changes in the window that took a task from not delivered to
+   *  delivered: a cancellation is not one, and done → closed is not a
+   *  second. */
+  completed: number;
+}
+
+/** The company's work as a series — `work_flow`, the tracker's history
+ *  replayed backward from today's census on the company clock. */
+export interface WorkFlowAnswer {
+  bucket: "day" | "week";
+  project?: string;
+  /** Oldest first; the last is the window now falls in. */
+  points: WorkFlowPoint[];
+  /** Today's open census, with the two shapes of trouble only the present
+   *  can answer. */
+  now: { not_started: number; active: number; blocked: number; overdue: number };
+  /** Always false: nothing records when a task became blocked, so the past
+   *  has no blocked count and a chart must not draw one. */
+  blocked_history: boolean;
+  read_level?: ReadLevel;
+  complete: boolean;
+}
+
+/** One tracker row of the company feed. */
+export interface FeedWorkRow {
+  id: string;
+  kind: "created" | "completed" | "handoff";
+  at: string;
+  cursor: string;
+  actor?: string;
+  actor_kind?: string;
+  /** The person a bound token's commit was made for. */
+  actor_seat?: string;
+  task: string;
+  key?: string;
+  title?: string;
+  project?: string;
+  /** On a completion: the task's running totals, tokens only. */
+  spend?: { tokens: number; turns: number };
+  /** On a completion with a charged turn: no reviewer ever sent it back. */
+  first_pass?: boolean;
+  /** On a create: the chat surface and conversation it was filed from. */
+  origin?: { surface: string; conversation?: string };
+  /** On a hand-off. */
+  from?: string;
+  to?: string;
+  reassignments?: number;
+  reassignment_budget?: number;
+}
+
+/** One merged row of `company_feed`: exactly one body, the kind's. */
+export interface FeedEntry {
+  kind: "completed" | "created" | "handoff" | "schedule" | "page";
+  at: string;
+  work?: FeedWorkRow;
+  page?: {
+    id: string;
+    page_id: string;
+    title?: string;
+    container?: string;
+    change: string;
+    actor?: string;
+    actor_kind?: string;
+    turn_id?: string;
+  };
+  schedule?: FeedScheduleRun;
+}
+
+/**
+ * A schedule's RUN in the company feed — a fire the scheduler dispatched,
+ * never a tick it skipped — or several in a row: the engine folds consecutive
+ * runs of one schedule for one runner that nothing else falls between into the
+ * newest of them.
+ */
+export interface FeedScheduleRun {
+  scope_type: string;
+  scope_id: string;
+  name: string;
+  target?: string;
+  outcome?: string;
+  trace_id?: string;
+  turn_id?: string;
+  /** How many consecutive runs this row stands for, at least 1. */
+  runs: number;
+  /** The oldest of them, when `runs` is above 1. */
+  since?: string;
+}
+
+/** `company_feed`: what the company did, newest first, merged across the
+ *  tracker, the pages and the schedules' runs. */
+export interface CompanyFeedAnswer {
+  rows: FeedEntry[];
+  /** Resumes every source where this page stopped; absent at the end. */
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  complete: boolean;
+}
+
+/** One thing waiting on a person's decision. */
+export interface DecisionItem {
+  kind: "ask" | "run";
+  at: string;
+  ask?: WorkAskRow;
+  run?: SandboxRun;
+}
+
+/** `decisions`: the open asks put to a person and the coding runs parked on
+ *  a question to them, newest first. */
+export interface DecisionsAnswer {
+  handle: string;
+  items: DecisionItem[];
+  /** Every such item, not the page. */
+  total: number;
+  /** The ask count reached the engine's ceiling, so `total` is a floor. */
+  capped: boolean;
+  /** When the longest-waiting one began waiting. */
+  oldest_at?: string;
+  read_level?: ReadLevel;
+  complete?: boolean;
+}
+
 export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
@@ -3825,6 +3963,9 @@ export interface QueryMap {
   work_person: WorkPersonState;
   work_search: WorkSearchAnswer;
   work_routing: WorkRoutingAnswer;
+  work_flow: WorkFlowAnswer;
+  company_feed: CompanyFeedAnswer;
+  decisions: DecisionsAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };

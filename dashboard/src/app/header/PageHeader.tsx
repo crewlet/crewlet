@@ -5,9 +5,11 @@
  * # Two rows, one banner
  *
  * The first row is the kit's top bar — the drawer toggle below the shell
- * breakpoint, the breadcrumb, and what this page can do: the screen's own
- * controls (portalled in through `PageActions`), who is working right now,
- * the star and the link. The second row is the workspace's SECTIONS, drawn
+ * breakpoint, the breadcrumb, and what this page can do: who is working right
+ * now, the star and the link, and LAST the screen's own controls (portalled
+ * in through `PageActions`) — because a screen's primary action ("New task")
+ * belongs at the bar's end, where the approved designs put it and where the
+ * eye finishes the row; the frame's quiet controls come before it. The second row is the workspace's SECTIONS, drawn
  * as tabs, on a section's own page only: on an object page the crumbs are the
  * way back out, and a strip of tabs over a task page would say the task is a
  * fourth kind of list.
@@ -93,10 +95,10 @@ export function PageHeader({
               only when the frame already knows there are controls could never
               be found by the screen that has them. The gap is the bar's own,
               so a screen's controls sit as far apart as the frame's. */}
-          <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
           <WorkingNow />
           <StarPage path={route.path} label={title} workspace={workspace} />
           <CopyLink />
+          <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
         </div>
       </AppShell.Topbar>
       {row && row.renderer === "tabs" && (

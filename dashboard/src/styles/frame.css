@@ -68,6 +68,13 @@
    was already written to, and stay. */
 .app .crewlet-app-shell__content {
   max-width: none;
+  /* AND IT IS THE SCREEN'S MEASURING STICK, under the same name the bar's is
+     (`.page-head`): every `@container page` rule a screen writes — the item
+     page's rail, the event feed's phone row, Home's figures — is about how
+     wide the SCREEN'S column is, and a query binds to the nearest ancestor
+     of that name. Only the header declared one, which is not an ancestor of
+     any screen, so each of those rules matched nothing at any width. */
+  container: page / inline-size;
 }
 
 .toolbar {
@@ -412,9 +419,15 @@
    reports rather than goes somewhere. A link to the nodes, or the button that
    asks for a token when the token is what is wrong. */
 .health-card {
-  display: flex;
+  /* A GRID, so the dot shares the TITLE's row and is centred on that line's
+     own box — whatever the title's size at this density, however many lines
+     follow it. It was a flex row with the dot's box sized to a computed line
+     height, which is a second statement of the title's metrics that drifts
+     the moment either changes; in a row it centred on the whole card. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--spacing-2);
+  column-gap: var(--spacing-2);
   width: 100%;
   min-width: 0;
   padding: calc(var(--spacing-2) + 1px) var(--size-nav-row-pad);
@@ -437,21 +450,21 @@
   outline-offset: var(--size-focus-ring-inset-offset);
 }
 
-/* The dot's box is the TITLE's line box, so the dot centres on the title
-   however many lines follow it. */
+/* The dot sits in the title's row; the text's lines take the column beside
+   it, each on a row of its own; the chevron spans them all. */
 .health-card-dot {
   display: flex;
-  flex: none;
-  align-self: flex-start;
-  align-items: center;
-  height: calc(var(--font-size-xs) * var(--font-line-height-snug));
+  grid-row: 1;
+  grid-column: 1;
 }
 
 .health-card-text {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
+  display: contents;
+  line-height: var(--font-line-height-snug);
+}
+
+.health-card-text > * {
+  grid-column: 2;
   line-height: var(--font-line-height-snug);
 }
 
@@ -486,6 +499,8 @@
 }
 
 .health-card-go {
+  grid-column: 3;
+  grid-row: 1 / span 3;
   flex: none;
   color: var(--color-text-tertiary);
 }
@@ -786,6 +801,11 @@ a.user-block-who:focus-visible {
     /* AND IT STOPS SHRINKING: inside a horizontal scroller shrinking squashes
        one button under the next instead of scrolling. */
     flex: 0 0 auto;
+    /* AND IT LEADS THE LINE. On a wide bar the screen's own controls END the
+       row, where its primary action belongs; on a line that scrolls from its
+       start, the end is past the edge, and the one control a screen most
+       wants pressed would be the one a phone reader has to swipe to. */
+    order: -1;
   }
 }
 

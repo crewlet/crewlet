@@ -573,6 +573,26 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-card__header",
+    why: "uilet's Card writes it on a card's head. styles/screens.css lets Home's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__header-main",
+    why: "uilet's Card writes it on the head's title group. See crewlet-card__header: on a phone Home's feed head gives this group the whole first line.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-stacked-columns__slot",
+    why: "uilet's StackedColumns writes it on each column's slot, oldest first. styles/screens.css paints the LAST slot's segment in the accent on Home's Tasks completed chart (`.home-chart`), because that column is today and the chart is ONE series: drawn as two series so the kit could colour today, the split leaked into the tooltip as a second 'Completed today' row on every column. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-stacked-columns__segment",
+    why: "uilet's StackedColumns writes it on each part of a column. See crewlet-stacked-columns__slot: it is the element whose paint Home's chart overrides on today's column.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "is-positive",
     why: "routes/agents/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
   },

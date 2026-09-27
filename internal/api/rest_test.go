@@ -355,6 +355,20 @@ func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (
 	return tracker.PersonState{}, nil
 }
 
+func (stubWorkReader) Flow(context.Context, tracker.FlowQuery, time.Time,
+	*time.Location) (tracker.FlowAnswer, error) {
+	return tracker.FlowAnswer{}, nil
+}
+
+func (stubWorkReader) CompanyFeed(context.Context, tracker.FeedQuery) (tracker.FeedPage, error) {
+	return tracker.FeedPage{}, nil
+}
+
+func (stubWorkReader) Decisions(context.Context, tracker.DecisionsQuery, time.Time,
+	*time.Location) (tracker.DecisionsAnswer, error) {
+	return tracker.DecisionsAnswer{}, nil
+}
+
 func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
 	statelog.Freshness) (tracker.ResolvedThread, error) {
 	return tracker.ResolvedThread{}, nil
