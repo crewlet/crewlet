@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -251,6 +253,26 @@ func bootstrapExampleLoads(t *testing.T, name string) {
 		// stand-in rather than on its own shape.
 		answers[name] = "set-for-this-test-and-long-enough"
 	}
+	// AND A KEY WHERE A KEY GOES. Key material is checked on what its
+	// reference RESOLVES to, as the cipher a node boots with reads it, so
+	// the stand-in above is refused as a key — which says nothing about
+	// the example's shape. The variables the keyring's material names are
+	// read off the file itself rather than off a naming convention.
+	var keyring struct {
+		Secrets struct {
+			Keys []struct {
+				Material string `yaml:"material"`
+			} `yaml:"keys"`
+		} `yaml:"secrets"`
+	}
+	if err := yaml.Unmarshal(data, &keyring); err != nil {
+		t.Fatalf("read the example's keyring: %v", err)
+	}
+	for _, key := range keyring.Secrets.Keys {
+		for _, name := range envref.Names(key.Material) {
+			answers[name] = TestKeyMaterial
+		}
+	}
 	cfg, err := ParseBootstrap(data, NewResolver(answers))
 	if err != nil {
 		t.Fatalf("the shipped Tier A example does not load: %v", err)
@@ -319,7 +341,7 @@ secrets:
 `), NewResolver(MapSource{
 		"CREWLET_NODE_ID":             "node-eu-1",
 		"CREWLET_API_TOKEN_FOUNDER":   "a-token-long-enough-to-pass",
-		"CREWLET_SECRET_KEY_2026_01":  "bWF0ZXJpYWw=",
+		"CREWLET_SECRET_KEY_2026_01":  TestKeyMaterial,
 		"CREWLET_STORE_UNUSED_MARKER": "",
 	}))
 	if err != nil {

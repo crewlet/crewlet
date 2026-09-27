@@ -80,6 +80,42 @@ func TestComparingAcrossStreamsIsAnErrorAndNotAFalse(t *testing.T) {
 	}
 }
 
+// A POSITION A CALLER NAMED IS ON THE LOG IT IS ASKED OF, OR NAMES NOTHING.
+//
+// The one rule every reader of a caller's position asks — a read's floor, a
+// feed's cursor and its `since` bound — because each is compared against this
+// log's own packed numbers, which carry no stream. A position on another log
+// is [statelog.ErrForeignPosition], the request's mistake, and never
+// [statelog.ErrWrongStream], which is the engine comparing two of its own. A
+// zero position and one with no stream are honoured nowhere, so neither is
+// refused: the controls.
+func TestAPositionACallerNamedIsHeldToItsOwnLog(t *testing.T) {
+	t.Parallel()
+	const here = "CREWLET_PROBE_LOG"
+	for _, c := range []struct {
+		name    string
+		at      statelog.Position
+		foreign bool
+	}{
+		{"on this log", statelog.Position{Stream: here, Generation: 1, Seq: 5}, false},
+		{"the zero position", statelog.Position{}, false},
+		{"a zero position on another log", statelog.Position{Stream: "OTHER"}, false},
+		{"no stream", statelog.Position{Generation: 1, Seq: 5}, false},
+		{"on another log", statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 5}, true},
+	} {
+		err := c.at.On(here)
+		switch {
+		case c.foreign && !errors.Is(err, statelog.ErrForeignPosition):
+			t.Errorf("%s: On = %v, want %v", c.name, err, statelog.ErrForeignPosition)
+		case c.foreign && errors.Is(err, statelog.ErrWrongStream):
+			t.Errorf("%s: On = %v, which is the engine's own comparison "+
+				"fault rather than the caller's request", c.name, err)
+		case !c.foreign && err != nil:
+			t.Errorf("%s: On = %v, want nil", c.name, err)
+		}
+	}
+}
+
 // THE PACKED FORM'S BOUNDS ARE CHECKED WHERE A POSITION IS MINTED.
 //
 // (generation << 40) inside an int64 leaves 2^23 generations and one

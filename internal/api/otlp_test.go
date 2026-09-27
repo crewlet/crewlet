@@ -27,7 +27,7 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 	t.Helper()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "test-key")}),
+		Tokens:           otelTokensFor(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "test-key")}),
 		UpstreamEndpoint: upstream,
 	})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 		// A token minted with somebody else's key. This is the case that
 		// matters most: anyone who can reach the endpoint can mint one of
 		// their own, and only the signature stops it counting.
-		{"another key's token", sandbox.NewOtelTokens(sandbox.OtelTokenOptions{
+		{"another key's token", otelTokensFor(t, sandbox.OtelTokenOptions{
 			Material: runtoken.OneKey("k", "attacker-key")}).Mint("trace-abc", time.Hour)},
 	} {
 		res := postOTLP(a, "/otlp/"+tc.token+"/v1/traces", "spans")
@@ -193,4 +193,15 @@ func closedToReads() *config.Bootstrap {
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	return &b
+}
+
+// otelTokensFor is [sandbox.NewOtelTokens] for a keyring a case expects to be
+// usable.
+func otelTokensFor(t *testing.T, opts sandbox.OtelTokenOptions) *sandbox.OtelTokens {
+	t.Helper()
+	tokens, err := sandbox.NewOtelTokens(opts)
+	if err != nil {
+		t.Fatalf("NewOtelTokens: %v", err)
+	}
+	return tokens
 }

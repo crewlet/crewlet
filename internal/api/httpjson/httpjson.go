@@ -41,9 +41,9 @@
 // because those are the only writers that set the `Retry-After` and the
 // envelope together: a dozen 503s written through [FailWith] told a client to
 // come back and never said when. Zero seconds writes NO header, and that is a
-// setting rather than an omission — a node missing its keyring will not have
-// one after any wait, and the header's absence is how a client learns not to
-// hammer it. `internal/api`'s source walk holds the settings surfaces to this,
+// setting rather than an omission — a node that runs no identity domain will
+// not run one after any wait, and the header's absence is how a client learns
+// not to hammer it. `internal/api`'s source walk holds the settings surfaces to this,
 // to hand-built bodies, and to codes minted outside the table.
 package httpjson
 
@@ -165,10 +165,13 @@ const (
 	CodeBadParams Code = "bad_params"
 
 	// CodeUnavailable is a question this node understood and cannot answer
-	// YET: a projection still catching up, or a coordination store that
-	// could not be reached. It is the code that must never be flattened
-	// into an empty result — "this company has no work" is an answer a
-	// person acts on.
+	// HERE: a projection still catching up, a coordination store that
+	// could not be reached, or a refusal by its state log — including the
+	// ones no wait clears, a full log or a record this node cannot decode.
+	// Whether waiting helps is the Retry-After's to say ([Unavailable]),
+	// and its absence says it will not. It is the code that must never be
+	// flattened into an empty result — "this company has no work" is an
+	// answer a person acts on.
 	CodeUnavailable Code = "unavailable"
 
 	// CodeIdentityUnavailable is a request this node could not decide WHO
@@ -227,8 +230,8 @@ const (
 	// It names the Tier A setting rather than the retired Tier B one, and
 	// the two differ in what an operator has to do: the old field was
 	// edited live through the dashboard, this one is a file on the node
-	// and a restart. A code that still said `public_base_url` would send
-	// somebody to a key the loader now refuses by name.
+	// and a restart. A code that still named the company document's key
+	// would send somebody to a key the loader now refuses by name.
 	CodeNoExternalURL Code = "no_external_url"
 
 	// CodeRequirementsOutstanding is a pass asked for against a
@@ -297,6 +300,12 @@ const (
 	// deployment no longer holds.
 	CodeUnreadableRevision Code = "unreadable_revision"
 
+	// CodeUnsealedRevision is a revision stored WITHOUT a seal, which a
+	// node reads nowhere. Its own code rather than [CodeUnreadableRevision]
+	// because the remedies share nothing: that one is a key to put back,
+	// and this one depends on which revision it is, which the hint names.
+	CodeUnsealedRevision Code = "unsealed_revision"
+
 	// CodeInvalidRevisionID is a revision route with no revision named.
 	CodeInvalidRevisionID Code = "invalid_revision_id"
 
@@ -332,22 +341,11 @@ const (
 	CodeSummaryRequired Code = "summary_required"
 )
 
-// The credential set: `/secrets`' refusals, and the keyring refusal `/setup`
-// shares with it because a connection seals a credential through the same
-// store.
+// The credential set: `/secrets`' refusals. There is no "no keyring" code:
+// every node holds one, and the surface refuses to be built without it.
 const (
 	// CodeInvalidName is a name a credential cannot be stored under.
 	CodeInvalidName Code = "invalid_name"
-
-	// CodeNoKeyring is a node with no `secrets.keys`, which can neither
-	// seal a credential nor open one. A 503 with NO Retry-After: waiting
-	// does not install a key, and a client told to come back would hammer
-	// a node that cannot answer until somebody reconfigures it.
-	CodeNoKeyring Code = "no_keyring"
-
-	// CodeNoActiveKey is a rekey on a node whose keyring names no key to
-	// re-seal onto — a configuration fault, answered like [CodeNoKeyring].
-	CodeNoActiveKey Code = "no_active_key"
 
 	// CodeKeyIDMismatch is a rekey whose caller expects a different active
 	// key from the one this node seals under.
@@ -564,6 +562,38 @@ const (
 	// than 503, because the remedy is finishing the upgrade and not waiting.
 	// The detail names the node still on the older protocol.
 	CodeFleetMixedVersion Code = "fleet_mixed_version"
+
+	// THE WEBHOOK EDGE. A delivery's sender is a vendor that reads the
+	// status and the Retry-After and nothing else, so what these buy is the
+	// OPERATOR: a delivery log at the vendor, a proxy's access log and the
+	// engine's own all show the body, and the edge answered `{"error":
+	// "invalid signature"}` — a code with a space in it that no client could
+	// find in any vocabulary — and `{"status": "unavailable", "reason": …}`,
+	// an envelope of its own. A node with no active company revision is
+	// [CodeNoActiveRevision], and a verified delivery the broker would not
+	// take is [CodeUnavailable]: the same facts other surfaces answer with.
+
+	// CodeInvalidSignature is a delivery whose credential did not verify: an
+	// HMAC signature, a shared token, or a Forge invocation token — and a
+	// delivery to a per-seat route naming a seat with no app here, which is
+	// the same answer for the same reason. 401. The log says which check
+	// failed; the body never does, because that is what somebody probing the
+	// route would read, and a code of its own for the seat with no app was a
+	// roster of which handles have one.
+	CodeInvalidSignature Code = "invalid_signature"
+	// CodeNoWebhookSecret is a route with no secret to verify a delivery
+	// against. 503 with a Retry-After sized to a person editing the
+	// configuration, so the sender holds the delivery rather than dropping
+	// it.
+	CodeNoWebhookSecret Code = "no_webhook_secret"
+	// CodeUnusableWebhookSecret is a route whose configured secret cannot
+	// do the check it is for: a shared token too short to be the whole of
+	// the authentication a provider that signs nothing leaves, or a GitLab
+	// signing key in a form GitLab never signs with. The same 503 as an
+	// absent secret, because the truth is the same — this route cannot check
+	// a delivery — under its own code because the fix is not: an operator
+	// told no secret is set goes looking for one they can see.
+	CodeUnusableWebhookSecret Code = "unusable_webhook_secret"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -608,8 +638,9 @@ var codes = map[Code]string{
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
 	CodeBadParams: "That query was asked with a parameter this endpoint does not accept.",
-	CodeUnavailable: "This node cannot answer that yet — something it reads " +
-		"is still catching up. Ask again in a moment.",
+	CodeUnavailable: "This node cannot answer that right now — ask it again " +
+		"when it says to, or, where it gives no time, ask another node or an " +
+		"operator.",
 	CodeCSRFOrigin: "That request came from a page this deployment does not " +
 		"serve, so it was refused without being carried out.",
 	CodeIdentityUnavailable: "This node cannot tell who you are at the moment — " +
@@ -705,6 +736,17 @@ var codes = map[Code]string{
 		"an import is applied by every node, the older ones included. Finish " +
 		"the upgrade and import again.",
 
+	CodeInvalidSignature: "This delivery's signature or token did not match " +
+		"what this route checks, so it was not accepted. Make the secret at the " +
+		"sender match the one this deployment holds for the integration.",
+	CodeNoWebhookSecret: "This route has no secret configured to check a " +
+		"delivery against, so it accepts none until one is set. The sender is " +
+		"asked to retry, so nothing is lost in the meantime.",
+	CodeUnusableWebhookSecret: "The secret configured for this route cannot " +
+		"do the check it is for, so the route accepts nothing until it is " +
+		"replaced. The engine's log says why; the sender is asked to retry " +
+		"meanwhile.",
+
 	CodeUnknownKind: "This build does not know that integration.",
 	CodeSeatRequired: "Name the seat this is for. The detail says why one is " +
 		"needed.",
@@ -727,6 +769,10 @@ var codes = map[Code]string{
 	CodeUnreadableRevision: "That revision is sealed under a key this " +
 		"deployment no longer holds, so it cannot be read. Put the key back in " +
 		"the node's keyring first.",
+	CodeUnsealedRevision: "That revision is stored without a seal, which a " +
+		"build older than the mandatory keyring wrote, and a node reads only " +
+		"sealed revisions because the seal is what authenticates one. The hint " +
+		"says what brings its document back.",
 	CodeInvalidRevisionID: "Name the revision this is about.",
 	CodeAgainstNotFound:   "The revision to compare against is not held here.",
 	CodeUnsupportedPatchMediaType: "This endpoint takes a JSON Merge Patch: an " +
@@ -747,12 +793,6 @@ var codes = map[Code]string{
 
 	CodeInvalidName: "That is not a name a credential can be stored under. The " +
 		"detail says what a name may be.",
-	CodeNoKeyring: "This node has no keyring, so it can neither seal a " +
-		"credential nor open one. Generate a key, add it to the node's " +
-		"configuration and restart it.",
-	CodeNoActiveKey: "This node's keyring names no active key, so there is " +
-		"nothing to re-seal onto. Set one in the node's configuration and " +
-		"restart it.",
 	CodeKeyIDMismatch: "This node seals under a different key from the one " +
 		"you expected. Make the two configurations agree before rekeying.",
 	CodeRekeyIncomplete: "The rekey stopped part of the way through. The detail " +

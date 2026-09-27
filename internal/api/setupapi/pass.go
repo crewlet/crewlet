@@ -192,12 +192,16 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		}
 		sink, err := s.sink(attributionOf(r))
 		if err != nil {
-			// NO Retry-After: waiting installs no key — see
-			// [httpjson.CodeNoKeyring].
-			httpjson.UnavailableWith(w, httpjson.CodeNoKeyring, 0, httpjson.Detail{
-				"detail": "this node has no secrets.keys, so a minted credential cannot be sealed",
-				"hint":   "run `crewlet secrets keygen` and install one",
-			})
+			// A FAULT IN THIS NODE'S WIRING, never a deployment's posture:
+			// every node holds the keyring a sink seals under, so a sink
+			// that cannot be built is a process assembled without its
+			// secret store, which no wait and no setting clears. The
+			// detail goes to the log; the caller learns only that it
+			// failed.
+			log.ErrorContext(r.Context(), "setup_pass_not_started",
+				"integration", kind, "error", err.Error(),
+				"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 			return
 		}
 		in.Sink = sink

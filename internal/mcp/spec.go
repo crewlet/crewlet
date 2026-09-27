@@ -52,9 +52,12 @@ type Spec struct {
 	Command string
 	Args    []string
 
-	// Env is layered OVER the engine's own environment for a stdio child.
-	// Values must already have their ${VAR} references resolved: this package
-	// never reads the secret store.
+	// Env is the stdio child's declared environment, layered over the
+	// allowlisted host environment every child gets — NEVER over the engine's
+	// own, which holds its keyring and its Tier A tokens (see mergedEnv). A
+	// variable the server reads that is not on the allowlist is declared
+	// here. Values must already have their ${VAR} references resolved: this
+	// package never reads the secret store.
 	Env map[string]string
 
 	// URL and Headers reach an HTTP server. Headers carry the per-seat

@@ -308,18 +308,19 @@ func TestARejectedTokenSaysWhatToSet(t *testing.T) {
 }
 
 // THE NODE'S HINT REACHES THE OPERATOR. A refusal this client swallowed would
-// leave a 503 with no reason anywhere the person running the command can see.
+// leave a failure with no reason anywhere the person running the command can
+// see.
 func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
 	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
-	node.status = http.StatusServiceUnavailable
-	node.body = `{"error":"no_keyring","hint":"run crewlet secrets keygen"}`
+	node.status = http.StatusBadRequest
+	node.body = `{"error":"invalid_name","hint":"a name is what a ${VAR} can hold"}`
 
 	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, "", time.Now())
 	if err == nil {
-		t.Fatal("a 503 was accepted as success")
+		t.Fatal("a 400 was accepted as success")
 	}
-	for _, want := range []string{"no_keyring", "crewlet secrets keygen"} {
+	for _, want := range []string{"invalid_name", "a name is what a ${VAR} can hold"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error omits %q: %v", want, err)
 		}

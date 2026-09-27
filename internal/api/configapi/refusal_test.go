@@ -65,8 +65,8 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 
 	t.Run("a put the validator refuses", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
 		res := s.do(t, http.MethodPut, "/config",
 			strings.Replace(companyDoc, "      type: anthropic", "      type: nowhere", 1), summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "validation_error")
@@ -84,7 +84,7 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 
 	t.Run("a put that does not parse", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		res := s.do(t, http.MethodPut, "/config", companyDoc+"missionn: typo\n", summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "invalid_body")
 		p := problemAt(t, body, "missionn")
@@ -101,8 +101,8 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 
 	t.Run("a patch naming an unknown key", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
 		body := refusalOf(t, s.do(t, http.MethodPatch, "/config", `{"missionn": "typo"}`, summaryHeader),
 			http.StatusBadRequest, "invalid_patch")
 		if p := problemAt(t, body, "missionn"); p.Kind != "unknown_field" {
@@ -118,8 +118,8 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 	// stored document, which the caller never saw.
 	t.Run("a patch whose merged document has the wrong shape", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
 		body := refusalOf(t, s.do(t, http.MethodPatch, "/config", "mcp_servers: not-a-list\n", summaryHeader),
 			http.StatusBadRequest, "invalid_patch")
 		p := problemAt(t, body, "mcp_servers")
@@ -132,8 +132,8 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 	// into, which is the document validated.
 	t.Run("an entity write the validator refuses", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
 		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
 			`{"type": "nowhere", "model": "claude-sonnet-5"}`, summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "validation_error")
@@ -144,8 +144,8 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 
 	t.Run("an entity body this kind cannot read", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
 		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
 			`{"type": "anthropic", "modell": "x"}`, summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "invalid_body")
@@ -160,9 +160,9 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 
 	t.Run("a revert the validator refuses", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		refused := s.seedStored(t, companyDoc, refusedByThisBuild)
-		s.seed(t, companyDoc, nil)
+		s.seed(t, companyDoc)
 		body := refusalOf(t, s.do(t, http.MethodPost, "/config/revisions/"+refused+"/revert", "", nil),
 			http.StatusBadRequest, "validation_error")
 		if p := problemAt(t, body, "workers.researcher.model"); p.Kind != "unknown_value" {
@@ -189,7 +189,7 @@ func TestNoRefusalRepeatsARestoredCredentialOrItsLength(t *testing.T) {
 		datadog    = "DATADOGLITERAL"
 		confluence = "CONFLUENCELITERAL"
 	)
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, companyDoc, func(document map[string]any) {
 		integrations := document["integrations"].(map[string]any)
 		integrations["gitlab"].(map[string]any)["signing_secret"] = signing

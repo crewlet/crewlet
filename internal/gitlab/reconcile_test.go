@@ -1574,46 +1574,6 @@ func TestAReconcileNeedsAClientAndASink(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING READS AND REPORTS RATHER THAN FAULTING.
-//
-// A nil sink is still refused above — that is the CLI's case, where a run
-// that minted live credentials and printed none of them is the worst outcome
-// available. What the reconcile loop hands such a node is
-// provision.ReadOnly, and the difference matters: ErrNoSink from the entry
-// point is a FAULT, which integration.Observe reports as "the last pass could
-// not read this integration" and retries on the waiting backoff for ever. An
-// ordinary deployment that keeps its ${VAR}s in the environment has no
-// secrets.keys at all, so that was every tick, permanently, on a node doing
-// exactly what it was configured to do.
-func TestASinklessPassReportsRatherThanFailing(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	res, err := reconcileAgainst(t, f, provision.ReadOnly(), map[string]string{
-		"swe": "GITLAB_TOKEN_SWE",
-	})
-	if err != nil {
-		t.Fatalf("a node with no keyring failed the whole pass: %v", err)
-	}
-	if res == nil {
-		t.Fatal("a sinkless pass returned no result to report from")
-	}
-	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing {
-		t.Fatalf("findings = %+v, want the missing keyring reported", findings)
-	}
-	if findings[0].Subject != "secrets.keys" {
-		t.Errorf("the finding names %q rather than the setting to add",
-			findings[0].Subject)
-	}
-	// AND NOTHING WAS CREATED AT THE INSTANCE. This pass makes an ACCOUNT
-	// before it mints a token and the rollback can only revoke the token,
-	// so reaching the first Record on a sink that cannot record leaves an
-	// identity nobody asked for and nothing recorded.
-	if len(res.Created) != 0 {
-		t.Errorf("a node that cannot seal a credential created %v", res.Created)
-	}
-}
-
 // A CANCELLED RUN STILL REVOKES. Ctrl+C during provisioning is exactly when
 // leaving credentials live is worst: the operator believes nothing happened.
 // A rollback that inherited the cancelled context would do nothing at all.

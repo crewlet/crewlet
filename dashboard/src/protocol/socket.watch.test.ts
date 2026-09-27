@@ -196,4 +196,41 @@ describe("a query frame", () => {
       grants: ["audit:read"],
     });
   });
+
+  // AN `unavailable` ANSWER CARRIES THE STATE LOG'S REFUSAL AND ITS HINT, which
+  // is what tells a node catching up from one that will refuse the same read
+  // until an operator acts. A zero hint is the answer, so it is carried rather
+  // than read as absent — and a frame with no hint at all, from a node too old
+  // to send one, carries nothing and reads as it always did.
+  test.each([
+    [
+      "a refusal no wait clears",
+      { refusal: "log_full", detail: "raise the stream's byte ceiling", retry_after: 0 },
+      { code: "log_full", detail: "raise the stream's byte ceiling", retryAfter: 0 },
+    ],
+    [
+      "an unreachable store, no refusal behind it",
+      { retry_after: 5 },
+      { code: null, detail: null, retryAfter: 5 },
+    ],
+    ["a node too old to say", {}, null],
+  ])("%s reaches the screen as the engine said it", async (_, extra, want) => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    socket.start();
+    dial(0).open();
+    const asked = socket.query("work_items");
+    const frames = dial(0).sent.map((raw) => JSON.parse(raw) as { kind: string; id?: number });
+    const id = frames.find((frame) => frame.kind === "query")?.id;
+    socket.onMessage(
+      JSON.stringify({ kind: "error", id, what: "work_items", error: "unavailable", ...extra }),
+    );
+    const refused = await asked.then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(refused).toBeInstanceOf(QueryRefusedError);
+    expect((refused as QueryRefusedError).message).toBe("unavailable");
+    expect((refused as QueryRefusedError).refusal).toEqual(want);
+  });
 });

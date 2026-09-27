@@ -64,7 +64,7 @@ func configPair(t *testing.T, bootstrapYAML, company string) []string {
 	comp := filepath.Join(dir, "company.yaml")
 	if bootstrapYAML == "" {
 		bootstrapYAML = "store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
-			"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n"
+			"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n" + fixtureKeyring
 	}
 	if err := os.WriteFile(boot, []byte(bootstrapYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -373,7 +373,7 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	port := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
+	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	})
 	e := testEngineWithBridge(t, bridge)
@@ -454,7 +454,7 @@ func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	port := freePort(t)
-	e := testEngineWithBridge(t, mcpbridge.New(mcpbridge.Options{
+	e := testEngineWithBridge(t, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	}))
 	boot := bootstrapFor(t, port)
@@ -655,10 +655,7 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 // reconciler that owns the posture, then the listener.
 func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, error) {
 	t.Helper()
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		t.Fatalf("keyring: %v", err)
-	}
+	cipher := e.Cipher()
 	configSurface, err := configapi.New(configapi.Options{
 		Store: e.Backends().Store, Cipher: cipher,
 		Plane: e.Backends().Fleet, Queue: e.Backends().Queue,
@@ -672,7 +669,7 @@ func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSur
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
 		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
-		Queue: e.Backends().Queue, NodeID: nodeID, Cipher: cipher,
+		Queue: e.Backends().Queue, NodeID: nodeID,
 	})
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
@@ -1065,7 +1062,8 @@ func TestValidateDetectsWhichTierADocumentIs(t *testing.T) {
 		{"a company under any name", companyYAML, "company"},
 		{"a bootstrap under any name",
 			"store:\n  path: " + filepath.Join(dir, "c.db") + "\n" +
-				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n", "bootstrap"},
+				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n" + fixtureKeyring,
+			"bootstrap"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1884,4 +1882,14 @@ func concatLiterals(e ast.Expr) (string, bool) {
 		return left + right, okL && okR
 	}
 	return "", false
+}
+
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
 }

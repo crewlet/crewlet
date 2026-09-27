@@ -402,7 +402,7 @@ written. The **fleet-wide session generation** is the one number that can be
 pushed forward without knowing:
 
 ```bash
-crewlet iam invalidate-all -api http://127.0.0.1:8080
+crewlet iam invalidate-all -api http://127.0.0.1:8000
 ```
 
 Every bearer minted before it — every cookie, every session and every
@@ -421,11 +421,46 @@ authority at once — and a proof of identity inside `step_up_sensitive`, which
 a Tier A token holding both grants (as the break-glass one does) satisfies by
 construction. A machine token never can: it never carries `people:manage`.
 
+**Before you run it, put back what took access away.** The generation ends
+*bearers* — cookies, sessions, machine tokens — and nothing else. Every other
+change to the identity directory made after the artefact was taken is rolled
+back with it, and several of those hand somebody a way in that no bearer
+carries, so everybody signing in again once lets them straight back:
+
+- **Somebody removed or suspended since is enrolled and active again**, with
+  the password, second factor and provider link they held when the artefact
+  was taken. A removal comes back whole — their row, their credentials, and
+  the key their name and address are sealed under, because the coordination
+  snapshot carries the secret store's bucket as it stood.
+- **A credential withdrawn since is back.** A password, a second factor or
+  a provider link revoked, a second factor reset and recovery codes
+  regenerated since are all as they were when the artefact was taken — so a
+  factor you reset because a phone was lost works again, and so do the
+  recovery codes it replaced.
+- **A grant, a colleague level or a seat binding taken away since is held
+  again** — never above `api.auth.max_grants`, which is Tier A and not in the
+  artefact, but up to it.
+
+The restored estate cannot list any of these: its own trail
+([`crewlet iam audit`](../reference/cli.md#crewlet-iam)) and every node's event
+log stop at the moment the artefact was taken, exactly like the rows they
+describe. So re-apply each one from a record kept **outside** the estate — your
+own off-boarding and access-change records, or the engine's logs if you ship
+them off the host — with `crewlet iam remove`, `suspend`, `grant`, `unbind`,
+`unlink`, `revoke-credential` and `reset-mfa`. Removals first: a removed person
+is the one the restore handed everything back to.
+
 Then read `crewlet iam check`: a restore under a different keyring reports
 every person as *sealed under a key this deployment does not have* rather than
-as somebody with no name, and a restore of an artefact taken before a removal
-brings back the tombstone and the ciphertext while the key stays destroyed —
-so the removed person's name does not come back with the backup.
+as somebody with no name. Somebody removed **before** the artefact was taken
+stays removed: the artefact holds their tombstone and their ciphertext and not
+the key the removal destroyed — and if that key's deletion had not landed when
+the copy was made, `removal_key_live` names it and the key duty destroys it.
+Somebody removed after it was taken is the first case above, and the reason a
+backup is what an erasure has to outlast: until every backup taken before a
+removal is deleted, the person it removed can be read — and restored — from
+it. See
+[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row).
 
 ## What not to do
 

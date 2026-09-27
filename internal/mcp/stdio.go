@@ -3,13 +3,12 @@ package mcp
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"slices"
-	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
@@ -64,27 +63,50 @@ func newStdioTransport(spec Spec, log *slog.Logger) (sdk.Transport, *childProces
 	}, &childProcess{cmd: cmd, relay: relay}, nil
 }
 
-// mergedEnv is the child's environment: everything this process has, with the
-// server's own declared variables layered on top.
+// mergedEnv is the child's environment: the allowlisted host environment, the
+// engine user's own locations, and the server's declared variables on top.
 //
-// WHOLE-ENVIRONMENT INHERITANCE IS DELIBERATE. MCP servers routinely read
-// undeclared conventional variables — PATH, HOME, the proxy variables, a
-// vendor SDK's own key — so narrowing this to the declared set breaks servers
-// that work today, in a way that surfaces as a server failing to start with an
-// error from someone else's code.
+// AN ALLOWLIST, NOT THE ENGINE'S ENVIRONMENT. This used to be os.Environ() with
+// the declared variables layered over it, on the reasoning that servers read
+// undeclared conventional variables and narrowing the set would break them.
+// What that handed every tool server was the engine's keyring (which signs
+// every session cookie and every state-log record), every Tier A token value
+// and the identity provider's client secret — to a process the company pulled
+// off a package registry, which logs its environment on a crash, forwards it
+// to its own children and reports it in telemetry. So a child gets exactly
+// what [hostbox] gives every child the engine starts — where to find binaries,
+// how to render text and talk TLS, how to reach the network — plus
+// [hostbox.HostUserEnv], because a server launched through `npx` or `uvx` runs
+// as the engine's user in no box of its own and keeps its package cache under
+// that user's HOME. Anything else a server reads is DECLARED in its `env:` (or
+// a seat's `mcp_env`), and a `${VAR}` there resolves from the secret store and
+// then the process environment, so passing one of the host's own variables
+// through is one line of configuration that says so.
 //
-// Note what it does NOT do: secret-store values are not poured in. spec.Env
-// has already had its ${VAR} references resolved by the caller, so a server
-// receives exactly the stored credentials its own config declares and no
-// others. Injecting the whole store here would hand every seat's token to
-// every subprocess in the company, which is strictly worse than the problem it
-// would solve.
+// IT IS NOT ISOLATION, and nothing here pretends it is: the child runs as the
+// engine's user, and a process running as that user can read what that user
+// can — the Tier A file, and the engine's own /proc/<pid>/environ. What the
+// allowlist removes is the engine HANDING its secrets to code that never asked
+// for them; keeping a hostile server away from them is a different user or a
+// container.
+//
+// A SERVER WHOSE COMMAND IS `docker` OR `podman` IS THE RUNTIME'S CLI, and it
+// gets what the runtime's CLI gets everywhere else ([hostbox.ContainerRuntime]):
+// the DOCKER_ family, Podman's CONTAINER_/CONTAINERS_/PODMAN_ families and
+// the rest. A tool server shipped as an image (`docker run -i --rm …`) is the
+// commonest way one is published, and handed only the host user's locations
+// a rootless runtime lost DOCKER_HOST and dialled the system socket — a
+// permission error at the daemon that named nothing the operator had set.
+//
+// Note what it does NOT do either: secret-store values are not poured in.
+// spec.Env has already had its ${VAR} references resolved by the caller, so a
+// server receives exactly the stored credentials its own config declares and
+// no others. Injecting the whole store here would hand every seat's token to
+// every subprocess in the company.
 func mergedEnv(spec Spec, log *slog.Logger) []string {
-	env := make(map[string]string, len(os.Environ())+len(spec.Env))
-	for _, kv := range os.Environ() {
-		if k, v, ok := strings.Cut(kv, "="); ok {
-			env[k] = v
-		}
+	env := hostbox.Inherit(hostbox.HostUserEnv...)
+	if hostbox.IsContainerRuntime(spec.Command) {
+		env = hostbox.ContainerRuntime()
 	}
 	keys := make([]string, 0, len(spec.Env))
 	var empty []string
@@ -108,12 +130,5 @@ func mergedEnv(spec Spec, log *slog.Logger) []string {
 	// and the value is the credential.
 	log.Debug("custom_env_keys", "server", spec.Name, "keys", keys)
 
-	out := make([]string, 0, len(env))
-	for k, v := range env {
-		out = append(out, k+"="+v)
-	}
-	// Sorted so a child's environment is reproducible across runs, which is
-	// the difference between a comparable log line and a new one every boot.
-	slices.Sort(out)
-	return out
+	return hostbox.Environ(env)
 }

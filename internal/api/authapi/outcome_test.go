@@ -32,8 +32,8 @@ import (
 // announces was said of writes that may not exist.
 //
 // Each case below makes ONE write answer unknown and holds the surface to the
-// same three things: a 503 with the Retry-After every 503 here carries and the
-// operation id; nothing built on the write (no session, no cookie, no codes);
+// same three things: a 503 with the Retry-After an unknown outcome carries —
+// its retry under the same id is the point — and the operation id; nothing built on the write (no session, no cookie, no codes);
 // and nothing announced about it.
 //
 // Mutation: treat an unknown outcome as landed at any one site and its case

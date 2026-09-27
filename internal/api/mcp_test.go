@@ -38,7 +38,7 @@ func TestTheBridgeRouteIsAbsentWithoutABridge(t *testing.T) {
 func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
-		Bridge: mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"}),
+		Bridge: bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"}),
 	})
 	res := probe(a, http.MethodPost, mcpbridge.PathPrefix+"not-a-token")
 	if res.StatusCode != http.StatusUnauthorized {
@@ -53,7 +53,7 @@ func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 // route.
 func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	t.Parallel()
-	bridge := mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
+	bridge := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
 	// The app first: mounting the route is what lets the bridge open a
 	// session at all.
 	a := newApp(t, api.Options{Bridge: bridge})
@@ -88,4 +88,14 @@ func probe(a *api.App, method, path string) *http.Response {
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, req)
 	return rec.Result()
+}
+
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
 }

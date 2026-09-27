@@ -227,18 +227,43 @@ func TestAnEditStopsAtAStepNobodyCanConfirm(t *testing.T) {
 // holding a record it cannot decode — answered a bare 503 with no Retry-After
 // and no op id, which a client cannot tell from a node gone for good, and
 // which leaves the retry the docs promise with nothing to retry under.
+//
+// AND WHEN IS THE REFUSAL'S OWN ANSWER. A write the log refused for good — a
+// record too large for the broker, a full log, a refusal the broker named, an
+// evicted node — carried the identity hint too, telling a client to come back
+// in two seconds for a write that could never land here, where the same
+// refusal on /chart or /work carries none. A node that is behind is the
+// control, and keeps the hint.
 func TestARefusedWriteSaysWhenAndWhatToRetry(t *testing.T) {
 	t.Parallel()
-	r := newRig(t)
-	r.writer.err = fmt.Errorf("iamdomain: publish: %w", &statelog.Unavailable{
-		Reason: statelog.ReasonBehind, Detail: "this node is behind"})
-	req := "/iam/people/" + bob.String() + "/sessions"
-	got := r.as(administrator(), http.MethodDelete, req, nil)
-	if got.status != http.StatusServiceUnavailable || got.header.Get("Retry-After") != "2" {
-		t.Fatalf("answered %d with Retry-After %q", got.status, got.header.Get("Retry-After"))
-	}
-	if op, _ := got.body["op_id"].(string); !strings.HasPrefix(op, "sessions:revoke:"+bob.String()) {
-		t.Errorf("op id %q, want the one this route published under", op)
+	for _, tc := range []struct {
+		reason statelog.Reason
+		retry  string
+	}{
+		{statelog.ReasonBehind, "2"},
+		{statelog.ReasonRecordTooLarge, ""},
+		{statelog.ReasonLogFull, ""},
+		{statelog.ReasonBrokerRefused, ""},
+		{statelog.ReasonEvicted, ""},
+	} {
+		t.Run(string(tc.reason), func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.err = fmt.Errorf("iamdomain: publish: %w", &statelog.Unavailable{
+				Reason: tc.reason, Detail: "what the refusal is about"})
+			req := "/iam/people/" + bob.String() + "/sessions"
+			got := r.as(administrator(), http.MethodDelete, req, nil)
+			if got.status != http.StatusServiceUnavailable ||
+				got.header.Get("Retry-After") != tc.retry {
+				t.Fatalf("a %s refusal answered %d with Retry-After %q, want 503 "+
+					"with %q", tc.reason, got.status, got.header.Get("Retry-After"),
+					tc.retry)
+			}
+			if op, _ := got.body["op_id"].(string); !strings.HasPrefix(op,
+				"sessions:revoke:"+bob.String()) {
+				t.Errorf("op id %q, want the one this route published under", op)
+			}
+		})
 	}
 }
 
@@ -279,7 +304,33 @@ func TestABootstrapMintFailureSaysWhetherWaitingHelps(t *testing.T) {
 				t.Errorf("answered %d with Retry-After %q (%v), want %d with %q",
 					got.status, got.header.Get("Retry-After"), got.body, tc.want, tc.retry)
 			}
+			// A FAULT'S OWN WORDS STAY IN THE LOG, where `internal_error`
+			// sends a reader: a path on this host is not the caller's.
+			if tc.want == http.StatusInternalServerError {
+				if detail, _ := got.body["detail"].(string); strings.Contains(detail, "permission denied") {
+					t.Errorf("the fault's own words reached the caller: %v", got.body)
+				}
+			}
 		})
+	}
+}
+
+// A WRITE THAT FAULTED KEEPS ITS OWN WORDS IN THE LOG.
+//
+// `internal_error` says the reason is in this node's log, and a fault's reason
+// is a store's or a driver's words — a database path here — which the directory
+// sent as the answer's `detail`. The control is a refusal by the domain, whose
+// sentence is written for the caller and still travels.
+func TestADirectoryWriteThatFaultedKeepsItsWordsInTheLog(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.err = errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+	got := r.as(administrator(), http.MethodDelete, "/iam/people/"+bob.String()+"/sessions", nil)
+	if got.status != http.StatusInternalServerError {
+		t.Fatalf("a write that faulted answered %d (%v), want 500", got.status, got.body)
+	}
+	if detail, _ := got.body["detail"].(string); strings.Contains(detail, "/var/lib") {
+		t.Errorf("the fault's own words reached the caller: %v", got.body)
 	}
 }
 
@@ -298,15 +349,18 @@ func TestAnInvitationWithNoExternalURLIsAFault(t *testing.T) {
 	}
 }
 
-// EVERY 503 THIS SURFACE ANSWERS CARRIES A RETRY-AFTER, BECAUSE NOTHING HERE
-// SPELLS ONE ITSELF.
+// EVERY 503 THIS SURFACE ANSWERS SAYS WHETHER TO COME BACK, BECAUSE NOTHING
+// HERE SPELLS ONE ITSELF OR PICKS ITS HINT WITHOUT ITS CAUSE.
 //
 // The same gate internal/api/authapi holds itself to: three sites here spelled
 // a bare 503 through FailWith, and a behavioural case per site says nothing
 // about the next one. No file in this package names the status, so
 // httpjson.Unavailable and httpjson.UnavailableWith — which pair it with the
-// header — are the only ways to answer one.
-func TestEveryUnavailableAnswerHereCarriesARetryAfter(t *testing.T) {
+// header — are the only ways to answer one. And no file names the bare hint:
+// every site asks auth.RetryIdentity with the 503's cause, so a refusal no
+// wait clears carries no Retry-After here as it carries none on /chart and
+// /work.
+func TestEveryUnavailableAnswerHereSaysWhetherToComeBack(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -335,6 +389,12 @@ func TestEveryUnavailableAnswerHereCarriesARetryAfter(t *testing.T) {
 					t.Errorf("%s spells a 503 itself; answer it with "+
 						"httpjson.Unavailable or UnavailableWith, which carry "+
 						"the Retry-After", fset.Position(n.Pos()))
+				}
+				if pkg, ok := n.X.(*ast.Ident); ok && pkg.Name == "auth" &&
+					n.Sel.Name == "RetryIdentitySeconds" {
+					t.Errorf("%s takes the identity hint whatever caused the "+
+						"503; ask auth.RetryIdentity with the cause, nil where "+
+						"there is none", fset.Position(n.Pos()))
 				}
 			case *ast.BasicLit:
 				if n.Kind == token.INT && n.Value == "503" {

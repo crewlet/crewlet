@@ -148,7 +148,7 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 			t.Parallel()
 			s := newCountedSurface(t)
 			if tc.seeded {
-				s.seed(t, companyDoc, nil)
+				s.seed(t, companyDoc)
 			}
 			before := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String()
 
@@ -172,7 +172,7 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 	// parameter make exactly one of each, or every zero above proves nothing.
 	for _, method := range []string{http.MethodPut, http.MethodPatch} {
 		s := newCountedSurface(t)
-		s.seed(t, companyDoc, nil)
+		s.seed(t, companyDoc)
 		body := companyDoc
 		if method == http.MethodPatch {
 			body = `{"mission": "written"}`
@@ -210,7 +210,7 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 func TestADryRunAnswersTheBaseAndItsWarnings(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	base := s.seed(t, companyDoc, nil)
+	base := s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodPatch, "/config?dry_run=true",
 		`{"mission": "ship the rewrite"}`, nil)
@@ -258,7 +258,7 @@ func TestADryRunAnswersTheBaseAndItsWarnings(t *testing.T) {
 func TestACheckOfADraftWithNoChangesIsValid(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodPatch, "/config?dry_run=true", `{}`, nil)
 	if res.Code != http.StatusOK {
@@ -292,7 +292,7 @@ func TestACheckOfADraftWithNoChangesIsValid(t *testing.T) {
 func TestTheDryRunParameterIsReadFirstAndOnlyTrueOrFalse(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 
 	for _, query := range []string{"dry_run=yes", "dry_run=1", "dry_run=", "dry_run", "dry_run=TRUE", "dry_run=true&dry_run=true"} {
 		for _, tc := range []struct {
@@ -337,7 +337,7 @@ func TestTheDryRunParameterIsReadFirstAndOnlyTrueOrFalse(t *testing.T) {
 func TestADryRunNeedsNoSummaryAndLiftsOneOut(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 
 	for name, tc := range map[string]struct{ method, body string }{
 		"put with none":      {http.MethodPut, companyDoc},
@@ -373,7 +373,7 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	}
 
 	s := newCountedSurface(t)
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 	stale := s.do(t, http.MethodPatch, "/config?dry_run=true", `{"mission": "x"}`,
 		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
 	if stale.Code != http.StatusConflict || decode(t, stale)["error"] != "revision_advanced" {

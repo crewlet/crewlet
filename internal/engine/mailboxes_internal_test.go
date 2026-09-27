@@ -70,7 +70,10 @@ roles:
 	}
 
 	fleet := &rosterFleet{memoryFleet: coordmem.NewFleet()}
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	// A KEYRING, because a reconciler reads the engine's own and refuses
+	// an engine that holds none.
+	_, cipher := testKeyring(t)
+	e := &Engine{backends: &Backends{Fleet: fleet}, cipher: cipher}
 	e.epoch.current.Store(company)
 
 	// Nothing activated: not a fault, and not a roster of nobody either.
@@ -78,7 +81,7 @@ roles:
 		t.Fatalf("roster with no activation = %v, want ErrNoActiveRevision", err)
 	}
 
-	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: "rev-1", At: time.Now()})
+	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now()})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}

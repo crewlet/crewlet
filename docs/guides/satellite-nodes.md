@@ -106,7 +106,23 @@ stream:
 coordination:
   type: embedded-kv               # the fleet's replicated KV, reached over
                                   #   the same NATS cluster
+
+secrets:                          # REQUIRED on every node, this one too
+  active_key_id: k1
+  keys:
+    - {id: k1, material: "${CREWLET_SECRET_KEY_K1}"}   # the SAME keys
+                                  #   every other node of the fleet holds
 ```
+
+The `secrets:` block is not optional on a satellite, although it serves no
+API and signs no session cookie. It runs state logs like every other node —
+the tracker, the vectors, the pages and the org chart, whatever its roles —
+and every record on every one of them is signed and verified under this
+keyring, because the broker authenticates nothing. The company document the
+satellite fetches from its peers is authenticated by its seal under the same
+keys. `crewlet validate` refuses a Tier A file without it, naming
+`secrets.keys`; generate a key once with `crewlet secrets keygen` and give
+every node the same material.
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
 anywhere else, so an orchestrator injects both from the environment
@@ -223,8 +239,12 @@ as a member that serves no work item, no page and no search.
 does not run it, and that is the point of the derivation: no turn reads
 it — a seat's principal is its own handle and its authority comes from the
 [org chart](../concepts/chart-domain.md) — so a satellite running it would
-pay the disk, the applier and a share of the stream budget to hold a
-directory of your people that it authenticates nobody against.
+pay the disk and the applier to hold a directory of your people that it
+authenticates nobody against. Not the broker's budget: the identity log's
+stream and its reserved ceiling are the **fleet's**, created and sized on
+every node whatever its roles, because a stream keeps the ceiling of
+whichever node created it first — so that share is spent on a satellite
+too, and `stream.iam_log_max_bytes` still counts in its broker's budget.
 
 > **Reading a satellite's tables.** `iam_people` on a seats-only node is
 > **empty because the domain is not running**, not because the company has

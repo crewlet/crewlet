@@ -25,9 +25,10 @@ A few things worth knowing when deploying Crewlet:
   identities (Atlassian/GitLab/Slack tokens) are separate service accounts —
   scope them minimally; the engine never needs a personal admin token at
   runtime (provisioning CLIs do need an admin credential, once).
-- **Session cookies are signed with the Tier A keyring, and a deployment
-  without one cannot serve sign-ins.** The engine refuses to build a session
-  signer from a keyring that cannot sign for the fleet, rather than falling
+- **Session cookies are signed with the Tier A keyring, and a node without
+  one does not start.** Every node needs a keyring (`crewlet validate`
+  refuses a file without one), and the engine refuses to build a session
+  signer from a keyring that cannot sign for the fleet rather than falling
   back to a per-process key: with a fallback, every ingress node would accept
   only cookies it minted itself, so a browser would be signed in on whichever
   node its request happened to reach. The cookie is `HttpOnly`, `Secure`,
@@ -87,10 +88,47 @@ A few things worth knowing when deploying Crewlet:
   `api.auth.max_grants` and no more, and logs a warning on every boot that
   enables it.
 - **Carrying a credential is not the same as being allowed to use it.** Every
-  route and every socket question declares one of eleven grants, and both
-  transports are decided by the same registry, so a question cannot be reached
-  by choosing a channel. A route registered with no grant is a build failure
-  rather than a route that answers to anyone.
+  route and every socket question declares one of
+  [eleven grants](docs/concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow),
+  and both transports are decided by the same registry, so a question cannot be
+  reached by choosing a channel. A route registered with no grant is a build
+  failure rather than a route that answers to anyone.
+- **`config:write` is host access: it runs code on every engine host.** It is
+  deliberately one grant over the whole company configuration, and that
+  configuration runs code: a stdio `mcp_servers` entry is a `command` the
+  engine starts as its own user on every node that runs seats; a `cli-agent`
+  provider names a binary it runs, and a seat on one with `run_in: self` does
+  its code work inside it; a `run_in: direct` sandbox cell runs a coding agent,
+  and its setup steps, as that same user; and a seat's runtime half — its model
+  chain, credentials, sandbox cell and `mcp_env`, written through `/chart` —
+  takes the same grant. Whoever holds it can therefore run anything on every
+  engine host and read whatever the engine's user can: the Tier A file, the
+  keyring that signs every session, and every credential the store holds. Give
+  it to the people and pipelines you would give a shell on those hosts. A
+  machine token can carry it — a deploy job applying configuration is what one
+  is for — so minting one with it hands that job the same reach, and
+  `crewlet validate` warns when an identity provider's group mapping confers
+  it, as it does for `people:manage` and the two `secrets:` grants. Every write
+  under it that can start a process — the company document, the chart's
+  runtime half, connecting an integration — asks for a recent step-up, so a
+  stolen session cookie alone does not reach it. `people:manage` is a separate
+  grant so a directory change stays a reviewable gesture of its own, not as a
+  bound on a `config:write` holder.
+- **A child process is handed an allowlisted environment, never the
+  engine's.** The engine's environment is where Tier A's `${VAR}` references
+  resolve from — the keyring, every `api.auth.tokens` value, the identity
+  provider's client secret, any credential in an external `stream.url` — and
+  where the engine reads its collector credential (`OTEL_EXPORTER_OTLP_HEADERS`),
+  often beside an operator's own provisioning tokens (`GITLAB_ADMIN_TOKEN`,
+  `MATTERMOST_ADMIN_TOKEN`); so no process the engine starts inherits it: a
+  stdio MCP server, a coding CLI, a local sandbox's coding agent and the
+  container runtime's own CLI each get `PATH`, locale, TLS trust and proxy
+  settings, the host user's home and temporary directories where they run
+  in no box of their own, and what their configuration declares. That keeps the
+  engine from *handing* its secrets to code that never asked for them. It is
+  not isolation: a child runs as the engine's user and can read what that user
+  can, `/proc/<engine pid>/environ` included. A tool server you do not trust
+  needs a different user or a container around it.
 - **A cross-site write is refused by its `Origin`.** CORS decides who may
   *read* an answer; on a state change that is the part an attacker does not
   need, so a separate check refuses a non-read whose `Origin` is not an address
@@ -103,19 +141,6 @@ A few things worth knowing when deploying Crewlet:
   holding a valid credential that theirs is invalid for the length of the
   outage — which is how a company gets taught to reset working passwords during
   one.
-- **`config:write` is host access, and should be conferred like it.** It is
-  one grant over the whole company configuration, and that configuration runs
-  code: an `mcp_servers` entry is a command every engine host executes, a
-  seat's `mcp_env` and model keys decide what its children run and which
-  credentials they are handed, and a `run_in: self` sandbox runs a coding agent
-  on the engine host. So a holder can run anything on every engine host and
-  read whatever a process there can, the keyring included. Give it to the
-  people and pipelines you would give a shell on those hosts. A machine token
-  can carry it — a deploy job applying configuration is what one is for — so
-  minting one with it hands that job the same reach, and `crewlet validate`
-  warns when an identity provider's group mapping confers it. `people:manage`
-  is a separate grant so directory changes stay a reviewable gesture of their
-  own, not as a bound on a `config:write` holder.
 - **`api.auth.max_grants` is the ceiling, and it is required.** A person's
   grants live in the replicated store and an identity provider's group mapping
   is written at the provider — neither is in a tier this deployment's operator
@@ -130,9 +155,53 @@ A few things worth knowing when deploying Crewlet:
   backend: a fresh deployment's identity estate is empty, so it is what creates
   the first person, and on a running one it is the way back in when the
   identity provider is down.
-- **Config encryption at rest** is available and recommended when your
-  company config carries secrets — see
-  `docs/concepts/configuration.md#secrets`.
+- **The company configuration is always sealed at rest.** Every revision is
+  encrypted and authenticated under the Tier A keyring before it reaches the
+  store — there is no plaintext mode, and a node reads only sealed revisions —
+  so a copied store file, a backup or a volume snapshot carries ciphertext
+  alone. The keyring is the root of trust: keep it out of the store's backup
+  domain. See
+  [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
+- **Removing a person destroys their key, not only their row.** Each person's
+  name and address are sealed under a data key that is theirs alone, and
+  removing them destroys it — so those values become unreadable at once
+  wherever the key is not also kept: the identity log, every snapshot a node
+  donates (the key never enters one), everything a node serves, and every
+  `crewlet backup` taken after the removal. **A backup taken *before* the
+  removal is not reached.** The key lives in the coordination store's secrets
+  bucket, and a backup's coordination snapshot carries that bucket, sealed
+  under the keyring — so the artefact holds the person's sealed name and
+  address and the key that opens them side by side. Whoever holds it and the
+  keyring can still read both, and restoring it brings the person back whole.
+  The erasure finishes there only when that backup is deleted or ages out — a
+  fortnight on the
+  [tiered schedule](docs/guides/backup.md#where-to-put-it-and-how-often) the
+  backup guide suggests — so when an erasure has to be complete, delete or
+  expire every backup taken before it. A raw copy of `stream.store_dir` — the
+  cold runbook's copy, a filesystem snapshot — is no better, even one taken
+  after the removal: the broker purges the key by marking it deleted in its
+  own files rather than overwriting it, so its sealed bytes can stay on disk
+  until the broker rewrites the file that holds them. On a node that dials an
+  external NATS cluster the bucket is that cluster's, so the key is in that
+  cluster's own backups, on that cluster's retention. What outlives the
+  removal is deliberate: their id, the tombstone (who removed them, when, and
+  which claims they held — an address as its blind, never its value), and the
+  audit trail's rows naming them, because a history whose authors evaporate is
+  not an audit trail. **Their login outlives it too, in the clear**, and
+  nothing destroys it: it is on the removal record in the identity log (so in
+  every backup and donated snapshot), in the tombstone's
+  `iam_removed.claims_json`, and in the audit rows that record an unbound
+  person's changes under it. A login is deliberately not sealed — it is
+  printed beside everything its holder does — and the one the sign-up form
+  proposes is derived from the address (`jane.doe@example.com` proposes
+  `jane.doe`), so after a removal the address's local part is usually still
+  readable. If a person's login has to be erasable, do not derive it from a
+  personal address: give them one that names nothing about them. The rows
+  commit before the key is destroyed; a key deletion that fails — a
+  coordination outage — is retried by the identity key duty, and
+  `crewlet iam check` (`GET /iam/check`) names every removed person whose key
+  still lives as `removal_key_live` until it is gone. See
+  [Removing somebody destroys a key, not a row](docs/concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row).
 - **Personal data in configuration revisions written before this release.**
   Every node keeps its own copy of every company-config revision it has ever
   met, in an append-only table that nothing deleted from and that is in every
@@ -148,7 +217,14 @@ A few things worth knowing when deploying Crewlet:
   forward the revision table is also swept: 400 days, plus the active
   revision and its parent chain (see
   `docs/guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach`).
-- **Sandbox isolation.** Coding-agent runs execute inside an isolated sandbox
-  (E2B); the sandbox boundary — not the coding agent's own permission
-  prompts — is the isolation model. Treat anything you inject into a sandbox
-  (tokens in `role.sandbox.env`) as visible to the code that runs there.
+- **Sandbox isolation depends on the cell a seat runs in.** A coding agent
+  runs fully permissioned — the sandbox boundary, not the agent's own
+  permission prompts, is the isolation model — so where it runs is the
+  security decision. `run_in: e2b` is a remote VM per run and `run_in:
+  container` a Docker or Podman container on the engine host; `run_in: direct`
+  is a process tree running **as the engine's own user on the engine host**,
+  which isolates each box's state and not the host — it can read what that
+  user can. Use `direct` on a workstation or a dedicated VM, never where the
+  work is untrusted. Treat anything you inject into a sandbox (tokens in
+  `role.sandbox.env`) as visible to the code that runs there. See
+  [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).

@@ -44,7 +44,7 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, NumberCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import type { PageContainer, PageSummary } from "~/protocol/index.ts";
+import { isLogRefusal, type PageContainer, type PageSummary } from "~/protocol/index.ts";
 // THE BROWSE'S OWN SPELLING of a page's address and of a link that peeks,
 // rather than a second one here: a hit, a grid row and a container's page list
 // must resolve to the same `peek=` token, or the stepper walks past the page
@@ -521,7 +521,10 @@ export function ContainerPeek({ id }: { id: string }) {
   // node still catching up, and to a read that simply had not come back.
   const unitsWithheld =
     doc.error === "unauthorized"
-      ? needsSentence("Reading who files here", doc.refusal?.grants ?? [])
+      ? needsSentence(
+          "Reading who files here",
+          doc.refusal && !isLogRefusal(doc.refusal) ? doc.refusal.grants : [],
+        )
       : doc.error
         ? "The company document could not be read just now"
         : "The company document has not answered yet";

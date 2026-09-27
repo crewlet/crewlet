@@ -505,8 +505,24 @@ const (
 
 // attempt publishes once and reads the answer.
 func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64, gen uint32, round int) (Result, disposition, error) {
-	seq, _, err := p.append(ctx, req, snap, expect)
-	switch f, detail := classify(err); f {
+	// FENCE 0 AGAIN, because a round is not free of it: a write that has
+	// spent fifteen rounds losing races has been running for as long as
+	// those races took, and the eviction it must not publish under may
+	// have landed inside that window.
+	//
+	// ITS REFUSAL IS RETURNED, NEVER CLASSIFIED. It used to be raised from
+	// inside the append, and the append's error went through [classify],
+	// which read an eviction as an append nobody answered: the subject was
+	// probed, nothing of this write's was found, the round re-decided and
+	// met the same refusal — sixteen times, until the caller was told the
+	// rows kept changing under a write a removed node had refused itself.
+	if err := p.checkEvicted(ctx); err != nil {
+		return Result{Rounds: round}, dispDone, err
+	}
+	seq, _, err := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect,
+		snap.Decision.Payload)
+	f, detail := classify(err)
+	switch f {
 	case faultNone:
 		at := Position{Stream: p.stream, Generation: gen, Seq: seq}
 		if err := at.Valid(); err != nil {
@@ -533,6 +549,30 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 			OpID: req.OpID,
 		}
 
+	case faultTooLarge:
+		return Result{Rounds: round}, dispDone, &Unavailable{
+			Reason: ReasonRecordTooLarge,
+			// THE RECORD'S OWN SIZE, which the publisher alone knows
+			// before the signature is added, beside the limit that
+			// refused it and what moves that limit — [classify] names
+			// which of the three it was. Nothing about the log's ceiling
+			// is involved, so neither the ceiling nor the trim is named:
+			// that remedy was what this refusal used to carry.
+			Detail: fmt.Sprintf("the record is %d bytes before its signature and "+
+				"no retry places it, here or on any node: %s",
+				len(snap.Decision.Payload), detail),
+			OpID: req.OpID,
+		}
+
+	case faultRefused:
+		return Result{Rounds: round}, dispDone, &Unavailable{
+			Reason: ReasonBrokerRefused,
+			Detail: fmt.Sprintf("the broker refused to store the record (%s) — a "+
+				"refusal this build has no remedy for, so the broker's own words "+
+				"are the one to act on, and asking again changes nothing", detail),
+			OpID: req.OpID,
+		}
+
 	case faultUnknown:
 		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
 		res.Rounds = round
@@ -543,12 +583,47 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		// there is no rejection to discriminate: take a fresh snapshot.
 		return Result{Rounds: round}, dispRetake, nil
 
-	default:
+	case faultUnsettled:
+		// THE BROKER SAID THIS OPERATION'S RECORD MAY YET LAND — its own
+		// record in flight under this op id, or a store closed under an
+		// entry raft had committed. Resolved exactly as an unanswered
+		// append is, because the record may already be visible and then
+		// the ledger answers for it.
+		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
+		res.Rounds = round
+		if err != nil || res.Outcome != "" {
+			return res, dispDone, err
+		}
+		// AND NEVER A RETAKE, which is the one difference from the arm
+		// above. There a probe finding nothing of this write's means
+		// nothing landed; here the broker has just said a record under
+		// this op id is committed or about to be, so a fresh snapshot
+		// would decide against a state about to hold this very write —
+		// a create would be told its own record already exists. Nor a
+		// refusal, which is what this was: "asking again changes
+		// nothing" about a record that applied a moment later, and a
+		// caller that re-filed under a fresh op id wrote it twice. The
+		// only safe retry is the same op id, and that one gets the
+		// broker's duplicate acknowledgement once the record lands.
+		p.logger.Warn("statelog_publish_unsettled",
+			"domain", p.domain.Name(), "subject", p.subjectOf(req.Subject),
+			"op_id", req.OpID, "publish_error", detail)
+		return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round},
+			dispDone, nil
+
+	case faultRejected:
 		p.count(metrics.StatelogPublishRejections, metrics.Attrs{
 			"domain": p.domain.Name(), "subject_kind": req.Subject.Kind,
 		})
 		return Result{Rounds: round}, dispRejected, nil
 	}
+	// UNREACHABLE while every fault has an arm above, and refused rather
+	// than defaulted when a new one does not: a default arm here was the
+	// rejection path, so a fault added without one would have been sent
+	// to the discriminator as a lost race and retried for every round.
+	return Result{Rounds: round}, dispDone, fmt.Errorf("statelog: a publish to %s "+
+		"ended in fault %d, which this build does not classify: %s", req.Subject,
+		f, detail)
 }
 
 // refuseFromSnapshot is every refusal a committed snapshot settles on its
@@ -918,19 +993,6 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	return Result{}, nil
 }
 
-// append publishes one record, stamping the framework's own fields onto the
-// envelope the domain decided.
-func (p *Publisher) append(ctx context.Context, req Request, snap Snap, expect *uint64) (uint64, bool, error) {
-	// FENCE 0 AGAIN, because a round is not free of it: a write that has
-	// spent fifteen rounds losing races has been running for as long as
-	// those races took, and the eviction it must not publish under may
-	// have landed inside that window.
-	if err := p.checkEvicted(ctx); err != nil {
-		return 0, false, err
-	}
-	return p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
-}
-
 // checkEvicted is fence 0.
 func (p *Publisher) checkEvicted(ctx context.Context) error {
 	evicted, err := p.fence.Evicted(ctx)
@@ -941,9 +1003,18 @@ func (p *Publisher) checkEvicted(ctx context.Context) error {
 		// eviction either, and the reason says which: this one clears
 		// when the state is read again, and a caller is told to come
 		// back rather than to give up on this node.
+		//
+		// AND THE STORE'S OWN WORDS GO TO THE LOG, never onto the
+		// detail: every surface sends a refusal's detail to the caller,
+		// and the read's error is a driver's message or a database
+		// path — see [Reader.scopeUnread].
+		p.logger.Warn("statelog_eviction_unread", "domain", p.domain.Name(),
+			"error", err.Error())
 		return &Unavailable{
 			Reason: ReasonEvictionUnknown,
-			Detail: fmt.Sprintf("this node's own eviction state could not be read: %v", err),
+			Detail: "this node's own eviction state could not be read from its " +
+				"store, and publishing under an eviction nobody can see produces " +
+				"records every node drops — the reason is in this node's log",
 		}
 	}
 	if evicted {

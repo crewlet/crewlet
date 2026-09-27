@@ -36,7 +36,7 @@ subcommand below is served by it.
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
 | `crewlet config diff <UUID> [-against <UUID\|active>]` | Structural diff of two revisions — paths and values, always redacted on both sides |
 | `crewlet config activate <UUID>` | Re-point the fleet at a revision; re-activating the current one mints a new epoch, which is how a rotated secret takes effect |
-| `crewlet config seal` | Encrypt the active revision as one document under the Tier A keyring (one-time migration off plaintext-at-rest) — see [Secrets](../concepts/configuration.md#secrets) |
+| `crewlet config seal` | Encrypt a plaintext active revision an older build left as one document under the Tier A keyring — every other reader refuses it — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [-dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
 | `crewlet config scrub [<UUID>] [-dry-run]` | Erase personal data from superseded revisions — the one-time cleanup of an archive written before the org chart left the document |
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
@@ -66,7 +66,7 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
@@ -144,7 +144,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers — and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. Roles also decide which [state-log domains the node applies](../guides/satellite-nodes.md#which-state-log-domains-the-node-runs): the identity estate only with `ingress` or `workers`, so a `seats`-only node replicates no people, credentials or sessions; [`crewlet validate`](#crewlet-validate) prints the set before the node boots. See [Running a Fleet](../guides/fleet.md). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying `api.auth.max_grants` and no more. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run".
@@ -396,7 +396,9 @@ Re-points the fleet at a revision. Every node applies it on its next reconcile.
 crewlet config seal [-config PATH]
 ```
 
-Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest. `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already sealed. Requires a keyring in `crewlet.yaml` (`crewlet secrets keygen`), and says so if there is none.
+Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest for a store an older build wrote before the keyring was required. It is the **one** reader of a plaintext revision: every other refuses one, because an unsealed document is one anything that reaches the store could have written, and the seal is what authenticates a revision a node fetches from its peers. `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already sealed.
+
+It seals the **active** revision and nothing else, so a refusal names it only where it applies. A reader of the active revision (`show`, `import`, a boot, and the boot's publish of a revision the fleet has no pointer for, which is refused rather than published) names this command. A **superseded** plaintext revision is sealed in place by nothing: `export` and `diff` refuse it as one that can be neither shown nor compared, and name the way to have its document again, which is importing it from your own copy.
 
 Like `import`, this writes the revision to **this node's** store; the note it prints says what publishes it to a running fleet.
 
@@ -528,14 +530,14 @@ variable at all.
 | `unlink ID` | Take the provider link back: their provider sign-in resolves to nobody from then on |
 | `grant ID` | Change what somebody carries: `-grants`, `-colleague` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way |
-| `remove ID` | Tombstone them and destroy their key, which makes their name and address unrecoverable everywhere |
+| `remove ID` | Tombstone them and destroy their key, which makes their name and address unreadable on the log, on every node and in every `crewlet backup` taken from then on. A backup taken **before** the removal still holds the key, so it goes on opening them until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody destroys a key, not a row](../concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row) |
 | `revoke ID` | End every session and token they hold, by bumping their revocation epoch |
 | `sessions ID` | Their sessions, newest first, ended ones included |
 | `credentials` | What somebody proves themselves with. `-person` names them; without it, yourself |
 | `token` | Mint a machine token, naming exactly one owner. **`-login L` mints your own**: a person's token is theirs alone to mint, so the command signs in as `L` for the one request — the password read from the terminal without echo, or the first line piped in, and a second-factor code — when your account holds one — asked for the same way, or piped as the line after it — mints from that session, and signs out, reading no `CREWLET_API_TOKEN`. A deployment that signs in only through an identity provider has no password route, so this cannot sign in there: the mint is `POST /iam/credentials` from a session the provider's round trip opened in a browser. **`-person ID` mints a service account's**, and takes `people:manage`; it is refused for a person's id, whoever asks. Either way the value is printed **once** and the estate holds a hash. It acts as that owner, carrying `-grants` (default: everything the owner holds a token may carry) cut to what they still hold on every request, reaching the work at `-colleague` or narrower, for `-days` (90, at most 365). Never `secrets:read` or `people:manage`. See [Machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts) |
 | `revoke-credential ID` | Withdraw one credential, naming its owner with `-person`. Run with a machine token, it withdraws machine tokens only |
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
-| `invalidate-all` | Invalidate every session and every machine token in the company. The restore runbook's last step, and the token takes `fleet:operate` **and** `people:manage`; the Tier A tokens in the config file are untouched |
+| `invalidate-all` | Invalidate every session and every machine token in the company. The restore runbook's last step — it ends bearers and nothing else, so a removal, a suspension, a withdrawn credential or a reduced grant the restore rolled back is re-applied by hand before it ([Backups & Restore](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)) — and the token takes `fleet:operate` **and** `people:manage`; the Tier A tokens in the config file are untouched |
 | `bootstrap-code` | Re-issue the one-time founder code. Withdraws every live code and ends a founding in progress in the one gesture the new code is minted in, so where that lands it is the one code that works, and prints the file's path **and the node** it is on — on a fleet that is whichever node served the command. The code lasts 24 hours. Refused (`409 bootstrap_closed`) once anybody is enrolled; where `api.auth.bootstrap` is closed the node serves no such route and answers `404 not_found` saying so |
 | `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat removed, tombstoned, turned into an agent seat, or not yet applied on this node), grants this node's ceiling clamps, duplicated and orphaned claims, removed people whose key still lives. A binding this node's chart cannot judge — its applier past the 60-second stall grace — is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
 | `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit`. The actor column names the credential beside them where the entry records one — `ana.admin (through pat:…)` for something their machine token did |
@@ -598,7 +600,7 @@ repairs: each finding is somebody's decision.
 | `grant_clamped_by_ceiling` | A grant somebody's row declares and this node's `api.auth.max_grants` withholds | Legal while a fleet rolls out a ceiling change; otherwise align the row and the ceiling |
 | `claim_duplicated` | An address, a login or a seat more than one person holds. `WHO` is the claim and every holder; an address is named by its kind alone, because the report carries no form of it | Decide who keeps it, and release it from the others |
 | `claim_orphaned` | Claims an enrolment took before it stopped, held for over an hour by nobody who can use them | `remove` the id, which releases them |
-| `removal_key_live` | Somebody removed whose key still exists, so their name and address are readable from every backup taken before the removal | Nothing — the key duty retries every fifteen minutes; a finding that stands says the company's secret store is refusing the delete |
+| `removal_key_live` | Somebody removed whose key still exists, so their name and address can still be opened wherever their ciphertext is — the log, every donated snapshot, every backup — and not only from a backup taken before the removal | Nothing — the key duty retries every fifteen minutes; a finding that stands says the company's secret store is refusing the delete |
 | `key_unowned` | A key no person, reservation, invitation or removal owns, over an hour old: minted for an enrolment or an invitation refused after the mint, or left by an invitation the sweep collected. `WHO` is the id it was minted for | Nothing — the key duty destroys it on its next pass; a finding that stands says the company's secret store is refusing the delete |
 
 A duplicate cannot come from ordinary traffic — the broker arbitrates every
@@ -648,7 +650,7 @@ A running engine picks the new value up at its next config activation or restart
 crewlet secrets list [-config PATH] [-api URL]
 ```
 
-Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, who wrote it — with the credential beside them where one made the write and names something they do not (`jane.doe (through pat:…)`) — and source. It names the store it read first, because a stopped node's own empty table and a fleet with nothing in it look identical otherwise. **Never** prints a value — the listing drops the envelope on the way out and the route behind it has no value field at all. Works without a keyring on the fleet's store, so an operator locked out of the key can still take inventory.
+Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, who wrote it — with the credential beside them where one made the write and names something they do not (`jane.doe (through pat:…)`) — and source. It names the store it read first, because a stopped node's own empty table and a fleet with nothing in it look identical otherwise. **Never** prints a value — the listing drops the envelope on the way out and the route behind it has no value field at all. It never opens a value, so a row sealed under a key this keyring no longer holds — one dropped before its rekey finished — still lists, and an operator locked out of that key can still take inventory.
 
 The engine's own keys — each person's data key, each provider session's refresh token, the identity directory's blind-index key — share the store and are **counted, never named**, on a line after the table. No `crewlet secrets` command reads, writes or removes one: `get`, `set` and `unset` refuse a name in the engine's namespace (`iam/…`) before they open anything, and the node refuses it again with `403 reserved_name`. Remove a person with `crewlet iam remove`, end their sessions with `crewlet iam revoke`. See [the secret store](../concepts/secret-store.md#the-engines-own-keys-share-the-bucket-and-never-the-namespace).
 
@@ -722,10 +724,28 @@ hold their work until a provider is added (see
 | `-json` | Emit a machine-readable result on stdout instead of prose. |
 | `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
+**A Tier A document also says which state-log domains it makes a node
+apply**, because `node.roles` decides that and nothing else shows it until the
+node boots: a `seats`-only node runs no identity estate (see
+[Which state-log domains the node runs](../guides/satellite-nodes.md#which-state-log-domains-the-node-runs)).
+The prose summary ends with it —
+
+```
+crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats], domains [tracker vectors pages chart]
+```
+
+— and so does the two-tier form's line, after the company's seats and
+providers.
+
 With `-json`, the payload is `{"valid": bool, "tier": str, "file": str,
-"problems": [...], "warnings": [...], "summary": {...}}`. Each problem is
-located and classified, so an editor, CI job, or [AI authoring
-loop](../getting-started/ai-authoring.md) can fix everything in one pass:
+"problems": [...], "warnings": [...], "summary": {...}}`. `summary` is what the
+document resolved to: a Tier B file's `company`, `seats` and `llm_providers`;
+a Tier A file's `stream`, `coordination`, `store`, `roles` and `domains`; and
+for the two-tier form the company's three beside `stream`, `coordination` and
+`domains`. `summary.domains` is always a list, in the order the engine reports
+domains everywhere else. Each problem is located and classified, so an editor,
+CI job, or [AI authoring loop](../getting-started/ai-authoring.md) can fix
+everything in one pass:
 
 ```json
 {

@@ -3,10 +3,10 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +16,12 @@ import (
 )
 
 // hostCommand is one command to run on the engine host.
+//
+// Its env is the child's WHOLE environment and it is REQUIRED: [runHost]
+// refuses a nil one, because os/exec reads a nil Cmd.Env as "inherit the
+// engine's" — the keyring, the Tier A tokens and every credential the engine
+// was started with. A box's own command carries [directBox.childEnv]; a
+// command for the container runtime's CLI is built by [containerCLI.command].
 type hostCommand struct {
 	argv    []string
 	cwd     string
@@ -55,23 +61,48 @@ func (c *capture) String() string {
 	return string(c.buf)
 }
 
-// flattenEnv renders an env map as os/exec's KEY=value slice.
+// containerCLI is the container runtime's own CLI as this backend drives it:
+// the binary [ResolveContainerRuntime] picked, and the variables an operator
+// DECLARED for it in providers.sandbox.local.runtime_env, already resolved.
 //
-// Sorted, so a spawn is reproducible and a test can assert on it; nil for an
-// empty map, which is os/exec's "inherit the parent" — a distinction the
-// callers here rely on being explicit, since inheriting the ENGINE's
-// environment is exactly what the allowlist exists to prevent. Every caller
-// passes a populated map.
-func flattenEnv(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
+// A VALUE every runtime call is built from rather than a binary path each call
+// site pairs with an environment it remembers: every one of these was a
+// hostCommand with no environment at all, which os/exec filled with the
+// engine's, so the runtime's CLI — and every plugin and credential helper it
+// runs — was handed the keyring and the Tier A tokens.
+type containerCLI struct {
+	path     string
+	declared map[string]string
+}
+
+// command is one control command for the runtime's CLI — `run`, `exec`,
+// `pause`, `rm`, `ps`, `info` — its arguments following the binary.
+//
+// ITS ENVIRONMENT IS [hostbox.ContainerRuntime] WITH THE DECLARED VARIABLES
+// OVER IT. Not the engine's, for the reason no child gets that (see
+// [hostbox]); and not the fixed rule alone either, because what a runtime's
+// helpers legitimately read is not a list anybody can close — the credential
+// helper that pulls the image from a private registry wants its cloud's role,
+// profile or key file (docker-credential-ecr-login, docker-credential-gcr),
+// and a plugin its own settings — and a fixed list with no
+// way to add to it leaves an operator whose runtime needs one of those with
+// no way to say so. The declared layer wins over the fixed one, because a
+// value an operator wrote down for this CLI is a decision and the host's is a
+// default.
+//
+// The run environment a coding agent gets is NOT here: it travels as an
+// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds
+// is what the runtime needs and nothing a box does. A bare `-e NAME` in
+// `local.run_args` therefore copies only a name this environment carries,
+// which is what the configuration's advisory about one says.
+func (c containerCLI) command(timeout time.Duration, args ...string) hostCommand {
+	env := hostbox.ContainerRuntime()
+	maps.Copy(env, c.declared)
+	return hostCommand{
+		argv:    append([]string{c.path}, args...),
+		env:     env,
+		timeout: timeout,
 	}
-	out := make([]string, 0, len(env))
-	for key, value := range env {
-		out = append(out, key+"="+value)
-	}
-	slices.Sort(out)
-	return out
 }
 
 // ---------------------------------------------------------------------
@@ -101,8 +132,9 @@ func (b *directBox) Home() string { return b.layout.root }
 // env.
 //
 // Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
-// environment holds the org's chat token, its database DSN and possibly a
-// metered API key, none of which the coding agent has any business reading.
+// environment holds the org's chat token, its collector credential
+// (OTEL_EXPORTER_OTLP_HEADERS) and possibly a metered API key, none of which
+// the coding agent has any business reading.
 // The run env is what config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
@@ -180,7 +212,7 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	// return.
 	proc := exec.Command("/bin/sh", "-c", cmd) //nolint:noctx // deliberate; see above
 	proc.Dir = dir
-	proc.Env = flattenEnv(b.childEnv(opts.Env))
+	proc.Env = hostbox.Environ(b.childEnv(opts.Env))
 	procgroup.Detach(proc)
 	// nil stdio is os/exec's /dev/null, which is what we want: nothing reads
 	// these, and a pipe nobody drains would block the agent on a full buffer.
@@ -396,7 +428,7 @@ func (b *directBox) Close(ctx context.Context) error {
 // side of the mount — no copy round trip through the runtime.
 type containerBox struct {
 	layout      boxLayout
-	runtime     string
+	cli         containerCLI
 	container   string
 	env         map[string]string
 	credentials map[string]string
@@ -468,7 +500,7 @@ func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 	// represented are dropped LOUDLY rather than silently truncated into a
 	// different env.
 	var lines []string
-	for _, assignment := range flattenEnv(merged) {
+	for _, assignment := range hostbox.Environ(merged) {
 		key, value, _ := strings.Cut(assignment, "=")
 		if strings.ContainsAny(value, "\n\r") {
 			localLog.Warn("local_sandbox_env_var_unrepresentable", "sandbox_id", b.layout.id, "var", key)
@@ -491,24 +523,22 @@ func (b *containerBox) execArgv(cmd string, opts ExecOptions) ([]string, error) 
 	if cwd == "" {
 		cwd = b.workdir()
 	}
-	argv := []string{b.runtime, "exec", "-w", cwd}
+	args := []string{"exec", "-w", cwd}
 	envArgs, err := b.envArgs(opts.Env)
 	if err != nil {
 		return nil, err
 	}
-	argv = append(argv, envArgs...)
-	return append(argv, b.container, "/bin/sh", "-c", cmd), nil
+	args = append(args, envArgs...)
+	return append(args, b.container, "/bin/sh", "-c", cmd), nil
 }
 
 func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
-	argv, err := b.execArgv(cmd, opts)
+	args, err := b.execArgv(cmd, opts)
 	if err != nil {
 		return ExecResult{}, err
 	}
-	return runHost(ctx, hostCommand{
-		argv:    argv,
-		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
-	})
+	return runHost(ctx, b.cli.command(
+		time.Duration(opts.TimeoutSec*float64(time.Second)), args...))
 }
 
 // StartBackground backgrounds the job inside the container and echoes its pid.
@@ -523,11 +553,11 @@ func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (
 // Direct mode does not need this: it spawns the job itself with its own
 // session, which gets both properties without a shell trick.
 func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error) {
-	argv, err := b.execArgv(cmd+" & echo $!", opts)
+	args, err := b.execArgv(cmd+" & echo $!", opts)
 	if err != nil {
 		return "", err
 	}
-	result, err := runHost(ctx, hostCommand{argv: argv})
+	result, err := runHost(ctx, b.cli.command(0, args...))
 	if err != nil {
 		return "", err
 	}
@@ -603,7 +633,7 @@ func (b *containerBox) SetTimeout(ctx context.Context, seconds float64) error {
 }
 
 func (b *containerBox) Pause(ctx context.Context) error {
-	result, err := runHost(ctx, hostCommand{argv: []string{b.runtime, "pause", b.container}})
+	result, err := runHost(ctx, b.cli.command(0, "pause", b.container))
 	if err != nil || result.ExitCode != 0 {
 		detail := strings.TrimSpace(result.Stderr)
 		if err != nil {
@@ -618,16 +648,15 @@ func (b *containerBox) Pause(ctx context.Context) error {
 // container reports an error we ignore, which keeps Connect a single
 // unconditional call.
 func (b *containerBox) unpause(ctx context.Context) {
-	_, _ = runHost(ctx, hostCommand{argv: []string{b.runtime, "unpause", b.container}})
+	_, _ = runHost(ctx, b.cli.command(0, "unpause", b.container))
 }
 
 func (b *containerBox) Close(ctx context.Context) error {
 	// A removal that failed LEAKS a container on the engine host, which is
 	// the one outcome here an operator has to be able to see: nothing else
 	// in the teardown path will mention it again.
-	if res, err := runHost(ctx, hostCommand{
-		argv: []string{b.runtime, "rm", "-f", b.container},
-	}); err != nil || res.ExitCode != 0 {
+	if res, err := runHost(ctx, b.cli.command(0, "rm", "-f", b.container)); err != nil ||
+		res.ExitCode != 0 {
 		localLog.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
 			"container", b.container, "exit", res.ExitCode,
 			"stderr", strings.TrimSpace(res.Stderr))

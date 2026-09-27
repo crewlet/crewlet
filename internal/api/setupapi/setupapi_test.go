@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -122,6 +121,9 @@ type surface struct {
 	vault   *vault
 	company func() (*config.Company, *org.Organization)
 	configs *store.Configs
+	// cipher is the keyring the config surface seals under, which a
+	// revision the case plants is sealed under too.
+	cipher secrets.Cipher
 	// status is the fleet row every write on this surface records to.
 	status *statusStore
 	// seats is the org chart's half: a seat's own document, which the
@@ -157,22 +159,25 @@ func newSurfaceWithNoExternalURL(t *testing.T) *surface {
 	return newSurfaceWithApps(t, nil, "")
 }
 
-// newConfigSurface is the config write path over a store of the test's own.
-func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB) {
+// newConfigSurface is the config write path over a store of the test's own,
+// sealing under a keyring of its own — which it returns, because a revision
+// the case plants has to be sealed under it to be read back.
+func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB, secrets.Cipher) {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	cipher := testCipher(t)
 	cfg, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(),
+		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
 		Now: func() time.Time { return pinned },
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}
-	return cfg, db
+	return cfg, db, cipher
 }
 
 // newService builds the service over whatever a case names, filling each
@@ -194,7 +199,7 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 		opts.Company = companySource(t, nil)
 	}
 	if opts.Config == nil {
-		opts.Config, _ = newConfigSurface(t)
+		opts.Config, _, _ = newConfigSurface(t)
 	}
 	if opts.Secrets == nil {
 		opts.Secrets = v
@@ -241,7 +246,7 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 // GitHub App refused. The constructor is where it has to surface.
 func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
-	cfg, _ := newConfigSurface(t)
+	cfg, _, _ := newConfigSurface(t)
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
@@ -292,10 +297,10 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 // not running, or seats that have not come up.
 func newSurfaceWithApps(t *testing.T, apps map[string]string, externalBase string) *surface {
 	t.Helper()
-	cfg, db := newConfigSurface(t)
+	cfg, db, cipher := newConfigSurface(t)
 	v := &vault{}
 	s := &surface{
-		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
+		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(), cipher: cipher,
 		status: &statusStore{}, seats: &seatStore{}, externalBase: externalBase,
 	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
@@ -389,14 +394,19 @@ func (s *surface) seed(t *testing.T) {
 	s.seedDocument(t, companyDoc)
 }
 
-// seedDocument stores one document as the active revision.
+// seedDocument stores one document as the active revision, sealed as every
+// writer stores one.
 func (s *surface) seedDocument(t *testing.T, document string) {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(document))
 	if err != nil {
 		t.Fatalf("parse the fixture: %v", err)
 	}
-	payload, err := json.Marshal(cfg)
+	stored, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := secrets.Seal(s.cipher, stored)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -983,6 +993,18 @@ func (s *surface) withPass(
 	t *testing.T, passes ...*recordingPass,
 ) (*statusStore, *setup.Runner) {
 	t.Helper()
+	return s.withPassSink(t, func(by iam.Actor) (provision.TokenSink, error) {
+		return provision.NewSecretStoreSink(sinkStore{s.vault}, authorOf(by)), nil
+	}, passes...)
+}
+
+// withPassSink is [surface.withPass] with the sink factory a writing pass is
+// handed, for the case about one that cannot be built.
+func (s *surface) withPassSink(
+	t *testing.T, sink func(iam.Actor) (provision.TokenSink, error),
+	passes ...*recordingPass,
+) (*statusStore, *setup.Runner) {
+	t.Helper()
 	status := &statusStore{}
 	wired := make([]setup.Pass, 0, len(passes))
 	for _, pass := range passes {
@@ -993,11 +1015,9 @@ func (s *surface) withPass(
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: s.config, Secrets: s.vault,
-		Resolve: s.vault.get,
-		Passes:  runner,
-		Sink: func(by iam.Actor) (provision.TokenSink, error) {
-			return provision.NewSecretStoreSink(sinkStore{s.vault}, authorOf(by)), nil
-		},
+		Resolve:      s.vault.get,
+		Passes:       runner,
+		Sink:         sink,
 		Status:       status,
 		Now:          func() time.Time { return pinned },
 		ExternalBase: s.externalBase,
@@ -1084,6 +1104,38 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 	// And the outcome landed on the fleet row the loop reads.
 	if _, ok := status.get(integration.KindGitHub); !ok {
 		t.Error("the pass wrote no status, so the screen would not update")
+	}
+}
+
+// A SINK THAT CANNOT BE BUILT IS THIS NODE'S FAULT, AND THE PASS NEVER STARTS.
+//
+// It was answered as a deployment's posture — 503 no_keyring, "run crewlet
+// secrets keygen" — for a node with no keyring. Every node holds the keyring
+// a sink seals under now, so the only way to get here is a process assembled
+// without its secret store: a fault no wait and no setting clears, and one a
+// pass must not start over, because what it mints would have nowhere to go.
+func TestAProvisionPassWhoseSinkCannotBeBuiltIsAFault(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	status, _ := s.withPassSink(t, func(iam.Actor) (provision.TokenSink, error) {
+		return nil, errors.New("engine: no company secret store")
+	}, pass)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", res.Code, res.Body)
+	}
+	if code := decode(t, res)["error"]; code != "internal_error" {
+		t.Errorf("error = %v, want internal_error", code)
+	}
+	if _, calls := pass.last(); calls != 0 {
+		t.Errorf("the pass ran %d times with nowhere to seal what it mints", calls)
+	}
+	if _, ok := status.get(integration.KindGitHub); ok {
+		t.Error("a pass that never started recorded a status")
 	}
 }
 
@@ -1702,33 +1754,6 @@ func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
 	want := []string{"DATADOG_API_KEY", "DATADOG_APP_KEY", "DATADOG_WEBHOOK_TOKEN"}
 	if got := orphansOf(orphans); !slices.Equal(got, want) {
 		t.Fatalf("orphaned = %v, want only the secrets that were actually stored", got)
-	}
-}
-
-// A MISSING KEYRING SAYS SO, rather than internal_error.
-//
-// A node whose bootstrap names no key fails at the seal with
-// secrets.ErrNoKeyring, a sentinel that exists to be recognised. It once fell
-// through to the generic case, so a screen that could have said "set
-// secrets.keys" said internal_error and left an operator reading engine logs
-// to find a one-line fix.
-func TestASealWithNoKeyringSaysWhatToSet(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	s.seed(t)
-	s.vault.fail = fmt.Errorf("setup: seal DATADOG_APP_KEY: %w", secrets.ErrNoKeyring)
-
-	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
-		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
-	if res.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503: %s", res.Code, res.Body)
-	}
-	body := decode(t, res)
-	if body["error"] != "no_keyring" {
-		t.Fatalf("error = %v, want no_keyring", body["error"])
-	}
-	if hint, _ := body["hint"].(string); !strings.Contains(hint, "secrets.keys") {
-		t.Errorf("hint = %q, want it to name what to set", hint)
 	}
 }
 

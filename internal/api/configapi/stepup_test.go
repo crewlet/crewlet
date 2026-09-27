@@ -27,7 +27,7 @@ import (
 // surface to having mounted each on the right one.
 func TestAConfigurationWriteAsksForARecentProof(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	proof := time.Now().Add(-2 * time.Hour)
 	stale := iam.Principal{ID: uuid.New(), Login: "jane.doe",
 		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: iam.AllGrants,

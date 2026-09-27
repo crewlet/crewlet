@@ -2036,6 +2036,181 @@ func TestTheArbitrationAnchorsAreSwept(t *testing.T) {
 	}
 }
 
+// THE ANCHOR SWEEP DRAINS A BACKLOG IN BATCHES, EACH ITS OWN TRANSACTION.
+//
+// Anchors are one row per arbitrated subject, so the first sweep after a trim
+// moves the floor past a busy month has the whole month's subjects to shed —
+// and the applier's connection is pinned to the same file, so one unbounded
+// DELETE holds the writer it is queued behind for as long as that takes. The
+// sweep is batched for that reason, and both ways of getting the loop wrong
+// look like a working sweep on a small table: an unbounded statement deletes
+// the right rows in one transaction, and a loop that stops after its first
+// batch leaves everything past [statelog.OpsPurgeBatch] behind. So the backlog
+// here is wider than one batch, the rows above the floor and another log's
+// rows below it must survive, and the transactions are COUNTED.
+func TestTheAnchorSweepIsBatched(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	below := statelog.OpsPurgeBatch + 7
+	at := func(stream string, seq uint64) int64 {
+		return statelog.Position{Stream: stream, Generation: 1, Seq: seq}.Packed()
+	}
+	floor := statelog.Position{Stream: probeStream, Generation: 1, Seq: uint64(below) + 1}
+	const above, elsewhere = 5, 3
+	// Written directly: publishing enough records to cross a batch is a
+	// minute of broker round trips to test one loop.
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		insert := func(stream, subject string, anchor int64) error {
+			_, err := tx.ExecContext(t.Context(), `
+				INSERT INTO statelog_anchor (stream, subject, anchor)
+				VALUES (?, ?, ?)`, stream, subject, anchor)
+			return err
+		}
+		for i := range below {
+			if err := insert(probeStream, fmt.Sprintf("%s.object.b%d", probePrefix, i),
+				at(probeStream, uint64(i)+1)); err != nil {
+				return err
+			}
+		}
+		for i := range above {
+			if err := insert(probeStream, fmt.Sprintf("%s.object.a%d", probePrefix, i),
+				at(probeStream, floor.Seq+uint64(i))); err != nil {
+				return err
+			}
+		}
+		// ANOTHER LOG'S ANCHORS, below this floor's sequence: a floor is a
+		// position in ONE log, and a sweep that forgot the stream would
+		// take them with it.
+		for i := range elsewhere {
+			if err := insert("CREWLET_OTHER_LOG", fmt.Sprintf("other.object.%d", i),
+				at("CREWLET_OTHER_LOG", 1)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed the anchors: %v", err)
+	}
+
+	estate := &countingEstate{Estate: h.db.Replicated()}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain:     probeDomain{},
+		Verifier:   testVerifier(t, probeDomain{}),
+		Applier:    newProbeApplier(),
+		Fetch:      newProbeFetch(),
+		DB:         estate,
+		Generation: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	estate.reset()
+
+	swept, err := runner.PurgeAnchors(t.Context(), floor)
+	if err != nil {
+		t.Fatalf("PurgeAnchors: %v", err)
+	}
+	if swept != int64(below) {
+		t.Errorf("the sweep took %d of the %d anchors below the floor — a loop "+
+			"that stops at its first batch leaves the backlog behind", swept, below)
+	}
+	// TWO BATCHES, each its own transaction and neither past the batch:
+	// one full and one short, and the short one ends the loop. A transaction
+	// that removed more is a statement over the whole backlog, holding the
+	// applier's writer for all of it.
+	removed := estate.removed()
+	if want := below/statelog.OpsPurgeBatch + 1; len(removed) != want {
+		t.Errorf("the sweep of %d anchors ran %d write transaction(s) %v, want %d",
+			below, len(removed), removed, want)
+	}
+	for i, n := range removed {
+		if n > statelog.OpsPurgeBatch {
+			t.Errorf("write transaction %d removed %d anchors, past the batch of %d "+
+				"— one statement over the backlog holds the writer the applier is "+
+				"queued behind", i, n, statelog.OpsPurgeBatch)
+		}
+	}
+
+	counts := map[string]int{}
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT stream, COUNT(*) FROM statelog_anchor GROUP BY stream`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var stream string
+			var n int
+			if err := rows.Scan(&stream, &n); err != nil {
+				return err
+			}
+			counts[stream] = n
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("count what is left: %v", err)
+	}
+	if counts[probeStream] != above {
+		t.Errorf("%d of this log's anchors survive, want the %d at or above the "+
+			"floor — they are what the next writer's expectation is formed from",
+			counts[probeStream], above)
+	}
+	if counts["CREWLET_OTHER_LOG"] != elsewhere {
+		t.Errorf("%d of another log's %d anchors survive a sweep of this one",
+			counts["CREWLET_OTHER_LOG"], elsewhere)
+	}
+}
+
+// countingEstate records how many anchors each write transaction run through
+// it removed, which is the one thing that tells a batched sweep from a single
+// statement deleting the same rows. The count is read around the transaction
+// rather than inside it, so what it measures is what committed.
+type countingEstate struct {
+	statelog.Estate
+	mu    sync.Mutex
+	after []int
+}
+
+func (e *countingEstate) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	before, err := e.anchors(ctx)
+	if err != nil {
+		return err
+	}
+	if err := e.Estate.Tx(ctx, fn); err != nil {
+		return err
+	}
+	after, err := e.anchors(ctx)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.after = append(e.after, before-after)
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *countingEstate) anchors(ctx context.Context) (int, error) {
+	var n int
+	err := e.Estate.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM statelog_anchor`).Scan(&n)
+	})
+	return n, err
+}
+
+func (e *countingEstate) reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.after = nil
+}
+
+// removed is how many anchors each write transaction removed, in order.
+func (e *countingEstate) removed() []int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]int(nil), e.after...)
+}
+
 // ONE SUBJECT KIND'S LEDGER ROWS CAN BE SWEPT ON THEIR OWN HORIZON — and only
 // that kind's.
 //

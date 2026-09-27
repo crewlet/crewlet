@@ -101,12 +101,13 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 // twice — it resembled nothing the engine hands a CLI, and a fresh HOME
 // isolates a credential FILE while doing nothing about an exported one, so on
 // any machine with a vendor key in the environment the case signed in and
-// `say hello` became a real, billed completion. Re-composing hostAllowlist and
-// HOME by hand fixed that and left the SAME shape of bug one layer in: each
-// case then named the one or two profile variables it remembered, so a profile
-// declaring a third had a test running a call the engine never makes. kimi-code
-// declares KIMI_CODE_NO_AUTO_UPDATE, KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE
-// and KIMI_LOOP_MAX_ATTEMPTS_PER_STEP; the case carried none of them, so it
+// `say hello` became a real, billed completion. Re-composing the host
+// allowlist and HOME by hand fixed that and left the SAME shape of bug one
+// layer in: each case then named the one or two profile variables it
+// remembered, so a profile declaring a third had a test running a call the
+// engine never makes. kimi-code declares KIMI_CODE_NO_AUTO_UPDATE,
+// KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE and
+// KIMI_LOOP_MAX_ATTEMPTS_PER_STEP; the case carried none of them, so it
 // could trigger the vendor's updater mid-run and wait out its default retry
 // policy in full. Deriving the whole environment is what ends that class.
 //

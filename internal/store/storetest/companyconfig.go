@@ -140,10 +140,9 @@ func testActivatingAMissingRevisionChangesNothing(t *testing.T, db *store.DB) {
 }
 
 func testPayloadRoundTrips(t *testing.T, db *store.DB) {
-	// The payload is opaque: a sealed envelope when a keyring is
-	// configured, the plaintext document when one is not. Either way what
-	// comes back must be what went in, byte for byte — a re-serialized
-	// document would not decrypt.
+	// The payload is opaque: the sealed envelope every writer stores, under
+	// the keyring every node holds. What comes back must be what went in,
+	// byte for byte — a re-serialized document would not decrypt.
 	sealed := json.RawMessage(`{"__encrypted__":"enc:v1:abc.def"}`)
 	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
 		Summary: "sealed", Payload: sealed, CreatedAt: base,

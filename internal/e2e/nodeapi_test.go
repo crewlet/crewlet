@@ -106,6 +106,15 @@ func wireAPI(
 		}
 		return nil, nil
 	}
+	// ONE KEYRING FOR THE PROCESS, the engine's, handed to every surface
+	// that seals or opens, as cmd/crewlet hands it over: every node in this
+	// suite carries one (withKeyring). The setup surface was the only one
+	// given it here, so the reconciler trusted a plaintext revision, the
+	// config surface stored one and /secrets could seal nothing — three
+	// shapes `crewlet run` never produces. The reconciler reads the
+	// engine's own now, and /config and /secrets refuse to be built
+	// without one.
+	cipher := e.Cipher()
 	// THE RECONCILER, because the health surface reports this node's config
 	// posture and its applied epoch, and the reconciler is what knows both.
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
@@ -120,26 +129,20 @@ func wireAPI(
 		return fail("engine runtime", err)
 	}
 	configSurface, err := configapi.New(configapi.Options{
-		Store: backends.Store, Plane: backends.Fleet, Queue: backends.Queue,
+		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
 	})
 	if err != nil {
 		return fail("config surface", err)
 	}
-	secretSurface, err := secretsapi.New(secretsapi.Options{Fleet: backends.Fleet})
+	secretSurface, err := secretsapi.New(secretsapi.Options{
+		Fleet: backends.Fleet, Cipher: cipher, ActiveKeyID: boot.Secrets.ActiveKeyID,
+	})
 	if err != nil {
 		return fail("secret surface", err)
 	}
 	status, err := e.IntegrationStore()
 	if err != nil {
 		return fail("integration status", err)
-	}
-	// THE NODE'S OWN KEYRING, as cmd/crewlet hands it over: every node in
-	// this suite carries one (withKeyring), and a secret store built with
-	// none — which this harness used to pass — refused every credential a
-	// setup submission sealed, on a shape `crewlet run` never produces.
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		return fail("keyring", err)
 	}
 	setupSurface, err := setupapi.New(setupapi.Options{
 		Company: company,

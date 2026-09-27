@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 const cliCompanyDoc = `
@@ -39,11 +41,53 @@ func companyFile(t *testing.T, dir, name string, amend func(string) string) stri
 	return path
 }
 
+// fixtureKeyring is the `secrets:` block a CLI fixture's Tier A carries,
+// because every node requires one and a file without it is refused before a
+// case reaches its subject.
+var fixtureKeyring = "secrets:\n  active_key_id: fixture\n  keys:\n" +
+	"    - {id: fixture, material: \"" + secrets.EncodeKey(fixtureKey) + "\"}\n"
+
+// fixtureKey is the one key [fixtureKeyring] declares: thirty-two zero bytes,
+// a key the keyring accepts, sealing nothing a case reads back as a secret.
+var fixtureKey = make([]byte, 32)
+
+// fixtureCipher is [fixtureKeyring] as a cipher, for a case that seeds a store
+// directly: a node seals its revisions under the keyring its Tier A names, and
+// nothing reads or writes a company document without one.
+var fixtureCipher = func() secrets.Cipher {
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "fixture", Keys: map[string][]byte{"fixture": fixtureKey},
+	})
+	if err != nil {
+		panic("the fixture keyring does not build: " + err.Error())
+	}
+	return cipher
+}()
+
+// keyedTierA is a Tier A document with [fixtureKeyring] appended, so a case
+// states what it is about and nothing else. A document that states its own
+// `secrets:` block is the case whose subject is the keyring, and is returned
+// as written.
+func keyedTierA(doc string) string {
+	if strings.HasPrefix(doc, "secrets:") || strings.Contains(doc, "\nsecrets:") {
+		return doc
+	}
+	if doc != "" && !strings.HasSuffix(doc, "\n") {
+		doc += "\n"
+	}
+	return doc + fixtureKeyring
+}
+
+// parseTierA is [config.ParseBootstrap] over [keyedTierA] of the document.
+func parseTierA(data []byte, r *config.Resolver) (*config.Bootstrap, error) {
+	return config.ParseBootstrap([]byte(keyedTierA(string(data))), r)
+}
+
 // bootstrapForStore writes a Tier A config naming a store in dir.
 func bootstrapForStore(t *testing.T, dir string) string {
 	t.Helper()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+		filepath.Join(dir, "index.db")) + fixtureKeyring
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write bootstrap: %v", err)
@@ -93,6 +137,10 @@ func TestImportingIsIdempotentByContent(t *testing.T) {
 		t.Fatalf("edited import: %v", err)
 	} else if !strings.Contains(out, "imported") {
 		t.Fatalf("the edited import said %q", out)
+	} else if !strings.Contains(out, "sealed under fixture") {
+		// THE KEY IT WAS SEALED UNDER, which is a fact; a `sealed=true`
+		// flag said the same thing on every import that ever ran.
+		t.Errorf("the import does not name the key it sealed under: %q", out)
 	}
 	shown, _, err := configCmd(t, cfg, "show")
 	if err != nil {
@@ -548,6 +596,11 @@ func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
 	}{
 		{"revisions -limit", []string{"revisions", "-limit", "5"}},
 		{"export -redact", []string{"export", "-redact"}},
+		// Every fixture carries a keyring now, so `rekey` can succeed
+		// here: the revision the import sealed is already under the
+		// active key, and -dry-run reports that rather than being refused
+		// by the flag parser.
+		{"rekey -dry-run", []string{"rekey", "-dry-run"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, _, err := configCmd(t, cfg, tc.args...); err != nil {
@@ -555,23 +608,6 @@ func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
 			}
 		})
 	}
-	// `rekey` cannot SUCCEED here — this fixture declares no keyring, and
-	// rekey refuses without one — so the claim is narrower and has to be
-	// stated as such: -dry-run reached the command rather than being
-	// refused by the flag parser. Asserting success instead would only
-	// prove the fixture had a key.
-	t.Run("rekey -dry-run", func(t *testing.T) {
-		_, _, err := configCmd(t, cfg, "rekey", "-dry-run")
-		if err == nil {
-			t.Fatal("rekey succeeded with no keyring configured")
-		}
-		if strings.Contains(err.Error(), "not defined") {
-			t.Errorf("rekey refused its own flag: %v", err)
-		}
-		if !strings.Contains(err.Error(), "secrets.keys") {
-			t.Errorf("rekey failed for an unexpected reason: %v", err)
-		}
-	})
 	// -revision and -against need a real id, so they are exercised against
 	// the revision the import above wrote rather than a literal.
 	id := activeRevisionID(t, cfg)

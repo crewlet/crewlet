@@ -94,8 +94,10 @@ type Options struct {
 	// the fleet store is opened on every topology.
 	Plane coord.Plane
 
-	// Cipher opens and seals a stored revision. Nil reads plaintext and
-	// writes plaintext, which is the documented opt-out.
+	// Cipher seals every revision this surface writes and opens every one
+	// it reads, under the keyring every node holds — the engine's own,
+	// which the reconciler authenticates a peer's revision under.
+	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
@@ -111,10 +113,16 @@ type Options struct {
 
 // New builds the service.
 //
-// A MISSING STORE OR PLANE IS REFUSED rather than served as a narrower surface.
-// `crewlet run` builds this beside an engine that holds both, so a nil here is a
-// wiring mistake, and a surface that quietly shrank around it (an unregistered
-// /config, a write answering 503) would hide exactly that.
+// A MISSING STORE, PLANE OR KEYRING IS REFUSED rather than served as a narrower
+// surface. `crewlet run` builds this beside an engine that holds all three, so a
+// nil here is a wiring mistake, and a surface that quietly shrank around it (an
+// unregistered /config, a write answering 503) would hide exactly that.
+//
+// The keyring most of all, because the surface built without one did not
+// shrink, it changed meaning: it stored every revision in plaintext, which
+// every node holding a keyring — every node — refuses to apply, so the fleet
+// converged on nothing while this surface answered 201. The e2e harness was
+// wired that way until it was noticed by hand.
 func New(opts Options) (*Service, error) {
 	switch {
 	case opts.Store == nil:
@@ -123,6 +131,10 @@ func New(opts Options) (*Service, error) {
 	case opts.Plane == nil:
 		return nil, errors.New("configapi: Options.Plane is required: a revision " +
 			"takes effect only once the fleet's activation pointer names it")
+	case opts.Cipher == nil:
+		return nil, errors.New("configapi: Options.Cipher is required: every " +
+			"revision is sealed under the keyring (secrets.keys) every node holds, " +
+			"and one written without it is a revision no node applies")
 	}
 	now := opts.Now
 	if now == nil {
@@ -817,16 +829,15 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// OPENED, not copied. A revision sealed under a key no longer in the
-	// keyring cannot be reverted to, and finding that out now beats
-	// activating a document every node will fail to read.
+	// OPENED, not copied. A revision this node cannot open cannot be
+	// reverted to, and finding that out now beats activating a document
+	// every node will fail to read. The refusal is the one every reader of
+	// a revision answers ([refuseUnreadable]).
 	document, company, err := s.openDocument(target)
 	if err != nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeUnreadableRevision, map[string]string{
-			"detail": err.Error(),
-			"hint": "the target revision is sealed under a key that is no longer " +
-				"in the keyring; restore it to the node's secrets.keys first",
-		})
+		if !refuseUnreadable(w, err) {
+			s.fail(w, "open the revision to revert to", err)
+		}
 		return
 	}
 	prepared, err := s.prepare(r.Context(), draft{
@@ -1025,10 +1036,15 @@ func (s *Service) open(revision store.Revision) (*config.Company, error) {
 
 // openDocument is [Service.open] plus the unsealed bytes it decoded, which is
 // what a write that must keep fields this build cannot represent works from.
+//
+// A revision the keyring does not open is an [UnreadableRevisionError], which
+// knows whether it is the active revision, because the remedy depends on it.
 func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company, error) {
 	document, err := secrets.Open(s.cipher, revision.Payload)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, &UnreadableRevisionError{
+			ID: revision.ID, Active: revision.Active, Err: err,
+		}
 	}
 	company, err := config.DecodeCompany(document)
 	if err != nil {
@@ -1121,8 +1137,86 @@ func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int)
 // database path or a driver's own message, and this surface is the one an
 // operator reaches from a browser.
 func (s *Service) fail(w http.ResponseWriter, what string, err error) {
+	// A REVISION THIS NODE CANNOT OPEN IS NOT A FAULT, and every route that
+	// reads one reaches here: GET /config, a revision read, a diff, the
+	// references, an entity, and a write whose prior is the active
+	// revision. It was a 500 on all of them, which said nothing about a
+	// state an operator can fix and whose fix depends on the revision.
+	if refuseUnreadable(w, err) {
+		return
+	}
 	log.Error("config_request_failed", "what", what, "error", err)
 	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+}
+
+// UnreadableRevisionError is a stored revision this node's keyring does not
+// open: stored without a seal, or sealed under a key the keyring does not hold.
+//
+// It carries whether it is the ACTIVE revision because that is what decides
+// the remedy for an unsealed one: `crewlet config seal` re-seals the active
+// revision and nothing else, and a superseded revision is sealed in place by
+// nothing at all.
+type UnreadableRevisionError struct {
+	ID     string
+	Active bool
+	Err    error
+}
+
+func (e *UnreadableRevisionError) Error() string {
+	return "configapi: revision " + e.ID + " does not open under this node's " +
+		"keyring (" + e.Err.Error() + "): " + e.Remedy()
+}
+
+func (e *UnreadableRevisionError) Unwrap() error { return e.Err }
+
+// Unsealed reports whether the revision was stored without a seal, rather
+// than sealed under a key this keyring does not hold.
+func (e *UnreadableRevisionError) Unsealed() bool {
+	return errors.Is(e.Err, secrets.ErrUnsealedWithKey)
+}
+
+// Remedy is what brings the revision's document back, for the revision it is.
+func (e *UnreadableRevisionError) Remedy() string {
+	switch {
+	case !e.Unsealed():
+		return "it is sealed under a key that is no longer in the keyring; " +
+			"restore that key to the node's secrets.keys first"
+	case e.Active:
+		return "it is this node's active revision, stored without a seal by a " +
+			"build older than the mandatory keyring; seal it with `crewlet " +
+			"config seal` on this node, which stores it sealed and activates it"
+	default:
+		return "it is a superseded revision a build older than the mandatory " +
+			"keyring stored without a seal, and nothing seals a superseded " +
+			"revision in place, so it can be neither shown nor reverted to; to " +
+			"have its document again, import it from your own copy with PUT " +
+			"/config or `crewlet config import`, which stores it sealed"
+	}
+}
+
+// refuseUnreadable answers a revision this node cannot open, and reports
+// whether err was one.
+//
+// 409 with the code the cause names — [httpjson.CodeUnsealedRevision] or
+// [httpjson.CodeUnreadableRevision] — and the remedy as the hint. Two codes
+// and not one with two hints, because an envelope's message is the table's
+// sentence and always wins: under one code, an unsealed revision was answered
+// with a message telling the caller to put a key back that was never involved.
+func refuseUnreadable(w http.ResponseWriter, err error) bool {
+	var unreadable *UnreadableRevisionError
+	if !errors.As(err, &unreadable) {
+		return false
+	}
+	code := httpjson.CodeUnreadableRevision
+	if unreadable.Unsealed() {
+		code = httpjson.CodeUnsealedRevision
+	}
+	httpjson.FailWith(w, http.StatusConflict, code, map[string]string{
+		"revision_id": unreadable.ID,
+		"detail":      unreadable.Err.Error(),
+		"hint":        unreadable.Remedy(),
+	})
+	return true
 }
 
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {

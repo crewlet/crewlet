@@ -474,7 +474,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		// honest answer is that this node cannot finish the sign-in now.
 		log.ErrorContext(r.Context(), "api_second_factor_unspent",
 			"person", held.ID, "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return factorUse{}, false
 	case !landed(spend):
 		// AND NOT A SPEND EITHER: nothing can establish whether it is on
@@ -572,7 +572,7 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		if closeErr != nil {
 			log.WarnContext(r.Context(), "api_step_up_close_failed",
 				"error", closeErr, "lineage", how.replaces)
-			httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(closeErr))
 			return
 		}
 		if !landed(closed) {
@@ -605,7 +605,7 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_session_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if !landed(opened.Result) {
@@ -618,7 +618,7 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	}
 	at := opened.Result.Position
 	if how.refresh != "" && !s.keep(r, lineage.String(), held.ID, how.refresh, at) {
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(nil))
 		return
 	}
 

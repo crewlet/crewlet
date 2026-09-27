@@ -551,10 +551,30 @@ func (c *Company) ReferenceWarnings() []Warning {
 // `units[i].id`, so nothing about what an operator sees moved except the
 // class. Reporting both would have put one mistake in front of them twice.
 //
-// Nothing else is advisory on this tier today. The method stays because the
-// three warning channels are one vocabulary and a caller asks for each of
-// them by name; the next advisory setting belongs here.
-func (c *Company) AdvisoryWarnings() []Warning { return nil }
+// A BARE `-e NAME` IN providers.sandbox.local.run_args THAT NOTHING SUPPLIES
+// is one: the runtime's CLI copies NAME from its own environment, which is a
+// fixed rule plus runtime_env and never the engine's, so the box gets nothing
+// for it — valid, since an operator may mean exactly that, and silent until
+// whatever read the variable inside the box finds it unset.
+//
+// EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
+func (c *Company) AdvisoryWarnings() []Warning {
+	out := []Warning{}
+	if local := c.Providers.Sandbox.localBlock(); local != nil {
+		args := field("providers.sandbox.local.run_args")
+		for _, unsupplied := range local.unsuppliedEnvArgs() {
+			out = append(out, advisory(idx(args, unsupplied.at), fmt.Sprintf(
+				"`-e %[1]s` copies %[1]s from the container runtime's own environment, "+
+					"which is its fixed allowlist plus providers.sandbox.local.runtime_env "+
+					"and never the engine's — and neither carries %[1]s, so the box gets "+
+					"nothing for it. Put what a box needs in role.sandbox.env or a setup "+
+					"step's env, which reach the box directly; or declare "+
+					"`%[1]s: \"${%[1]s}\"` under runtime_env to have the runtime pass the "+
+					"host's value on", unsupplied.name)))
+		}
+	}
+	return out
+}
 
 // Warnings is everything valid about this bootstrap that its author should
 // still know.

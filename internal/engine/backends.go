@@ -253,6 +253,24 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 
 // openStore opens this node's local database.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
+	opts, err := storeOptions(b, c)
+	if err != nil {
+		return nil, err
+	}
+	db, err := store.Open(ctx, b.Store.Path, opts)
+	if err != nil {
+		return nil, fmt.Errorf("engine: store: %w", err)
+	}
+	return db, nil
+}
+
+// storeOptions is what this node's store is opened with, decided from Tier A,
+// the node's roles and the company.
+//
+// APART FROM THE OPEN so that what the pool is sized for can be asked of a
+// node's configuration without a file: the pinned writers follow the ROLES,
+// and a table over the role sets is the only honest way to hold that.
+func storeOptions(b *config.Bootstrap, c *config.Company) (store.Options, error) {
 	// Tier A validated the roles before anything reached here, so a parse
 	// failure at this point is a build fault rather than an operator's —
 	// and it is still an error rather than a default, because silently
@@ -260,8 +278,8 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 	// may not run.
 	roles, err := b.Node.RoleSet()
 	if err != nil {
-		return nil, fmt.Errorf("engine: read this node's roles to size the "+
-			"store's pinned writers: %w", err)
+		return store.Options{}, fmt.Errorf("engine: read this node's roles to "+
+			"size the store's pinned writers: %w", err)
 	}
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
@@ -309,11 +327,7 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}
-	db, err := store.Open(ctx, b.Store.Path, opts)
-	if err != nil {
-		return nil, fmt.Errorf("engine: store: %w", err)
-	}
-	return db, nil
+	return opts, nil
 }
 
 // openNATS builds a JetStream stream, embedded or external, and the

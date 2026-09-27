@@ -83,24 +83,6 @@ func TestTheEnvironmentStillAnswersWhatTheStoreDoesNot(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING RESOLVES FROM THE ENVIRONMENT and does not fail:
-// that is the pre-store behaviour and a supported deployment, not a
-// degraded one.
-func TestANodeWithNoKeyringUsesTheEnvironmentAlone(t *testing.T) {
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	e := &Engine{backends: &Backends{Store: db}}
-	t.Setenv("SOME_TOKEN", "from-the-environment")
-
-	e.refreshSecrets(t.Context())
-	if got := e.resolver().Value("${SOME_TOKEN}"); got != "from-the-environment" {
-		t.Fatalf("${SOME_TOKEN} = %q", got)
-	}
-}
-
 // AN UNREADABLE STORE LEAVES THE PREVIOUS SNAPSHOT STANDING rather than
 // falling back to the environment. Falling back is the stale-.env shadowing
 // the whole mechanism exists to prevent, and it would happen at the worst
@@ -154,19 +136,24 @@ func TestABrokenKeyringFailsRatherThanDegrading(t *testing.T) {
 	}
 }
 
-// NO KEYRING CONFIGURED IS NOT AN ERROR, which is what keeps every existing
-// deployment working.
-func TestNoKeyringConfiguredIsNotAFailure(t *testing.T) {
+// NO KEYRING CONFIGURED FAILS THE BOOT, naming the field.
+//
+// It was a supported posture — secrets from the environment, the company
+// document read in plaintext — and it is the one a node that boots with no
+// company would still reach, because it starts no state log and so meets no
+// signer. Every node needs the keyring now, so the engine refuses to build
+// without one rather than handing every seam beneath it a nil to interpret.
+func TestNoKeyringConfiguredFailsTheBoot(t *testing.T) {
 	t.Parallel()
 	cipher, err := openCipher(&config.Bootstrap{})
-	if err != nil {
-		t.Fatalf("openCipher: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "secrets.keys") {
+		t.Fatalf("openCipher(no keyring) = %v, want a refusal naming secrets.keys", err)
 	}
 	if cipher != nil {
 		t.Fatal("a cipher was built for a node with no keys")
 	}
-	if cipher, err = openCipher(nil); err != nil || cipher != nil {
-		t.Fatalf("openCipher(nil) = %v, %v", cipher, err)
+	if cipher, err = openCipher(nil); err == nil || cipher != nil {
+		t.Fatalf("openCipher(nil) = %v, %v, want a refusal", cipher, err)
 	}
 }
 
@@ -177,7 +164,7 @@ func TestNoKeyringConfiguredIsNotAFailure(t *testing.T) {
 func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 	t.Parallel()
 	if (&Engine{}).refreshSecrets(t.Context()) {
-		t.Error("a node with no store reported that it loaded a snapshot")
+		t.Error("an engine with no store reported that it loaded a snapshot")
 	}
 
 	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
@@ -186,7 +173,7 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if (&Engine{backends: &Backends{Store: db}}).refreshSecrets(t.Context()) {
-		t.Error("a node with no keyring reported that it loaded a snapshot")
+		t.Error("an engine with no keyring reported that it loaded a snapshot")
 	}
 
 	_, cipher := testKeyring(t)

@@ -113,32 +113,59 @@ func TestSealingIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestAPlaintextStoreKeepsReading(t *testing.T) {
+// A PLAINTEXT DOCUMENT IS REFUSED BY A READER HOLDING A KEYRING.
+//
+// The seal is what authenticates a document a peer published: sealed under
+// the fleet's keyring, a forged body does not open, while a plaintext one
+// opens as whatever its author wrote — and anything that reaches the
+// coordination store can author one. It used to come back verbatim whatever
+// the reader held, so a node with a keyring applied a forged plaintext
+// document as readily as its own. The refusal states the fact and names NO
+// command: which one fixes it depends on the document, and each caller names
+// its own — a remedy here was wrong for every reader but one.
+//
+// Mutation: hand a plaintext payload back whatever the cipher, and this fails.
+func TestAPlaintextDocumentIsRefusedByAReaderHoldingAKeyring(t *testing.T) {
 	t.Parallel()
-	// A deployment with no keyring in Tier A stores plaintext — the
-	// documented opt-out. Open must hand that back verbatim, or configuring
-	// a keyring later would be the moment every existing revision became
-	// unreadable.
 	cipher, err := NewCipher(testRing(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []Cipher{nil, cipher} {
-		opened, err := Open(c, document)
-		if err != nil {
-			t.Fatalf("open plaintext: %v", err)
-		}
-		if string(opened) != string(document) {
-			t.Fatalf("opened %s, want the document unchanged", opened)
-		}
+	opened, err := Open(cipher, document)
+	if !errors.Is(err, ErrUnsealedWithKey) {
+		t.Fatalf("Open(keyring, plaintext) = %v, want ErrUnsealedWithKey", err)
+	}
+	if opened != nil {
+		t.Errorf("a refused open still produced %s", opened)
+	}
+	if strings.Contains(err.Error(), "crewlet") {
+		t.Errorf("the refusal names a command, which only its caller can "+
+			"choose: %v", err)
+	}
+
+	// THE CONTROL: the same document sealed under the ring opens, so the
+	// refusal above is about the missing seal and nothing else.
+	sealed, err := Seal(cipher, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened, err = Open(cipher, sealed); err != nil || string(opened) != string(document) {
+		t.Fatalf("Open(keyring, sealed) = %s, %v, want the document", opened, err)
 	}
 }
 
-func TestASealedDocumentWithNoKeyIsAnErrorNotAnEmptyCompany(t *testing.T) {
+// WITHOUT A KEYRING NOTHING IS SEALED AND NOTHING IS READ.
+//
+// A nil cipher used to be a posture: it read a plaintext payload verbatim and
+// wrote one, for a caller holding no keyring. No node is such a caller, so a
+// nil is a caller wired without the node's keyring — and what it did was the
+// harm the seal exists to prevent: read an unauthenticated document as if a
+// node had written it, and write a revision every node refuses to apply.
+//
+// Mutation: let a nil cipher read plaintext, or store plaintext, and a row
+// answers without ErrNoKeyring.
+func TestWithNoKeyringNothingIsSealedOrRead(t *testing.T) {
 	t.Parallel()
-	// Returning nothing would boot the node onto an empty company, which
-	// reads on every surface as an operator who has configured nothing —
-	// and the actual fault is a deployment that lost its root of trust.
 	cipher, err := NewCipher(testRing(t))
 	if err != nil {
 		t.Fatal(err)
@@ -147,12 +174,47 @@ func TestASealedDocumentWithNoKeyIsAnErrorNotAnEmptyCompany(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := Open(nil, sealed)
-	if !errors.Is(err, ErrSealedWithoutKey) {
-		t.Fatalf("err = %v, want ErrSealedWithoutKey", err)
+	for name, payload := range map[string][]byte{"plaintext": document, "sealed": sealed} {
+		opened, err := Open(nil, payload)
+		if !errors.Is(err, ErrNoKeyring) {
+			t.Errorf("Open(nil, %s) = %v, want ErrNoKeyring", name, err)
+		}
+		// NOTHING rather than an empty document: returning one would boot
+		// the caller onto an empty company.
+		if opened != nil {
+			t.Errorf("a refused Open(nil, %s) still produced %s", name, opened)
+		}
 	}
-	if opened != nil {
-		t.Errorf("a refused open still produced %s", opened)
+	if stored, err := Seal(nil, document); !errors.Is(err, ErrNoKeyring) || stored != nil {
+		t.Errorf("Seal(nil) = (%s, %v), want nothing and ErrNoKeyring", stored, err)
+	}
+}
+
+// THE MIGRATION READS BOTH, and only with the keyring it will seal under.
+//
+// `crewlet config seal` rewrites an older build's plaintext revision sealed,
+// and `crewlet config scrub` must reach a plaintext revision's personal data as
+// surely as a sealed one's — both write back sealed, so both must read what
+// they replace. Without a keyring there is nothing to seal under, so the read
+// is refused before it happens.
+func TestTheMigrationOpensEitherAndOnlyWithAKeyring(t *testing.T) {
+	t.Parallel()
+	cipher, err := NewCipher(testRing(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := Seal(cipher, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, payload := range map[string][]byte{"plaintext": document, "sealed": sealed} {
+		opened, err := OpenToReseal(cipher, payload)
+		if err != nil || string(opened) != string(document) {
+			t.Errorf("OpenToReseal(%s) = %s, %v, want the document", name, opened, err)
+		}
+	}
+	if _, err := OpenToReseal(nil, document); !errors.Is(err, ErrNoKeyring) {
+		t.Errorf("OpenToReseal with no keyring = %v, want ErrNoKeyring", err)
 	}
 }
 

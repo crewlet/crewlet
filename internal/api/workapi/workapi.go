@@ -596,15 +596,25 @@ func failErr(w http.ResponseWriter, err error, key string) {
 // NOT FOUND IS A 404 AND EVERYTHING ELSE IS THIS NODE: a row that is absent
 // and a row this node could not read are opposite answers, and a read failure
 // rendered as "no such item" is how a caller comes to file a duplicate.
+//
+// AND "THIS NODE" IS TWO THINGS. A read the state log REFUSED is `503` with the
+// refusal's own words and hint — composed for a caller, and saying whether
+// waiting helps. Anything else is a FAULT: `500 internal_error`, its words to
+// the log. Both were one 503 carrying the error's text, so a store this node
+// could not read told a client to come back in two seconds, and handed it a
+// database path to read while it waited.
 func readFailed(w http.ResponseWriter, err error) {
-	if errors.Is(err, tracker.ErrNoTask) || errors.Is(err, pages.ErrNotFound) {
+	switch {
+	case errors.Is(err, tracker.ErrNoTask) || errors.Is(err, pages.ErrNotFound):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 			map[string]string{"detail": err.Error()})
-		return
+	case errors.Is(err, statelog.ErrUnavailable):
+		unavailableFor(w, err, "this node could not read what the decision is "+
+			"about: "+err.Error(), nil)
+	default:
+		log.Warn("api_work_read_failed", "error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 	}
-	log.Warn("api_work_read_failed", "error", err)
-	unavailableFor(w, err, "this node could not read what the decision is about: "+
-		err.Error(), nil)
 }
 
 // positionOf is a log position as a receipt states it: absent for a write that

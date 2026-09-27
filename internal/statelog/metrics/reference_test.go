@@ -15,8 +15,9 @@ const referencePath = "../../../docs/reference/metrics.md"
 //
 // A reference maintained by hand is one that stops matching the code, and a
 // metric whose meaning lives only in the source is one an operator cannot act
-// on. Regenerate with `go test ./internal/statelog/metrics -run Reference
-// -update`.
+// on. Regenerate with `go run ./internal/statelog/metrics/gen >
+// docs/reference/metrics.md` from the repository root, which is what the
+// failure below says too — this test has no -update flag.
 func TestTheMetricsReferenceIsGenerated(t *testing.T) {
 	t.Parallel()
 	want := metrics.Reference()

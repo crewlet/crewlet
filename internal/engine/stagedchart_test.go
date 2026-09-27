@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -139,6 +140,47 @@ func TestAStagedChartThatDeclaresNoRuntimeClearsTheObjects(t *testing.T) {
 	}
 }
 
+// A STAGE THAT DOES NOT OPEN SAYS THE ONE THING THAT BRINGS IT BACK.
+//
+// An offline import by a build older than the mandatory keyring staged its
+// chart in the clear, and the keyring refuses to open that. The stage is taken
+// before it is opened, so it is spent either way, and the remedy is the
+// import's own: re-run it against a running node — which every failure past
+// the take says, so the boot's warning carries it whatever went wrong.
+//
+// Mutation: return the open's error without the stage's remedy and the case
+// fails.
+func TestAStageThatDoesNotOpenNamesTheImport(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	body, err := json.Marshal(chart.Authored{
+		Units: []chart.AuthoredUnit{{Key: "clear-team", Name: "Clear Team"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backends().Store.StagedCharts().Stage(t.Context(), store.StagedChart{
+		ID: "file:clear", Payload: body, SourcePath: "company.yaml", StagedBy: "ops",
+	}); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	err = e.PublishStagedChartForTest(t.Context())
+	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("publishing a stage stored in the clear = %v, want it refused unsealed", err)
+	}
+	for _, says := range []string{"company.yaml", "re-run the import against a running node"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+	// AND ONLY THAT: the keyring's refusal used to name `crewlet config
+	// seal`, which seals a revision and never a stage, so the boot's
+	// warning named two remedies and one of them did nothing.
+	if strings.Contains(err.Error(), "config seal") {
+		t.Errorf("the refusal names a command that seals a revision, not a stage: %v", err)
+	}
+}
+
 // A STAGE REPLACES A STAGE, because it is a PENDING INTENT and not a history:
 // two offline imports in a row mean the operator changed their mind, and
 // publishing both would replay a structure they have already abandoned.
@@ -184,11 +226,15 @@ func TestTheStagedPayloadRoundTripsAsAnAuthoredChart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := secrets.Seal(nil, body)
+	cipher, err := bootstrap(t, nil).Secrets.Cipher()
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+	payload, err := secrets.Seal(cipher, body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := secrets.Open(nil, payload)
+	opened, err := secrets.Open(cipher, payload)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -213,9 +259,10 @@ func stageChart(t *testing.T, e *engine.Engine, authored chart.Authored) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// SEALED WITH NOTHING, which is a real configuration: company_config
-	// supports a plaintext mode, and Open answers the bytes back.
-	payload, err := secrets.Seal(nil, body)
+	// SEALED UNDER THE NODE'S KEYRING, as the offline command seals what it
+	// stages: every node holds one, and a stage stored in the clear is one
+	// the boot refuses to open ([TestAStageThatDoesNotOpenNamesTheImport]).
+	payload, err := secrets.Seal(e.Cipher(), body)
 	if err != nil {
 		t.Fatal(err)
 	}

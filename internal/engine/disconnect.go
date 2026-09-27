@@ -163,8 +163,10 @@ func (d vendorDisconnect) Disconnect(
 // error rather than logging one — a swallowed failure drops the block with the
 // credentials still sealed, and the retry that would have caught it never runs.
 //
-// A NODE WITH NO KEYRING CANNOT DELETE A SEALED ROW. It says so, naming the
-// values, rather than reporting a completeness it did not achieve.
+// A SINK THAT CANNOT BE BUILT FAILS THE TEARDOWN like any other failure here:
+// every node holds the keyring the rows were sealed under, so it is an engine
+// wired without its secret store, and dropping the block over it would leave
+// the dead values sealed with nothing left to retry.
 func (e *Engine) forgetRemoved(
 	ctx context.Context, kind integration.Kind, removed provision.Removed,
 	by iam.Actor,
@@ -175,11 +177,7 @@ func (e *Engine) forgetRemoved(
 	}
 	sink, err := e.SetupSink(by)
 	if err != nil {
-		log.WarnContext(ctx, "removed_credentials_not_deleted",
-			"integration", kind.String(), "error", err, "secrets", names,
-			"detail", "the accounts are gone and these values are dead; this "+
-				"node has no keyring, so remove them with `crewlet secrets unset`")
-		return nil
+		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
 	if err := sink.Forget(ctx, names...); err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)

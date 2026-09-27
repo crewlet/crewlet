@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func TestEveryRegisteredDomainIsSizedFromTierA(t *testing.T) {
 			// A's own validation rather than against a constant here,
 			// so a new domain inherits the rule without this test
 			// learning its field's bounds.
-			boot := config.DefaultBootstrap()
+			boot := testBootstrap(t)
 			boot.Stream.StoreDir = t.TempDir()
 			reflect.ValueOf(&boot.Stream).Elem().
 				FieldByIndex(keys[strings.TrimPrefix(derived.Field, "stream.")]).
@@ -289,11 +290,19 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 // already exists is `crewlet retention set-capacity`, which needs a node whose
 // state logs are up, and every mode starts them: the refusal once offered it,
 // sending the operator to a verb that fails the same way.
+//
+// And WHERE THE CEILING CAME FROM is one of three facts. The org chart's and
+// the identity log's unset ceilings are their own fixed defaults, below the
+// gibibyte scaling stops at: read as derived, a refused 512 MiB identity log
+// was said to go no lower than a gibibyte and was never offered the smaller
+// ceiling its field accepts. The identity log is provisioned last, so on a
+// tight broker it is the likeliest refusal of all.
 func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		headroom int64
 		stream   config.Stream
+		log      string
 		needed   int64
 		says     []string
 		never    []string
@@ -304,26 +313,58 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 		// at the floor goes no lower, so room is the only remedy.
 		"a derived ceiling at its floor": {
 			headroom: 5 * gib / 2,
+			log:      "CREWLET_PAGES_LOG",
 			needed:   gib,
 			says: []string{
 				"stream.pages_log_max_bytes is unset",
+				"derived from the stream volume's free space",
 				"no lower than 1073741824 bytes",
 				"Give the broker more room;",
 			},
-			never: []string{"to a smaller ceiling"},
+			never: []string{"to a smaller ceiling", "fixed default"},
 		},
 		// An explicit ceiling is never scaled, so the operator is told
 		// what would have fitted, and that a smaller one is theirs to set.
 		"an explicit ceiling": {
 			headroom: 7 * gib / 2,
 			stream:   config.Stream{PagesLogMaxBytes: 2 * gib},
+			log:      "CREWLET_PAGES_LOG",
 			needed:   2 * gib,
 			says: []string{
 				"stream.pages_log_max_bytes sets the ceiling",
 				"at most 1610612736 bytes fits",
 				"Give the broker more room, or set stream.pages_log_max_bytes " +
-					"to a smaller ceiling;",
+					"to a smaller ceiling, no lower than its 1073741824-byte floor;",
 			},
+		},
+		// THE IDENTITY LOG'S FIXED 512 MiB, refused with the three derived
+		// logs at their gibibyte floors and the chart's 64 MiB already
+		// reserved. Its field takes 64 MiB, so a smaller ceiling is on
+		// offer — and nothing about a derivation or a gibibyte is said.
+		"the identity log's fixed default": {
+			headroom: 3*gib + gib/4,
+			log:      "CREWLET_IAM_LOG",
+			needed:   config.DefaultIamLogMaxBytes,
+			says: []string{
+				"stream.iam_log_max_bytes is unset",
+				"the log's own fixed default",
+				"Give the broker more room, or set stream.iam_log_max_bytes " +
+					"to a smaller ceiling, no lower than its 67108864-byte floor;",
+			},
+			never: []string{"derived", "scaled", "1073741824"},
+		},
+		// THE ORG CHART'S FIXED DEFAULT IS ITS FIELD'S FLOOR, so room is
+		// the only remedy there — and still nothing about a gibibyte.
+		"the org chart's fixed default at its floor": {
+			headroom: 3*gib + gib/32,
+			log:      "CREWLET_CHART_LOG",
+			needed:   config.DefaultChartLogMaxBytes,
+			says: []string{
+				"stream.chart_log_max_bytes is unset",
+				"the log's own fixed default",
+				"Give the broker more room;",
+			},
+			never: []string{"to a smaller ceiling", "derived", "1073741824"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -338,7 +379,7 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 				t.Fatalf("StreamBudget: %v", budgetErr)
 			}
 			for _, want := range append([]string{
-				"CREWLET_PAGES_LOG needed " + itoa(tc.needed) + " bytes",
+				tc.log + " needed " + itoa(tc.needed) + " bytes",
 				"the broker had " + itoa(budget.Available()) + " bytes left",
 				"stream.store_dir (/var/lib/crewlet/stream)",
 				"the state logs that already exist keep the ceilings they were created with",
@@ -347,10 +388,14 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 					t.Errorf("the refusal does not say %q:\n%v", want, err)
 				}
 			}
-			for _, unreachable := range append([]string{"set-capacity"}, tc.never...) {
-				if strings.Contains(err.Error(), unreachable) {
-					t.Errorf("the refusal offers %q, which this node cannot do:\n%v",
-						unreachable, err)
+			if strings.Contains(err.Error(), "set-capacity") {
+				t.Errorf("the refusal offers set-capacity, which this node cannot "+
+					"do:\n%v", err)
+			}
+			for _, untrue := range tc.never {
+				if strings.Contains(err.Error(), untrue) {
+					t.Errorf("the refusal says %q, which is not true of this "+
+						"ceiling:\n%v", untrue, err)
 				}
 			}
 		})
@@ -492,5 +537,50 @@ func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
 	}
 	if strings.Contains(unstated, "-1") {
 		t.Errorf("an unstated limit reaches an operator as the number -1: %s", unstated)
+	}
+}
+
+// A NODE THAT CANNOT MEASURE ITS VOLUME NAMES THE FIELDS THAT VOLUME DECIDES,
+// and only those.
+//
+// The warning is the operator's one chance to choose the ceilings a missing
+// measurement shrinks, so it has to name exactly the unset ones that follow
+// the free space: not the org chart's or the identity log's, whose flat asks
+// the volume has no say in, and not a field the operator already set. It was a
+// list of three written beside the warning, which went on naming a set field.
+func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		stream config.Stream
+		want   []string
+	}{
+		{"nothing set", config.Stream{}, []string{"stream.tracker_log_max_bytes",
+			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes"}},
+		{"the mutation log set", config.Stream{TrackerLogMaxBytes: 8 << 30},
+			[]string{"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes"}},
+		{"every volume-derived log set", config.Stream{TrackerLogMaxBytes: 8 << 30,
+			TrackerVectorsMaxBytes: 8 << 30, PagesLogMaxBytes: 2 << 30}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := diskDerivedFields(c.stream)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("a volume this node cannot measure names %v, want %v", got, c.want)
+			}
+			detail := unmeasuredDetail(got)
+			for _, field := range got {
+				if !strings.Contains(detail, field) {
+					t.Errorf("the warning does not name %s: %s", field, detail)
+				}
+			}
+			for _, flat := range []string{"stream.chart_log_max_bytes",
+				"stream.iam_log_max_bytes"} {
+				if strings.Contains(detail, flat) {
+					t.Errorf("the warning names %s, whose ceiling no volume "+
+						"decides: %s", flat, detail)
+				}
+			}
+		})
 	}
 }

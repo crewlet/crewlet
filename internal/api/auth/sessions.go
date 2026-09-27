@@ -141,7 +141,31 @@ func seatRefusal(binding session.Binding) *Refusal {
 // ONE NUMBER, declared once: internal/api/auth and internal/api/authapi each
 // carried a private copy beside this one, which is how three spellings of one
 // hint come to disagree.
+//
+// A 503 whose CAUSE is in hand takes it through [RetryIdentity] rather than
+// this constant, because the cause may be a refusal no wait clears.
 const RetryIdentitySeconds = 2
+
+// RetryIdentity is the `Retry-After` on an identity 503, in seconds, given
+// what caused it: [RetryIdentitySeconds] unless the state log's own rule —
+// [statelog.RetryAfter], every surface's — says otherwise. ZERO, which writes
+// no header at all, for a refusal waiting cannot clear: a record larger than
+// the broker takes, a full log, a refusal the broker named, an evicted node,
+// a record this node cannot decode. A read refusal's own derived hint where it
+// carries one. A nil cause, or one that is no state-log refusal, is the
+// constant.
+//
+// IT TAKES THE CAUSE because the identity surfaces answered every state-log
+// refusal with the constant: an identity write refused `record_too_large` or
+// `log_full` told a client to come back in two seconds for a write that could
+// never land, which the same refusal on /chart or /work did not. /iam and
+// /auth are held to naming the cause at every 503 by a gate in each package,
+// which refuses the constant there — a site with nothing in hand passes nil,
+// so the absence of a cause is written down rather than defaulted.
+func RetryIdentity(cause error) int {
+	return httpjson.RetrySeconds(statelog.RetryAfter(cause,
+		RetryIdentitySeconds*time.Second))
+}
 
 // SessionCatchUp is how long a write presenting a session this node has not
 // yet applied waits for it, before it is answered 503.

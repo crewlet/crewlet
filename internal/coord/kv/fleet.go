@@ -503,13 +503,28 @@ const (
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
 	mailboxesSuffix    = "_mailboxes"
-	activationKey      = "activation"
-	// payloadKey holds the CURRENT revision's sealed body, in the same
-	// bucket as the pointer and for the same reason: neither may expire,
-	// and a payload in a bucket the pointer is not in could age out from
-	// under the epoch it belongs to.
-	payloadKey      = "revision_payload"
-	fleetCASRetries = 16
+	// activationKey holds the pointer AND the current revision's sealed
+	// body, in one record — see [activationRecord].
+	activationKey = "activation"
+	// legacyPayloadKey is where a build before the body moved into the
+	// pointer kept it, in [legacyPayloadRecord]'s shape, and it is the
+	// ONLY place such a build looks: it ignores the pointer's payload
+	// field. A rolling upgrade puts that build on this bucket beside this
+	// one, and the fleet activates during a rollout whether or not anybody
+	// edits the company — a credential the integration loop seals
+	// re-activates the revision, a discovered site is written back through
+	// the configuration, a node booting ahead of the pointer publishes its
+	// own — so this build WRITES it as well, as a mirror of each body it
+	// activates ([FleetStore.mirrorLegacyPayload]). That is a contract
+	// between PEERS, which no release boundary makes optional.
+	//
+	// It is also READ, and only for a pointer that carries no body of its
+	// own: a bucket such a build wrote is the state a node upgraded in
+	// place finds, and its pointer is not rewritten until somebody next
+	// activates — a node that could not read the body beside it would
+	// refuse to join the fleet it had just been part of.
+	legacyPayloadKey = "revision_payload"
+	fleetCASRetries  = 16
 )
 
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
@@ -1626,6 +1641,29 @@ type activationRecord struct {
 	CreatedBy     string `json:"created_by,omitempty"`
 	CreatedByKind string `json:"created_by_kind,omitempty"`
 	OperatorID    string `json:"operator_id,omitempty"`
+
+	// Payload is the revision's sealed body, IN the pointer so the two are
+	// one write (see [coord.Plane.Activate] for the race two writes lost),
+	// and as the JSON object it is rather than as bytes, which the record
+	// would encode as base64 over an envelope whose ciphertext is base64
+	// already. ADDITIVE in the one direction a record has to be: a build
+	// that predates it reads the pointer and ignores the field. Absent on
+	// a pointer such a build wrote, whose body is under [legacyPayloadKey].
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// encodeActivation is the record's wire form, with the payload embedded
+// VERBATIM: encoding/json HTML-escapes what it embeds unless told not to, and
+// a body that came back with `<` spelled `\u003c` would be a different body
+// from the one [coord.CanonicalPayload] promised.
+func encodeActivation(record activationRecord) ([]byte, error) {
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(record); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
 // Activate publishes a new target revision.
@@ -1637,38 +1675,28 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		return coord.Activation{}, errors.New("coord/kv: an activation cannot " +
 			"expect a revision and no revision at once")
 	}
-	// THE EXPECTATION IS RESOLVED FIRST, before anything is written: a
-	// caller that has already lost the race must not leave a payload
-	// behind for a revision the fleet will never point at.
+	payload, err := coord.CanonicalPayload(req.Payload)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/kv: %w", err)
+	}
 	seq, err := f.expectedSeq(ctx, req)
 	if err != nil {
 		return coord.Activation{}, err
 	}
-	raw, err := json.Marshal(activationRecord{
+	raw, err := encodeActivation(activationRecord{
 		RevisionID: req.RevisionID, At: req.At.UTC(), Summary: req.Summary,
 		CreatedBy: req.CreatedBy, CreatedByKind: req.CreatedByKind,
-		OperatorID: req.OperatorID,
+		OperatorID: req.OperatorID, Payload: payload,
 	})
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: encode the activation: %w", err)
 	}
-	// THE PAYLOAD FIRST. A crash here leaves a body nothing points at,
-	// which the next activation replaces; the other order points the fleet
-	// at bytes no node can read.
-	body, err := json.Marshal(payloadRecord{RevisionID: req.RevisionID, Payload: req.Payload})
-	if err != nil {
-		return coord.Activation{}, fmt.Errorf("coord/kv: encode the revision payload: %w", err)
-	}
-	if _, put := f.config.Put(ctx, payloadKey, body); put != nil {
-		return coord.Activation{}, unavailable("publish the revision payload", put)
-	}
-	// ONE WRITE for the flip. The store returns the revision it assigned,
-	// and that revision IS the epoch — so the append and the flip cannot
-	// come apart, and two nodes activating at the same instant are handed
-	// two epochs by the store rather than racing over a counter this engine
-	// keeps. Writing the payload into the same bucket moves the sequence
-	// too, which is harmless: the epoch has to be monotonic and unique,
-	// never dense.
+	// ONE WRITE, the body inside the flip. The store returns the revision
+	// it assigned, and that revision IS the epoch — so the append and the
+	// flip cannot come apart, two nodes activating at the same instant are
+	// handed two epochs by the store rather than racing over a counter
+	// this engine keeps, and the pointer can never name a body another
+	// writer replaced (see [coord.Plane.Activate]).
 	//
 	// UPDATE RATHER THAN PUT when the caller said what it was replacing.
 	// Update carries the sequence read above, so anything that wrote in
@@ -1678,6 +1706,18 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	revision, err := f.flip(ctx, req, seq, raw)
 	if err != nil {
 		return coord.Activation{}, err
+	}
+	// BEST EFFORT, AND LOGGED. The activation has landed: every node of
+	// this build converges on the pointer's own body whatever happens
+	// here, so failing the call would report a failure of a write that
+	// succeeded, and the caller's retry would be a second activation.
+	if err := f.mirrorLegacyPayload(ctx, revision, req.RevisionID, payload); err != nil {
+		log.WarnContext(ctx, "coord_kv_legacy_payload_unmirrored",
+			"revision", req.RevisionID, "epoch", revision, "error", err,
+			"detail", "the activation landed and every node on this build reads "+
+				"its body from the pointer; a node still on an earlier build reads "+
+				"it only from the key beside the pointer, so until the next "+
+				"activation such a node cannot reach this epoch")
 	}
 	return coord.Activation{
 		Epoch:         int64(revision),
@@ -1785,36 +1825,170 @@ func isWrongLastSequence(err error) bool {
 		api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant
 }
 
-// payloadRecord is the current revision's sealed body on the wire. The
-// revision id travels WITH it so a reader can tell "the payload for the epoch
-// I am converging on" from "a payload a newer activation has already
-// replaced" — the two are one key, and only the id separates them.
-type payloadRecord struct {
+// legacyPayloadRecord is the body as a build before [activationRecord.Payload]
+// reads it, under [legacyPayloadKey]: bytes, which encoding/json spells as a
+// base64 string. The revision id travels with it because it is a key of its
+// own that any activation overwrites.
+type legacyPayloadRecord struct {
 	RevisionID string `json:"revision_id"`
 	Payload    []byte `json:"payload"`
+
+	// Epoch is the pointer revision this record MIRRORS, which is what
+	// orders two mirror writes ([FleetStore.mirrorLegacyPayload]) — and
+	// nothing else reads it: the pointer's own epoch is its key's
+	// revision. ADDITIVE, so an earlier build decodes the record and
+	// ignores it, and zero on a record such a build wrote, which is the
+	// oldest a mirror can be.
+	Epoch uint64 `json:"epoch,omitempty"`
+}
+
+// mirrorLegacyPayload writes the body an activation has just published under
+// [legacyPayloadKey], for a peer on a build that reads it nowhere else.
+//
+// AFTER THE FLIP, never before it. The earlier build wrote this key first and
+// its pointer second, and that is the race [coord.Plane.Activate] describes: a
+// writer whose flip then lost — a compare-and-set refused, or another
+// activation landing after its body — had already replaced the body the
+// winning pointer named. Written after, a flip that is refused writes nothing
+// here at all.
+//
+// FENCED ON THE EPOCH, so racing writers converge on the pointer rather than
+// on whichever mirror landed last. The record carries the epoch it copies, and
+// every write is a compare-and-set at the revision of the mirror it read: a
+// writer that finds a mirror at its own epoch or later stops, and one whose
+// read went stale is refused and reads again. The highest epoch — the flip
+// that landed last — is therefore the last mirror written, and nothing earlier
+// can replace it. Comparing the BODY instead would not do: re-activating an
+// unchanged revision, the credential-rotation gesture, makes a stale writer's
+// read look current.
+//
+// And it never replaces a body a LATER pointer depends on. A pointer the
+// earlier build wrote carries no body, and that build put its body here just
+// before its flip; replacing it would leave a pointer no node of either build
+// can read. So a writer that finds the pointer already past its own epoch
+// stops, whoever wrote it — a newer pointer of this build is mirrored by its
+// own writer. The mirror is read BEFORE the pointer, so a pointer of this
+// build that moves past this writer after it looked belongs to a writer whose
+// own mirror write lands after this one or makes this one's compare-and-set
+// fail.
+//
+// What this cannot close is the earlier build's own race, because it is that
+// build's: its body lands here before its flip, and a mirror written between
+// the two leaves its pointer naming a body that is not here — the same outcome
+// two of its own nodes racing always had.
+//
+// The window the order opens is the one between the flip and this write, in
+// which a peer on the earlier build that polls sees a pointer whose body is not
+// beside it yet: it records one failed attempt of its three and reads the body
+// on its next tick. The nudge that wakes a peer early is published after
+// [FleetStore.Activate] returns, so a woken peer reads both.
+func (f *FleetStore) mirrorLegacyPayload(ctx context.Context, epoch uint64,
+	revisionID string, payload json.RawMessage) error {
+
+	raw, err := json.Marshal(legacyPayloadRecord{
+		RevisionID: revisionID, Payload: payload, Epoch: epoch,
+	})
+	if err != nil {
+		return fmt.Errorf("coord/kv: encode the mirrored payload: %w", err)
+	}
+	for range fleetCASRetries {
+		// Zero is "absent": a KV revision is never zero, and Create is
+		// the compare-and-set against no entry.
+		var at uint64
+		entry, err := f.config.Get(ctx, legacyPayloadKey)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+		case err != nil:
+			return unavailable("read the mirrored payload", err)
+		default:
+			// An undecodable record is replaced rather than obeyed:
+			// nothing can read it, so no pointer depends on it.
+			var held legacyPayloadRecord
+			if json.Unmarshal(entry.Value(), &held) == nil && held.Epoch >= epoch {
+				return nil
+			}
+			at = entry.Revision()
+		}
+		pointer, err := f.config.Get(ctx, activationKey)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			// Nothing points anywhere, so nothing reads a mirror.
+			return nil
+		}
+		if err != nil {
+			return unavailable("read the activation pointer", err)
+		}
+		if pointer.Revision() > epoch {
+			return nil
+		}
+		if at == 0 {
+			_, err = f.config.Create(ctx, legacyPayloadKey, raw)
+		} else {
+			_, err = f.config.Update(ctx, legacyPayloadKey, raw, at)
+		}
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err):
+			// Another writer's mirror landed after the read: read
+			// again, and its epoch decides.
+			continue
+		default:
+			return unavailable("write the mirrored payload", err)
+		}
+	}
+	return fmt.Errorf("coord/kv: the mirrored payload was still contended after "+
+		"%d attempts", fleetCASRetries)
 }
 
 // Payload returns the current revision's sealed payload.
-func (f *FleetStore) Payload(ctx context.Context, revisionID string) ([]byte, bool, error) {
+//
+// A DIFFERENT REVISION'S is reported as absent rather than as the wrong body:
+// a node converging on epoch N that applied whatever happened to be there
+// would converge on a revision the fleet is not pointed at, and say it
+// succeeded. With the body inside the pointer that is a pointer that moved
+// between this node's Target and this read.
+func (f *FleetStore) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
 	if revisionID == "" {
 		return nil, false, errors.New("coord/kv: a payload read needs a revision id")
 	}
-	entry, err := f.config.Get(ctx, payloadKey)
+	entry, err := f.config.Get(ctx, activationKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, unavailable("read the activation pointer", err)
+	}
+	var record activationRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return nil, false, unavailable("decode the activation pointer", err)
+	}
+	if record.RevisionID != revisionID {
+		return nil, false, nil
+	}
+	if len(record.Payload) > 0 {
+		return record.Payload, true, nil
+	}
+	return f.legacyPayload(ctx, revisionID)
+}
+
+// legacyPayload reads the body a pointer with none of its own was written
+// beside — see [legacyPayloadKey]. Its revision id is checked for the reason
+// it always was: an earlier build overwrites that key on every activation,
+// the losers of a race included, and this one mirrors its own there, so it
+// may hold a body the pointer does not name.
+func (f *FleetStore) legacyPayload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
+	entry, err := f.config.Get(ctx, legacyPayloadKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, unavailable("read the revision payload", err)
 	}
-	var record payloadRecord
+	var record legacyPayloadRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		return nil, false, unavailable("decode the revision payload", err)
 	}
 	if record.RevisionID != revisionID {
-		// A newer activation has replaced it. Reported as absent rather
-		// than as the wrong body: a node that applied whatever happened
-		// to be there would converge on a revision the fleet is not
-		// pointed at, and say it succeeded.
 		return nil, false, nil
 	}
 	return record.Payload, true, nil

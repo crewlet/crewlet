@@ -1,15 +1,23 @@
-// Package hostbox holds the primitives for running somebody else's process in
-// a directory on the engine host.
+// Package hostbox holds the primitives for running somebody else's process on
+// the engine host.
 //
-// Two subsystems do that, and they must do it identically: the subscription
-// CLI LLM backend, which drives a coding CLI per seat with its own HOME, and
-// the local sandbox provider, which runs a whole coding agent in a box. Both
-// seed operator-supplied credential paths in, both copy a refreshed login back
-// out, and both hand a child process an environment. A second implementation
-// of any of those is the one that drifts — and each of them is a guard, so
-// drift means a hole.
+// Three subsystems do that, and they must do it identically: the subscription
+// CLI LLM backend, which drives a coding CLI per seat with its own HOME; the
+// local sandbox provider, which runs a whole coding agent in a box and drives a
+// container runtime's CLI to make one; and the MCP client, which starts every
+// stdio tool server a company declares. The first two seed operator-supplied
+// credential paths in and copy a refreshed login back out, and all three hand
+// a child process an environment. A second implementation of any of those is
+// the one that drifts — and each of them is a guard, so drift means a hole.
+// The environment had already drifted: the CLI backend carried a copy of the
+// allowlist that disagreed with this one about five names, and the MCP client
+// carried none at all and handed every tool server the engine's whole
+// environment — its keyring, its Tier A token values and its identity
+// provider's client secret among it. A container runtime's own CLI has a rule
+// of its own ([ContainerRuntime]), held here for the same reason: two callers
+// start one, the sandbox and a tool server declared as `command: docker`.
 //
-// Nothing here imports the rest of Crewlet: it sits below both consumers.
+// Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox
 
 import (
@@ -20,31 +28,43 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-// DirMode is the mode for every directory these two subsystems create.
-// Credentials and prompt transcripts both land under one, on a host that may
-// run other services.
+// DirMode is the mode for every directory the CLI backend and the local
+// sandbox create. Credentials and prompt transcripts both land under one, on a
+// host that may run other services.
 const DirMode os.FileMode = 0o700
 
 // FileMode is the mode for every file they create, for the same reason.
 const FileMode os.FileMode = 0o600
 
-// PassthroughEnv is the host environment a child process may inherit.
+// PassthroughEnv is the host environment every child process may inherit.
 //
 // An ALLOWLIST, not a denylist, and that polarity is the whole point: the
-// engine's own environment holds the org's chat token, its database DSN and
-// possibly a metered API key, none of which a coding agent has any business
-// reading. A denylist would leak every variable nobody thought to name.
+// engine's own environment holds the keyring every session cookie and every
+// sealed revision is signed under, the Tier A token values, the identity
+// provider's client secret, any credential in an external stream URL, the
+// collector credential in OTEL_EXPORTER_OTLP_HEADERS and possibly a metered
+// API key,
+// none of which a child has any business reading. A denylist would leak every
+// variable nobody thought to name — and the engine's Tier A `${VAR}`
+// references mean an operator names those variables, not this package.
 //
 // What is on it is what a process needs to run at all — where to find
-// binaries, how to talk TLS, how to reach the network — never what to
-// authenticate as. Credentials reach a child only through the run environment
-// config deliberately put there.
+// binaries, how to render text, how to talk TLS, how to reach the network —
+// never what to authenticate as. Credentials reach a child only through the
+// environment its config deliberately declares.
+//
+// ONE LIST FOR EVERY CHILD. The CLI backend kept its own and had already
+// drifted from this one: it lacked LC_NUMERIC, TERM and the ALL_PROXY pair (so
+// a coding CLI behind a SOCKS proxy reached nothing), and it carried LANGUAGE,
+// which this one did not.
 var PassthroughEnv = []string{
 	"PATH",
 	"LANG",
+	"LANGUAGE",
 	"LC_ALL",
 	"LC_CTYPE",
 	"LC_NUMERIC",
@@ -65,10 +85,34 @@ var PassthroughEnv = []string{
 	"no_proxy",
 }
 
+// HostUserEnv is where the engine's own user keeps its files and its runtime
+// state: the home, the user's name, the temporary directory and the XDG base
+// directories.
+//
+// SEPARATE FROM [PassthroughEnv] because a box REPLACES every one of these: a
+// coding CLI and a sandboxed coding agent each get a HOME, an XDG tree and a
+// TMPDIR of their own, which is the isolation, so inheriting the engine's would
+// only be overwritten. A child that runs AS the host user in no box of its own —
+// a stdio MCP server launched through `npx` or `uvx`, which keeps its package
+// cache under HOME, and a container runtime's CLI, which finds its config and
+// a rootless daemon's socket through HOME and XDG_RUNTIME_DIR — needs the real
+// ones, and none of them authenticates anything.
+var HostUserEnv = []string{
+	"HOME",
+	"USER",
+	"LOGNAME",
+	"TMPDIR",
+	"XDG_CONFIG_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_DATA_HOME",
+	"XDG_STATE_HOME",
+	"XDG_RUNTIME_DIR",
+}
+
 // Inherit returns the allowlisted slice of the host environment, ready to be
-// extended with a box's own variables. Names that are unset are omitted rather
-// than passed through empty: a child that distinguishes "unset" from "empty"
-// (curl does, for NO_PROXY) must see the same thing the engine saw.
+// extended with a child's own variables. Names that are unset are omitted
+// rather than passed through empty: a child that distinguishes "unset" from
+// "empty" (curl does, for NO_PROXY) must see the same thing the engine saw.
 func Inherit(extra ...string) map[string]string {
 	env := make(map[string]string, len(PassthroughEnv)+len(extra))
 	for _, name := range append(append([]string{}, PassthroughEnv...), extra...) {
@@ -77,6 +121,123 @@ func Inherit(extra ...string) map[string]string {
 		}
 	}
 	return env
+}
+
+// InheritFamilies adds to env every host variable whose name begins with one
+// of prefixes.
+//
+// FOR A CHILD WHOSE OWN CONFIGURATION IS A DOCUMENTED FAMILY of variables — a
+// container runtime's `DOCKER_*` — where naming each member would break the
+// child the day its vendor adds one, and silently: a runtime that no longer
+// sees its `DOCKER_HOST` dials the default socket instead of failing. A family
+// is still an allowlist; what it cannot do is reach a name outside itself.
+func InheritFamilies(env map[string]string, prefixes ...string) {
+	for _, kv := range os.Environ() {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(name, prefix) {
+				env[name] = value
+				break
+			}
+		}
+	}
+}
+
+// ContainerRuntimeEnv is what a container runtime's own CLI reads by NAME,
+// beyond the host user's locations: REGISTRY_AUTH_FILE, where Podman reads
+// registry credentials, and DBUS_SESSION_BUS_ADDRESS, which rootless Podman's
+// systemd cgroup manager dials.
+var ContainerRuntimeEnv = []string{
+	"REGISTRY_AUTH_FILE",
+	"DBUS_SESSION_BUS_ADDRESS",
+}
+
+// ContainerRuntimeFamilies is what a container runtime's own CLI reads by
+// PREFIX: the DOCKER_ family — DOCKER_HOST, DOCKER_CONTEXT, DOCKER_CONFIG and
+// the TLS trio, without which a rootless Docker's CLI dials the system socket
+// instead of the user's and a remote daemon is not the one configured — the
+// CONTAINER_ and CONTAINERS_ families, Podman's remote connection and its
+// config, storage and registry files, and the PODMAN_ family.
+//
+// FAMILIES rather than names, because each vendor documents the set as a
+// prefix and adds to it, and a runtime that silently lost a new member would
+// dial something other than what the operator configured. None of them is
+// anything of the engine's.
+var ContainerRuntimeFamilies = []string{"DOCKER_", "CONTAINER_", "CONTAINERS_", "PODMAN_"}
+
+// ContainerRuntime is the host environment a container runtime's CLI runs
+// with: the allowlist, the host user's locations ([HostUserEnv] — where the
+// runtime keeps its config, and XDG_RUNTIME_DIR, where a rootless daemon's
+// socket lives), [ContainerRuntimeEnv] and every member of
+// [ContainerRuntimeFamilies] the engine was started with.
+//
+// ONE RULE FOR EVERY CALLER THAT STARTS ONE, and there are two: the local
+// sandbox drives the CLI to make and run a box, and a stdio MCP server
+// declared as `command: docker` or `podman` IS the CLI. Written twice, the
+// copy on the second path is the one that loses DOCKER_HOST — and a rootless
+// runtime without it dials the system socket, which fails as a permission
+// error at the daemon rather than as anything naming the variable.
+//
+// It is what the runtime needs to reach the daemon the operator configured,
+// never what an image or a credential helper authenticates with: a caller
+// with a declared channel layers that over this.
+func ContainerRuntime() map[string]string {
+	env := Inherit(append(append([]string{}, HostUserEnv...), ContainerRuntimeEnv...)...)
+	InheritFamilies(env, ContainerRuntimeFamilies...)
+	return env
+}
+
+// ContainerRuntimeCarries reports whether [ContainerRuntime] passes name
+// through from the host, whether or not the host has it set.
+//
+// The question a check asks of a `-e NAME` it finds in a container's run
+// arguments: the runtime copies NAME from its OWN environment, so a name this
+// answers false for arrives in the box as nothing at all unless a caller
+// declares it.
+func ContainerRuntimeCarries(name string) bool {
+	if slices.Contains(PassthroughEnv, name) || slices.Contains(HostUserEnv, name) ||
+		slices.Contains(ContainerRuntimeEnv, name) {
+		return true
+	}
+	for _, prefix := range ContainerRuntimeFamilies {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsContainerRuntime reports whether command starts a container runtime's
+// CLI — `docker` or `podman`, by name or by path — and so is owed
+// [ContainerRuntime] rather than the environment of an ordinary child.
+func IsContainerRuntime(command string) bool {
+	switch filepath.Base(strings.TrimSpace(command)) {
+	case "docker", "podman":
+		return true
+	}
+	return false
+}
+
+// Environ renders env as os/exec's KEY=value slice: sorted, and NEVER nil.
+//
+// NEVER NIL, because a nil exec.Cmd.Env does not mean "no environment": os/exec
+// then hands the child the ENGINE's own, which is precisely what the allowlist
+// exists to keep out of it. An empty map therefore renders as an empty,
+// non-nil slice — a child with nothing rather than a child with everything —
+// and a caller whose child genuinely needs something states it.
+//
+// Sorted, so a spawn is reproducible from a log line and a test compares an
+// environment rather than a map's iteration order.
+func Environ(env map[string]string) []string {
+	out := make([]string, 0, len(env))
+	for name, value := range env {
+		out = append(out, name+"="+value)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ErrEscape reports a path that resolves outside the root it was joined to.

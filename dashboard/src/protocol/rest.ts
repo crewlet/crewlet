@@ -29,7 +29,7 @@ import { apiToken } from "./authToken.ts";
  *
  * `status` alone is not enough to act on: the setup surface distinguishes a
  * revision that moved under the caller from a config slot holding a literal
- * from a fleet with no keyring, and all three are a 409 or a 503. The engine
+ * from a company with no active revision, and all three are a 409. The engine
  * answers those with a `code`, and the screen branches on it.
  */
 export class RestError extends Error {

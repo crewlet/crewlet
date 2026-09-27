@@ -73,7 +73,7 @@ Four fields differ from the [hosted code host's](github.md) block beside it:
 
 The `provisioning:` sub-block drives the reconcile described under [Provisioning](#provisioning), and both the CLI and the engine's own reconcile loop read it.
 
-**`mode` says where a service account is owned, and it is not only the CLI's business.** It decides which endpoint creates an account, which one mints its tokens, and which one deletes it — and the group delete answers `404` as success ("unknown or already removed; both are the state the caller asked for"), so an instance-owned account sent down the group route reports itself deleted and stays live with every credential it holds. It used to be `-mode` on the command line and nowhere else, so the engine assumed `group` for every company: against accounts created with `-mode instance` its passes minted through a group that does not own them and its disconnect removed none of them. `crewlet gitlab provision -mode …` still overrides it for one invocation, the way `-public-url` overrides `integrations.public_base_url`.
+**`mode` says where a service account is owned, and it is not only the CLI's business.** It decides which endpoint creates an account, which one mints its tokens, and which one deletes it — and the group delete answers `404` as success ("unknown or already removed; both are the state the caller asked for"), so an instance-owned account sent down the group route reports itself deleted and stays live with every credential it holds. It used to be `-mode` on the command line and nowhere else, so the engine assumed `group` for every company: against accounts created with `-mode instance` its passes minted through a group that does not own them and its disconnect removed none of them. `crewlet gitlab provision -mode …` still overrides it for one invocation, the way `-public-url` overrides `api.external_url` — the Tier A address, which the command reads from the file `-config` names, already resolved.
 
 ---
 
@@ -278,7 +278,7 @@ The steady-state reconcile deliberately does **not** walk the group like that. I
 
 Three sinks, chosen by flag:
 
-- **`-secret-store`**: write each minted value into the encrypted [secret store](../concepts/secret-store.md) under the same `${VAR}` name the config references. The engine consults the store ahead of the environment, so the `source` + restart step disappears entirely — and a run against a node whose engine is up records the credential where the whole fleet reads it. This is the recommended sink once a Tier A keyring is configured.
+- **`-secret-store`**: write each minted value into the encrypted [secret store](../concepts/secret-store.md) under the same `${VAR}` name the config references. The engine consults the store ahead of the environment, so the `source` + restart step disappears entirely — and a run against a node whose engine is up records the credential where the whole fleet reads it. This is the recommended sink: every node's Tier A carries the keyring the store seals under.
 - **`-env-file PATH`**: append/update `VAR=token` lines — the file the operator feeds the engine. Written through on every mint, so a crash mid-run cannot leave a minted-but-unrecorded credential, and each write is atomic and leaves the file `0600` — including when you created it yourself, which under the usual umask means `0644`. A newly minted token is shown once; re-runs never re-print a live token.
 - **`-print`**: emit `export VAR=token` lines to stdout for shell `eval` and persist nothing.
 
@@ -356,12 +356,15 @@ base64 payload, compared in constant time against any of the header's
 space-separated `v1,…` entries, with a ±5-minute timestamp tolerance in both
 directions.
 
-- **No signature, or a wrong one → `401`.** There is no fallback. GitLab's
-  other secret — the plaintext `X-Gitlab-Token` — is not a credential here.
-- **A delivery before `signing_secret` is configured, or one whose value is
-  not a usable key → `503`** with a `Retry-After`, so the delivery is held
-  for retry rather than discarded. The request was fine; what is missing is
-  on this side.
+- **No signature, or a wrong one → `401 invalid_signature`.** There is no
+  fallback. GitLab's other secret — the plaintext `X-Gitlab-Token` — is not a
+  credential here.
+- **A delivery before `signing_secret` is configured → `503
+  no_webhook_secret`, and one whose value is not a usable `whsec_` key →
+  `503 unusable_webhook_secret`**, each with a `Retry-After`, so the delivery
+  is held for retry rather than discarded. The request was fine; what is
+  wrong is on this side — and the two codes differ because the fixes do: one
+  says to set the secret, the other that the one set is the problem.
 
 > **GitLab signs when the hook has a signing token, not when the version is
 > new enough.** These are two different secrets on the same hook and they are

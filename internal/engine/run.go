@@ -288,12 +288,10 @@ type Engine struct {
 	// nothing from inside a box, which is the ordinary configuration.
 	//
 	// Held here and handed OUT to the API this process serves rather than
-	// built twice: that API verifies the tokens this engine minted, and two
-	// receivers would sign with two per-process keys unless a keyring
-	// happens to be configured, which is exactly the case that must not
-	// depend on happening to be configured. A peer verifies them with its
-	// own receiver, which is why the key is derived from the fleet's
-	// keyring rather than held.
+	// built twice: that API verifies the tokens this engine minted, and one
+	// object is the only arrangement that cannot drift from its twin. A
+	// peer verifies them with its own receiver, which is why the key is
+	// derived from the fleet's keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
 	// bridge serves a running seat's tool surface to a coding agent over
@@ -335,17 +333,12 @@ type Engine struct {
 	// when it seals a credential. See republish.go.
 	republish republisher
 
-	// cipher is the keyring this node seals and opens secret rows with,
-	// nil on a node that has none. Held rather than rebuilt because ONE
-	// cipher per process is what keeps a row this node wrote a row it can
-	// read back.
+	// cipher is the keyring this node seals and opens secret rows with.
+	// [New] refuses a node without one, so it is nil only on an Engine
+	// built by hand in a test. Held rather than rebuilt because ONE cipher
+	// per process is what keeps a row this node wrote a row it can read
+	// back.
 	cipher secrets.Cipher
-
-	// sinkUnavailable makes the loop say "this node cannot seal a minted
-	// credential" ONCE. It is a property of [Engine.cipher] — the same for
-	// every integration and unchanged until the process restarts — and the
-	// reconcile loop asks per surface per tick. See integrations.go.
-	sinkUnavailable sync.Once
 
 	// profile is what this node declared it does: whether it claims
 	// seats, serves inbound traffic, and runs the fleet's singleton
@@ -604,6 +597,17 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
+	// THE KEYRING FIRST, because everything below derives from it — the
+	// per-run token issuers, the state logs' signatures, the secret store
+	// and the company document a peer fetches — and because building it
+	// opens nothing, so a node without one (or with a broken one) is
+	// refused before there is anything to unwind. It used to be built
+	// after the backends were open, and it used to answer nil for a node
+	// with none.
+	cipher, err := openCipher(opts.Bootstrap)
+	if err != nil {
+		return nil, err
+	}
 
 	// EVERYTHING THAT CAN FAIL WITH NOTHING OPEN COMES FIRST, which is why
 	// the telemetry receiver, the bridge and this node's identity are
@@ -620,7 +624,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// launched in between exporting nowhere, silently.
 	otel := opts.OtelReceiver
 	if otel == nil {
-		built, err := sandbox.BuildOtelReceiver(os.Getenv,
+		otel, err = sandbox.BuildOtelReceiver(os.Getenv,
 			tokenMaterial(opts.Bootstrap))
 		if err != nil {
 			// A receiver URL that is set and unusable is a deployment
@@ -629,15 +633,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			// config that looks complete and exports nothing.
 			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
 		}
-		otel = built
 	}
 	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
 	// receiver above is built here: a fleet mints on one node and may
 	// verify on another, so every node derives its key from the fleet's
-	// keyring rather than from a per-process random.
+	// keyring — which the keyring check above has already required.
 	bridge := opts.Bridge
 	if bridge == nil {
-		bridge = mcpbridge.Build(os.Getenv, tokenMaterial(opts.Bootstrap))
+		if bridge, err = mcpbridge.Build(os.Getenv, tokenMaterial(opts.Bootstrap)); err != nil {
+			return nil, fmt.Errorf("engine: tool bridge: %w", err)
+		}
 	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
@@ -683,7 +688,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	e := &Engine{
-		backends: backends, ownsBackends: ownsBackends,
+		backends: backends, ownsBackends: ownsBackends, cipher: cipher,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
@@ -759,21 +764,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("engine: tool skills: %w", err)
 	}
 
-	// THE KEYRING AND THE SNAPSHOT BEFORE THE FIRST EPOCH, because the
-	// epoch resolves every ${VAR} it holds as it is built — the provider
-	// keys, the integration tokens, the per-role MCP env. Loading the
-	// snapshot afterwards would give the first epoch environment-only
-	// resolution and every later one the store, so a rotated secret would
-	// work on the second apply and not on boot.
-	//
-	// A node whose keyring is CONFIGURED but broken fails here rather than
-	// resolving everything from the environment and looking healthy.
-	cipher, err := openCipher(opts.Bootstrap)
-	if err != nil {
-		return nil, err
-	}
-	e.cipher = cipher
-
 	// THE ADMISSION HANDSHAKE, BEFORE ANY PUBLISHER — and this is the
 	// earliest point at which it can run, because it needs the
 	// coordination backend and nothing else. Everything below it starts
@@ -788,6 +778,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	e.acknowledge(ctx, maintenanceStreams())
 
+	// THE SNAPSHOT BEFORE THE FIRST EPOCH, because the epoch resolves every
+	// ${VAR} it holds as it is built — the provider keys, the integration
+	// tokens, the per-role MCP env. Loading the snapshot afterwards would
+	// give the first epoch environment-only resolution and every later one
+	// the store, so a rotated secret would work on the second apply and not
+	// on boot.
+	//
 	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
 	// engine was stopped is on the fleet before anything resolves it —
 	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].
@@ -1496,6 +1493,18 @@ func (e *Engine) Node() *node.Node { return e.node }
 // connections to one broker fail independently, and the store is exclusive to
 // one process, so a second open is contention with itself.
 func (e *Engine) Backends() *Backends { return e.backends }
+
+// Cipher is this node's keyring: the ONE cipher of the process.
+//
+// EXPOSED for the reason [Engine.Backends] is. `crewlet run` composes the
+// config surface, the secret surface and the sign-in surface beside the
+// engine, and each seals or opens under the keyring the engine already built
+// from Tier A — the reconciler authenticates a peer's revision under it, and a
+// revision the config surface sealed under anything else would be one no node
+// could open. Handing the surfaces this one rather than letting the command
+// build its own is what makes "one keyring" a fact instead of a promise two
+// constructors keep. Never nil on an engine [New] built.
+func (e *Engine) Cipher() secrets.Cipher { return e.cipher }
 
 // Recorder is the process's one metrics recorder, or nil.
 //

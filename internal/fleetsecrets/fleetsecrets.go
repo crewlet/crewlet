@@ -75,10 +75,10 @@ type Store struct {
 
 // New builds a store over a coordination backend and a keyring.
 //
-// A nil cipher is a node with no keyring, which every method answers with
-// [secrets.ErrNoKeyring] rather than by resolving to plaintext: an
-// operator who configured no encryption gets the environment, not a store
-// that quietly holds credentials in the clear.
+// A nil cipher is a store every sealing or opening method answers with
+// [secrets.ErrNoKeyring] rather than by resolving to plaintext. No node
+// builds one — every node holds a keyring — so it is a caller's mistake,
+// refused where it would do harm.
 func New(fleet coord.Secrets, cipher secrets.Cipher) *Store {
 	if fleet == nil {
 		return nil
@@ -645,7 +645,7 @@ func (e *Estate) Unset(ctx context.Context, name string) (bool, error) {
 //
 // NO KEYRING NEEDED, for [Estate.Unset]'s reason: what reads this is the duty
 // that finishes a removal and collects a key nobody owns, and the finding half
-// must not be the one thing a node with no keyring cannot do. The WRITE TIME
+// must not be the one thing a node whose keyring lacks a row's key cannot do. The WRITE TIME
 // is what that duty ages a key by — a key nobody owns yet may be one an
 // enrolment minted a second ago — and the VERSION is what it destroys one at
 // ([Estate.UnsetAt]), so a key written after the listing is spared; both ride

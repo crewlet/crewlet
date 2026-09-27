@@ -236,9 +236,12 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 	}
 	for _, reason := range q.Reasons {
 		if !slices.Contains(Reasons, reason) {
-			return InboxAnswer{}, fmt.Errorf("tracker: %q is not a wake reason",
-				reason)
+			return InboxAnswer{}, fmt.Errorf("%w: %q is not a wake reason",
+				ErrBadQuery, reason)
 		}
+	}
+	if err := feedPositions(q.Cursor, q.Since); err != nil {
+		return InboxAnswer{}, err
 	}
 	limit := q.Limit
 	if limit <= 0 || limit > MaxInboxRows {

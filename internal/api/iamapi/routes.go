@@ -237,15 +237,16 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (string, boo
 // a company with nobody in it render identically as `[]`, and the second is
 // an answer somebody acts on — so a failed read says so.
 //
-// THE ONE RETRY HINT every identity 503 carries, [auth.RetryIdentitySeconds]:
-// this surface kept a private copy of the number, which is how four spellings
-// of one hint come to disagree.
+// THE ONE RETRY RULE every identity 503 takes, [auth.RetryIdentity] over the
+// read's own error: this surface kept a private copy of the number, which is
+// how four spellings of one hint come to disagree — and a read the state log
+// refused for good says so by carrying no Retry-After at all.
 func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 	what string, err error) {
 
 	log.WarnContext(r.Context(), "api_iam_read_failed",
 		"what", what, "error", err)
-	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 }
 
 // sequence folds the answers of a gesture that is several records — a create
@@ -303,9 +304,12 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 // address, a login or a seat (409, naming who holds it). A provider subject
 // somebody else holds, and a person already linked to a different one
 // ([iamdomain.ErrLinked]), are 409 `subject_conflict` — the code the sign-in
-// surface answers the same fact with. An estate that could not decide is 503 WITH the Retry-After every identity 503 carries and the
-// operation id: it used to be a bare 503, which a client cannot tell from a
-// node that is gone for good.
+// surface answers the same fact with. An estate that could not decide is 503
+// WITH the operation id and the Retry-After the refusal's own rule gives
+// ([auth.RetryIdentity]): it used to be a bare 503, which a client cannot tell
+// from a node that is gone for good — and then a 503 carrying the identity
+// hint whatever refused it, which told a client to come back in two seconds
+// for a record too large to place, a full log or an evicted node.
 //
 // THREE ARE SUCCESSES, and they are what the writer's answer used to hide —
 // it answered a bare position, so an `unknown` outcome read as 200:
@@ -398,14 +402,26 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		if errors.As(err, &refused) && refused.OpID != "" {
 			opID = refused.OpID
 		}
+		// THE REFUSAL'S OWN HINT: the identity estate's two seconds for
+		// one that clears here, and NONE for one no wait clears — a
+		// record too large, a full log, a refusal the broker named, an
+		// evicted node — so a client is not sent back to be refused the
+		// same way.
 		log.WarnContext(r.Context(), "api_iam_write_unavailable",
 			"op_id", opID, "error", err)
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds,
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(err),
 			withExtra(extra, httpjson.Detail{"detail": err.Error(), "op_id": opID}))
 		return
 	case err != nil:
+		// THE FAULT'S OWN WORDS GO TO THE LOG, which is where the
+		// envelope's sentence sends a reader: they are a store's or a
+		// driver's, and administering people does not make a caller
+		// somebody a database path is for. What the caller passed and
+		// what already landed still travel.
+		log.WarnContext(r.Context(), "api_iam_write_failed", "op_id", opID,
+			"error", err)
 		refuse(http.StatusInternalServerError, httpjson.CodeInternalError,
-			httpjson.Detail{"detail": err.Error()})
+			httpjson.Detail{})
 		return
 	}
 
@@ -433,7 +449,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 				"one would defeat the ledger that makes the retry safe.",
 			"op_id": opID,
 		}
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds,
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(nil),
 			withExtra(extra, detail))
 	}
 }

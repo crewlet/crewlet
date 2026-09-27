@@ -3,6 +3,7 @@ package statelog
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -173,11 +174,44 @@ const (
 	// ceiling or unblocks the trim.
 	ReasonLogFull Reason = "log_full"
 
+	// ReasonRecordTooLarge — the record is larger than the broker takes in
+	// one message, and nothing about the log's size is involved. No node
+	// can place it and no wait changes it. The detail names which limit
+	// refused it, because each has its own remedy: the server's
+	// max_payload (an operator raises it on an external server), the
+	// stream's own max_msg_size (somebody reconfigured the stream; it is
+	// restored), or the file store's per-record limit (nothing raises it)
+	// — and splitting the change answers all three.
+	//
+	// ITS OWN REASON RATHER THAN [ReasonLogFull], which it used to be:
+	// that one tells an operator to raise a ceiling or unblock the trim,
+	// and a record too large is refused by a log with room to spare.
+	ReasonRecordTooLarge Reason = "record_too_large"
+
+	// ReasonBrokerRefused — the broker refused to store the record, named
+	// a reason, and it is none this framework has a remedy for: a sealed
+	// stream, a JetStream store with no resources left, a limit nobody
+	// declared on a state log. The detail carries the broker's own code
+	// and words, which are the remedy. Nothing about waiting changes it.
+	ReasonBrokerRefused Reason = "broker_refused"
+
 	// ReasonSkew — the broker answered a last sequence BELOW an
 	// expectation this node formed, which cannot happen on a healthy
 	// stream and means a store or stream was restored out of step.
 	ReasonSkew Reason = "skew"
 )
+
+// Reasons are every reason, so a surface can enumerate them and a reason off
+// the wire can be told from a value this build does not know.
+var Reasons = []Reason{
+	ReasonEvicted, ReasonEvictionUnknown, ReasonDeferred, ReasonBehind,
+	ReasonBelowFloor, ReasonFloorUnknown, ReasonDeleted, ReasonGated,
+	ReasonRetired, ReasonLogFull, ReasonRecordTooLarge, ReasonBrokerRefused,
+	ReasonSkew,
+}
+
+// Valid reports whether a reason off the wire is one this build knows.
+func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
 // Retryable reports whether this refusal clears on THIS node without anybody
 // doing anything — the write-side twin of [ReadRefusal.Retryable], and for its
@@ -249,6 +283,12 @@ var ErrConflict = errors.New("statelog: conflict")
 // A REASON AND A DETAIL rather than a message, because two different readers
 // need it: a surface switches on the reason to decide whether to retry
 // elsewhere, and a person reads the detail to find out what to change.
+//
+// THE DETAIL IS WRITTEN FOR THAT PERSON, and every surface sends it on — so it
+// is composed by this package, naming positions, versions, settings and the
+// words a broker chose for its refusal, and never an error's own text: a
+// store's error is a driver's message or a database path, and it goes to the
+// log. [Refused.Detail] is held to the same rule.
 type Unavailable struct {
 	Reason   Reason
 	Detail   string

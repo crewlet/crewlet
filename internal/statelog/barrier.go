@@ -219,6 +219,11 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		}
 		body, err := r.encode(env)
 		if err != nil {
+			// LOGGED HERE, once, for the reason [barrierAppendFailed]
+			// logs: every reader waiting on this run is told the
+			// refusal's own sentence, never these words.
+			log.Warn("statelog_barrier_unconfirmed", "subject", r.subject,
+				"stage", "encode", "error", err.Error())
 			run.err = fmt.Errorf("statelog: encode a barrier: %w", err)
 			return
 		}
@@ -230,7 +235,7 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		// refusal rather than an answer.
 		seq, duplicate, err := r.log.Append(appendCtx, r.subject, "", nil, body)
 		if err != nil {
-			run.err = fmt.Errorf("statelog: append a barrier on %s: %w", r.subject, err)
+			run.err = barrierAppendFailed(r.subject, err)
 			return
 		}
 		if duplicate {
@@ -251,4 +256,55 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 				metrics.Attrs{"domain": r.domain})
 		}
 	}()
+}
+
+// barrierAppendFailed is what a barrier append the broker did not store means
+// to the read waiting on it, decided by the same [classify] a write's append
+// is.
+//
+// A REFUSAL THE BROKER NAMED IS A REFUSAL, NOT A MISSED QUORUM. The error went
+// back wrapped and unclassified, and the read mapped anything that was not
+// already an [Unavailable] to `no_quorum` — so a log at its ceiling, which
+// refuses the barrier exactly as it refuses a write, was answered as a failed
+// election: retryable, with a four-second hint, from a node that will refuse
+// the next barrier identically until an operator resizes the log. And
+// `log_full`, the refusal the read vocabulary has for it, was reachable only
+// from a test's fake appender that returned one ready-made.
+//
+// What nobody answered stays unclassified, and is the missed quorum it was —
+// and so does an answer saying the barrier may yet land ([faultUnsettled]): a
+// barrier carries no message id, so the one such answer it can meet is a
+// store that closed under an entry raft had committed, which is a stream
+// restarting and clears exactly as a missed quorum does.
+//
+// THAT ERROR IS LOGGED HERE, once per append, and never told to a caller: it
+// is the transport's or the broker's own words, and every reader waiting on
+// the append is told [barrierRefusal]'s sentence instead. A refusal the broker
+// NAMED is different — its words are the remedy, so they travel on the
+// refusal's detail.
+func barrierAppendFailed(subject string, err error) error {
+	switch f, detail := classify(err); f {
+	case faultFull:
+		return &Unavailable{
+			Reason: ReasonLogFull,
+			Detail: fmt.Sprintf("the broker refused to store the barrier on %s: "+
+				"%s — a full log refuses appends rather than dropping records, "+
+				"so raise the stream's byte ceiling or unblock the trim "+
+				"(`crewlet retention status` names the term holding it)",
+				subject, detail),
+		}
+	case faultTooLarge, faultRefused:
+		// A BARRIER IS A FEW HUNDRED BYTES, so a broker that refuses one
+		// as too large is one whose limit refuses every record; either way
+		// it is the broker's decision, and the detail carries its words —
+		// and, for a limit, which one and what moves it.
+		return &Unavailable{
+			Reason: ReasonBrokerRefused,
+			Detail: fmt.Sprintf("the broker refused to store the barrier on %s: %s",
+				subject, detail),
+		}
+	}
+	log.Warn("statelog_barrier_unconfirmed", "subject", subject,
+		"stage", "append", "error", err.Error())
+	return fmt.Errorf("statelog: append a barrier on %s: %w", subject, err)
 }

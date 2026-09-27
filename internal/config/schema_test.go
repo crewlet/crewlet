@@ -200,8 +200,16 @@ func TestSchemaNeverRejectsWhatTheValidatorAccepts(t *testing.T) {
 	for _, tc := range parityCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			schemaErr := compiled[tc.tier].Validate(asJSON(t, tc.yaml))
-			validatorErr := validateTier(tc.tier, tc.yaml)
+			// EVERY TIER A CASE CARRIES THE KEYRING every node needs,
+			// so each one is judged on its own subject — unless the
+			// keyring IS its subject, in which case it states its own
+			// `secrets:` block and [Keyed] leaves it as written.
+			doc := tc.yaml
+			if tc.tier == TierBootstrap {
+				doc = Keyed(doc)
+			}
+			schemaErr := compiled[tc.tier].Validate(asJSON(t, doc))
+			validatorErr := validateTier(tc.tier, doc)
 
 			if schemaErr != nil && validatorErr == nil {
 				t.Fatalf("the schema rejects a config the engine accepts — an "+
@@ -239,17 +247,25 @@ func parityCases() []parityCase {
 		// Valid documents. Every one of these must survive BOTH layers, or
 		// the schema is stricter than the engine.
 		{name: "minimal company", tier: TierCompany, yaml: "name: Acme\n"},
-		// Genuinely empty: every Tier A field has a default, so a
-		// document that sets nothing must survive both layers. It used to
-		// carry one throwaway key, which meant the case proved that key
-		// parsed rather than that the defaults stand on their own.
+		// Empty but for the keyring the harness adds: every other Tier A
+		// field has a default, so a document that sets nothing else must
+		// survive both layers. It used to carry one throwaway key, which
+		// meant the case proved that key parsed rather than that the
+		// defaults stand on their own.
 		//
-		// `{}` rather than a zero-byte document because that decodes to
-		// YAML null, which the schema refuses at the root ("got null,
-		// want object") while the loader accepts it. That gap is real but
-		// it is not this case's subject, and an empty MAPPING is what an
-		// operator's "empty" crewlet.yaml actually looks like.
+		// `{}` because that is what an operator's "empty" crewlet.yaml
+		// actually looks like, and [Keyed] reads it as the empty mapping
+		// it is.
 		{name: "empty bootstrap", tier: TierBootstrap, yaml: "{}\n"},
+		// A NODE WITH NO KEYRING, which both layers refuse: every node
+		// signs and verifies every state-log record under it, so an
+		// editor can say so while the file is still being written. The
+		// block is stated — and stated empty — because the keyring is
+		// this case's subject.
+		{name: "a node with no keyring", tier: TierBootstrap, editorCatches: true,
+			yaml: "secrets: {}\n"},
+		{name: "a keyring with no keys", tier: TierBootstrap, editorCatches: true,
+			yaml: "secrets:\n  keys: []\n"},
 		{name: "bootstrap logging block", tier: TierBootstrap, yaml: "logging:\n  level: warn\n  format: json\n"},
 		{
 			name: "bootstrap log file block",

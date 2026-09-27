@@ -61,20 +61,23 @@ const (
 
 	// KindKeyOutlivedRemoval is somebody removed whose key still exists,
 	// because the removal's own delete of it failed. Until the key duty
-	// lands it their name and address are readable from every backup taken
-	// before the removal — which is the answer to "is that person gone"
-	// that an operator needs to be told is "not yet".
+	// lands it their name and address can still be opened wherever their
+	// ciphertext is — the log, every donated snapshot, every backup, and not
+	// only one taken before the removal — which is the answer to "is that
+	// person gone" that an operator needs to be told is "not yet".
 	KindKeyOutlivedRemoval FindingKind = "removal_key_live"
 
 	// KindKeyUnowned is a key no person, reservation, invitation or
 	// removal owns, older than [iamdomain.OrphanKeyGrace]: minted for an
 	// enrolment or an invitation refused after the mint, or left by an
-	// invitation the sweep collected. Whatever it sealed is readable from
-	// every backup until the key duty destroys it, which its next pass on
-	// a node that has applied the whole log does. Reported only by such a
-	// node, because on one behind the log — or holding a record it
-	// retained, which moves its checkpoint past rows it never wrote — a
-	// person whose enrolment has not been applied owns nothing yet.
+	// invitation the sweep collected. Whatever it sealed can be opened
+	// wherever it landed until the key duty destroys it, which its next
+	// pass on a node that has applied the whole log does — and a backup
+	// taken before then carries the key for as long as it is kept. Reported
+	// only by such a node, because on one behind the log — or holding a
+	// record it retained, which moves its checkpoint past rows it never
+	// wrote — a person whose enrolment has not been applied owns nothing
+	// yet.
 	KindKeyUnowned FindingKind = "key_unowned"
 )
 

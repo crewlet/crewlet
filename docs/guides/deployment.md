@@ -162,6 +162,12 @@ stream:
 coordination:
   type: embedded-kv                    # the leases ride the stream's own
                                        #   connection; nothing else to set
+
+secrets:                               # the SAME keys on every member: each
+  active_key_id: "2026-01"             #   one verifies what the others sign
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 **Bind the route port to the network the peers are on.** `cluster.host` is the
@@ -362,6 +368,12 @@ stream:
 
 coordination:
   type: embedded-kv
+
+secrets:                                     # required on every node, and the
+  active_key_id: "2026-01"                   #   same keys on each of them
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 **The URL goes to the NATS client verbatim**, so a comma-separated list of a
@@ -411,9 +423,11 @@ than something a reconnect policy should paper over.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the three state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the five state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_CHART_LOG`, `CREWLET_IAM_LOG` — every one on
+every node, including a log its roles do not apply), a stream per extra
+subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), and the eighteen `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -491,14 +505,23 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The three logs reserve their byte
-ceilings against the account's JetStream storage limit when their streams are
-created, and the node sizes them to half of what that limit has left. An
+**And it needs room for the state logs.** The five state logs reserve their
+byte ceilings against the account's JetStream storage limit when their streams
+are created, and the node sizes them to half of what that limit has left. An
 untiered limit counts every replica, so a `replicas: 3` fleet needs three
 times the bytes; a tiered one needs its `R3` tier. An account that states no
 limit leaves the node nothing to size against but its own disk, and a server's
 own cap then refuses what does not fit, by name. See
 [Replication](replication.md#how-the-byte-ceilings-are-sized).
+
+**And a `max_payload` of at least 8 MiB.** That is the largest single message
+the engine promises to carry — an event, a webhook delivery, a state-log record
+— and the embedded broker is configured at exactly that; nats-server's own
+default is 1 MiB. A server below it refuses a message between its limit and
+8 MiB that the default topology would have carried, permanently, and the
+refusal names the message's size and the server's `max_payload` — a
+state-log write answers `record_too_large`. Set `max_payload: 8MB` in the
+server's configuration.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
@@ -588,14 +611,18 @@ api:
     tokens: [{id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}",
               grants: [...]}]   # at least one, on every backend
 secrets:
-  active_key_id: k1          # REQUIRED once port is set: the keyring signs
-  keys: [{id: k1, material: "${CREWLET_SECRET_KEY_K1}"}]   # every session
+  active_key_id: k1          # REQUIRED on EVERY node, serving or not
+  keys: [{id: k1, material: "${CREWLET_SECRET_KEY_K1}"}]
 ```
 
-**Four settings stop being optional the moment `api.port` is non-zero** —
-`api.external_url`, `api.auth.max_grants`, at least one `api.auth.tokens` entry
-and `secrets.keys`. `crewlet validate` refuses each by name, so a deployment
-finds out on a laptop rather than at bind time. See
+**`secrets.keys` is required on every node**, whether or not it serves the
+API: every record on every state log is signed and verified under the keyring,
+the company document a node fetches from its peers is authenticated by its
+seal, and — once a port is set — it signs every session cookie and per-run
+token too. **Three more settings stop being optional the moment `api.port` is
+non-zero** — `api.external_url`, `api.auth.max_grants` and at least one
+`api.auth.tokens` entry. `crewlet validate` refuses each by name, so a
+deployment finds out on a laptop rather than at bind time. See
 [the Tier A example](../getting-started/configuration.md#tier-a) and
 [Configuration § Auth](../concepts/configuration.md#auth) for what each one
 decides.
@@ -675,7 +702,7 @@ timing differs.
 - **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
 - **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
 
-They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
+They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 

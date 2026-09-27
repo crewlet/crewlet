@@ -194,24 +194,38 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 | `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company. It also lists the seats nobody holds (`/chart/seats?unheld=true`), which is what an invitation is sent into |
 | `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
 
-**`config:write` is host access, and is conferred like it.** It is one grant
-by decision: the configuration it writes runs code — an `mcp_servers` entry is
-a command every engine host executes, a seat's `mcp_env` and its per-phase
-model keys (`llm_*`, a `cli-agent` provider among them) decide what the seat's
-children run and which credentials they are handed, a `sandbox` cell of
-`run_in: self` runs a coding agent on the engine host, and a seat's worker
-grants decide which of its tools a worker holds. So a holder can run anything
-on every engine host and read whatever a process there can, the keyring
-included, and every other grant is transitively theirs. A separate "runtime"
-grant would be this one's whole reach under a second name, and a ceiling that
-withheld it would withhold every settings edit with it. Give it to whoever you
-would give a shell on those hosts. A machine token may carry it —
-`iamdomain` mints it onto one deliberately, because applying a configuration
-from a deploy job is what a token is for — so minting a token with it is handing
-that job host access; and `crewlet validate` warns when an identity provider's
-group mapping confers it. `people:manage` being its own grant keeps directory
-changes a reviewable gesture of their own; it is **not** a bound on a
-`config:write` holder, who can reach the store the directory lives in anyway.
+**`config:write` is host access: running code on every engine host**, and
+that is what it confers rather than a side effect of it. It is one grant by
+decision, and the configuration it writes runs code — a stdio `mcp_servers`
+entry is a `command` the engine starts as its own user on every node that runs
+seats; a seat's per-phase model keys (`llm_*`) name a `cli-agent` provider, a
+binary the engine runs, and a `sandbox` cell of `run_in: self` does its code
+work inside it; a `run_in: direct` sandbox cell runs a coding agent, and every
+setup step, as that user; a seat's `mcp_env` decides which credentials its
+children are handed; and a seat's worker grants decide which of its tools a
+worker holds. The seat's half of that — its model chain, its credentials, its
+sandbox cell and its `mcp_env`, the runtime half on the org chart — takes the
+same grant through `/chart`. So a holder can run anything on every engine host
+and read whatever the engine's user can: the Tier A file, the keyring every
+session cookie is signed under, and every credential the store holds — and
+every other grant is transitively theirs. A separate "runtime" grant would be
+this one's whole reach under a second name, and a ceiling that withheld it
+would withhold every settings edit with it. Hand it out as you would a shell on
+those hosts. A machine token may carry it — `iamdomain` mints it onto one
+deliberately, because applying a configuration from a deploy job is what a
+token is for — so minting a token with it is handing that job host access; and
+`crewlet validate` warns when an identity provider's group mapping confers it.
+Every write that can start a process — the company document, the chart's
+runtime half, connecting an integration — asks for a
+[recent step-up](#some-gestures-ask-how-recently-you-proved-who-you-are), which
+is what keeps a stolen week-old cookie from reaching it, and every child the
+engine starts is handed
+an [allowlisted environment](../guides/tools-and-mcp.md#what-a-stdio-servers-environment-is)
+rather than the engine's own — which stops the engine *handing* its secrets to
+a tool server, and does nothing about a holder of this grant, who chose that
+server. `people:manage` being its own grant keeps directory changes a
+reviewable gesture of their own; it is **not** a bound on a `config:write`
+holder, who can reach the store the directory lives in anyway.
 
 **Connecting an integration has no grant of its own.** `/setup` performs no
 write of its own — a credential goes through the store `/secrets` serves, and
@@ -1083,11 +1097,15 @@ brand-new session's row serves its reads on the declared set alone, which only
 ever narrows. `GET /auth/session` shows the effective set.
 
 `crewlet validate` **warns** about a mapping that confers `secrets:read`,
-`secrets:write` or `config:write`: adding somebody to a group is an act
-performed at the provider that nobody here reviews, and those grants hand over
-the company's credentials or — for `config:write` — host access. A warning
-rather than a refusal, because a company may mean it; declaring such a grant on
-the person's own record puts the decision where it is reviewed.
+`secrets:write`, `people:manage` or `config:write`: adding somebody to a group
+is an act performed at the provider that nobody here reviews, and those grants
+hand over the company's credentials, every person here — invite, suspend,
+re-grant, remove — or, for `config:write`, host access. Each warning names the
+group and the grant and says which of those it hands over, and the warnings
+come out in the groups' own order, so two runs over one file print the same
+thing. A warning rather than a refusal, because a company may mean it;
+declaring such a grant on the person's own record puts the decision where it is
+reviewed.
 
 ### The deactivation probe
 
@@ -2015,9 +2033,19 @@ is the only number that can be pushed *forward* without knowing which sessions
 were affected — every cookie in existence carries a value below the new one —
 which is why bumping it is the restore runbook's last step.
 
-Both are stated on the record rather than incremented by the applier. An
-applier that did `+ 1` would fold over an arrival order, and two nodes at one
-checkpoint have seen the same set of records in a different order.
+It ends **bearers**, and nothing else. A restore rolls back every other change
+to the directory made after the artefact was taken as well — a removal, a
+suspension, a withdrawn credential, a reduced grant — and none of those is a
+bearer: the person comes back holding the password, the second factor and the
+grants they had, and signs in again like everybody else. No number moved
+forward can undo those, because each one is about somebody in particular, so
+the runbook re-applies them by hand, from a record kept outside the estate,
+before it bumps the generation
+([Backups & Restore](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)).
+
+Both counters are stated on the record rather than incremented by the applier.
+An applier that did `+ 1` would fold over an arrival order, and two nodes at
+one checkpoint have seen the same set of records in a different order.
 
 And a session is **opened at** both. The writer reads the person's current
 epoch and the fleet's current generation in the same snapshot it forms the
@@ -2081,8 +2109,41 @@ cannot keep.
 
 So each person's name and address are sealed under a key that is **theirs
 alone**, kept in the company's sealed secret store, and removing them
-**destroys that key**. Every copy of the ciphertext, wherever it already is,
-becomes unreadable at once — nothing has to be found or rewritten.
+**destroys that key**. Every copy of the ciphertext that is not also a copy of
+the key becomes unreadable at once — the log's records, every node's rows and
+everything a node serves, every snapshot a node has donated or will donate (a
+donation is a copy of the replicated estate, which the key never enters), and
+every `crewlet backup` taken after the removal — and nothing has to be found or
+rewritten.
+
+**A backup taken before the removal is the copy it does not reach.** The key
+lives in the secret store, which is a coordination bucket, and a backup's
+coordination snapshot carries every bucket — this one included, sealed under
+the keyring exactly as every other credential in it is. So an artefact taken
+before the removal holds the person's sealed name and address *and* the key
+that opens them, side by side: whoever holds the artefact and the keyring —
+which you, the operator, hold by design — can still read both, and
+[restoring it](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)
+brings the person back whole. Nothing the removal does can reach a file that
+already sits somewhere else, so the erasure finishes in each such backup only
+when it is deleted or ages out: on the
+[tiered schedule](../guides/backup.md#where-to-put-it-and-how-often), a
+fortnight after the removal. When an erasure has to be complete — a request
+you must answer, not a leaver you are tidying up after — delete or expire every
+backup taken before the removal rather than waiting for the rotation. Two more
+copies behave the same way:
+
+- **A raw copy of `stream.store_dir`** — the cold runbook's copy, or a
+  filesystem or volume snapshot. The broker purges the key by marking it
+  deleted in its own files rather than overwriting it, so the key's sealed
+  bytes can stay on disk until the broker rewrites the file that holds them,
+  and a raw copy can carry them *even when it was taken after the removal*.
+  `crewlet backup` does not have this problem: its stream snapshot holds the
+  messages a stream still has, and never one it purged.
+- **An external NATS cluster's own backups**, on a node that dials one
+  (`stream.type: nats`). The bucket is that cluster's, so the key is in
+  whatever copy of it the cluster's operator took before the removal, on that
+  cluster's retention rather than yours.
 
 The id survives on purpose, and the row does not. A removal deletes the
 person's row, their sessions, their credentials and their revocation epoch, and
@@ -2091,6 +2152,20 @@ what every later question about them reads. The authentication trail keeps
 naming the id, because a history whose authors evaporate is not an audit
 trail: "who suspended this person, and when" has to keep answering after they
 have gone.
+
+**The login is not sealed, and it outlives the removal in the clear.** A
+login is printed beside everything its holder does, so it is deliberately a
+plain value rather than a sealed one, and destroying the key does nothing to
+it. It stays on the removal record in the identity log — and so in every
+backup and donated snapshot for as long as retention keeps the log — in the
+tombstone's `iam_removed.claims_json`, and in the audit rows that recorded an
+unbound person's changes under it. The login an invitation or the first-person
+form **proposes** is derived from the address (`jane.doe@example.com` proposes
+`jane.doe`, and `jane@example.com` proposes `jane.example`), so a removed
+person's address is, more often than not, still partly readable from their
+login. If an erasure request has to reach the login too, the only way is not
+to have put personal data in it: give such a person a login that names
+nothing about them, and do not accept the proposed one.
 
 Two consequences worth knowing before you see them:
 
@@ -2159,9 +2234,12 @@ applier would stampede your identity provider.
 **A seats-only node does not run this domain at all.** It is the first domain
 whose participation narrows on `node.roles`: ingress runs it because it serves
 requests, workers runs it because it sweeps, and a satellite that only holds
-seats runs neither — so it does not pay the disk, the applier or a share of
-the stream budget to hold a directory of people it authenticates nobody
-against. The corollary matters when you read a satellite's tables: `iam_people`
+seats runs neither — so it does not pay the disk or the applier to hold a
+directory of people it authenticates nobody against. It still counts the
+log's share of the broker's budget: the stream and its reserved ceiling are
+the fleet's, created and sized on every node whatever it runs, because a
+stream keeps the ceiling of whichever node created it first. The corollary
+matters when you read a satellite's tables: `iam_people`
 there is empty because the domain is not running, **not** because the company
 has nobody, and every reader in this estate is three-valued for that reason.
 

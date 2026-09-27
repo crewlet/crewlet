@@ -373,7 +373,9 @@ async snapshot() {
 */
 /**
 * A rejected question, carrying — when the engine refused it on AUTHORITY —
-* the reason and the grants its error frame named.
+* the reason and the grants its error frame named, or — when it answered
+* `unavailable` — the state log's refusal behind that and whether asking again
+* can change it ({@link LogRefusal}).
 *
 * `message` IS STILL THE CODE, which every existing reader tests with
 * {@link queryErrorCode}; the refusal rides beside it rather than replacing it,
@@ -388,6 +390,14 @@ var QueryRefusedError = class extends Error {
 		this.name = "QueryRefusedError";
 	}
 };
+/**
+* Whether a refusal is the state log's, carried by an `unavailable` answer,
+* rather than one on authority. The two ride the same field of an answer
+* because a screen hands both to `QueryState` the same way.
+*/
+function isLogRefusal(refusal) {
+	return "retryAfter" in refusal;
+}
 var PATH = "/ws/stream";
 /**
 * The credential this socket was opened with names nobody any more — the
@@ -467,10 +477,19 @@ var QUERY_ERROR_CODES = {
 	closed: true
 };
 /**
-* The refusal an error frame carries, or null — for a frame that is not a
-* refusal on authority, or a node too old to say why.
+* The refusal an error frame carries, or null — for a frame that is neither a
+* refusal on authority nor an `unavailable` answer, or a node too old to say
+* why.
 */
 function refusalOf(msg) {
+	if (msg.error === "unavailable") {
+		if (typeof msg.retry_after !== "number") return null;
+		return {
+			code: typeof msg.refusal === "string" ? msg.refusal : null,
+			detail: typeof msg.detail === "string" ? msg.detail : null,
+			retryAfter: msg.retry_after
+		};
+	}
 	if (msg.error !== "unauthorized" || typeof msg.reason !== "string") return null;
 	return {
 		reason: msg.reason,
@@ -932,7 +951,7 @@ var LiveSocket = class {
 *
 * `status` alone is not enough to act on: the setup surface distinguishes a
 * revision that moved under the caller from a config slot holding a literal
-* from a fleet with no keyring, and all three are a 409 or a 503. The engine
+* from a company with no active revision, and all three are a 409. The engine
 * answers those with a `code`, and the screen branches on it.
 */
 var RestError = class extends Error {
@@ -1170,4 +1189,4 @@ var rest = {
 	})
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, refusedGrants, requestToken, rest, storeToken };
+export { LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, apiToken, clearToken, isAbort, isLogRefusal, onTokenChanged, onTokenRequested, queryErrorCode, refusedGrants, requestToken, rest, storeToken };

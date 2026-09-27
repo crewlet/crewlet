@@ -48,6 +48,13 @@ different with each.
 - **`unknown`** — nothing can be established about the record. It may be on the
   log and it may not. This is the only outcome a retry is correct for, and the
   retry carries the same operation id so the ledger collapses a duplicate.
+  It is also what a write answers when the broker **says** the record may yet
+  land: on a clustered stream, a second append under an operation id whose
+  first record is proposed and not yet applied (`duplicate message id is in
+  process`), or a leader whose store closed under a record raft had already
+  committed (`store is closed`). Neither is a refusal — the record usually
+  applies a moment later — so the retry under the same id is answered by the
+  broker's duplicate acknowledgement once it lands.
 
 ### Two pendings, and only one says something about the node
 
@@ -390,15 +397,21 @@ from the work tracker, are the first retired kind.
 
 A byte ceiling is a **reservation**. The broker grants it in full when it
 creates the stream, before a single record is written, and refuses to create a
-stream whose ceiling it could not honour. So the three logs compete for one
-number, and a node sizes them together, once, when it creates their streams:
+stream whose ceiling it could not honour. So the state logs compete for one
+number, and a node sizes them together, once, when it creates their streams —
+**all five** this build registers (the tracker's, the vectors', the knowledge
+base's, the org chart's and the identity estate's), whatever roles the node
+runs. Every node creates every log's stream, a stream keeps whatever ceiling
+the node that created it gave it, and a seats-only satellite that sized its
+logs over the four it applies would hand the others a share of bytes the fifth
+already has:
 
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. |
-| **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. The org chart's log asks a flat 64 MiB (`stream.chart_log_max_bytes`, 64 MiB..16 GiB) and the identity estate's a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB): neither grows with anything the volume has a say in — a chart is hundreds of objects, and the identity log grows with headcount and sign-ins. |
+| **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB — which is a floor on scaling DOWN, never a raise: an unset ask already below it, the org chart's and the identity log's, is held at exactly what it asked for, whatever the pool. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
 missing stream is created with and nothing else: a booting node never rewrites
@@ -422,19 +435,31 @@ left to reserve (… of its …-byte limit already reserved), and that limit is
 stream.store_max_bytes where you set one, and otherwise three quarters of the
 free space on the volume holding stream.store_dir (/var/lib/crewlet/stream),
 counting what the broker's streams already hold there.
-stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
-into the state logs' share of the broker, and it goes no lower than
-1073741824 bytes. Give the broker more room; the state logs that already exist
-keep the ceilings they were created with, and no Tier A setting changes them: …
+stream.pages_log_max_bytes is unset, so the ceiling was derived from the
+stream volume's free space and scaled into the state logs' share of the
+broker, and scaling takes it no lower than 1073741824 bytes. Give the broker
+more room; the state logs that already exist keep the ceilings they were
+created with, and no Tier A setting changes them: …
 ```
+
+The sentence about the Tier A field says which of three things the ceiling
+was: **set** (`… sets the ceiling`, with what would have fitted), **derived**
+from the volume and scaled, as above, or the log's own **fixed default** —
+the org chart's and the identity log's, which neither follow the volume nor
+stop at the gibibyte scaling does.
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 4 GiB free there, three quarters
-of which is the three 1 GiB floors), which the broker measures again when the
-node next starts. Or, when the refused log's ceiling is
-above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
-so when that applies.
+on that volume (a first boot needs at least 4.75 GiB free there, three
+quarters of which — 3.56 GiB — is what the floors reserve: the three 1 GiB
+floors, the org chart's 64 MiB and the identity log's 512 MiB), which the
+broker measures again when the node next starts. Or, when the refused log's
+ceiling is above the smallest value its own field accepts, set that field to a
+smaller ceiling — the refusal offers it only then, and names that floor: 1 GiB
+for the tracker's, the vectors' and the knowledge base's fields, 64 MiB for
+`stream.chart_log_max_bytes` and `stream.iam_log_max_bytes`. So a refused
+identity log at its 512 MiB default is offered a smaller one, and a refused
+org chart log at its 64 MiB default, already its field's floor, is not.
 
 A log that already exists cannot be shrunk to make room from here. Its ceiling
 changes only through `crewlet retention set-capacity`, which runs on a node

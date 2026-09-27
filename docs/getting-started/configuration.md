@@ -878,9 +878,13 @@ is down or an administrator has locked themselves out. Each entry states its own
 where it is pinned — and its value must be at least 26 characters, checked on
 what the `${VAR}` resolves to.
 
-**`secrets.keys` is required once a port is set too.** The keyring signs every
-session cookie and derives the key that verifies each per-run token, so an API
-served without one accepts nobody.
+**`secrets.keys` is required on every node**, whether or not a port is set.
+Every record on every state log is signed and verified under the keyring, the
+company document a node fetches from its peers is authenticated by its seal,
+and — once a port is set — it signs every session cookie and derives the key
+that verifies each per-run token. `crewlet validate` refuses a Tier A file
+without one; see [Configuration § What Tier A must state on every
+node](../concepts/configuration.md#what-tier-a-must-state-on-every-node).
 
 Binding a credential to a seat is in neither tier. A token acts under the
 login `token:<id>`, and it acts **as a seat** when the identity directory holds

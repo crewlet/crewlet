@@ -141,6 +141,30 @@ func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 	}
 }
 
+// A READ BEFORE A DECISION THAT FAULTED IS A FAULT, NOT A REFUSAL.
+//
+// It was one `503` for everything but a missing row, carrying the error's
+// text: a store this node could not read told the client to come back in two
+// seconds, and handed it a database path while it waited. A fault is `500
+// internal_error` with its words in the log; the refusals above keep their
+// `503` — the control.
+func TestAReadBeforeADecisionThatFaultedIsAFault(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	r.reader.err = errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+	got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+		map[string]any{"after": "ENG-2"})
+	if got.status != http.StatusInternalServerError {
+		t.Fatalf("answered %d, want 500: %v", got.status, got.body)
+	}
+	if after := got.header.Get("Retry-After"); after != "" {
+		t.Errorf("a fault told the client to come back in %s seconds", after)
+	}
+	if detail, _ := got.body["detail"].(string); strings.Contains(detail, "/var/lib") {
+		t.Errorf("the fault's own words reached the caller: %v", got.body)
+	}
+}
+
 // AN ARGUMENT THE TOOL DOES NOT READ IS REFUSED BY NAME, NEVER DROPPED.
 //
 // `save_work_view` lost its free `owner` when a personal view became the

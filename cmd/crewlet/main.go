@@ -1167,15 +1167,12 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		return err
 	}
 
-	// ONE keyring for the process. The reconciler opens revisions with it
-	// and the config surface seals them with it; two ciphers over one
-	// store would mean a revision written by this node is one it cannot
-	// read back.
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
-		return fmt.Errorf("secrets keyring: %w", err)
-	}
+	// ONE keyring for the process, and it is the ENGINE's: the reconciler
+	// opens and authenticates revisions under it, so the config surface
+	// seals them with the same one and the seed seals the file with it.
+	// Built a second time here from the same Tier A, it matched only
+	// because two constructors happened to agree.
+	cipher := e.Cipher()
 
 	// THE STORE IS AUTHORITATIVE AT RUNTIME; the file is a seed. Both
 	// halves matter: without the seed a first run has nothing to activate
@@ -1615,9 +1612,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// writes through the engine rather than through the config
 		// surface beside it.
 		Seats: e,
-		// The fleet's own store, sealed with the same keyring. A node with
-		// no secrets.keys still gets one, and every secret write through
-		// it refuses with no_keyring rather than storing plaintext.
+		// The fleet's own store, sealed with the same keyring — the one
+		// every node holds, since Tier A refuses a file without it.
 		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
 		// THIS NODE'S resolution chain, so a requirement can say whether
 		// a ${VAR} actually resolved rather than only whether somebody
@@ -1721,9 +1717,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// how a person at the dashboard learns they have work.
 		Inbox: e,
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
-		// verifies tokens this process's engine minted, and two receivers
-		// would sign with two per-process keys unless a keyring happened
-		// to be configured.
+		// verifies tokens this process's engine minted, and a second
+		// receiver is a second construction of one decision that nothing
+		// compares with the first.
 		OtelReceiver: e.OtelReceiver(),
 		// THE ENGINE'S OWN, not a second one. A run's session lives in
 		// the object that opened it, so an API holding a different
@@ -1901,9 +1897,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// THE SAME ANSWER /chart/check reads, so a gauge on /health and
 		// the screen that renders the report cannot disagree.
 		SeatHeld: seatHeld(e),
-		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that cannot
-		// serve one — see [signInSurface] for the two postures that
-		// produce a nil and why each is honest rather than a fault.
+		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that runs no
+		// identity domain — see [signInSurface] for why that is honest
+		// rather than a fault.
 		Auth: authSurface,
 		// AND THE OTHER END OF THE COOKIE IT MINTS. Nil exactly when
 		// Auth is: a node that cannot sign one has none to check.

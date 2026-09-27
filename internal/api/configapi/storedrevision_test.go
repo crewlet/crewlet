@@ -38,7 +38,7 @@ func refusedByThisBuild(document map[string]any) {
 // document they needed to fix.
 func TestAStoredRevisionThisBuildRefusesIsStillServed(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	id := s.seedStored(t, companyDoc, refusedByThisBuild)
 
 	for _, path := range []string{
@@ -66,7 +66,7 @@ func TestAStoredRevisionThisBuildRefusesIsStillServed(t *testing.T) {
 // the one write that fixes the company answered 500.
 func TestACorrectedPutReplacesARevisionThisBuildRefuses(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, companyDoc, refusedByThisBuild)
 
 	res := s.do(t, http.MethodPut, "/config", companyDoc,
@@ -85,7 +85,7 @@ func TestACorrectedPutReplacesARevisionThisBuildRefuses(t *testing.T) {
 // skipped validation would pass the first and store a company no node runs.
 func TestAPatchReplacesARevisionThisBuildRefusesOnlyWhenItCorrectsIt(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, companyDoc, refusedByThisBuild)
 
 	unrelated := s.do(t, http.MethodPatch, "/config", `{"mission": "unrelated"}`, summaryHeader)
@@ -118,7 +118,7 @@ func TestAPatchReplacesARevisionThisBuildRefusesOnlyWhenItCorrectsIt(t *testing.
 // validated was the only thing that could fail.
 func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	refused := s.seedStored(t, companyDoc, refusedByThisBuild)
 
 	reload := s.do(t, http.MethodPost, "/config/reload", "", nil)
@@ -129,7 +129,7 @@ func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 		t.Errorf("reload error = %v, want validation_error", got)
 	}
 
-	s.seed(t, companyDoc, nil)
+	s.seed(t, companyDoc)
 	revert := s.do(t, http.MethodPost, "/config/revisions/"+refused+"/revert", "", nil)
 	if revert.Code != http.StatusBadRequest {
 		t.Fatalf("revert = %d, want 400: %s", revert.Code, revert.Body)
@@ -201,7 +201,7 @@ func TestAnOldChartIsServedAndNeverWrittenBack(t *testing.T) {
 
 	t.Run("served", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
 		// THE UNIT IS ADDRESSED BY ITS KEY, and this document declares
 		// none — so the key is the one minted from its name when the
@@ -216,7 +216,7 @@ func TestAnOldChartIsServedAndNeverWrittenBack(t *testing.T) {
 
 	t.Run("a PUT sending it back is refused naming the chart", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
 
 		kept := s.do(t, http.MethodPut, "/config", duplicateNamesDoc,
@@ -246,7 +246,7 @@ func TestAnOldChartIsServedAndNeverWrittenBack(t *testing.T) {
 		// base carrying an admission break is refused for THAT whatever
 		// the patch says — which would make the second half of this case
 		// pass for the wrong reason.
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		s.seedStored(t, oldChartDoc, func(map[string]any) {})
 
 		chart := s.do(t, http.MethodPatch, "/config",
@@ -277,7 +277,7 @@ func TestAnOldChartIsServedAndNeverWrittenBack(t *testing.T) {
 	// writing anything a caller sent.
 	t.Run("a reload and a revert of it are accepted", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		stored := s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
 		if res := s.do(t, http.MethodPost, "/config/reload", "", nil); res.Code != http.StatusCreated {
 			t.Fatalf("reload = %d, want 201: %s", res.Code, res.Body)
@@ -312,7 +312,7 @@ mcp_servers:
     shared: false
     env: {TOKEN: ` + literal + `}
 `
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, doc, func(document map[string]any) {
 		document["a_setting_from_a_newer_build"] = map[string]any{"depth": 3}
 	})

@@ -78,8 +78,8 @@ So the chart makes its own trade, and states it rather than inheriting one:
   a seat or a unit is sealed into this store under a name derived from the
   object and the field, and the record carries a `${VAR}` **reference**. The
   value reaches the store and never the log, the rows, a snapshot or a backup
-  of either. A write that hands a literal to a node with no secret store is
-  **refused** rather than stored.
+  of either. A write whose literal cannot be sealed is **refused** rather
+  than stored in the clear.
 - **A whole `${VAR}` is stored as written.** It names a credential rather than
   being one, it is what you edit, and sealing it would put a pointer inside the
   store and a pointer to that pointer on the record.
@@ -90,9 +90,14 @@ So the chart makes its own trade, and states it rather than inheriting one:
   matched against, one indexed read. The place a *person's* name and address
   live under a key that can be deleted is the
   [identity directory](identity-and-access.md): removing somebody there
-  destroys that key, which makes every copy unreadable at once — the only
-  erasure a write-ahead log can actually offer. A leaver's seat still names
-  them until the seat's own `name` and `email` are cleared.
+  destroys that key, which makes every copy of them that does not also hold
+  the key unreadable at once — the only erasure a write-ahead log can actually
+  offer. A backup taken before the removal does hold it, because this store's
+  bucket is in every backup, so that backup goes on opening their name and
+  address for whoever holds it and the keyring until it is deleted
+  ([what a removal reaches](identity-and-access.md#removing-somebody-destroys-a-key-not-a-row)).
+  A leaver's seat still names them until the seat's own `name` and `email`
+  are cleared.
 
 At boot the engine loads every record into a process-local snapshot and installs it as the **secret source**. From then on `${VAR}` resolution asks the store first and falls back to the process environment:
 
@@ -120,7 +125,7 @@ When a name exists in both with **different** values, boot logs `secret_shadowed
 
 ### A keyring is required
 
-Unlike `company_config` — which supports a plaintext mode so pre-encryption deployments keep working — the secret store has **no plaintext mode**. There is no legacy corpus to stay compatible with, and a store whose whole purpose is holding secrets should not be able to hold them in the clear. A node with no keyring is still a supported deployment; it simply does not use the store, and resolves from the environment.
+The secret store has **no plaintext mode**, and neither does anything else any more: every node's Tier A carries a keyring (`crewlet validate` refuses a file without one, and a node refuses to start), and a company document stored unsealed is refused by every reader but `crewlet config seal`. A store whose whole purpose is holding secrets should not be able to hold them in the clear. The one place a command runs with no keyring is a provisioning run given no Tier A file at all, which opens no store and resolves from the environment alone — and says so.
 
 Each value is sealed with AES-256-GCM and the record's own `name` bound in as associated data, so a ciphertext moved to another name fails to decrypt rather than silently impersonating a different secret. That is also what makes a **read fail closed**: a snapshot that skipped a record it could not open would let the environment answer for it, which is exactly the stale-`.env` shadowing the store exists to prevent — so an unopenable record refuses the whole snapshot, loudly, and the previous one keeps serving.
 
@@ -202,7 +207,8 @@ crewlet secrets rekey                            # after a keyring rotation
 
 A deployment has one keyring, and everything that has to be authenticated
 across a fleet derives from it. It **seals** the company config and the secret
-store's rows. It **signs** the two per-run tokens a sandbox carries. And it
+store's rows — and a sealed company document is an authenticated one, so a
+node refuses one its peers published unsealed. It **signs** the two per-run tokens a sandbox carries. And it
 **signs every record on every state log** — the tracker's, the knowledge
 base's, and any domain a later build registers.
 
@@ -400,12 +406,12 @@ Resolution order on any node, for any `${VAR}`:
 3. **Tier B** (the company document) resolves **store first, environment
    second**.
 
-So a node with an empty store — or no keyring at all — resolves everything
-from the environment and runs normally. That is not a degraded mode: *"no
-keyring is a supported deployment; secrets come from the environment and the
-store is simply not in use"* is the engine's own comment at the point it
-decides. **A brand-new node always starts from the environment.** Nothing has
-to be copied to it, and there is no first-boot step that reads a peer.
+So a node with an empty store resolves everything from the environment and
+runs normally. That is not a degraded mode. **A brand-new node always starts
+from the environment.** Nothing has to be copied to it, and there is no
+first-boot step that reads a peer. (What a node cannot do is start with no
+keyring at all: every node needs one — see [the three jobs
+above](#the-keyring-is-not-optional-and-it-does-three-jobs).)
 
 ### Which one to use
 
@@ -416,7 +422,7 @@ to be copied to it, and there is no first-boot step that reads a peer.
 
 **The two columns are the same, and that is the point.** A credential is company-wide state, so it lives where the company config lives: one sealed copy on the coordination KV, written through any node's authenticated API, read by all of them.
 
-The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node with no keyring, or an empty store, resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
+The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node whose store is empty resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
 
 > **Provisioner-minted credentials work fleet-wide too.** `crewlet gitlab
 > provision`, `crewlet slack provision` and the rest MINT credentials, and
@@ -441,7 +447,7 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 | Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, never persisted by Crewlet **and never read back from the store**: a GitLab admin PAT carries `api` scope over the whole group, and the store is read by every node holding the keyring. Reading one from it would imply it may be kept there |
 | OTLP endpoint / protocol / headers, `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | **Env only** | Deployment-environment settings that belong to the host, not the company; several are read before the store loads |
 | `CREWLET_TOOL_SKILLS_SPACE` | **Env only** | Not secrets — flag defaults for the import/resync commands, read by nothing else |
-| MCP stdio subprocess environment | **Env only, plus declared creds** | Servers read undeclared conventional variables (`PATH`, proxy vars, vendor SDK keys), so the host env is inherited. Store values are **not** poured in — each server gets exactly the credentials its `mcp_env` declares, already resolved. Injecting the whole store would hand every seat's token to every subprocess |
+| MCP stdio subprocess environment | **Declared only, over an allowlist** | A child is handed the host allowlist (`PATH`, locale, TLS trust, proxy), the engine user's `HOME`, `TMPDIR` and XDG directories, and exactly what its `env:` and the seat's `mcp_env` declare, already resolved — **never** the engine's own environment, which is where Tier A's keyring, token values and client secret resolve from. A server that reads an undeclared variable names it in `env:` with a `${VAR}` reference, which resolves through the store and then the environment like any other. Store values are **not** poured in either: injecting the whole store would hand every seat's token to every subprocess. See [What a stdio server's environment is](../guides/tools-and-mcp.md#what-a-stdio-servers-environment-is) |
 
 Nothing writes a minted value back into the process environment. **The sink is the only durability path**, and a value minted this run is read back through the sink, which is why a run must name one before it touches the third-party app, and why `-print` reports itself as holding nothing rather than pretending otherwise.
 
@@ -463,7 +469,7 @@ activate`](../reference/cli.md#crewlet-config-activate).
 ## Operational notes
 
 - **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. `sandbox_env_unresolved` warns (names only) when a sandbox launch references something nothing answers, and the sandbox credential check refuses to launch a coding agent on an empty credential.
-- **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point.
+- **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a coordination backup opens everything the bucket held when it was taken — including the data key of every person removed since, whose name and address that same backup still carries. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before it is gone ([what a removal reaches](identity-and-access.md#removing-somebody-destroys-a-key-not-a-row)).
 - **Key rotation.** Add the new key to `secrets.keys` **on every node**, set `active_key_id`, then run **both** `crewlet config rekey` and `crewlet secrets rekey` before dropping the old key. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a removed person's key in particular stays destroyed rather than being written back as the value the pass read before the removal.
 - **The `_secrets` bucket is created on demand** by the first node to open coordination, and it is durable: on the embedded topology it lives under `stream.store_dir` like every other bucket, so a restart does not lose it. Back that directory up alongside the keyring.
 - **Rows left in a node's own `secret_values` table** — written before this change, or while its engine was stopped — are migrated onto the fleet at that node's next start and removed locally. The pass copies before it deletes and never overwrites a name the fleet already holds, because the fleet's copy is by definition the newer write. A failure leaves the local rows in place and logs `secret_migration_incomplete`; the node keeps serving from them and retries at the next start.

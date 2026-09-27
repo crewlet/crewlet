@@ -398,7 +398,7 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 	// a node now needs: the command no longer helps itself to the first
 	// entry of the Tier A list it just parsed.
 	t.Setenv(apiTokenEnv, "ops-token")
-	boot := bootWithAPI(t, "127.0.0.1", 8080, "ops-token")
+	boot := bootWithAPI(t, "127.0.0.1", 8000, "ops-token")
 	locked := fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
 		"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
 
@@ -410,7 +410,7 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 		t.Fatal("the target is not marked fleet-wide, so `secrets set` would " +
 			"tell an operator their rotation reached one node")
 	}
-	if !strings.Contains(target.where, "127.0.0.1:8080") {
+	if !strings.Contains(target.where, "127.0.0.1:8000") {
 		t.Errorf("where = %q, want the node it writes through", target.where)
 	}
 }
@@ -455,7 +455,7 @@ func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 // unreadable path replaces an accurate message with a connection refused.
 func TestOnlyALockedStoreIsRoutedThroughTheAPI(t *testing.T) {
 	t.Parallel()
-	boot := bootWithAPI(t, "127.0.0.1", 8080, "ops-token")
+	boot := bootWithAPI(t, "127.0.0.1", 8000, "ops-token")
 	other := errors.New("the keyring cannot open this store")
 
 	target, err := throughTheRunningNode(boot, "crewlet.yaml", other)

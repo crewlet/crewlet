@@ -388,33 +388,9 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 			Grants: []iam.Grant{e.needs}}
 	}
 	data, err := e.answer(ctx, p)
-	return data, unavailableIfTransient(err)
+	return data, classifyFailure(err)
 }
 
-// unavailableIfTransient turns a read this node could not serve YET into
-// [ErrUnavailable], leaving every other failure alone.
-//
-// AT THE REGISTRY, ONCE, rather than at each answer that reads something
-// that can be briefly unreachable. It was per answer, and the answers that
-// did not call it were exactly the ones reported: an unreadable lease table
-// reached `fleet` as a plain failure and `sandbox_runs` likewise, so a
-// coordination blip rendered as `query_failed` and a 500, telling a client to
-// give up on a screen that would work in a few seconds. The reference had
-// promised a 503 for both.
-//
-// Two sources of "not yet", and each is its own subsystem's classification
-// rather than a second list here:
-//
-//   - a state-log read refusal whose code is retryable
-//     ([statelog.ReadRefusal.Retryable]). A node that is behind will catch
-//     up; a node holding a record it cannot decode will not, however long a
-//     caller waits, so that one stays a failure.
-//   - [coord.ErrUnavailable], the coordination contract's own third answer:
-//     the store could not be reached, which is neither "held" nor "absent".
-//
-// A refusal about the REQUEST is never reclassified, even when it wraps one of
-// those: the caller has to change what it asks, and "come back" would send the
-// identical request round a loop.
 // unresolved is the refusal for a question asked on a context whose principal
 // nobody could establish, classified into the two things that actually cause
 // it — because this package already reports three kinds of failure and these
@@ -444,7 +420,52 @@ func unresolved(ctx context.Context, what string) error {
 		"read identity: %w", ErrUnavailable, what, why)
 }
 
-func unavailableIfTransient(err error) error {
+// classifyFailure sorts a failed answer into this registry's own vocabulary: a
+// read THIS NODE could not serve becomes [ErrUnavailable], a read whose request
+// named another log's position becomes [ErrBadParams], and every other failure
+// is left alone.
+//
+// AT THE REGISTRY, ONCE, rather than at each answer that reads something
+// that can be unreachable or refused. It was per answer, and the answers that
+// did not call it were exactly the ones reported: an unreadable lease table
+// reached `fleet` as a plain failure and `sandbox_runs` likewise, so a
+// coordination blip rendered as `query_failed` and a 500, telling a client to
+// give up on a screen that would work in a few seconds. The reference had
+// promised a 503 for both.
+//
+// Two sources, and each is its own subsystem's classification rather than a
+// second list here:
+//
+//   - EVERY state-log refusal ([statelog.ErrUnavailable]), a read's or a
+//     write's, whether or not waiting clears it. A node that is behind will
+//     catch up; a node holding a record it cannot decode, one whose log is
+//     full or whose broker refused the barrier will not — but none of those
+//     is a FAULT, and reported as one (a 500 `query_failed`, with the
+//     refusal's words sent only to the log) it told a caller the server had
+//     broken while hiding the remedy the refusal names. Whether to come back
+//     is carried separately, by [statelog.RetryAfter], which is ZERO for a
+//     refusal waiting cannot clear — so a surface answers it with no
+//     Retry-After and a client does not go round a loop. The retryable ones
+//     alone used to qualify, and when a barrier the broker refused stopped
+//     reading as a missed quorum, a linearizable read on a full log went
+//     from a 503 to a 500.
+//   - [coord.ErrUnavailable], the coordination contract's own third answer:
+//     the store could not be reached, which is neither "held" nor "absent".
+//
+// A refusal about the REQUEST is never reclassified, even when it wraps one of
+// those: the caller has to change what it asks, and "come back" would send the
+// identical request round a loop.
+//
+// AND ONE REQUEST MISTAKE IS RAISED ONLY BY THE READ ITSELF, so it is
+// classified here as [ErrBadParams]: a position the caller named on another
+// domain's log ([statelog.ErrForeignPosition]) — a `min_position`, or a feed's
+// `cursor` or `since`. The grammar that parses a position cannot know which
+// log a question reads, and the reader can — so the reader refuses it, before
+// it consults anything about this node, and this is where that refusal
+// becomes the caller's. A floor was a `wrong_stream` refusal, answered
+// `unavailable`: a 503 telling a client to ask another node, which refused it
+// identically, and a dashboard telling a person an operator had to act.
+func classifyFailure(err error) error {
 	switch {
 	case err == nil,
 		errors.Is(err, ErrUnavailable),
@@ -453,14 +474,13 @@ func unavailableIfTransient(err error) error {
 		errors.Is(err, ErrUnauthenticated),
 		errors.Is(err, ErrUnauthorized):
 		return err
+	case errors.Is(err, statelog.ErrForeignPosition):
+		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
-	var refused *statelog.Refused
-	if errors.As(err, &refused) && refused.Code.Retryable() {
+	if errors.Is(err, statelog.ErrUnavailable) || errors.Is(err, coord.ErrUnavailable) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and
-		// derived hint survive for [RetryAfter] and for the log.
-		return fmt.Errorf("%w: %w", ErrUnavailable, err)
-	}
-	if errors.Is(err, coord.ErrUnavailable) {
+		// derived hint survive for [statelog.RetryAfter], for the
+		// transport that renders them, and for the log.
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return err

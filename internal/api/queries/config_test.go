@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -27,13 +28,27 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
+	// A KEYRING, because the surface refuses to be built without one and
+	// reads only what was sealed under it.
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": key}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var ids []string
 	for i, doc := range docs {
 		cfg, err := config.ParseCompany([]byte(doc))
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		payload, err := json.Marshal(cfg)
+		document, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := secrets.Seal(cipher, document)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +61,7 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 		}
 		ids = append(ids, id)
 	}
-	svc, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet()})
+	svc, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}

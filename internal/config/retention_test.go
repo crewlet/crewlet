@@ -12,7 +12,7 @@ import (
 // retentionBoot is a valid Tier A with a retention block to vary.
 func retentionBoot(t *testing.T, r config.TrackerRetention) config.Bootstrap {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := config.KeyedBootstrap()
 	b.Stream.TrackerRetention = r
 	return b
 }
@@ -146,7 +146,7 @@ func TestAnAbsentRetentionBlockIsTheDefaults(t *testing.T) {
 	// AND THE DEFAULTS THEMSELVES SATISFY THE CROSS-FIELD RULE. A shipped
 	// default set that its own validator refuses is a deployment nobody
 	// can start.
-	shipped := config.DefaultBootstrap()
+	shipped := config.KeyedBootstrap()
 	if err := shipped.Validate(); err != nil {
 		t.Fatalf("the shipped defaults do not validate: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"the chart past 16 GiB":     {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16*gib + 1 }, false, "chart_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.KeyedBootstrap()
 			tc.mutate(&b)
 			err := b.Validate()
 			if tc.accept {
@@ -501,7 +501,7 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		}, false, "store_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.KeyedBootstrap()
 			tc.mutate(&b)
 			err := b.Validate()
 			if tc.accept {
@@ -529,7 +529,7 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 // like "I have bounded this node's broker".
 func TestAStoreLimitWithNoStoreDirectoryIsCalledOut(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := config.KeyedBootstrap()
 	b.Stream.StoreDir, b.Stream.StoreMaxBytes = "", 16<<30
 	if err := b.Validate(); err != nil {
 		t.Fatalf("refused a valid document: %v", err)

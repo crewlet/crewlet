@@ -104,8 +104,9 @@ type API struct {
 // Serving reports whether this configuration binds an HTTP surface at all.
 //
 // The one predicate every rule below turns on, in one place: a deployment that
-// serves nothing needs no external URL, no keyring and no credential, and a
-// deployment that serves needs all three.
+// serves nothing needs no external URL, no grant ceiling and no credential,
+// and a deployment that serves needs all three. The keyring is not among them:
+// every node needs it, serving or not ([Bootstrap.Validate]).
 func (a API) Serving() bool { return a.Port != 0 }
 
 // ExternalBase is [API.ExternalURL] without its trailing slash, which is the
@@ -1330,19 +1331,25 @@ func checkOrigin(path Path, origin string) error {
 }
 
 // groupGrantConsequence is every grant an identity provider's group mapping is
-// warned about, and what adding somebody to that group then hands them.
+// warned about, and what adding somebody to that group then hands them — and
+// only those: the rest are authority a company can reasonably leave to a
+// directory's own teams.
 //
 // THE GRANTS THAT REACH PAST THE COMPANY'S OWN WORK, each with its consequence
-// in the sentence an operator reads: the two that read and write the company's
-// credentials, and `config:write`, which is HOST ACCESS — the configuration it
-// writes runs commands on every engine host (an `mcp_servers` entry, a seat's
-// `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so whatever a
-// process there can read, the keyring included, is the holder's. A map rather
-// than a condition, so a grant added here arrives with the sentence that says
-// why.
+// in the sentence an operator reads, because what the provider's administrator
+// would then be deciding differs: the two that read and write the company's
+// credentials; `people:manage`, which is authority over who holds everything
+// else — invite, suspend, re-grant, remove; and `config:write`, which is HOST
+// ACCESS — the configuration it writes runs commands on every engine host (an
+// `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in:
+// self` sandbox), so whatever a process there can read, the keyring included,
+// is the holder's. A map rather than a condition, so a grant added here
+// arrives with the sentence that says why.
 var groupGrantConsequence = map[iam.Grant]string{
 	iam.GrantSecretRead:  "hands them this company's credentials",
 	iam.GrantSecretWrite: "hands them this company's credentials",
+	iam.GrantPeopleManage: "makes them able to invite, suspend, re-grant and " +
+		"remove every person here",
 	iam.GrantConfigWrite: "hands them host access: the configuration " +
 		"config:write writes runs commands on every engine host, so they " +
 		"can run anything there and read whatever a process there can, the " +
@@ -1418,14 +1425,15 @@ func (a API) warnings() []Warning {
 		// somebody to a directory group is an ordinary act performed by
 		// whoever administers the identity provider, and nobody here
 		// reviews it — so a mapping that confers a grant reaching past the
-		// company's own work ([groupGrantConsequence]) hands that reach to
-		// a membership change.
+		// company's own work ([groupGrantConsequence]: the secret store,
+		// every person, or host access) hands that reach to a membership
+		// change. Each gets its own sentence, because what the provider's
+		// administrator would then be deciding differs.
 		//
-		// IN THE GROUPS' OWN ORDER, sorted, because this is a map and
-		// `crewlet validate` prints what it returns: ranged directly, two
-		// mapped groups came out in a different order on every run, so a
-		// diff of the output between two runs of one file showed a change
-		// that was not there.
+		// IN THE GROUPS' OWN ORDER, sorted, and never the map's: ranging
+		// over the map printed these in a different order on every run of
+		// `crewlet validate`, so two runs over one unchanged file differed
+		// and a CI step diffing the output reported a change nobody made.
 		for _, group := range slices.Sorted(maps.Keys(oidc.GroupGrants)) {
 			for _, g := range oidc.GroupGrants[group] {
 				consequence, warned := groupGrantConsequence[g]

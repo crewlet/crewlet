@@ -69,7 +69,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.KeyedBootstrap()
 			tc.mutate(&b)
 			if err := b.Validate(); err != nil {
 				t.Fatalf("the fixture does not validate, so this is a refusal "+
@@ -112,7 +112,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 // has something in it is one nobody reads.
 func TestAFullyStatedDeploymentWarnsAboutNothing(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := config.KeyedBootstrap()
 	b.Stream.StoreDir = "/var/lib/crewlet/stream"
 	b.Retention.BackupOwner = "platform-oncall"
 	if err := b.Validate(); err != nil {
@@ -147,7 +147,7 @@ func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.KeyedBootstrap()
 			b.Stream.StoreDir = "/var/lib/crewlet/stream"
 			b.Retention.BackupOwner = "platform-oncall"
 			b.Stream.Debug = true

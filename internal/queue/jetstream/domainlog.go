@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -157,6 +158,15 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	}
 	ack, err := l.js.Publish(ctx, subject, body, opts...)
 	if err != nil {
+		// THE SIZES TRAVEL WITH A RECORD TOO LARGE TO SEND, because the
+		// client's refusal carries neither and they are the whole of what
+		// its remedy turns on: how far over the record is, and which
+		// server's max_payload it was measured against. Wrapped, so the
+		// state log still classifies it by the sentinel.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return 0, false, fmt.Errorf("%s: %w",
+				tooLarge(l.js.Conn(), "append to", subject, len(body)), err)
+		}
 		return 0, false, err
 	}
 	return ack.Sequence, ack.Duplicate, nil

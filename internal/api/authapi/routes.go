@@ -136,7 +136,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		// here for the reason it is everywhere: a session minted now
 		// would act as the bare credential on this node and as its seat
 		// on the next.
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -170,7 +170,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_token_exchange_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if !landed(opened.Result) {
@@ -276,7 +276,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	held, err := s.directory.PersonByLogin(r.Context(), principal.Login)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_step_up_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	// THE CALLER IS KNOWN here, so the subject is who they signed in as and
@@ -351,7 +351,7 @@ func (s *Service) replacedSession(w http.ResponseWriter, r *http.Request,
 	case v.Row == session.RowValid && v.Bearer.Person == held.ID:
 		return v, true
 	case v.Row == session.RowBehind || v.Row == session.RowStalled:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(nil))
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	}

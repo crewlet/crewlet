@@ -196,7 +196,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	closed, err := s.bootstrapClosed(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_bootstrap_estate_unreadable", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if closed != "" {
@@ -341,7 +341,7 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 	code, err := s.directory.BootstrapCode(r.Context(), bootstrapCodeID(presented))
 	if err != nil {
 		log.WarnContext(r.Context(), "api_bootstrap_codes_unreadable", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return iamdomain.BootstrapCode{}, false
 	}
 	switch state := code.State(s.now()); state {

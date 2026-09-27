@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,9 +12,9 @@ import (
 
 // The keyring is the deployment's SOLE ROOT OF TRUST: the store holds only
 // ciphertext, and the key material lives in Tier A, never in the database it
-// opens. What these pin is the boundary between "encryption is off" — a real,
-// documented posture — and "encryption is on and broken", which must never
-// boot.
+// opens. What these pin is that there is no "encryption is off" any more —
+// every node holds a keyring — and that "encryption is on and broken" never
+// boots either.
 
 func keyMaterial(t *testing.T) string {
 	t.Helper()
@@ -24,18 +25,25 @@ func keyMaterial(t *testing.T) string {
 	return base64.StdEncoding.EncodeToString(key)
 }
 
-func TestNoKeyringIsAPostureNotAFailure(t *testing.T) {
+// NO KEYRING IS A REFUSAL, NOT A POSTURE.
+//
+// It was the documented opt-out: a nil cipher stored the company document in
+// plaintext and read a peer's in plaintext too, which is a document anybody
+// who can reach the coordination store can author. Every node requires a
+// keyring now, and the value that would have reached that posture is refused
+// where it is built, naming the field.
+func TestNoKeyringIsRefusedRatherThanAPosture(t *testing.T) {
 	t.Parallel()
-	// A deployment with no keyring stores its company config in plaintext.
-	// That is the opt-out and the state every deployment starts in, so
-	// refusing here would make the first run of one impossible.
 	var none config.Secrets
 	cipher, err := none.Cipher()
-	if err != nil {
-		t.Fatalf("an unconfigured keyring errored: %v", err)
+	if !errors.Is(err, config.ErrMissing) {
+		t.Fatalf("an empty keyring: err = %v, want ErrMissing", err)
+	}
+	if !strings.Contains(err.Error(), "secrets.keys") {
+		t.Errorf("the refusal does not name the field: %v", err)
 	}
 	if cipher != nil {
-		t.Error("no keyring produced a cipher, so plaintext storage is unreachable")
+		t.Error("an empty keyring produced a cipher")
 	}
 }
 
@@ -169,5 +177,61 @@ func TestKeyMaterialOfTheWrongLengthIsRefused(t *testing.T) {
 	}
 	if _, err := ring.Cipher(); err == nil {
 		t.Fatal("a 9-byte key was accepted as AES-256")
+	}
+}
+
+// VALIDATION REFUSES THE KEY MATERIAL THE BOOT WOULD.
+//
+// `crewlet validate` checked only that a key's material was present, so a file
+// whose key was not base64, or was base64 of three bytes, printed a clean
+// summary and exited 0 — and the boot refused it building the cipher. Tier A
+// resolves ${VAR} before it decodes, so the material validation sees is the
+// material the boot would use, and it is judged by the one decoder the cipher
+// uses, in the one sentence the cipher refuses with. Each row names the key's
+// own material field and never carries the material.
+//
+// The control is the same file holding a 32-byte key.
+//
+// Mutation: drop the decode from validation and every row validates.
+func TestValidationRefusesTheKeyMaterialTheBootWould(t *testing.T) {
+	t.Parallel()
+	file := func(material string) []byte {
+		return []byte("node:\n  roles: [seats]\napi:\n  port: 0\n" +
+			"secrets:\n  active_key_id: k1\n  keys:\n    - id: k1\n      material: \"" +
+			material + "\"\n")
+	}
+	for name, material := range map[string]string{
+		"not base64":  "not-base64-at-all",
+		"three bytes": "AAAA",
+		"31 bytes":    base64.StdEncoding.EncodeToString(make([]byte, 31)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := config.ParseBootstrap(file(material), config.EnvOnly())
+			if !errors.Is(err, config.ErrShape) {
+				t.Fatalf("validation = %v, want the material refused as ErrShape", err)
+			}
+			for _, says := range []string{"secrets.keys[0].material", `key "k1"`,
+				secrets.ErrKeyMaterial.Error(), "crewlet secrets keygen"} {
+				if !strings.Contains(err.Error(), says) {
+					t.Errorf("the refusal does not say %q: %v", says, err)
+				}
+			}
+			if strings.Contains(err.Error(), material) {
+				t.Errorf("the refusal carries the key material: %v", err)
+			}
+			// THE BOOT SAYS THE SAME, so the command and the node agree.
+			ring := config.Secrets{ActiveKeyID: "k1",
+				Keys: []config.SecretKey{{ID: "k1", Material: material}}}
+			if _, boot := ring.Cipher(); boot == nil ||
+				!strings.Contains(boot.Error(), secrets.ErrKeyMaterial.Error()) {
+				t.Errorf("the boot refuses it in other words: %v", boot)
+			}
+		})
+	}
+
+	// THE CONTROL: the same file with a key.
+	if _, err := config.ParseBootstrap(file(keyMaterial(t)), config.EnvOnly()); err != nil {
+		t.Fatalf("the same file with a 32-byte key was refused: %v", err)
 	}
 }

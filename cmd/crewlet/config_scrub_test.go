@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // `crewlet config scrub` — the one-time erasure of personal data from
@@ -35,6 +36,59 @@ roles:
     contact:
       slack_user_id: U0FOUNDER
 `
+
+// THE SCRUB REACHES A PLAINTEXT REVISION TOO, AND WRITES IT BACK SEALED.
+//
+// A store written before the keyring was required holds its superseded
+// revisions in the clear, and those are precisely the old revisions whose
+// charts named people. Every ordinary reader refuses a plaintext revision now
+// — it is one anything that reaches the store could have written — so the
+// scrub is the one reader that must take it, and what it writes back is
+// sealed rather than a second plaintext copy.
+//
+// Mutation: open through the ordinary reader and the scrub stops on the
+// plaintext revision with the address still in it.
+func TestTheScrubReachesAPlaintextRevisionAndSealsIt(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	company, err := config.ParseCompany([]byte(scrubCompanyDoc))
+	if err != nil {
+		t.Fatalf("parse the fixture: %v", err)
+	}
+	document, err := json.Marshal(company)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := plantPlaintext(t, dir, document)
+	seedPreSplit(t, cfg, scrubCompanyDoc+"mission: ship it\n")
+
+	out, errs, err := configCmd(t, cfg, "scrub")
+	if err != nil {
+		t.Fatalf("scrub: %v (%s)", err, errs)
+	}
+	if !strings.Contains(out, "scrubbed 1 revision(s)") {
+		t.Errorf("the scrub did not report the plaintext revision:\n%s", out)
+	}
+	cs, closeStore, err := openConfigStore(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+	defer closeStore()
+	rev, found, err := cs.configs.Get(t.Context(), old)
+	if err != nil || !found {
+		t.Fatalf("the scrubbed revision is gone (found=%v err=%v)", found, err)
+	}
+	if !secrets.Sealed(rev.Payload) {
+		t.Error("the scrub wrote the revision back in the clear")
+	}
+	opened, err := secrets.Open(cs.cipher, rev.Payload)
+	if err != nil {
+		t.Fatalf("the scrubbed revision does not open: %v", err)
+	}
+	if strings.Contains(string(opened), "sarah@example.com") {
+		t.Error("the address survived the scrub of a plaintext revision")
+	}
+}
 
 // THE SCRUB ERASES A SUPERSEDED REVISION AND REFUSES THE ACTIVE ONE.
 //

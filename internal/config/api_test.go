@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -76,9 +77,6 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 		{"no credential at all", func(b *Bootstrap) {
 			b.API.Auth.Tokens = nil
 		}, "at least one token is required"},
-		{"no keyring to sign a session with", func(b *Bootstrap) {
-			b.Secrets = Secrets{}
-		}, "signs every session cookie"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -89,18 +87,52 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 	}
 }
 
-// THE COUNTERFACTUAL, and it is what keeps the four rules above from being
+// THE COUNTERFACTUAL, and it is what keeps the three rules above from being
 // ceremony every node pays. A worker or a seats-only node binds nothing, so it
-// needs no address, no ceiling, no credential and no keyring — and the default
-// Tier A, which is what an empty file decodes to, is exactly that node.
+// needs no address, no ceiling and no credential — and the keyed default Tier
+// A is exactly that node.
 func TestANodeThatServesNoApiNeedsNoneOfIt(t *testing.T) {
 	t.Parallel()
-	b := DefaultBootstrap()
+	b := KeyedBootstrap()
 	if b.API.Serving() {
 		t.Fatal("the default binds a port, so this case is not the one it names")
 	}
 	if err := b.Validate(); err != nil {
 		t.Errorf("a node serving no API was refused: %v", err)
+	}
+}
+
+// BUT EVERY NODE NEEDS THE KEYRING, whatever its roles and whether or not it
+// binds a port.
+//
+// It used to be one of the rules above, required only once `api.port` was
+// set. Every node runs state logs, though — the tracker, the vectors, the
+// pages and the chart run on a seats-only satellite too — and every record on
+// every log is signed and verified under the keyring, so the engine refused
+// the keyless satellite the moment it started its logs, after this command had
+// called its file sound. The satellite is the case, because it is the one the
+// old rule let through.
+func TestASatelliteServingNoApiIsRefusedWithoutAKeyring(t *testing.T) {
+	t.Parallel()
+	const satellite = "node:\n  roles: [seats]\napi:\n  port: 0\n"
+	_, err := ParseBootstrap([]byte(satellite), EnvOnly())
+	if err == nil {
+		t.Fatal("a seats-only node with no keyring validated, and the engine " +
+			"refuses it the moment it starts its state logs")
+	}
+	if !errors.Is(err, ErrMissing) {
+		t.Errorf("err = %v, want ErrMissing", err)
+	}
+	for _, says := range []string{"secrets.keys", "every state log", "crewlet secrets keygen"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+
+	// THE CONTROL: the same node holding a keyring is sound, so the refusal
+	// above is about the keyring and nothing else in the file.
+	if _, err := ParseKeyedBootstrap([]byte(satellite), EnvOnly()); err != nil {
+		t.Fatalf("the same satellite with a keyring was refused: %v", err)
 	}
 }
 
@@ -753,78 +785,86 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 		}
 		named(t, b, "oidc.scopes")
 	})
-	t.Run("a group that confers the secret store", func(t *testing.T) {
-		t.Parallel()
-		b := serving()
-		b.API.Auth.Backend = AuthBackendOIDC
-		b.API.Auth.OIDC = &APIOIDC{
-			Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
-			Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
-			GroupsClaim: "groups",
-			GroupGrants: map[string][]iam.Grant{"ops": {iam.GrantSecretRead}},
-		}
-		named(t, b, "group_grants")
-	})
-	// config:write IS HOST ACCESS: the configuration it writes runs
-	// commands on every engine host, so a group that confers it hands a
-	// membership change at the provider shell on this deployment.
-	t.Run("a group that confers host access", func(t *testing.T) {
-		t.Parallel()
-		b := serving()
-		b.API.Auth.Backend = AuthBackendOIDC
-		b.API.Auth.OIDC = &APIOIDC{
-			Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
-			Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
-			GroupsClaim: "groups",
-			GroupGrants: map[string][]iam.Grant{"admins": {iam.GrantConfigWrite}},
-		}
-		named(t, b, "group_grants.admins.config:write")
-		for _, w := range b.Warnings() {
-			if strings.Contains(w.Path, "config:write") &&
-				!strings.Contains(w.Message, "host access") {
-				t.Errorf("the warning does not say it is host access: %s", w.Message)
+	// EACH WARNED GRANT SAYS WHAT IT HANDS OVER, in its own sentence, and
+	// the path names the grant: what the provider's administrator would
+	// then be deciding differs, so the secret store's sentence on either
+	// of the other two would say the wrong thing.
+	for _, c := range []struct {
+		grant iam.Grant
+		says  string
+	}{
+		{iam.GrantSecretRead, "credentials"},
+		{iam.GrantSecretWrite, "credentials"},
+		// THE GRANT THAT CAN GRANT: whoever administers the provider then
+		// decides who may invite, suspend, re-grant and remove every
+		// person here, which is authority over who holds everything else.
+		{iam.GrantPeopleManage, "invite, suspend, re-grant and remove"},
+		// config:write IS HOST ACCESS: the configuration it writes runs
+		// commands on every engine host, so a group that confers it hands
+		// a membership change at the provider a shell on this deployment.
+		{iam.GrantConfigWrite, "host access"},
+	} {
+		t.Run("a group that confers "+string(c.grant), func(t *testing.T) {
+			t.Parallel()
+			b := serving()
+			b.API.Auth.Backend = AuthBackendOIDC
+			b.API.Auth.OIDC = &APIOIDC{
+				Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+				Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
+				GroupsClaim: "groups",
+				GroupGrants: map[string][]iam.Grant{"admins": {c.grant}},
 			}
-		}
-	})
+			named(t, b, "group_grants.admins."+string(c.grant))
+			for _, w := range b.Warnings() {
+				if strings.HasSuffix(w.Path, "."+string(c.grant)) &&
+					!strings.Contains(w.Message, c.says) {
+					t.Errorf("the %s warning does not say %q: %s",
+						c.grant, c.says, w.Message)
+				}
+			}
+		})
+	}
 }
 
-// THE GROUP WARNINGS COME OUT IN ONE ORDER, whatever order the map ranges in.
+// THE GROUP WARNINGS COME OUT IN ONE ORDER, run after run.
 //
-// `crewlet validate` prints the warnings as returned, and the mapping is a map:
-// ranged directly, two warned groups came out in a different order from one
-// run to the next, so diffing the output of two runs over one file showed a
-// change that was not there. Asked many times, because one run of a random
-// order can come out sorted by chance. Mutation: range the map directly and
-// the order differs within a few runs.
+// They were read off a map, whose iteration order Go randomises, so
+// `crewlet validate` over one unchanged file printed them in a different order
+// each time and a CI step diffing its output saw a change nobody made. Eight
+// groups and twenty reads, because a map of eight iterates from one of eight
+// starting points: a shuffled order survives twenty reads by luck roughly one
+// time in a quintillion.
+//
+// Mutation: range over the map again and the order differs between reads.
 func TestTheGroupWarningsComeOutInOneOrder(t *testing.T) {
 	t.Parallel()
 	b := serving()
 	b.API.Auth.Backend = AuthBackendOIDC
+	grants := map[string][]iam.Grant{}
+	var want []string
+	for _, group := range []string{"alpha", "bravo", "charlie", "delta",
+		"echo", "foxtrot", "golf", "hotel"} {
+		grants[group] = []iam.Grant{iam.GrantSecretRead}
+		want = append(want, "api.auth.oidc.group_grants."+group+"."+
+			string(iam.GrantSecretRead))
+	}
 	b.API.Auth.OIDC = &APIOIDC{
 		Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
-		Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
-		GroupsClaim: "groups",
-		GroupGrants: map[string][]iam.Grant{
-			"platform": {iam.GrantSecretWrite}, "audit": {iam.GrantSecretRead},
-			"ops": {iam.GrantSecretRead}, "billing": {iam.GrantSecretWrite},
-		},
+		Scopes: []string{ScopeOpenID, ScopeOfflineAccess}, GroupsClaim: "groups",
+		GroupGrants: grants,
 	}
-	paths := func() []string {
-		var out []string
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
+	}
+	for range 20 {
+		var got []string
 		for _, w := range b.Warnings() {
 			if strings.Contains(w.Path, "group_grants") {
-				out = append(out, w.Path)
+				got = append(got, w.Path)
 			}
 		}
-		return out
-	}
-	first := paths()
-	if !slices.IsSorted(first) || len(first) != 4 {
-		t.Fatalf("the group warnings are %v, want the four in sorted order", first)
-	}
-	for range 64 {
-		if got := paths(); !slices.Equal(got, first) {
-			t.Fatalf("the group warnings came out as %v after %v", got, first)
+		if !slices.Equal(got, want) {
+			t.Fatalf("group warnings = %v\nwant the groups' own order %v", got, want)
 		}
 	}
 }
@@ -832,15 +872,31 @@ func TestTheGroupWarningsComeOutInOneOrder(t *testing.T) {
 // AND THE COUNTERFACTUAL: a deployment doing none of those warns about none
 // of them. Without this the table above would pass on a build that warned
 // unconditionally, which is the same as a build that warns about nothing.
+//
+// The group maps EVERY grant the table does not warn about, named here rather
+// than read off the table so a grant that joins it by mistake fails: those
+// are authority a company can reasonably leave to a directory's own teams.
 func TestASoundApiPostureWarnsAboutNothing(t *testing.T) {
 	t.Parallel()
+	var unwarned []iam.Grant
+	for _, g := range iam.AllGrants {
+		switch g {
+		case iam.GrantSecretRead, iam.GrantSecretWrite,
+			iam.GrantPeopleManage, iam.GrantConfigWrite:
+			continue
+		}
+		unwarned = append(unwarned, g)
+	}
 	b := serving()
 	b.API.Auth.Backend = AuthBackendOIDC
 	b.API.Auth.OIDC = &APIOIDC{
 		Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
 		Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
 		GroupsClaim: "groups",
-		GroupGrants: map[string][]iam.Grant{"ops": {iam.GrantStateRead}},
+		GroupGrants: map[string][]iam.Grant{"ops": unwarned},
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
 	}
 	for _, w := range b.Warnings() {
 		if strings.HasPrefix(w.Path, "api.") {

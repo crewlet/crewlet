@@ -87,12 +87,17 @@ memory inside the CLI would make turns non-reproducible and would carry
 one task's context into the next.
 
 **Between the seat and the host.** The child process gets an
-**allowlisted** environment — `PATH`, locale, TLS trust, proxy settings,
-plus whatever the profile and your `cli.env` declare — never
-the process environment. Inheriting the engine's environment would hand every seat
-the org's `SLACK_BOT_TOKEN` and database DSN. It would also, for a
-subscription backend, silently bill a metered `ANTHROPIC_API_KEY` that
-happened to be exported.
+**allowlisted** environment — `PATH`, locale, `TERM`, TLS trust, proxy
+settings, plus whatever the profile and your `cli.env` declare — never the
+process environment. It is the one allowlist every child the engine starts is
+handed, a [stdio MCP server](../guides/tools-and-mcp.md#what-a-stdio-servers-environment-is)
+and a local sandbox's coding agent included, so the three cannot disagree about
+what a child may see. Inheriting the engine's environment would hand every seat
+the keyring every session cookie is signed under, the Tier A token values, the
+org's `SLACK_BOT_TOKEN` and the collector credential in
+`OTEL_EXPORTER_OTLP_HEADERS`. It would also, for a subscription
+backend, silently bill a metered `ANTHROPIC_API_KEY` that happened to be
+exported.
 
 **Working directory.** Each call runs in an empty, per-call scratch
 directory that is removed afterwards — so a CLI that reads `AGENTS.md` /

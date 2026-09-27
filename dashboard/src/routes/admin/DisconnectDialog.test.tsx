@@ -433,8 +433,8 @@ test("a refusal that is not a race stops and offers the force", async () => {
         JSON.stringify({
           error: "unavailable",
           message:
-            "This node cannot answer that yet — something it reads is still " +
-            "catching up. Ask again in a moment.",
+            "This node cannot answer that right now — ask it again when it says to, " +
+            "or, where it gives no time, ask another node or an operator.",
           detail:
             "setupapi: this node could not take jira to record the disconnect: " +
             "the fleet status row could not be written",

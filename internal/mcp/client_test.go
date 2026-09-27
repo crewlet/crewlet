@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -297,14 +298,44 @@ func TestPaginationEdgeCases(t *testing.T) {
 	}
 }
 
-func TestChildEnvironmentIsInheritedAndOverlaid(t *testing.T) {
-	// Not parallel: it sets a process-wide environment variable, which is the
-	// only way to prove INHERITANCE rather than assert it about a map.
-	t.Setenv("CREWLET_MCP_TEST_INHERITED", "from-the-engine")
+// A STDIO CHILD IS HANDED THE ALLOWLIST AND ITS OWN DECLARATION, NEVER THE
+// ENGINE'S ENVIRONMENT.
+//
+// It was handed the engine's whole environment: the keyring every session
+// cookie and state-log record is signed under, every Tier A token value and
+// the identity provider's client secret reached every tool server the company
+// declared — a process pulled off a package registry that logs its environment
+// on a crash and forwards it to its own children. What a child needs to run
+// (PATH, and the engine user's HOME, where `npx` and `uvx` keep their caches)
+// still arrives, and what the server's config declares still wins.
+func TestAStdioChildSeesNoneOfTheEnginesSecrets(t *testing.T) {
+	// Not parallel: it sets process-wide environment variables, which is the
+	// only way to prove what a real child INHERITS rather than assert it
+	// about a map.
+	engineSecrets := map[string]string{
+		// The shapes Tier A resolves its `${VAR}` references from: keyring
+		// material, a Tier A token's value, the provider's client secret —
+		// the collector credential the engine reads directly, an operator's
+		// provisioning token and a vendor key exported on the host.
+		"CREWLET_SECRET_KEY_2026_01": "keyring-material-not-for-a-tool-server",
+		"CREWLET_OPS_TOKEN":          "tier-a-token-not-for-a-tool-server",
+		"OIDC_CLIENT_SECRET":         "client-secret-not-for-a-tool-server",
+		"OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer%20otlp-not-for-a-tool-server",
+		"GITLAB_ADMIN_TOKEN":         "glpat-admin-not-for-a-tool-server",
+		"ANTHROPIC_API_KEY":          "sk-ant-not-for-a-tool-server",
+	}
+	for k, v := range engineSecrets {
+		t.Setenv(k, v)
+	}
 	t.Setenv("CREWLET_MCP_TEST_OVERRIDDEN", "engine-value")
+	t.Setenv("HOME", t.TempDir())
 
+	echoed := []string{"CREWLET_MCP_TEST_OVERRIDDEN", "CREWLET_MCP_TEST_DECLARED", "PATH", "HOME"}
+	for k := range engineSecrets {
+		echoed = append(echoed, k)
+	}
 	spec := helperSpec(t, "envdump", "serve", map[string]string{
-		helperEchoEnv:                 "CREWLET_MCP_TEST_INHERITED,CREWLET_MCP_TEST_OVERRIDDEN,CREWLET_MCP_TEST_DECLARED,PATH",
+		helperEchoEnv:                 strings.Join(echoed, ","),
 		"CREWLET_MCP_TEST_OVERRIDDEN": "server-value",
 		"CREWLET_MCP_TEST_DECLARED":   "declared",
 	})
@@ -313,7 +344,7 @@ func TestChildEnvironmentIsInheritedAndOverlaid(t *testing.T) {
 		t.Fatalf("listTools: %v", err)
 	}
 
-	tail := waitForTail(t, c, 4)
+	tail := waitForTail(t, c, len(echoed))
 	env := map[string]string{}
 	for _, line := range tail {
 		if rest, ok := strings.CutPrefix(line, "ENV "); ok {
@@ -322,18 +353,26 @@ func TestChildEnvironmentIsInheritedAndOverlaid(t *testing.T) {
 			}
 		}
 	}
-	if env["CREWLET_MCP_TEST_INHERITED"] != "from-the-engine" {
-		t.Errorf("the child did not inherit the engine's environment: %v", env)
+	for k, secret := range engineSecrets {
+		if env[k] == secret {
+			t.Errorf("%s reached the tool server: the engine's environment is not "+
+				"the child's to read", k)
+		}
 	}
 	if env["CREWLET_MCP_TEST_OVERRIDDEN"] != "server-value" {
-		t.Errorf("the server's own declaration must win over the inherited value, got %q",
+		t.Errorf("the server's own declaration must win over anything inherited, got %q",
 			env["CREWLET_MCP_TEST_OVERRIDDEN"])
 	}
 	if env["CREWLET_MCP_TEST_DECLARED"] != "declared" {
 		t.Errorf("a declared variable did not reach the child: %v", env)
 	}
 	if env["PATH"] == "" {
-		t.Error("PATH did not reach the child; whole-environment inheritance is the point")
+		t.Error("PATH did not reach the child, so a server started through npx or uvx " +
+			"cannot find its runtime")
+	}
+	if env["HOME"] != os.Getenv("HOME") {
+		t.Errorf("HOME = %q, want the engine user's own %q: a package runner keeps "+
+			"its cache there", env["HOME"], os.Getenv("HOME"))
 	}
 }
 

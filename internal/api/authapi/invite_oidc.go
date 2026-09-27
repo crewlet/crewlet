@@ -115,7 +115,7 @@ func (s *Service) StartProviderRedemption(w http.ResponseWriter, r *http.Request
 		// derives it, so it is a name the person was already shown.
 		email, err := s.openSealed(r, held)
 		if err != nil {
-			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 			return
 		}
 		login = iam.LoginFromAddress(email)
@@ -192,7 +192,7 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_holder_unreadable",
 			"error", err, "invitation", held.ID)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if holder.ID != "" && !holder.Reserved {
@@ -207,19 +207,19 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	blinder, err := s.blinder.Blinder(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_blind_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	blind, err := blinder.Subject(claims.Issuer, claims.Subject)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_blind_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	attempt.Person = person

@@ -185,9 +185,8 @@ var ErrDisconnectUnavailable = errors.New("integration: this node cannot complet
 // handing in a cancelled context, both have to reach the reconciler.
 //
 // release is non-nil exactly when held is true, and calling it is what lets the
-// next writer in. Nil Guard is an unguarded worker — the shape a test builds
-// and the shape a node with no keyring runs, where there is no lease to take
-// and nothing to serialize against.
+// next writer in. Nil Guard is an unguarded worker — the shape a test builds,
+// where there is no lease to take and nothing to serialize against.
 type Guard func(ctx context.Context, kind Kind) (
 	bounded context.Context, release func(), held bool, err error)
 

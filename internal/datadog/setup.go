@@ -16,8 +16,9 @@ import (
 // monitors they want an agent woken by.
 //
 // The webhook URL is deliberately NOT a requirement, and now for a stronger
-// reason than before: it is not an input at all but `<public_base_url>` plus
-// the inbound path, and the engine WRITES it at Datadog on every pass.
+// reason than before: it is not an input at all but `api.external_url` — the
+// Tier A address, resolved before the file is decoded — plus the inbound path,
+// and the engine WRITES it at Datadog on every pass.
 // Modelling it as a field would invite somebody to type one the next
 // reconcile would overwrite.
 

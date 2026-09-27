@@ -543,30 +543,133 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	}
 }
 
-// AND A REFUSAL WAITING CANNOT CLEAR IS STILL A FAILURE.
+// A FLOOR ON ANOTHER LOG IS THE REQUEST'S MISTAKE, AND A REBUILT STREAM IS
+// THIS NODE'S.
+//
+// The reader refuses a `min_position` naming another domain's log before it
+// looks at anything about this node, because every node refuses it the same:
+// the caller has to change what it asks, so it is [queries.ErrBadParams]. It
+// used to arrive as a `wrong_stream` refusal and be answered unavailable — a
+// 503 sending a client to another node that refused it identically. The code
+// keeps its other meaning, which IS a state of this node (its checkpoint past
+// the log's end, or a stream rebuilt under it), and that one stays
+// unavailable: the control.
+func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"a min_position on another domain's log",
+			fmt.Errorf("tracker: read: %w: this read floors at CREWLET_PAGES_LOG@1:5",
+				statelog.ErrForeignPosition),
+			queries.ErrBadParams},
+		{"a node whose stream was rebuilt under it",
+			&statelog.Refused{Code: statelog.RefuseWrongStream, Level: statelog.ReadStale},
+			queries.ErrUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := queries.NewRegistry()
+			queries.Register(r, queries.Sources{Work: &stubWork{err: tc.err}})
+			_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items",
+				map[string]any{})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("answered %v, want %v", err, tc.want)
+			}
+			if errors.Is(tc.want, queries.ErrBadParams) && errors.Is(err, queries.ErrUnavailable) {
+				t.Errorf("answered %v, which is also unavailable — a request "+
+					"every node refuses is not this node's to come back to", err)
+			}
+		})
+	}
+}
+
+// A FEED'S REQUEST MISTAKE IS BAD PARAMS, AND A FEED'S FAULT IS NOT.
+//
+// `work_activity` and `work_inbox` read two positions off the wire — a cursor
+// and a `since` — and the reader refuses one it cannot use, before any row, as
+// [tracker.ErrBadQuery]: not a position, or a position from another log. That
+// is the caller's, so it is bad params. `work_activity` used to answer EVERY
+// failure that was not the state log's as bad params, so a store this node
+// could not read was told to the caller as their mistake; `work_inbox` answered
+// none, so a malformed cursor was a fault. The sentinel decides now, and a
+// store's own error stays a fault — the control.
+func TestAFeedsRequestMistakeIsBadParamsAndItsFaultIsNot(t *testing.T) {
+	t.Parallel()
+	mistake := fmt.Errorf("%w: cursor: statelog: a position on another log",
+		tracker.ErrBadQuery)
+	fault := errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+	for _, what := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"work_activity", map[string]any{"container": "workspace"}},
+		{"work_inbox", map[string]any{"handle": "ana"}},
+	} {
+		t.Run(what.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := askAsOperator(t, queries.Sources{Work: &stubWork{err: mistake}},
+				what.name, what.args)
+			if !errors.Is(err, queries.ErrBadParams) {
+				t.Errorf("a refused request answered %v, want %v", err, queries.ErrBadParams)
+			}
+			_, err = askAsOperator(t, queries.Sources{Work: &stubWork{err: fault}},
+				what.name, what.args)
+			if err == nil || errors.Is(err, queries.ErrBadParams) ||
+				errors.Is(err, queries.ErrUnavailable) {
+				t.Errorf("a store fault answered %v, want a plain failure — it "+
+					"is this node's, not the caller's and not a refusal", err)
+			}
+		})
+	}
+}
+
+// AND A REFUSAL WAITING CANNOT CLEAR IS UNAVAILABLE TOO — WITH NO HINT.
 //
 // A node holding a record it cannot decode will not catch up however long the
-// caller waits, so a Retry-After there sends a client round a loop that cannot
-// terminate. The classification is the state log's own rather than a second
-// list on this side.
-func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
+// caller waits, and a log at its ceiling or a barrier its broker refused will
+// not either. None of them is a fault: they were one, a 500 `query_failed`
+// whose remedy went only to the log, and a linearizable read on a full log
+// became one the moment its barrier stopped reading as a missed quorum. So
+// every state-log refusal is [queries.ErrUnavailable], and what keeps a
+// client out of a loop is the hint, which is the state log's own rule and
+// ZERO for these — a surface answers it with no Retry-After. A behind node
+// is the control: it keeps its derived hint.
+func TestARefusalWaitingCannotClearIsUnavailableWithNoHint(t *testing.T) {
 	t.Parallel()
-	work := &stubWork{err: &statelog.Refused{
-		Code:   statelog.RefuseDeferred,
-		Level:  statelog.ReadSession,
-		Detail: "this node holds a record at a version it cannot decode",
-	}}
-	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Work: work})
+	for _, tc := range []struct {
+		name string
+		code statelog.ReadRefusal
+		want time.Duration
+	}{
+		{"a record this node cannot decode", statelog.RefuseDeferred, 0},
+		{"a log at its byte ceiling", statelog.RefuseLogFull, 0},
+		{"a barrier the broker refused", statelog.RefuseBrokerRefused, 0},
+		{"a node that is behind, the control", statelog.RefuseBehind, 12 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			refused := &statelog.Refused{Code: tc.code, Level: statelog.ReadLinearizable,
+				Detail: "what the refusal is about"}
+			if tc.code.Retryable() {
+				refused.RetryAfter = 12 * time.Second
+			}
+			r := queries.NewRegistry()
+			queries.Register(r, queries.Sources{Work: &stubWork{err: refused}})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{})
-	if err == nil {
-		t.Fatal("a refused read answered successfully")
-	}
-	if errors.Is(err, queries.ErrUnavailable) {
-		t.Fatalf("a refusal waiting cannot clear was reported as %v — a client "+
-			"told to come back goes round a loop that cannot terminate",
-			queries.ErrUnavailable)
+			_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items",
+				map[string]any{})
+			if !errors.Is(err, queries.ErrUnavailable) {
+				t.Fatalf("a read refused %s answered %v, want %v — it is this "+
+					"node's refusal, not a fault", tc.code, err, queries.ErrUnavailable)
+			}
+			if got := statelog.RetryAfter(err, 5*time.Second); got != tc.want {
+				t.Errorf("a read refused %s carries a hint of %s, want %s",
+					tc.code, got, tc.want)
+			}
+		})
 	}
 }
 

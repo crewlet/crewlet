@@ -253,8 +253,9 @@ func errText(err error) string {
 //
 // The record may or may not be on the log, so this surface does exactly what
 // a single write does with `unknown`: it opens no session on it, mints no
-// bearer from it, says no event about it, and answers 503 with the Retry-After
-// every 503 here carries — and the OPERATION ID, which is how the write is
+// bearer from it, says no event about it, and answers 503 with the identity
+// Retry-After — an unknown outcome is the one a retry under the same id is
+// FOR, so it always carries one — and the OPERATION ID, which is how the write is
 // found in `iam_history` and, where the gesture derives its id from what the
 // caller presented (a logout of one lineage, an invitation, the bootstrap
 // code), the id the retry lands under by construction.
@@ -263,7 +264,7 @@ func unresolved(w http.ResponseWriter, r *http.Request, event string,
 
 	log.WarnContext(r.Context(), event, "op_id", result.OpID,
 		"outcome", string(result.Outcome))
-	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds,
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(nil),
 		httpjson.Detail{
 			"detail": "this node cannot establish whether that change landed; " +
 				"nothing was built on it — try again",
@@ -574,7 +575,7 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request, source string,
 	}
 	log.WarnContext(r.Context(), "api_sign_in_admission_failed",
 		"error", err, "source", source)
-	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 	return false
 }
 

@@ -448,7 +448,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		// THE BLIND KEY, unreadable or not yet minted: nothing has been
 		// published, and the same edit lands once the key is readable.
 		log.WarnContext(r.Context(), "api_iam_subject_unblinded", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	refused, unreadable := s.judgeEdit(r.Context(), writer, id, in, held,

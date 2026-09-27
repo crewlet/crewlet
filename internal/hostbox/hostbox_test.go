@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -148,6 +150,147 @@ func TestInheritTakesOnlyTheAllowlist(t *testing.T) {
 	}
 }
 
+// A BOX REPLACES WHERE ITS CHILD KEEPS ITS FILES, so the base allowlist must
+// not carry the engine user's own: a box consumer that inherited HOME and then
+// forgot to overwrite one XDG directory would have a coding agent writing its
+// login into the engine user's real dotfiles. The host user's locations are a
+// separate list a child that runs in no box asks for by name.
+func TestTheBaseAllowlistCarriesNoneOfTheHostUsersLocations(t *testing.T) {
+	for _, name := range HostUserEnv {
+		if slices.Contains(PassthroughEnv, name) {
+			t.Errorf("%s is on the base allowlist, so every box inherits the "+
+				"engine user's own before overwriting it", name)
+		}
+	}
+	t.Setenv("HOME", "/home/engine")
+	if _, ok := Inherit()["HOME"]; ok {
+		t.Error("Inherit() passed the engine's HOME to a child that did not ask for it")
+	}
+	if got := Inherit(HostUserEnv...)["HOME"]; got != "/home/engine" {
+		t.Errorf("Inherit(HostUserEnv...) HOME = %q, want the engine user's", got)
+	}
+}
+
+// A FAMILY IS STILL AN ALLOWLIST: every member of the family arrives, and a
+// name outside it — the engine's keyring above all — does not, however much it
+// resembles one.
+func TestInheritFamiliesTakesTheFamilyAndNothingElse(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+	t.Setenv("DOCKER_CONTEXT", "rootless")
+	t.Setenv("DOCKERFILE_PATH", "/not/a/runtime/setting")
+	t.Setenv("CREWLET_SECRET_KEY_2026_01", "base64-keyring-material-not-for-the-child")
+
+	env := map[string]string{}
+	InheritFamilies(env, "DOCKER_")
+	if env["DOCKER_HOST"] != "unix:///run/user/1000/docker.sock" || env["DOCKER_CONTEXT"] != "rootless" {
+		t.Errorf("the family did not arrive whole: %v", env)
+	}
+	for _, name := range []string{"DOCKERFILE_PATH", "CREWLET_SECRET_KEY_2026_01"} {
+		if _, ok := env[name]; ok {
+			t.Errorf("%s is outside the DOCKER_ family and reached the child", name)
+		}
+	}
+}
+
+// A CONTAINER RUNTIME'S CLI GETS WHAT IT DIALS THE DAEMON WITH, and nothing of
+// the engine's: the runtime's own families and named settings, the host user's
+// locations, and not the keyring — nor a credential a helper might want, which
+// is the caller's declared channel to hand over and never this rule's.
+func TestContainerRuntimeTakesTheRuntimesSettingsAndNothingOfTheEngines(t *testing.T) {
+	for name, value := range map[string]string{
+		"DOCKER_HOST":                "unix:///run/user/1000/docker.sock",
+		"CONTAINERS_CONF":            "/etc/containers/containers.conf",
+		"PODMAN_CONNECTIONS_CONF":    "/home/engine/.config/podman.json",
+		"REGISTRY_AUTH_FILE":         "/home/engine/.config/auth.json",
+		"XDG_RUNTIME_DIR":            "/run/user/1000",
+		"HOME":                       "/home/engine",
+		"CREWLET_SECRET_KEY_2026_01": "base64-keyring-material-not-for-the-runtime",
+		"SSH_AUTH_SOCK":              "/tmp/ssh-agent.sock",
+		"AWS_PROFILE":                "production",
+	} {
+		t.Setenv(name, value)
+	}
+	env := ContainerRuntime()
+	for _, name := range []string{
+		"DOCKER_HOST", "CONTAINERS_CONF", "PODMAN_CONNECTIONS_CONF",
+		"REGISTRY_AUTH_FILE", "XDG_RUNTIME_DIR", "HOME",
+	} {
+		if env[name] != os.Getenv(name) {
+			t.Errorf("%s = %q, want the host's %q: the runtime needs it to reach "+
+				"the daemon the operator configured", name, env[name], os.Getenv(name))
+		}
+	}
+	for _, name := range []string{"CREWLET_SECRET_KEY_2026_01", "SSH_AUTH_SOCK", "AWS_PROFILE"} {
+		if _, ok := env[name]; ok {
+			t.Errorf("%s reached the runtime without being declared", name)
+		}
+	}
+}
+
+// WHAT A CHECK IS TOLD THE RUNTIME CARRIES IS WHAT IT CARRIES. A `-e NAME` in a
+// container's run arguments is judged by [ContainerRuntimeCarries] and copied
+// by [ContainerRuntime], so the two answer the same question from two ends and
+// are held together here over every kind of name: allowlisted, the host user's,
+// named, a family member, a family look-alike, and a credential.
+func TestContainerRuntimeCarriesIsWhatContainerRuntimePasses(t *testing.T) {
+	names := []string{
+		"PATH", "HTTPS_PROXY", "HOME", "XDG_RUNTIME_DIR", "REGISTRY_AUTH_FILE",
+		"DBUS_SESSION_BUS_ADDRESS", "DOCKER_HOST", "DOCKER_CONFIG", "CONTAINER_HOST",
+		"CONTAINERS_STORAGE_CONF", "PODMAN_USERNS", "DOCKERFILE_PATH",
+		"SSH_AUTH_SOCK", "AWS_ROLE_ARN", "CREWLET_SECRET_KEY_2026_01",
+	}
+	for _, name := range names {
+		t.Setenv(name, "set-by-the-test")
+	}
+	env := ContainerRuntime()
+	for _, name := range names {
+		_, passed := env[name]
+		if carried := ContainerRuntimeCarries(name); carried != passed {
+			t.Errorf("ContainerRuntimeCarries(%q) = %v, but ContainerRuntime passes it: %v",
+				name, carried, passed)
+		}
+	}
+}
+
+// Every runtime this engine drives, by name or by path, and nothing that
+// merely resembles one.
+func TestIsContainerRuntimeNamesTheRuntimesCLI(t *testing.T) {
+	for command, want := range map[string]bool{
+		"docker":             true,
+		"podman":             true,
+		"/usr/bin/docker":    true,
+		"/opt/bin/podman":    true,
+		"npx":                false,
+		"uvx":                false,
+		"docker-compose":     false,
+		"/usr/bin/dockerd":   false,
+		"/usr/local/bin/sh":  false,
+		"":                   false,
+		"docker/credentials": false,
+	} {
+		if got := IsContainerRuntime(command); got != want {
+			t.Errorf("IsContainerRuntime(%q) = %v, want %v", command, got, want)
+		}
+	}
+}
+
+// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec reads a nil Cmd.Env as
+// "inherit the parent's", so an empty map rendered as nil would hand a child
+// the whole engine environment — the exact opposite of the empty one it asked
+// for.
+func TestEnvironIsNeverNilAndSorted(t *testing.T) {
+	if got := Environ(nil); got == nil || len(got) != 0 {
+		t.Fatalf("Environ(nil) = %#v, want an empty non-nil slice", got)
+	}
+	if got := Environ(map[string]string{}); got == nil {
+		t.Fatal("Environ of an empty map is nil, which os/exec reads as the engine's own")
+	}
+	got := Environ(map[string]string{"B": "2", "A": "1", "C": ""})
+	if want := []string{"A=1", "B=2", "C="}; !slices.Equal(got, want) {
+		t.Fatalf("Environ = %v, want %v", got, want)
+	}
+}
+
 func TestInheritTakesTheExtraNamesAProfileAsksFor(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "/somewhere")
 	env := Inherit("CLAUDE_CONFIG_DIR")
@@ -264,3 +407,69 @@ func TestFileDigestOfAnUnreadableFileIsEmpty(t *testing.T) {
 		t.Fatalf("FileDigest(absent) = %q, want \"\"", got)
 	}
 }
+
+// THE PUBLISHED TABLE OF WHAT A CHILD SEES IS THESE LISTS, NAME FOR NAME.
+//
+// docs/guides/tools-and-mcp.md tells an operator exactly which host variables
+// a tool server receives, so they know which ones to declare — and it is a
+// copy of [PassthroughEnv], [HostUserEnv] and the container runtime's rule,
+// written in another file in another language. Copies drift: the CLI backend's
+// own copy of the allowlist had already disagreed with this one by five names.
+// So each row's names are read out of the page and held to the Go list in BOTH
+// directions — a name added here and not there, or published and never passed.
+func TestThePublishedChildEnvironmentIsHostboxsOwn(t *testing.T) {
+	t.Parallel()
+	const page = "../../docs/guides/tools-and-mcp.md"
+	raw, err := os.ReadFile(page)
+	if err != nil {
+		t.Fatalf("read %s: %v", page, err)
+	}
+	names := func(row string) []string {
+		t.Helper()
+		for line := range strings.SplitSeq(string(raw), "\n") {
+			cells := strings.Split(line, "|")
+			if len(cells) < 4 || !strings.HasPrefix(strings.TrimSpace(cells[1]), row) {
+				continue
+			}
+			var out []string
+			for _, m := range backticked.FindAllStringSubmatch(cells[2], -1) {
+				out = append(out, m[1])
+			}
+			slices.Sort(out)
+			return out
+		}
+		t.Fatalf("%s has no row starting %q: the table this gate reads was renamed "+
+			"or removed, so nothing holds what it publishes", page, row)
+		return nil
+	}
+	sorted := func(in []string) []string {
+		out := slices.Clone(in)
+		slices.Sort(out)
+		return out
+	}
+
+	if got, want := names("The host allowlist"), sorted(PassthroughEnv); !slices.Equal(got, want) {
+		t.Errorf("the published host allowlist is %v, and PassthroughEnv is %v", got, want)
+	}
+	if got, want := names("The engine user's locations"), sorted(HostUserEnv); !slices.Equal(got, want) {
+		t.Errorf("the published host user's locations are %v, and HostUserEnv is %v", got, want)
+	}
+	var named, families []string
+	for _, name := range names("A container runtime's own settings") {
+		if family, ok := strings.CutSuffix(name, "*"); ok {
+			families = append(families, family)
+			continue
+		}
+		named = append(named, name)
+	}
+	if want := sorted(ContainerRuntimeEnv); !slices.Equal(named, want) {
+		t.Errorf("the published runtime settings by name are %v, and ContainerRuntimeEnv is %v",
+			named, want)
+	}
+	if want := sorted(ContainerRuntimeFamilies); !slices.Equal(sorted(families), want) {
+		t.Errorf("the published runtime families are %v, and ContainerRuntimeFamilies is %v",
+			families, want)
+	}
+}
+
+var backticked = regexp.MustCompile("`([^`]+)`")

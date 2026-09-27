@@ -137,10 +137,15 @@ node:
 Roles decide one more thing, and it is not in the table because it is not a
 job somebody does: which
 [state-log domains this node applies](satellite-nodes.md#which-state-log-domains-the-node-runs).
-All three domains this engine ships are needed by every role, so today every
-node applies all three whatever its roles — but the answer is *derived* from
-the roles rather than configured beside them, which is what `/health` reports
-and what decides whose snapshot this node can adopt.
+Four of the five run on every node whatever its roles — the tracker, the
+vectors, the knowledge base and the org chart, which every role reads. The
+**identity estate runs only where `ingress` or `workers` is declared**: a
+seats-only node authenticates nobody, so it does not replicate your people,
+their credentials or their sessions. The set is *derived* from the roles
+rather than configured beside them — `crewlet validate` prints it before a
+node boots, `/health` reports it on a running one (and a node that serves no
+HTTP logs it as `statelog_started`), and it decides whose snapshot this node
+can adopt; see [Who can donate to whom](#who-can-donate-to-whom).
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -352,6 +357,22 @@ Two consequences worth stating plainly:
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
 
+**An activation during a rollout reaches both builds.** A revision reaches
+every node through the activation pointer, which carries the sealed document
+inside its own record. A build from before that change reads the document only
+from a key beside the pointer, so every activation writes it there too, just
+after the pointer. The fleet activates during a rollout even when nobody edits
+the company: the integration loop re-activates the revision when it seals a
+credential, and a node whose revision is newer than the pointer publishes it
+at boot. A node on the earlier build that polls between the two writes records
+one failed attempt and applies the revision on its next poll. The one race the
+mirror cannot close is the earlier build's own: one of its nodes activating in
+the same instant as an upgraded node can leave the older nodes unable to reach
+that epoch (they shed their work to an upgraded peer and, three attempts
+later, fail `/ready`, visible on the fleet screen). Two nodes of the earlier
+build racing always had that outcome, and the next activation ends it. See
+[Control Plane § The design](../concepts/control-plane.md#the-design).
+
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two
 builds that disagree about what a node must hold.
@@ -452,11 +473,14 @@ snapshots work at all in a mixed fleet:
 
 ```mermaid
 flowchart LR
-    D1["<b>core node</b><br/>runs tracker · vectors · pages"]
-    D2["<b>narrow node</b><br/>runs tracker only"]
-    R["<b>joining node</b><br/>runs tracker · pages"]
-    D1 -->|"adopted, then<br/>vectors stripped"| R
-    D2 -->|"refused: names no<br/>position for pages"| R
+    F["<b>full node</b> · ingress, seats, workers<br/>runs tracker · vectors · pages · chart · iam"]
+    S["<b>satellite</b> · seats<br/>runs tracker · vectors · pages · chart"]
+    JS["<b>joining satellite</b> · seats"]
+    JI["<b>joining ingress node</b> · ingress"]
+    F -->|"adopted, then<br/>iam stripped"| JS
+    F -->|"adopted"| JI
+    S -->|"adopted"| JS
+    S -->|"refused: names no<br/>position for iam"| JI
 ```
 
 The practical consequence for an operator: **keep at least one node that runs

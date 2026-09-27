@@ -866,6 +866,20 @@ func (q *Queue) ackWait() time.Duration {
 	return ackWait
 }
 
+// tooLarge names a message the connection refused as larger than the server
+// takes, and the limit it came from.
+//
+// THE CONNECTION'S OWN max_payload, read off the server's INFO, and never the
+// contract's [queue.MaxPayloadBytes]: the embedded broker is configured at
+// exactly that number, but an external server states its own — nats-server's
+// default is 1 MiB — and the client refuses against what the server said. A
+// refusal naming the contract there names a limit the payload is inside of,
+// and sends whoever reads it looking for the wrong knob.
+func tooLarge(nc *nats.Conn, verb, subject string, size int) string {
+	return fmt.Sprintf("%s %s: %d bytes exceeds the %d-byte limit (the server's "+
+		"max_payload)", verb, subject, size, nc.MaxPayload())
+}
+
 // Conn exposes this client's NATS connection, for subsystems that ride the
 // same broker outside the queue contract (the KV coordination backend).
 // The queue keeps ownership: closing it is Stop's job, not the caller's.
@@ -945,8 +959,8 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		// contract forbids. Wrapped rather than replaced so the original
 		// still reads in a log.
 		if errors.Is(err, nats.ErrMaxPayload) {
-			return fmt.Errorf("publish %s: %d bytes exceeds the %d-byte limit: %w: %w",
-				topic, len(data), queue.MaxPayloadBytes, queue.ErrTooLarge, err)
+			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "publish", topic, len(data)),
+				queue.ErrTooLarge, err)
 		}
 		return fmt.Errorf("publish %s: %w", topic, err)
 	}

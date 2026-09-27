@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -77,7 +78,7 @@ type Fleet struct {
 	epoch   int64
 	target  coord.Activation
 	set     bool
-	payload []byte
+	payload json.RawMessage
 }
 
 type windowKey struct {
@@ -357,12 +358,17 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/memory: an activation needs a revision id")
 	}
+	// THE KV's OWN FORM, so a body reads back here as the broker would
+	// hand it back — see [coord.CanonicalPayload].
+	payload, err := coord.CanonicalPayload(req.Payload)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// THE EXPECTATION FIRST, and before the payload write, so a caller
-	// that has already lost the race leaves nothing behind — the same
-	// ordering the KV holds, for the same reason.
+	// THE EXPECTATION FIRST, so a caller that has already lost the race
+	// changes nothing.
 	//
 	// The mutex makes the compare and the set one step here, which is
 	// exactly what the KV buys with a sequence: the twin has to REFUSE the
@@ -387,11 +393,9 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 			coord.ErrActivationRaced, f.target.RevisionID)
 	}
 
-	// The payload lands before the pointer, matching the KV's two writes.
-	// The twin gets both under one mutex, so the window cannot open here —
-	// which is the point of holding it to the same order anyway: a reader
-	// of this file should find the same invariant stated in both places.
-	f.payload = slices.Clone(req.Payload)
+	// The payload and the pointer in one step, as the KV writes them in
+	// one record (see [coord.Plane.Activate]).
+	f.payload = payload
 	f.epoch++
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID,
@@ -404,7 +408,7 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 }
 
 // Payload returns the current revision's sealed payload.
-func (f *Fleet) Payload(_ context.Context, revisionID string) ([]byte, bool, error) {
+func (f *Fleet) Payload(_ context.Context, revisionID string) (json.RawMessage, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.set || f.target.RevisionID != revisionID || f.payload == nil {

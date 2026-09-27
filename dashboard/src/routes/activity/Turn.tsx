@@ -121,7 +121,7 @@ import {
   type Story,
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
-import type { EventRecord, QueryRefusal, TurnRow } from "~/protocol/index.ts";
+import type { EventRecord, LogRefusal, QueryRefusal, TurnRow } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -262,8 +262,9 @@ export interface TurnView {
   turnId: string;
   loading: boolean;
   error: string | null;
-  /** Why an `unauthorized` answer was refused, for the refusal banner. */
-  refusal: QueryRefusal | null;
+  /** Why the answer was refused — on authority, or by the state log — for
+   *  the refusal banner. */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Oldest first: a turn is read forwards. */
   events: EventRecord[];
   /** The store stopped at its per-turn cap, so what is missing is the MIDDLE. */

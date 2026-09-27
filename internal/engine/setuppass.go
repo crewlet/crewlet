@@ -126,7 +126,7 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
 	findings := res.Findings()
-	if note := p.recordSite(ctx, company, res.Site, provision.CanMint(in.Sink)); note != "" {
+	if note := p.recordSite(ctx, company, res.Site, in.Sink != nil); note != "" {
 		findings = append(findings, integration.Finding{
 			Kind: integration.FindingGrantShort, Detail: note,
 		})
@@ -142,11 +142,9 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 // cloud id and a link address is asking them to copy three values out of a
 // console this engine is already reading.
 //
-// WHAT "writing" MEANS HERE IS provision.CanMint, not "a sink was supplied".
-// The test was `in.Sink != nil`, and the reconcile loop hands every pass a
-// non-nil READ-ONLY sink — so a node explicitly told it cannot seal anything
-// still advanced the company's config epoch, from a timer, on every pass until
-// the field happened to stick.
+// ONLY A WRITING PASS RECORDS IT, which is one handed a sink: the dashboard's
+// read-only check is handed none, and a check that advanced the company's
+// config epoch would be a write nobody asked for.
 //
 // The CLOUD ID is the load-bearing one: a provisioned service account's token
 // is refused by the site host and accepted only at the API gateway, so a
@@ -237,12 +235,10 @@ func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) (p
 
 var _ setup.Teardowner = (*atlassianPass)(nil)
 
-// SetupRunner is the pass runner this node serves, or nil when it has no
-// secret store to mint into.
-//
-// Nil rather than a runner that refuses: a pass that cannot record what it
-// mints must not run at all, and the surface above answers 503 naming the
-// keyring rather than starting something it will have to unwind.
+// SetupRunner is the pass runner this node serves, or nil on an Engine with
+// no fleet store — one built by hand in a test, since [New] refuses a set of
+// backends without one, and the setup surface refuses to be built without a
+// runner.
 //
 // THE SAME RUNNER EVERY TIME, built once — see [Engine.setupRunner]. A caller
 // that wants its own clock builds its own with [setup.NewRunner]; there is no
@@ -281,9 +277,9 @@ func (e *Engine) newSetupRunner() *setup.Runner {
 // [setup.PassDeadline], which is strictly inside [setup.LeaseTTL], so that
 // cannot happen by construction rather than by measurement.
 //
-// A node with no runner has no keyring to mint into and therefore nothing to
-// serialize: it reads and reports. held is true there, the deadline still
-// applies, and release is the cancel.
+// An Engine with no runner (see [Engine.SetupRunner]) has nothing to
+// serialize against: held is true there, the deadline still applies, and
+// release is the cancel.
 func (e *Engine) holdSurface(
 	ctx context.Context, kind integration.Kind,
 ) (context.Context, func(), bool, error) {
@@ -569,9 +565,15 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 // BY IS WHO THE RUN IS FOR — the person who pressed Connect, with the
 // credential they pressed it through, or [loopActor] for a timer's pass — and
 // every row the sink seals and the revision its rebuild writes record it.
+//
+// AN ERROR ONLY FOR AN ENGINE WITH NO COMPANY SECRET STORE, which [New] never
+// builds: it refuses a node without a keyring and a set of backends without
+// the fleet store. So a caller reports this as the fault it is — a wiring
+// mistake — and never as a posture to carry on in with nothing sealed.
 func (e *Engine) SetupSink(by iam.Actor) (provision.TokenSink, error) {
-	if e.cipher == nil {
-		return nil, fmt.Errorf("engine: this node has no keyring, so a minted credential cannot be sealed")
+	if e.cipher == nil || e.backends == nil || e.backends.Fleet == nil {
+		return nil, errors.New("engine: this engine holds no company secret " +
+			"store to seal a minted credential into; it was not built by engine.New")
 	}
 	return &refreshingSink{
 		TokenSink: provision.NewSecretStoreSink(
@@ -623,15 +625,6 @@ type refreshingSink struct {
 	sealed  bool
 	flushed bool
 }
-
-// Mints forwards the wrapped sink's answer, because an embedded INTERFACE
-// contributes no method to this type's method set: without this,
-// [provision.CanMint]'s type assertion misses a [provision.ReadOnly] inside
-// and every pass gated on it would create accounts on a node that can seal
-// nothing. It is true for every sink this type is built over today —
-// [Engine.SetupSink] refuses without a keyring — which is exactly why a
-// wrapper that silently claims it is a trap rather than a bug.
-func (s *refreshingSink) Mints() bool { return provision.CanMint(s.TokenSink) }
 
 func (s *refreshingSink) Record(ctx context.Context, name, value string) error {
 	if err := s.TokenSink.Record(ctx, name, value); err != nil {
@@ -1296,8 +1289,9 @@ func mattermostAdminToken(cfg *config.Mattermost, env *config.Resolver, override
 // which internal/jira must not import: it would put the tracker in the
 // coordination layer's graph to answer a question about Atlassian.
 //
-// NIL WHERE NOTHING CAN SAY, which is what a node with no keyring is, and
-// the tracker then reports a refusal as the failure it may well be. The
+// NIL WHERE NOTHING CAN SAY — a company whose Atlassian plan cannot be
+// derived — and the tracker then reports a refusal as the failure it may well
+// be. The
 // alternative — guessing "still propagating" — would tell an operator not to
 // act on every genuinely broken seat, for ever.
 //

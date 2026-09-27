@@ -31,8 +31,9 @@ import (
 // the app's own page and sealing them.
 //
 // The webhook URL is not a field for the same reason it is not one anywhere
-// else: it is `<public_base_url>/webhooks/slack/<handle>`, which the surface
-// shows to copy rather than inviting somebody to type a different one.
+// else: it is `<api.external_url>/webhooks/slack/<handle>`, built on the Tier A
+// address, which the surface shows to copy rather than inviting somebody to
+// type a different one.
 
 // Requirements says what one SEAT still needs for Slack.
 //

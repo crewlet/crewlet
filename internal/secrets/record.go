@@ -90,9 +90,9 @@ type Author struct {
 
 // ErrNoKeyring reports a secret store asked to work without one.
 //
-// Every store refuses rather than falling back to plaintext: an operator who
-// configured no encryption gets the environment, not a store that quietly
-// holds credentials in the clear.
+// Every store refuses rather than falling back to plaintext, a store that
+// quietly holds credentials in the clear. No node reaches it: every node's
+// Tier A carries a keyring, so meeting it is a caller built without one.
 var ErrNoKeyring = errors.New(
 	"secrets: this needs a keyring; set bootstrap secrets.keys")
 

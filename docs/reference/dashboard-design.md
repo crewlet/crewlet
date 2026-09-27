@@ -2402,7 +2402,12 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   engine understood the question and refused it, so retrying sends the same bad
   request again. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
-  reload. The table is keyed on the protocol's `QueryErrorCode` union, so a
+  reload — unless the engine's frame says waiting will not change the answer
+  (`retry_after: 0`, a state-log refusal such as a full log or a record the
+  node cannot decode). Then `useQuery` stops the quick re-ask, keeping only
+  the screen's own poll, and `QueryState` says the node refused the read and
+  what the refusal names rather than that it is catching up — five-second
+  re-asks of a read an operator has to unblock are a loop, not a retry. The table is keyed on the protocol's `QueryErrorCode` union, so a
   code added to the union without a sentence here is a compile error, and a Go
   test in `internal/api/stream` pins that union to the codes the engine sends —
   and a second one pins those codes to the engine's own

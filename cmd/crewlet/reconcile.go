@@ -48,9 +48,9 @@ import (
 // # Why the comparison is against the opened document
 //
 // The seed is compared against the ACTIVE revision's opened document, not
-// against its stored bytes: with a keyring configured the stored form is
-// ciphertext and differs on every seal, so a byte comparison would import a
-// fresh revision on every single boot.
+// against its stored bytes: every revision is sealed under the keyring every
+// node holds, so the stored form is ciphertext that differs on every seal, and
+// a byte comparison would import a fresh revision on every single boot.
 
 // startReconciler seeds the store from the file, converges this node on the
 // pointer, and returns the loop for the caller to run.
@@ -69,7 +69,7 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
 		Store: db, Fleet: plane, Queue: e.Backends().Queue,
-		NodeID: nodeID, Cipher: cipher,
+		NodeID: nodeID,
 		OnApply: func(epoch int64, status configplane.ApplyStatus) {
 			log.InfoContext(ctx, "config_revision_applied",
 				"epoch", epoch, "status", string(status))
@@ -110,7 +110,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		if !found {
 			return nil
 		}
-		return publishLocalActive(ctx, plane, pub, active, log)
+		return publishLocalActive(ctx, plane, pub, active, cipher, log)
 	}
 	// THE SETTINGS HALF, because that is what a revision holds. The file
 	// carries both and always will — an operator authors one document
@@ -129,15 +129,15 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	parent := ""
 	if found {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		current, err := secrets.Open(cipher, active.Payload)
+		current, err := openStored(cipher, active)
 		if err != nil {
-			return fmt.Errorf("open the active revision: %w", err)
+			return err
 		}
 		if bytes.Equal(current, document) {
 			// The file has not changed, so there is nothing to import.
 			// The node may still owe the fleet a POINTER — see
 			// publishLocalActive for the case that puts it there.
-			return publishLocalActive(ctx, plane, pub, active, log)
+			return publishLocalActive(ctx, plane, pub, active, cipher, log)
 		}
 		if !seed.Override {
 			// THE COMPANY EXISTS AND THIS FILE IS ONLY A BOOTSTRAP, so
@@ -152,7 +152,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 					"-import-company "+seed.Path+"; to change the running "+
 					"fleet with no restart, run `crewlet config import "+
 					seed.Path+"`")
-			return publishLocalActive(ctx, plane, pub, active, log)
+			return publishLocalActive(ctx, plane, pub, active, cipher, log)
 		}
 		parent = active.ID
 	}
@@ -205,8 +205,11 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
 	nudge(ctx, pub, seeded, log)
+	// THE KEY IT WAS SEALED UNDER, read off the envelope: a `sealed` flag
+	// said `true` on every line, since nothing is stored unsealed.
+	sealedUnder, _ := secrets.EnvelopeKeyIDOf(payload)
 	log.InfoContext(ctx, "company_config_seeded", "revision", id, "epoch", published.Epoch,
-		"parent", parent, "sealed", cipher != nil)
+		"parent", parent, "sealed_under", sealedUnder)
 	return nil
 }
 
@@ -233,8 +236,18 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 // and the consequence is bounded and stated: a node whose clock is ahead can
 // republish its own revision once, which every peer then converges on — the
 // same outcome as an operator re-activating it deliberately.
+//
+// # AUTHENTICATED BEFORE IT IS PUBLISHED
+//
+// What this publishes, every peer applies — and every peer refuses a body that
+// is not sealed, because the seal is what says a node of this fleet wrote it.
+// So a revision this node holds in the clear, which only a build older than
+// the mandatory keyring wrote, is refused HERE, where `crewlet config seal` is
+// the remedy and this node is the one to run it. Published, it was refused on
+// every node, this one included, each telling its operator to seal a revision
+// that was never theirs.
 func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publisher,
-	active store.Revision, log *slog.Logger,
+	active store.Revision, cipher secrets.Cipher, log *slog.Logger,
 ) error {
 	target, found, err := plane.Target(ctx)
 	if err != nil {
@@ -250,6 +263,10 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 			"fleet", target.RevisionID, "epoch", target.Epoch,
 			"detail", "this node converges on the fleet's revision")
 		return nil
+	}
+	if _, err = openStored(cipher, active); err != nil {
+		return fmt.Errorf("this node's active revision is not published to the "+
+			"fleet: %w", err)
 	}
 	// The payload goes up with it. This node is telling the fleet to serve
 	// a revision only it holds, so the body has to travel or every peer
@@ -342,9 +359,9 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	if !found {
 		return nil, nil
 	}
-	document, err := secrets.Open(cs.cipher, active.Payload)
+	document, err := openStored(cs.cipher, active)
 	if err != nil {
-		return nil, fmt.Errorf("open the active revision %s: %w", active.ID, err)
+		return nil, err
 	}
 	// AS SETTINGS: a stored revision is the company's settings and the org
 	// chart is the state log's own domain. A revision written before the

@@ -28,7 +28,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +40,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -48,26 +48,42 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("api.webhooks")
 
-// The two Retry-After values, and the difference between them is the point.
+// The three Retry-After values, each the cadence of the thing the sender is
+// actually waiting on — which is why there are three and not one.
 const (
 	// NoRevisionRetryAfter is what a node with no active company revision
-	// asks for. Matched to the control plane's reconcile cadence: a node
-	// that missed an activation picks the revision up on its next poll, so
+	// asks for: the control plane's reconcile poll, because a node that
+	// missed an activation picks the revision up on its next one, so
 	// telling a sender to come back sooner just burns deliveries against a
 	// node that cannot have converged yet.
-	NoRevisionRetryAfter = 15 * time.Second
+	//
+	// THE POLL ITSELF, not a copy of its value: it was a literal fifteen
+	// seconds here, which a retune of the poll would have left telling
+	// every sender the old cadence.
+	NoRevisionRetryAfter = configplane.ReconcileInterval
 
 	// NoSecretRetryAfter is what a route with no secret asks for.
 	// Deliberately much longer: the unconfigured case resolves itself on
 	// the next poll, this one waits on a human editing config, and a
-	// sender hammering every 15 s in the meantime buys nothing.
+	// sender hammering every poll in the meantime buys nothing.
 	NoSecretRetryAfter = 5 * time.Minute
+
+	// BrokerRetryAfter is what a VERIFIED delivery the broker would not
+	// take asks for: the broker's own minimum election timeout, the hint
+	// every state-log surface gives for a broker it cannot reach
+	// ([statelog.ElectionRetryHint]). A publish the broker refused is
+	// waiting on the client's reconnection or on an election, and a hint
+	// shorter than the election sends the retry back before anything can
+	// have changed. It borrowed [NoRevisionRetryAfter] before, whose reason
+	// is a config poll that has nothing to do with a broker.
+	BrokerRetryAfter = statelog.ElectionRetryHint
 )
 
 // verified is proof that a delivery authenticated.
@@ -292,7 +308,13 @@ func (r *Receiver) serving(w http.ResponseWriter, source, event string) bool {
 	log.Warn("webhook_rejected_unconfigured", "source", source, "event", event,
 		"detail", "no company revision is active on this node, so the delivery "+
 			"cannot be routed; answering 503 so the sender retries rather than discards it")
-	unavailable(w, "unconfigured", NoRevisionRetryAfter)
+	httpjson.UnavailableWith(w, httpjson.CodeNoActiveRevision,
+		httpjson.RetrySeconds(NoRevisionRetryAfter), httpjson.Detail{
+			"detail": "a node that missed an activation takes the active revision " +
+				"on its next reconcile poll, and the sender's retry lands once it " +
+				"has; a deployment that never imported one needs " +
+				"`crewlet config import`",
+		})
 	return false
 }
 
@@ -321,7 +343,7 @@ func (r *Receiver) authenticate(w http.ResponseWriter, source, secret, signature
 	}
 	if signature == "" || !check.verify(body, secret, signature) {
 		log.Warn("webhook_signature_invalid", "source", source)
-		unauthorized(w, "invalid signature")
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 		return verified{}, false
 	}
 	return verified{source: source}, true
@@ -382,7 +404,7 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 	ctx := req.Context()
 	if !r.claim(ctx, d) {
 		log.Debug("webhook_delivery_duplicate", "source", d.source, "key", d.key)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
+		accepted(w, map[string]string{"status": "duplicate"})
 		return
 	}
 
@@ -442,14 +464,17 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 		log.Error("webhook_publish_failed", "source", d.source, "route", v.source,
 			"error", err, "detail", "the delivery was verified and could not be "+
 				"queued; releasing its claim so the provider's retry is not refused")
-		unavailable(w, "queue_unavailable", NoRevisionRetryAfter)
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			httpjson.RetrySeconds(BrokerRetryAfter), httpjson.Detail{
+				"detail": "the delivery was verified and could not be queued",
+			})
 		return
 	}
 
 	log.Info("webhook_received", "source", d.source, "route", v.source,
 		"event", d.label, "handle", d.handle)
 	r.record(ctx, d, trace)
-	writeJSON(w, http.StatusOK, answer)
+	accepted(w, answer)
 }
 
 // claim reports whether this caller may handle the delivery.
@@ -666,22 +691,16 @@ func headerOr(req *http.Request, name, fallback string) string {
 // statusOK is the answer five of the six routes give.
 var statusOK = map[string]string{"status": "ok"}
 
-// writeJSON is [httpjson.Write] under this package's own name.
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	httpjson.Write(w, status, body)
+// accepted answers 200 with body: a delivery taken, deduplicated or knowingly
+// ignored, or Slack's handshake echoed. It is the only answer this package
+// writes by hand, and it takes no status because a refusal is never written
+// through it — every one goes through [httpjson.Fail] or
+// [httpjson.Unavailable], so it is the engine's one envelope and a 503 always
+// says when to come back.
+func accepted(w http.ResponseWriter, body any) {
+	httpjson.Write(w, http.StatusOK, body)
 }
 
-func unavailable(w http.ResponseWriter, reason string, retryAfter time.Duration) {
-	w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-	writeJSON(w, http.StatusServiceUnavailable,
-		map[string]string{"status": "unavailable", "reason": reason})
-}
-
-func unauthorized(w http.ResponseWriter, reason string) {
-	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": reason})
-}
-
-// noSecret is the answer when a route has no secret to verify against.
 // weakSecret refuses a route whose shared token cannot be the authentication.
 func weakSecret(w http.ResponseWriter, source string, why error) {
 	log.Error("webhook_secret_too_weak", "source", source, "error", why,
@@ -689,21 +708,33 @@ func weakSecret(w http.ResponseWriter, source string, why error) {
 			"whole check and this one is not strong enough to be it; answering 503 "+
 			"so the sender retries rather than discards. Set a stronger token, or "+
 			"press Generate in the setup form")
-	// ITS OWN REASON, not the absent-secret one. The status is the same
-	// because the truth is the same — this route cannot check a delivery —
-	// but the two are different misconfigurations with different fixes, and
-	// a caller correlating logs or a person reading the body should not have
-	// to guess which of them they hit. Sharing the string also made the
-	// distinction this function exists for invisible on the wire.
-	unavailable(w, "weak_webhook_secret", NoSecretRetryAfter)
+	unusableSecret(w)
 }
 
+// unusableSecret answers a route whose configured secret cannot do the check
+// it is for — a shared token too weak to be the authentication, a signing key
+// in a form the provider never signs with. The caller has already logged
+// which, because only it knows.
+//
+// ITS OWN CODE, not the absent-secret one. The status is the same because the
+// truth is the same — this route cannot check a delivery — but the two are
+// different misconfigurations with different fixes, and a person reading the
+// body should not have to guess which they hit: told no secret is set, an
+// operator goes looking for a value they can already see. GitLab's malformed
+// key answered exactly that, and logged the absent-secret line beside its own.
+func unusableSecret(w http.ResponseWriter) {
+	httpjson.Unavailable(w, httpjson.CodeUnusableWebhookSecret,
+		httpjson.RetrySeconds(NoSecretRetryAfter))
+}
+
+// noSecret is the answer when a route has no secret to verify against.
 func noSecret(w http.ResponseWriter, source string) {
 	log.Error("webhook_no_secret_configured", "source", source,
 		"detail", "this route verifies a provider credential and has none to check "+
 			"against, so it cannot accept deliveries; answering 503 so the sender "+
 			"retries rather than discards them. Set the integration's secret to clear it")
-	unavailable(w, "no_webhook_secret", NoSecretRetryAfter)
+	httpjson.Unavailable(w, httpjson.CodeNoWebhookSecret,
+		httpjson.RetrySeconds(NoSecretRetryAfter))
 }
 
 // bodyKey is the delivery identity of a third-party app that sends none.

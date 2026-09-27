@@ -274,7 +274,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | Per-entity routes (`PUT /config/llm-providers/{key}`, `/config/mcp-servers/{name}`) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
 | `PUT /config/roles/{handle}`, `PUT /config/units/{key}` | `400 chart_not_writable_here` — a seat and a unit are the [org chart](chart-domain.md)'s, whatever this node holds |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
-| `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
+| `POST /webhooks/...` | Answered **before** the signature check — a node with no revision has no secrets to check against, and verifying first would answer every delivery with the no-secret refusal and its five-minute wait — as `503 no_active_revision` with a 15-second `Retry-After`, so the sender **retries**; `webhook_rejected_unconfigured` is logged at WARNING with the source and the event. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet. See [Webhook refusals](../reference/api-endpoints.md#webhook-refusals) |
 
 Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes, including the reflect dispatcher and the inbound edge that boot starts only for a company it already has (see the `learning` and `integrations` stages below) → the engine is fully alive. The dashboard carries the unconfigured state in always-on chrome (a caution banner saying inbound webhooks are being refused, an engine pill that says so, and the first row of the overview's attention queue), and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
 
@@ -619,8 +619,8 @@ CREATE TABLE company_config (
                                                   -- write no credential made
     source             TEXT    NOT NULL,          -- "api" | "file" | "rekey" | "fleet"
     summary            TEXT    NOT NULL,          -- short human-readable change note
-    payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
-                                                  -- sealed envelope when a keyring is set
+    payload            TEXT    NOT NULL,          -- the whole document, sealed under
+                                                  -- the keyring every node holds
     is_active          INTEGER NOT NULL DEFAULT 0,
     activated_at       INTEGER,
     scrubbed_at        INTEGER,                   -- when `crewlet config scrub`
@@ -819,21 +819,42 @@ that can match, and every guarded route answers `401`. That is the only safe
 reading of "an app was built without being told who may act", and it removes the
 possibility of a process serving `/config` writes with nothing in front of them.
 
+### What Tier A must state on every node
+
+**`secrets.keys` is required on every node**, whatever its roles and whether or
+not it serves the API, and `crewlet validate` refuses a Tier A file without it.
+It has no default — a key the engine invented would be one no other node holds
+— and far more than the company's credentials rest on it:
+
+- every record on every state log is signed and verified under it, because the
+  broker authenticates nothing, and every node runs state logs (the tracker,
+  the vectors, the pages and the org chart run on a seats-only satellite too);
+- the company document a node fetches from its peers is authenticated by its
+  seal, so a node refuses one that arrives unsealed (see [Secrets](#secrets));
+- on a node serving the API it signs every session cookie and derives the key
+  that verifies each per-run token.
+
+Each key's `material` must be the base64 of a 32-byte key, which is what
+`crewlet secrets keygen` prints. `crewlet validate` checks it on the value its
+`${VAR}` resolves to, with the same decoder the node uses to build its keyring,
+so a key that is not base64, or decodes to the wrong length, is refused by
+`validate` naming `secrets.keys[i].material` rather than at boot.
+
 ### What Tier A must state once the API is served
 
-Four settings stop being optional the moment `api.port` is non-zero, and each is
-refused by `crewlet validate` on a laptop rather than by a process at bind time:
+Three more settings stop being optional the moment `api.port` is non-zero, and
+each is refused by `crewlet validate` on a laptop rather than by a process at
+bind time:
 
 | Setting | Why it cannot be defaulted |
 |---------|----------------------------|
 | `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, it is the OIDC redirect base, and it is what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
 | `api.auth.max_grants` | The ceiling on what a directory record or an identity provider's group mapping may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
 | `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when the identity provider is down. Required on **every** backend, `none` included |
-| `secrets.keys` | The keyring signs every session cookie and derives the key that verifies each per-run token. An API served without one accepts nobody |
 
 ### What `crewlet validate` warns about
 
-Four API postures are **valid** and worth reading before a deployment runs on
+Five API postures are **valid** and worth reading before a deployment runs on
 them — every warned group listed in the order of its name, so two runs over one
 file print the same thing. None can be a refusal, because each is a configuration that works exactly
 as written with its consequence somewhere else:
@@ -844,6 +865,7 @@ as written with its consequence somewhere else:
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, a password backend with an optional second factor, already is one |
 | An OIDC `scopes` list written without `offline_access` (an unset list asks for it) | Nothing notices a deactivation. An identity provider tells this engine nothing when somebody is disabled, so the session it already minted works until its absolute deadline — and the deactivation probe, which is what would end it early, is a refresh-token exchange with nothing to exchange |
 | A group mapping conferring `secrets:read`, `secrets:write` or `config:write` | Adding somebody to a directory group is an ordinary act performed by whoever administers the identity provider. The first two read and write this company's credentials, and `config:write` is [host access](#configwrite-is-host-access). Declaring them on the person's own record puts the decision where it is reviewed |
+| A group mapping conferring `people:manage` | Membership of that group lets whoever administers the identity provider make somebody able to invite, suspend, re-grant and remove every person here — the grant that decides who holds every other one — and nobody here reviews a membership change. Declaring it on the person's own record puts the decision where it is reviewed |
 
 `api.trusted_proxies` is a **CIDR list, never a bool**, because the question a
 forwarded header poses is not "does this deployment sit behind a proxy" but "is
@@ -888,17 +910,15 @@ See the [API endpoints reference](../reference/api-endpoints.md#config--live-con
 
 ## Secrets
 
-Crewlet has two secret-handling behaviours for Tier B. Which one is in effect depends solely on whether a **Tier A encryption keyring** is configured.
+Every node holds a **Tier A keyring** — `crewlet validate` refuses a `crewlet.yaml` without one and a node refuses to start (see [What Tier A must state on every node](#what-tier-a-must-state-on-every-node)) — so there is one secret-handling behaviour for Tier B, not two.
 
-### Default: `${VAR}` references (no keyring)
+### `${VAR}` references
 
-With no `secrets:` block in `crewlet.yaml`, the DB stores `${ENV_VAR}` reference strings verbatim and resolution happens at provider / transport / integration construction time (`internal/engine`). The `company_config` table never holds a real secret; the environment is the source of truth. Safe to back up / export, but every deployment must re-provision the referenced env vars, and rotating a key means editing the env + restarting.
+A credential in the company document is normally a `${ENV_VAR}` reference, stored verbatim and resolved where a provider, transport or integration is constructed (`internal/engine`). It resolves from the encrypted [secret store](secret-store.md) first and the process environment behind it — which is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. A reference the store does not answer resolves from the environment, so a deployment that keeps its credentials in its platform's own secret mechanism needs nothing else.
 
-A configured keyring also unlocks a second, independent place a `${VAR}` can resolve from: the encrypted [secret store](secret-store.md), consulted ahead of the environment. That is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. It is opt-in and inert until a secret is actually stored.
+### Encrypted at rest, and authenticated
 
-### Encrypted at rest (Tier A keyring configured)
-
-Add a keyring to `crewlet.yaml` and Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) before it reaches the DB:
+Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) under the keyring before it reaches the DB:
 
 ```yaml
 # crewlet.yaml (Tier A) — the keyring is the sole root of trust
@@ -909,28 +929,27 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes); crewlet secrets keygen
 ```
 
-The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the config's structure (org chart, policies, model choices, or secrets) is visible in the database. A stolen DB reveals nothing.
+The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the settings' structure (policies, model choices, integrations, or secrets) is visible in the database. The org chart is not in this document: it is a state log of its own, whose structure is plaintext and whose credentials are sealed one value at a time — see [What the org chart puts here](secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not).
 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine and the API it serves, migrations, and the CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
-- **Fail closed.** If an activated revision is stored encrypted but no keyring is configured (or the key is missing), the engine refuses to boot rather than run with an opaque blob it can't read.
+- **Fail closed.** A revision sealed under a key this node's keyring does not hold is refused rather than run as an opaque blob it can't read.
+- **Authenticated, not only hidden.** The document a node fetches from its peers comes through the coordination store, which anything reaching the broker can write, so the seal is also what proves a node of this fleet wrote it. A revision stored **unsealed** is refused — never applied, adopted, shown or reverted to — with an error naming what brings it back, which depends on the revision: `crewlet config seal` for this node's active revision, importing its document again for a superseded one (nothing seals one in place), and the publishing node's own `crewlet config seal` for a body a peer sent. See [Control Plane § The design](control-plane.md#the-design).
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
 
 Because the key gates every read, keep it as available as the database itself: the API, dashboard, migrations, and CLI all fail closed without it.
 
 **Threat model.** Encryption at rest defends against *data-at-rest* exposure: a leaked backup, a copied store file, a stolen volume snapshot, a coordination-store dump on a laptop — the attacker gets one opaque ciphertext blob per revision, no structure and no credentials. It also keeps config egress clean (`GET /config`, dashboard views, and revision diffs are decrypt-then-redact — no plaintext secrets) and absorbs accidental plaintext (a raw key pasted into `company.yaml` is encrypted on write, so it never lands in the DB in the clear). It does **not** defend against a compromised engine host that holds both the DB and the Tier A key (that host can decrypt — it must, to run; keep the key out of the store's backup domain — that separation is the point), a malicious operator with a valid key and API access, or in-memory extraction from the live process. The property: plaintext config exists only transiently in the encrypt/decrypt path and in the live engine's memory — never in durable storage.
 
-### Migrating from `${VAR}` to encrypted
+### A revision stored before the keyring was required
 
-Encryption is opt-in and backward-compatible — a plaintext config boots with or without a keyring. To migrate an existing deployment:
+Every write path seals, so the only plaintext revision a store can hold is one a build older than the mandatory keyring wrote. A node refuses to read it, naming the command that fixes it:
 
 ```bash
-crewlet secrets keygen --key-id 2026-01     # prints a key + the Tier A snippet
-# add the secrets: block to crewlet.yaml, export CREWLET_SECRET_KEY_2026_01
-crewlet config seal                          # encrypts the active revision as one document
+crewlet config seal                          # re-stores the active revision sealed
 ```
 
-`crewlet config seal` writes a new revision holding the encrypted document; afterwards the per-secret env vars are no longer needed at runtime (only the Tier A key). It's idempotent — a second run on an already-sealed revision is a no-op.
+`crewlet config seal` writes a new revision holding the encrypted document — the one read of a plaintext revision the engine allows, because it is the operator vouching for the revision their own node was running. It's idempotent: a second run on an already-sealed revision is a no-op. Superseded plaintext revisions stay unreadable to every other reader, which says so and names importing the document again as the way to have it back; `crewlet config scrub` still reaches them, and writes back sealed what it erases.
 
 ### Rotation
 

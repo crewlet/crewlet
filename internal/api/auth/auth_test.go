@@ -551,13 +551,21 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 	}
 }
 
-// THE COUNTERFACTUAL. A node that serves no HTTP at all needs none of it —
-// every rule above is gated on `api.port`, and a worker node that had to
+// THE COUNTERFACTUAL. A node that serves no HTTP at all needs none of the
+// API's own rules — each is gated on `api.port`, and a worker node that had to
 // declare a ceiling, an address and a token for a surface it does not bind
-// would be four settings of ceremony for nothing.
+// would be three settings of ceremony for nothing. The keyring is not one of
+// them: every node needs it, because every node runs state logs whose records
+// are signed under it, so this node carries one and nothing else.
 func TestANodeServingNoApiNeedsNoneOfIt(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
+	b.Secrets = config.Secrets{
+		ActiveKeyID: "k1",
+		Keys: []config.SecretKey{{
+			ID: "k1", Material: base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		}},
+	}
 	if b.API.Port != 0 {
 		t.Fatal("the default binds a port, so this case is not the one it names")
 	}

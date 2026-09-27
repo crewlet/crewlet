@@ -5,6 +5,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -914,7 +915,7 @@ func TestTheContainerEnvGoesInAFileNeverOnTheCommandLine(t *testing.T) {
 	root := t.TempDir()
 	box := &containerBox{
 		layout:    boxLayout{id: "box", root: root},
-		runtime:   "/usr/bin/docker",
+		cli:       containerCLI{path: "/usr/bin/docker"},
 		container: "crewlet-sbx-box",
 		env:       map[string]string{"ANTHROPIC_API_KEY": "sk-ant-secret"},
 	}
@@ -946,8 +947,8 @@ func TestTheContainerEnvGoesInAFileNeverOnTheCommandLine(t *testing.T) {
 func TestAnUnrepresentableEnvValueIsDroppedRatherThanForgingAVariable(t *testing.T) {
 	root := t.TempDir()
 	box := &containerBox{
-		layout:  boxLayout{id: "box", root: root},
-		runtime: "/usr/bin/docker", container: "c",
+		layout: boxLayout{id: "box", root: root},
+		cli:    containerCLI{path: "/usr/bin/docker"}, container: "c",
 		env: map[string]string{
 			"SAFE":     "fine",
 			"INJECTED": "value\nADMIN_TOKEN=forged",
@@ -972,8 +973,8 @@ func TestAnUnrepresentableEnvValueIsDroppedRatherThanForgingAVariable(t *testing
 func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 	root := t.TempDir()
 	box := &containerBox{
-		layout:  boxLayout{id: "box", root: root},
-		runtime: "/usr/bin/docker", container: "c",
+		layout: boxLayout{id: "box", root: root},
+		cli:    containerCLI{path: "/usr/bin/docker"}, container: "c",
 		env: map[string]string{"PHASE": "run"},
 	}
 	if _, err := box.envArgs(map[string]string{"SETUP_ONLY": "yes"}); err != nil {
@@ -990,7 +991,7 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 
 func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 	root := t.TempDir()
-	box := &containerBox{layout: boxLayout{id: "box", root: root}, runtime: "d", container: "c"}
+	box := &containerBox{layout: boxLayout{id: "box", root: root}, cli: containerCLI{path: "d"}, container: "c"}
 
 	got, err := box.hostPath(DefaultHome + "/workspace/notes.md")
 	if err != nil {
@@ -1009,7 +1010,7 @@ func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 // A prefix test alone would pass this: it starts with the mount point and
 // still resolves outside it, and setup-step file paths are operator config.
 func TestTheContainerRefusesAPathThatResolvesOffTheMount(t *testing.T) {
-	box := &containerBox{layout: boxLayout{id: "box", root: t.TempDir()}, runtime: "d", container: "c"}
+	box := &containerBox{layout: boxLayout{id: "box", root: t.TempDir()}, cli: containerCLI{path: "d"}, container: "c"}
 	for _, path := range []string{
 		DefaultHome + "/../../etc/cron.d/x",
 		"/etc/passwd",
@@ -1052,6 +1053,7 @@ func TestAnUnknownContainerRuntimeIsRefused(t *testing.T) {
 func TestAControlCommandThatHangsIsAbandonedWithATimeoutCode(t *testing.T) {
 	result, err := runHost(t.Context(), hostCommand{
 		argv:    []string{"/bin/sh", "-c", "sleep 30"},
+		env:     map[string]string{"PATH": os.Getenv("PATH")},
 		timeout: 200 * time.Millisecond,
 	})
 	if err != nil {
@@ -1142,15 +1144,147 @@ func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
 	}
 }
 
+// A HOST COMMAND WITH NO ENVIRONMENT IS NOT STARTED.
+//
 // os/exec reads a nil Env as "inherit the parent's", which is exactly what the
-// allowlist exists to prevent — so no caller may reach that path by accident.
-func TestFlattenEnvIsSortedAndNilOnlyWhenEmpty(t *testing.T) {
-	if got := flattenEnv(nil); got != nil {
-		t.Fatalf("flattenEnv(nil) = %v", got)
+// allowlist exists to prevent — and every container-runtime call in this file
+// reached the child that way, handing the runtime's CLI the engine's keyring
+// and Tier A tokens. The refusal has to come before the fork, so the proof is
+// that the child never ran.
+func TestAHostCommandWithNoEnvironmentIsNotStarted(t *testing.T) {
+	t.Parallel()
+	marker := filepath.Join(t.TempDir(), "ran")
+	_, err := runHost(t.Context(), hostCommand{
+		argv: []string{"/bin/sh", "-c", `: > "$0"`, marker},
+	})
+	if err == nil {
+		t.Fatal("a host command with no environment of its own was run")
 	}
-	got := flattenEnv(map[string]string{"B": "2", "A": "1"})
-	if len(got) != 2 || got[0] != "A=1" || got[1] != "B=2" {
-		t.Fatalf("flattenEnv = %v, want it sorted", got)
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the child ran before the refusal, holding the engine's environment")
+	}
+}
+
+// THE CONTAINER RUNTIME'S CLI SEES NONE OF THE ENGINE'S SECRETS, and every
+// setting of its own.
+//
+// Every `docker run`, `exec`, `pause`, `rm`, `ps` and `info` was started with
+// no environment, which os/exec fills with the engine's — so the runtime and
+// every plugin and credential helper it runs held the keyring every session
+// cookie is signed under. What the runtime cannot run correctly without — its
+// own DOCKER_HOST (a rootless daemon's socket), and the engine user's HOME
+// where its config lives — still arrives.
+func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
+	// Not parallel: it sets process-wide environment variables, which is the
+	// only way to prove what a real child INHERITS.
+	for name, value := range map[string]string{
+		"CREWLET_SECRET_KEY_2026_01": "keyring-material-not-for-the-runtime",
+		"CREWLET_OPS_TOKEN":          "tier-a-token-not-for-the-runtime",
+		"OIDC_CLIENT_SECRET":         "client-secret-not-for-the-runtime",
+		"OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer%20otlp-not-for-the-runtime",
+		"ANTHROPIC_API_KEY":          "sk-ant-not-for-the-runtime",
+	} {
+		t.Setenv(name, value)
+	}
+	t.Setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+	t.Setenv("HOME", t.TempDir())
+
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "env")
+	// THE DUMP PATH IS IN THE SCRIPT, not the environment: the environment
+	// is what is under test, so nothing the case needs can travel in it.
+	runtime := filepath.Join(dir, "docker")
+	script := fmt.Sprintf("#!/bin/sh\n/usr/bin/env > '%s'\n", dump)
+	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	waitExecutable(t, runtime)
+	// The rootless probe is one of the runtime calls, and it is the one every
+	// container box makes first.
+	runtimeIsRootless(t.Context(), containerCLI{path: runtime})
+
+	raw, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatalf("the runtime never ran: %v", err)
+	}
+	got := string(raw)
+	for _, secret := range []string{
+		"keyring-material-not-for-the-runtime", "tier-a-token-not-for-the-runtime",
+		"client-secret-not-for-the-runtime", "otlp-not-for-the-runtime",
+		"sk-ant-not-for-the-runtime",
+	} {
+		if strings.Contains(got, secret) {
+			t.Errorf("the container runtime was handed the engine's %q:\n%s", secret, got)
+		}
+	}
+	for _, want := range []string{
+		"DOCKER_HOST=unix:///run/user/1000/docker.sock", "HOME=" + os.Getenv("HOME"), "PATH=",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the runtime's environment lacks %q, which it needs to reach "+
+				"the daemon the operator configured:\n%s", want, got)
+		}
+	}
+}
+
+// WHAT AN OPERATOR DECLARES FOR THE RUNTIME REACHES IT, OVER THE HOST'S.
+//
+// The fixed rule cannot know what a runtime's helpers read — the credential
+// helper that pulls a private image wants its cloud's role and profile — and
+// with no channel to add one, a runtime that needed it
+// was simply broken. `providers.sandbox.local.runtime_env` is that channel, so
+// what it declares arrives on every runtime call the backend makes, a declared
+// value beats the host's for the same name, and the map the caller handed in
+// is not the one the backend reads.
+func TestTheRuntimeGetsWhatItsRuntimeEnvDeclares(t *testing.T) {
+	// Not parallel: PATH is how the backend finds its runtime, and the
+	// host's DOCKER_CONFIG is what the declared one must beat.
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "env")
+	runtime := filepath.Join(dir, "docker")
+	script := fmt.Sprintf("#!/bin/sh\n/usr/bin/env > '%s'\n", dump)
+	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	waitExecutable(t, runtime)
+	t.Setenv("PATH", dir)
+	t.Setenv("DOCKER_CONFIG", "/home/engine/.docker")
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/the-engines-own-agent.sock")
+
+	declared := map[string]string{
+		"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
+		"AWS_PROFILE":   "registry-pull",
+		"DOCKER_CONFIG": "/etc/crewlet/docker",
+	}
+	l, err := NewLocal(LocalOptions{
+		Placement: Container, Image: "img", Runtime: "docker",
+		StateDir: t.TempDir(), RuntimeEnv: declared,
+	})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	declared["AWS_PROFILE"] = "changed-after-construction"
+
+	// Any runtime call carries it; the listing is one every Create makes.
+	if _, err := l.liveContainers(t.Context()); err != nil {
+		t.Fatalf("liveContainers: %v", err)
+	}
+	raw, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatalf("the runtime never ran: %v", err)
+	}
+	got := string(raw)
+	for _, want := range []string{
+		"SSH_AUTH_SOCK=/run/user/1000/ssh-agent.sock",
+		"AWS_PROFILE=registry-pull",
+		"DOCKER_CONFIG=/etc/crewlet/docker",
+	} {
+		if !strings.Contains(got, want+"\n") {
+			t.Errorf("the runtime's environment lacks the declared %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "the-engines-own-agent") {
+		t.Errorf("the host's own SSH_AUTH_SOCK reached the runtime:\n%s", got)
 	}
 }
 

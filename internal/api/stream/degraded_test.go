@@ -116,6 +116,19 @@ func TestTheDegradedEnvelopeHoldsTheSocketOpen(t *testing.T) {
 		t.Errorf("a degraded node answered %v, want an %q refusal",
 			answer, stream.CodeUnavailable)
 	}
+	// AND IT SAYS WHEN TO ASK AGAIN, as every `unavailable` frame does: a
+	// frame with no `retry_after` is what a node too old to say sends, and
+	// the dashboard reads it as one. The posture is re-derived on the
+	// health tick, so one tick — ten milliseconds here, rounded up to a
+	// whole second — is the hint, and no state-log refusal is named.
+	if got, ok := answer["retry_after"].(float64); !ok || got != 1 {
+		t.Errorf("a degraded node's refusal carries retry_after %v, want the "+
+			"health tick's, 1 — its zero is an answer and its absence is an "+
+			"old node", answer["retry_after"])
+	}
+	if _, named := answer["refusal"]; named {
+		t.Errorf("a degraded node's refusal named a state-log refusal: %v", answer)
+	}
 	select {
 	case <-ran:
 		t.Error("the query ran on a degraded node: its copy of the company " +

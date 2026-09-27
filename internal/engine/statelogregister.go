@@ -127,10 +127,16 @@ type registration struct {
 	// domain. Required, and stated per domain rather than defaulted,
 	// because "every node runs everything" is an answer rather than an
 	// absence: a domain whose rows only an ingress node reads still costs
-	// every seats-only satellite its disk, its applier and its share of
-	// the stream budget, and a satellite that holds a directory of people
-	// it authenticates nobody against is the specific thing this exists to
-	// prevent.
+	// every seats-only satellite its disk and its applier, and a satellite
+	// that holds a directory of people it authenticates nobody against is
+	// the specific thing this exists to prevent.
+	//
+	// THE STREAM IS NOT PART OF WHAT IT SAVES. A domain's stream and the
+	// ceiling reserved for it are the FLEET's, and every node creates and
+	// sizes every registered domain's stream whatever it runs
+	// ([ceilingsFor], [stateLog.provisionAll]), because a stream keeps the
+	// ceiling of whichever node created it first — so a node that does not
+	// run a domain still counts its share of the broker's budget.
 	//
 	// EVERY DOMAIN A NODE DECLARES OR NONE. The set is one fact with five
 	// readers — the applier set, the snapshot manifest, an offer's
@@ -187,7 +193,8 @@ func register() []registration {
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.LogMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
-					Field: "stream.tracker_log_max_bytes", Explicit: !derived}
+					Field: "stream.tracker_log_max_bytes", Explicit: !derived,
+					Floor: config.TrackerLogMaxBytesFloor}
 			},
 		},
 		{
@@ -214,7 +221,8 @@ func register() []registration {
 				bytes, _ := stream.VectorsMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
 					Field:    "stream.tracker_vectors_max_bytes",
-					Explicit: stream.TrackerVectorsMaxBytes > 0}
+					Explicit: stream.TrackerVectorsMaxBytes > 0,
+					Floor:    config.TrackerVectorsMaxBytesFloor}
 			},
 		},
 		{
@@ -246,7 +254,8 @@ func register() []registration {
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.PagesMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
-					Field: "stream.pages_log_max_bytes", Explicit: !derived}
+					Field: "stream.pages_log_max_bytes", Explicit: !derived,
+					Floor: config.PagesLogMaxBytesFloor}
 			},
 		},
 		{
@@ -294,7 +303,8 @@ func register() []registration {
 			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 				bytes, derived := stream.ChartMaxBytes()
 				return domainCeiling{Bytes: bytes,
-					Field: "stream.chart_log_max_bytes", Explicit: !derived}
+					Field: "stream.chart_log_max_bytes", Explicit: !derived,
+					Floor: config.ChartLogMaxBytesFloor}
 			},
 		},
 		{
@@ -303,8 +313,9 @@ func register() []registration {
 				// THE SHREDDER, because removing a person is a key
 				// deletion rather than a row deletion and the apply is
 				// the only thing that sees every removal on every node.
-				// Nil is legal and means a node with no keyring: it
-				// deletes the rows and the key is a peer's to destroy.
+				// Nil only on an Engine built by hand without its key
+				// store; the key duty then destroys what the applier
+				// could not.
 				//
 				// AND THE DIRECTORY'S SIGNAL, the party registry's
 				// second rebuild trigger beside the chart view's: a
@@ -346,7 +357,8 @@ func register() []registration {
 			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 				bytes, derived := stream.IamMaxBytes()
 				return domainCeiling{Bytes: bytes,
-					Field: "stream.iam_log_max_bytes", Explicit: !derived}
+					Field: "stream.iam_log_max_bytes", Explicit: !derived,
+					Floor: config.IamLogMaxBytesFloor}
 			},
 		},
 	}
@@ -385,6 +397,11 @@ func checkRegister(entries []registration) error {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares no "+
 				"Tier A ceiling for its stream, so it would reserve its own default "+
 				"outside the budget every other state log is sized into", name)
+		}
+		if floor := entry.Ceiling(config.Stream{}, 0).Floor; floor <= 0 {
+			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
+				"no floor for its ceiling's field, so a boot the broker refuses could "+
+				"not say how small a ceiling the field accepts", name)
 		}
 		if entry.OpsRetention <= 0 {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares an "+
@@ -481,8 +498,11 @@ type participation struct {
 	Run []registration
 
 	// Unrun is the rest, as bare declarations: nothing here has an
-	// applier, a publisher or a ceiling on this node, and the only thing
-	// asked of it is what tables and which stream to scrub.
+	// applier or a publisher on this node, and the only thing asked of it
+	// is what tables and which stream to scrub out of an artefact. Its
+	// STREAM still exists and is still sized here — a stream and its
+	// reserved ceiling are the fleet's, created on every node whatever it
+	// runs — so what not running it saves is the disk and the applier.
 	Unrun []statelog.Domain
 }
 
@@ -641,10 +661,12 @@ func everyNode(placement.RoleSet) bool { return true }
 // AN AGENT SEAT NEVER READS THIS DOMAIN. A seat's principal is its own handle,
 // its authority is decided by internal/authz from the ORG CHART, and its work
 // arrives on its mailbox — so a seats-only satellite gains nothing from these
-// rows and pays for them three times over: the disk, the applier, and its
-// share of a stream budget every other log is sized into. A satellite holding
-// a directory of the company's people, which it authenticates nobody against,
-// is the specific thing the Participates field was added for.
+// rows and would pay for them twice over: the disk and the applier. Not the
+// stream — that and its reserved ceiling are the fleet's, created and sized on
+// every node whatever it runs — so the share of the broker's budget is spent
+// either way. A satellite holding a directory of the company's people, which
+// it authenticates nobody against, is the specific thing the Participates
+// field was added for.
 //
 // INGRESS BECAUSE IT SERVES REQUESTS: resolving who is asking, validating a
 // session bearer against a revocation epoch, and refusing one that is over.

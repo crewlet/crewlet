@@ -47,7 +47,7 @@ func TestLogFileSettingsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			boot, err := config.ParseBootstrap([]byte(tc.yaml), config.EnvOnly())
+			boot, err := parseTierA([]byte(tc.yaml), config.EnvOnly())
 			if err != nil {
 				t.Fatalf("expected a valid Tier A document, got: %v", err)
 			}
@@ -71,7 +71,7 @@ func TestLogFileSettingsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 // which is the same line `-roles` and `-api-host` are drawn along.
 func TestTheFlagMovesThePathAndNotTheCaps(t *testing.T) {
 	t.Parallel()
-	boot, err := config.ParseBootstrap([]byte(
+	boot, err := parseTierA([]byte(
 		"logging:\n  file:\n    path: /var/log/crewlet/crewlet.log\n"+
 			"    max_size_mb: 20\n    max_backups: 0\n"), config.EnvOnly())
 	if err != nil {
@@ -220,7 +220,7 @@ func TestTheOperatorCommandsWriteTheEnvironmentsLogFile(t *testing.T) {
 func TestRunIgnoresTheEnvironmentsLogFile(t *testing.T) {
 	t.Setenv("CREWLET_LOG_FILE", filepath.Join(t.TempDir(), "ops.log"))
 
-	boot, err := config.ParseBootstrap(nil, config.EnvOnly())
+	boot, err := parseTierA(nil, config.EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid Tier A document, got: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestABrokenEnvironmentLogFileFailsTheCommand(t *testing.T) {
 // this is where a node that would write its log nowhere is stopped.
 func TestRemovingTheOnlyDestinationIsRefused(t *testing.T) {
 	t.Parallel()
-	boot, err := config.ParseBootstrap([]byte(
+	boot, err := parseTierA([]byte(
 		"logging:\n  stderr: false\n  file:\n    path: /var/log/crewlet/crewlet.log\n"),
 		config.EnvOnly())
 	if err != nil {
@@ -277,7 +277,7 @@ func TestRemovingTheOnlyDestinationIsRefused(t *testing.T) {
 // turn a Tier A log file off for one run.
 func TestRemovingTheFileIsFineWhileStderrRemains(t *testing.T) {
 	t.Parallel()
-	boot, err := config.ParseBootstrap([]byte(
+	boot, err := parseTierA([]byte(
 		"logging:\n  file:\n    path: /var/log/crewlet/crewlet.log\n"), config.EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid Tier A document, got: %v", err)
@@ -300,7 +300,7 @@ func TestRemovingTheFileIsFineWhileStderrRemains(t *testing.T) {
 // is, which is a property of the deployment.
 func TestTheFlagMovesThePathAndNotTheLevel(t *testing.T) {
 	t.Parallel()
-	boot, err := config.ParseBootstrap([]byte(
+	boot, err := parseTierA([]byte(
 		"logging:\n  level: warn\n  file:\n    path: /var/log/crewlet/crewlet.log\n"+
 			"    level: debug\n"), config.EnvOnly())
 	if err != nil {

@@ -707,6 +707,42 @@ func TestAFailedReadIsNotAnEmptyResult(t *testing.T) {
 	}
 }
 
+// A READ REFUSED FOR WHAT IT ASKED IS NOT "TRY AGAIN".
+//
+// A feed's cursor that is not a position, a cursor or `since` from another
+// log, a text search wider than the feed scans, a floor on another log: each
+// is refused the same on every attempt, so the sentence that told a model the
+// tracker could not be read "right now" sent it round with the same arguments.
+// The refusal says the arguments are what has to change. The control is the
+// case above, where the store itself failed and trying again is right.
+func TestARequestTheTrackerRefusedIsNotToldToTryAgain(t *testing.T) {
+	t.Parallel()
+	for _, refusal := range []error{
+		fmt.Errorf("%w: cursor: \"42\" is not a log position", tracker.ErrBadQuery),
+		fmt.Errorf("this read's floor: %w", statelog.ErrForeignPosition),
+	} {
+		trk := newFakeTracker()
+		trk.readErr = refusal
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+		for _, name := range []string{builtin.ListWorkItemsTool, builtin.GetWorkItemTool} {
+			entry, ok := reg.Lookup(name)
+			if !ok {
+				t.Fatalf("%s is not registered", name)
+			}
+			got := callWork(t, reg, name, declaredOf(entry.Tool,
+				map[string]any{"item": "ENG-1"}))
+			if !got.Failed {
+				t.Errorf("%s reported success on a refused read", name)
+			}
+			if strings.Contains(got.Output, "Try again") ||
+				!strings.Contains(got.Output, "change the arguments") {
+				t.Errorf("%s on %v says: %s — want it to name the arguments as "+
+					"what changes, never to try again", name, refusal, got.Output)
+			}
+		}
+	}
+}
+
 // A FAILED WRITE SAYS THE CHANGE WAS NOT MADE, or the model reports work it
 // did not do.
 func TestAFailedWriteSaysSo(t *testing.T) {

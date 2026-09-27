@@ -99,7 +99,7 @@ func TestABridgedCallActsAsTheRunsSeatBehindTheGuard(t *testing.T) {
 
 			server := httptest.NewServer(nil)
 			t.Cleanup(server.Close)
-			bridge := mcpbridge.New(mcpbridge.Options{
+			bridge := bridgeFor(t, mcpbridge.Options{
 				Material: runtoken.OneKey("k", "test-key"), BaseURL: server.URL,
 			})
 			mux := http.NewServeMux()

@@ -2,6 +2,9 @@ package engine_test
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -79,6 +82,39 @@ func TestABadConfigFailsBeforeAnythingIsClaimed(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("an invalid company built an engine")
+	}
+}
+
+// A NODE WITH NO KEYRING IS REFUSED BEFORE ANYTHING OPENS — THE UNCONFIGURED
+// ONE INCLUDED.
+//
+// The unconfigured node is the case, because it is the one nothing else
+// caught: it starts no state log until it has a company, so it met no signer
+// and booted keyless, and its first applied revision was read in whatever
+// shape the coordination store held. And "before anything opens" is the other
+// half: the keyring is built from Tier A alone, so a refusal that came after
+// the store was open would leave the file behind for nothing.
+//
+// Mutation: let openCipher answer nil for an empty keyring and this engine
+// builds; move it back below OpenBackends and the store file exists.
+func TestAKeylessNodeIsRefusedBeforeAnythingOpens(t *testing.T) {
+	t.Parallel()
+	storePath := filepath.Join(t.TempDir(), "crewlet.db")
+	_, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Store.Path = storePath
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			b.Secrets = config.Secrets{}
+		}),
+	})
+	if err == nil {
+		t.Fatal("an unconfigured node with no keyring was built")
+	}
+	if !strings.Contains(err.Error(), "secrets.keys") {
+		t.Errorf("the refusal does not name the keyring: %v", err)
+	}
+	if _, statErr := os.Stat(storePath); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("the store was opened before the keyring was refused: %v", statErr)
 	}
 }
 

@@ -36,8 +36,8 @@ func entityOf(t *testing.T, s *surface, kind, id string) map[string]any {
 // to see what it holds. The listing is a READ; the write is what moved.
 func TestEveryEntityCollectionListsWhatTheDocumentCarries(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, entityDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
 	for _, tc := range []struct {
 		kind string
@@ -75,8 +75,8 @@ func TestEveryEntityCollectionListsWhatTheDocumentCarries(t *testing.T) {
 // for the entity they just deleted.
 func TestAnUnknownEntityKindSaysWhatTheKindsAre(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	_, err := s.service().Entities(t.Context(), "widgets")
 	if err == nil {
@@ -94,8 +94,8 @@ func TestAnUnknownEntityKindSaysWhatTheKindsAre(t *testing.T) {
 // company one seat at a time, past the masking the document read applies.
 func TestAnEntityReadCarriesNoCredential(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, entityDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
 	provider := entityOf(t, s, configapi.EntityLLMProviders, "zulu")
 	raw, err := json.Marshal(provider)
@@ -119,8 +119,8 @@ func TestAnEntityReadCarriesNoCredential(t *testing.T) {
 // every integration and every other server in the company.
 func TestAnEntityWriteLeavesTheRestOfTheDocumentAlone(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, entityDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
 	server := entityOf(t, s, configapi.EntityMCPServers, "tracker")
 	server["url"] = "https://tracker.example.com"
@@ -159,8 +159,8 @@ func TestAnEntityWriteLeavesTheRestOfTheDocumentAlone(t *testing.T) {
 // discovered when the integration stops authenticating.
 func TestAnEntityWriteRestoresWhatTheReadMasked(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	provider := entityOf(t, s, configapi.EntityLLMProviders, "zulu")
 	provider["model"] = "claude-haiku-4-5"
@@ -203,7 +203,7 @@ func TestAnEntityWriteRestoresWhatTheReadMasked(t *testing.T) {
 // still holds: a delegate template naming a provider nobody configures.
 func TestAnEntityWriteThatBreaksTheCompanyIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, entityDoc, refusedByThisBuild)
 
 	// A PERFECTLY GOOD ENTITY, and the write is still refused: what the
@@ -236,8 +236,8 @@ func TestAnEntityWriteThatBreaksTheCompanyIsRefused(t *testing.T) {
 // the document they changed.
 func TestAnEntityWriteNeverCreates(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, entityDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
 	res := s.do(t, http.MethodPut, "/config/llm-providers/xray",
 		`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${X}"]}`,
@@ -259,8 +259,8 @@ func TestAnEntityWriteNeverCreates(t *testing.T) {
 // most likely to be made in a hurry.
 func TestAnEntityWriteNeedsASummary(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, entityDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
 	res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
 		`{"type":"anthropic","model":"claude-sonnet-5"}`, nil)
@@ -287,8 +287,8 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // this status code, which is why it is asserted rather than assumed.
 func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	for _, kind := range configapi.EntityKinds() {
 		for _, method := range []string{
@@ -372,7 +372,7 @@ func TestASeatOrAUnitIsNotWrittenAtThisDoor(t *testing.T) {
 			// A PRE-SPLIT REVISION, which is the one document the splice
 			// could actually have landed on: on a settings-only revision
 			// the route finds nothing and the refusal proves less.
-			s := newSurface(t, nil)
+			s := newSurface(t)
 			s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
 			before := s.activeDocument(t)
 
@@ -410,7 +410,7 @@ func TestASeatOrAUnitIsNotWrittenAtThisDoor(t *testing.T) {
 	// served, because an operator repairing one has to be able to see it.
 	t.Run("the read still answers", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
 		if res := s.do(t, http.MethodGet, "/config/units/platform", "", nil); res.Code != http.StatusOK {
 			t.Errorf("GET a unit of a pre-split revision = %d, want 200: %s",
@@ -447,8 +447,8 @@ func TestAnEntityWriteNeverRenames(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
-			s.seed(t, entityDoc, nil)
+			s := newSurface(t)
+			s.seed(t, entityDoc)
 			before := s.activeDocument(t)
 
 			path := "/config/" + tc.kind + "/" + tc.id
@@ -488,8 +488,8 @@ func TestAnEntityWriteNeverRenames(t *testing.T) {
 // would make the surface useless for the thing it is most used for.
 func TestAnEntityWriteAcceptsAChangeThatKeepsTheIdentity(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, entityDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
 	res := s.do(t, http.MethodPut, "/config/mcp-servers/tracker",
 		`{"name":"tracker","transport":"http","url":"https://issues.example.com"}`,
@@ -514,8 +514,8 @@ func TestAnEntityWriteAcceptsAChangeThatKeepsTheIdentity(t *testing.T) {
 // The read is now the entity itself, so GET | PUT round-trips.
 func TestAnEntityReadRoundTripsStraightBackIntoTheWrite(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, entityDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
 	// AN ENTITY CARRYING A CREDENTIAL, because that is where the round
 	// trip is hardest: the read masks it and the write has to put the
@@ -560,8 +560,8 @@ func TestAnEntityReadRoundTripsStraightBackIntoTheWrite(t *testing.T) {
 // at a time, past the masking the document read applies.
 func TestAnEntityReadOverHTTPCarriesNoCredential(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config/llm-providers/zulu", "", nil)
 	if res.Code != http.StatusOK {
@@ -579,8 +579,8 @@ func TestAnEntityReadOverHTTPCarriesNoCredential(t *testing.T) {
 // AN ID NOBODY CARRIES IS A 404 ON THE READ TOO, not an empty entity.
 func TestReadingAnAbsentEntityIsNotFound(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config/roles/nobody", "", nil)
 	if res.Code != http.StatusNotFound {
@@ -627,8 +627,8 @@ func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
-			s.seed(t, entityDoc, nil)
+			s := newSurface(t)
+			s.seed(t, entityDoc)
 
 			path := "/config/" + tc.kind + "/" + tc.id
 			res := s.do(t, http.MethodPut, path, tc.body,
@@ -679,8 +679,8 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 			// member of each collection is what pins the index in the
 			// placed path — one of each cannot tell `[0]` from "the
 			// one there is".
-			s := newSurface(t, nil)
-			s.seed(t, entityDoc, nil)
+			s := newSurface(t)
+			s.seed(t, entityDoc)
 
 			res := s.do(t, http.MethodPut, "/config/"+tc.kind+"/"+tc.id, tc.body,
 				map[string]string{"X-Summary": "with a typo in it"})
@@ -726,8 +726,8 @@ func TestAUnitOfAnOldRevisionIsAddressedByItsKey(t *testing.T) {
 	  "units":[{"name":"Platform Engineering","id":"plat",
 	    "roles":[{"name":"Engineer","handle":"eng","llm":"zulu"}]}]}`
 
-	s := newSurface(t, nil)
-	s.seed(t, doc, nil)
+	s := newSurface(t)
+	s.seed(t, doc)
 
 	// THE LISTING NAMES THE KEY, which is what a client then addresses.
 	ids, err := s.service().Entities(t.Context(), configapi.EntityUnits)

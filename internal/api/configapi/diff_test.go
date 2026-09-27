@@ -204,9 +204,9 @@ func TestADiffReportsEveryChangeItFound(t *testing.T) {
 // "that is all that changed".
 func TestTheDiffAnswerIsCappedAndReportsTheTotal(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	first := s.seed(t, wideCompanyDoc("one"), nil)
-	second := s.seed(t, wideCompanyDoc("two"), nil)
+	s := newSurface(t)
+	first := s.seed(t, wideCompanyDoc("one"))
+	second := s.seed(t, wideCompanyDoc("two"))
 
 	body, err := s.service().Diff(t.Context(), second, first)
 	if err != nil {
@@ -228,9 +228,9 @@ func TestTheDiffAnswerIsCappedAndReportsTheTotal(t *testing.T) {
 // nothing changed.
 func TestADiffOfIdenticalRevisionsAnswersAnEmptyList(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	first := s.seed(t, companyDoc, nil)
-	second := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	first := s.seed(t, companyDoc)
+	second := s.seed(t, companyDoc)
 
 	body, err := s.service().Diff(t.Context(), second, first)
 	if err != nil {

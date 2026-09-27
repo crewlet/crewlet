@@ -245,7 +245,7 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 | What it found | What it reports | What clears it |
 |---|---|---|
 | No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set `api.external_url` |
-| No webhook was registered because `webhook_token` resolved to nothing, or because this node has no keyring to seal one with | `credential_missing` | set `integrations.datadog.webhook_token`, or install `secrets.keys` |
+| No webhook was registered because `webhook_token` resolved to nothing | `credential_missing` | set `integrations.datadog.webhook_token` |
 | A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
 | A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
 | A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
@@ -284,11 +284,6 @@ The other direction of the same mismatch — the account has a key and the seat'
 It used to stop the whole card on *Action required* and tell an operator to "delete the key at Datadog and run this again" — an API call the engine is itself authenticated for, holding the very credentials it listed the key with. Asking a person to perform a write you are authorized for is not a safety property; it is the same write with a worse actor, and it left companies parked on *Action required* over one seat.
 
 Only the keys **this engine minted** are deleted, matched on the name every mint here writes (`crewlet`). That is narrower than what a [disconnect](#giving-each-agent-its-own-datadog-identity) does — a teardown revokes *every* key on the account — and the difference is the goal rather than an inconsistency: a teardown must leave no live credential on a decommissioned account, so a key it cannot attribute is exactly the hazard it exists to remove, while a repair only has to give this seat a working credential and minting is additive. A key somebody else put on the account is left alone and the seat is fixed regardless.
-
-A node with no keyring also no longer creates the accounts. It used to make a
-real Datadog service account per seat and then fail to record its key — so the
-account existed, nothing could authenticate as it, and the next pass made
-another one.
 
 ### The payload template
 

@@ -20,8 +20,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -287,8 +289,134 @@ func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.
 	if !strings.Contains(rec.Body.String(), `"unavailable"`) {
 		t.Errorf("REST body = %s, want the unavailable code", rec.Body.String())
 	}
-	if socket := overSocket(t, a, "blip", nil); socket["error"] != "unavailable" {
+	socket := overSocket(t, a, "blip", nil)
+	if socket["error"] != "unavailable" {
 		t.Errorf("socket answer = %v, want unavailable", socket)
+	}
+	// NO REFUSAL IS BEHIND IT, and the hint is the health tick's.
+	if _, named := socket["refusal"]; named {
+		t.Errorf("a coordination blip named a state-log refusal: %v", socket)
+	}
+	if got := socket["retry_after"]; got != float64(stream.HealthInterval/time.Second) {
+		t.Errorf("socket retry_after = %v, want the health tick's %s", got,
+			stream.HealthInterval)
+	}
+}
+
+// A STATE-LOG REFUSAL IS UNAVAILABLE ON BOTH TRANSPORTS, CARRYING ITS CODE,
+// ITS WORDS AND ITS OWN HINT.
+//
+// A linearizable read whose barrier the broker refused — a full log, a sealed
+// stream — reached the caller as a 500 `query_failed` with the refusal's words
+// sent only to the log, and a refusal waiting cannot clear, a record this node
+// cannot decode, always had. Neither is a fault. Both transports now answer
+// `unavailable` with the refusal's code and detail, and the hint is the state
+// log's: none at all for a refusal no wait changes, so a client is told what
+// to do rather than to poll, and the derived hint for a node that is behind.
+func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		refused *statelog.Refused
+		retry   string
+	}{
+		{"a log at its byte ceiling", &statelog.Refused{Code: statelog.RefuseLogFull,
+			Level: statelog.ReadLinearizable, Detail: "raise the stream's byte ceiling"}, ""},
+		{"a barrier the broker refused", &statelog.Refused{Code: statelog.RefuseBrokerRefused,
+			Level: statelog.ReadLinearizable, Detail: "code 10109: sealed"}, ""},
+		// THE CONTROL: a refusal that clears keeps its derived hint.
+		{"a node that is behind", &statelog.Refused{Code: statelog.RefuseBehind,
+			Level: statelog.ReadLinearizable, Detail: "40 000 records behind",
+			RetryAfter: 12 * time.Second}, "12"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := seededApp(t, nil)
+			a.Queries().Register("refused", iam.GrantStateRead,
+				func(context.Context, queries.Params) (any, error) {
+					return nil, fmt.Errorf("read the board: %w", tc.refused)
+				})
+
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/refused", nil)))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Errorf("REST status = %d, want 503 — a refusal is not a fault", rec.Code)
+			}
+			if got := rec.Header().Get("Retry-After"); got != tc.retry {
+				t.Errorf("REST Retry-After = %q, want %q", got, tc.retry)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("REST body: %v", err)
+			}
+			if body["error"] != "unavailable" || body["refusal"] != string(tc.refused.Code) ||
+				body["detail"] != tc.refused.Detail {
+				t.Errorf("REST body = %v, want unavailable carrying %s and its words",
+					body, tc.refused.Code)
+			}
+
+			socket := overSocket(t, a, "refused", nil)
+			if socket["error"] != "unavailable" || socket["refusal"] != string(tc.refused.Code) ||
+				socket["detail"] != tc.refused.Detail {
+				t.Errorf("socket answer = %v, want unavailable carrying %s and its words",
+					socket, tc.refused.Code)
+			}
+			wantSeconds := 0.0
+			if tc.retry != "" {
+				wantSeconds = 12
+			}
+			if got, ok := socket["retry_after"].(float64); !ok || got != wantSeconds {
+				t.Errorf("socket retry_after = %v, want %v — its zero is the answer, "+
+					"so it is never omitted", socket["retry_after"], wantSeconds)
+			}
+		})
+	}
+}
+
+// A FLOOR ON ANOTHER DOMAIN'S LOG IS THE CALLER'S MISTAKE ON BOTH TRANSPORTS,
+// AND A NODE ON A REBUILT STREAM IS STILL THIS NODE'S REFUSAL.
+//
+// `min_position=CREWLET_PAGES_LOG@1:5` on a tracker question is refused
+// identically by every node however long anybody waits, so it is `400
+// bad_params` over REST and `bad_params` on the socket — the request is what
+// has to change. It was answered as the reader's `wrong_stream` refusal: a 503
+// with no Retry-After, a frame telling the dashboard to send the person to
+// another node or an operator. The control is that refusal's other meaning,
+// which is a state of the node: a checkpoint past its log's end, or a stream
+// rebuilt under it, stays `unavailable` on both.
+func TestAFloorOnAnotherLogIsABadRequestOnBothTransports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"a min_position on another domain's log",
+			fmt.Errorf("read the board: %w: this read floors at CREWLET_PAGES_LOG@1:5",
+				statelog.ErrForeignPosition),
+			http.StatusBadRequest, "bad_params"},
+		{"a node whose stream was rebuilt under it, the control",
+			fmt.Errorf("read the board: %w", &statelog.Refused{
+				Code: statelog.RefuseWrongStream, Level: statelog.ReadStale,
+				Detail: "the stream was recreated under this node"}),
+			http.StatusServiceUnavailable, "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := seededApp(t, nil)
+			a.Queries().Register("floored", iam.GrantStateRead,
+				func(context.Context, queries.Params) (any, error) { return nil, tc.err })
+
+			status, answered := overREST(t, a, "floored", nil)
+			body, _ := answered.(map[string]any)
+			if status != tc.status || body["error"] != tc.code {
+				t.Errorf("REST = %d %v, want %d %s", status, body, tc.status, tc.code)
+			}
+			if socket := overSocket(t, a, "floored", nil); socket["error"] != tc.code {
+				t.Errorf("socket answer = %v, want %s", socket, tc.code)
+			}
+		})
 	}
 }
 

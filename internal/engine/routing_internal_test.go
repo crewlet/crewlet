@@ -160,7 +160,7 @@ func TestOnlyTheSurfacesThatLookUpAnAccountReportRouting(t *testing.T) {
 // instance at url.
 func routingEngine(t *testing.T, instance string) (*Engine, *Company) {
 	t.Helper()
-	e := &Engine{}
+	e := sealingNode(t)
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:

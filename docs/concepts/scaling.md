@@ -162,6 +162,19 @@ live leases over a connection that still works while the one carrying its inbox
 has dropped — alive to its peers, deaf to its work. One connection makes
 "reachable" a single fact about a node rather than two that can disagree.
 
+**The state logs share one byte budget on that broker.** Each state log's
+stream reserves its whole byte ceiling when it is created, so the logs are
+sized together: `StreamBudgetShare` — half — of what the broker can grant,
+divided over every domain this build registers
+(`internal/engine/statelogceilings.go`) rather than over the ones a node's
+roles apply, because every node creates every log's stream and a stream keeps
+the ceiling its creator gave it. The other half is for what reserves nothing:
+every seat's mailbox, every coordination bucket and the snapshot a joining
+node reads. A log allowed the whole broker would starve the estate it is part
+of, and the failure would not be a full log but a company that cannot claim a
+seat. See
+[Replication § How the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized).
+
 ### What stays per-process, deliberately
 
 - **`max_concurrent`.** Tier A's `node.max_concurrent` (default 32) is the gate

@@ -1082,6 +1082,88 @@ func TestAReadRefusalSaysWhetherAndWhenToComeBack(t *testing.T) {
 	}
 }
 
+// A FLOOR ON ANOTHER LOG IS A BAD REQUEST, NOT A REFUSAL TO COME BACK FROM.
+//
+// Only the read can tell a `min_position` from the pages log apart from one
+// from the chart's, and every node refuses it the same — so the route answers
+// `400 bad_params` as it does every other parameter it cannot take. It was the
+// reader's `wrong_stream` refusal and a 503, sending a client to another node.
+// The control is the refusal a node on a rebuilt stream gives, which stays a
+// 503.
+func TestAFloorOnAnotherLogIsABadRequest(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		err    error
+		status int
+		code   httpjson.Code
+	}{
+		{"a min_position on another domain's log",
+			fmt.Errorf("chart: read: %w: this read floors at CREWLET_PAGES_LOG@1:5",
+				statelog.ErrForeignPosition),
+			http.StatusBadRequest, httpjson.CodeBadParams},
+		{"a node whose stream was rebuilt under it, the control",
+			&statelog.Refused{Code: statelog.RefuseWrongStream, Level: statelog.ReadStale},
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := serve(t, &reader{err: c.err}, leadOf(iam.GrantStateRead), leads())
+			rec := httptest.NewRecorder()
+			r.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x/chart", nil))
+			if rec.Code != c.status {
+				t.Fatalf("answered %d, want %d: %s", rec.Code, c.status, rec.Body)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v: %s", err, rec.Body)
+			}
+			if body["error"] != string(c.code) {
+				t.Errorf("error = %v, want %s", body["error"], c.code)
+			}
+		})
+	}
+}
+
+// A FAULT'S OWN WORDS STAY IN THE LOG.
+//
+// `internal_error` says the reason is in this node's log, and a fault's reason
+// is a store's or a driver's words — a database path here. This surface sent
+// them as the answer's `detail` and logged nothing, on a read and on a write
+// alike. The control is a state-log refusal, whose detail is written for the
+// caller and still travels.
+func TestAFaultsOwnWordsStayInTheLog(t *testing.T) {
+	t.Parallel()
+	fault := errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+
+	read := serve(t, &reader{err: fault}, leadOf(iam.GrantStateRead), leads())
+	rec := httptest.NewRecorder()
+	read.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x/chart", nil))
+	if rec.Code != http.StatusInternalServerError ||
+		strings.Contains(rec.Body.String(), "/var/lib") {
+		t.Errorf("a read that faulted answered %d: %s — want 500 without the "+
+			"store's words", rec.Code, rec.Body)
+	}
+
+	write := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	write.writer.err = fault
+	if rec := post(write.mux, "/chart/units/engineering/rename",
+		`{"to":"platform"}`); rec.Code != http.StatusInternalServerError ||
+		strings.Contains(rec.Body.String(), "/var/lib") {
+		t.Errorf("a write that faulted answered %d: %s — want 500 without the "+
+			"store's words", rec.Code, rec.Body)
+	}
+
+	refused := serve(t, &reader{err: &statelog.Refused{Code: statelog.RefuseDeferred,
+		Level: statelog.ReadStale, Detail: "a record at version 9 this node cannot decode"}},
+		leadOf(iam.GrantStateRead), leads())
+	rec = httptest.NewRecorder()
+	refused.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x/chart", nil))
+	if !strings.Contains(rec.Body.String(), "version 9") {
+		t.Errorf("a refusal lost its own words: %s", rec.Body)
+	}
+}
+
 // A RENAME IS A ONE-OPERATION STRUCTURAL BATCH, naming the object by the
 // address the route is addressed by and the address the body asks for.
 //

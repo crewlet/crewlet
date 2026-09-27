@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -186,5 +188,82 @@ func TestTheContainerImageIsRequiredOnlyWhereAContainerRuns(t *testing.T) {
 		"providers.sandbox.local.image")
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
+	}
+}
+
+// THE RUNTIME'S OWN ENVIRONMENT IS DECLARED BY NAME, and a name no process can
+// read back is refused rather than handed to the runtime: `A=B` as a key would
+// set a variable called A. And it is a container field like the rest — a
+// direct box drives no runtime, so there it configures nothing.
+func TestRuntimeEnvTakesEnvironmentNamesOnlyAndOnlyWhereAContainerRuns(t *testing.T) {
+	t.Parallel()
+	const container = "name: Acme\nproviders:\n  sandbox:\n    local:\n" +
+		"      image: \"example.invalid/box:1\"\n      runtime_env:\n%s" +
+		"    default_run_in: container\n"
+	mustCompany(t, fmt.Sprintf(container,
+		"        SSH_AUTH_SOCK: \"${SSH_AUTH_SOCK}\"\n        AWS_PROFILE: registry-pull\n"))
+	for _, bad := range []string{"A=B", "HAS SPACE", "1LEADING_DIGIT"} {
+		err := rejects(t, fmt.Sprintf(container, fmt.Sprintf("        %q: x\n", bad)),
+			"providers.sandbox.local.runtime_env."+bad)
+		if !errors.Is(err, ErrShape) {
+			t.Fatalf("runtime_env key %q: want ErrShape, got %v", bad, err)
+		}
+	}
+	err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local:\n"+
+		"      runtime_env: {SSH_AUTH_SOCK: \"${SSH_AUTH_SOCK}\"}\n    default_run_in: direct\n",
+		"providers.sandbox.local.runtime_env")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("runtime_env with no container seat: want ErrConflict, got %v", err)
+	}
+}
+
+// A BARE `-e NAME` THE RUNTIME HAS NOTHING FOR IS SAID BEFORE IT IS APPLIED.
+//
+// The runtime's CLI copies NAME from its own environment — a fixed rule plus
+// runtime_env, never the engine's — so a name neither carries starts a box in
+// which it is simply unset, and nothing anywhere says why. Every spelling the
+// runtimes accept is read; a name the fixed rule carries, one runtime_env
+// declares, one given its own value and an env FILE are all fine, and each
+// warning sits at the argument that names it.
+func TestABareEnvArgNothingSuppliesIsAdvised(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local:\n"+
+		"      image: \"example.invalid/box:1\"\n"+
+		"      runtime_env: {DECLARED: \"${DECLARED}\"}\n"+
+		"      run_args: [\"-e\", \"FOO\", \"--env\", \"BAR\", \"--env=BAZ\", \"-eQUX\",\n"+
+		"        \"-e\", \"DOCKER_HOST\", \"-e\", \"HTTPS_PROXY\", \"-e\", \"DECLARED\",\n"+
+		"        \"-e\", \"SET=value\", \"--env-file\", \"/etc/crewlet/box.env\", \"--cpus\", \"2\"]\n"+
+		"    default_run_in: container\n")
+	got := map[string]string{}
+	for _, w := range cfg.AdvisoryWarnings() {
+		if w.Kind != WarningAdvisory {
+			t.Errorf("warning %+v is not an advisory", w)
+		}
+		got[w.Path] = w.Message
+	}
+	want := map[string]string{
+		"providers.sandbox.local.run_args[1]": "FOO",
+		"providers.sandbox.local.run_args[3]": "BAR",
+		"providers.sandbox.local.run_args[4]": "BAZ",
+		"providers.sandbox.local.run_args[5]": "QUX",
+	}
+	for path, name := range want {
+		message, ok := got[path]
+		if !ok {
+			t.Errorf("no advisory at %s for the bare `-e %s`: %v", path, name, got)
+			continue
+		}
+		if !strings.Contains(message, "`-e "+name+"`") || !strings.Contains(message, "runtime_env") {
+			t.Errorf("advisory at %s = %q, want it to name %s and runtime_env", path, message, name)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("advisories = %v, want exactly %v", got, want)
+	}
+	// And a company with nothing to say says nothing — as an empty list,
+	// which a surface renders as "nothing to say" where a null reads as a
+	// failure.
+	if quiet := mustCompany(t, "name: Acme\n").AdvisoryWarnings(); quiet == nil || len(quiet) != 0 {
+		t.Errorf("AdvisoryWarnings of a company with no sandbox = %#v, want an empty list", quiet)
 	}
 }

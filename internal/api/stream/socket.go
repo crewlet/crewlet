@@ -45,6 +45,13 @@ import (
 // they mean, so an operator reading a close code and an operator reading a
 // REST refusal are reading one number.
 //
+// THE DASHBOARD HOLDS THE SAME TWO NUMBERS, as `CLOSE_UNAUTHENTICATED` and
+// `CLOSE_FORBIDDEN` in its socket module, and a gate in this package's suite
+// reads them from its source: each must equal the constant here, and every
+// application close code declared here must have one there. They were two
+// literals with nothing between them, and renumbering one side would have left
+// the dashboard reconnecting for ever against a withdrawn grant.
+//
 // NOTHING ELSE CLOSES THIS SOCKET FOR A FAULT. A node that cannot serve keeps
 // its socket open and degrades it instead — see [FrameDegraded].
 const (
@@ -111,9 +118,15 @@ const (
 	CodeBadParams = "bad_params"
 
 	// CodeUnavailable is a question this node understood and cannot answer
-	// YET: a projection still catching up, or a coordination store that
-	// could not be reached. A surface this process does not have at all is
-	// CodeUnknownQuery instead, because waiting never changes that answer.
+	// HERE: a projection still catching up, a coordination store that could
+	// not be reached, or a refusal by its state log — a node behind its log,
+	// and also one holding a record it cannot decode or whose log is full,
+	// which no wait clears. WHETHER WAITING HELPS is not this code's to say:
+	// the frame's `retry_after` carries it ([Unavailable], by
+	// [statelog.RetryAfter]'s rule), and its zero sends a client to another
+	// node or an operator rather than back here. A surface this process does
+	// not have at all is CodeUnknownQuery instead: that is this node's
+	// configuration rather than its state, and no wait changes it.
 	//
 	// It is the code that must never be flattened into an empty result.
 	// "This company has no work" is an answer a person acts on: they file
@@ -130,7 +143,7 @@ var (
 	ErrUnauthorized = errors.New("stream: this caller may not ask that")
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
-	ErrUnavailable  = errors.New("stream: not available on this node yet")
+	ErrUnavailable  = errors.New("stream: not available on this node")
 )
 
 // RefusedError is [ErrUnauthorized] carrying WHY: the rule's reason and the
@@ -359,7 +372,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 	defer checking.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, slots)
+	code, reason := readLoop(ctx, conn, seats, client, query, who, slots, svc.interval)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -421,9 +434,12 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // that end a socket at all; everything else this loop can go wrong about is
 // answered ON the socket and the socket stays open. See [CloseUnauthenticated]
 // and [FrameDegraded].
+//
+// healthEvery is the shared tick's cadence, which is when a degraded posture
+// can next change — the hint a query refused on one carries.
 func readLoop(ctx context.Context, conn *websocket.Conn,
 	seats *watching, client *Client, query Query, who *asking,
-	slots chan struct{},
+	slots chan struct{}, healthEvery time.Duration,
 ) (websocket.StatusCode, string) {
 	// THE CONCURRENCY BOUND ARRIVES FROM THE SERVICE rather than being
 	// made here, and that is the whole of the per-principal change: a
@@ -465,8 +481,22 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// out of it — "there is no such work item" — is something a
 			// person acts on. The refusal is a DIRECT frame, so it
 			// reaches the client whatever the posture.
+			//
+			// AND IT SAYS WHEN TO ASK AGAIN, like every other
+			// `unavailable` frame: `retry_after` is never omitted,
+			// because a frame without it is what a node too old to say
+			// sends. The posture is re-derived on the shared health
+			// tick — a node shedding or stuck on a configuration, or
+			// this socket's own credential unverifiable — so one tick
+			// is the soonest this node could answer differently, and
+			// the health frame the tab keeps receiving says why. No
+			// state-log refusal is behind it, so none is named.
 			if !client.Posture().ServesQueries() {
-				client.Reply(queryError(req, CodeUnavailable))
+				env := queryError(req, CodeUnavailable)
+				env.Unavailable = &Unavailable{
+					RetryAfter: httpjson.RetrySeconds(healthEvery),
+				}
+				client.Reply(env)
 				continue
 			}
 			if query == nil {
@@ -749,7 +779,13 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
 		client.Reply(queryError(req, CodeBadParams))
 	case errors.Is(err, ErrUnavailable):
-		client.Reply(queryError(req, CodeUnavailable))
+		// THE REFUSAL AND ITS HINT RIDE THE FRAME, because a node
+		// catching up and a node that will refuse this read until an
+		// operator acts are both `unavailable` — see [Unavailable].
+		env := queryError(req, CodeUnavailable)
+		u := UnavailableOf(err)
+		env.Unavailable = &u
+		client.Reply(env)
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and holding the

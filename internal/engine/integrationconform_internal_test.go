@@ -64,7 +64,7 @@ func TestTheAdapterMeetsTheContract(t *testing.T) {
 	adapter := func(findings ...integration.Finding) func(integrationtest.TB) integration.Reconciler {
 		return func(integrationtest.TB) integration.Reconciler {
 			pass = &convergedPass{kind: integration.KindGitLab, findings: findings}
-			e := &Engine{}
+			e := sealingNode(t)
 			e.epoch.current.Store(companyFor(t, `
 name: Acme
 providers:
