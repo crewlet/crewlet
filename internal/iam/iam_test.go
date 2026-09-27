@@ -125,6 +125,71 @@ func TestTheLoginAndHandleRegexesAreDisjoint(t *testing.T) {
 	}
 }
 
+// NO SEAT HANDLE IS EVER A LOGIN, and no login is ever a seat handle.
+//
+// This is the third namespace against the other two, which the case above
+// reaches only through a claim about separators: here the seat grammar is
+// asked directly, over the same generated corpus plus handles GENERATED FROM
+// the seat grammar itself — every one-to-four symbol string over its alphabet,
+// and each at the width bound — because the property is universal. A name
+// [NamesLogin] admits is sent to the identity directory by [OwnerOf] and never
+// to the chart, so one that was also a valid seat handle would be a seat no
+// name could ever reach. Mutation: let the seat pattern admit '.' and `jane.doe`
+// is both.
+func TestNoSeatHandleIsALogin(t *testing.T) {
+	t.Parallel()
+	corpus := nameCorpus()
+	level := []string{""}
+	for range 4 {
+		var next []string
+		for _, prefix := range level {
+			for _, r := range "a9-" {
+				next = append(next, prefix+string(r))
+			}
+		}
+		corpus = append(corpus, next...)
+		level = next
+	}
+	corpus = append(corpus, strings.Repeat("a", MaxLogin),
+		strings.Repeat("a", MaxLogin+1), "jane.doe", "ci:release", "token:ops")
+
+	seats := 0
+	for _, s := range corpus {
+		seat := ValidSeatHandle(s)
+		if seat && NamesLogin(s) {
+			t.Fatalf("%q is a valid seat handle AND has a login's shape — "+
+				"OwnerOf would send it to the directory, and the seat named "+
+				"by it could never be reached by name", s)
+		}
+		if seat && strings.ContainsAny(s, ".:") {
+			t.Fatalf("%q is a valid seat handle and carries a login separator", s)
+		}
+		if seat {
+			seats++
+		}
+	}
+	for _, login := range []string{"jane.doe", "ci:release", "token:ops"} {
+		if ValidSeatHandle(login) {
+			t.Errorf("%q is admitted as a seat handle — the chart would hold "+
+				"a seat every name resolution sends to the identity directory",
+				login)
+		}
+	}
+	// THE BOUND, at and one past it.
+	if !ValidSeatHandle(strings.Repeat("a", MaxLogin)) {
+		t.Errorf("a seat handle of %d bytes, the bound, is refused", MaxLogin)
+	}
+	if ValidSeatHandle(strings.Repeat("a", MaxLogin+1)) {
+		t.Errorf("a seat handle of %d bytes, past the bound, is admitted", MaxLogin+1)
+	}
+	// THE CONTROL: a corpus that admitted no seat handle would pass the
+	// disjointness above while proving nothing.
+	if seats < 50 {
+		t.Fatalf("the corpus admitted %d seat handles; the assertions above "+
+			"are vacuous", seats)
+	}
+}
+
 // A LOGIN'S GRAMMAR BELONGS TO ITS KIND, and to no other.
 //
 // Disjointness alone is not enough, which is what this adds to the case above:

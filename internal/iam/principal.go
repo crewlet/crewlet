@@ -95,9 +95,10 @@ type Principal struct {
 	// credential — and unbound is an ordinary state, not a
 	// misconfiguration.
 	//
-	// Carried as an opaque string: internal/org owns the seat-handle
-	// grammar, and a second copy of it in a leaf package is a copy that
-	// drifts the first time org widens it.
+	// Carried as the string the binding holds and NOT re-validated here:
+	// the grammar is [ValidSeatHandle], asked where a handle is created or
+	// renamed, and a principal only ever carries one the chart already
+	// holds.
 	Seat string
 
 	// SeatAt is the CHART POSITION the binding was decided at: the

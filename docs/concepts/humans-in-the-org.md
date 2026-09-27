@@ -138,9 +138,13 @@ their fallbacks: "default provider" is a MODEL for a seat that runs none, and
 a configured-settings panel asserting one is a panel claiming this company
 configured something validation would have refused.
 
-Handles are validated for format (`[a-z0-9][a-z0-9-]*`) and org-wide
-uniqueness. They are the canonical seat identity, and an agent and a human
-sharing one would misattribute the person's activity to the agent.
+Handles are validated for format (`[a-z0-9][a-z0-9-]*`, at most 64 bytes) and
+org-wide uniqueness. They are the canonical seat identity, and an agent and a
+human sharing one would misattribute the person's activity to the agent. A
+handle never carries a `.` or a `:`: those are how a person's login
+(`jane.doe`) and a machine's (`ci:release`) are spelled, so a seat called
+`jane.doe` would be one every name lookup sends to the identity directory
+instead of to the seat.
 
 ---
 

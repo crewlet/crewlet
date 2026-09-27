@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -46,18 +46,19 @@ const (
 	TransportGitLab     Transport = "gitlab"
 )
 
-// handlePattern is the canonical handle shape. Slugify output always
-// conforms; an explicit handle is checked against it at validation.
-var handlePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-
 // ValidHandle reports whether s is a registry-safe seat handle: lowercase
-// alphanumerics and hyphens, starting with an alphanumeric.
+// alphanumerics and hyphens, starting with an alphanumeric, at most
+// [iam.MaxLogin] bytes.
 //
-// This is the ONE definition of the shape, exported because the party
-// registry enforces it again at registration time — a second regex there
-// that disagreed by one character would accept a handle at config time and
-// reject the same seat during engine start.
-func ValidHandle(s string) bool { return handlePattern.MatchString(s) }
+// IT IS [iam.ValidSeatHandle], and deliberately not a regex of its own. The
+// shape used to be defined here, and the org chart's write path — which
+// imports the identity leaf and cannot import this package — validated a
+// handle by a looser rule of its own, so a seat called `jane.doe` reached the
+// chart. One definition in the leaf every one of them imports is what makes a
+// document, the party registry and the chart refuse exactly the same names.
+// Slugify output always conforms but for its length, which [Role.Validate]
+// checks.
+func ValidHandle(s string) bool { return iam.ValidSeatHandle(s) }
 
 // EnvLookup resolves an environment variable, reporting whether it is set.
 // It matches os.LookupEnv, which is what a nil lookup falls back to.
@@ -857,6 +858,15 @@ func (r *Role) Validate() error {
 		add([]any{"name"}, fmt.Errorf(
 			"role %q: %w: the name yields no handle, so set one explicitly",
 			name, ErrInvalidHandle))
+	case name != "" && r.DeclaredHandle == "" && !ValidHandle(r.Handle()):
+		// A HANDLE DERIVED FROM A LONG NAME is the one way a slug fails the
+		// grammar: it is past the width every handle shares. Reported here
+		// rather than at the chart, which refuses the same seat later — at
+		// an import, naming a handle nobody typed.
+		add([]any{"name"}, fmt.Errorf(
+			"role %q: %w: the name yields the handle %q, which is %d bytes "+
+				"and the limit is %d — set a shorter handle explicitly",
+			name, ErrInvalidHandle, r.Handle(), len(r.Handle()), iam.MaxLogin))
 	}
 
 	if r.IsHuman() {

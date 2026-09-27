@@ -30,16 +30,24 @@
 // a column, and what keeps the names apart now is the SHAPE OF THE VALUE —
 // tracker/rank.go's move, applied to names instead of ranks:
 //
-//   - a SEAT HANDLE is one segment, [a-z0-9][a-z0-9-]* (internal/org/role.go
-//     owns that grammar and this package deliberately does not restate it);
+//   - a SEAT HANDLE is one segment, [a-z0-9][a-z0-9-]* — [ValidSeatHandle];
 //   - a PERSON's login is segments joined by DOTS — jane.doe;
 //   - a MACHINE's handle is segments joined by a COLON — ci:release.
 //
-// Both of the grammars here therefore REQUIRE a separator, which is the one
+// Both of the login grammars therefore REQUIRE a separator, which is the one
 // thing a seat handle can never carry, and they require different ones, which
 // is what makes them disjoint from each other. No collision is possible, in
 // either direction, by construction rather than by a uniqueness check some
 // later writer has to remember to run.
+//
+// ALL THREE GRAMMARS LIVE HERE, the seat handle's included. It used to be
+// internal/org's alone, and "by construction" held only where org's rule was
+// asked: the org chart's own write path imports this leaf and cannot import
+// org (org is built from the chart's rows), so it validated a handle by the
+// chart's looser address rule — and `jane.doe`, `ci:release` and `token:ops`
+// were each accepted as a seat, after which [OwnerOf] sent every name of that
+// shape to the identity directory rather than to the seat. One definition,
+// here, is what every path that creates or renames a seat asks.
 //
 // AND BOTH ARE BOUNDED AT [MaxLogin], a seat handle's own width: a login is a
 // subject token the broker indexes for the life of the deployment and the
@@ -123,8 +131,9 @@ var Kinds = []Kind{KindPerson, KindSeat, KindMachine, KindEngine}
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 
 // segment is one part of a compound name: lowercase alphanumerics, with
-// internal hyphens. Deliberately the SAME shape as a seat handle's, so the
-// only thing telling the three namespaces apart is the separator — one rule to
+// internal hyphens. Deliberately a seat handle's own alphabet — only a seat
+// handle may also end in a hyphen or double one ([ValidSeatHandle]) — so the
+// only thing telling the three namespaces apart is the separator: one rule to
 // read rather than three grammars to compare.
 const segment = `[a-z0-9]+(?:-[a-z0-9]+)*`
 
@@ -173,6 +182,33 @@ const MaxLogin = 64
 
 // ValidLogin reports whether s is a well-formed person login.
 func ValidLogin(s string) bool { return len(s) <= MaxLogin && loginPattern.MatchString(s) }
+
+// seatHandlePattern is a seat handle: ONE run of lowercase alphanumerics and
+// hyphens, starting with an alphanumeric.
+//
+// NO SEPARATOR OF EITHER LOGIN GRAMMAR, which is the whole of what keeps the
+// three namespaces apart: a dot is a person's and a colon a machine's, so a
+// name carrying either is never a seat and a seat's name never carries one.
+// Looser than [segment] in one direction only — it admits a trailing or doubled
+// hyphen, which is what a slug of a name like "R & D -" produces and what
+// companies already run on — and that looseness cannot reach a separator.
+var seatHandlePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// ValidSeatHandle reports whether s is a well-formed seat handle: one segment,
+// at most [MaxLogin] bytes.
+//
+// THE ONE DEFINITION of the shape. internal/org's ValidHandle is this, so a
+// document, the party registry and the chart's write path refuse exactly the
+// same names — a second copy that disagreed by one character would accept a
+// seat at one of them and refuse it at the next.
+//
+// BOUNDED AT [MaxLogin], a handle's own width: a handle is a subject token and
+// a scope path segment on the chart's log and sits in the same author column a
+// login does, so the three share one width. The chart's MaxKey is held to it
+// by that package's own suite.
+func ValidSeatHandle(s string) bool {
+	return len(s) <= MaxLogin && seatHandlePattern.MatchString(s)
+}
 
 // ValidMachineHandle reports whether s is a well-formed machine handle.
 //
@@ -305,7 +341,7 @@ func ValidTokenID(id string) bool { return ValidMachineHandle(TokenLogin(id)) }
 // it must never belong to.
 //
 // A SEAT and the ENGINE answer false for every string. A seat's name is its
-// handle, which internal/org owns and which carries no separator by design; the
+// handle ([ValidSeatHandle]), which carries no separator by design; the
 // engine's is the node's own id, minted rather than typed. Neither enrols, so
 // neither has a login for this grammar to admit — and a kind this build cannot
 // name answers false too, which is the direction that fails closed.

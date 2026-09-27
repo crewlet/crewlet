@@ -49,6 +49,36 @@ func TestHandleDerivationAndOverride(t *testing.T) {
 			// chart, unreachable from everywhere else.
 			name: "a name that slugifies to nothing", role: Role{Name: "###"}, want: "", wantFail: true,
 		},
+		{
+			// A LOGIN'S SHAPE IS NEVER A SEAT'S: a dot is a person's
+			// login separator, and a name carrying one is resolved in
+			// the identity directory rather than the chart.
+			name: "a person's login shape rejected", role: Role{Name: "Jane",
+				DeclaredHandle: "jane.doe"}, want: "jane.doe", wantFail: true,
+		},
+		{
+			name: "a machine's login shape rejected", role: Role{Name: "CI",
+				DeclaredHandle: "ci:release"}, want: "ci:release", wantFail: true,
+		},
+		{
+			// THE WIDTH EVERY HANDLE SHARES, at the bound and one past it —
+			// declared, and derived from a long name, which is the one way
+			// a slug fails the grammar and used to reach the chart before
+			// anything refused it.
+			name: "a handle at the width bound", role: Role{Name: "Wide",
+				DeclaredHandle: strings.Repeat("a", 64)},
+			want: strings.Repeat("a", 64),
+		},
+		{
+			name: "a declared handle past the width bound", role: Role{Name: "Wide",
+				DeclaredHandle: strings.Repeat("a", 65)},
+			want: strings.Repeat("a", 65), wantFail: true,
+		},
+		{
+			name: "a name whose slug is past the width bound",
+			role: Role{Name: strings.Repeat("Word ", 14)},
+			want: strings.TrimSuffix(strings.Repeat("word-", 14), "-"), wantFail: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
