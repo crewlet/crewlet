@@ -958,35 +958,117 @@ func (f *FleetStore) Release(ctx context.Context, key string) error {
 //
 // AN OBJECT, so a field a later build adds is one an older build carries past
 // rather than chokes on — two builds share this bucket through a rolling
-// upgrade. A value that is not one is a bare RFC 3339 instant, which is what
-// a build writing one revision per attempt put there, and it is read as the
-// one attempt it records.
+// upgrade.
+//
+// # A rolling upgrade from the layout before it
+//
+// The build before this one wrote each attempt as a revision of its own
+// holding a bare RFC 3339 instant — a blind Put, with the bucket's per-key
+// HISTORY of coord.AttemptCap as the cap — and read them back through that
+// history. A bucket it created keeps that history, and while both builds run
+// its nodes go on writing that way. So the newest value alone cannot answer
+// for such a key: a key holding a run of the older build's attempts is a run
+// of revisions whose newest is one instant, and an older node's Put of one
+// instant lands on top of this build's object. When the newest value is not
+// this build's object, the key's history is read and folded ([readAttempts]),
+// and the next write carries the fold forward, so only a key an older build
+// wrote to last costs the consumer a history read opens — and only an older
+// build ever writes one, which is what keeps a stranger from choosing it.
+//
+// WHAT IT CANNOT RECOVER is a history the bucket did not keep: on a bucket
+// this build created, with the default history of one, an older build's Put
+// replaces the object outright, and the fold finds the one instant it wrote.
+// That arises only when an older build joins a fleet this one started — a
+// rollback — and it costs the pair its count until the older node is gone,
+// never more than one window.
 type attemptsRecord struct {
 	At []time.Time `json:"at"`
 }
 
-// decodeAttempts reads a record back, whatever build wrote it.
+// attemptsOf reads one revision of a record, whatever build wrote it, and
+// reports whether it is THIS build's object — the one shape that answers for
+// every attempt before it.
 //
-// UNREADABLE IS STILL AN ATTEMPT. Something wrote a record here, and the
+// ANYTHING ELSE IS ONE ATTEMPT: the bare instant an older build wrote per
+// attempt, and a value neither build could have written, because the
 // direction that cannot be defended is the one where a value nobody can parse
-// un-throttles the caller it was written against — so it is read as one
-// attempt, dated by the broker's own receipt of the write.
-func decodeAttempts(entry jetstream.KeyValueEntry) attemptsRecord {
+// un-throttles the caller it was written against — so it is dated by the
+// broker's own receipt of the write.
+func attemptsOf(entry jetstream.KeyValueEntry) (attemptsRecord, bool) {
 	var record attemptsRecord
 	if err := json.Unmarshal(entry.Value(), &record); err == nil && record.At != nil {
-		return record
+		return record, true
 	}
 	if at, err := time.Parse(time.RFC3339Nano, string(entry.Value())); err == nil {
-		return attemptsRecord{At: []time.Time{at}}
+		return attemptsRecord{At: []time.Time{at}}, false
 	}
-	return attemptsRecord{At: []time.Time{entry.Created()}}
+	return attemptsRecord{At: []time.Time{entry.Created()}}, false
 }
 
-// with is the record with one more attempt at now, keeping the newest
-// coord.AttemptCap by INSTANT — never by arrival, since two nodes' failures
-// land in whichever order the broker takes them.
+// readAttempts reads subject's record at key and the revision a write over it
+// must be conditioned on, or found false where the key holds no attempts.
+//
+// ONE GET when the newest value is this build's object — every write this
+// build makes, so every key a fleet of this build alone ever holds. Anything
+// else is a key an older build wrote to last, and its history is folded, in
+// revision order: this build's object stands for every attempt before it, an
+// older build's instant is one more, and a removal forgets everything before
+// it. See [attemptsRecord] for why.
+func (f *FleetStore) readAttempts(ctx context.Context, key string) (
+	record attemptsRecord, revision uint64, found bool, err error) {
+
+	entry, err := f.attempts.Get(ctx, key)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		// NOTHING RECORDED, which is the ordinary answer: a clean
+		// caller, one whose attempts have all aged out of the bucket, or
+		// one a success flushed.
+		return attemptsRecord{}, 0, false, nil
+	}
+	if err != nil {
+		return attemptsRecord{}, 0, false, unavailable("read the failed attempts", err)
+	}
+	if current, ok := attemptsOf(entry); ok {
+		return current, entry.Revision(), true, nil
+	}
+	history, err := f.attempts.History(ctx, key)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		// FLUSHED between the two reads, or aged out of the bucket.
+		return attemptsRecord{}, 0, false, nil
+	}
+	if err != nil {
+		return attemptsRecord{}, 0, false, unavailable("read the failed attempts' history", err)
+	}
+	var at []time.Time
+	for _, rev := range history {
+		revision = rev.Revision()
+		if rev.Operation() != jetstream.KeyValuePut {
+			at, found = nil, false
+			continue
+		}
+		one, current := attemptsOf(rev)
+		if current {
+			at = slices.Clone(one.At)
+		} else {
+			at = append(at, one.At...)
+		}
+		found = true
+	}
+	if !found {
+		return attemptsRecord{}, 0, false, nil
+	}
+	return attemptsRecord{At: at}.capped(), revision, true, nil
+}
+
+// with is the record with one more attempt at now.
 func (r attemptsRecord) with(now time.Time) attemptsRecord {
-	at := append(slices.Clone(r.At), now.UTC())
+	return attemptsRecord{At: append(slices.Clone(r.At), now.UTC())}.capped()
+}
+
+// capped is the record's newest coord.AttemptCap attempts, oldest first, by
+// INSTANT — never by arrival, since two nodes' failures land in whichever
+// order the broker takes them.
+func (r attemptsRecord) capped() attemptsRecord {
+	at := slices.Clone(r.At)
 	slices.SortFunc(at, time.Time.Compare)
 	// DISCARD THE OLDEST. The other direction — refusing the newest — would
 	// leave the record frozen at attempts that then age out, and the caller
@@ -1005,20 +1087,24 @@ func mustEncodeAttempts(record attemptsRecord) []byte {
 
 // Fail records one failed authentication.
 //
-// A GET AND A COMPARE-AND-SET, retried when another node's write lands in
+// A READ AND A COMPARE-AND-SET, retried when another node's write lands in
 // between, so two nodes failing one subject at once record two attempts
 // rather than one overwriting the other. The record's age is the bucket's:
 // every write re-dates the key, so a subject nobody fails against for a whole
 // window leaves the bucket, and one somebody keeps failing against keeps its
-// newest coord.AttemptCap.
+// newest coord.AttemptCap. The read is [FleetStore.readAttempts], so a write
+// on a key an older build wrote to last carries every attempt it held.
 func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) error {
 	if subject == "" {
 		return errors.New("coord/kv: an attempt needs a subject")
 	}
 	key := encodeKey(subject)
 	for range fleetCASRetries {
-		entry, err := f.attempts.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
+		record, revision, found, err := f.readAttempts(ctx, key)
+		if err != nil {
+			return err
+		}
+		if !found {
 			// CREATE, NOT PUT: a node racing this one to the first
 			// attempt must lose and read what it wrote, or one of the
 			// two attempts is overwritten.
@@ -1033,11 +1119,7 @@ func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) er
 				return unavailable("record the failed attempt", created)
 			}
 		}
-		if err != nil {
-			return unavailable("read the failed attempts", err)
-		}
-		_, err = f.attempts.Update(ctx, key,
-			mustEncodeAttempts(decodeAttempts(entry).with(now)), entry.Revision())
+		_, err = f.attempts.Update(ctx, key, mustEncodeAttempts(record.with(now)), revision)
 		switch {
 		case err == nil:
 			return nil
@@ -1053,26 +1135,20 @@ func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) er
 // Failures reports what the window holds against subject.
 //
 // ONE GET, and no consumer — see [attemptsRecord] for what the history read
-// it replaced cost a clustered fleet.
+// it replaced cost a clustered fleet, and for the one key it is still paid on.
 func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time) (coord.Attempted, error) {
 	if subject == "" {
 		return coord.Attempted{}, errors.New("coord/kv: an attempt needs a subject")
 	}
-	entry, err := f.attempts.Get(ctx, encodeKey(subject))
-	if errors.Is(err, jetstream.ErrKeyNotFound) {
-		// NOTHING RECORDED, which is the ordinary answer: a clean
-		// caller, one whose attempts have all aged out of the bucket, or
-		// one a success flushed.
-		return coord.Attempted{}, nil
-	}
+	record, _, _, err := f.readAttempts(ctx, encodeKey(subject))
 	if err != nil {
-		return coord.Attempted{}, unavailable("read the failed attempts", err)
+		return coord.Attempted{}, err
 	}
 	cutoff := now.Add(-f.attemptWindow)
 	var out coord.Attempted
-	// Held oldest first ([attemptsRecord.with] sorts every write), so the
-	// window answers in the order the contract states.
-	for _, at := range decodeAttempts(entry).At {
+	// Held oldest first ([attemptsRecord.capped] sorts every write and
+	// every fold), so the window answers in the order the contract states.
+	for _, at := range record.At {
 		// THE INSTANT DECIDES, the way a cooldown's does: the bucket's
 		// age is what keeps the record set finite and the broker reaps
 		// on its own clock, while the WINDOW is judged against the

@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // apiRequests records every JetStream API request a connection publishes while
@@ -106,43 +109,74 @@ func TestReadingTheAttemptsWindowOpensNoConsumer(t *testing.T) {
 	}
 }
 
-// A RECORD AN OLDER BUILD WROTE STILL COUNTS, AND A WRITE CARRIES IT FORWARD.
+// A RECORD AN OLDER BUILD WROTE STILL COUNTS, WHOLE, AND A WRITE CARRIES IT
+// FORWARD.
 //
 // Two builds share this bucket through a rolling upgrade, and the one before
-// this wrote each attempt as its own revision holding a bare RFC 3339 instant.
-// Read as this build's record, such a value is the one attempt it records; the
-// next failure written on top of it keeps it. And a value neither build could
-// have written is still an attempt, dated by the broker's own receipt, because
-// the direction that cannot be defended is a value nobody can parse
-// un-throttling the caller it was written against.
+// this wrote each attempt as its own revision holding a bare RFC 3339 instant,
+// in a bucket it created with a history of coord.AttemptCap — which a bucket
+// keeps. Read by its newest value alone, a key holding five of its attempts is
+// ONE, and an older node's Put of one more instant on top of this build's
+// object reset the count to one: a run spread across old and new nodes stayed
+// at the bottom of the curve on the new ones for the whole rollout. So a key
+// whose newest value is not this build's object is read through its history:
+// every one of the older build's attempts counts, this build's object stands
+// for everything before it, and the next failure writes the fold forward. And
+// a value neither build could have written is still an attempt, dated by the
+// broker's own receipt, because the direction that cannot be defended is a
+// value nobody can parse un-throttling the caller it was written against.
 //
-// Mutations: decode only this build's shape and the older value counts
-// nothing; drop the unreadable arm and the garbage counts nothing.
-func TestAnOlderBuildsAttemptStillCounts(t *testing.T) {
+// Mutations: read the newest value alone and five older attempts read as one;
+// fold only the older build's instants and its Put over this build's object
+// reads as one; drop the unreadable arm and the garbage counts nothing.
+func TestAnOlderBuildsAttemptsStillCount(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
-	store := openFleetForTest(t, nc, fmt.Sprintf("a%d", bucketSeq.Add(1)))
+	prefix := fmt.Sprintf("a%d", bucketSeq.Add(1))
 	ctx := context.Background()
+	// THE BUCKET AS THE OLDER BUILD MADE IT: its history was the cap.
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	if _, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: prefix + attemptsSuffix, TTL: 10 * time.Minute,
+		History: coord.AttemptCap,
+	}); err != nil {
+		t.Fatalf("create the older build's bucket: %v", err)
+	}
+	store := openFleetForTest(t, nc, prefix)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	earlier := now.Add(-time.Minute)
+	older := func(at time.Time) {
+		t.Helper()
+		if _, err := store.attempts.Put(ctx, encodeKey("older-build"),
+			[]byte(at.Format(time.RFC3339Nano))); err != nil {
+			t.Fatalf("an older build's put: %v", err)
+		}
+	}
+	window := func(want int, newest time.Time, why string) {
+		t.Helper()
+		got, err := store.Failures(ctx, "older-build", now)
+		if err != nil || got.Count() != want || !got.Last().Equal(newest) {
+			t.Fatalf("%s: the window reads %v (%v), want %d attempts, the newest "+
+				"at %v", why, got.At, err, want, newest)
+		}
+	}
 
-	if _, err := store.attempts.Put(ctx, encodeKey("older-build"),
-		[]byte(earlier.Format(time.RFC3339Nano))); err != nil {
-		t.Fatalf("put: %v", err)
+	for i := range 5 {
+		older(now.Add(time.Duration(i-10) * time.Minute / 2))
 	}
-	if got, err := store.Failures(ctx, "older-build", now); err != nil ||
-		got.Count() != 1 || !got.Last().Equal(earlier) {
-		t.Fatalf("an older build's attempt reads %+v (%v), want one attempt at %v",
-			got, err, earlier)
+	window(5, now.Add(-3*time.Minute), "five of an older build's attempts")
+	if err := store.Fail(ctx, "older-build", now.Add(-2*time.Minute)); err != nil {
+		t.Fatalf("Fail: %v", err)
 	}
+	window(6, now.Add(-2*time.Minute), "a failure written over them")
+	older(now.Add(-time.Minute))
+	window(7, now.Add(-time.Minute), "an older build's put over this build's record")
 	if err := store.Fail(ctx, "older-build", now); err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
-	if got, err := store.Failures(ctx, "older-build", now); err != nil ||
-		got.Count() != 2 || !got.Last().Equal(now) {
-		t.Fatalf("after a failure on top of it the window reads %+v (%v), want "+
-			"both attempts, the newest at %v", got, err, now)
-	}
+	window(8, now, "a failure written over that")
 
 	if _, err := store.attempts.Put(ctx, encodeKey("unreadable"),
 		[]byte("not an instant at all")); err != nil {
