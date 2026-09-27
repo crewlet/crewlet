@@ -289,9 +289,10 @@ func TestEveryRegisteredDomainSaysWhichNodesRunIt(t *testing.T) {
 //
 // THE FIFTH NARROWS, which is what this case is now two-sided about. The
 // identity estate runs on ingress and workers and NOT on a seats-only
-// satellite: no turn reads it, so such a node would pay for the disk, the
-// applier and a share of the stream budget to hold a directory of people it
-// authenticates nobody against.
+// satellite: no turn reads it, so such a node would pay for the disk and the
+// applier to hold a directory of people it authenticates nobody against. (Not
+// the stream: that and its reserved ceiling are the fleet's, created and sized
+// on every node whatever it runs.)
 //
 // Both directions, because each failure is silent in its own way. A domain
 // that quietly stopped narrowing puts personal data on every satellite in the

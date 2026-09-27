@@ -2133,9 +2133,12 @@ applier would stampede your identity provider.
 **A seats-only node does not run this domain at all.** It is the first domain
 whose participation narrows on `node.roles`: ingress runs it because it serves
 requests, workers runs it because it sweeps, and a satellite that only holds
-seats runs neither — so it does not pay the disk, the applier or a share of
-the stream budget to hold a directory of people it authenticates nobody
-against. The corollary matters when you read a satellite's tables: `iam_people`
+seats runs neither — so it does not pay the disk or the applier to hold a
+directory of people it authenticates nobody against. It still counts the
+log's share of the broker's budget: the stream and its reserved ceiling are
+the fleet's, created and sized on every node whatever it runs, because a
+stream keeps the ceiling of whichever node created it first. The corollary
+matters when you read a satellite's tables: `iam_people`
 there is empty because the domain is not running, **not** because the company
 has nobody, and every reader in this estate is three-valued for that reason.
 

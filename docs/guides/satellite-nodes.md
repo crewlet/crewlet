@@ -239,8 +239,12 @@ as a member that serves no work item, no page and no search.
 does not run it, and that is the point of the derivation: no turn reads
 it — a seat's principal is its own handle and its authority comes from the
 [org chart](../concepts/chart-domain.md) — so a satellite running it would
-pay the disk, the applier and a share of the stream budget to hold a
-directory of your people that it authenticates nobody against.
+pay the disk and the applier to hold a directory of your people that it
+authenticates nobody against. Not the broker's budget: the identity log's
+stream and its reserved ceiling are the **fleet's**, created and sized on
+every node whatever its roles, because a stream keeps the ceiling of
+whichever node created it first — so that share is spent on a satellite
+too, and `stream.iam_log_max_bytes` still counts in its broker's budget.
 
 > **Reading a satellite's tables.** `iam_people` on a seats-only node is
 > **empty because the domain is not running**, not because the company has
