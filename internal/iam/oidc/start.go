@@ -108,7 +108,7 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 			"begun here could not be finished anywhere — including here",
 			ErrNotConfigured)
 	}
-	if err := c.Validate(); err != nil {
+	if err = c.Validate(); err != nil {
 		return "", "", fmt.Errorf("%w: %w", ErrNotConfigured, err)
 	}
 	flight := Flight{Return: want.Return, Invite: want.Invite, Login: want.Login,
@@ -119,11 +119,9 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 			"never both")
 	}
 	for _, into := range []*string{&flight.State, &flight.Nonce, &flight.Verifier} {
-		value, err := randomValue()
-		if err != nil {
+		if *into, err = randomValue(); err != nil {
 			return "", "", err
 		}
-		*into = value
 	}
 	body, err := json.Marshal(flight)
 	if err != nil {

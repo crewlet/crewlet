@@ -403,7 +403,7 @@ func LoginFromAddress(address string) string {
 func loginSegments(text string) []string {
 	var segments []string
 	for _, piece := range strings.FieldsFunc(text, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-')
+		return !segmentRune(r)
 	}) {
 		words := strings.FieldsFunc(piece, func(r rune) bool { return r == '-' })
 		if len(words) > 0 {
@@ -411,4 +411,10 @@ func loginSegments(text string) []string {
 		}
 	}
 	return segments
+}
+
+// segmentRune reports whether r may appear inside a login segment: a
+// lowercase letter, a digit, or the hyphen that joins two runs of them.
+func segmentRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
 }

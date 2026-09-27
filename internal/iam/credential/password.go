@@ -51,9 +51,10 @@ const (
 
 	// KeyLen is the digest length in bytes, and SaltLen the salt's. 32 and
 	// 16 are argon2's own recommendations; neither is a security knob
-	// anybody should be turning.
+	// anybody should be turning. Typed for what each is handed to: argon2
+	// takes the digest length as a uint32, and the salt's sizes a slice.
 	KeyLen  uint32 = 32
-	SaltLen        = 16
+	SaltLen int    = 16
 )
 
 // VerifyCap is how many argon2id verifications this process runs at once.
