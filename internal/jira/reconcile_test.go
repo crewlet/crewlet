@@ -1424,11 +1424,11 @@ func TestASeatRefusedOutsideTheGrantWindowIsStillAFailure(t *testing.T) {
 // as a wait nobody should act on, which is the state this whole distinction
 // exists to leave.
 //
-// BOTH SHAPES OF "CANNOT SAY", because they arrive by different routes and
-// only one of them is a node with no keyring: a seat this engine does not
-// provision — its credential was pasted in by a person — has no grant of ours
-// to be waiting on, and the seam answers false for it while answering for
-// every other seat.
+// BOTH SHAPES OF "CANNOT SAY", because they arrive by different routes:
+// nothing wired to answer at all, and a seat this engine does not provision —
+// its credential was pasted in by a person — which has no grant of ours to be
+// waiting on, so the seam answers false for it while answering for every
+// other seat.
 func TestASeatRefusedWithNoSealTimeIsStillAFailure(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

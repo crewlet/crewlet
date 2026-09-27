@@ -796,10 +796,7 @@ snapshot taken at apply time, so in the window between a pass sealing a secret
 and something rebuilding that snapshot the resolver answers empty for a
 variable the fleet already holds — and without the read-back the loop minted
 again on every tick, rotating the key GitHub signs with until the snapshot
-caught up. On a node with **no keyring** at all (`secrets.keys` unset) nothing
-is minted and no hook is registered: the surface reports `ingress_blocked`
-against `integrations.github.webhook_secret`, naming `secrets.keys`, rather
-than failing every pass as though the engine were working on it.
+caught up.
 
 **A repository that cannot be hooked is reported, not raised.** A company's
 list will contain one that was renamed, archived, or made private to a team

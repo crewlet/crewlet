@@ -28,10 +28,6 @@ type Options struct {
 
 	// Sink records what is minted. Nil is a DRY RUN: the pass reads what
 	// exists and creates nothing, which is what a check is.
-	//
-	// A sink that exists and cannot mint ([provision.ReadOnly], which the
-	// loop hands a node with no keyring) is a THIRD answer rather than
-	// either of those — see [sealsNothing].
 	Sink provision.TokenSink
 
 	// WebhookBase is this deployment's public base URL, or empty to skip
@@ -57,11 +53,6 @@ type Result struct {
 	// Webhook is what this pass did to the inbound definition at Datadog,
 	// nil where the pass never reached it.
 	Webhook *WebhookResult
-
-	// NoKeyring reports a node that was asked to provision identities and
-	// cannot seal what it would mint, so it created nothing. See
-	// [sealsNothing].
-	NoKeyring bool
 
 	// UsersURL is this organization's user administration at Datadog, or ""
 	// when the pass could not name one. It is where a person goes to settle
@@ -237,31 +228,6 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	res.Notes = append(res.Notes, opts.Plan.Notes...)
 
-	// A NODE THAT CANNOT SEAL DOES NOT CREATE AN IDENTITY.
-	//
-	// [provision.CanMint]'s own doc names this shape as the hazard it
-	// exists for: a pass that creates an ACCOUNT and then mints a key on
-	// it has no rollback that can undo the first half, so reaching the
-	// first Record on a sink that cannot record leaves a service account
-	// at Datadog nobody asked for and nothing can ever authenticate as.
-	// This pass did exactly that — once per seat, because the account it
-	// made was then found by every later pass — and then reported each
-	// seat as "could not read whether <VAR> already holds a key", a
-	// sentence whose only instruction came from [provision.ErrNoSink] and
-	// told an operator to name where minted credentials should go. None of
-	// them named secrets.keys, which is the only thing that fixes it.
-	//
-	// AFTER THE WEBHOOK, which is what makes this different from the same
-	// check in gitlab, jira and mattermost. The inbound half needs no
-	// keyring at all — the definition is written with the organization
-	// credentials the company document already carries — and it is the
-	// half that carries the alerts, so a node that cannot provision
-	// identities still keeps this company's monitors reaching a seat.
-	if sealsNothing(opts.Sink) {
-		res.NoKeyring = true
-		return res, nil
-	}
-
 	// THE ROLE IS RESOLVED ONCE, not per seat: it is the same role for
 	// every account, and asking Datadog for it per seat spends a rate
 	// limit on an answer that cannot differ.
@@ -409,10 +375,9 @@ func provisionSeat(
 	// enquiry on one meant the button an operator presses when they
 	// suspect trouble returned without looking and answered "ready" over
 	// the dead agent it was pressed about — while the next scheduled pass
-	// repaired the very thing it had just declared fine. The other three
-	// provisioning surfaces gate on [provision.CanMint] rather than on
-	// nil for exactly this reason: what a missing sink withholds is the
-	// permission to WRITE, never the ability to look.
+	// repaired the very thing it had just declared fine. What a missing
+	// sink withholds is the permission to WRITE, never the ability to
+	// look.
 	//
 	// Datadog is the last of the four to ask the vendor at all. Each of
 	// the others had to be taught the same lesson: atlassian counts the
@@ -422,13 +387,12 @@ func provisionSeat(
 
 	// A RUN THAT MAY NOT WRITE REPORTS WHAT IT CAN ESTABLISH AND STOPS.
 	//
-	// It cannot read the store — [provision.ReadOnly] answers Value as
-	// UNKNOWN and a nil sink cannot be asked — so "is the sealed value one
-	// of this account's keys" is beyond it. What is not beyond it is the
+	// It cannot read the store — a nil sink cannot be asked — so "is the
+	// sealed value one of this account's keys" is beyond it. What is not beyond it is the
 	// account's own side: this engine mints one key per opted-in seat, so
 	// an account holding NONE is a seat that cannot act, whatever the store
 	// says. That is the finding a check exists to surface.
-	if !provision.CanMint(opts.Sink) {
+	if opts.Sink == nil {
 		out.KeyMissing = listErr == nil && len(keys) == 0
 		return out
 	}
@@ -686,19 +650,6 @@ func madeHere(email, domain string) bool {
 	return strings.HasPrefix(strings.ToLower(local), "crewlet-")
 }
 
-// sealsNothing reports a sink that EXISTS and cannot record.
-//
-// DISTINCT FROM A NIL SINK, and collapsing the two would lose the more useful
-// of them. Nil is a dry run, which is a posture the caller chose: it reads and
-// reports without writing, and telling an operator which seats have no account
-// is the whole point of one. This is a node that was ASKED to provision and
-// has nowhere to put a credential, which is a fact about the deployment — the
-// only thing to report is the bootstrap field that fixes it, and reading on
-// would spend two calls per tick on an answer nothing can act on.
-func sealsNothing(sink provision.TokenSink) bool {
-	return sink != nil && !provision.CanMint(sink)
-}
-
 func emailDomainOf(cfg *config.Datadog) string {
 	if cfg != nil && cfg.Provisioning != nil && cfg.Provisioning.EmailDomain != "" {
 		return cfg.Provisioning.EmailDomain
@@ -716,21 +667,6 @@ func (r *Result) Findings() []integration.Finding {
 		return nil
 	}
 	out := []integration.Finding{}
-	if r.NoKeyring {
-		// THE OPERATOR'S WORK, not a fault the engine is retrying. No
-		// pass will ever provision a seat until somebody sets
-		// secrets.keys, so reporting it as a wait leaves them watching a
-		// retry that cannot succeed. The same finding gitlab, jira and
-		// mattermost report, on the same subject, because it is one
-		// bootstrap field rather than seven third-party app problems.
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
-			Subject: "secrets.keys",
-			Detail: "this node has no keyring, so an application key minted " +
-				"for a seat could not be sealed and no service account was " +
-				"created — set secrets.keys in the bootstrap configuration",
-		})
-	}
 	if hook := r.Webhook; hook != nil {
 		switch {
 		case hook.Err != nil:

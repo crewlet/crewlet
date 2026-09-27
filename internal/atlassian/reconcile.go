@@ -25,15 +25,8 @@ type Options struct {
 	// Plan names the seats wanting an identity, from [PlanFor].
 	Plan *provision.Plan
 
-	// Sink records what is minted. A sink that cannot mint is a DRY RUN:
-	// the pass reads what exists and creates nothing, which is what a check
-	// is.
-	//
-	// THE TEST IS [provision.CanMint], NOT A NIL CHECK, and the difference
-	// is a whole posture rather than an edge case: nil is the command
-	// line's check, while the reconcile loop hands a node with no keyring
-	// [provision.ReadOnly], which is not nil and can seal nothing. See
-	// [Result.NoKeyring].
+	// Sink records what is minted. Nil is a DRY RUN: the pass reads what
+	// exists and creates nothing, which is what a check is.
 	Sink provision.TokenSink
 
 	// Now is injectable so a test can pin a token's label and expiry.
@@ -58,15 +51,6 @@ type Result struct {
 
 	// Notes are the caveats: a seat whose token slot is a literal.
 	Notes []string
-
-	// NoKeyring is a pass this node could not run in full because it has
-	// nowhere to seal what provisioning creates.
-	//
-	// A STATE, not an error, and the distinction is what an operator is
-	// told: a fault reports the engine working on it and is retried for
-	// ever, where this never resolves until somebody sets secrets.keys.
-	// See [provision.CanMint], and [Result.Findings] for what it becomes.
-	NoKeyring bool
 }
 
 // SeatResult is what happened to one seat.
@@ -157,10 +141,7 @@ type SeatResult struct {
 // that has to stay in step with a mint several call frames away.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res, err := reconcile(ctx, opts)
-	// A NIL SINK IS THE COMMAND LINE'S CHECK and there is nothing to
-	// complete. It is not [provision.ReadOnly], which is a sink and whose
-	// Flush answers cheaply — see [Options.Sink] for why the two are
-	// different facts.
+	// A NIL SINK IS A CHECK and there is nothing to complete.
 	if opts.Sink == nil {
 		return res, err
 	}
@@ -227,10 +208,6 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	res := &Result{
 		Site: *site,
-		// A SINK THAT EXISTS AND CANNOT SEAL is a node with no keyring, and
-		// it is a different fact from the nil sink of a command-line check.
-		// Both create nothing; only one is something an operator has to fix.
-		NoKeyring: opts.Sink != nil && !provision.CanMint(opts.Sink),
 	}
 	if opts.Plan == nil {
 		return res, nil
@@ -280,17 +257,9 @@ func reconcileSeat(
 	out := SeatResult{Handle: seat.Handle}
 	account, found := byOrigin[seat.Origin]
 
-	// WHETHER THIS PASS MAY WRITE AT ALL, asked once and by
-	// [provision.CanMint] rather than by a nil check.
-	//
-	// The reconcile loop hands a node with no keyring [provision.ReadOnly],
-	// which is not nil. On the nil check this was, such a node created an
-	// account at Atlassian, granted it, and then failed at the first Record
-	// with [provision.ErrNoSink] — reporting EVERY seat as a failure over a
-	// perfectly converged company, on a timer, and leaving behind an
-	// identity nothing had recorded a credential for. See
-	// [Result.NoKeyring] for what it reports instead.
-	writing := provision.CanMint(opts.Sink)
+	// WHETHER THIS PASS MAY WRITE AT ALL, asked once: a check runs with no
+	// sink and creates nothing.
+	writing := opts.Sink != nil
 
 	switch {
 	case found:
@@ -570,22 +539,6 @@ func (r *Result) Findings() []integration.Finding {
 		return nil
 	}
 	out := []integration.Finding{}
-	// THE PASS COULD NOT DO ITS WORK AT ALL, said as the operator's own task
-	// rather than as a fault the engine is retrying. Provisioning here
-	// creates an ACCOUNT and then mints a token on it, so a node with
-	// nowhere to seal the token must not create the account either — and no
-	// pass on this node will ever get further until somebody sets
-	// secrets.keys, which a retry cannot bring about. See
-	// [provision.CanMint].
-	if r.NoKeyring {
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
-			Subject: "secrets.keys",
-			Detail: "this node has no keyring, so an Atlassian API token minted " +
-				"for a seat could not be sealed and no service account was " +
-				"created — set secrets.keys in the bootstrap configuration",
-		})
-	}
 	for _, seat := range r.Seats {
 		switch {
 		case seat.Err != nil:

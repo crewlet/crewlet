@@ -122,9 +122,8 @@ type Options struct {
 	// See [SeatDocuments].
 	Seats SeatDocuments
 
-	// Secrets seals a submitted credential. A node with no keyring still
-	// has one: its seal fails with [secrets.ErrNoKeyring], which every
-	// secret write refuses rather than storing plaintext.
+	// Secrets seals a submitted credential, under the keyring every node
+	// holds.
 	Secrets setup.Secrets
 
 	// Resolve turns a ${VAR} name into what this process actually
@@ -2294,19 +2293,6 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "import a company configuration first",
-		})
-	case errors.Is(err, secrets.ErrNoKeyring):
-		// A node whose bootstrap names no key fails at the seal, with this
-		// sentinel, which exists to be recognised. It once fell through to
-		// the generic case, so a screen that could have said "set
-		// secrets.keys" said internal_error and left the operator reading
-		// engine logs to find a one-line fix.
-		// NO Retry-After: waiting installs no key — see
-		// [httpjson.CodeNoKeyring].
-		httpjson.UnavailableWith(w, httpjson.CodeNoKeyring, 0, httpjson.Detail{
-			"detail": "this node has no secrets.keys, so a credential cannot be sealed",
-			"hint": "run `crewlet secrets keygen`, put the key in secrets.keys in " +
-				"crewlet.yaml, and restart the engine",
 		})
 	default:
 		// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own

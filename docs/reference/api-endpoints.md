@@ -1691,8 +1691,7 @@ What the route does, in this order:
 
 Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
-`409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`,
-`503 no_keyring`.
+`409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`.
 
 ### Running the provisioning pass
 

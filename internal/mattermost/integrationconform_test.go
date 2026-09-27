@@ -19,9 +19,9 @@ import (
 //
 // The adapter lives here rather than in the engine because that is the only
 // place a converged WORLD can be stood up: engine.mattermostPass on a bare
-// Engine falls back to a read-only sink, [provision.CanMint] answers false,
-// and [mattermost.Reconcile] returns before its first HTTP request — so
-// every clause below would pass over a reconciler nothing ever reached,
+// Engine has no company secret store to seal into, so it faults before
+// [mattermost.Reconcile] makes its first HTTP request — and every clause
+// below would pass over a reconciler nothing ever reached,
 // which is the exact shape this suite was written to replace.
 type chatReconciler struct {
 	client *mattermost.Client
@@ -152,14 +152,11 @@ func convergedChatOn(t *testing.T, tb integrationtest.TB, tune func(*chatServer)
 // refused at all. That window is the whole reason this is reported rather
 // than discovered.
 //
-// # Why this one rather than the alternatives
+// # Why this one
 //
-// It is the only person-owed shape this pass reaches that is also a FULL
-// pass. The alternative — handing it [provision.ReadOnly] so the node has no
-// keyring — reports a person-owed finding too, and returns it from
-// [mattermost.Reconcile]'s third guard, before one HTTP request is made:
-// every clause reading that world would be certifying an early return rather
-// than the reconciler. This world resolves the team, lists the bots, reads
+// It is a person-owed shape this pass reaches only at the END of a FULL
+// pass, so every clause reading that world certifies the reconciler rather
+// than an early return. This world resolves the team, lists the bots, reads
 // the team and channel rosters, verifies the sealed token against the
 // account it authenticates as, and THEN reports.
 //

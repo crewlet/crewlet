@@ -232,25 +232,30 @@ func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING SAYS SO RATHER THAN CLAIMING IT CLEANED UP.
+// A TEARDOWN WITH NOWHERE TO FORGET INTO FAILS, AND THE BLOCK STAYS.
 //
-// It cannot open a sealed row at all. Failing the disconnect would hold a
-// surface in PhaseDisconnecting for ever on a node that will never be able to
-// finish; claiming success would report a completeness it did not achieve. It
-// logs the names and lets the block drop.
-func TestANodeWithNoKeyringReportsTheCredentialsItCannotDelete(t *testing.T) {
+// It used to log the names and let the block drop, on the argument that a
+// node with no keyring could never open a sealed row and would otherwise hold
+// the surface disconnecting for ever. There is no such node now — every node
+// holds the keyring the rows were sealed under — so a sink that cannot be
+// built is an engine wired without its secret store, and dropping the block
+// over it would leave the dead values sealed with nothing left to retry.
+func TestATeardownWithNoSecretStoreFailsRatherThanDroppingTheBlock(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	if _, err := e.SetupSink(testParty); err == nil {
-		t.Fatal("precondition: a node with no keyring must refuse a sink")
+		t.Fatal("precondition: an engine with no secret store must refuse a sink")
 	}
 
 	err := e.forgetRemoved(t.Context(), integration.KindAtlassian, provision.Removed{
 		Accounts: []provision.Removal{{Handle: "sre-lead", Secrets: []string{"SRE_TOKEN"}}},
 	}, testParty)
-	if err != nil {
-		t.Errorf("forgetRemoved = %v: a node that cannot open a sealed row would "+
-			"hold the surface disconnecting for ever", err)
+	if err == nil {
+		t.Fatal("forgetRemoved = nil over credentials it could not delete, so the " +
+			"block would drop with them still sealed and nothing would retry")
+	}
+	if !strings.Contains(err.Error(), "atlassian teardown") {
+		t.Errorf("the failure does not name the teardown it failed: %v", err)
 	}
 }
 

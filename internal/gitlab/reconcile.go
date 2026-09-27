@@ -91,15 +91,6 @@ type Result struct {
 	// anywhere but [Reconcile] must not invent an ingress problem.
 	NoIngress string
 
-	// NoKeyring is a pass this node could not run at all because it has
-	// nowhere to seal what provisioning creates.
-	//
-	// A STATE, not an error, and the distinction is what an operator is
-	// told: a fault reports the engine working on it and is retried for
-	// ever, where this never resolves until somebody sets secrets.keys.
-	// See [provision.CanMint].
-	NoKeyring bool
-
 	// Unusable names the seats whose ACCOUNT GitLab will not let
 	// authenticate — a token minted seconds earlier was refused.
 	//
@@ -271,20 +262,6 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// nowhere to put what it mints would create live credentials and
 		// print none of them, which is the worst outcome available.
 		return nil, provision.ErrNoSink
-	}
-	if !provision.CanMint(opts.Sink) {
-		// A NODE THAT CANNOT SEAL DOES NOT CREATE. This pass makes an
-		// ACCOUNT before it mints a token, and the rollback can only
-		// revoke the token — so reaching the first Record on a sink that
-		// cannot record leaves an identity at the third-party app that
-		// nobody asked for and nothing recorded.
-		//
-		// REPORTED, NOT RAISED. An error is a fault the loop retries
-		// while telling an operator the engine is working on it, which is
-		// the one thing that is certainly not happening: no pass will
-		// ever succeed until somebody sets secrets.keys. See
-		// [Result.Findings].
-		return &Result{Notes: notesOf(opts.Plan), NoKeyring: true}, nil
 	}
 	if opts.Plan == nil || opts.Plan.Empty() {
 		return &Result{Notes: notesOf(opts.Plan)}, nil
@@ -1092,16 +1069,6 @@ func signingSecret(ctx context.Context, opts Options) (secret, note string, fres
 		ctx, opts.Sink, plan.Var, plan.Action == SigningRotate, whsec.Mint)
 	if err != nil {
 		return "", "", false, fmt.Errorf("gitlab: %w", err)
-	}
-	if minted.NoKeyring {
-		// UNREACHABLE, and an error rather than an empty secret if it
-		// ever is not. [Reconcile] reports the keyring and returns long
-		// before this, because a pass here creates an ACCOUNT before it
-		// mints anything; what must never happen is falling through with
-		// no value and registering a hook nothing can sign.
-		return "", "", false, errors.New(
-			"gitlab: this node has no keyring, so no signing secret could be " +
-				"sealed — set secrets.keys in the bootstrap configuration")
 	}
 	if !minted.Minted {
 		// ALREADY SEALED, by a pass whose value the resolver has not

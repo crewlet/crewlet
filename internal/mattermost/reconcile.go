@@ -60,15 +60,6 @@ type Result struct {
 	// any of this works.
 	Disabled []DisabledSetting
 
-	// NoKeyring is a pass this node could not run at all because it has
-	// nowhere to seal what provisioning creates.
-	//
-	// A STATE, not an error, and the distinction is what an operator is
-	// told: a fault reports the engine working on it and is retried for
-	// ever, where this never resolves until somebody sets secrets.keys.
-	// See [provision.CanMint].
-	NoKeyring bool
-
 	Notes []string
 }
 
@@ -126,10 +117,9 @@ type Options struct {
 // the default rather than the flag.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// A CANCELLED PASS HAS OBSERVED NOTHING, and it has to say so BEFORE
-	// the two returns below that answer without looking: an empty plan
-	// and a node with no keyring are both decided from the arguments
-	// alone, so a cancelled pass took either branch and reported a
-	// converged surface it never read. The reconcile loop treats "no
+	// the return below that answers without looking: an empty plan is
+	// decided from the arguments alone, so a cancelled pass took that
+	// branch and reported a converged surface it never read. The reconcile loop treats "no
 	// findings, no error" as ready and trusts it for a full settled
 	// interval, so a node shutting down mid-pass recorded every
 	// integration as healthy on its way out and the next node to hold
@@ -163,20 +153,6 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// nowhere to put what it mints would create live credentials and
 		// print none of them, which is the worst outcome available.
 		return nil, provision.ErrNoSink
-	}
-	if !provision.CanMint(opts.Sink) {
-		// A NODE THAT CANNOT SEAL DOES NOT CREATE. This pass makes an
-		// ACCOUNT before it mints a token, and the rollback can only
-		// revoke the token — so reaching the first Record on a sink that
-		// cannot record leaves an identity at the third-party app that
-		// nobody asked for and nothing recorded.
-		//
-		// REPORTED, NOT RAISED. An error is a fault the loop retries
-		// while telling an operator the engine is working on it, which is
-		// the one thing that is certainly not happening: no pass will
-		// ever succeed until somebody sets secrets.keys. See
-		// [Result.Findings].
-		return &Result{Notes: notesOf(opts.Plan), NoKeyring: true}, nil
 	}
 	if opts.Plan == nil || opts.Plan.Empty() {
 		return &Result{Notes: notesOf(opts.Plan)}, nil

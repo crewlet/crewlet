@@ -333,17 +333,12 @@ type Engine struct {
 	// when it seals a credential. See republish.go.
 	republish republisher
 
-	// cipher is the keyring this node seals and opens secret rows with,
-	// nil on a node that has none. Held rather than rebuilt because ONE
-	// cipher per process is what keeps a row this node wrote a row it can
-	// read back.
+	// cipher is the keyring this node seals and opens secret rows with.
+	// [New] refuses a node without one, so it is nil only on an Engine
+	// built by hand in a test. Held rather than rebuilt because ONE cipher
+	// per process is what keeps a row this node wrote a row it can read
+	// back.
 	cipher secrets.Cipher
-
-	// sinkUnavailable makes the loop say "this node cannot seal a minted
-	// credential" ONCE. It is a property of [Engine.cipher] — the same for
-	// every integration and unchanged until the process restarts — and the
-	// reconcile loop asks per surface per tick. See integrations.go.
-	sinkUnavailable sync.Once
 
 	// profile is what this node declared it does: whether it claims
 	// seats, serves inbound traffic, and runs the fleet's singleton

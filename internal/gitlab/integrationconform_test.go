@@ -158,10 +158,8 @@ func newWorld(t *testing.T, tb integrationtest.TB, tune func(*adminInstance),
 		// setting that makes the pass do LESS than the loop really does,
 		// and each would make the converged clause pass for the wrong
 		// reason: an empty WebhookBase touches no hook at all, empty
-		// Projects adds no project memberships, and a sink where
-		// provision.CanMint is false short-circuits the whole pass to
-		// NoKeyring without one request. recordingSink has no Mints
-		// method, so CanMint answers true.
+		// Projects adds no project memberships, and a nil sink refuses
+		// the whole pass before one request.
 		//
 		// The three the engine never sets — Mode, Decommission and Rotate
 		// (its PassInput carries no Recreate) — are left at their zero
@@ -261,11 +259,9 @@ func (w *gitlabWorld) vacuous() string {
 //
 // # Why this one
 //
-// It is the only person-owed finding this pass reaches that is also a FULL
-// pass. The alternative — handing it [provision.ReadOnly], so the node has no
-// keyring — reports a person-owed finding too, and returns it before one
-// HTTP request is made: every clause downstream would then be certifying an
-// early return rather than the reconciler. This world resolves the group,
+// It is a person-owed finding this pass reaches only at the END of a FULL
+// pass, so every clause downstream certifies the reconciler rather than an
+// early return. This world resolves the group,
 // resolves both projects, reads both rosters, creates two accounts, adds four
 // memberships, mints and seals two tokens, and THEN reports.
 //

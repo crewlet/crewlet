@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -983,6 +982,18 @@ func (s *surface) withPass(
 	t *testing.T, passes ...*recordingPass,
 ) (*statusStore, *setup.Runner) {
 	t.Helper()
+	return s.withPassSink(t, func(by iam.Actor) (provision.TokenSink, error) {
+		return provision.NewSecretStoreSink(sinkStore{s.vault}, authorOf(by)), nil
+	}, passes...)
+}
+
+// withPassSink is [surface.withPass] with the sink factory a writing pass is
+// handed, for the case about one that cannot be built.
+func (s *surface) withPassSink(
+	t *testing.T, sink func(iam.Actor) (provision.TokenSink, error),
+	passes ...*recordingPass,
+) (*statusStore, *setup.Runner) {
+	t.Helper()
 	status := &statusStore{}
 	wired := make([]setup.Pass, 0, len(passes))
 	for _, pass := range passes {
@@ -993,11 +1004,9 @@ func (s *surface) withPass(
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: s.config, Secrets: s.vault,
-		Resolve: s.vault.get,
-		Passes:  runner,
-		Sink: func(by iam.Actor) (provision.TokenSink, error) {
-			return provision.NewSecretStoreSink(sinkStore{s.vault}, authorOf(by)), nil
-		},
+		Resolve:      s.vault.get,
+		Passes:       runner,
+		Sink:         sink,
 		Status:       status,
 		Now:          func() time.Time { return pinned },
 		ExternalBase: s.externalBase,
@@ -1084,6 +1093,38 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 	// And the outcome landed on the fleet row the loop reads.
 	if _, ok := status.get(integration.KindGitHub); !ok {
 		t.Error("the pass wrote no status, so the screen would not update")
+	}
+}
+
+// A SINK THAT CANNOT BE BUILT IS THIS NODE'S FAULT, AND THE PASS NEVER STARTS.
+//
+// It was answered as a deployment's posture — 503 no_keyring, "run crewlet
+// secrets keygen" — for a node with no keyring. Every node holds the keyring
+// a sink seals under now, so the only way to get here is a process assembled
+// without its secret store: a fault no wait and no setting clears, and one a
+// pass must not start over, because what it mints would have nowhere to go.
+func TestAProvisionPassWhoseSinkCannotBeBuiltIsAFault(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	status, _ := s.withPassSink(t, func(iam.Actor) (provision.TokenSink, error) {
+		return nil, errors.New("engine: no company secret store")
+	}, pass)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", res.Code, res.Body)
+	}
+	if code := decode(t, res)["error"]; code != "internal_error" {
+		t.Errorf("error = %v, want internal_error", code)
+	}
+	if _, calls := pass.last(); calls != 0 {
+		t.Errorf("the pass ran %d times with nowhere to seal what it mints", calls)
+	}
+	if _, ok := status.get(integration.KindGitHub); ok {
+		t.Error("a pass that never started recorded a status")
 	}
 }
 
@@ -1702,33 +1743,6 @@ func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
 	want := []string{"DATADOG_API_KEY", "DATADOG_APP_KEY", "DATADOG_WEBHOOK_TOKEN"}
 	if got := orphansOf(orphans); !slices.Equal(got, want) {
 		t.Fatalf("orphaned = %v, want only the secrets that were actually stored", got)
-	}
-}
-
-// A MISSING KEYRING SAYS SO, rather than internal_error.
-//
-// A node whose bootstrap names no key fails at the seal with
-// secrets.ErrNoKeyring, a sentinel that exists to be recognised. It once fell
-// through to the generic case, so a screen that could have said "set
-// secrets.keys" said internal_error and left an operator reading engine logs
-// to find a one-line fix.
-func TestASealWithNoKeyringSaysWhatToSet(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	s.seed(t)
-	s.vault.fail = fmt.Errorf("setup: seal DATADOG_APP_KEY: %w", secrets.ErrNoKeyring)
-
-	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
-		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
-	if res.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503: %s", res.Code, res.Body)
-	}
-	body := decode(t, res)
-	if body["error"] != "no_keyring" {
-		t.Fatalf("error = %v, want no_keyring", body["error"])
-	}
-	if hint, _ := body["hint"].(string); !strings.Contains(hint, "secrets.keys") {
-		t.Errorf("hint = %q, want it to name what to set", hint)
 	}
 }
 
