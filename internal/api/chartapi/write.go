@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -249,10 +250,15 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 				"route's: " + err.Error()})
 		return out, false
 	}
-	if dec.More() {
+	// NOTHING AFTER THE ONE VALUE, whitespace aside. `Decoder.More` is not
+	// that check: it answers false before a `}` or a `]`, so `{"to":"x"}}`
+	// decoded as one value and was written, where json.Unmarshal refused it.
+	// Only the stream's end says the body held exactly one value.
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "the body holds more than one JSON " +
-				"value, and this route reads exactly one"})
+			map[string]string{"detail": "the body holds something after its " +
+				"JSON value, and this route reads exactly one value"})
 		return out, false
 	}
 	return out, true

@@ -641,7 +641,8 @@ prevent.
 A body carrying a field the route does not read is refused `400 invalid_body`,
 naming the field, rather than having it dropped — every write here is full
 post-state or a structural gesture, so a dropped field would answer `200` for a
-request that asked for more than landed.
+request that asked for more than landed. So is a body holding anything after its
+one JSON value but whitespace — a stray `}` or `]`, or a second value.
 
 A refusal by the chart's own rules is `400`, a contention another writer won is
 `409 stale` (re-read and write again — nothing about the request was wrong), and

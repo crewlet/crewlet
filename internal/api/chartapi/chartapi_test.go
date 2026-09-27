@@ -970,6 +970,15 @@ func TestAFieldARouteDoesNotReadIsRefused(t *testing.T) {
 			`{"operations":[{"kind":"move","object":{"kind":"seat","id":"cto"},"parnet":"eng"}]}`},
 		{"a rename", http.MethodPost, "/chart/units/engineering/rename",
 			`{"to":"platform","from":"engineering"}`},
+		// AND ANYTHING AFTER THE ONE VALUE, which json.Unmarshal refused
+		// and a decoder asked only whether More values follow does not:
+		// it answers no before a `}` or a `]`.
+		{"a body with a trailing brace", http.MethodPost,
+			"/chart/units/engineering/rename", `{"to":"platform"}}`},
+		{"a body with a trailing bracket", http.MethodPost, "/chart/batch",
+			`{"operations":[{"kind":"move","object":{"kind":"seat","id":"cto"},"parent":"eng"}]}]`},
+		{"a body with a second value", http.MethodPatch,
+			"/chart/units/engineering", `{"name":"E"} {"name":"F"}`},
 	} {
 		var rec *httptest.ResponseRecorder
 		if c.method == http.MethodPatch {
@@ -978,15 +987,16 @@ func TestAFieldARouteDoesNotReadIsRefused(t *testing.T) {
 			rec = post(r.mux, c.path, c.body)
 		}
 		if rec.Code != http.StatusBadRequest {
-			t.Errorf("%s with a field the route does not read answered %d, "+
-				"want 400: %s", c.name, rec.Code, rec.Body)
+			t.Errorf("%s answered %d, want 400 — a body carrying what "+
+				"the route does not read is refused: %s", c.name, rec.Code, rec.Body)
 		}
 	}
 	if len(r.writer.calls) != 0 {
 		t.Errorf("a refused body reached the writer: %v", r.writer.calls)
 	}
-	// THE CONTROL: the same unit body without the stray field is written.
-	if rec := patch(r.mux, "/chart/units/engineering", `{"name":"E"}`); rec.Code != http.StatusOK {
+	// THE CONTROL: the same unit body without the stray field is written,
+	// and whitespace after the value is not a second one.
+	if rec := patch(r.mux, "/chart/units/engineering", "{\"name\":\"E\"}\n \t"); rec.Code != http.StatusOK {
 		t.Errorf("a well-formed unit body answered %d: %s", rec.Code, rec.Body)
 	}
 }
