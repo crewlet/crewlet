@@ -329,7 +329,10 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
 	}
-	fmt.Fprintf(stdout, "imported %s as revision %s (sealed=%t)\n", path, id, cs.cipher != nil)
+	// THE KEY IT WAS SEALED UNDER, read off the envelope: a `sealed=` flag
+	// printed `true` on every import, since nothing is stored unsealed.
+	sealedUnder, _ := secrets.EnvelopeKeyIDOf(payload)
+	fmt.Fprintf(stdout, "imported %s as revision %s (sealed under %s)\n", path, id, sealedUnder)
 	if err := stageTheChart(ctx, cs, path, company, stdout); err != nil {
 		return err
 	}

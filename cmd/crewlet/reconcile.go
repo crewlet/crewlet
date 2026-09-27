@@ -205,8 +205,11 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
 	nudge(ctx, pub, seeded, log)
+	// THE KEY IT WAS SEALED UNDER, read off the envelope: a `sealed` flag
+	// said `true` on every line, since nothing is stored unsealed.
+	sealedUnder, _ := secrets.EnvelopeKeyIDOf(payload)
 	log.InfoContext(ctx, "company_config_seeded", "revision", id, "epoch", published.Epoch,
-		"parent", parent, "sealed", cipher != nil)
+		"parent", parent, "sealed_under", sealedUnder)
 	return nil
 }
 

@@ -137,6 +137,10 @@ func TestImportingIsIdempotentByContent(t *testing.T) {
 		t.Fatalf("edited import: %v", err)
 	} else if !strings.Contains(out, "imported") {
 		t.Fatalf("the edited import said %q", out)
+	} else if !strings.Contains(out, "sealed under fixture") {
+		// THE KEY IT WAS SEALED UNDER, which is a fact; a `sealed=true`
+		// flag said the same thing on every import that ever ran.
+		t.Errorf("the import does not name the key it sealed under: %q", out)
 	}
 	shown, _, err := configCmd(t, cfg, "show")
 	if err != nil {
