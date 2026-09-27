@@ -162,3 +162,57 @@ func fill(v reflect.Value, depth int) {
 		}
 	}
 }
+
+// AN OBJECT WITH NOTHING IN ITS RUNTIME HALF HAS NO RUNTIME HALF.
+//
+// The chart classes a content write by whether its runtime half changes, and
+// that half is the company's configuration — so an object whose runtime
+// encoded to ANYTHING when it held nothing carried a runtime every edit had to
+// preserve. `name` is authored on every seat and unit and has no `omitempty`,
+// so every seeded plain seat and unit carried `{"name":""}`, and a lead
+// correcting a goal was refused as though they had touched its credentials.
+//
+// Every field the rows own is set here, so a clear that forgot one would
+// encode it and fail too. And the control beside it: a seat or unit that does
+// hold something keeps it, since an encoder that answered nil for everything
+// would pass the first half and lose every model chain in the company.
+func TestAnEmptyRuntimeHalfEncodesAsNone(t *testing.T) {
+	t.Parallel()
+	seat := &Role{
+		Name: "Jane Doe", Kind: KindHuman, DeclaredHandle: "jane",
+		Email: "jane@example.com", Backstory: "b", Goal: "g",
+		Responsibilities: []string{"r"}, BehavioralGuidelines: []string{"b"},
+		Project: "ENG", Space: "ENG", Manages: []string{"sre"}, UnitRef: "eng",
+	}
+	if got, err := SeatRuntime(seat); err != nil || got != nil {
+		t.Errorf("a seat whose runtime half holds nothing encoded to %q "+
+			"(err %v), want nil", got, err)
+	}
+	unit := &Unit{
+		Name: "Engineering", ID: "eng", Type: "team", Purpose: "p",
+		Goals: []string{"g"}, Channel: "eng", Project: "ENG", Space: "ENG",
+		KnowledgeRefs: []string{"k"}, Lead: "cto",
+	}
+	if got, err := UnitRuntime(unit); err != nil || got != nil {
+		t.Errorf("a unit whose runtime half holds nothing encoded to %q "+
+			"(err %v), want nil", got, err)
+	}
+
+	seat.LLM = ProviderKeys{"claude-sonnet"}
+	got, err := SeatRuntime(seat)
+	if err != nil || len(got) == 0 {
+		t.Fatalf("a seat with a model chain encoded to %q (err %v)", got, err)
+	}
+	var back Role
+	if err := ApplySeatRuntime(&back, got); err != nil {
+		t.Fatalf("decode the seat's runtime: %v", err)
+	}
+	if len(back.LLM) != 1 || back.LLM[0] != "claude-sonnet" {
+		t.Errorf("the model chain did not survive its runtime half: %s", got)
+	}
+	unit.MCPEnv = MCPEnv{"gitlab": {"GITLAB_TOKEN": "${GL}"}}
+	if got, err := UnitRuntime(unit); err != nil || len(got) == 0 {
+		t.Errorf("a unit with credentials for its members encoded to %q "+
+			"(err %v)", got, err)
+	}
+}

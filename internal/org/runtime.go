@@ -1,8 +1,10 @@
 package org
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // THE HALF OF A SEAT THE CHART CANNOT SPEAK FOR.
@@ -83,16 +85,38 @@ var unitRowFields = map[string]string{
 }
 
 // SeatRuntime is one seat's engine-only content, encoded for the chart to
-// carry.
+// carry — and NIL where the seat has none.
 //
 // THE ROW-OWNED FIELDS ARE CLEARED rather than omitted by a tag, because they
 // are legitimately part of [Role] on every other path: the same type is what
 // a document parses into and what a turn reads.
+//
+// # An empty runtime half is no runtime half
+//
+// Clearing is not the same as leaving nothing: `name` is authored on every
+// seat and carries no `omitempty`, so a seat with no model chain, no
+// credentials and no contact encoded to `{"name":""}` — eleven bytes that say
+// nothing. And the chart classes a content write by whether its runtime half
+// CHANGES, which is the company's configuration: every seeded and imported
+// seat then carried a runtime that was not empty, and a lead correcting the
+// goal of a plain human seat was refused as though they had touched its
+// credentials. So a document that encodes exactly as a cleared seat with
+// nothing in it — the zero [Role]'s encoding, computed once rather than
+// spelled — is answered as nil, which the chart stores as no runtime at all.
+//
+// THE ZERO VALUE'S ENCODING AND NOT A LIST OF TAGS, so a field added to
+// [Role] without `omitempty` moves the reference with it rather than making
+// every seat's runtime non-empty again.
 func SeatRuntime(r *Role) (json.RawMessage, error) {
 	if r == nil {
 		return nil, nil
 	}
-	content := *r
+	return encodeRuntime(clearedSeat(*r), emptySeatRuntime, "seat")
+}
+
+// clearedSeat is a seat with every field the chart's rows own set to zero:
+// what is left is the runtime half ([seatRowFields]).
+func clearedSeat(content Role) Role {
 	content.Name, content.Kind, content.DeclaredHandle = "", "", ""
 	content.Email, content.Backstory, content.Goal = "", "", ""
 	content.Responsibilities, content.BehavioralGuidelines = nil, nil
@@ -100,10 +124,30 @@ func SeatRuntime(r *Role) (json.RawMessage, error) {
 	content.Manages, content.AutoManaged, content.UnitRef = nil, nil, ""
 	content.Incomplete = false
 	content.OriginHandle, content.FormerHandles = "", nil
+	return content
+}
+
+// emptySeatRuntime is the encoding of a seat whose runtime half holds nothing.
+var emptySeatRuntime = sync.OnceValues(func() ([]byte, error) {
+	return json.Marshal(clearedSeat(Role{}))
+})
+
+// encodeRuntime encodes one cleared object, and answers nil where it encodes
+// exactly as the empty one does — see [SeatRuntime].
+func encodeRuntime(content any, empty func() ([]byte, error), what string) (
+	json.RawMessage, error) {
 
 	body, err := json.Marshal(content)
 	if err != nil {
-		return nil, fmt.Errorf("org: encode the seat's runtime document: %w", err)
+		return nil, fmt.Errorf("org: encode the %s's runtime document: %w", what, err)
+	}
+	nothing, err := empty()
+	if err != nil {
+		return nil, fmt.Errorf("org: encode an empty %s's runtime document: %w",
+			what, err)
+	}
+	if bytes.Equal(body, nothing) {
+		return nil, nil
 	}
 	return body, nil
 }
@@ -123,12 +167,17 @@ func ApplySeatRuntime(r *Role, body json.RawMessage) error {
 	return nil
 }
 
-// UnitRuntime is [SeatRuntime] for a unit.
+// UnitRuntime is [SeatRuntime] for a unit: its engine-only content, and nil
+// where it has none.
 func UnitRuntime(u *Unit) (json.RawMessage, error) {
 	if u == nil {
 		return nil, nil
 	}
-	content := *u
+	return encodeRuntime(clearedUnit(*u), emptyUnitRuntime, "unit")
+}
+
+// clearedUnit is [clearedSeat] for a unit ([unitRowFields]).
+func clearedUnit(content Unit) Unit {
 	content.Name, content.ID, content.Type, content.Purpose = "", "", "", ""
 	content.Goals, content.Channel = nil, ""
 	content.Project, content.Space, content.KnowledgeRefs = "", "", nil
@@ -136,13 +185,13 @@ func UnitRuntime(u *Unit) (json.RawMessage, error) {
 	content.DeclaredLead, content.DeclaredChannel = "", ""
 	content.OriginKey, content.FormerKeys = "", nil
 	content.Roles, content.Children = nil, nil
-
-	body, err := json.Marshal(content)
-	if err != nil {
-		return nil, fmt.Errorf("org: encode the unit's runtime document: %w", err)
-	}
-	return body, nil
+	return content
 }
+
+// emptyUnitRuntime is [emptySeatRuntime] for a unit.
+var emptyUnitRuntime = sync.OnceValues(func() ([]byte, error) {
+	return json.Marshal(clearedUnit(Unit{}))
+})
 
 // ApplyUnitRuntime is [ApplySeatRuntime] for a unit.
 func ApplyUnitRuntime(u *Unit, body json.RawMessage) error {

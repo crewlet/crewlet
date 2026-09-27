@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -63,6 +64,112 @@ func TestAContentRecordWithAPrivilegedFieldIsRefusedBelowItsGrant(t *testing.T) 
 		if strings.Contains(doc, "mcp_env") {
 			t.Fatalf("the refused runtime half reached the rows: %s", doc)
 		}
+	}
+}
+
+// plainCompany is a company whose unit and first seat declare nothing the
+// engine alone reads — no model chain, no credentials, no contact — beside an
+// agent seat that does.
+const plainCompany = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+units:
+  - name: Engineering
+    id: eng
+    purpose: ships the product
+    roles:
+      - name: Jane Doe
+        handle: jane
+        kind: human
+        goal: run the team
+      - name: SRE
+        handle: sre
+        llm: zulu
+        goal: keep it up
+`
+
+// seedCompany places a company file's chart the way a node's first boot does:
+// the import, then one content record per object, written by the rig's own
+// party, which holds the company's grant.
+func (r *writeRig) seedCompany(doc string) chart.Authored {
+	r.t.Helper()
+	company, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		r.t.Fatalf("parse the company: %v", err)
+	}
+	authored := config.AuthoredChart(company)
+	if _, err := r.writer.WriteImport(r.t.Context(), "op-seed", "rev-seed",
+		authored.Edges()); err != nil {
+		r.t.Fatalf("import the company's structure: %v", err)
+	}
+	r.drain()
+	for _, unit := range authored.Units {
+		if _, err := r.writer.WriteUnit(r.t.Context(), "op-seed-u-"+unit.Key,
+			chart.UnitContent{
+				Key: unit.Key, Name: unit.Name, Type: unit.Type,
+				Purpose: unit.Purpose, Goals: unit.Goals, Channel: unit.Channel,
+				Project: unit.Project, Space: unit.Space,
+				KnowledgeRefs: unit.KnowledgeRefs, Runtime: unit.Runtime,
+			}); err != nil {
+			r.t.Fatalf("seed the content of unit %s: %v", unit.Key, err)
+		}
+	}
+	for _, seat := range authored.Seats {
+		if _, err := r.writer.WriteSeat(r.t.Context(), "op-seed-s-"+seat.Handle,
+			chart.SeatContent{
+				Handle: seat.Handle, Unit: seat.Unit, Name: seat.Name,
+				Email: seat.Email, Backstory: seat.Backstory, Goal: seat.Goal,
+				Responsibilities:     seat.Responsibilities,
+				BehavioralGuidelines: seat.BehavioralGuidelines,
+				Manages:              seat.Manages, Project: seat.Project,
+				Space: seat.Space, Runtime: seat.Runtime,
+			}); err != nil {
+			r.t.Fatalf("seed the content of seat %s: %v", seat.Handle, err)
+		}
+	}
+	r.drain()
+	return authored
+}
+
+// A LEAD EDITS THE PROSE OF A PLAIN SEAT AND A PLAIN UNIT, seeded from a file.
+//
+// The seat and the unit declare nothing the engine alone reads, so nothing a
+// lead writes about them can touch the company's configuration — yet every
+// seeded object used to carry a runtime half of `{"name":""}`, the encoding of
+// a cleared document that held nothing, and a lead holding no grant was
+// refused a goal as though it were a credential. Seeded through the SAME
+// function a node's boot and `crewlet config import` use, because that is
+// where the eleven bytes came from.
+func TestALeadEditsThePlainObjectsACompanyFileSeeded(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.seedCompany(plainCompany)
+	lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
+
+	if _, err := lead.WriteSeat(t.Context(), "op-goal", chart.SeatContent{
+		Handle: "jane", Unit: "eng", Name: "Jane Doe", Goal: "hire two SREs",
+	}); err != nil {
+		t.Fatalf("a lead's edit of a plain seat's goal: %v", err)
+	}
+	if _, err := lead.WriteUnit(t.Context(), "op-purpose", chart.UnitContent{
+		Key: "eng", Name: "Engineering", Purpose: "ships and runs the product",
+	}); err != nil {
+		t.Fatalf("a lead's edit of a plain unit's purpose: %v", err)
+	}
+	r.drain()
+	if seat := r.mustSeat("jane"); seat.Goal != "hire two SREs" || len(seat.Runtime) != 0 {
+		t.Errorf("the seat reads goal %q and runtime %s, want the lead's goal "+
+			"and still no runtime", seat.Goal, seat.Runtime)
+	}
+	if unit := r.mustUnit("eng"); unit.Purpose != "ships and runs the product" ||
+		len(unit.Runtime) != 0 {
+		t.Errorf("the unit reads purpose %q and runtime %s, want the lead's "+
+			"purpose and still no runtime", unit.Purpose, unit.Runtime)
 	}
 }
 
