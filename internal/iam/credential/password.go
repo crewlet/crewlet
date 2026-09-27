@@ -18,6 +18,15 @@ import (
 // cost that drifts down is invisible: every test still passes, every login
 // still works, and the only thing that changed is how long an offline attack
 // against a stolen database takes.
+//
+// A CHANGE MAY ONLY RAISE THEM, each on its own. A stored verifier is
+// rewritten at this build's cost only where that cost is above the verifier's
+// in some parameter and below it in none ([Hasher.Verify]), because a rolling
+// upgrade runs two builds against one identity estate and a rewrite in either
+// direction flaps every person's verifier between them — half of each sign-in
+// at the weaker cost. So a change that lowers one parameter to raise another
+// is one no existing verifier ever reaches: everybody keeps the cost they were
+// enrolled at until they choose a new password.
 const (
 	// Memory is argon2id's memory cost in KiB: 64 MiB.
 	//
@@ -146,9 +155,21 @@ func (h *Hasher) Hash(password string) (string, error) {
 // THE REHASH FLAG IS WHY THE PARAMETERS ARE IN THE STORED STRING. Raising the
 // cost is otherwise a migration nobody can perform — the plaintext is not
 // stored, so the only instant at which a stronger digest can be computed is
-// the one where somebody presents their password. A verifier written under an
-// older cost verifies under its OWN parameters and is reported stale, and the
+// the one where somebody presents their password. A verifier written under a
+// weaker cost verifies under its OWN parameters and is reported stale, and the
 // caller rewrites it in the record that records the successful login.
+//
+// STALE MEANS WEAKER, NEVER MERELY DIFFERENT ([Params.weakerThan]). The only
+// place the cost is chosen is a build's [Default], so the only way it moves is
+// a new build — and a new build arrives as a rolling upgrade, two builds
+// sharing one identity estate. Reported whenever the parameters differed, a
+// node still on the older build read every verifier the newer one had written
+// as stale and rewrote it at its own, weaker cost, while a sign-in on an
+// upgraded node rewrote it back up: every person's verifier flapped for the
+// whole rollout and spent part of it at the cost the upgrade was retiring,
+// which is the silent downgrade [Memory] and [Time] are pinned against. A
+// verifier at a cost that is higher in any parameter verifies and is left
+// where it is.
 //
 // AN UNPARSEABLE VERIFIER IS A REFUSAL AND NOT AN ERROR PATH THE CALLER
 // BRANCHES ON: a row somebody corrupted must not be distinguishable, from
@@ -172,7 +193,32 @@ func (h *Hasher) Verify(verifier, password string) (ok bool, rehash bool) {
 	if subtle.ConstantTimeCompare(got, want) != 1 {
 		return false, false
 	}
-	return true, params != h.params
+	return true, params.weakerThan(h.params)
+}
+
+// weakerThan reports whether p is a WEAKER cost than q: below it in at least
+// one parameter an attacker pays for, and above it in none.
+//
+// A PARTIAL ORDER, deliberately, and not a product or any other single number
+// of cost: a rewrite that lowers ANY parameter is a downgrade in that
+// parameter, and a cost model deciding it was paid for elsewhere is exactly
+// the judgement argon2's own trade-offs make unreliable — OWASP's settings of
+// equal defence are not one memory-time product, because one pass buys less
+// per KiB than three. A verifier whose cost is neither weaker nor stronger
+// than a build's is left where it is by that build — and the order being
+// antisymmetric is what makes the rule safe mid-rollout: no two builds can
+// each find the other's verifier weaker, so nothing flaps.
+//
+// [Params.Threads] IS NOT A COST and decides nothing: parallelism changes how
+// soon one verification finishes, not what an attacker pays (see [Threads]),
+// so a verifier that differs only in it is neither weaker nor stronger, and
+// two builds disagreeing about it would otherwise rewrite each person's on
+// every sign-in for nothing.
+func (p Params) weakerThan(q Params) bool {
+	if p.Memory > q.Memory || p.Time > q.Time || p.KeyLen > q.KeyLen {
+		return false
+	}
+	return p.Memory < q.Memory || p.Time < q.Time || p.KeyLen < q.KeyLen
 }
 
 // Rehash produces a verifier for a password at this hasher's cost, as [Hash]

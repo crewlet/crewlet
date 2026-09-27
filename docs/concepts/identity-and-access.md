@@ -809,6 +809,19 @@ rewrites it at the current cost — the same credential, its id kept, one write 
 the person's own credentials decided in the write's snapshot, so a password
 changed in the meantime keeps its change.
 
+It only ever goes **up**. A verifier is stale when its cost is *below* this
+build's in memory, passes or digest length and above it in none — never merely
+because its parameters differ. The cost is a property of the build, so it
+moves during a rolling upgrade, when a node still on the older build meets the
+verifiers the newer one has written at the raised cost; rewriting those at its
+own cost would be a downgrade, undone by the person's next sign-in on an
+upgraded node and redone by the one after on an old node, for as long as the
+rollout lasts. So a verifier at a higher cost verifies and is left exactly as
+it is, and so is one that is higher in one parameter and lower in another.
+Parallelism is not a cost — it changes how soon one verification finishes, not
+what an attacker pays — so it decides nothing. A new cost therefore reaches
+existing verifiers only when it lowers none of the three.
+
 It is **best effort and never on the sign-in's time**: the person is waiting
 for a session, not a stronger digest, so the rewrite starts only once the
 sign-in has answered, in the background, and nothing in the answer waits on it.

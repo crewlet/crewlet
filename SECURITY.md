@@ -54,7 +54,9 @@ A few things worth knowing when deploying Crewlet:
   minimum and no composition rules.** The parameters are in the stored
   verifier, so raising the cost re-hashes each person's on their next
   successful sign-in — the only instant a stronger digest can be computed,
-  because the plaintext is not stored. Machine tokens and recovery codes are
+  because the plaintext is not stored. A re-hash only ever raises a cost: a
+  node still on an older build during a rolling upgrade leaves a verifier the
+  newer build wrote exactly as it is. Machine tokens and recovery codes are
   SHA-256 rather than argon2id, deliberately: both are minted by this engine
   from `crypto/rand`, so there is no dictionary to grind and the memory cost
   would buy nothing while adding a hundred milliseconds to every request a CI

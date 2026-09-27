@@ -232,7 +232,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// rehashPassword rewrites a password verifier written under an older cost at
+// rehashPassword rewrites a password verifier written under a weaker cost at
 // this hasher's current one, for a sign-in that has just proved the password —
 // in the BACKGROUND, owned by this surface, once the answer is on its way.
 //
@@ -244,6 +244,12 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 // reported it to nobody: every sign-in discarded the flag, so raising the cost
 // changed new passwords and left every existing verifier at the old one for
 // the life of the deployment.
+//
+// STALE IS WEAKER and never merely different, which is what makes acting on
+// the flag safe in a rolling upgrade: a node still on an older build meets the
+// verifiers a newer one wrote at a raised cost, and rewriting those at this
+// build's cost would be a downgrade, undone by the next sign-in on an upgraded
+// node and redone by the next here. Verify leaves them unreported.
 //
 // # Never on the request, and never at a sign-in's expense
 //

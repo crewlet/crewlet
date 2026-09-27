@@ -19,7 +19,12 @@ import (
 // written under it is one a later cost raise left behind.
 var cheaper = credential.Params{Memory: 32, Time: 1, Threads: 1, KeyLen: 32}
 
-// A PASSWORD UNDER AN OLDER COST IS RE-HASHED BY THE SIGN-IN THAT PRESENTS IT.
+// stronger is a cost above [cheap] in every parameter that is a cost: a
+// verifier written under it is one a NEWER build wrote, read by a node still
+// running this one while a rolling upgrade is under way.
+var stronger = credential.Params{Memory: 128, Time: 2, Threads: 1, KeyLen: 32}
+
+// A PASSWORD IS RE-HASHED UP BY THE SIGN-IN THAT PRESENTS IT, AND NEVER DOWN.
 //
 // The parameters ride in the stored verifier so a cost raise is possible at
 // all: the plaintext is not stored, and the one instant a stronger digest can
@@ -32,48 +37,57 @@ var cheaper = credential.Params{Memory: 32, Time: 1, Threads: 1, KeyLen: 32}
 // the store readable here — waited for, since the stop here is given all the
 // time the case has.
 //
+// And ONLY UP. A cost moves only with a build, so a raised one arrives as a
+// rolling upgrade, and a node still on this build meets the verifiers the
+// newer one wrote: read as stale because they DIFFERED, each was rewritten
+// here at this build's weaker cost, and back up on the next sign-in an
+// upgraded node served — every person's verifier flapping for the whole
+// rollout, part of it at the cost being retired. A verifier stronger than this
+// build's is left exactly as it is, with no record asked for.
+//
 // The CONTROL is a verifier already at the current cost: no rewrite, and no
-// record asked for — so the first half is about the stale verifier and not
+// record asked for — so the first row is about the weaker verifier and not
 // about every sign-in writing one. Mutation: drop the rehash call from either
-// route and its stale case keeps the old parameters.
-func TestAPasswordUnderAnOlderCostIsRehashedByTheSignInThatPresentsIt(t *testing.T) {
+// route and its older-cost row keeps the old parameters; report a verifier
+// stale whenever its cost differs and the newer build's row is rewritten down.
+func TestAPasswordIsRehashedUpByTheSignInThatPresentsItAndNeverDown(t *testing.T) {
 	t.Parallel()
 	for _, route := range []struct {
 		name string
-		run  func(t *testing.T, stale bool) *estate
+		run  func(t *testing.T, stored credential.Params) (*estate, string)
 	}{
-		{"a sign-in", func(t *testing.T, stale bool) *estate {
+		{"a sign-in", func(t *testing.T, stored credential.Params) (*estate, string) {
 			r := newSignInRig(t)
-			if stale {
-				restale(t, r.estate)
-			}
+			before := storeVerifierAt(t, r.estate, stored)
 			if got := r.login(t, "jane.doe", password, appCode(t, clock)); got != http.StatusOK {
 				t.Fatalf("the sign-in answered %d", got)
 			}
 			r.svc.Stop(t.Context())
-			return r.estate
+			return r.estate, before
 		}},
-		{"a step-up", func(t *testing.T, stale bool) *estate {
+		{"a step-up", func(t *testing.T, stored credential.Params) (*estate, string) {
 			r := newStepUpRig(t, session.RowValid)
-			if stale {
-				restale(t, r.estate)
-			}
+			before := storeVerifierAt(t, r.estate, stored)
 			if rec := r.stepUp(t); rec.Code != http.StatusOK {
 				t.Fatalf("the step-up answered %d (%s)", rec.Code, rec.Body)
 			}
 			r.svc.Stop(t.Context())
-			return r.estate
+			return r.estate, before
 		}},
 	} {
-		for _, stale := range []bool{true, false} {
-			name := route.name + ", verifier at the current cost (the control)"
-			if stale {
-				name = route.name + ", verifier at an older cost"
-			}
-			t.Run(name, func(t *testing.T) {
+		for _, stored := range []struct {
+			name      string
+			cost      credential.Params
+			rewritten bool
+		}{
+			{"verifier at an older cost", cheaper, true},
+			{"verifier at the current cost (the control)", cheap, false},
+			{"verifier at a newer build's stronger cost", stronger, false},
+		} {
+			t.Run(route.name+", "+stored.name, func(t *testing.T) {
 				t.Parallel()
-				e := route.run(t, stale)
-				assertRehashed(t, e, cheap, stale)
+				e, before := route.run(t, stored.cost)
+				assertRehashed(t, e, cheap, before, stored.rewritten)
 			})
 		}
 	}
@@ -97,11 +111,12 @@ func TestAStaleVerifierIsRewrittenAtTheCostThatShips(t *testing.T) {
 	r := newSignInRigWith(t, func(o *authapi.Options) {
 		o.Hasher = credential.NewHasher(credential.Default(), 1)
 	})
+	before := storeVerifierAt(t, r.estate, cheap)
 	if got := r.login(t, "jane.doe", password, appCode(t, clock)); got != http.StatusOK {
 		t.Fatalf("the sign-in answered %d", got)
 	}
 	r.svc.Stop(t.Context())
-	assertRehashed(t, r.estate, credential.Default(), true)
+	assertRehashed(t, r.estate, credential.Default(), before, true)
 }
 
 // A SIGN-IN NEVER WAITS FOR ITS VERIFIER'S REWRITE, AND STOPPING ENDS IT.
@@ -124,8 +139,7 @@ func TestASignInNeverWaitsForItsVerifiersRewrite(t *testing.T) {
 		held.estate = o.Writer.(*estate)
 		o.Writer = held
 	})
-	restale(t, r.estate)
-	before := r.estate.person.Credentials[0].Verifier
+	before := storeVerifierAt(t, r.estate, cheaper)
 
 	answered := make(chan int, 1)
 	go func() { answered <- r.login(t, "jane.doe", password, appCode(t, clock)) }()
@@ -191,9 +205,13 @@ func (h *heldRewrite) SetCredentials(ctx context.Context,
 	return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: in.OpID}, ctx.Err()
 }
 
-// assertRehashed holds the estate's password to the cost it should be at now,
-// and to exactly as many re-hash writes as a stale verifier asks for.
-func assertRehashed(t *testing.T, e *estate, current credential.Params, stale bool) {
+// assertRehashed holds the estate's password to the cost it should be at now:
+// rewritten at the current cost by exactly one re-hash write, or — where it was
+// not to be rewritten — the very verifier it held before, with no re-hash
+// write asked for at all.
+func assertRehashed(t *testing.T, e *estate, current credential.Params,
+	before string, rewritten bool) {
+
 	t.Helper()
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -209,14 +227,17 @@ func assertRehashed(t *testing.T, e *estate, current credential.Params, stale bo
 		}
 	}
 	switch {
-	case stale && !strings.Contains(pw.Verifier, params(current)):
+	case rewritten && !strings.Contains(pw.Verifier, params(current)):
 		t.Errorf("after the sign-in the verifier is %q, want it "+
 			"at the current cost %s", pw.Verifier, params(current))
-	case stale && rehashes != 1:
+	case rewritten && rehashes != 1:
 		t.Errorf("asked for %d re-hash writes, want 1", rehashes)
-	case !stale && rehashes != 0:
-		t.Errorf("a verifier already at the current cost was "+
-			"rewritten %d times", rehashes)
+	case !rewritten && rehashes != 0:
+		t.Errorf("a verifier that was not weaker than the current cost "+
+			"was rewritten %d times", rehashes)
+	case !rewritten && pw.Verifier != before:
+		t.Errorf("the verifier moved from %q to %q with no re-hash "+
+			"asked for", before, pw.Verifier)
 	}
 	if ok, _ := credential.NewHasher(current, 1).Verify(pw.Verifier,
 		password); !ok {
@@ -224,21 +245,23 @@ func assertRehashed(t *testing.T, e *estate, current credential.Params, stale bo
 	}
 }
 
-// restale replaces the person's password verifier with one written under
-// [cheaper], as a deployment that has since raised its cost holds.
-func restale(t *testing.T, e *estate) {
+// storeVerifierAt replaces the person's password verifier with one written
+// under cost — an older cost a deployment has since raised, the current one,
+// or a newer build's — and answers the verifier it stored.
+func storeVerifierAt(t *testing.T, e *estate, cost credential.Params) string {
 	t.Helper()
-	old, err := credential.NewHasher(cheaper, 1).Hash(password)
+	verifier, err := credential.NewHasher(cost, 1).Hash(password)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(old, params(cheaper)) {
-		t.Fatalf("the stale verifier %q is not at %s; this case tests nothing",
-			old, params(cheaper))
+	if !strings.Contains(verifier, params(cost)) {
+		t.Fatalf("the stored verifier %q is not at %s; this case tests nothing",
+			verifier, params(cost))
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.person.Credentials[0].Verifier = old
+	e.person.Credentials[0].Verifier = verifier
+	return verifier
 }
 
 // params is how a verifier spells its cost.
