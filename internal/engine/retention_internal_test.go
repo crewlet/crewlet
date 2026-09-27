@@ -870,17 +870,16 @@ func TestAnEvictionLandsOnEveryGatedLog(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read the pages log's evictions: %v", err)
 		}
-		// EACH LOG NAMES THE OPERATOR ITS OWN WAY: the tracker's writer
-		// records the token's name as the author, and the knowledge base
-		// records an operator with no seat handle as `operator:` and the
-		// token's name, which no seat can hold.
-		gone := func(node string, back bool, by, want string) bool {
-			return node == "node-gone" && !back && by == want
+		// EVERY LOG NAMES THE ONE OPERATOR ONE WAY: `operator:` and the
+		// token's name, which no seat handle can spell — so an audit
+		// reading both logs finds one gesture by one person.
+		gone := func(node string, back bool, by string) bool {
+			return node == "node-gone" && !back && by == "operator:ops"
 		}
 		return slices.ContainsFunc(trackerRows, func(r tracker.EvictionRow) bool {
-				return gone(r.NodeID, r.IsBack, r.By, "ops")
+				return gone(r.NodeID, r.IsBack, r.By)
 			}), slices.ContainsFunc(pagesRows, func(r pages.EvictionRow) bool {
-				return gone(r.NodeID, r.IsBack, r.By, "operator:ops")
+				return gone(r.NodeID, r.IsBack, r.By)
 			})
 	}
 	waitUntil(t, 20*time.Second, "both logs to apply the eviction", func() bool {
@@ -1038,7 +1037,8 @@ func firedKind(alarms []statelog.Alarm, want statelog.Kind) bool {
 // actor's handle is a seat's: the record would name that seat as the author,
 // and the change feed wakes nobody whose handle equals it. Both gestures that
 // write a page record as an operator — the eviction gate and a reanchor's
-// generation — build their actor here.
+// generation — build their actor here, and their tracker record's writer
+// beside it ([operatorWriter]).
 func TestAnOperatorGesturesPageActorNamesTheTokenAndNoSeat(t *testing.T) {
 	t.Parallel()
 	actor := operatorPageActor("dev")
@@ -1051,5 +1051,20 @@ func TestAnOperatorGesturesPageActorNamesTheTokenAndNoSeat(t *testing.T) {
 	if got := actor.Name(); got != "operator:dev" {
 		t.Errorf("the record names %q, want operator:dev — a name the seat dev "+
 			"cannot hold", got)
+	}
+
+	// AND THE TRACKER'S RECORD OF THE SAME GESTURE NAMES THE SAME
+	// OPERATOR THE SAME WAY, with the token again as the credential — so an
+	// audit reading both logs finds one person, and the tracker's own
+	// identity rule admits the writer that carries it.
+	w, err := operatorWriter(&statelog.Publisher{}, "", "dev")
+	if err != nil {
+		t.Fatalf("the operator's tracker writer was refused: %v", err)
+	}
+	if w.Actor != actor.Name() || w.ActorKind != tracker.AuthorOperator ||
+		w.OperatorID != "dev" {
+		t.Errorf("the tracker records the gesture as %q of kind %q for %q, and "+
+			"the knowledge base as %q", w.Actor, w.ActorKind, w.OperatorID,
+			actor.Name())
 	}
 }

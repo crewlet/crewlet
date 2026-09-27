@@ -412,8 +412,14 @@ type WriterDeps struct {
 	Drain     func() float64
 	Actor     string
 	ActorKind AuthorKind
-	Leads     Leads
-	Now       func() time.Time
+
+	// OperatorID is the API token a writer of kind [AuthorOperator] acts
+	// for, which its Actor must spell as [OperatorActor] of — the rule
+	// [Writer.As] holds its provenance to, held here at the other door.
+	// Empty for every other kind.
+	OperatorID string
+	Leads      Leads
+	Now        func() time.Time
 
 	// ClaimClock is what a walk's claim is measured on — see
 	// [Writer.claimClock]. Nil is [time.Now], whose readings carry the
@@ -456,18 +462,12 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 		return nil
 	}
 	clone := *w
-	refusal := actorRefusal(actor, kind)
-	if refusal == nil && kind == AuthorOperator &&
-		actor != OperatorActor(provenance.OperatorID) {
-		// THE NAME IS THE CREDENTIAL'S, so the two fields a record
-		// carries about an operator cannot name two different tokens:
-		// an audit asks `operator_id` what one token did and reads the
-		// author for who did it.
-		refusal = fmt.Errorf("an operator is recorded under its own "+
-			"credential's name, %q, and this names the credential %q",
-			OperatorActor(provenance.OperatorID), provenance.OperatorID)
-	}
-	if refusal != nil {
+	// A REFUSAL IS ABOUT THE IDENTITY IT REFUSED, and this replaces that
+	// identity whole: a clone of a refused writer that is handed one the
+	// rule admits writes as it, rather than refusing every write in the
+	// name of an actor it no longer is.
+	clone.refusal = nil
+	if refusal := actorRefusal(actor, kind, provenance.OperatorID); refusal != nil {
 		// THE SAME RULE [NewWriter] HOLDS, because this is the other
 		// door into the same state: a clone that skipped it would be the
 		// one writer in the tree recording history rows nobody can
@@ -603,28 +603,35 @@ const operatorPrefix = "operator:"
 //
 // Because a record's author is compared with seats' handles, and a bare token
 // name can be one. The wake that leaves out whoever wrote a record ([Route])
-// drops the candidate whose handle is the recorded name, so a token named like
-// a seat would keep that seat from hearing about everything the token wrote. A
-// seat's handle is lowercase letters, digits and dashes (org.ValidHandle), so
-// a name with a colon is never one, whatever the token is called.
+// drops a candidate whose handle is the recorded name, under every reason but
+// the one that wakes a record's own writer ([Reason.WakesActor]) — so a token
+// named like a seat would keep that seat from being woken by the token's
+// writes. A seat's handle is lowercase letters, digits and dashes
+// (org.ValidHandle), so a name with a colon is never one, whatever the token is
+// called.
 //
-// THE KNOWLEDGE BASE RECORDS AN OPERATOR THE SAME WAY (pages.Actor.Name), so
-// one operator is one name across the work and the pages.
+// THE KNOWLEDGE BASE SPELLS AN OPERATOR THE SAME WAY: an actor of its operator
+// kind with no seat handle is recorded as `operator:` and the token's name
+// (pages.Actor.Name), so one operator is one name across the work and the
+// pages.
 func OperatorActor(token string) string { return operatorPrefix + token }
 
-// actorRefusal is the rule every writer's identity is held to, and nil when it
-// holds.
+// actorRefusal is the rule every writer's identity is held to — the actor, its
+// kind, and the API token it names as its credential — and nil when it holds.
 //
 // AN AUTHOR, OF A KIND THIS BUILD KNOWS: a record carrying neither is a
 // history row nobody can attribute.
 //
-// AND THE NAME AGREES WITH THE KIND about whether it is an operator's. An
-// operator's name is [OperatorActor] of a token, and a bare token name is
-// refused for the reason that function gives. A writer of any other kind is
-// never spelled as an operator, because every screen and every audit that
-// reads the name would then show an operator's hand in what somebody else
-// did.
-func actorRefusal(actor string, kind AuthorKind) error {
+// AN OPERATOR IS [OperatorActor] OF THE TOKEN IT PRESENTED. A bare token name
+// is refused for the reason that function gives, and a name spelling a token
+// other than the one in `operatorID` is refused because a record carries both:
+// an audit asks `operator_id` what one token did and reads the author for who
+// did it, and the two must name the same token.
+//
+// A WRITER OF ANY OTHER KIND IS NEVER SPELLED AS AN OPERATOR, because every
+// screen and every audit that reads the name would then show an operator's
+// hand in what somebody else did.
+func actorRefusal(actor string, kind AuthorKind, operatorID string) error {
 	switch {
 	case actor == "":
 		return fmt.Errorf("every record carries who wrote it, and one that " +
@@ -633,12 +640,18 @@ func actorRefusal(actor string, kind AuthorKind) error {
 		return fmt.Errorf("%q is not an author kind, and every record carries "+
 			"who wrote it as one of %v", kind, AuthorKinds)
 	}
-	token, operator := strings.CutPrefix(actor, operatorPrefix)
+	_, spelled := strings.CutPrefix(actor, operatorPrefix)
 	switch {
-	case kind == AuthorOperator && (!operator || strings.TrimSpace(token) == ""):
-		return fmt.Errorf("an operator is recorded as %s and the name of its "+
-			"token, because a bare name is one a seat can hold", operatorPrefix)
-	case kind != AuthorOperator && operator:
+	case kind == AuthorOperator && strings.TrimSpace(operatorID) == "":
+		return fmt.Errorf("an operator is recorded with the API token it "+
+			"presented, and this one names none — it would be recorded as %s "+
+			"and nobody", operatorPrefix)
+	case kind == AuthorOperator && actor != OperatorActor(operatorID):
+		return fmt.Errorf("an operator is recorded as %s and the name of the "+
+			"API token it presented, %q, because a bare name is one a seat can "+
+			"hold and another token's is somebody else's",
+			operatorPrefix, OperatorActor(operatorID))
+	case kind != AuthorOperator && spelled:
 		return fmt.Errorf("a name beginning %s is an operator's, and this "+
 			"writer is not one", operatorPrefix)
 	}
@@ -650,7 +663,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	if d.Publisher == nil {
 		return nil, fmt.Errorf("tracker: a writer has no publisher")
 	}
-	if err := actorRefusal(d.Actor, d.ActorKind); err != nil {
+	if err := actorRefusal(d.Actor, d.ActorKind, d.OperatorID); err != nil {
 		return nil, fmt.Errorf("tracker: a writer cannot act as %q of kind %q "+
 			"— %w", d.Actor, d.ActorKind, err)
 	}
@@ -666,7 +679,8 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
 		local: newLocalClaims(), claimClock: claimClock,
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
-		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
+		OperatorID: d.OperatorID,
+		Drain:      d.Drain, Leads: d.Leads, World: d.World, Now: now,
 	}, nil
 }
 

@@ -284,7 +284,10 @@ func TestARunCollectedBeforeARelaunchReachesTheFinalRecordOnce(t *testing.T) {
 			{Model: "claude-sonnet", InputTokens: 300, OutputTokens: 30, CostUSD: 0.4},
 			{Model: "claude-haiku", InputTokens: 100, OutputTokens: 10, CostUSD: 0.1},
 		}},
-		DeliveredRefs: []string{pr1, pr2},
+		// NOT BEGINNING WITH THE FIRST RUN'S, so the record's list shows
+		// which run's refs it puts first: the earlier run's, as it reported
+		// them, then the later run's that are new.
+		DeliveredRefs: []string{pr2, pr1},
 	}
 
 	// relaunch resumes the phase parked after two rounds (500 tokens on
@@ -448,6 +451,12 @@ func TestARunCollectedBeforeARelaunchReachesTheFinalRecordOnce(t *testing.T) {
 		if done.TotalTokens != 590 || math.Abs(done.CostUSD-0.5) > 1e-9 || done.RunSpendUnreported {
 			t.Errorf("record = %d tokens at $%v (unreported %v), want 590 at the second run's $0.50, whole",
 				done.TotalTokens, done.CostUSD, done.RunSpendUnreported)
+		}
+		// The refs are evidence rather than spend, so the first run's travel
+		// on the suspension that carried none of its spend, and lead.
+		if !slices.Equal(done.DeliveredRefs, []string{pr1, pr2}) {
+			t.Errorf("delivered_refs = %v, want the first run's and then the second's, each once",
+				done.DeliveredRefs)
 		}
 	})
 }

@@ -173,8 +173,8 @@ func TestDeclaredTagIsFiled(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesAnUndeclaredTag covers the other write path, which had the
-// same hole: a patch's tags replace the set whole.
+// TestUpdateRefusesAnUndeclaredTag covers the other write path, which the same
+// hole is open on: a patch's tags replace the set whole.
 func TestUpdateRefusesAnUndeclaredTag(t *testing.T) {
 	r := newRoundTrip(t)
 	r.declareTags("regression")

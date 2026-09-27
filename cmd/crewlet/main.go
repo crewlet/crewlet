@@ -1906,13 +1906,17 @@ const apiReadHeaderTimeout = 10 * time.Second
 
 // projectionSeedBudget bounds the store read that seeds the live projection.
 //
-// The read is two indexed range scans of this node's own file, each stopping at
-// the projection's own bound: the newest 400 event rows without their payloads,
-// and the newest 8 000 phase records of one day from promoted columns. Both are
-// milliseconds on a healthy node, so five seconds is three orders of magnitude
-// of headroom and is a ceiling on the one case that matters: a store that will
-// not answer must not hold the listener shut, since nothing else can accept a
-// webhook while the bind is waiting. A seed that times out costs history on a
+// The read is two bounded reads of this node's own file, each stopping at the
+// projection's own bound: the newest livestate.EventFeedLimit event rows
+// without their payloads, and the newest livestate.SpendRecordLimit spend
+// records of the live spend window from their promoted columns. The first is
+// milliseconds. The second is the one sized against this number: its cap is
+// set so that the costliest day's read from a warm page cache takes about a
+// quarter of it, and the cap's own comment carries that measurement. What five
+// seconds is for is the case that matters: a store that will not answer, or
+// answers slowly, must not hold the listener shut, since nothing else can
+// accept a webhook while the bind is waiting. A spend read the budget stops
+// keeps the newest records it read, so a slow store costs history on a
 // screen, never a delivery.
 const projectionSeedBudget = 5 * time.Second
 

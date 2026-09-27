@@ -10,15 +10,17 @@ import (
 
 // A DEFERRED READ IS NOT AN INVITATION TO TRY AGAIN.
 //
-// A node holding a change it cannot apply — one a newer build wrote — refuses
-// a read of the item that change covers, and waiting does not clear that: the
-// seat's next call asks the same node the same question. So the model is told
-// what resolves it and to say it could not check, and never "try again",
-// which spends its rounds on a loop that cannot end. A refusal that DOES clear
-// by waiting keeps the invitation, and neither is ever an empty result.
+// A node retaining a change it cannot apply — one a newer build wrote —
+// refuses a read of the item that change covers, and waiting does not clear
+// that: the seat's next call asks the same node the same question. So the
+// model is told what resolves it and to say it could not check, and never "try
+// again", which spends its rounds on a loop that cannot end. A refusal that
+// DOES clear by waiting keeps the invitation, and neither is ever an empty
+// result.
 //
-// Mutation: drop the deferred arm from unservedRead and both tools tell the
-// model to try again.
+// Mutations: drop the deferred arm from unservedAdvice and neither tool names
+// the newer build that resolves it; answer every refusal as retryable and the
+// deferred one tells the model to try again.
 func TestADeferredReadIsNotAnInvitationToTryAgain(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

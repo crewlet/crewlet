@@ -426,13 +426,13 @@ func TestTheDeadHistoryIndexesAreGone(t *testing.T) {
 //
 // # The failure this exists to catch
 //
-// The horizon was a MAX over every status-carrying row in the window,
-// computed with no reference to the limit, while the rows below it were cut
-// at `ORDER BY t.id LIMIT ?`. One blocker clearing more dependents than the
-// limit therefore produced a tick that told the first n, advanced the position
-// past the record that made all of them workable, and never looked at the rest
-// again: the notice is the ONLY wake the dependents of a quietly-cleared
-// blocker ever get, so those people were silently never told, for ever.
+// A horizon taken as a MAX over every status-carrying row in the window,
+// computed with no reference to the limit while the rows below it are cut at
+// `ORDER BY t.id LIMIT ?`, lets one blocker clearing more dependents than the
+// limit produce a tick that tells the first n, advances the position past the
+// record that made all of them workable, and never looks at the rest again:
+// the notice is the ONLY wake the dependents of a quietly-cleared blocker ever
+// get, so those people would never be told.
 //
 // This case is the duty's own loop — scan, tell, carry the position forward —
 // with a limit deliberately smaller than the dependent set. It is written

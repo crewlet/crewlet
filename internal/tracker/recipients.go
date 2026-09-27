@@ -306,11 +306,11 @@ func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
 // assignee, its collaborators and its watchers.
 //
 // EXPORTED SO A TEST CAN WALK IT. The allowlist below has no compiler link to
-// [ChangeKinds], and that gap is what let `prioritised` sit in the enum,
-// answer Valid(), pass Validate(), ride a real record and route to nobody: a
-// task's priority change woke no assignee, no collaborator and no watcher, and
-// nothing in the build noticed. The classification test in wakes_test.go is
-// that link, and it needs to be able to ask.
+// [ChangeKinds], so a kind can sit in the enum, answer Valid(), pass
+// Validate(), ride a real record and route to nobody — a task change that
+// wakes no assignee, no collaborator and no watcher, with nothing in the build
+// to notice. The classification test in wakes_test.go is that link, and it
+// needs to be able to ask.
 func (k ChangeKind) TaskCommit() bool {
 	switch k {
 	case ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,

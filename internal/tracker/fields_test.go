@@ -611,9 +611,9 @@ func TestAValueForAnUndeclaredFieldIsRecordedAsForeign(t *testing.T) {
 // A REQUIRED FIELD IS REQUIRED OF THE TASKS IT APPLIES TO, and of no others.
 //
 // `AppliesTo` names the types a field is carried by. A field required only of
-// bugs was enforced on every task in the project, so a plain task filed into a
-// project that requires `severity` of its bugs was refused for not setting a
-// field that would have been HIDDEN the moment it was set.
+// bugs, enforced on every task in the project, would refuse a plain task filed
+// into a project that requires `severity` of its bugs for not setting a field
+// that would be HIDDEN the moment it was set.
 func TestARequiredFieldIsRequiredOnlyOfTheTypesItAppliesTo(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -672,11 +672,11 @@ func TestAWorkspaceRequiredFieldIsEnforced(t *testing.T) {
 
 // A VALUE WRITTEN AS AN OPTION'S SLUG IS THE SAME VALUE AS ITS ID.
 //
-// The query resolved a caller's word to the option's id before comparing and
-// the write stored whatever text it was handed, so a task set to `"high"` —
-// the slug a person types and the query accepts — stored "high" where every
-// filter looked for "o-high". The task was invisible to every filter, grouping
-// and total on the field it had just set, with nothing anywhere saying so.
+// The query resolves a caller's word to the option's id before comparing, so a
+// write that stored whatever text it was handed would store `"high"` — the slug
+// a person types and the query accepts — where every filter looks for "o-high",
+// and the task would be invisible to every filter, grouping and total on the
+// field it had just set, with nothing anywhere saying so.
 func TestAnOptionResolvesToItsIDOnTheWriteAsWellAsTheRead(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

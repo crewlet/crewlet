@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -101,16 +102,19 @@ const (
 	// flag) on a window it could not finish and the rest come up next
 	// sweep.
 	//
-	// THE OTHER TWO DUTY JOBS ARE BOUNDED PER UNIT, NOT PER TICK, and
+	// THE OTHER THREE DUTY JOBS ARE BOUNDED PER UNIT, NOT PER TICK, and
 	// that is the blast radius a retune has to price rather than a detail
 	// of theirs. [duty.clearDuplicates] takes one batch PER PROJECT and
 	// loops every flagged project, so one tick publishes a rank-order
 	// record for each of them, each re-minting up to this many keys.
 	// [duty.finishMerges] takes this many MERGES and runs
 	// [Writer.reparentOnto] to exhaustion on every one, so one tick can
-	// publish a record per subtask of 64 whole subtrees. Both keep their
-	// own gate — the project flag, `merging = 1` — so what a tick cuts is
-	// read again next sweep.
+	// publish a record per subtask of 64 whole subtrees.
+	// [duty.finishSplits] takes this many ROOTS and moves at most this
+	// many tasks under each, so one tick can publish 64 moves and a key
+	// mint for each of 64 subtrees. All three keep their own gate — the
+	// project flag, `merging = 1`, `inconsistent_project = 1` — so what a
+	// tick cuts is read again next sweep.
 	//
 	// Widening this therefore divides the repair drain AND multiplies
 	// what one sweep lands on every applier, and narrowing it does the
@@ -561,6 +565,9 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		if err := refuseRemovedParent(ctx, tx, *task.Parent); err != nil {
 			return nil, nil, err
 		}
+		if err := refuseForeignParent(ctx, tx, *task.Parent, task.Project); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err := declaredType(ctx, tx, task); err != nil {
 		return nil, nil, err
@@ -572,6 +579,40 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return nil, nil, err
 	}
 	return settleFields(ctx, tx, task.Project, task.Type, task.Fields, w.World)
+}
+
+// ErrForeignParent refuses a task filed under a parent in another project.
+var ErrForeignParent = errors.New("tracker: a subtask is filed in its parent's project")
+
+// refuseForeignParent refuses a create whose parent is in another project.
+//
+// A SUBTASK LIVES IN ITS PARENT'S PROJECT: a cross-project move carries the
+// whole subtree for that reason, and a board draws a subtree in its root's
+// project ([compileWhere]). Filed anyway, the task would be one the applier
+// flags as outside its root's project ([ProjectFlagRecordVersion]), and the
+// tracker duty would then move and re-key it — so the key this create answers
+// with would stop being the task's a sweep later. Refused here, the caller is
+// told which project to file it in.
+//
+// A PARENT THIS NODE DOES NOT HOLD PASSES, because absent and purged are other
+// questions with other answers ([refusePurged]). And a parent that moves
+// between this read and the create's landing is the race the flag and the duty
+// exist for: the broker arbitrates the parent's subject and the child's
+// separately, so no read here could close it.
+func refuseForeignParent(ctx context.Context, tx *sql.Tx, parent, project string) error {
+	var home string
+	err := tx.QueryRowContext(ctx,
+		`SELECT project_key FROM tracker_tasks WHERE id = ?`, parent).Scan(&home)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("tracker: read the project of parent %s: %w", parent, err)
+	case home != project:
+		return fmt.Errorf("%w: task %s is in %s and this subtask names %s — "+
+			"file it in %s", ErrForeignParent, parent, home, project, home)
+	}
+	return nil
 }
 
 // declaredType refuses a task naming a type the company has not declared.
@@ -762,13 +803,6 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 					"restore it before promoting anything out of it",
 					parentID, current.Removed.By,
 					current.Removed.At.Format(time.RFC3339))
-			case current.Project != subtask.Project:
-				// A SUBTASK LIVES IN ITS PARENT'S PROJECT — a cross-project
-				// move carries the whole subtree for that reason — and the
-				// parent's append below is addressed to that project.
-				return fmt.Errorf("tracker: task %s is in %s and the subtask "+
-					"promoted out of it names %s — a subtask lives in its "+
-					"parent's project", parentID, current.Project, subtask.Project)
 			}
 			if _, _, found := findItem(current, itemID); !found {
 				return fmt.Errorf("tracker: task %s has no checklist item %s",
@@ -1037,10 +1071,12 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 	h, err := w.claim(ctx, resource)
 	switch {
 	case err != nil:
-		// UNKNOWN, AND THIS ONE FAILS CLOSED. A cross-project move
-		// rewrites a whole subtree's keys; two of them interleaved
-		// produce a subtree keyed into two projects, which no duty can
-		// tell from an abandoned walk.
+		// UNKNOWN, AND THIS ONE FAILS CLOSED. A walk rewrites many
+		// subjects one append at a time, and two of one walk interleaved
+		// each rewrite what the other just wrote: two moves of one root
+		// key every descendant twice and leave the subtree spread across
+		// both targets until the duty gathers it into the project the
+		// root landed in last.
 		return nil, err
 	case h == nil:
 		return nil, fmt.Errorf("tracker: %s is held, so this walk is already "+
@@ -1145,43 +1181,47 @@ func (h *held) release(ctx context.Context) {
 //	Rk, then take move/<task> → Rs the target project and its tag set;
 //	refuse archived, refuse a required field the task lacks → A the tags
 //	the subtree carries that the target lacks → A the alias on the former
-//	key at expectation 0 → A the counter, a RANGE mint for the whole
-//	subtree → A the root task, carrying the range's BASE and its length →
-//	A per descendant on its own subject, in the (depth, id) order the range
-//	was minted against → release.
-//
-// # Why the base rides the root record
-//
-// The range's base is NOT recoverable afterwards. By the time anything picks
-// up an abandoned walk, other creates have advanced the counter — so a
-// completion that recomputed the base would assign a different key to the same
-// descendant on a different node, and the walk would stop being idempotent. The
-// ordering by (depth, id) fixes the ORDER; only the base fixes the ORIGIN. That
-// is what a completion needs; what exists to perform one is the residue note
-// below.
+//	key at expectation 0 → A the counter, a RANGE mint for the root and
+//	every descendant not in the trash → A the root task → A per descendant
+//	on its own subject, in the (depth, id) order the range was minted
+//	against → release.
 //
 // THE SOURCE PROJECT'S ORDER IS NOT REWRITTEN. The rows leave it entirely, so
 // there is nothing to place; what covers a reader whose closure names the
 // source is this sequence's own scope, which carries BOTH containers.
+//
+// A DESCENDANT IN THE TRASH IS NOT MOVED. A removed task is frozen — every
+// patch on one is refused ([Writer.UpdateTask]) — so a walk that tried would
+// stop at it and leave everything after it behind. It is passed over and takes
+// no number; the root's move flags it like any other task left outside the
+// root's project, and the tracker duty moves it once it is restored.
 //
 // CRASH RESIDUE: a tag declared with no task yet (harmless); an alias for a key
 // still held (harmless — the apply never lowers `current`); a numbering gap of
 // at most 1 + [MaxDescendants], which is the range this mints in one go; and
 // descendants still keyed in the old project, which is the one that shows.
 //
-// REPAIRER: NOBODY YET, AND THE GAP IS STATED RATHER THAN IMPLIED. The walk is
-// idempotent by construction — a descendant whose row already carries the
-// target project writes nothing, and the base rides the root record (see
-// [KeyMint]) precisely so a completion assigns the same keys on any node at any
-// later time — but [Jobs] registers no job that finds a half-moved subtree, and
-// re-issuing the gesture is REFUSED by the pre-flight below, which reads the
-// root as already in the target. So a walk that dies mid-subtree leaves a
-// subtree nothing in this build finishes. Completing it needs the same shape
-// every other repair here has: a fact a writer stamped (the applier flagging a
-// task whose project differs from its parent's, as it flags a long rank and an
-// abandoned merge) plus a gated duty job over that flag — a scan for it would
-// be a whole-table join on every tick, which is what this file's duty is
-// against. Until then the honest report is that there is no repairer.
+// REPAIRER: THE TRACKER DUTY, for the last. The root's record is at
+// [ProjectFlagRecordVersion], so its apply flags every task under it that is
+// not in its new project, and every descendant's own move clears its flag —
+// whatever a walk that stopped left behind stays flagged, and so does a
+// subtask filed under the subtree after the walk read it. The duty
+// ([duty.finishSplits]) takes this sequence's claim once nothing holds it,
+// reads the root at [statelog.ReadLinearizable], and moves every descendant
+// still outside the root's project and out of the trash by the steps below
+// ([Writer.moveDescendants]), on a range of its own, at most [WalkBatch] a
+// sweep. Re-issuing the gesture is refused once the root has moved, so the
+// duty is what finishes it.
+//
+// # Why a completion mints its own range
+//
+// This walk's range is a function of the subtree AS IT READ IT, in (depth, id)
+// order, and nothing records that read: a subtask filed or re-parented since
+// shifts every offset after it, so a completion that re-derived the walk's
+// offsets could hand a descendant a key the walk already gave another. A mint
+// of its own is arbitrated by the counter like every other, so its keys are
+// unique whatever changed, and the numbers the walk did not use are the
+// numbering gap above.
 func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
 	newTags []Tag) (WriteResult, error) {
 
@@ -1202,8 +1242,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	w = w.under(claim)
 
 	// The subtree, read ONCE and ordered by (depth, id) — the ordering the
-	// range assignment is a pure function of, so a duty completing this
-	// walk on another node assigns every descendant the same key.
+	// range assignment is a pure function of.
 	var root Task
 	var subtree []Task
 	if w.db == nil {
@@ -1224,7 +1263,8 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 				"task moves between projects — moving a subtask alone would "+
 				"leave it in a project its parent is not in", taskID)
 		case current.Project == target:
-			return fmt.Errorf("tracker: task %s is already in %s", taskID, target)
+			return fmt.Errorf("tracker: task %s is already in %s; the tracker "+
+				"duty moves whatever of its subtree is not", taskID, target)
 		}
 		root = current
 		project, held, err := readProject(ctx, tx, target)
@@ -1247,9 +1287,10 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	}); err != nil {
 		return WriteResult{}, err
 	}
-	if len(subtree) > MaxDescendants {
+	moving := slices.DeleteFunc(subtree, func(t Task) bool { return t.Removed != nil })
+	if len(moving) > MaxDescendants {
 		return WriteResult{}, fmt.Errorf("tracker: task %s has %d descendants "+
-			"and a move carries at most %d", taskID, len(subtree), MaxDescendants)
+			"and a move carries at most %d", taskID, len(moving), MaxDescendants)
 	}
 
 	at := w.Now()
@@ -1280,7 +1321,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	// the subtree in between makes the retry need one more number than the
 	// first attempt took, and [Writer.mintKey] recovers a range only for the
 	// count that minted it.
-	span := 1 + len(subtree)
+	span := 1 + len(moving)
 	base, _, err := w.mintKey(ctx, stepID(opID, fmt.Sprintf("counter%d", span)),
 		target, span, nil)
 	if err != nil {
@@ -1294,49 +1335,68 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return WriteResult{}, err
 	}
 	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
-		&KeyMint{N: base, Base: base, Length: span})
+		&KeyMint{N: base})
 	if err != nil {
 		return result, err
 	}
+	if _, err := w.moveDescendants(ctx, opID, taskID, target, moving,
+		base+1); err != nil {
+		// PARTIAL, AND NOT RE-RUN: the root is in the target by now, so
+		// re-issuing the gesture is refused by the pre-flight above, and
+		// what is left is the duty's to finish.
+		return result, partial(false, "%w", err)
+	}
+	result.Key, result.Rank = rootKey, rootRank
+	return result, nil
+}
 
-	for i, descendant := range subtree {
-		// THE KEY BY PLACE, THE STEP BY TASK. The number is the range's
-		// offset in the (depth, id) order, which is what the range is a
-		// function of; the step is named by the descendant for the trash
-		// walks' reason ([descendantStep]).
-		n := base + uint64(i) + 1
+// moveDescendants re-homes the descendants of a cross-project move, one append
+// each on its own subject, onto the keys base, base+1, … in the order given,
+// and reports how many it moved.
+//
+// SHARED BY THE SEQUENCE AND THE DUTY, which is what makes finishing a walk a
+// re-run of its steps rather than a second account of what a move does:
+// [Writer.MoveTaskToProject] hands it the subtree it read with the range it
+// minted beside the root's number, and the tracker duty ([duty.finishSplit])
+// hands it what a walk left behind with a range of its own.
+//
+// THE KEY BY PLACE, THE STEP BY TASK. The number is the range's offset in the
+// (depth, id) order the caller read, which is what the range is a function of;
+// the step is named by the descendant for the trash walks' reason
+// ([descendantStep]).
+//
+// IT STOPS AT THE FIRST STEP THAT FAILS OR IS UNRESOLVED — for [unresolved]'s
+// reason in the second case — and names what it left behind rather than
+// promising it will sort itself out: everything after that step is still
+// outside the target, flagged by the root's own apply, and it is the duty's
+// to move.
+func (w *Writer) moveDescendants(ctx context.Context, opID, rootID, target string,
+	descendants []Task, base uint64) (int, error) {
+
+	for i, descendant := range descendants {
 		moved, err := w.moveOne(ctx, descendantStep(opID, descendant.ID),
 			descendant, target,
 			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: n})
-		// NAMING WHAT IS LEFT BEHIND rather than promising a repair: no
-		// duty job completes this walk, and the root is already in the
-		// target by now, so re-issuing the gesture is refused by the
-		// pre-flight above. The subtree is split until somebody moves the
-		// rest, and a caller told "idempotent, it will sort itself out"
-		// would never look.
+			&KeyMint{N: base + uint64(i)})
 		switch {
 		case err != nil:
-			return result, partial(false, "tracker: task %s moved to %s with "+
-				"%d of %d descendants; the rest are still in %s and nothing "+
-				"completes this walk on its own — re-issuing the move is "+
-				"refused because the root has already moved: %w",
-				taskID, target, i, len(subtree), root.Project, err)
+			return i, fmt.Errorf("tracker: task %s is in %s with %d of the %d "+
+				"descendants this walk carried; the rest are still outside it, "+
+				"and the tracker duty moves them once this walk's claim is "+
+				"free: %w", rootID, target, i, len(descendants), err)
 		case moved.Outcome == statelog.OutcomeUnknown:
 			// AN UNRESOLVED STEP STOPS THE WALK TOO, for [unresolved]'s
 			// reason: stepping past it reports a subtree this node cannot
 			// vouch for.
-			return result, partial(false, "tracker: task %s moved to %s with "+
-				"%d of %d descendants, and the move of %s is unresolved — its "+
-				"record may be on the log and may not; the rest are still in "+
-				"%s and nothing completes this walk on its own — re-issuing "+
-				"the move is refused because the root has already moved: %w",
-				taskID, target, i, len(subtree), descendant.ID, root.Project,
-				statelog.ErrUnavailable)
+			return i, fmt.Errorf("tracker: task %s is in %s with %d of the %d "+
+				"descendants this walk carried, and the move of %s is "+
+				"unresolved — its record may be on the log and may not; the "+
+				"rest are still outside it, and the tracker duty moves them "+
+				"once this walk's claim is free: %w", rootID, target, i,
+				len(descendants), descendant.ID, statelog.ErrUnavailable)
 		}
 	}
-	result.Key, result.Rank = rootKey, rootRank
-	return result, nil
+	return len(descendants), nil
 }
 
 // moveOne re-homes one task of a moving subtree.
@@ -1508,6 +1568,28 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 				current.Removed.By, current.Removed.At.Format(time.RFC3339))
 		}
 		task = current
+		if !reparent {
+			return nil
+		}
+		// A MERGE THAT MOVES THE SUBTASKS MAY NOT FOLD INTO ONE OF THEM.
+		// Every subtask is re-parented onto the target, so a target
+		// inside the duplicate's own subtree becomes the parent of the
+		// subtask it hangs from — a cycle, which the applier can only
+		// flag, and a subtree no board can draw.
+		var inside int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM tracker_task_closure
+			WHERE ancestor_id = ? AND descendant_id = ?)`,
+			duplicate, into).Scan(&inside); err != nil {
+			return fmt.Errorf("tracker: read whether %s is under %s: %w",
+				into, duplicate, err)
+		}
+		if inside == 1 {
+			return fmt.Errorf("tracker: task %s is under %s, so moving %s's "+
+				"subtasks onto it would hang it from itself — merge without "+
+				"moving the subtasks, or into a task outside this one",
+				into, duplicate, duplicate)
+		}
 		return nil
 	}); err != nil {
 		return WriteResult{}, err

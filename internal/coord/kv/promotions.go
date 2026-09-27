@@ -14,10 +14,12 @@ import (
 
 // ---- the promotion ledger ---------------------------------------------- //
 //
-// IN THE POSITIONS REGISTER, under a key class of its own, because that is
-// the one bucket with no age and a promotion record must not have one: see
-// [coord.Promotions]. Every listing over the register filters on its own
-// class, which is what lets this class share it.
+// IN THE POSITIONS REGISTER, under a key class of its own: a promotion record
+// must not have an age (internal/coord/promotions.go says why), the register
+// has none, and a bucket of its own would be one more stream with a replica
+// count, a place in every sweep and a retention decision of its own
+// ([coord.PositionKey] gives the register's reasons). Every listing over the
+// register filters on its own class, which is what lets this class share it.
 
 // Promotions returns every record filed under one unit, ordered by
 // fingerprint.
@@ -91,8 +93,12 @@ func (f *FleetStore) AllPromotions(ctx context.Context) ([]coord.PromotionRecord
 
 // DeletePromotion removes a record at the version it was read at.
 //
-// A PURGE rather than a delete marker, so the address holds nothing a listing
-// has to step over and a later create files it afresh.
+// A PURGE: it places a marker and removes every earlier revision of the key,
+// where a delete places the same marker and leaves the revisions to the
+// bucket's history setting — so what a removed record held is gone whatever
+// history the register is given. The marker stays at the address either way:
+// the listings never return it, because they walk through [watchWalk], which
+// passes IgnoreDeletes, and a later create writes over it.
 func (f *FleetStore) DeletePromotion(ctx context.Context, unit, fingerprint string, version uint64) (bool, error) {
 	if err := (coord.PromotionRecord{Unit: unit, Fingerprint: fingerprint}).Validate(); err != nil {
 		return false, err

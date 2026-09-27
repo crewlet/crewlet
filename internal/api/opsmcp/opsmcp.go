@@ -19,10 +19,10 @@
 // nobody looks at, and only one of the two is ever tested.
 //
 // What differs is WHO the write is attributed to. A seat's writes carry its
-// handle and its turn; these carry the operator's token label and
-// [tracker.AuthorOperator], so a person and the credential they used are two
-// separate facts on the record and an audit can tell an operator's edit from
-// an agent's.
+// handle and its turn; these carry `operator:` and the operator's token label,
+// with the author kind [tracker.AuthorOperator] — see [WorkActor] — so a
+// person and the credential they used are two separate facts on the record and
+// an audit can tell an operator's edit from an agent's.
 //
 // # It serves what the CURRENT revision runs
 //
@@ -425,20 +425,26 @@ func (s *Server) Handler() http.Handler {
 //
 // A Tier A token has a NAME — the key in `api.auth.tokens` — and both halves
 // record a write under `operator:` and that name: `operator:founder`,
-// `operator:ci`. The author KIND is `operator`, and the credential is recorded
-// again in `OperatorID` so an audit can ask what one token did without
-// reasoning about kinds.
+// `operator:ci`. The work half is handed that name as the actor's handle
+// ([tracker.OperatorActor]); the page half is handed no handle, and the
+// knowledge base records an operator without one under the same name
+// ([pages.Actor.Name]). The author KIND is `operator` in both, and the
+// credential is recorded again in `OperatorID` so an audit can ask what one
+// token did without reasoning about kinds.
 //
-// NOT THE BARE NAME, because a token's name can be a seat's handle and each
-// half compares the recorded author with seats' handles: the wake that leaves
-// out whoever wrote a record drops the seat so named, and whatever a create
-// subscribes under the actor's handle subscribes that seat. A seat's handle
-// carries no colon, so neither can happen to a name with one
-// ([tracker.OperatorActor], [pages.SystemName]).
+// NOT THE BARE NAME, because a token's name can be a seat's handle. Both
+// halves leave out of a record's wake whoever it names as its author,
+// comparing that name with each recipient's handle, so a bare name would keep
+// the seat that holds it from being woken by the token's writes; and both
+// subscribe a create's author handle to what it creates, so a bare name as
+// that handle would subscribe the seat to everything the token files. A
+// seat's handle carries no colon (org.ValidHandle), so none of that can happen
+// to a name with one.
 //
-// An author rather than an empty field, because both halves require one: a
-// record carrying no author is a history row nobody can attribute, which is
-// the single thing this surface exists to prevent.
+// NEVER AN EMPTY AUTHOR: a record carrying no author is a history row nobody
+// can attribute, which is the single thing this surface exists to prevent, so
+// both refuse a request with no operator on its context before anything is
+// written.
 //
 // The alternative — asking the caller to name a seat to act as — was rejected:
 // it lets anybody with the token write as anybody, and a tracker whose author
@@ -464,10 +470,10 @@ func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 //
 // NO HANDLE, which is where the two differ. A page actor's handle is a SEAT'S
 // handle to the knowledge base: a create makes it the page's watcher, and a
-// page with a seat's handle among its watchers wakes that seat on every later
-// save. With the handle empty, [pages.Actor.Name] records the author as
-// `operator:` and the token's name — the tracker's spelling — and OperatorID
-// carries the token for an audit to ask about.
+// page with a seat's handle among its watchers wakes that seat on each later
+// save that notifies. With the handle empty, [pages.Actor.Name] records the
+// author as `operator:` and the token's name — the tracker's spelling — and
+// OperatorID carries the token for an audit to ask about.
 func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
 	id, ok := auth.OperatorFrom(ctx)
 	if !ok || id == "" {

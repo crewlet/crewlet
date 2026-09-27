@@ -24,9 +24,9 @@ func newReadHarness(t *testing.T) *readHarness {
 	t.Helper()
 	h := newApplyHarness(t)
 	// THROUGH THE FRAMEWORK, exactly as production does. A harness that
-	// read the rows directly would be testing a path nothing takes — and
-	// it is how `read_level` came to be a word in the answer rather than a
-	// property of it.
+	// read the rows directly would be testing a path nothing takes, and
+	// would certify an answer whose `read_level` is a word the reader wrote
+	// rather than the level the framework served.
 	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
 		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: h.seq})
 	if err != nil {
@@ -556,9 +556,9 @@ func TestACursorFromAnotherOrderOfEqualLengthIsRefused(t *testing.T) {
 // `due` is nullable and a `sort=f.<slug>` term is a LEFT JOIN whose column is
 // NULL for every task that set no value — that join is LEFT precisely so those
 // tasks still appear. A keyset written with bare `>`, `<` and `=` is NULL for
-// every one of them: ascending, the page that ended on a valueless row matched
-// nothing and the list simply stopped; descending, `col < ?` excluded the NULL
-// rows at every page, so they were unreachable.
+// every one of them: ascending, the page that ends on a valueless row matches
+// nothing and the list simply stops; descending, `col < ?` excludes the NULL
+// rows at every page, so they are unreachable.
 func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

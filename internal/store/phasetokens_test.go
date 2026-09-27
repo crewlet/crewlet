@@ -1,7 +1,11 @@
 package store_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -38,14 +42,13 @@ func seedPhase(t *testing.T, log *store.EventLog, id string, at time.Time,
 	}
 }
 
-// THE PRICE IS A COLUMN NOWHERE, and it is the one value here still read out
-// of the payload.
+// A PHASE'S PRICE REACHES THE ROLLUP, from the payload member the writer reads
+// it out of into its column.
 //
-// Only a subscription coding CLI reports one, so promoting it would be a
-// migration and a column that is NULL on almost every row of the table. What
-// matters is that the read carries it at all: without it the rollup's currency
-// total is zero for every window, which renders as a company that has never
-// spent a cent rather than as one whose backend does not quote.
+// Only a subscription coding CLI quotes one, so it is zero on most records.
+// What matters is that the read carries it at all: without it the rollup's
+// currency total is zero for every window, which renders as a company that has
+// never spent a cent rather than as one whose backend does not quote.
 func TestAPhasesPriceReachesTheRollup(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -277,9 +280,8 @@ func TestATailAcrossBothSpendTypesKeepsTheNewestOfBoth(t *testing.T) {
 // A TAIL THAT STARTS INSIDE ONE INSTANT KEEPS THE RECORDS THE TABLE'S ORDER
 // PUTS NEWEST. Records share an instant routinely, and the table orders them by
 // (time, id) descending: a tail cut between two records of one instant keeps
-// the one with the greater id, whichever spend type each is — and keeps each
-// record once, since the key that finds where the tail starts and the rows read
-// from it are two reads.
+// the one with the greater id, whichever spend type each is, and keeps each
+// record once.
 func TestATailCutInsideAnInstantKeepsTheTablesNewest(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -334,10 +336,10 @@ func TestATailCutInsideAnInstantKeepsTheTablesNewest(t *testing.T) {
 	}
 }
 
-// A RECORD'S MODEL SPLIT AND ITS UNREPORTED MARK REACH THE STORED ROLLUP. Both
-// are payload members rather than columns, so a read of the columns alone
-// counted every phase under its first model and stated a coding run's floor as
-// its whole — the live window, which reads the payload, answered otherwise.
+// A RECORD'S MODEL SPLIT AND ITS UNREPORTED MARK REACH THE STORED ROLLUP. A
+// read without them counts every phase under its first model and states a
+// coding run's floor as its whole, while the live window, which reads both off
+// the event, answers otherwise.
 func TestAStoredRecordsSplitAndUnreportedMarkReachTheRollup(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -375,5 +377,189 @@ func TestAStoredRecordsSplitAndUnreportedMarkReachTheRollup(t *testing.T) {
 	}
 	if rollup.Totals.UnreportedCalls != 1 || rollup.Totals.CostUSD != 0.5 {
 		t.Errorf("totals = %+v, want one unreported call and the run's price", rollup.Totals)
+	}
+}
+
+// ONE TYPE PAST THE LIMIT IS A WINDOW THAT HOLDS MORE, and the record read one
+// past the limit is the only evidence of it. Taken `limit` deep instead, a
+// window holding one record more than the limit, every one of a single type,
+// answers exactly the limit's worth, says nothing was left behind, and the seed
+// heads its rollup with the whole window over a tail that left the oldest
+// record out. Each type on its own, since each is its own read and the merge
+// takes from one only what it needs; and a window holding exactly the limit
+// says it holds no more.
+func TestATailOfOneTypeSaysWhenTheWindowHoldsMore(t *testing.T) {
+	t.Parallel()
+	const limit = 3
+	for _, eventType := range []string{"agent_phase_completed", "auxiliary_call_completed"} {
+		for _, c := range []struct {
+			held int
+			more bool
+		}{{limit + 1, true}, {limit, false}} {
+			log := open(t).Events()
+			now := time.Now().UTC()
+			for i := range c.held {
+				if err := log.Append(t.Context(), store.EventRecord{
+					ID: fmt.Sprintf("r-%d", i), Type: eventType,
+					Time:     now.Add(-time.Duration(c.held-i) * time.Minute),
+					Category: "lifecycle", Actor: "PM",
+					Payload: []byte(`{"role":"PM","phase":"execute","total_tokens":1}`),
+				}); err != nil {
+					t.Fatalf("append: %v", err)
+				}
+			}
+			tail, more, err := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, limit)
+			if err != nil {
+				t.Fatalf("%s × %d: phase token tail: %v", eventType, c.held, err)
+			}
+			ids := make([]string, len(tail))
+			for i, r := range tail {
+				ids[i] = r.EventID
+			}
+			want := make([]string, 0, limit)
+			for i := c.held - 1; i >= c.held-limit; i-- {
+				want = append(want, fmt.Sprintf("r-%d", i))
+			}
+			if !slices.Equal(ids, want) || more != c.more {
+				t.Errorf("%s × %d, limit %d: tail %v (more=%v), want %v (more=%v)",
+					eventType, c.held, limit, ids, more, want, c.more)
+			}
+		}
+	}
+}
+
+// THE SPEND READ TAKES ITS VALUES FROM THE COLUMNS, the price, the split and
+// the unreported mark among them (schema/0032), and parses no payload. A record
+// appended with a spend that disagrees with its own payload is how that shows:
+// both reads answer what the columns hold. A read that went back to the payload
+// for any of the three would parse every phase record's prompts again, on the
+// one read with a time budget.
+func TestTheSpendReadTakesItsValuesFromTheColumns(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "p1", Type: "agent_phase_completed", Time: time.Now().UTC().Add(-time.Hour),
+		Category: "lifecycle", Actor: "PM", Tags: map[string]string{"agent_role": "PM"},
+		Payload: []byte(`{"role":"PM","phase":"execute","model":"from-payload","total_tokens":1,
+			"cost_usd":9,"models":[{"model":"from-payload","input_tokens":1}],"run_spend_unreported":false}`),
+		Spend: &store.Spend{
+			Phase: "execute", Model: "sonnet", InputTokens: 5, TotalTokens: 5, CostUSD: 0.25,
+			Models: []tokens.ModelSpend{{Model: "haiku", InputTokens: 5}}, Unreported: true,
+		},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	whole, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	tail, _, err := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 10)
+	if err != nil {
+		t.Fatalf("phase token tail: %v", err)
+	}
+	for name, got := range map[string][]tokens.Record{"PhaseTokens": whole, "PhaseTokenTail": tail} {
+		if len(got) != 1 {
+			t.Fatalf("%s: %d records, want the one appended", name, len(got))
+		}
+		r := got[0]
+		if r.CostUSD != 0.25 || !r.Unreported || r.Model != "sonnet" ||
+			!slices.Equal(r.Models, []tokens.ModelSpend{{Model: "haiku", InputTokens: 5}}) {
+			t.Errorf("%s: record = %+v, want the columns' $0.25, haiku split and floor mark", name, r)
+		}
+	}
+}
+
+// THE SPEND READS NEED ONE CONNECTION. Every statement is read to its end
+// before the next begins, the tail's merge of the two types included, so a
+// pool of one serves them: at `store.max_open_conns: 1`, a read that opened
+// its second statement while the first was still open would wait on the pool
+// for a connection only it could give back.
+func TestTheSpendReadsNeedOneConnection(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "one.db"), store.Options{MaxOpenConns: 1})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	log := db.Events()
+	now := time.Now().UTC()
+	for i, eventType := range []string{"agent_phase_completed", "auxiliary_call_completed",
+		"agent_phase_completed", "auxiliary_call_completed"} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: fmt.Sprintf("r-%d", i), Type: eventType, Time: now.Add(-time.Duration(4-i) * time.Minute),
+			Category: "lifecycle", Actor: "PM", Payload: []byte(`{"role":"PM","total_tokens":1}`),
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	whole, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil || len(whole) != 4 {
+		t.Fatalf("PhaseTokens on a pool of one = %d records, %v; want all four", len(whole), err)
+	}
+	tail, more, err := log.PhaseTokenTail(ctx, store.PhaseTokenQuery{SinceDays: 1}, 3)
+	if err != nil || len(tail) != 3 || !more {
+		t.Fatalf("PhaseTokenTail on a pool of one = %d records (more=%v), %v; want three and more", len(tail), more, err)
+	}
+}
+
+// A TAIL THAT CANNOT READ SAYS THE WINDOW MAY HOLD MORE. Nothing it read says
+// the window is empty, and the caller that seeds a rollup from it heads that
+// rollup with what the records cover: answered "no more", an empty tail would
+// head the live records with the whole window they do not cover.
+func TestATailThatCannotReadSaysTheWindowMayHoldMore(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	tail, more, err := log.PhaseTokenTail(ctx, store.PhaseTokenQuery{SinceDays: 1}, 3)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a tail read on a cancelled context answered %v, want its cause", err)
+	}
+	if tail == nil || len(tail) != 0 || !more {
+		t.Errorf("tail = %v (nil %v), more=%v; want an allocated empty tail and more", tail, tail == nil, more)
+	}
+}
+
+// A TAIL LONGER THAN ONE STATEMENT KEEPS EVERY RECORD ONCE, in the table's
+// order. The tail reads each type a statement at a time, each starting past
+// the last record the one before it read, and records share an instant
+// routinely: a statement that started at the instant rather than past the
+// record would read one twice or step over its neighbours.
+func TestATailLongerThanOneStatementKeepsEveryRecordOnce(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	// Three records to an instant, so a statement's boundary falls inside one
+	// whichever record ends it; and an auxiliary call every fifth instant, so
+	// the merge takes from both types across the boundaries.
+	var want []string
+	for i := range 1200 {
+		eventType := "agent_phase_completed"
+		if i%15 == 7 {
+			eventType = "auxiliary_call_completed"
+		}
+		id := fmt.Sprintf("r-%04d", i)
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: eventType, Time: base.Add(time.Duration(i/3) * time.Millisecond),
+			Category: "lifecycle", Actor: "PM", Payload: []byte(`{"role":"PM","total_tokens":1}`),
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		want = append(want, id)
+	}
+	slices.Reverse(want)
+	tail, more, err := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 1100)
+	if err != nil {
+		t.Fatalf("phase token tail: %v", err)
+	}
+	ids := make([]string, len(tail))
+	for i, r := range tail {
+		ids[i] = r.EventID
+	}
+	if !slices.Equal(ids, want[:1100]) || !more {
+		t.Errorf("tail of 1100 over 1200 records differs from the table's newest 1100 (more=%v): "+
+			"got %d records, first %v, last %v", more, len(ids), ids[:3], ids[len(ids)-3:])
 	}
 }

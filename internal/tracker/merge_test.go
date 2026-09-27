@@ -887,7 +887,7 @@ func TestAMergeWhoseTargetIsRemovedPartWayIsGivenUp(t *testing.T) {
 //
 // The walk reads a batch of subtasks and moves them one append at a time. A
 // subtask purged in between has no row for its move to read, and refused as a
-// task this node does not hold, it stopped the walk as a failure — after the
+// task this node does not hold, it would stop the walk as a failure — after the
 // mark and the earlier moves had landed, with the caller told the merge did
 // not land. A purged task is no subtask of anything, so the move is passed
 // over like one moved elsewhere.
@@ -1067,5 +1067,51 @@ func TestAMergeWhoseDuplicateIsPurgedWhileItWalksIsEnded(t *testing.T) {
 	if got := parentOf(r.task(t, "kid-2")); got != "" {
 		t.Errorf("the subtask the purge moved is under %q, want the purged "+
 			"duplicate's own parent — none", got)
+	}
+}
+
+// A MERGE THAT MOVES THE SUBTASKS IS REFUSED INTO ONE OF THEM, AND WRITES
+// NOTHING.
+//
+// Every subtask of the duplicate is re-parented onto the target, so a target
+// under the duplicate becomes the parent of the subtask it hangs from — a
+// cycle, which the applier can only flag, around a subtree no board can draw.
+// Refused before the mark, nothing is left for the duty to finish; the same
+// merge that leaves the subtasks where they are is no cycle, and lands.
+//
+// Mutation: drop the subtree check from MergeDuplicates and the merge lands,
+// leaving kid in a cycle.
+func TestAMergeThatMovesSubtasksIsRefusedIntoOneOfThem(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "dup")
+	parent := "dup"
+	kid := newTask("kid")
+	kid.Parent, kid.Depth = &parent, 1
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+		t.Fatalf("CreateTask kid: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup", "kid",
+		true, nil); err == nil || !strings.Contains(err.Error(), "is under dup") {
+		t.Fatalf("a merge moving dup's subtasks onto its own subtask answered "+
+			"%v, want it refused naming the subtree", err)
+	}
+	r.drain()
+	dup := r.task(t, "dup")
+	if dup.Task.Merging || dup.Task.Status == tracker.StatusCancelled {
+		t.Errorf("the refused merge marked the duplicate (merging=%v, %q)",
+			dup.Task.Merging, dup.Task.Status)
+	}
+	if got := parentOf(r.task(t, "kid")); got != "dup" {
+		t.Errorf("the subtask is under %q after a refused merge, want dup", got)
+	}
+
+	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge-flat", "dup",
+		"kid", false, nil); err != nil {
+		t.Fatalf("the same merge leaving the subtasks where they are was "+
+			"refused: %v", err)
 	}
 }

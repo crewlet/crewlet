@@ -3,6 +3,7 @@ package observe_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -279,10 +280,10 @@ func (h halfBroken) PhaseTokenTail(_ context.Context, _ store.PhaseTokenQuery, _
 	}}, false, nil
 }
 
-// THE SEED READS NO MORE SPEND THAN THE PROJECTION KEEPS. A day busier than
-// the record cap used to be read in full, inside the seed's time budget, and
-// cut to the cap on arrival; on the one kind of company the cap exists for, a
-// read that ran out of budget seeded no spend at all.
+// THE SEED READS NO MORE SPEND THAN THE PROJECTION KEEPS. A record past the
+// cap is dropped on arrival, so reading it would spend the seed's time budget
+// on nothing — and on the busiest company, the one the cap exists for, that is
+// the budget the newest records needed.
 func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 	t.Parallel()
 	history := &recordingHistory{}
@@ -369,4 +370,44 @@ func TestTheSeedCarriesTheStoresTruncationToTheProjection(t *testing.T) {
 				tc.name, covered, tc.want)
 		}
 	}
+}
+
+// A SPEND READ CUT SHORT SEEDS WHAT IT READ. The store's tail answers the
+// newest records it took before its deadline, beside the error that stopped
+// it, and says the window held more: the seed keeps those records, heads the
+// rollup with the oldest of them, and reports the error — so a slow store
+// costs the older part of the window rather than all of it, and the heading
+// never claims hours the records do not cover.
+func TestASpendReadCutShortSeedsWhatItRead(t *testing.T) {
+	t.Parallel()
+	oldest := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	live := livestate.New()
+	err := observe.Seed(t.Context(), cutShort{records: []tokens.Record{
+		{EventID: "p2", Timestamp: oldest.Add(time.Minute).Format(time.RFC3339Nano),
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 10},
+		{EventID: "p1", Timestamp: oldest.Format(time.RFC3339Nano),
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 10},
+	}}, live)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Seed = %v, want the read's own error reported", err)
+	}
+	records, covered := live.SpendRecords()
+	if len(records) != 2 {
+		t.Errorf("records = %+v, want the two the read took", records)
+	}
+	if !covered.Equal(oldest) {
+		t.Errorf("the rollup covers from %v, want the oldest record read, %v", covered, oldest)
+	}
+}
+
+// cutShort answers the spend read as the store's tail does when its deadline
+// stops it part-way.
+type cutShort struct{ records []tokens.Record }
+
+func (h cutShort) List(_ context.Context, _ store.ListQuery) ([]store.EventRecord, error) {
+	return nil, nil
+}
+
+func (h cutShort) PhaseTokenTail(_ context.Context, _ store.PhaseTokenQuery, _ int) ([]tokens.Record, bool, error) {
+	return h.records, true, fmt.Errorf("store: phase tokens (agent_phase_completed): %w", context.DeadlineExceeded)
 }

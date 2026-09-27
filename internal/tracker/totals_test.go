@@ -248,10 +248,10 @@ func TestACustomFieldsTotalAddsUpItsValues(t *testing.T) {
 
 // A TOTAL DOES NOT MOVE AS SOMEBODY PAGES.
 //
-// The cursor says where this PAGE starts, and it was folded into the predicate
-// the totals and the hint share — so page two's header reported the sum of page
-// two ONWARDS. A number that changes as somebody pages is the same failure as
-// one that changes as they scroll.
+// The cursor says where this PAGE starts, and folded into the predicate the
+// totals and the hint share it would make page two's header report the sum of
+// page two ONWARDS. A number that changes as somebody pages is the same failure
+// as one that changes as they scroll.
 func TestATotalDoesNotMoveAsSomebodyPages(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

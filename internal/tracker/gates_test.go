@@ -305,7 +305,7 @@ func TestAPurgeReasonTravelsWholeOrNothingIsPurged(t *testing.T) {
 		filedTask(t, r, id)
 	}
 	r.writer.Leads = fixedLeads{project: "eng-lead"}
-	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	operator := asOperator(r, "ops-1")
 
 	// THE LINE WITH NO REASON ON IT is the room the reason has left,
 	// less the separator it is joined by.
@@ -334,7 +334,7 @@ func TestAPurgeReasonTravelsWholeOrNothingIsPurged(t *testing.T) {
 		leads tracker.Leads
 	}{{"t-c", fixedLeads{project: "eng-lead"}}, {"t-d", nil}} {
 		r.writer.Leads = c.leads
-		operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+		operator := asOperator(r, "ops-1")
 		_, err := operator.PurgeTask(t.Context(), "op-"+c.id, c.id, "ENG", tooLong)
 		// TYPED, because the fix is the caller's: a surface that cannot
 		// tell this from a purge that failed answers an operator's long

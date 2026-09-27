@@ -37,8 +37,9 @@ import (
 // task" to a model, an API says 404, and neither should say either when what
 // actually happened is that this node has not applied the record that creates
 // it. The detail read distinguishes those: a read level that waits covers a
-// record this node has not reached yet, and a record it retains and cannot
-// apply is refused as deferred rather than answered with this ([Reader.Task]).
+// record this node has not reached yet, and a task a record this node retains
+// and cannot apply may be the create of is refused rather than answered with
+// this ([Reader.Task]).
 var ErrNoTask = errors.New("tracker: no such task")
 
 // ErrNoProject reports a project this node has no row for.
@@ -131,8 +132,9 @@ type TaskDetail struct {
 	// over rows one already covers.
 	//
 	// Without it a task with five hundred changes and a task with fifty
-	// answered identically, which is exactly what [readGroups] refuses to do
-	// one file over: an overflow is counted and said, never silently cut.
+	// would answer identically, which is exactly what [readGroups] refuses
+	// to do one file over: an overflow is counted and said, never silently
+	// cut.
 	HistoryTruncated bool `json:"history_truncated,omitempty"`
 
 	// Fields are the task's custom-field values with the declaration that
@@ -233,8 +235,9 @@ type HistoryEntry struct {
 // from.
 //
 // A TASK A RETAINED RECORD COVERS IS REFUSED, as [statelog.RefuseDeferred],
-// rather than answered with a gap the way a listing is, and so is an absent
-// task a retained record could be the create of ([refuseUnaccounted]).
+// rather than answered with a gap the way a listing is — and an absent task a
+// retained record could be the create of is refused too, by the rule
+// [refuseAbsent] states.
 func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	fresh statelog.Freshness) (TaskDetail, error) {
 
@@ -252,13 +255,11 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	// about this node's lag rather than about a set, so one row's read
 	// is exactly as far behind as a listing's, and a floor the caller
 	// named is the position its own write landed at.
-	term, err := r.pointTerm(ctx, idOrKey)
+	scope, err := r.pointScope(ctx, idOrKey)
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	served, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{
-		Paths: []string{term.Path()},
-	}.Normalised(), false), func(tx *sql.Tx) error {
+	served, err := r.log.Read(ctx, fresh.Query(scope, false), func(tx *sql.Tx) error {
 		return readTaskDetail(ctx, tx, fresh.Level, idOrKey, want, &out)
 	})
 	if err != nil {
@@ -351,42 +352,44 @@ func taskTerm(id, project string) ScopeTerm {
 	return ScopeTerm{Kind: TermObject, ID: id, Container: project}
 }
 
-// pointTerm is the scope a point read about one task hands the framework,
-// formed from this node's rows BEFORE the read.
+// pointScope is the scope a point read about one task hands the framework,
+// formed from this node's rows BEFORE the read. The framework probes it for a
+// retained record before any wait, and again inside the answer's transaction.
 //
 // THE TASK UNDER ITS OWN PROJECT when this node holds it, because a scope path
 // nests the object under its container: a record deferred on the task, or on
 // its project, is filed under that project's path, and a term naming the
 // reference alone resolves to the workspace's, which meets neither — the
-// framework's probe, which runs before any wait, would never fire on the one
-// task the read is about.
+// framework's probe would never fire on the one task the read is about.
 //
-// THE REFERENCE ALONE when it does not, which resolves under the workspace and
-// so meets a record scoped to the whole domain or to the workspace, and none
-// filed under a project. A task this node does not hold YET may be one a
-// session or linearizable read is about to wait for, and a wider term here —
-// the project a key names — would refuse that read over an unrelated record in
-// the same project before the wait could bring the task in. What covers an
-// absent task is [refuseUnaccounted], after the wait, in the transaction the
-// answer is read from.
-func (r *Reader) pointTerm(ctx context.Context, idOrKey string) (ScopeTerm, error) {
-	var term ScopeTerm
+// [blockedAbsence] when it does not: the retained records that hold back every
+// record that could create the task, so a probe that meets one refuses a read
+// no wait can answer. Nothing wider, because a task this node does not hold
+// YET may be one a session or linearizable read is about to wait for, and a
+// wider scope — the project a key names, or a guessed container — would refuse
+// that read before the wait over a record that neither creates the task nor
+// holds its create back. What covers the rest of an absent task is
+// [refuseAbsent], after the wait, in the transaction the answer is read from.
+func (r *Reader) pointScope(ctx context.Context, idOrKey string) (statelog.ScopeSet, error) {
+	var scope statelog.ScopeSet
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		id, project, held, err := locateTask(ctx, tx, idOrKey)
 		switch {
 		case err != nil:
 			return err
 		case held:
-			term = taskTerm(id, project)
+			scope = statelog.ScopeSet{
+				Paths: []string{taskTerm(id, project).Path()},
+			}.Normalised()
 		default:
-			term = ScopeTerm{Kind: TermObject, ID: idOrKey}
+			scope, _ = blockedAbsence(idOrKey)
 		}
 		return nil
 	})
 	if err != nil {
-		return ScopeTerm{}, fmt.Errorf("tracker: locate %q: %w", idOrKey, err)
+		return statelog.ScopeSet{}, fmt.Errorf("tracker: locate %q: %w", idOrKey, err)
 	}
-	return term, nil
+	return scope, nil
 }
 
 // locateTask resolves a reference to a task's id and project from the rows tx
@@ -416,8 +419,8 @@ func locateTask(ctx context.Context, tx *sql.Tx, idOrKey string) (string, string
 // refuseUnaccounted is a point read's own coverage probe about ONE task, run
 // in the transaction the answer is read from: the task's id when this node can
 // answer for it, [ErrNoTask] when it can say there is no such task, and a
-// [statelog.RefuseDeferred] refusal for the framework to answer with when it
-// can say neither.
+// refusal for the framework to answer with when it can say neither — which
+// [refuseCovered] and [refuseAbsent] each state for their own half.
 //
 // # A held task is probed under its own project
 //
@@ -425,17 +428,14 @@ func locateTask(ctx context.Context, tx *sql.Tx, idOrKey string) (string, string
 // the tracker makes a BOARD incomplete and says nothing about this task —
 // refusing here would refuse every task in a company holding one undecodable
 // record about one other task. It meets what the framework's own probe could
-// not: a task this node did not hold when [Reader.pointTerm] ran, or a
+// not: a task this node did not hold when [Reader.pointScope] ran, or a
 // reference that resolves differently now.
 //
-// # An absent task is probed where its create would be filed
+// # An absent task is probed for what could create it
 //
 // "There is no such task" is an answer a caller acts on — a seat files the
 // duplicate, a screen shows a dead link — so it is given only when no record
-// this node retains could be the one that creates it. A create is scoped to
-// its task under its project ([Writer.CreateTask]), so the probe is the
-// project a KEY names ([absentScope]), or every project for an id, whose
-// project nothing here can name.
+// this node retains could be the one that creates it.
 //
 // A PURGED TASK IS ANSWERED ABSENT WHATEVER IS RETAINED, because the deletion
 // gate drops every later record about it on every node ([Applier.Gated]):
@@ -478,7 +478,30 @@ func refuseCovered(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
 
 // refuseAbsent is [refuseUnaccounted] for a task this node does not hold:
 // [ErrNoTask] when nothing it retains could create the task, and a refusal
-// when something could.
+// when something could — [statelog.RefuseDeferred] when waiting on this node
+// cannot clear it, and [statelog.RefuseBehind] when it may.
+//
+// # Two probes, because a retained record is one of two things to it
+//
+// A record [blockedAbsence] meets makes the absence PERMANENT here. One about
+// the whole tracker or the task's project holds back every later record whose
+// scope meets it — the retain rule — so a create landing after it is retained
+// too, and one landing before it was consumed before it; one about the key
+// itself is the record that would make the key resolve. Either way this node
+// holds no such task until it runs a build that can read the record, so the
+// refusal is deferred at EVERY level — the same refusal the framework's own
+// probe gives before any wait, over the same scope ([Reader.pointScope]).
+//
+// A record that MAY BE the create ([absentScope]) holds nothing back, so the
+// answer turns on whether the read waited for the log's end. A LINEARIZABLE
+// read did: every create committed before it arrived has been consumed —
+// applied or retained — so this node cannot rule the record out as the task's
+// create, and the refusal is deferred. A read at any other level did not, so
+// the task may equally be a create committed on another node that this one has
+// not reached yet, which clears by itself; a deferred refusal would tell the
+// caller that waiting never helps, so the refusal is behind, and the framework
+// derives its hint from this node's lag. Its detail says a linearizable read
+// rules the lag out.
 func refuseAbsent(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
 	idOrKey string) error {
 
@@ -490,23 +513,51 @@ func refuseAbsent(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
 	case purged:
 		return absent
 	}
+	blocking, covering := blockedAbsence(idOrKey)
+	held, err := coverageOf(ctx, tx, blocking)
+	switch {
+	case err != nil:
+		return err
+	case held != nil:
+		return &statelog.Refused{
+			Code: statelog.RefuseDeferred, Level: level,
+			Detail: fmt.Sprintf("this node holds no task %s and retains %d "+
+				"record(s) it has not applied %s (the lowest at %s, written at "+
+				"version %d), and every record that could create the task is "+
+				"held back behind them, so it cannot answer that there is no "+
+				"such task until it runs a build that can read them",
+				idOrKey, held.Records, covering, held.From, held.Version),
+		}
+	}
 	scope, where := absentScope(idOrKey)
 	incomplete, err := coverageOf(ctx, tx, scope)
 	switch {
 	case err != nil:
 		return err
-	case incomplete != nil:
+	case incomplete == nil:
+		return absent
+	case level == statelog.ReadLinearizable:
 		return &statelog.Refused{
 			Code: statelog.RefuseDeferred, Level: level,
 			Detail: fmt.Sprintf("this node holds no task %s and retains %d "+
-				"record(s) it has not applied %s — the lowest at %s, written "+
-				"at version %d — any of which may be the one that creates it, "+
-				"so it cannot answer that there is no such task",
-				idOrKey, incomplete.Records, where, incomplete.From,
-				incomplete.Version),
+				"record(s) it has not applied %s (the lowest at %s, written at "+
+				"version %d), and it cannot rule any of them out as the one "+
+				"that creates the task, so it cannot answer that there is no "+
+				"such task", idOrKey, incomplete.Records, where,
+				incomplete.From, incomplete.Version),
 		}
 	}
-	return absent
+	return &statelog.Refused{
+		Code: statelog.RefuseBehind, Level: level,
+		Detail: fmt.Sprintf("this node holds no task %s and retains %d record(s) "+
+			"it has not applied %s (the lowest at %s, written at version %d), "+
+			"and it cannot rule any of them out as the one that creates the "+
+			"task — nor, since a %s read does not wait for the log's end, a "+
+			"create committed elsewhere that this node has not reached yet, "+
+			"which clears as it catches up; a linearizable read waits for the "+
+			"log's end and rules that out", idOrKey, incomplete.Records, where,
+			incomplete.From, incomplete.Version, level),
+	}
 }
 
 // wasPurged reports whether a reference names a task a purge destroyed, by the
@@ -532,8 +583,12 @@ func wasPurged(ctx context.Context, tx *sql.Tx, idOrKey string) (bool, error) {
 // record in the same project refuses the read too, and one in another project
 // does not.
 //
-// EVERY PROJECT FOR ANYTHING ELSE, because an id names no container, and a
-// narrower guess would be the workspace's path — which no task is filed under.
+// EVERY CONTAINER FOR ANYTHING ELSE, because an id names no project and this
+// probe keys on paths alone. So a record about any task in any project refuses
+// the read, as does one filed under the workspace, which no task is filed
+// under: telling a record about another task from this one's create needs the
+// retained record's own subject, which the framework's probe does not compare.
+// Every refusal it adds is a refusal, never a wrong "there is no such task".
 //
 // The second return says which of the two, in the words a refusal uses.
 func absentScope(idOrKey string) (statelog.ScopeSet, string) {
@@ -547,6 +602,39 @@ func absentScope(idOrKey string) (statelog.ScopeSet, string) {
 	return statelog.ScopeSet{Paths: []string{
 		join(pathDomain, pathContainer),
 	}}.Normalised(), "in any project"
+}
+
+// blockedAbsence is where a retained record that makes a task this node does
+// not hold PERMANENTLY unanswerable here is filed ([refuseAbsent] says why),
+// and the words a refusal names it with.
+//
+// A create is scoped to its task under its project ([Writer.CreateTask]), and
+// the retain rule holds a record back behind any retained record its scope
+// meets — so what holds back every create of the task is a record on a path
+// ABOVE the one that create is filed under: the whole tracker's, or the
+// project's.
+//
+// FOR A KEY, the key's own term under the project the key names. Its path sits
+// beneath that project's, so the probe meets a record about the whole tracker,
+// one about the project as a whole — its counter and its settings among them —
+// and one about the key itself, an alias that would make the key resolve to a
+// task that moved. It meets nothing filed under one of the project's tasks,
+// which neither creates this one nor holds its create back.
+//
+// FOR AN ID, [unplacedPath]: the id names no project, so the one record known
+// to hold back its create wherever that create is filed is one about the whole
+// tracker.
+func blockedAbsence(idOrKey string) (statelog.ScopeSet, string) {
+	ref := strings.TrimSpace(idOrKey)
+	if key := strings.ToUpper(ref); taskKeyRef.MatchString(key) {
+		project, _, _ := strings.Cut(key, "-")
+		return statelog.ScopeSet{Paths: []string{
+				ScopeTerm{Kind: TermKey, Container: project, ID: key}.Path(),
+			}}.Normalised(), fmt.Sprintf("covering the whole tracker, project "+
+				"%s or key %s", project, key)
+	}
+	return statelog.ScopeSet{Paths: []string{unplacedPath(ref)}}.Normalised(),
+		"covering the whole tracker"
 }
 
 // taskKeyRef is a reference that is a task key and nothing else — the

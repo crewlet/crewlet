@@ -164,13 +164,20 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 	if err != nil {
 		return nil, fmt.Errorf("learning: drafting a clustered skill for %s: %w", handle, err)
 	}
-	draft, ok := parseSkillDraft(ctx, completion)
-	if !ok {
-		// The model looked at eleven similar runs and could not name a
+	draft, answer := readSkillDraft(ctx, completion)
+	switch answer {
+	case skillDrafted:
+	case skillDeclined:
+		// The model looked at the similar runs and could not name a
 		// procedure. Rarer than the single-turn decline and still not an
 		// error: similar tool runs are not always the same work.
 		log.DebugContext(ctx, "skill_clustering_declined", "agent_handle", handle,
 			"cluster_size", cluster.Size())
+		return nil, nil
+	default:
+		// AN ANSWER THAT DECIDED NOTHING WRITES NOTHING, and it is not a
+		// decline: [readSkillDraft] reported it at WARN with the answer
+		// itself, which is the one copy of it there is.
 		return nil, nil
 	}
 

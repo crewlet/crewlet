@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -343,11 +344,16 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		{stream.ErrUnauthorized, stream.CodeUnauthorized},
 		{stream.ErrNotFound, stream.CodeNotFound},
 		// A REFUSED REQUEST IS NOT A FAILED ONE. Left to the default it
-		// reached the client as `query_failed` — retried on every poll
-		// of a screen that could never succeed — and was logged by this
-		// node as though its own health were in question.
+		// would reach the client as `query_failed` — retried on every poll
+		// of a screen that can never succeed — and be logged by this node
+		// as though its own health were in question.
 		{stream.ErrBadParams, stream.CodeBadParams},
 		{stream.ErrUnavailable, stream.CodeUnavailable},
+		// AND A CHANGE THIS NODE CANNOT APPLY IS NEITHER: not `unavailable`,
+		// which a client retries against the same node for ever, and not
+		// `query_failed`, which reports a broken engine.
+		{fmt.Errorf("%w: work_item: this node retains a record at version 9",
+			stream.ErrDeferred), stream.CodeDeferred},
 		{errors.New("the store fell over at /var/lib/crewlet/crewlet.db"), stream.CodeQueryFailed},
 	} {
 		f := newSocket(t, nil, func(context.Context, string, map[string]any, string) (any, error) {

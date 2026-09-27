@@ -3,10 +3,12 @@ package tracker_test
 import (
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -182,11 +184,10 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 			count++
 		}
 	}
-	// Eighteen: eleven plain and seven partial. EVERY ONE IS REACHED BY A
-	// PLAN, which is what TestEveryIndexServesARegisteredQuery
-	// establishes and this count makes visible — an index added without a
-	// reader moves this number before it moves a benchmark, and nine that
-	// no plan reached were deleted to reach it.
+	// EVERY ONE IS REACHED BY A PLAN, which is what
+	// TestEveryIndexServesARegisteredQuery establishes and this count makes
+	// visible — an index added without a reader moves this number before
+	// it moves a benchmark.
 	const want = 18
 	if count != want {
 		t.Fatalf("tracker_tasks carries %d indexes and the enumeration is %d — "+
@@ -233,9 +234,8 @@ func TestEveryTrackerTableIsAccountedFor(t *testing.T) {
 // The list is where the set of spend counters is written down once, so it and
 // the schema must name the same columns: one the list names and the schema
 // lacks is a column nothing created, and one the schema carries that the list
-// omits is a counter nobody declared — the silent failure, because a counter
-// nothing increments reads zero for ever, which looks exactly like a task
-// nobody has worked on.
+// omits is a counter nobody declared. The other half — that the turn apply
+// writes every column the list names — is [TestEverySpendColumnIsOneATurnMoves].
 func TestTheSpendColumnsMatchTheSchema(t *testing.T) {
 	t.Parallel()
 	statement := ddl(t)["table:tracker_tasks"]
@@ -250,12 +250,66 @@ func TestTheSpendColumnsMatchTheSchema(t *testing.T) {
 	for _, column := range found {
 		if !slices.Contains(tracker.SpendColumns, column) {
 			t.Errorf("%s is a spend column in the schema and not in the list, so "+
-				"the applier will never write it", column)
+				"nothing holds the turn apply to writing it", column)
 		}
 	}
 	if len(found) != len(tracker.SpendColumns) {
 		t.Fatalf("the schema carries %d spend columns and the list has %d",
 			len(found), len(tracker.SpendColumns))
+	}
+}
+
+// EVERY SPEND COLUMN THE LIST NAMES IS ONE A TURN MOVES.
+//
+// [TestTheSpendColumnsMatchTheSchema] holds the list to the DDL; this holds it
+// to the APPLIER, whose statement names the columns itself. Between the two, a
+// counter the schema carries and the turn apply never increments fails here
+// rather than reading zero for ever — which looks exactly like a task nobody
+// has worked on.
+//
+// EVERY COUNTER THE TURN RECORD CARRIES IS SET, by reflection over its own
+// spend type, so a counter added there is carried by this case without being
+// named in it; a listed column no counter feeds stays zero and fails too.
+//
+// Mutation: drop spend_wall_ms from the turn apply's UPDATE and this fails
+// naming it.
+func TestEverySpendColumnIsOneATurnMoves(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, err := h.apply(taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil),
+		time.Unix(1_700_000_100, 0).UTC()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var spend tracker.TurnSpend
+	counters := reflect.ValueOf(&spend).Elem()
+	set := 0
+	for i := range counters.NumField() {
+		if counter := counters.Field(i); counter.Kind() == reflect.Int {
+			counter.SetInt(int64(10 * (i + 1)))
+			set++
+		}
+	}
+	if set == 0 {
+		t.Fatal("the turn record's spend type carries no counter, so this case " +
+			"would pass on an applier that writes nothing")
+	}
+	turn := tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: "turn-every-counter",
+			Subject: tracker.TurnSubject("t-1"), Op: tracker.OpTurn,
+			CreatedAt: time.Unix(1_700_000_200, 0).UTC(),
+			Writer:    "node-a", Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
+		},
+		Mutation: mustJSON(map[string]any{"task": "t-1", "spend": spend}),
+	}
+	if _, err := h.apply(turn, time.Unix(1_700_000_200, 0).UTC()); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	for _, column := range tracker.SpendColumns {
+		if got := h.value(`SELECT ` + column + ` FROM tracker_tasks WHERE id = 't-1'`); got == 0 {
+			t.Errorf("%s is still zero after a turn carrying every counter — the "+
+				"list names it and the turn apply does not write it", column)
+		}
 	}
 }
 

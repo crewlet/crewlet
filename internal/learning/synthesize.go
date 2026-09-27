@@ -285,13 +285,20 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 	if err != nil {
 		return nil, fmt.Errorf("learning: drafting a skill for %s: %w", handle, err)
 	}
-	draft, ok := parseSkillDraft(ctx, completion)
-	if !ok {
+	draft, answer := readSkillDraft(ctx, completion)
+	switch answer {
+	case skillDrafted:
+	case skillDeclined:
 		// The model declined, which is the expected answer for a turn whose
 		// tool run had no reusable shape. Not an error: asking is cheap and
 		// most turns are not procedures.
 		log.DebugContext(ctx, "skill_synthesis_declined", "agent_handle", handle,
 			"turn_id", t.Event.TurnID)
+		return nil, nil
+	default:
+		// AN ANSWER THAT DECIDED NOTHING WRITES NOTHING, and it is not a
+		// decline: [readSkillDraft] reported it at WARN with the answer
+		// itself, which is the one copy of it there is.
 		return nil, nil
 	}
 
@@ -350,7 +357,9 @@ type skillDraft struct {
 // is no procedure; an answer that is absent, empty, undecodable or a draft
 // missing a part decided nothing. A caller that remembers a decline — the
 // promotion pass does, until more seats converge — must remember only the
-// first.
+// first, and one that reports a decline reports only the first: an unusable
+// answer reported as a decline is a worker that has stopped working, read as a
+// model with nothing to draft.
 type skillAnswer string
 
 const (
@@ -367,14 +376,6 @@ const (
 	skillUnusable skillAnswer = "unusable"
 )
 
-// parseSkillDraft reads the model's answer, reporting whether it drafted one:
-// [readSkillDraft] for a caller that treats a decline and an unusable answer
-// alike, because it records neither.
-func parseSkillDraft(ctx context.Context, c *llm.Completion) (skillDraft, bool) {
-	draft, answer := readSkillDraft(ctx, c)
-	return draft, answer == skillDrafted
-}
-
 // readSkillDraft reads the model's answer and says what it amounts to.
 //
 // A draft missing any of its three parts is DROPPED rather than written with
@@ -382,10 +383,10 @@ func parseSkillDraft(ctx context.Context, c *llm.Completion) (skillDraft, bool) 
 // and teaches nothing, and one with no name cannot be addressed by `use_skill`.
 //
 // EVERY UNUSABLE ANSWER IS LOGGED AT WARN, the decline never is: a drafting
-// worker that has stopped producing usable answers is indistinguishable, in
-// every count it reports, from a model with nothing to draft, and only the
-// first needs somebody. Both lines, because the answer has no other copy
-// anywhere — see [answerLogFields].
+// worker that has stopped producing usable answers writes nothing, exactly as
+// a model with nothing to draft writes nothing, and only the first needs
+// somebody. Both lines, because the answer has no other copy anywhere — see
+// [answerLogFields].
 func readSkillDraft(ctx context.Context, c *llm.Completion) (skillDraft, skillAnswer) {
 	if c == nil {
 		log.WarnContext(ctx, "skill_draft_missing",

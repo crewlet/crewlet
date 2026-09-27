@@ -238,8 +238,8 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 // That is what makes "required views" moot: a fresh project needs no setup
 // gesture and nothing has to guard against somebody deleting the last view.
 //
-// THE SET IN ORDER, never its size — see [TestEveryImplicitViewsQueryParses],
-// which was a count and reported adding a view as "has 6, want 5".
+// THE SET IN ORDER, never its size — [TestEveryImplicitViewsQueryParses] says
+// what a count reports instead.
 func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -279,9 +279,9 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 //
 // THE SET RATHER THAN THE COUNT, because a count says nothing about WHICH: a
 // view renamed, dropped and replaced by another passes a count check, and a
-// view added is a failure whose message names a number rather than a tab. This
-// was a count, and adding the timeline turned it into "has 6 views, want 5" —
-// a red build whose message named nothing anybody could act on.
+// view added is a failure whose message names a number rather than a tab: a
+// count turns adding one into "has 6 views, want 5", a red build whose message
+// names nothing anybody can act on.
 func TestEveryImplicitViewsQueryParses(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

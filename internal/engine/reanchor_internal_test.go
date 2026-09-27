@@ -179,14 +179,21 @@ func TestAReanchorFollowsTheLiveStreamAndMovesOneDomain(t *testing.T) {
 	// and this row is the only place its identity survives — AND THE
 	// RECORD, by the op id it was published under.
 	var prev, next int64
-	var record string
+	var record, by string
 	if err := back.Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `
-			SELECT prev_stream_created_at, new_stream_created_at, record_id
+			SELECT prev_stream_created_at, new_stream_created_at, record_id, by
 			FROM tracker_log_generations WHERE generation = ?`, gen).Scan(
-			&prev, &next, &record)
+			&prev, &next, &record, &by)
 	}); err != nil {
 		t.Fatalf("read generation %d's audit row: %v", gen, err)
+	}
+	// AND THE OPERATOR AS EVERY OTHER NODE'S APPLIER WRITES THIS ROW: from
+	// the generation record, which names the operator `operator:` and the
+	// token's name. The row this node writes itself, beside its cursor,
+	// must say the same, or one reanchor has two authors across the fleet.
+	if by != "operator:ops" {
+		t.Errorf("the audit row names the operator %q, want operator:ops", by)
 	}
 	subject := tracker.GenerationSubject(gen)
 	holder, held, err := running.publisher.Holder(t.Context(),
@@ -551,10 +558,7 @@ func TestARefusedReanchorLeavesTheApplierRunning(t *testing.T) {
 
 	// ANOTHER REANCHOR'S RECORD HOLDS THE GENERATION this one would take:
 	// the claim would meet it, and the read before the halt does.
-	rival, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: running.publisher, NodeID: "node-b",
-		Actor: "ops-b", ActorKind: tracker.AuthorOperator,
-	})
+	rival, err := operatorWriter(running.publisher, "node-b", "ops-b")
 	if err != nil {
 		t.Fatalf("build node-b's writer: %v", err)
 	}

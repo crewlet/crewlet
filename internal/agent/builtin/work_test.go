@@ -750,10 +750,10 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	}
 	// A GESTURE, AND NEVER THE WHOLE SET. [tracker.TaskPatch]'s
 	// collections are carried whole, so stating this one edge as the
-	// collection deleted every other relation the item had — and the
+	// collection would delete every other relation the item has — and the
 	// `waiting_on` edges are the expensive half, because their mirrors on
 	// the blockers survive and the repair scans for a missing mirror from
-	// the AUTHORED end, which is the row that was deleted.
+	// the AUTHORED end, which is the row that would be gone.
 	gesture := trk.patched[0].Relate
 	if trk.patched[0].Relations != nil {
 		t.Fatalf("the tool stated the whole relation set %v, which is every "+
@@ -788,6 +788,40 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	}
 }
 
+// A SUBTASK IS FILED IN ITS PARENT'S PROJECT WHEN THE CALL NAMES NONE.
+//
+// The writer refuses a subtask in any other project
+// ([tracker.ErrForeignParent]), so the seat's own team is the wrong default
+// for one: a model that named the parent and not the project would be refused
+// on every call from a seat whose team owns another project, and a seat whose
+// team owns none would be told to name a project the parent already names.
+//
+// Mutation: drop the parent's project as the default and the first case files
+// the subtask in OPS, the second refuses it.
+func TestASubtaskDefaultsToItsParentsProject(t *testing.T) {
+	t.Parallel()
+	for name, fallback := range map[string]func(string) string{
+		"a seat whose team owns another project": func(string) string { return "OPS" },
+		"a seat whose team owns none":            nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := workRegistry(t, builtin.WorkDeps{
+				Reader: trk, Writer: trk.as, DefaultProject: fallback,
+			})
+			if got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+				"title": "child", "parent": "ENG-1",
+			}); got.Failed {
+				t.Fatalf("the subtask failed: %s", got.Output)
+			}
+			if got := trk.created[0].Project; got != "ENG" {
+				t.Errorf("the subtask was filed in %q, want its parent's ENG", got)
+			}
+		})
+	}
+}
+
 // EVERY INERT EDGE ONE CALL STATES TRAVELS IN ONE GESTURE.
 //
 // A patch carries exactly one relation gesture and the writer resolves it
@@ -795,7 +829,7 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 // ran last wins and the other's edges are silently gone — and two arms
 // composing one gesture and one whole SET is worse still: the writer refuses
 // the pair outright, so a model that named a link and a duplicate in one call
-// was told its own arguments were a programming error.
+// would be told its own arguments were a programming error.
 func TestOneCallsLinkAndDuplicateBothSurvive(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -903,12 +937,12 @@ func TestTheTrackerWritesAreClassifiedAsSharedWrites(t *testing.T) {
 //
 // The tool's arguments are the MODEL's vocabulary and the query keys are the
 // transport's, so the two are translated — and a translation nothing checks is
-// one that silently stops translating. Both halves of this tool's table were
-// wrong at once: `text` was copied through under its own name, which the
-// grammar does not read, so every text search returned an unfiltered list; and
-// `open_only` named two "status groups" that do not exist, so the parser
-// refused the whole call and the commonest filter a model reaches for failed
-// every time.
+// one that silently stops translating, in either of two ways. An argument
+// copied through under its own name is one the grammar does not read, so a
+// text search sent as `text` would answer an unfiltered list; and one
+// translated into values the grammar does not have — a status group that does
+// not exist — is refused by the parser, taking the whole call with it. So each
+// argument is sent and read back off the query the grammar parsed.
 func TestEveryListArgumentReachesTheGrammar(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1212,11 +1246,10 @@ func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 
 // A PAGING ARGUMENT NEEDS A PAGE TO COME FROM.
 //
-// `cursor` tells a caller to pass "the `next_cursor` from a previous call",
-// and this tool was the one reader of the query grammar that never put one in
-// its answer — the REST route beside it has always passed it on. An argument
-// whose only source is an answer the tool does not give is an argument nobody
-// can use.
+// `cursor` tells a caller to pass "the `next_cursor` from a previous call", so
+// the answer has to carry one whenever the query has a next page — as the REST
+// route beside this tool does. An argument whose only source is an answer the
+// tool does not give is an argument nobody can use.
 func TestTheListAnswerCarriesTheCursorItsOwnArgumentAsksFor(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1267,9 +1300,10 @@ func TestTheParentFilterIsResolvedToAnID(t *testing.T) {
 // The emptiness check decides whether the write is issued at all, so a field
 // it does not see is a call that answers `outcome: applied` and changes
 // nothing — the one failure a seat cannot detect, because there is no error
-// to read and no history row to notice is missing. Both of these were in that
-// state: `fields` and `routing_unit` were the two arms of the argument parser
-// the hand-written list of patch fields had never been extended for.
+// to read and no history row to notice is missing. So an update carrying a
+// custom field alone, and one carrying a re-route alone, are each asserted to
+// reach the writer: each sets one patch field and nothing else, which is the
+// call such a check drops.
 func TestAFieldsOnlyUpdateIsNotSilentlyDropped(t *testing.T) {
 	t.Parallel()
 	for name, args := range map[string]map[string]any{
@@ -1300,10 +1334,10 @@ func TestAFieldsOnlyUpdateIsNotSilentlyDropped(t *testing.T) {
 //
 // The thread page carries EXCERPTS — twenty bodies at their full length is ten
 // times the ceiling on one tool answer — and that is only honest while the
-// rest is one call away. It was not: the excerpt was documented as a pointer
-// to a `comment:` argument this tool never had, so a body past 2 KiB could not
-// be recovered by any seat through any tool. These two cases are the argument
-// and the refusal that make the excerpt a pointer rather than a loss.
+// rest is one call away: an excerpt pointing at an argument the tool does not
+// take leaves a body past 2 KiB unrecoverable by any seat through any tool.
+// These two cases are the argument and the refusal that make the excerpt a
+// pointer rather than a loss.
 func TestOneCommentCanBeOpenedWholeAndAWrongIDSaysHow(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1358,13 +1392,13 @@ func TestOneCommentCanBeOpenedWholeAndAWrongIDSaysHow(t *testing.T) {
 // THE DESCRIPTION IS BOUNDED LIKE EVERY OTHER PART OF A DETAIL READ, AND THE
 // WHOLE OF IT IS ONE CALL AWAY.
 //
-// It was the one value on this answer with no bound at all: the thread is
-// paged, the history is capped, the relation sets are capped, and the body
-// rode whole at up to [tracker.MaxBody]. That cap was exactly
-// [builtin.ToolAnswerBytes], so an item with a long description was refused
-// for weight — and `include` names the collections BESIDE the task, never the
-// task itself, so the refusal's own advice could not help. A caller who does
-// mean the description says so and gets it whole.
+// The thread is paged, the history is capped and the relation sets are
+// capped. A body is accepted at up to [tracker.MaxBody], half of
+// [builtin.ToolAnswerBytes], so carried whole beside the rest of a detail read
+// a long description can take the answer past the ceiling — and `include`
+// names the collections BESIDE the task, never the task itself, so the
+// refusal's own advice could not help. A caller who does mean the description
+// says so and gets it whole.
 func TestADescriptionIsShortenedUnlessItIsWhatWasAskedFor(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1383,7 +1417,7 @@ func TestADescriptionIsShortenedUnlessItIsWhatWasAskedFor(t *testing.T) {
 	}
 	if strings.Contains(got.Output, whole) {
 		t.Error("the whole description rode on an ordinary read, which is " +
-			"what put a maximal item past the ceiling with no argument to narrow it")
+			"what puts a maximal item past the ceiling with no argument to narrow it")
 	}
 	if !strings.Contains(got.Output, "…") {
 		t.Errorf("the description was cut without a mark: %.300s", got.Output)
@@ -1428,12 +1462,10 @@ func TestADescriptionIsShortenedUnlessItIsWhatWasAskedFor(t *testing.T) {
 
 // WHEN A TASK IS DUE AND HOW BIG IT IS.
 //
-// All four columns have existed since migration 0002, the query grammar
-// filters on every one and sorts on three, a row's `overdue` flag is derived
-// from the due date, and every total is a sum over the sizing pair. NOTHING
-// COULD SET ANY OF THEM — so an estimate could never exist, and both the
-// overdue predicate and every size total were dead surface that looked like
-// an empty company.
+// The query grammar filters and sorts on all four, a row's `overdue` flag is
+// derived from the due date, and every total is a sum over the sizing pair —
+// so a tool that could not set them would leave the overdue predicate and
+// every size total reading an empty company. A create sets all four.
 func TestACreateSetsWhenAndHowBig(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1552,16 +1584,15 @@ func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
 
 // AN UNREADABLE SIZE IS REFUSED, NOT READ AS ZERO.
 //
-// This is the date rule above applied to the half of `readSchedule` that was
-// not written to it. Each of these fields is a POINTER because its zero is a
-// setting — zero minutes and zero points both mean UNESTIMATED — so a
-// value the parser could not read became `&0`, the write succeeded, and the
-// answer said `applied` while the estimate had been WIPED. A model reads that
-// as having set one.
+// This is the date rule above applied to the size half of `readSchedule`.
+// Each of these fields is a POINTER because its zero is a setting — zero
+// minutes and zero points both mean UNESTIMATED — so a value the parser could
+// not read, taken as `&0`, would succeed and answer `applied` while it WIPED
+// the estimate. A model reads that as having set one.
 //
-// `"2 days"` is the case that makes it more than a missed refusal: the reader
-// was `fmt.Sscanf("%d")`, which takes the leading integer and stops, so a
-// two-day estimate was stored as two MINUTES with nothing to say so.
+// `"2 days"` is the case that makes it more than a missed refusal: a reader
+// that takes the leading integer and stops — `fmt.Sscanf("%d")` does — would
+// store a two-day estimate as two MINUTES with nothing to say so.
 func TestAnUnreadableSizeIsRefusedRatherThanReadAsZero(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1634,11 +1665,11 @@ func TestAnExplicitZeroEstimateIsSet(t *testing.T) {
 }
 
 // A SIZE THAT IS NOT A NUMBER IS REFUSED, and NaN is the one that gets past a
-// range check by definition: every comparison with it is false, so the
-// `points < 0` guard said nothing about it and it reached the writer. An
-// infinity passed the same guard honestly. Neither is a value a total's
+// range check by definition: every comparison with it is false, so a
+// `points < 0` guard says nothing about it and it would reach the writer. An
+// infinity passes the same guard honestly. Neither is a value a total's
 // figures can be summed from, and JSON cannot encode either — so the failure
-// would have surfaced somewhere downstream with no memory of who typed it.
+// would surface somewhere downstream with no memory of who typed it.
 func TestANonFiniteSizeIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1678,10 +1709,10 @@ func TestANonFiniteSizeIsRefused(t *testing.T) {
 // THE UPDATE SCHEMA ADMITS THE NULL ITS OWN DESCRIPTION PROMISES.
 //
 // Clearing a date or a size is done by passing null; `readSchedule`
-// reads it and the description says so. The declared type said `string` and
-// `integer` alone, so a caller that VALIDATES against this schema refuses the
-// null before the tool is reached — a gesture documented, implemented, and
-// unreachable through any strict client.
+// reads it and the description says so. Declared as `string` or `integer`
+// alone, the type would make a caller that VALIDATES against this schema
+// refuse the null before the tool is reached — a gesture documented,
+// implemented, and unreachable through any strict client.
 //
 // A CREATE STAYS NON-NULLABLE, because a create has nothing to clear: a null
 // there is a value nobody meant rather than an instruction.
@@ -1730,16 +1761,14 @@ func TestOnlyTheUpdateSchemaAcceptsANullClear(t *testing.T) {
 // A SCHEDULE EDIT REACHES THE WAKE IT ANNOUNCES.
 //
 // The notification's deltas are computed between the task this tool READ and
-// a snapshot of it with the patch applied. That snapshot was a field-by-field
-// reimplementation of the writer's own merge, and it never learned the
-// schedule fields — so the durable row took the new due date while the
-// snapshot kept the old one, `TaskDeltas` compared a task against itself on
-// exactly those fields, and every date, estimate and size a seat moved
-// arrived as a change that changed nothing.
+// a snapshot of it with the patch applied, and that snapshot is the writer's
+// own merge ([tracker.Patched]). A snapshot built any other way can miss a
+// field the durable row takes — `TaskDeltas` then compares a task against
+// itself on that field, and a date, an estimate or a size a seat moved
+// arrives as a change that changed nothing.
 //
-// The snapshot is the writer's merge now, so this asserts the CONSEQUENCE
-// rather than the copy: a test over the field list would pass again the day
-// somebody adds a field to the patch and forgets it, which is the bug.
+// So this asserts the CONSEQUENCE rather than the copy: a test over the field
+// list would pass the day somebody adds a field to the patch and forgets it.
 func TestASceduleEditReachesTheNotification(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

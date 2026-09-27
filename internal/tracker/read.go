@@ -468,8 +468,9 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 }
 
 // incompleteFrom renders the framework's coverage gap in this domain's own
-// shape: the `incomplete` member of every tracker answer over a SET. A point
-// read has none to carry — it refuses instead ([Reader.Task]).
+// shape: the `incomplete` member an answer carries when a record this node
+// holds and cannot apply covers part of what it read. [TaskDetail] carries
+// none — [Reader.Task] refuses such a read instead.
 func incompleteFrom(in *statelog.Incomplete) *Incomplete {
 	if in == nil {
 		return nil
@@ -777,25 +778,9 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		add(clause, values...)
 	}
 	if len(q.Flags) > 0 {
-		clause, onTask, err := flagsClause(q.Flags)
+		clause, err := flagsClause(q.Flags)
 		if err != nil {
 			return "", nil, err
-		}
-		if onTask {
-			// THE INDEX'S OWN PREDICATE, stated because it is what
-			// makes the index reachable. The attention index is
-			// partial over the four task flags together — a task
-			// with any of them is a fraction of a percent of the
-			// table — and `cycle = 1` alone does not imply that
-			// disjunction to a planner, so a flag filter without it
-			// reads every task in the company.
-			//
-			// ONLY WHEN EVERY NAMED FLAG IS ON THE TASK ROW. The two
-			// dependency flags live on `tracker_relations`, and a
-			// task whose edge is one-sided carries none of these
-			// four — so adding this predicate beside them would
-			// silently answer nothing.
-			add(anyFlagSet)
 		}
 		add(clause)
 	}
@@ -805,8 +790,8 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see [compileWhere].
 	case q.Archived == ArchivedExclude:
 		// A JOIN RATHER THAN A COLUMN: a project's archive is the
-		// project's own fact, and copying it onto every task was the one
-		// unbounded cross-object write this design removed.
+		// project's own fact, and copying it onto every task would make
+		// archiving a project an unbounded write across every task in it.
 		add("t.archived = 0 AND NOT EXISTS (SELECT 1 FROM tracker_projects p " +
 			"WHERE p.key = t.project_key AND p.archived = 1)")
 	case q.Archived == ArchivedOnly:
@@ -911,12 +896,14 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			// shares.
 			//
 			// It narrows no legitimate answer either. A subtree lives
-			// in one project — a cross-project move takes the
-			// descendants with it — and a subtask whose project
-			// differs from its root's is the `inconsistent_project`
-			// anomaly the attention set exists to surface, not a
-			// shape a board should quietly return rows from another
-			// container for.
+			// in its root's project — a subtask is filed in its
+			// parent's, and a cross-project move takes the descendants
+			// with it — and a subtask whose project differs from its
+			// root's is the `inconsistent_project` anomaly: the
+			// attention set surfaces it and the tracker duty moves it
+			// into its root's project ([duty.finishSplits]), and it is
+			// not a shape a board should quietly return rows from
+			// another container for.
 			//
 			// THE ARGUMENT IS PREPENDED, because placeholders bind in
 			// textual order and this clause now precedes the subquery
@@ -1101,11 +1088,6 @@ func numClause(column string, filter NumFilter) (string, []any) {
 // flagColumn maps an attention flag to its column, from a CLOSED SET — the one
 // place a grammar value reaches a statement as a name rather than a bound
 // value, and therefore the one that has to be enumerated.
-// anyFlagSet is the attention index's own partial predicate, written once so
-// the DDL and the query cannot disagree about what it is.
-const anyFlagSet = `(t.inconsistent_project = 1 OR t.cycle = 1 OR ` +
-	`t.too_deep = 1 OR t.key_collision = 1)`
-
 func flagColumn(flag string) (string, bool) {
 	switch flag {
 	case "cycle":
@@ -1125,47 +1107,51 @@ func flagColumn(flag string) (string, bool) {
 // # The set is an OR, not an AND
 //
 // ANDed, `flag=cycle,too_deep` would mean a task that is BOTH in a cycle and
-// too deep — which is not what an attention queue asks, and not what the
-// screen that reads this passes: it names every flag there is and expects the
-// tasks carrying any of them. With conjunction that screen would answer
-// nothing, on every company, for ever, and look exactly like a company with
-// nothing wrong.
+// too deep — which is not what an attention queue asks. A caller naming
+// several flags wants the tasks carrying any of them, and a conjunction over
+// several answers nothing on nearly every company, which reads exactly like a
+// company with nothing wrong.
 //
 // # And two of the six are not on the task row
 //
 // `one_sided` and `one_sided_final` are properties of a dependency EDGE — an
 // authored `waiting_on` whose blocker does not list it, and one whose mirror
 // was refused permanently. They are on `tracker_relations`, which is why they
-// are an EXISTS rather than a column, and why the caller is told whether every
-// flag it named is on the task row: the attention index's partial predicate
-// applies to those four and to nothing else.
-func flagsClause(flags []string) (clause string, allOnTask bool, err error) {
+// are an EXISTS rather than a column.
+//
+// # Nothing here restates an index's predicate
+//
+// The schema declines a partial index over the four task flags together:
+// every list query here is ordered and limited, and under a limit this
+// engine's planner walks the ordering index rather than seeking a filter and
+// sorting — the measurement `0002_the_tracker_lands.sql` records beside the
+// indexes it declines. So the clause is the filter and nothing else, and a
+// disjunction of all four ANDed beside it would be a second statement of the
+// same predicate for a planner that has no index to reach with it.
+func flagsClause(flags []string) (string, error) {
 	terms := make([]string, 0, len(flags))
-	allOnTask = true
 	for _, flag := range flags {
 		switch term, onTask := flagColumn(flag); {
 		case onTask:
 			terms = append(terms, term)
 		case flag == "one_sided":
-			allOnTask = false
 			terms = append(terms, "EXISTS (SELECT 1 FROM tracker_relations x "+
 				"WHERE x.task_id = t.id AND x.one_sided = 1 "+
 				"AND x.one_sided_final = 0)")
 		case flag == "one_sided_final":
-			allOnTask = false
 			terms = append(terms, "EXISTS (SELECT 1 FROM tracker_relations x "+
 				"WHERE x.task_id = t.id AND x.one_sided_final = 1)")
 		default:
-			return "", false, fmt.Errorf("tracker: %q is not an attention "+
+			return "", fmt.Errorf("tracker: %q is not an attention "+
 				"flag. The flags are: %s", flag, strings.Join(AttentionFlags, ", "))
 		}
 	}
-	return "(" + strings.Join(terms, " OR ") + ")", allOnTask, nil
+	return "(" + strings.Join(terms, " OR ") + ")", nil
 }
 
-// AttentionFlags is the closed set, in the order the attention queue reads
-// them: the four a task carries on its own row, then the two a dependency
-// edge carries.
+// AttentionFlags is the closed set: the four a task carries on its own row,
+// then the two a dependency edge carries — the order the refusal of an unknown
+// flag names them in.
 var AttentionFlags = []string{
 	"cycle", "too_deep", "inconsistent_project", "key_collision",
 	"one_sided", "one_sided_final",

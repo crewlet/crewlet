@@ -15,9 +15,9 @@ import (
 // knowing which. Each sends a reader somewhere different: at who has left, at
 // a retention horizon, and at neither.
 //
-// The first draft of this reader collapsed all three into one boolean called
-// `swept`, which is the failure the whole domain's three-valued answers exist
-// to prevent, arriving at the one surface built to end it.
+// Collapsed into one boolean — `swept`, say — the three would be the failure
+// the whole domain's three-valued answers exist to prevent, arriving at the
+// one surface built to end it.
 //
 // In-package and OVER VALUES, for `coerce.go`'s own reason: a rule exercised
 // only through a database is a rule nobody re-reads, and every one of these

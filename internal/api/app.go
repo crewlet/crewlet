@@ -598,21 +598,24 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
 	case errors.Is(err, queries.ErrBadParams):
-		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT, which is what it
-		// was: an untranslated refusal reached the socket as an
-		// unclassified error, so a caller that asked wrong was told the
-		// query FAILED and the node warned about its own health. REST
-		// already answered 400 here, and the two transports disagreeing
-		// about whose fault a request is is exactly what this mapping
-		// exists to prevent.
+		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT: an untranslated
+		// refusal reaches the socket as an unclassified error, so a caller
+		// that asked wrong would be told the query FAILED while the node
+		// warned about its own health — and REST answers the same refusal
+		// 400, so the two transports would disagree about whose fault a
+		// request is, which is exactly what this mapping exists to prevent.
 		//
-		// THE ONLY ONE HERE THAT KEEPS THE ORIGINAL ERROR, because it is
-		// the only one whose message is written FOR the caller: it names
-		// the field that was missing and the values the field accepts,
-		// and [stream] logs exactly that at debug. The others are
-		// deliberately reduced to the query name — a failure's own text
-		// can carry a database path, and none of them has a reader.
+		// IT KEEPS THE ORIGINAL ERROR because its message is written FOR the
+		// caller: it names the field that was missing and the values the
+		// field accepts, and [stream] logs exactly that at debug.
 		return nil, fmt.Errorf("%w: %s: %w", stream.ErrBadParams, what, err)
+	case errors.Is(err, queries.ErrDeferred):
+		// AND SO DOES THIS ONE, because the refusal it wraps is the one fact
+		// an operator acts on — which change this node retains, and at what
+		// version — and [stream] logs it and sends the client the code
+		// alone. Every other arm is reduced to the query name: a failure's
+		// own text can carry a database path, and none of them has a reader.
+		return nil, fmt.Errorf("%w: %s: %w", stream.ErrDeferred, what, err)
 	case errors.Is(err, queries.ErrUnavailable):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
 	default:
@@ -653,9 +656,8 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	case errors.Is(err, queries.ErrUnauthorized):
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
 	case errors.Is(err, queries.ErrBadParams):
-		// 400 AND ITS OWN CODE. The status was already right; the code
-		// said `query_failed`, which names a fault of this node for a
-		// request the caller has to change.
+		// 400 AND ITS OWN CODE: `query_failed` would name a fault of this
+		// node for a request the caller has to change.
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeBadParams})
 	case errors.Is(err, queries.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
@@ -683,6 +685,30 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		w.Header().Set("Retry-After", strconv.Itoa(after))
 		writeJSON(w, http.StatusServiceUnavailable,
 			map[string]string{"error": stream.CodeUnavailable})
+	case errors.Is(err, queries.ErrDeferred):
+		// 503, AND NO RETRY-AFTER.
+		//
+		// 503 because the failure is THIS NODE's and no other's: it retains
+		// a change it cannot apply, a node running a build that can read
+		// that change answers the same request, and a balancer in front of
+		// a fleet can be configured to retry a 503 on another member. Not a
+		// 404 — the record may well exist — and not a 500, since nothing
+		// here is broken.
+		//
+		// No Retry-After because the header tells a client to come back to
+		// THIS node after that long, and waiting here never clears it: the
+		// change stays unapplied until this node runs a newer build, so a
+		// client honouring a hint would ask the same node the same question
+		// on a loop. The body's code is what says so, for a client that
+		// reads one.
+		//
+		// INFO, as the socket logs the same refusal: it names the retained
+		// change, which is what an operator needs, and a screen polling this
+		// route would otherwise warn on every tick about a node that is not
+		// failing.
+		log.Info("api_query_deferred", "what", what, "error", err)
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": stream.CodeDeferred})
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and these routes are

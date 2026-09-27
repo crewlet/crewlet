@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // Category reports the dashboard category an event type is filed under, and
@@ -181,8 +182,8 @@ func spendEvent(eventType string) bool { return slices.Contains(spendEventTypes,
 // would see nothing at all on an unknown type.
 //
 // Nil for every other event, which is what leaves the promoted columns at
-// their defaults — see schema/0015 for why they are columns.
-// It reads the SHALLOW form: only a few scalars are wanted, and decoding into
+// their defaults — see schema/0015 and schema/0032 for why they are columns.
+// It reads the SHALLOW form: only a few members are wanted, and decoding into
 // map[string]any would deep-decode the engine's largest payload — a phase
 // completion carries the phase's whole prompt and tool log.
 // map[string]json.RawMessage leaves everything it is not asked for as bytes.
@@ -203,6 +204,13 @@ func SpendFor(eventType string, payload []byte) *Spend {
 // payload would not decode, which still answers a spend: the call happened,
 // and dropping it because its payload would not decode understates the spend
 // this exists to report.
+//
+// Each member is read ON ITS OWN, so a value that does not decode costs itself
+// and nothing else: a price that is not a number is no price, a split that
+// internal/tokens cannot read as one is no split, and a mark that is not JSON
+// true is not set. schema/0032's backfill reads the price and the mark by the
+// same rules, and copies any split that is a JSON array as the payload holds
+// it.
 func spendOf(eventType string, body map[string]json.RawMessage, decoded bool) *Spend {
 	if !spendEvent(eventType) {
 		return nil
@@ -221,6 +229,9 @@ func spendOf(eventType string, body map[string]json.RawMessage, decoded bool) *S
 		InputTokens:  jsonInt(body["input_tokens"]),
 		OutputTokens: jsonInt(body["output_tokens"]),
 		TotalTokens:  jsonInt(body["total_tokens"]),
+		CostUSD:      jsonFloat(body["cost_usd"]),
+		Models:       tokens.DecodeModels(body["models"]),
+		Unreported:   jsonTrue(body["run_spend_unreported"]),
 	}
 	if spend.Model == "" {
 		// An entry that names no model is identified by the provider
@@ -289,6 +300,23 @@ func jsonInt(raw json.RawMessage) int {
 		return 0
 	}
 	return int(v)
+}
+
+// jsonFloat reads a number out of a raw JSON field, yielding 0 for anything
+// that is not one: absent, null, a string.
+func jsonFloat(raw json.RawMessage) float64 {
+	var f float64
+	if len(raw) == 0 || json.Unmarshal(raw, &f) != nil {
+		return 0
+	}
+	return f
+}
+
+// jsonTrue reports whether a raw JSON field is `true`: false for false, and
+// for anything that is not a boolean.
+func jsonTrue(raw json.RawMessage) bool {
+	var b bool
+	return len(raw) > 0 && json.Unmarshal(raw, &b) == nil && b
 }
 
 // jsonString reads a JSON value as a string, yielding "" for anything that is

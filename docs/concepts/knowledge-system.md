@@ -605,9 +605,12 @@ with your API token and tell it what to publish:
 > Publish everything under `examples/nimbus-docs/` — one container per
 > directory, the page title from each file's first `# H1`.
 
-It calls `write_page` per file, with your token's own name on each page as the
-author. That handles the parts a flag-driven CLI handles badly: the parent
-chain, and a title that already exists (`save_page` with the version it read).
+It calls `write_page` per file, with `operator:` and your token's own name on
+each page as the author — `operator:founder` for a token `founder`, the name the
+tracker records the same token's work items under (see
+[who a write is attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to)).
+That handles the parts a flag-driven CLI handles badly: the parent chain, and a
+title that already exists (`save_page` with the version it read).
 
 It writes the [reserved containers](#accessible-containers) too, which a seat's
 own `write_page` refuses, and `write_page` is the only thing that creates a

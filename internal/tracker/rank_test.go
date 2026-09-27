@@ -64,8 +64,8 @@ func TestTheHeadOrdersAcrossItsOwnBoundaries(t *testing.T) {
 
 // REPEATED HEAD INSERTION GROWS THE KEY LOGARITHMICALLY, NOT LINEARLY.
 //
-// This is the capacity the flat encoding did not have: decrementing the first
-// character gave THIRTY head placements per project, ever. The bound is
+// A flat encoding decremented at its first character caps a project at THIRTY
+// head placements, ever; the magnitude head borrows instead. The bound is
 // 2 + ceil(log62(n)); at 100 000 insertions that is 5 and the real answer is
 // 4, so it is a bound rather than an equality — which is the honest way to
 // state it and the reason the test asserts ≤ rather than ==.

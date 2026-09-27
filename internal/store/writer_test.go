@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // buildEvent assembles an event from raw JSON, which is how one arrives off
@@ -259,5 +261,69 @@ func TestRecordForStampsAZeroTimestamp(t *testing.T) {
 	}
 	if rec.Time.IsZero() {
 		t.Error("a zero timestamp reached the row, where no read floor lets a query return it")
+	}
+}
+
+// A SPEND RECORD'S PRICE, SPLIT AND UNREPORTED MARK ARE PART OF ITS SPEND.
+//
+// The spend a record builds from is what [store.EventLog.Append] writes to the
+// columns every spend read folds from (schema/0032), so a member left out here
+// is a column every row holds at its default: a coding run's quoted price read
+// as a company never billed, a fallback's tokens counted under the model the
+// phase began on, a floor stated as the whole.
+func TestRecordForCarriesThePriceTheSplitAndTheUnreportedMark(t *testing.T) {
+	t.Parallel()
+	phase := types.AgentPhaseCompleted{
+		RoleName: "Dev", TurnID: "run-1", Phase: types.PhaseExecute, Model: "sonnet",
+		InputTokens: 10, TotalTokens: 10, CostUSD: 0.5,
+		Models: []types.ModelSpend{{Model: "sonnet", InputTokens: 10}},
+	}
+	// A collected run whose agent accounted for part of it: its models join
+	// the split, and the record is a floor.
+	phase.AddRun(types.RunSpend{Collected: true, Models: []types.ModelSpend{
+		{Model: "opus", InputTokens: 30, OutputTokens: 5, CostUSD: 0.5},
+	}})
+	rec, ok, err := store.RecordFor(events.New(phase, events.TraceContext{}))
+	if err != nil || !ok || rec.Spend == nil {
+		t.Fatalf("RecordFor = %+v, %v, %v; want a spend record", rec.Spend, ok, err)
+	}
+	spend := rec.Spend
+	if spend.CostUSD != 0.5 || !spend.Unreported {
+		t.Errorf("spend = %+v, want the quoted $0.50 and the run's floor marked", *spend)
+	}
+	want := []tokens.ModelSpend{
+		{Model: "sonnet", InputTokens: 10},
+		{Model: "opus", InputTokens: 30, OutputTokens: 5, CostUSD: 0.5},
+	}
+	if !slices.Equal(spend.Models, want) {
+		t.Errorf("split = %+v, want %+v — the phase's own model and the run's", spend.Models, want)
+	}
+}
+
+// EACH SPEND MEMBER IS READ ON ITS OWN, so one that does not decode costs
+// itself and nothing else. A payload whose price is a string, whose split is
+// not a list and whose mark is not a boolean still answers its tokens, its
+// model and its turn, with no price, no split and no mark — never a record
+// dropped whole, which would read as a call that did not happen.
+func TestAMalformedSpendMemberCostsOnlyItself(t *testing.T) {
+	t.Parallel()
+	spend := store.SpendFor("agent_phase_completed", []byte(`{
+		"phase": "execute", "model": "sonnet", "turn_id": "run-1",
+		"input_tokens": 7, "total_tokens": 7,
+		"cost_usd": "0.5", "models": {"model": "haiku"}, "run_spend_unreported": 1}`))
+	if spend == nil {
+		t.Fatal("a phase record answered no spend")
+	}
+	if spend.Model != "sonnet" || spend.TurnID != "run-1" || spend.TotalTokens != 7 {
+		t.Errorf("spend = %+v, want the members that decode", *spend)
+	}
+	if spend.CostUSD != 0 || spend.Models != nil || spend.Unreported {
+		t.Errorf("spend = %+v, want no price, no split and no mark from members of the wrong type", *spend)
+	}
+	// And a split whose entries do not decode is no split, as the rollup
+	// reads one — not a partial list.
+	if got := store.SpendFor("agent_phase_completed",
+		[]byte(`{"models": [{"model": "a"}, {"model": 5}]}`)); got == nil || got.Models != nil {
+		t.Errorf("a split with an entry that does not decode = %+v, want none", got)
 	}
 }

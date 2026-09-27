@@ -37,18 +37,19 @@ var (
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
 
-	// ErrDeferred is a read this node refused because it holds a change
-	// covering the record asked about that it cannot apply — one a newer
-	// build wrote, or one queued behind such a change
+	// ErrDeferred is a read this node refused because it retains a change
+	// it cannot apply — one a newer build wrote, or one held back behind
+	// such a change — covering the record asked about, or, for a record it
+	// does not hold, one that may be the change creating it
 	// ([statelog.RefuseDeferred]).
 	//
 	// ITS OWN ANSWER, because it is neither of the two it sits between.
-	// Not [ErrUnavailable]: waiting on THIS node never clears it, so a
+	// Not [ErrUnavailable]: waiting on THIS node does not clear it, so a
 	// retry hint sends a client round a loop that cannot end. Not a plain
 	// failure: nothing on the node is broken, another node running a build
 	// that can read the change answers the same question, and a person has
-	// to be told the record exists and cannot be shown here rather than
-	// that the query failed.
+	// to be told the record cannot be shown here rather than that the query
+	// failed.
 	ErrDeferred = errors.New("queries: held back by a change this node cannot apply")
 )
 
@@ -332,13 +333,14 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 //
 //   - a state-log read refusal whose code is retryable
 //     ([statelog.ReadRefusal.Retryable]). A node that is behind will catch
-//     up; a node holding a record it cannot decode will not, however long a
-//     caller waits, so that one is never "not yet".
+//     up; a node retaining a record it cannot decode will not, however long
+//     a caller waits, so that one is never "not yet".
 //   - [coord.ErrUnavailable], the coordination contract's own third answer:
 //     the store could not be reached, which is neither "held" nor "absent".
 //
 // And one source of "not here": a [statelog.RefuseDeferred] refusal, which is
-// that record-it-cannot-decode case on a point read.
+// that retained record meeting a read about one object. A read over a set is
+// served with a gap instead and never reaches this.
 //
 // A refusal about the REQUEST is never reclassified, even when it wraps one of
 // those: the caller has to change what it asks, and "come back" would send the

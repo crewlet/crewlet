@@ -12,14 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// EVERY CHANGE KIND IS CLASSIFIED, and this is the guard the tree did not have.
+// EVERY CHANGE KIND IS CLASSIFIED AS A TASK COMMIT OR NOT.
 //
-// `prioritised` was in the enum, was Valid(), passed Validate(), rode a real
-// record — and was absent from taskCommit(), so a task's priority change woke
-// no assignee, no collaborator and no watcher. Nothing in the build caught it,
-// because the allowlist inside taskCommit has no compiler link to ChangeKinds:
-// a kind added to one and forgotten in the other is a kind that routes to
-// nobody, silently, for ever.
+// The allowlist inside [tracker.ChangeKind.TaskCommit] has no compiler link to
+// [tracker.ChangeKinds]: a kind added to the enum and forgotten there is Valid,
+// passes Validate and rides a real record — and, if it is about a task, wakes
+// no assignee, no collaborator and no watcher, silently, for ever.
 //
 // So the table below is that link, written out. A new kind fails this test
 // until somebody DECIDES which half it is in — which is the whole point: the
@@ -52,8 +50,8 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 	for _, kind := range tracker.ChangeKinds {
 		if got := kind.TaskCommit(); got == notTasks[kind] {
 			t.Errorf("%q: TaskCommit() = %v and this table says the opposite "+
-				"— a kind in neither half routes to nobody, which is exactly "+
-				"how a task's priority change came to wake no one", kind, got)
+				"— a kind in neither half is one nobody decided, and a task "+
+				"kind left out of TaskCommit routes to nobody", kind, got)
 		}
 	}
 }
@@ -430,11 +428,11 @@ func candidateHandles(wake *tracker.Notify) []string {
 //
 // This is the case that decides whether the wake above can fire at all.
 // `set_priorities` is registered on the operator MCP alone, and an operator's
-// actor is an API TOKEN's name — never a handle in the chart — so no ancestor
-// walk can match it and `Lead` is false for every operator by construction.
-// A gate reading `own || Lead` would refuse every cross-person write on the
-// only surface this verb has, and omitting the handle would silently write a
-// person record for the token instead.
+// actor is `operator:` and an API token's name — never a handle in the chart —
+// so no ancestor walk can match it, `Lead` is false for every operator by
+// construction, and no list is an operator's own. A gate reading
+// `own || Lead` would refuse every cross-person write on the only surface this
+// verb has.
 func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 	r := newRoundTrip(t)
 	task := r.createTask("The thing")
@@ -442,23 +440,25 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 	for name, tc := range map[string]struct {
 		actor     string
 		kind      tracker.AuthorKind
+		operator  string
 		authority tracker.PersonAuthority
 		allowed   bool
 	}{
-		"an operator": {"ops", tracker.AuthorOperator,
+		"an operator": {tracker.OperatorActor("ops"), tracker.AuthorOperator, "ops",
 			tracker.PersonAuthority{Person: true}, true},
-		"a human": {"founder", tracker.AuthorHuman,
+		"a human": {"founder", tracker.AuthorHuman, "",
 			tracker.PersonAuthority{Person: true}, true},
-		"a lead": {"lead", tracker.AuthorAgent,
+		"a lead": {"lead", tracker.AuthorAgent, "",
 			tracker.PersonAuthority{Lead: true}, true},
 		// A SEAT IS THE ONE PARTY THAT MAY NOT. An agent re-ordering a
 		// colleague's list is a hand-off in disguise: an Addressed wake
 		// that bypasses the guarded take and the reassignment budget.
-		"a plain seat": {"peer", tracker.AuthorAgent,
+		"a plain seat": {"peer", tracker.AuthorAgent, "",
 			tracker.PersonAuthority{}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			writer := r.writer.As(tc.actor, tc.kind, tracker.Provenance{})
+			writer := r.writer.As(tc.actor, tc.kind,
+				tracker.Provenance{OperatorID: tc.operator})
 			_, err := writer.WritePriorities(t.Context(), "op-"+tc.actor,
 				"alice", []string{task.ID}, tc.authority)
 			switch {
@@ -705,12 +705,12 @@ func TestClearingASizeIsAChange(t *testing.T) {
 // A MOVE INSIDE ONE DAY IS STILL A MOVE.
 //
 // The delta is text and a field is only recorded when the two sides DIFFER, so
-// rendering a schedule instant as a calendar day made every same-day change
-// compare equal to itself: pulling a due time from the morning to the end of
-// the afternoon produced no `due` entry at all, and the history row and the
-// notification card carried the change's kind with nothing it changed. That is
-// the same failure the schedule fields were added to these deltas to end, one
-// granularity down.
+// rendering a schedule instant as a calendar day would make every same-day
+// change compare equal to itself: pulling a due time from the morning to the
+// end of the afternoon would produce no `due` entry at all, and the history row
+// and the notification card would carry the change's kind with nothing it
+// changed — the failure the schedule deltas exist to prevent, one granularity
+// down.
 func TestASameDayScheduleMoveIsRecorded(t *testing.T) {
 	t.Parallel()
 	at := func(iso string) *time.Time {

@@ -32,8 +32,8 @@ func blockerIDs(got tracker.TaskRow) []string {
 //
 // `blocked` is one bit, and a bit cannot be drawn as a relation: a renderer
 // showing two bars on a date axis has to know WHICH of the rows it holds is
-// the blocker, and the only other way to learn that was a single-task read per
-// bar — fifty reads to draw fifty rows.
+// the blocker, and without it the only way to learn that is a single-task read
+// per bar — fifty reads to draw fifty rows.
 func TestABoardRowNamesTheTasksItWaitsOn(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

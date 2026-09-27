@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,11 +26,12 @@ import (
 //
 // # It is an aggregate over columns, not over payloads
 //
-// Migration 0015 promoted a spend record's numbers out of its payload — the
-// model, the phase, the iteration and the three token counts are columns,
-// written for every spend record ([spendEventTypes]), a phase's and an
-// auxiliary call's alike — and 0018 indexed `turn_id`. So one row per turn is
-// a GROUP BY over narrow values, not a fold over documents.
+// A spend record's numbers are columns — its model, phase, iteration and three
+// token counts (schema/0015) and its per-model split (schema/0032) — written
+// for every spend record ([spendEventTypes]), a phase's and an auxiliary
+// call's alike, and schema/0018 indexes `turn_id`. So one row per turn is a
+// GROUP BY that parses no spend record's payload, and the models a page's
+// turns used are a second read of the same rows ([turnModelsSQL]).
 //
 // The exception is the three facts that only the COMPLETION event knows: how
 // long the turn took, what it concluded, and what it set out to do. Those are
@@ -110,15 +112,21 @@ type Turn struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 
-	// Models is every distinct model those spend records name, comma-joined
-	// by the read because a turn routinely has several — a cheap one for
-	// the extension judge, the seat's own for the work, the auxiliary
-	// model for the calls made for it. A record names ONE model, the one
-	// its first completion reported: a model that only a record's per-model
-	// split holds — a fallback that took over mid-phase, a coding run's —
-	// is not in this list, and the spend rollup's by-model rows are where
-	// it is counted.
-	Models string `json:"models,omitempty"`
+	// Models is every distinct model name those spend records carry, sorted
+	// — a turn routinely has several: a cheap one for the extension judge,
+	// the seat's own for the work, the auxiliary model for the calls made
+	// for it. A record carries names in two places, and both count: its
+	// `model`, the one its first completion reported (or the provider key
+	// it ran on where it names none), and every entry of its per-model
+	// split — a fallback that took over mid-phase, the models a collected
+	// coding run reported ([turnModelsSQL] reads both). An entry reported under
+	// no name adds nothing, so the rollup's `unknown` and `unmeasured` rows,
+	// which are spend without a model's name, are never here.
+	//
+	// A LIST OF NAMES, not an account: which of these the tokens above are
+	// counted under is the spend rollup's by-model breakdown, which ignores
+	// a split whose figures do not fit inside its record.
+	Models []string `json:"models,omitempty"`
 
 	// Summary is what the turn set out to do, in the agent's own words.
 	Summary string `json:"summary,omitempty"`
@@ -140,7 +148,8 @@ type TurnQuery struct {
 	AgentRole string
 	AgentID   string
 
-	// Model narrows to turns that used one.
+	// Model narrows to turns that used one: whose spend records carry the
+	// name in either place [Turn.Models] reads.
 	Model string
 
 	// WorkKey narrows to every RUN of one unit of work — the attempts at a
@@ -227,28 +236,32 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error)
 		floor = history
 	}
 
-	where := []string{"turn_id != ''", "event_time >= ?"}
-	args := []any{EncodeTime(floor)}
+	// THE ROWS a turn is folded from. Every term here is on the ROW, and the
+	// models read after the page takes the same terms, so a row's list of
+	// models describes the rows its figures were summed from.
+	rowTerms := []string{"turn_id != ''", "event_time >= ?"}
+	rowArgs := []any{EncodeTime(floor)}
 	// ONLY THE IDENTIFIERS THE CALLER HOLDS — binding an empty one matches
 	// every row that carries none, which is every non-agent event in the
 	// window. See [seatClause].
 	if clause, ids := seatClause(q.AgentID, q.AgentRole); clause != "" {
-		where = append(where, strings.TrimPrefix(clause, " AND "))
-		args = append(args, ids...)
+		rowTerms = append(rowTerms, strings.TrimPrefix(clause, " AND "))
+		rowArgs = append(rowArgs, ids...)
 	}
 	if q.WorkKey != "" {
-		where = append(where, "work_key = ?")
-		args = append(args, q.WorkKey)
+		rowTerms = append(rowTerms, "work_key = ?")
+		rowArgs = append(rowArgs, q.WorkKey)
 	}
+	where := slices.Clone(rowTerms)
+	args := slices.Clone(rowArgs)
 	if q.Model != "" {
-		// ON THE TURN, not on the row: a turn is selected when ANY of
-		// its spend records names the model — a phase's or an auxiliary
-		// call's, the column [Turn.Models] lists — which is what a reader
-		// means by "turns on the cheap model".
-		where = append(where,
-			"turn_id IN (SELECT turn_id FROM crewlet_events "+
-				"WHERE model = ? AND event_time >= ? AND turn_id != '')")
-		args = append(args, q.Model, EncodeTime(floor))
+		// ON THE TURN, not on the row: a turn is selected when ANY of its
+		// spend records carries the model — as its own `model` or in its
+		// per-model split, the two places [Turn.Models] reads — which is
+		// what a reader means by "turns on the cheap model". Over the
+		// window alone, as the page's own rows are.
+		where = append(where, "turn_id IN ("+turnsUsingSQL("turn_id != '' AND event_time >= ?")+")")
+		args = append(args, EncodeTime(floor), q.Model, q.Model)
 	}
 
 	having := []string{}
@@ -272,13 +285,6 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error)
 	}
 	args = append(args, limit+1)
 
-	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
-	// and only a spend record — a phase's or an auxiliary call's — carries
-	// one. Every turn's group also holds
-	// its `turn_completed` row, so GROUP_CONCAT — which skips NULLs but
-	// not empty strings — joined one model as ",claude-opus-5" and handed
-	// every consumer splitting on the comma a nameless band in its legend
-	// and a nameless row in its breakdown.
 	rows, err := l.db.sql.QueryContext(ctx, `
 		SELECT turn_id,
 		       MAX(work_key),
@@ -288,7 +294,6 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error)
 		       MAX(iteration),
 		       MAX(CASE WHEN json_extract(tags, '$.failed') = 'true' THEN 1 ELSE 0 END),
 		       SUM(input_tokens), SUM(output_tokens), SUM(total_tokens),
-		       GROUP_CONCAT(DISTINCT NULLIF(model, '')),
 		       MAX(CASE WHEN event_type = ? THEN 1 ELSE 0 END),
 		       MAX(CASE WHEN event_type = ?
 		                THEN COALESCE(json_extract(payload, '$.duration_ms'), 0) END),
@@ -317,13 +322,13 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error)
 			agentID, role     sql.NullString
 			started, ended    int64
 			failed, complete  int
-			models, summary   sql.NullString
+			summary           sql.NullString
 			taskID, trigger   sql.NullString
 			in, outTok, total sql.NullInt64
 			duration          sql.NullInt64
 		)
 		if err := rows.Scan(&t.TurnID, &workKey, &agentID, &role, &started, &ended,
-			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total, &models,
+			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total,
 			&complete, &duration, &summary, &taskID, &trigger); err != nil {
 
 			return nil, false, fmt.Errorf("store: scan a turn: %w", err)
@@ -337,7 +342,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error)
 		t.InputTokens = int(in.Int64)
 		t.OutputTokens = int(outTok.Int64)
 		t.TotalTokens = int(total.Int64)
-		t.Models, t.Summary = models.String, summary.String
+		t.Summary = summary.String
 		t.TaskID, t.Trigger = taskID.String, trigger.String
 		out = append(out, t)
 	}
@@ -345,5 +350,100 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error)
 		return nil, false, fmt.Errorf("store: list turns: %w", err)
 	}
 	out, more := probed(out, limit)
+	if err := l.nameTurnModels(ctx, out, rowTerms, rowArgs); err != nil {
+		return nil, false, err
+	}
 	return out, more, nil
+}
+
+// splitEntryModel is one split entry's `model`, as json_each walks a row's
+// `models` column (the row aliased `e`) one entry at a time (aliased `entry`).
+// Addressed by the entry's path into the column rather than read out of the
+// entry's own value, so an entry that is not an object answers NULL instead of
+// failing the statement: json_extract parses its first argument, and a string
+// entry's value is the bare text.
+const splitEntryModel = `json_extract(e.models, entry.fullkey || '.model')`
+
+// turnModelsSQL is the (turn_id, model) pairs the rows `rowTerms` selects carry,
+// in the two places [Turn.Models] names: a row's own `model` where it is not
+// empty, and the `model` of each entry of its per-model split that is a
+// non-empty string. Its placeholders are the rows' own, once for each half
+// ([turnModelArgs]).
+//
+// THE SPLIT IS EXPANDED IN SQL, with json_each over a column that holds a JSON
+// array on every row (schema/0032), in the same terms [turnsUsingSQL] filters
+// on, so a turn found by a model lists it.
+func turnModelsSQL(rowTerms string) string {
+	return `SELECT e.turn_id, e.model FROM crewlet_events e
+	 WHERE ` + rowTerms + ` AND e.model <> ''
+	UNION
+	SELECT e.turn_id, ` + splitEntryModel + ` FROM crewlet_events e, json_each(e.models) entry
+	 WHERE ` + rowTerms + ` AND e.models <> '[]'
+	   AND json_type(e.models, entry.fullkey || '.model') = 'text' AND ` + splitEntryModel + ` <> ''`
+}
+
+// turnModelArgs is [turnModelsSQL]'s arguments: the rows' own, once for each
+// half.
+func turnModelArgs(rowArgs []any) []any {
+	return append(slices.Clone(rowArgs), rowArgs...)
+}
+
+// turnsUsingSQL is the turns among the rows `rowTerms` selects that carry one
+// model, in either place [turnModelsSQL] reads; its placeholders are the rows'
+// own and then the name, twice.
+//
+// ONE PASS over the rows rather than a pass per place, because the rows are
+// every row in the window and a row costs what it weighs to read, a phase
+// record's whole payload included: two passes measured twice the time of one.
+// And the name a caller filters on is never empty, so `= ?` matches exactly
+// the names [turnModelsSQL] lists — no empty one, and nothing json_extract
+// answers for an entry whose `model` is not a string.
+func turnsUsingSQL(rowTerms string) string {
+	return `SELECT e.turn_id FROM crewlet_events e
+	 WHERE ` + rowTerms + ` AND (e.model = ? OR (e.models <> '[]' AND EXISTS (
+	     SELECT 1 FROM json_each(e.models) entry WHERE ` + splitEntryModel + ` = ?)))`
+}
+
+// nameTurnModels fills in [Turn.Models] for a page of turns, from the same rows
+// their figures were folded from.
+//
+// A SECOND READ, of the page's own turns through the turn index, rather than a
+// column of the fold: the fold groups every turn in the window before the
+// page is cut, and naming each one's models there would expand the splits of
+// every spend record in the window to label the few turns a page shows.
+func (l *EventLog) nameTurnModels(ctx context.Context, page []Turn, rowTerms []string, rowArgs []any) error {
+	if len(page) == 0 {
+		return nil
+	}
+	ids := make([]any, len(page))
+	for i, t := range page {
+		ids[i] = t.TurnID
+	}
+	terms := strings.Join(append(slices.Clone(rowTerms),
+		"turn_id IN (?"+strings.Repeat(", ?", len(ids)-1)+")"), " AND ")
+	rows, err := l.db.sql.QueryContext(ctx, turnModelsSQL(terms),
+		turnModelArgs(append(slices.Clone(rowArgs), ids...))...)
+	if err != nil {
+		return fmt.Errorf("store: name the models of a page of turns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	named := make(map[string][]string, len(page))
+	for rows.Next() {
+		var turnID, model string
+		if err := rows.Scan(&turnID, &model); err != nil {
+			return fmt.Errorf("store: name the models of a page of turns: scan: %w", err)
+		}
+		named[turnID] = append(named[turnID], model)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: name the models of a page of turns: %w", err)
+	}
+	for i := range page {
+		// SORTED, since the UNION already made each pair distinct and has no
+		// order of its own: one turn read twice lists its models the same way.
+		models := named[page[i].TurnID]
+		slices.Sort(models)
+		page[i].Models = models
+	}
+	return nil
 }

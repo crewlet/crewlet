@@ -248,7 +248,7 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 			// never over the collection: the relation set holds every
 			// kind together, and a `set` that reached the writer whole
 			// would drop the item's duplicates, pages and dependency
-			// edges along with the links it replaced.
+			// edges along with the links it replaces.
 			stated.Add, stated.Remove = delta(othersOfKind(task, side.kind), stated.Values)
 		}
 		for _, id := range stated.Add {

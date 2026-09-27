@@ -10,10 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the version this build writes every record at but three
-// kinds — a rank order at [RankOrderRecordVersion], a purge at
-// [PurgeRecordVersion], and a task patch that raises or lowers the merge marker
-// at [MergeRecordVersion] — and the version of every record encoded without
+// RecordVersion is the version this build writes every record at but four
+// kinds — a rank order at [RankOrderRecordVersion], a task patch that raises
+// or lowers the merge marker at [MergeRecordVersion], and a purge, a create
+// under a parent and a task patch carrying a project or a parent at
+// [ProjectFlagRecordVersion] — and the version of every record encoded without
 // one.
 //
 // A record at a version higher than [ReadableRecordVersion] leaves the envelope
@@ -44,7 +45,9 @@ const RecordVersion = 1
 // with every later record its scope covers, and applies them after its upgrade.
 const RankOrderRecordVersion = 2
 
-// PurgeRecordVersion is the version a purge is written at.
+// PurgeRecordVersion is the lowest version whose purge applies the rules
+// below — [ProjectFlagRecordVersion] is the one this build writes a purge at,
+// and its purge applies every one of them too.
 //
 // A purge at it does everything one at [RecordVersion] does — the task's rows
 // deleted with its relations, its dependency edges and the references between
@@ -85,7 +88,8 @@ const RankOrderRecordVersion = 2
 // A purge at [RecordVersion] keeps the task's history and inbox content, on
 // every node that applies or replays it, and nothing re-scrubs it: a migration
 // would empty only the rows a node held when it ran, and a node that replays
-// the log after it would hold them whole. This build writes none.
+// the log after it would hold them whole. This build writes a purge at neither
+// version: its purges are at [ProjectFlagRecordVersion].
 const PurgeRecordVersion = 3
 
 // MergeRecordVersion is the version a task patch that raises or lowers the
@@ -117,9 +121,44 @@ const PurgeRecordVersion = 3
 // scope covers, and applies them after its upgrade.
 const MergeRecordVersion = 4
 
+// ProjectFlagRecordVersion is the version a record that can move a task, or
+// the root of its subtree, into another project is written at: a create under
+// a parent, a task patch carrying a project or a parent, and a purge, which
+// moves the purged task's children onto its own parent.
+//
+// A record at it DERIVES `inconsistent_project` in the closure pass, on the
+// task it writes and on every task under it ([Applier.rebuildAncestry]): set
+// when the task's project differs from its subtree root's, clear otherwise —
+// and clear on a root, and on a task in a cycle, which has no root to differ
+// from. Each apply derives the flag from the rows at its own position, over
+// the whole subtree its closure pass walks, so a root's move re-derives every
+// descendant and each descendant's own move re-derives it and what is under
+// it. It is what the tracker duty selects on to carry a task left outside its
+// root's project into it ([duty.finishSplits]).
+//
+// A record at a lower version derives nothing. Its closure pass writes the
+// ancestry — `root_id`, `depth`, `cycle`, `too_deep` — and leaves the column
+// as it found it on every task it walks, so a split such a record makes is not
+// flagged, and one it heals keeps the flag the last record at this version
+// derived. The duty's selection reads the projects themselves beside the flag
+// rather than trusting it ([splitSelection]), so a flag left standing moves
+// nothing and holds no sweep open.
+//
+// # Why the change is a version and not an edit
+//
+// For [RankOrderRecordVersion]'s reason: a node that replays the log applies
+// every record again, and a node on an older build applies the ones it reads
+// by its own rule — so deriving the flag on records already written would
+// leave two copies of one log holding different flags for the same record. A
+// build that reads below this version RETAINS a create or a patch at it, with
+// every later record its scope covers, and applies them after its upgrade.
+// A purge at it installs a gate, so such a build's applier STOPS there
+// instead ([PurgeRecordVersion] says what a stop costs).
+const ProjectFlagRecordVersion = 5
+
 // ReadableRecordVersion is the highest record version this build decodes —
 // what [Domain.RecordVersion] declares to the framework.
-const ReadableRecordVersion = MergeRecordVersion
+const ReadableRecordVersion = ProjectFlagRecordVersion
 
 // recordVersionOf is the version a record on this subject, doing this, with
 // this payload, is written at.
@@ -127,8 +166,15 @@ const ReadableRecordVersion = MergeRecordVersion
 // THE LOWEST VERSION WHOSE APPLY IS THE ONE THIS BUILD MEANS, and nothing
 // higher: a record stamped above what an older build reads is retained by
 // every such node — or, for a gate, stops it — for no change in what it does.
-// So a task patch is at [MergeRecordVersion] only when it carries the merge
-// target, and at [RecordVersion] otherwise.
+// So a task patch is at [ProjectFlagRecordVersion] only when it carries a
+// project or a parent, at [MergeRecordVersion] when it carries the merge
+// target and neither of those, and at [RecordVersion] otherwise; and a create
+// is at [ProjectFlagRecordVersion] only when it names a parent, since a root's
+// flag is clear whichever build applies it.
+//
+// THE VERSIONS NEST: an apply at a version does what every lower version's
+// apply does and adds its own rule, so a patch carrying both a parent and the
+// merge target is written at the higher of the two and loses neither.
 func recordVersionOf(subject Subject, op OpKind, payload any) int {
 	switch {
 	case subject.Kind == KindRankOrder:
@@ -136,10 +182,20 @@ func recordVersionOf(subject Subject, op OpKind, payload any) int {
 	case subject.Kind == KindEviction:
 		return GateRecordVersion
 	case op == OpPurge:
-		return PurgeRecordVersion
+		return ProjectFlagRecordVersion
 	}
-	if patch, ok := payload.(TaskPatch); ok && patch.MergeInto != nil {
-		return MergeRecordVersion
+	switch value := payload.(type) {
+	case Task:
+		if op == OpCreate && value.Parent != nil && *value.Parent != "" {
+			return ProjectFlagRecordVersion
+		}
+	case TaskPatch:
+		switch {
+		case value.Project != nil || value.Parent != nil:
+			return ProjectFlagRecordVersion
+		case value.MergeInto != nil:
+			return MergeRecordVersion
+		}
 	}
 	return RecordVersion
 }
@@ -376,6 +432,20 @@ func (t ScopeTerm) container() string {
 	}
 	return t.Container
 }
+
+// unplacedPath is the path a READ probes for an object it cannot place in a
+// container: a task this node does not hold, named by its id.
+//
+// UNDER THE DOMAIN AND UNDER NO CONTAINER. The object's own path sits beneath
+// a container this node cannot name, and naming one anyway — the workspace,
+// which is what an object term with no container resolves to — would meet
+// every record filed in that container and none filed where the object lives.
+// No record's path passes through the domain's object segment, so the only
+// ancestor of this path any record is filed under is the domain's own: the
+// probe meets a record about the whole tracker, and nothing a container holds.
+//
+// NO TERM RENDERS IT, so no record ever declares it. It is a read's scope only.
+func unplacedPath(id string) string { return join(pathDomain, pathObject, id) }
 
 // join builds a scope path from its segments, skipping empty ones so a
 // missing id can never produce a path with a hole in it.
@@ -742,7 +812,7 @@ type MutationRecord struct {
 	// arbitrated exactly like a loud one, and writes its history row like
 	// every other: quiet means it wakes nobody, and nothing else.
 	//
-	// IT NO LONGER CARRIES THE KIND ALONE — see [MutationRecord.Kind].
+	// THE KIND HAS A CARRIER OF ITS OWN — see [MutationRecord.Kind].
 	// When both are present they must agree, which [Writer.decide]
 	// checks: one fact with two carriers is one fact that can disagree
 	// with itself.

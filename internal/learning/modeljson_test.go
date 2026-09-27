@@ -101,11 +101,11 @@ func TestEveryModelJSONParserSurvivesTheSameMalformations(t *testing.T) {
 			if err != nil || summary.CommonTaskPattern != "triage" {
 				t.Errorf("ParseSummary declined a %s answer: %+v %v", name, summary, err)
 			}
-			// The skill synthesizer.
-			draft, ok := parseSkillDraft(t.Context(), completionOf(
+			// The skill synthesizer, the cluster pass and the promotion.
+			draft, answer := readSkillDraft(t.Context(), completionOf(
 				wrap(`{"name":"n","description":"d","content":"c"}`)))
-			if !ok || draft.Name != "n" {
-				t.Errorf("parseSkillDraft declined a %s answer", name)
+			if answer != skillDrafted || draft.Name != "n" {
+				t.Errorf("readSkillDraft read a %s answer as %s", name, answer)
 			}
 			// The skill refiner.
 			choice, ok := parseRefinement(t.Context(), completionOf(

@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -86,8 +87,10 @@ func TestTheTurnFallbackDoesNotInventSpend(t *testing.T) {
 		ID: "e-1", Type: "message_delivered", Source: "engine", Category: "comms",
 		Time: at.Add(time.Second),
 		Tags: map[string]string{"turn_id": "turn-1"},
-		// A payload that WOULD look like spend if anything read it here.
-		Payload: []byte(`{"turn_id":"turn-1","total_tokens":999,"model":"ghost"}`),
+		// A payload that WOULD look like spend if anything read it here,
+		// its price and its split included.
+		Payload: []byte(`{"turn_id":"turn-1","total_tokens":999,"model":"ghost",` +
+			`"cost_usd":5,"models":[{"model":"ghost-split","input_tokens":999}]}`),
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -102,7 +105,7 @@ func TestTheTurnFallbackDoesNotInventSpend(t *testing.T) {
 		t.Errorf("the turn totals %d tokens, want the phase's 10 — a delivery "+
 			"was credited with a phase's numbers", rows[0].TotalTokens)
 	}
-	if rows[0].Models != "real" {
+	if !slices.Equal(rows[0].Models, []string{"real"}) {
 		t.Errorf("models = %q, want only the phase's", rows[0].Models)
 	}
 }

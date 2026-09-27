@@ -1558,6 +1558,67 @@ func TestADraftingRecordIsMadeInTheUnitsCurrentContainer(t *testing.T) {
 	}
 }
 
+// A CREATE ASKED FOR IN ANOTHER CONTAINER CLAIMS NOTHING IN THIS ONE.
+//
+// A drafting record that asked for its page in the container the unit filed
+// in then says so, and a page found under its title THERE is its own. The page
+// is made where the unit files now, and no create was asked for there — so a
+// page already holding the title in the unit's current container is somebody
+// else's: another unit's draft in a shared space, or a person's page. Adopted,
+// it would file this convergence as drafted on a page about something else and
+// drop the body the record holds; the draft is re-titled and made instead.
+func TestACreateAskedForInAnotherContainerAdoptsNothingHere(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	ledger := memory.NewFleet()
+	title := knowledge.AutoDraftTitlePrefix + "cut-a-release"
+	drafting := `{"v":1,"state":"drafting","tools":["announce","build","fetch","tag"],` +
+		`"agents":3,"backend":"fake","name":"cut-a-release","container":"GONE",` +
+		`"title":` + fmt.Sprintf("%q", title) + `,"body":"the record's own page",` +
+		`"tried":true,"at":"2026-01-01T00:00:00Z"}`
+	if _, _, err := ledger.CreatePromotion(t.Context(), coord.PromotionRecord{
+		Unit: "Platform", Fingerprint: "fp", Value: []byte(drafting),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	w := &fakeWriter{}
+	held := w.seed(title)
+	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
+		learning.PromoterOptions{MinSiblings: 3})
+
+	out := p.Pass(t.Context())
+	if len(out) != 1 {
+		t.Fatalf("payloads = %v, want the draft made in ENG under a title of its "+
+			"own", out)
+	}
+	ev := out[0].(types.SkillPromoted)
+	if ev.PageID == held {
+		t.Fatalf("the record adopted the page %s it never asked for, on the "+
+			"strength of a create asked for in GONE", held)
+	}
+	if !strings.HasPrefix(ev.PageTitle, title+" (") || ev.ContainerKey != "ENG" {
+		t.Errorf("the draft is %q in %s, want %q with a suffix of its own, in ENG",
+			ev.PageTitle, ev.ContainerKey, title)
+	}
+	calls := w.calls()
+	if len(calls) != 2 || calls[1].container != "ENG" ||
+		calls[1].body != "the record's own page" {
+		t.Errorf("draft calls = %+v, want the held title and then a title of its "+
+			"own in ENG, carrying the record's body", calls)
+	}
+	got := records(t, ledger, "Platform")
+	if len(got) != 1 || got[0]["state"] != "drafted" || got[0]["page_id"] != ev.PageID {
+		t.Errorf("the ledger holds %v, want the page this pass made", got)
+	}
+	if model.calls != 0 {
+		t.Errorf("model calls = %d, want none: the record held the page", model.calls)
+	}
+}
+
 // A REJECTION THAT CANNOT BE READ LEAVES THE DRAFT STANDING. An error is never
 // a rejection: a pass that recorded an outage as one would hold, for good, a
 // decision nobody made.

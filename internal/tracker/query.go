@@ -60,7 +60,7 @@ const (
 	// A project and a ninety-day window make it a range over
 	// `(project_key, log_seq DESC)`. Ninety because it is a quarter, which
 	// is the span somebody actually asks a question like this about. The
-	// alternatives were refused: pushing `q=` through the lexical index is
+	// alternatives do not hold: pushing `q=` through the lexical index is
 	// a second search surface for a facet nobody asked to rank, and
 	// DEFAULTING to a window silently answers a different question than the
 	// one asked. See [Reader.Activity].

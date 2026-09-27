@@ -725,10 +725,10 @@ func bulkTasks(t *testing.T, r *roundTrip, n int, project string) {
 // A GROUPING IS REFUSED ON WHAT IT WOULD SORT, never on which keys are present.
 //
 // A gate asking for "a narrowing filter — a status_group, an assignee, a unit
-// or a date bound" is satisfied by `status_group=not_started` while nothing is
-// narrowed: every open task is already in it. So the case files one row past
-// the ceiling, asks WITH that filter, and expects the refusal anyway — which
-// is the whole difference between a gate on a name and a gate on a count.
+// or a date bound" is satisfied by a `status_group=` that narrows nothing. So
+// the case files one row past the ceiling, every one of them not started, asks
+// WITH `status_group=not_started`, and expects the refusal anyway — which is
+// the whole difference between a gate on a name and a gate on a count.
 func TestAGroupingIsRefusedOnTheRowsItWouldSortRatherThanOnAKey(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -740,7 +740,7 @@ func TestAGroupingIsRefusedOnTheRowsItWouldSortRatherThanOnAKey(t *testing.T) {
 	})
 	if !errors.Is(err, tracker.ErrTooBroad) {
 		t.Fatalf("a workspace grouping over %d rows answered %v, want "+
-			"ErrTooBroad: a filter every open task satisfies narrows nothing, "+
+			"ErrTooBroad: a filter every task in the set satisfies narrows nothing, "+
 			"and a gate that accepted it is a gate a caller clears in one "+
 			"attempt without making the query any cheaper",
 			tracker.GroupByRowCeiling+1, err)

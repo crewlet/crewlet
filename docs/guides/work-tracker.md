@@ -65,6 +65,35 @@ four times. **Nothing in this build records one:** the engine does not call
 the tracker's turn record, so every task's counters read zero, and so do
 `sort=spend` and the `spend_*` totals.
 
+### A subtree lives in its root's project
+
+A subtask is filed in its **parent's project**. `create_work_item` files it
+there when the call names no `project`, and refuses any other, naming the
+parent's — a board draws a subtree in its root's project, so a subtask filed
+elsewhere would be one nobody looking at that board sees.
+
+Some writes can still leave an item outside its root's project, because each
+is a write to one item and the broker never weighs one item's write against
+another's: a merge that moves the duplicate's subtasks onto an item in another
+project, or a subtask filed under an item at the moment that item's subtree is
+being carried into another project. Every node marks such an item —
+`flag=inconsistent_project` in the attention queue — and the engine's own
+`tracker` sweep carries it into its root's project: the item and whatever is
+under it, one at a time and top-down, each **re-keyed** in that project with
+its old key kept, so a key somebody pasted still finds it. The sweep leaves a
+subtree alone while a walk that moves it is still running, leaves an item in
+the trash until it is restored, and logs `tracker_split_finished` for each
+subtree it carries across. An item in a **cycle** is marked `cycle` instead: a
+cycle has no root to move into, so somebody breaks it first.
+
+The writes that can carry an item or its root into another project — filing a
+subtask, re-parenting or moving an item, and a purge, which moves the purged
+item's children onto its own parent — are in a record format a build older
+than the one that writes them cannot read. During a rolling upgrade a node on
+such a build holds them back, with every later change they cover, and its
+applier stops at such a purge, until it is upgraded — see
+[what a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks).
+
 ## The catalogue
 
 Two declarations, and they are the company's own vocabulary: what a task may
@@ -547,7 +576,7 @@ CHANGE rather than about state:
 | Tool | What it does |
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. A view that **groups** answers as the same list too: a grouped answer draws a bounded number of columns and a bounded slice of each and mints no cursor, so through this tool the rest of a column could not be reached at all — flattened, the view's filter and order come back as rows with a `next_cursor`, and nothing is cut. A view that **pins one column** (`group=`, or a `subgroup=` lane) is refused naming the column, because dropping the axis would drop the narrowing with it; pass the filter the column stands for instead. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
-| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`history_truncated`** says the change feed was cut and `task_activity` holds the rest; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere). An item a record from a newer build covers — one this node holds but cannot apply yet — is **refused** (`deferred`) rather than answered with a gap the way a list is, because that one item's rows may already be wrong |
+| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`history_truncated`** says the change feed was cut and `task_activity` holds the rest; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere). An item a record from a newer build covers — one this node holds but cannot apply yet — is **refused** (`deferred`) rather than answered with a gap the way a list is, because that one item's rows may already be wrong. So is an item this node does not hold when a record it holds but cannot apply could be the one creating it: the tool answers that it could not check rather than that there is no such item, because a seat told "no such item" files the duplicate |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
 | `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. `duplicate_of` links the item as a duplicate of one other: an item duplicates one thing, so the link **replaces** any `duplicate_of` link it already had, resolved against the item's links inside the write's own transaction. It is a link and nothing more — `merge_work_item` is what closes the duplicate and moves its work |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |

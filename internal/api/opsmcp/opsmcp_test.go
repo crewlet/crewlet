@@ -116,14 +116,20 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 }
 
 // A WRITE IS ATTRIBUTED TO THE CREDENTIAL, never to a seat and never to a
-// name the caller chose.
+// name the caller chose — and ONE OPERATOR IS ONE NAME on the work and the
+// pages: `operator:` and the token's name.
+//
+// The token here is named like a seat, which is the case the spelling exists
+// for: both halves compare a record's author with seats' handles when they
+// decide who to wake, so a token's bare name would silence — and, as a create's
+// watcher, subscribe — the seat that holds it.
 //
 // The alternative — letting the caller name a seat to act as — was rejected
 // because it lets anybody holding the token write as anybody, and a tracker
 // whose author field is chosen by the writer is not an audit trail.
 func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	t.Parallel()
-	ctx := auth.WithOperator(t.Context(), "ops-bot")
+	ctx := auth.WithOperator(t.Context(), "eng")
 
 	actor, err := opsmcp.WorkActor(ctx, nil)
 	if err != nil {
@@ -132,17 +138,25 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	if actor.Kind != tracker.AuthorOperator {
 		t.Errorf("an operator write is attributed as %q", actor.Kind)
 	}
-	if actor.OperatorID != "ops-bot" {
+	if actor.OperatorID != "eng" {
 		t.Errorf("the record names the operator %q", actor.OperatorID)
 	}
-	// THE AUTHOR IS THE TOKEN'S OWN NAME, and the KIND is what says it is
-	// not a seat. An empty author is the one thing this surface must never
-	// record — a history row nobody can attribute — so the discriminator
-	// is the kind, which every renderer and every recipient rule already
-	// reads, rather than the emptiness of a string.
-	if actor.Handle != "ops-bot" {
-		t.Errorf("an operator write is authored by %q, want the token's name",
-			actor.Handle)
+	// THE HANDLE IS THE TRACKER'S SPELLING OF THE OPERATOR, because the
+	// work tools write it as the author, the reporter and a create's first
+	// watcher — and the seat eng's own handle in any of the three is a
+	// write by, a report from and a subscription for somebody else.
+	if actor.Handle != "operator:eng" {
+		t.Errorf("an operator write is authored by %q, want operator:eng — the "+
+			"bare name is the seat eng's handle", actor.Handle)
+	}
+	// AND THE TRACKER ADMITS IT: a writer derived from this actor, as the
+	// operator surface derives one, passes the identity rule rather than
+	// failing every write it is handed.
+	if _, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: &statelog.Publisher{}, Actor: actor.Handle,
+		ActorKind: actor.Kind, OperatorID: actor.OperatorID,
+	}); err != nil {
+		t.Errorf("the tracker refuses the operator surface's own actor: %v", err)
 	}
 
 	// THE KNOWLEDGE BASE NAMES THE SAME TOKEN AND NO SEAT. A page actor's
@@ -154,7 +168,7 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PageActor: %v", err)
 	}
-	if page.Kind != pages.AuthorOperator || page.OperatorID != "ops-bot" {
+	if page.Kind != pages.AuthorOperator || page.OperatorID != "eng" {
 		t.Errorf("a page write is attributed as %+v", page)
 	}
 	if page.Handle != "" {
@@ -162,11 +176,11 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 			page.Handle)
 	}
 	// THROUGH `Name`, which is what actually lands in the history row and
-	// what the feed compares recipients against: a name with the colon no
-	// seat handle can carry.
-	if got := page.Name(); got != "operator:ops-bot" {
-		t.Errorf("a page history row records the author as %q, want "+
-			"operator:ops-bot", got)
+	// what the feed compares recipients against — and the SAME NAME the
+	// work half records, so an audit reading both finds one operator.
+	if got := page.Name(); got != actor.Handle {
+		t.Errorf("a page history row records the author as %q and a work item "+
+			"as %q — one operator, two names", got, actor.Handle)
 	}
 }
 

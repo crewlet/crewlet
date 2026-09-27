@@ -930,7 +930,7 @@ func TestAMirrorSweepRepairsEveryEdgeBehindOneBlocker(t *testing.T) {
 // tick read at all. It says nothing about the edges the tick DID read — and a
 // tick that read sixty-four and committed one prints exactly the `truncated` a
 // tick that committed all sixty-four prints. That is the same unmarked cut the
-// flag was added to close, one layer in, and it is the reachable one: a
+// flag closes, one layer in, and it is the reachable one: a
 // commit's failure is WARNed and stepped over, deliberately, so that one
 // wedged counterparty does not hold up every other repair in the company.
 //
