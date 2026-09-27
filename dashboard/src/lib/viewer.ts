@@ -50,6 +50,12 @@ export interface ViewerState {
    */
   acts: readonly string[];
   kind: "agent" | "human" | "";
+  /**
+   * The project this person's create lands in when it names none — the
+   * engine's own default for their seat, never a guess from the chart — or
+   * "" when there is none, and a create must name one.
+   */
+  project: string;
   /** A token is presented and no seat names its id. */
   unbound: boolean;
   /** No token is presented at all. */
@@ -95,6 +101,7 @@ function useViewerRead(): ViewerState {
     handle,
     name: data?.name ?? "",
     acts: data?.acts ?? [],
+    project: data?.project ?? "",
     kind: (data?.kind as ViewerState["kind"]) ?? "",
     unbound: operatorID !== "" && handle === "",
     anonymous: !unknown && operatorID === "",

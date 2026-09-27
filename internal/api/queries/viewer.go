@@ -56,6 +56,12 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// the engine refuses. ALWAYS AN ARRAY, never null, so "may do
 		// nothing" is a value a reader can test rather than an absence.
 		"acts": []string{},
+		// WHERE THIS PERSON'S CREATE LANDS when it names no project — the
+		// project `create_work_item` defaults a person's create to, from
+		// the same derivation. "" is a real answer: a seat whose team, and
+		// every team above it, owns no project, whose create is refused
+		// until one is named.
+		"project": "",
 	}
 	seat := s.seatForOperator(operatorID)
 	if seat == nil {
@@ -75,6 +81,10 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		kind = org.KindAgent
 	}
 	out["kind"] = string(kind)
+	// THE CHART THIS ANSWER WAS READ FROM, through the one derivation the
+	// operator surface's create applies (`engine.ProjectOfSeat`), so the
+	// project promised here is the project the create files into.
+	out["project"] = s.projectOf(seat.Handle())
 	return out, nil
 }
 

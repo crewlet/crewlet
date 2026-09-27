@@ -15,7 +15,13 @@
 
 import { Callout, Card, Tag, cx } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { CalendarGlyph, CircleAlertGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CalendarGlyph,
+  CircleAlertGlyph,
+  CircleCheckGlyph,
+  CircleGlyph,
+  UserGlyph,
+} from "@crewlethq/icons/glyphs";
 // STILL OURS: a task TYPE's mark is named by the company's own type table as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays in
 // `~/ui/Icon.tsx`, which is where one change moves every caller at once.
@@ -124,6 +130,26 @@ export function PriorityMark({ priority, word }: { priority?: string; word?: boo
         </span>
       ) : null}
       {word ? <span>{priority}</span> : <span className="sr-only">{priority} priority</span>}
+    </span>
+  );
+}
+
+/**
+ * A status as a mark: a hollow ring while the work is open, a check once it
+ * was delivered — the approved palette's task row.
+ *
+ * THE SHAPE SAYS "DONE", AND THE TONE IS THE STATUS'S OWN (`STATUS_TONE`):
+ * blue while somebody is on it, green once delivered, no hue for work nobody
+ * has started or that was closed or cancelled. Cancelled finished without
+ * being delivered, so it keeps the hollow ring rather than claiming a check.
+ * Decorative: every caller prints the status's word beside it.
+ */
+export function StatusMark({ status }: { status: string }) {
+  const tone = STATUS_TONE[status] ?? "neutral";
+  const delivered = status === "done";
+  return (
+    <span className={cx("work-status-mark", tone)} aria-hidden="true">
+      {delivered ? <CircleCheckGlyph size="sm" /> : <CircleGlyph size="sm" />}
     </span>
   );
 }

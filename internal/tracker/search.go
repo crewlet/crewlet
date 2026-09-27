@@ -43,6 +43,11 @@ type Ranked struct {
 	Type     string `json:"type"`
 	Status   Status `json:"status"`
 	Assignee string `json:"assignee,omitempty"`
+	// Priority is the item's own, so a ranked answer says how much a hit
+	// matters beside what it is — the palette draws it as the Board does,
+	// and a seat weighing which of twenty hits to open reads it as the
+	// board's reader would.
+	Priority Priority `json:"priority"`
 	// Rank is this hit's 1-based place in the answer.
 	//
 	// A PLACE AND NOT A SCORE, because a place is what the fan-out
@@ -226,7 +231,7 @@ func (s *Searcher) itemsByID(ctx context.Context, docs []RankedDoc) (map[string]
 	out := make(map[string]Ranked, len(ids))
 	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, key, project_key, type, title, status, assignee
+			SELECT id, key, project_key, type, title, status, assignee, priority
 			  FROM tracker_tasks
 			 WHERE removed_at IS NULL AND id IN (`+placeholders(len(ids))+`)`,
 			ids...)
@@ -237,7 +242,7 @@ func (s *Searcher) itemsByID(ctx context.Context, docs []RankedDoc) (map[string]
 		for rows.Next() {
 			var row Ranked
 			if err := rows.Scan(&row.ID, &row.Key, &row.Project, &row.Type,
-				&row.Title, &row.Status, &row.Assignee); err != nil {
+				&row.Title, &row.Status, &row.Assignee, &row.Priority); err != nil {
 				return err
 			}
 			out[row.ID] = row

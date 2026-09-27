@@ -31,6 +31,7 @@
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useToast } from "@crewlethq/ui";
+import { isAbort } from "~/protocol/rest.ts";
 import {
   act,
   newRequestId,
@@ -53,6 +54,25 @@ export interface Refusal {
 export interface PressLabel {
   /** What happened, past tense, naming the object: "Assigned ENG-42 to Ana". */
   done: string;
+  /**
+   * The control draws what came back in place of a toast: an answer the
+   * person asked for is shown where they asked, and a toast saying "Answered"
+   * over the answer itself is the same fact twice. Applied, pending and
+   * unknown then raise no toast and the caller renders the result `run`
+   * resolves with; a refusal is held on the hook exactly as for any press.
+   */
+  quiet?: boolean;
+}
+
+/** How one press is sent. */
+export interface RunOptions {
+  /**
+   * Abandons the press: `run` resolves with null and nothing is reported.
+   * For a press that a later one supersedes (the palette's answer, when the
+   * question changes) — never for a change the person made, whose outcome
+   * they are owed.
+   */
+  signal?: AbortSignal;
 }
 
 export interface Act<T extends ActionTool> {
@@ -62,8 +82,11 @@ export interface Act<T extends ActionTool> {
   busy: boolean;
   /** The last press's refusal, until the next press. */
   refusal: Refusal | null;
-  /** Make the change. Resolves with what it came to, or null when nothing was sent. */
-  run: (args: ActionArgs<T>, label: PressLabel) => Promise<ActResult | null>;
+  /**
+   * Make the change. Resolves with what it came to, or null when nothing was
+   * sent or the press was abandoned through its signal.
+   */
+  run: (args: ActionArgs<T>, label: PressLabel, options?: RunOptions) => Promise<ActResult | null>;
   /**
    * Send the press `refusal` answered again — its arguments and its request
    * id — or nothing when there is no refusal to retry.
@@ -111,17 +134,29 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
     can.current = access.can;
   }, [access.can]);
 
+  // PRESSES IN FLIGHT, COUNTED: a press abandoned while a newer one is out
+  // settles first, and a plain flag it cleared would call the newer one done.
+  const inFlight = useRef(0);
+
   const send = useCallback(
-    async (press: Press<T>): Promise<ActResult | null> => {
+    async (press: Press<T>, signal?: AbortSignal): Promise<ActResult | null> => {
       if (!can.current) return null;
+      inFlight.current += 1;
       setBusy(true);
       setRefused(null);
       let result: ActResult;
       try {
-        result = await act(tool, press.args, { requestId: press.requestId });
+        result = await act(tool, press.args, { requestId: press.requestId, signal });
+      } catch (err) {
+        // ABANDONED, which is the caller's own doing and not an answer:
+        // nothing to report, and nothing to retry.
+        if (isAbort(err)) return null;
+        throw err;
       } finally {
-        setBusy(false);
+        inFlight.current -= 1;
+        setBusy(inFlight.current > 0);
       }
+      if (press.label.quiet && result.kind !== "refused") return result;
       switch (result.kind) {
         case "applied":
           toast.ok(press.label.done);
@@ -160,7 +195,8 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
   // A NEW PRESS IS A NEW REQUEST ID, minted here in the handler and never
   // per attempt: only a retry of that press reuses it.
   const run = useCallback(
-    (args: ActionArgs<T>, label: PressLabel) => send({ args, requestId: newRequestId(), label }),
+    (args: ActionArgs<T>, label: PressLabel, options?: RunOptions) =>
+      send({ args, requestId: newRequestId(), label }, options?.signal),
     [send],
   );
 

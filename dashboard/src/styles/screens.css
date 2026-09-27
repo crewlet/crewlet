@@ -2432,6 +2432,19 @@ details > summary.int-summary::-webkit-details-marker {
    value drawn a step smaller and in a status hue than every value beside it
    read as a warning rather than as a setting. The MARK carries the scale; only
    `urgent`'s alert mark takes a tone. */
+/* A status as a mark (`components/work.tsx` StatusMark): the status's own
+   tone, the tertiary ink where it has none. */
+.work-status-mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.work-status-mark.info {
+  color: var(--color-feedback-info-ink);
+}
+.work-status-mark.positive {
+  color: var(--color-feedback-success-ink);
+}
 .work-prio {
   display: inline-flex;
   align-items: center;

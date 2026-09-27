@@ -1328,6 +1328,7 @@ for the keys is the reader who does not know `?` yet.
 | On a page with tabs | `1`–`9` go to that tab |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
+| In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
 | In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
 `Mod` is Command on a Mac and Control elsewhere, and every hint is drawn in
@@ -1338,8 +1339,12 @@ rows it answers — `{"peek.close": close}` — and the table says which key tha
 is, so no two places can spell one key two ways. `keymap.test.tsx` refuses two
 rows answering one press where both can be live: the page's scopes are all
 live together (a list, with a peek open, on an object with tabs, beside a
-chart), so a press is unique across them, and the layer's rows are their own
-namespace because every page key stands aside while a layer is up. Rows the
+chart), so a press is unique across them, and the layer's rows — search's
+among them, since the palette is a layer — are their own namespace because
+every page key stands aside while a layer is up. Search's accelerators take
+`Alt` rather than a bare letter because they are pressed in its field, where
+a bare letter is a letter of the query; they match the physical key, since
+Option+A on a Mac types `å`. Rows the
 design system binds itself — the canvas's zoom, the layer's Escape — are in
 the table so the legend is the whole answer and the collision check sees
 them, and `useKeymap` refuses to bind one a second time. Nothing else binds a
@@ -1674,67 +1679,151 @@ look like one rewritten in the middle. "This save did not change the body" is
 its own answer, because a title, a label and a move are saved beside a body
 and a pane of unmarked lines reads as one that failed to load.
 
-## The palette has scopes, and remembers
+## ⌘K: search, answer, act
 
-A launcher with one index answers "where do I go", and three questions do not
-fit that shape. Each gets a **sigil**, typed in the same box in the same
-keystroke:
+The command palette is one box for the whole product: where to go, what the
+company knows, and the three changes a person most often makes from a search.
+It is the design system's `CommandPalette` — the combobox, the scope tabs, the
+answer's live region and the key legend are the kit's — and `app/palette/` is
+what it searches and what a row does.
 
-| Typed | Searches |
-|---|---|
-| *(nothing)* | screens, seats, units, tools, and any event / trace / turn id pasted out of a log |
-| `#` | the company's **work**, ranked — a server query, which is why it cannot be folded into the index above |
-| `@` | **people** — seats and units only, so a colleague is not buried under four tools whose names happen to match |
-| `>` | **commands** — theme, density, copy link, set token — which have no name to search for at all |
+### Five scopes, three sigils
 
-The scopes are named in the palette's footer with the one in use marked: a
-sigil nobody is told about is a feature that does not exist.
+A launcher with one index answers "where do I go", and four questions do not
+fit that shape, so each is a tab under the field:
+
+| Scope | Searches | Sigil |
+|---|---|---|
+| **All** | screens, a pasted event / trace / turn id, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, and the answer's remaining sources; recents when nothing is typed | |
+| **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
+| **Pages** | `knowledge`, the company's one knowledge backend | |
+| **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's ring from the agents push, then people and teams | `@` |
+| **Actions** | the per-browser commands — theme, density, dates, time zone, copy link, set token, clear recents, the key legend — and the three changes; the legend names who they are made as | `>` |
+
+`Tab` and `Shift+Tab` walk the tabs from the field, and a sigil typed at the
+start selects its tab and leaves the box, so the tab row — not a character the
+reader has to know is special — says where they are.
+
+**A server search has four answers, and each says which.** Too short to run
+(under two characters), searching, refused — the refusal in the one table of
+what each code means, since "this node does not serve it" and "the socket went
+away" both read as "nothing matched" otherwise — and nothing matched. A
+building index is its own sentence, because the work exists and is not
+findable from this node yet. A term's hits are never shown under the next
+term: the answer on hand is remembered against the term it answers.
+
+The pill at the end of the scope row is the mode the search was SERVED in —
+"Hybrid search", or "Keyword search" on a company with no embeddings — never
+the mode asked. At most three of the socket's four query slots are the
+palette's (`work_search`, `knowledge`, `colleague`; a picker holds two), so the
+screen under it keeps one. The company's projects (`work_projects`) are read
+once as the palette opens, before a term can be typed, so they never contend
+with the three. A term longer than the engine resolves to a colleague (200
+bytes — a pasted log line) is not sent to `colleague`, and the chart's own
+matching answers it; the cap is `COLLEAGUE_QUERY_MAX` in the contract, held to
+the engine's by a Go gate.
+
+### The answer, and when it spends tokens
+
+A term that reads as a question — **three words and twelve characters** —
+gets an answer from the company's own pages and tasks above the rows, written
+by `answer_knowledge` as the person asking. Every answer is a model call
+charged to the company's budget windows, so it is asked only when:
+
+- the scope is All or Pages;
+- typing has paused for **800 ms** (a typist's gap is 150–250 ms, so this is a
+  question finished rather than one being typed);
+- this browser may ask: a token bound to a person, on an engine that answers;
+- the question has not been answered already this session — answers are kept
+  per normalised question for as long as the page is open.
+
+At most one is in flight: a new term abandons the question before it, and an
+answer is only ever drawn under the term it answers. It shows its sources as
+chips numbered the way the answer cites them (`[1]`) — one line of them, the
+first four and "+N" — and every source the hits did not already list is a row
+under **Sources of the answer**, below the actions, so the keyboard reaches
+all of them and the three changes stay in the first screen. A term that reads
+as a question also trims All to two task and two page hits, from the moment it
+is typed rather than when the answer lands, so the list does not shrink under
+the highlight. The answer ends with a footnote in **tokens** — "1,440 tokens, charged to
+the company", or "Answered before — no tokens spent" — never money. An
+anonymous or unbound reader gets one line instead: *Set a token bound to your
+seat to get an answer from your company's knowledge.*
+
+### Three changes, made as you
+
+Each is a `useAct` write, attributed to the person the token is bound to
+(ADR-0024), and each row is drawn for every reader — where this browser cannot
+act, its hint is the reason, and a press on it says so again rather than doing
+anything.
+
+| Row | Key | What it does |
+|---|---|---|
+| Assign {KEY} to an agent… | `Alt+A` | Opens a picker over the agents — the one holding the task marked "holds it" — and assigns the task at hand (the one on screen, else the best task hit) on a pick — `update_work_item`, conditioned on the version the picker read, so a task somebody moved meanwhile is refused rather than overwritten |
+| Ask {agent} about "…" | `Mod+Enter` | Files the term as an ask on a new task (`create_work_item{title, assignee, ask}`), whose answer lands in the asker's Inbox; with an answer on screen, the task's body carries it |
+| Create task "…" | `Alt+C` | Files the term as a task and opens it |
+
+**Nothing is picked for the person.** The agent a row suggests is the one the
+term NAMES — the engine's `colleague` `match`, set only when exactly one seat
+matches through the same tiers an agent's `lookup_colleague` uses. Several is a
+list and no name is the whole roster; either way the person presses the row.
+The same holds for where a create lands: the project on screen, else the one
+the person's own create defaults to (`viewer.project`, the engine's own
+derivation — the one the operator surface's `create_work_item` applies), and
+the row names it ("in ENG · Core platform", why that one on hover). Where
+neither says, the press opens a **project step** listing the company's
+projects, the one the top task hit is filed in first as a suggestion — so a
+founder on Home can file work without first navigating to a project. The only
+reason a create is refused outright is a company with no project at all.
+
+**A row that cannot act is drawn, not disabled.** The kit's palette rows take
+no disabled state, so a write this browser may not make (F-7) stays a row
+whose hint is the reason; a press on it — or its key — adds that reason as a
+line UNDER the answer, never in its place, and sends nothing. A screen reader
+hears the reason as part of the row.
+
+A write row keeps the palette open until the engine answers: a refusal is drawn
+in it, in the engine's words, because a refusal on a palette that already closed
+is one nobody reads. An applied or pending change closes it with a toast; an
+unknown one closes it with the toast that stays, carrying Retry.
+
+### It remembers, and it closes
 
 An empty palette offers **recents** — the last few objects this reader opened,
 most recently visited first, per browser. Objects only: anything the sidebar
-already lists is left out, because a recents list repeating the
-navigation beside it costs a reader a scan and tells them nothing. The label
-stored is the one the **screen** resolved, which lands a render after the route
-— so a recents row says what a turn did, what a trace began at, what a coding
-run was asked for, and falls back to the id only where nothing has named the
-object yet. See [A screen publishes what the chrome needs](#the-frame).
+already lists is left out, because a recents list repeating the navigation
+beside it costs a reader a scan and tells them nothing. The label stored is
+the one the **screen** resolved, which lands a render after the route — so a
+recents row says what a turn did, what a trace began at, what a coding run was
+asked for, and falls back to the id only where nothing has named the object
+yet. See [A screen publishes what the chrome needs](#the-frame).
 
 **One reader, so one order: most recently visited first.** The palette is
 opened fresh, ranks what it offers and closes, so it has a re-sort boundary and
 "where I just was" is what an empty query should put first; the list is stored
 that way, and at its cap of eight the bottom row — the place nobody has opened
 in longest — leaves. The sidebar keeps no recents: a place a reader keeps on
-purpose is a star, and a sidebar that also carried what was merely opened is
-the tree the one sidebar replaced. (While a workspace sidebar did draw a Recent
-section, the list was stored in arrival order so a drawn row would not move
-under the pointer, and the cap was counted per workspace — which let an empty
-palette open on up to eight rows for each of nine workspaces once that section
-was gone.) A route no workspace owns is not remembered, and a stored row whose
-route this build no longer has is dropped when the list is read.
+purpose is a star. A route no workspace owns is not remembered, and a stored
+row whose route this build no longer has is dropped when the list is read.
 
 **And a name is never replaced by an identifier.** Every screen publishes its
 object's name a render after the route, so the first write of every navigation
 carries the raw segment — a uuid for a turn — and the second carries the name.
-Overwriting on the first is fine on a first visit and wrong on a revisit:
-opening a recent re-navigates to it, so the row the reader pressed lost its
-title to a hex string at the instant they pressed it, until the query came
-back. `remember` takes whether a screen supplied the label, asked once of the
-published labels rather than as a flag each crumb branch would have to set —
-fourteen places to keep in step, of which the four nobody updated would go on
-downgrading in silence. A place nothing has EVER named still stores its id,
-because an object with no name has that and nothing else.
+`remember` takes whether a screen supplied the label, so a revisit never
+downgrades a named row to its id. A place nothing has EVER named still stores
+its id, because an object with no name has that and nothing else.
 
-A `>` command that would change nothing is not offered: the list omits the
-theme and the density already in use, because a control that says "switch to
-dark" while the page is already dark does not know what it is looking at.
+A command that would change nothing is not offered: the list omits the theme,
+the density and the date format already in use, because a control that says
+"switch to dark" while the page is already dark does not know what it is
+looking at.
 
-**And it closes when the route changes**, the way the workspace drawer does.
+**It closes when the route changes**, the way the workspace drawer does.
 Picking a row closes it on the way out, so what this covers is every other way
 the route can move while it is open — Back, Forward, a phone's back gesture, a
-restored history entry. A palette that survives one of those is left ranking
-the objects of the screen the reader just left, over a screen it knows nothing
-about. The token dialog is deliberately not in that rule: a credential prompt
-is about the reader's access rather than about where they are.
+restored history entry. `Mod+K` closes it from its own field. The token dialog
+is deliberately not in that rule: a credential prompt is about the reader's
+access rather than about where they are.
 
 ---
 
@@ -3850,8 +3939,9 @@ brings that carries a design-system rule.
   nothing, because the page behind `aria-modal` is inert and search opened
   over a dialog could navigate away from under it, unmounting an unsaved
   editor or a write whose outcome the operator has not seen. Search closes on
-  its own chord from inside it: the palette answers `Mod+K` itself while it
-  is the topmost layer, because the page's binding is standing aside for it.
+  its own chord from inside it: the palette reads `Mod+K` off its own
+  surface's keys, because the page's binding is standing aside for it — and
+  a key pressed in a dialog raised over it never reaches it.
   What happens inside an open menu stays there: its keys, presses and clicks
   do not reach the card or row it was opened from, so Enter on "Delete" is
   never also the card's Enter.

@@ -35,6 +35,25 @@
  * that is refused `invalid` the first time somebody presses it.
  */
 export const ACTIONS = {
+  create_work_item: {
+    // THE PALETTE'S TWO CREATES: "Create task" (a title, filed where the
+    // person's own create lands, or on the project they are looking at) and
+    // "Ask" (the question as the title, `ask` naming the agent who owes the
+    // answer, which lands in the asker's inbox).
+    args: ["title", "body", "project", "assignee", "ask"],
+    domain: "tracker",
+    refreshes: ["work_search"],
+    scope: "person",
+  },
+  answer_knowledge: {
+    // A WRITE THAT CHANGES NOTHING, because it SPENDS: one model call per
+    // question, and a read would be asked again on every refocus and
+    // reconnect. It lands in no log, so it raises no floor.
+    args: ["q"],
+    domain: null,
+    refreshes: [],
+    scope: "person",
+  },
   update_work_item: {
     args: ["item", "assignee", "reason", "status", "priority", "if_match"],
     domain: "tracker",

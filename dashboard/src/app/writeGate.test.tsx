@@ -20,12 +20,14 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ComponentType } from "react";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import * as writes from "~/components/writes.tsx";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
-import { type Node, isLocalSource, modules, parse } from "~/test/source.ts";
+import { SRC, type Node, isLocalSource, modules, parse } from "~/test/source.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
   useConnection: vi.fn(),
@@ -34,9 +36,29 @@ vi.mock("~/lib/store-hooks.ts", () => ({
 }));
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
-/** Every module that may make a change, and why it is one. */
-const WRITE_MODULES: Readonly<Record<string, string>> = {
-  "components/writes.tsx": "the write controls every screen draws, each rendered below",
+/**
+ * Every module that may make a change, why it is one, and the suite that
+ * renders its controls for every reader — `null` for the controls rendered
+ * below.
+ */
+const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null }>> = {
+  "components/writes.tsx": {
+    why: "the write controls every screen draws, each rendered below",
+    suite: null,
+  },
+  "app/palette/Palette.tsx": {
+    why:
+      "the command palette's three actions — ROWS of the kit's list rather than " +
+      "buttons, because focus never leaves its field — each drawn for every reader " +
+      "with the reason it cannot act as its hint",
+    suite: "app/palette/Palette.test.tsx",
+  },
+  "app/palette/answer.ts": {
+    why:
+      "the palette's answer from the company's knowledge, asked only for a reader " +
+      "who may ask, and telling an anonymous or unbound one what would let them",
+    suite: "app/palette/Palette.test.tsx",
+  },
 };
 
 /** How each control of `components/writes.tsx` is mounted, and the name it is found by. */
@@ -63,6 +85,7 @@ const NOBODY: ViewerState = {
   handle: "",
   name: "",
   acts: [],
+  project: "",
   kind: "",
   unbound: false,
   anonymous: true,
@@ -164,9 +187,27 @@ describe("the source", () => {
   });
 
   test("draws each of those controls with the gated button", () => {
-    for (const path of Object.keys(WRITE_MODULES)) {
+    for (const [path, { suite }] of Object.entries(WRITE_MODULES)) {
+      if (suite !== null) continue;
       const module = tree.find((m) => m.path === path)!;
       expect(importsOf(module.text, module.lang).has("WriteButton"), path).toBe(true);
+    }
+  });
+
+  // A MODULE WHOSE CONTROLS ARE NOT BUTTONS is rendered by its own suite, and
+  // that suite has to be one that draws them for the readers who cannot act:
+  // naming a suite is not the same as the suite covering them.
+  test("and a module drawn elsewhere names a suite that renders it for each reader", () => {
+    for (const [path, { suite }] of Object.entries(WRITE_MODULES)) {
+      if (suite === null) continue;
+      const file = join(SRC, suite);
+      expect(existsSync(file), `${path} names ${suite}, which does not exist`).toBe(true);
+      const text = readFileSync(file, "utf8");
+      for (const block of ["anonymous", "unbound", "not_served"]) {
+        expect(text, `${suite} never draws ${path} for a reader who is ${block}`).toContain(
+          `WRITE_REASONS.${block}`,
+        );
+      }
     }
   });
 

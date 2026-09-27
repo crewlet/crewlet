@@ -88,78 +88,193 @@
   min-height: var(--toolbar-h);
 }
 
+/* ---- The command palette ------------------------------------------------
+   THE KIT DRAWS THE SURFACE (`CommandPalette`): the field, the scope tabs, the
+   lead's raised box and the key legend's band. What is here is what the
+   dashboard puts IN it — the legend's two ends, the answer, the picker's head
+   and the task key's register. `.palette` is the class the kit's frame takes. */
+
+/* THE FRAME IS WHAT THE SERVED MODE IS PLACED AGAINST (below), and it opens
+   where the approved palette does: 96px down, the kit's 64px inset plus the
+   32px step. The kit caps the frame at 74dvh, so the two together fit any
+   window over 370px tall. A phone keeps the kit's inset, where the first
+   screen is too short to give a row of it away. */
 .palette {
-  width: min(620px, 100%);
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-hover);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  max-height: min(60dvh, 520px);
-  animation: rise var(--motion-duration-slow) var(--motion-easing-emphasized);
+  position: relative;
+}
+@media (width >= 640px) {
+  .palette {
+    margin-top: var(--spacing-7);
+  }
 }
 
-.palette-input {
-  width: 100%;
-  height: var(--size-row-lg);
-  padding: 0 var(--spacing-4);
-  border: none;
-  border-bottom: 1px solid var(--color-border-default);
-  background: transparent;
-  font-size: var(--font-size-md);
-  color: var(--color-text-primary);
-}
-
-.palette-results {
-  overflow-y: auto;
-  padding: var(--spacing-1);
-}
-
-.palette-group {
-  padding: var(--spacing-2) var(--spacing-3) var(--spacing-1);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  letter-spacing: var(--font-letter-spacing-wide);
-  text-transform: uppercase;
-  color: var(--color-text-tertiary);
-}
-
-.palette-item {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: 100%;
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius-sm);
-  text-align: left;
-  font-size: var(--font-size-compact);
-  color: var(--color-text-secondary);
-  min-width: 0;
-}
-
-.palette-item[aria-selected="true"] {
-  background: var(--color-brand-accent-soft);
-  color: var(--color-brand-accent-ink);
-}
-
-.palette-item .palette-hint {
-  margin-left: auto;
+/* THE GROUP HEADINGS IN THE DESIGN'S REGISTER: "Tasks", "Pages", "Actions"
+   in sentence case at the small label step, as the approved palette writes
+   them — the listbox's uppercase micro-label is a table's column head, and
+   here it shouted over rows that are themselves one quiet line each. */
+.palette .crewlet-listbox__heading {
   font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* THE LEGEND SPANS THE BAND, keys at its start and what the search is doing at
+   its end, as the approved palette draws it. The kit's start slot is sized to
+   its content; this lets it take the band so the end can sit at the end. */
+.palette .crewlet-modal__footer-start {
+  flex: 1 1 auto;
+}
+/* THE KEYS WRAP rather than run off the band: a phone's palette is 358px wide
+   and three keys with their words are not. */
+.palette-keys {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-4);
+}
+.palette-keys > span,
+.palette-scope-note,
+.palette-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
   white-space: nowrap;
 }
+/* The scope's note starts the band's end. */
+.palette-scope-note {
+  margin-left: auto;
+}
+/* The mode SERVED, as a quiet pill: "Hybrid search", or the ranking a
+   degraded search actually ran — at the END OF THE SCOPE ROW, where the
+   approved palette draws it. It is written in the legend (the kit's scope row
+   has no trailing slot) and placed against the frame: the field's band, then
+   half the scope row's, both the kit's own row tokens. The tabs never reach
+   it: five short words take 290px of a frame that is 640px or wider wherever
+   the pill is drawn, and a phone does not draw it (below). */
+.palette-mode {
+  position: absolute;
+  top: calc(var(--size-row-lg) + var(--size-row-md) / 2);
+  right: var(--spacing-4);
+  transform: translateY(-50%);
+  padding: 0 var(--spacing-2);
+  min-height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-2xs);
+}
 
-.palette-foot {
+/* A task's key inside a row's label: the mono register at the hint's ink, so
+   the title after it reads as the label. */
+.palette-key {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+/* THE ANSWER, inside the kit's raised lead. */
+.palette-answer {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.palette-answer-head,
+.palette-answer-note {
+  display: inline-flex;
   align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-2) var(--spacing-3);
-  border-top: 1px solid var(--color-border-default);
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.palette-answer-note {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.palette-answer-note.is-refused {
+  color: var(--color-feedback-danger-ink);
+}
+.palette-answer-body > :first-child {
+  margin-top: 0;
+}
+.palette-answer-body > :last-child {
+  margin-bottom: 0;
+}
+.palette-answer-wait {
+  margin: 0;
+  color: var(--color-text-tertiary);
+}
+.palette-sources-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* ONE LINE OF SOURCES: a chip gives up width before the line wraps, and the
+   ones past the first few are "+N" (`SOURCE_CHIPS`) — a second line of chips
+   is what pushed the three actions off the first screen. */
+.palette-answer-sources {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.palette-sources-label,
+.palette-sources-more {
+  flex: none;
+}
+.palette-sources-more {
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
-  background: var(--color-surface-elevated);
+}
+/* A SOURCE IS A CHIP numbered as the answer cites it ([n]), so a claim leads
+   to its document. A pointer target: every source is also a row. */
+.palette-source {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-height: 20px;
+  min-width: 4em;
+  max-width: 100%;
+  padding: 0 var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.palette-source:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-hover);
+}
+.palette-source-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palette-source-n {
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+.palette-answer-foot {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+.palette-pick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.palette-pick > p {
+  margin: 0;
+  color: var(--color-text-primary);
 }
 
 /* ---- The peek, as a column of the sheet ----------------------------------
@@ -1709,6 +1824,24 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
    here: below `breakpoint.shell` the sidebar is already the kit's drawer, and
    the sheet the whole window. What changes at a phone's width is the grid. */
 @media (width < 640px) {
+  /* A PHONE KEEPS THE PALETTE'S KEYS ON ONE LINE: the mode pill and the
+     scope note are what its band can lose without losing a key — the tabs
+     already say the scope, and the mode is a property of the answer, which
+     still reads — and so is the ask chord, which a phone has no keyboard to
+     press (its row is still a row, pressed like any other). */
+  .palette-scope-note,
+  .palette-mode,
+  .palette-keys > .palette-keys-chord {
+    display: none;
+  }
+  /* AND ITS SOURCES WRAP: four chips on one 326px line are four numbers and
+     an ellipsis each. The one-line rule is for the first screen of a desktop
+     window, where the actions under the answer have to stay in view; a
+     phone scrolls to them in any case. */
+  .palette-answer-sources {
+    flex-wrap: wrap;
+  }
+
   /* The bar's inset tightens to the sheet's own phone inset, so the trail
      starts where the screen's content does. */
   .app .page-bar {

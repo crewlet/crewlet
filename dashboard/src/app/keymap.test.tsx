@@ -8,7 +8,15 @@ import { useRef, type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, Modal } from "@crewlethq/ui";
-import { KEYMAP, KEY_SCOPES, keyRow, matchesRow, useKeymap, type KeyHandler } from "./keymap.ts";
+import {
+  KEYMAP,
+  KEY_SCOPES,
+  keyRow,
+  layerScoped,
+  matchesRow,
+  useKeymap,
+  type KeyHandler,
+} from "./keymap.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
 import { WORKSPACES } from "./nav.ts";
 import { focusSearchTarget, useSearchTarget } from "./searchTarget.ts";
@@ -25,8 +33,14 @@ function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
 }
 
 /** A press's identity: what `lib/keys.ts` compares. */
-function signature(p: { key: string; mod?: boolean; shift?: boolean; after?: string }): string {
-  return `${p.after ? `${p.after} then ` : ""}${p.mod ? "Mod+" : ""}${p.shift ? "Shift+" : ""}${p.key}`;
+function signature(p: {
+  key: string;
+  mod?: boolean;
+  alt?: boolean;
+  shift?: boolean;
+  after?: string;
+}): string {
+  return `${p.after ? `${p.after} then ` : ""}${p.mod ? "Mod+" : ""}${p.alt ? "Alt+" : ""}${p.shift ? "Shift+" : ""}${p.key}`;
 }
 
 describe("the table", () => {
@@ -37,13 +51,14 @@ describe("the table", () => {
 
   // THE PAGE'S SCOPES ARE LIVE TOGETHER — a list, with a peek open, on an
   // object with tabs, beside a chart — so a press two of them answer is a
-  // press that does two things. The layer's rows are live only while every
-  // page key stands aside, so they are their own namespace.
+  // press that does two things. The layer's rows — and the palette's, which
+  // is a layer — are live only while every page key stands aside, so they
+  // are their own namespace, shared with each other.
   test("no press is answered twice where both rows can be live", () => {
     for (const layer of [false, true]) {
       const seen = new Map<string, string>();
       const clashes: string[] = [];
-      for (const row of KEYMAP.filter((r) => (r.scope === "layer") === layer)) {
+      for (const row of KEYMAP.filter((r) => layerScoped(r.scope) === layer)) {
         for (const p of row.presses) {
           const sig = signature(p);
           const other = seen.get(sig);
@@ -203,6 +218,24 @@ describe("binding a row", () => {
   test("a row the design system binds is refused, and so is one nobody declared", () => {
     expect(() => render(<Bound handlers={{ "canvas.fit": () => {} }} />)).toThrow(/design system/);
     expect(() => render(<Bound handlers={{ "list.nxet": () => {} }} />)).toThrow(/no row/);
+  });
+
+  // ALT IS READ BY THE PHYSICAL KEY, because Option+A on a Mac types `å`: a
+  // row matched by `key` alone would never fire there. And never without the
+  // Alt — the bare letter is a letter of the palette's query.
+  test("an Alt row matches Option on a Mac's layout, and never the bare letter", () => {
+    const mac = new KeyboardEvent("keydown", { key: "å", code: "KeyA", altKey: true });
+    const bare = new KeyboardEvent("keydown", { key: "a", code: "KeyA" });
+    expect(matchesRow("search.assign", mac)).toBe(true);
+    expect(matchesRow("search.assign", bare)).toBe(false);
+    expect(matchesRow("search.create", mac)).toBe(false);
+    // And a row that names no Alt refuses one: Alt+Z is not undo.
+    const altZ = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, altKey: true });
+    expect(matchesRow("builder.undo", altZ)).toBe(false);
+  });
+
+  test("an Alt row cannot be a window chord", () => {
+    expect(() => render(<Bound handlers={{ "search.assign": () => {} }} />)).toThrow(/Alt/);
   });
 
   test("the builder's undo reads its presses from the table, Shift and a non-Latin layout included", () => {

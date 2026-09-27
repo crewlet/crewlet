@@ -42,7 +42,8 @@ import { useKeyChords, type Chord, type Sequence } from "~/lib/keys.ts";
 import { WORKSPACES } from "./nav.ts";
 
 /** Where a row is live. See the file's doc. */
-export type KeyScope = "frame" | "list" | "object" | "peek" | "canvas" | "builder" | "layer";
+export type KeyScope =
+  "frame" | "list" | "object" | "peek" | "canvas" | "builder" | "search" | "layer";
 
 /** The scopes in the order the legend draws them, with what each heading says. */
 export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
@@ -52,6 +53,7 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "object", title: "On a page with tabs" },
   { scope: "canvas", title: "On a chart" },
   { scope: "builder", title: "In the org builder" },
+  { scope: "search", title: "In search" },
   { scope: "layer", title: "In a dialog, a menu or the navigation drawer" },
 ];
 
@@ -67,6 +69,14 @@ export interface Press {
    * reports and what a reader's keycap says.
    */
   shift?: boolean;
+  /**
+   * Option on a Mac, Alt elsewhere. ONLY for a row a surface reads through
+   * [matchesRow] from inside itself — the palette's accelerators, pressed in
+   * its field, where a bare letter is a letter of the query and Alt is what
+   * turns it into a key. Matched by the physical key, because Option+A on a
+   * Mac types `å`. [useKeymap] refuses one, like Shift.
+   */
+  alt?: boolean;
   /** The key pressed first, for a two-key sequence: `g` then `h`. */
   after?: string;
 }
@@ -216,6 +226,54 @@ const PAGE: KeyRow[] = [
   },
 ];
 
+/**
+ * THE PALETTE'S OWN KEYS, read by it from its field through [matchesRow]. They
+ * are live while it is the top layer and never beside a page key, so they
+ * share a namespace with the layer's Escape and with nothing else.
+ */
+const SEARCH: KeyRow[] = [
+  {
+    id: "search.scope",
+    scope: "search",
+    presses: [{ key: "tab" }],
+    does: "Next scope — All, Tasks, Pages, Agents, Actions; Shift+Tab goes back",
+    by: "kit",
+    whileTyping: true,
+  },
+  {
+    id: "search.ask",
+    scope: "search",
+    presses: [{ key: "enter", mod: true }],
+    does: "Ask an agent about what you typed — the answer lands in your inbox",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "search.assign",
+    scope: "search",
+    presses: [{ key: "a", alt: true }],
+    does: "Assign the task at hand to an agent",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "search.create",
+    scope: "search",
+    presses: [{ key: "c", alt: true }],
+    does: "Create a task titled what you typed",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "search.back",
+    scope: "search",
+    presses: [{ key: "backspace" }],
+    does: "Back to the results, from an empty picker",
+    by: "dashboard",
+    whileTyping: true,
+  },
+];
+
 const LAYER: KeyRow[] = [
   {
     id: "layer.close",
@@ -228,7 +286,15 @@ const LAYER: KeyRow[] = [
 ];
 
 /** The table. */
-export const KEYMAP: readonly KeyRow[] = [...FRAME, ...PAGE, ...LAYER];
+export const KEYMAP: readonly KeyRow[] = [...FRAME, ...PAGE, ...SEARCH, ...LAYER];
+
+/**
+ * Whether a row is live only while a layer holds the keyboard — its own
+ * namespace, since every page key stands aside then (`lib/keys.ts`).
+ */
+export function layerScoped(scope: KeyScope): boolean {
+  return scope === "layer" || scope === "search";
+}
 
 const BY_ID = new Map(KEYMAP.map((row) => [row.id, row]));
 
@@ -252,6 +318,7 @@ export function matchesRow(id: string, e: KeyboardEvent): boolean {
       !p.after &&
       (p.key === e.key.toLowerCase() || sameLetterKey(p.key, e.code)) &&
       Boolean(p.mod) === mod &&
+      Boolean(p.alt) === e.altKey &&
       (p.shift === undefined ? true : p.shift === e.shiftKey),
   );
 }
@@ -303,6 +370,11 @@ export function useKeymap(handlers: Record<string, KeyHandler>): void {
     const run = typeof handler === "function" ? handler : handler.run;
     const when = typeof handler === "function" ? undefined : handler.when;
     row.presses.forEach((press, index) => {
+      if (press.alt) {
+        // Alt is read from inside a surface by `matchesRow`: a window chord
+        // compares no Alt and would fire for the plain letter.
+        throw new Error(`keymap: "${id}" names Alt and cannot be a window chord`);
+      }
       if (press.shift) {
         // A shifted letter is matched by `matchesRow`, never by a window
         // chord, which compares no Shift and would fire for the plain letter.
@@ -322,7 +394,12 @@ export function useKeymap(handlers: Record<string, KeyHandler>): void {
 }
 
 /** Names `@crewlethq/ui`'s `Kbd` knows, for the keys this table lowercases. */
-const CAP_NAMES: Record<string, string> = { escape: "Escape", enter: "Enter" };
+const CAP_NAMES: Record<string, string> = {
+  escape: "Escape",
+  enter: "Enter",
+  tab: "Tab",
+  backspace: "Backspace",
+};
 
 /**
  * One press as the keys of a kit `Kbd` — `["Mod", "k"]` — so a hint drawn
@@ -333,6 +410,7 @@ const CAP_NAMES: Record<string, string> = { escape: "Escape", enter: "Enter" };
 export function capsOf(press: Press): string[] {
   const caps: string[] = [];
   if (press.mod) caps.push("Mod");
+  if (press.alt) caps.push("Alt");
   if (press.shift) caps.push("Shift");
   caps.push(CAP_NAMES[press.key] ?? press.key);
   return caps;

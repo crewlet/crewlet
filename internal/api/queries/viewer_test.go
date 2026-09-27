@@ -375,3 +375,60 @@ func TestTheInboxResumeTakesTheWholePosition(t *testing.T) {
 		t.Errorf("a bare sequence = %v, want bad_params", err)
 	}
 }
+
+// THE VIEWER SAYS WHERE THEIR CREATE LANDS, from the chart the answer was
+// read from and through the engine's one derivation (`engine.ProjectOfSeat`,
+// the seat's own, else its team's, else the nearest ancestor's) — the project
+// `create_work_item` files a person's work into when it names none — so
+// "Create task" can say where rather than a screen working out a second
+// answer. The bound seat's, and "" for a caller with no seat or a seat whose
+// teams own none.
+func TestTheViewerSaysWhereTheirCreateLands(t *testing.T) {
+	t.Parallel()
+	const company = `
+name: Acme
+units:
+  - name: Engineering
+    type: department
+    project: ENG
+    children:
+      - name: Platform
+        type: team
+        roles:
+          - name: Ana Diaz
+            handle: ana
+            kind: human
+            contact:
+              crewlet_operator_id: ops-1
+roles:
+  - name: Bo Lang
+    handle: bo
+    kind: human
+    contact:
+      crewlet_operator_id: ops-2
+`
+	cfg, err := config.ParseCompany([]byte(company))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	s := queries.Sources{Company: func() *config.Company { return cfg }, Work: &stubWork{}}
+
+	answered, err := askAsOperator(t, s, "viewer", nil)
+	if got := answerMap(t, answered, err); got["project"] != "ENG" {
+		t.Errorf("project = %v, want ENG: Ana's team owns none, so her department's", got["project"])
+	}
+
+	// A SEAT WITH NO PROJECT ANYWHERE ABOVE IT answers "", the value a
+	// create must fill in — never a project borrowed from somebody else.
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	answered, err = r.Answer(t.Context(), "viewer", nil, "ops-2")
+	if got := answerMap(t, answered, err); got["project"] != "" {
+		t.Errorf("a seat no team holds: project = %v, want \"\"", got["project"])
+	}
+
+	answered, err = r.Answer(t.Context(), "viewer", nil, "")
+	if anonymous := answerMap(t, answered, err); anonymous["project"] != "" {
+		t.Errorf("an anonymous viewer's project = %v, want \"\"", anonymous["project"])
+	}
+}

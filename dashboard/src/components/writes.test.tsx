@@ -29,6 +29,7 @@ const JANE: ViewerState = {
   handle: "jane",
   name: "Jane Founder",
   acts: ["update_work_item", "restore_work_item", "set_pins", "mark_inbox"],
+  project: "",
   kind: "human",
   unbound: false,
   anonymous: false,

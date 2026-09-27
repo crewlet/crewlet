@@ -17,8 +17,9 @@ import { modules, parse, walk } from "../test/source.ts";
  * Two kinds of motion are allowed, and every animation here is declared as
  * one of them with its reason:
  *
- * - an ENTRANCE of a surface the reader opened — the palette rising, its veil
- *   fading in. It plays once, because somebody pressed something.
+ * - an ENTRANCE of a surface the reader opened — a dialog rising, its veil
+ *   fading in (the design system's own, for every dialog and the command
+ *   palette alike). It plays once, because somebody pressed something.
  * - a STEADY-STATE PULSE on something live right now — a round in flight, a
  *   run waiting on its answer, text being written. It runs for as long as the
  *   state holds rather than playing once when the state arrives, so a push
@@ -48,16 +49,6 @@ type Kind = "entrance" | "steady";
  * than leaving an exemption behind for the next one to borrow.
  */
 const ANIMATED: { selector: string; kind: Kind; why: string }[] = [
-  {
-    selector: ".veil",
-    kind: "entrance",
-    why: "The command palette's ground fading in, once, because somebody pressed ⌘K or /.",
-  },
-  {
-    selector: ".palette",
-    kind: "entrance",
-    why: "The command palette itself rising into place on the same press.",
-  },
   {
     selector: ".round.live .round-node::before",
     kind: "steady",
@@ -190,7 +181,7 @@ describe("what animates", () => {
     for (const selector of [".row.is-new", ".cell-flash", ".feed-row.entering", ".value.changed"]) {
       expect(PUSH_WORDS.test(selector), selector).toBe(true);
     }
-    for (const selector of [".veil", ".palette", ".round.live .round-node::before"]) {
+    for (const selector of [".crewlet-modal", ".palette", ".round.live .round-node::before"]) {
       expect(PUSH_WORDS.test(selector), selector).toBe(false);
     }
   });

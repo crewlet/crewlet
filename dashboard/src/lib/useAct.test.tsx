@@ -29,6 +29,7 @@ const BOUND: ViewerState = {
   handle: "jane",
   name: "Jane Founder",
   acts: ["set_pins", "update_work_item"],
+  project: "",
   kind: "human",
   unbound: false,
   anonymous: false,
@@ -245,4 +246,66 @@ test("offline, the press sends nothing and says why", async () => {
   await new Promise((r) => setTimeout(r, 20));
   expect(posts).toHaveLength(0);
   expect(document.body.textContent).toContain("Offline");
+});
+
+/** A press whose outcome the caller draws itself, abandonable through a signal. */
+function Quiet({ signal, onResult }: { signal?: AbortSignal; onResult: (r: unknown) => void }) {
+  const pin = useAct("set_pins");
+  return (
+    <button
+      onClick={() =>
+        void pin
+          .run({ views: { add: ["v1"] } }, { done: "Pinned Triage", quiet: true }, { signal })
+          .then(onResult)
+      }
+    >
+      Quiet
+    </button>
+  );
+}
+
+// A QUIET PRESS IS DRAWN BY ITS CALLER — the palette's answer, over which a
+// toast saying "Answered" would be the same fact twice — and resolves with the
+// outcome for it to draw.
+test("a quiet press raises no toast, and hands its caller the outcome", async () => {
+  engine(() =>
+    json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:950" }, 200),
+  );
+  const got = vi.fn();
+  render(
+    <ToastProvider>
+      <Quiet onResult={got} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Quiet" }));
+  await waitFor(() => expect(got).toHaveBeenCalled());
+  expect(got.mock.calls[0]![0]).toMatchObject({ kind: "applied" });
+  expect(screen.queryByText("Pinned Triage")).toBeNull();
+});
+
+// AN ABANDONED PRESS IS NOT AN ANSWER: a later question superseded it, so it
+// reports nothing and resolves with null rather than rejecting.
+test("an abandoned press resolves with null and reports nothing", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    ),
+  );
+  const controller = new AbortController();
+  const got = vi.fn();
+  render(
+    <ToastProvider>
+      <Quiet signal={controller.signal} onResult={got} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Quiet" }));
+  controller.abort();
+  await waitFor(() => expect(got).toHaveBeenCalledWith(null));
+  expect(screen.queryByText(/Could not confirm/)).toBeNull();
 });

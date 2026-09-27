@@ -23,6 +23,7 @@ const nobody: ViewerState = {
   handle: "",
   name: "",
   acts: [],
+  project: "",
   kind: "",
   unbound: false,
   anonymous: false,

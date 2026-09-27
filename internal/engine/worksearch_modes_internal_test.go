@@ -264,3 +264,28 @@ type failingEmbedder struct{ *embeddings.Fake }
 func (failingEmbedder) Embed(context.Context, string) ([]float32, error) {
 	return nil, errors.New("the provider is rate limiting")
 }
+
+// A HIT SAYS HOW MUCH IT MATTERS. The command palette draws a ranked task
+// with the Board's priority bars, and a hit that carried no priority drew
+// every result at the same weight — an urgent outage beside a nice-to-have,
+// indistinguishable on the one surface a person searches from.
+func TestAWorkSearchHitCarriesItsOwnPriority(t *testing.T) {
+	t.Parallel()
+	db := modeTestStore(t)
+	modeTestTask(t, db, "t.urgent", "Gateway backoff", "retries hammer the gateway")
+	if _, err := db.Replicated().SQL().ExecContext(t.Context(),
+		`UPDATE tracker_tasks SET priority = 'high' WHERE id = 't.urgent'`); err != nil {
+		t.Fatalf("set priority: %v", err)
+	}
+	index := search.NewIndexerOver(db, []search.LexicalSource{search.TaskSource{}})
+	modeTestSettle(t, index)
+	answer, err := modeTestSearcher(db, index, nil).Search(t.Context(), tracker.SearchQuery{
+		Text: modeTestQuery, Mode: knowledge.ModeKeyword,
+	})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(answer.Hits) != 1 || answer.Hits[0].Priority != tracker.PriorityHigh {
+		t.Fatalf("hits = %+v, want t.urgent carrying priority high", answer.Hits)
+	}
+}

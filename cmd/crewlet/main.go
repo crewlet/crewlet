@@ -2736,9 +2736,13 @@ func operatorSurface(e *engine.Engine) (*operator.Server, error) {
 			// task woke nobody at all — the lead fallback is what
 			// catches exactly that task — and with no Units every
 			// project this surface listed read as belonging to no team.
-			Leads:          engine.LiveLeads(e),
-			Units:          engine.LiveUnits(e),
-			DefaultProject: func(string) string { return "" },
+			Leads: engine.LiveLeads(e),
+			Units: engine.LiveUnits(e),
+			// A PERSON'S CREATE THAT NAMES NO PROJECT lands where their
+			// seat's work does — the derivation every seat's surface and
+			// the dashboard's `viewer` use, read per call against the
+			// current chart because this surface outlives every apply.
+			DefaultProject: engine.LiveDefaultProject(e),
 			// THE SAME CHART DECIDES WHO IS WRITING: a token bound to
 			// a human seat writes that PERSON's own state, while the
 			// author on the record stays the token.

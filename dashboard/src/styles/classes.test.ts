@@ -538,6 +538,16 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-listbox__heading",
+    why: "uilet's Listbox writes it on a group's heading, which is what the CommandPalette draws over each group of results. styles/frame.css sets it in sentence case at the small label step inside the palette (`.palette`), as the approved palette writes its group names, where the listbox's own register is the uppercase micro-label. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-modal__footer-start",
+    why: "uilet's Modal writes it on the start slot of a dialog's foot, which the CommandPalette's key legend is. styles/frame.css lets it take the band inside the palette (`.palette`), so the legend's keys stand at its start and what the search is doing at its end, as the approved palette draws them; the slot is otherwise sized to its content. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-app-shell__main",
     why: "uilet's AppShell writes it on the page column's one scroller. styles/frame.css turns smooth scrolling off on it (the router restores a position per history entry, and a smooth restore animates every Back) and publishes `--sticky-top` from it when a screen draws a toolbar. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

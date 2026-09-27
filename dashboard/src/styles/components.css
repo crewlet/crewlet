@@ -608,42 +608,6 @@ kbd {
   color: var(--color-text-tertiary);
 }
 
-/* ---- Overlay ------------------------------------------------------------ */
-
-/* WHAT IS LEFT HERE IS THE VEIL, and only because the command palette still
-   draws one: every dialog in the product is `@crewlethq/ui`'s Modal now, which
-   brings its own overlay, frame and head/body/foot bands. The four recipes
-   that used to follow this one — .dialog, .dialog-head, .dialog-body and
-   .dialog-foot — went with the component that wrote them.
-
-   The palette keeps ours because it is a modal whose header IS its input: it
-   takes uilet's layer WITHOUT uilet's frame (see app/CommandPalette.tsx), so
-   the ground it sits on has to be declared somewhere, and this is where. */
-.veil {
-  position: fixed;
-  inset: 0;
-  background: color-mix(in srgb, var(--color-surface-subtle) 72%, transparent);
-  backdrop-filter: blur(3px);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: var(--spacing-10) var(--spacing-4) var(--spacing-4);
-  z-index: var(--z-index-modal);
-  animation: fade var(--motion-duration-base) var(--motion-easing-default);
-}
-@keyframes fade {
-  from {
-    opacity: 0;
-  }
-}
-/* The palette is its one caller now — `.palette`, in frame.css. */
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-}
-
 /* ---- Chart -------------------------------------------------------------- */
 
 .chart {
@@ -733,13 +697,6 @@ kbd {
   z-index: 2;
   pointer-events: none;
   border-top: 1px dashed var(--color-text-secondary);
-}
-
-/* The palette's scope hints, with the one in use marked: a sigil nobody is
-   told about is a feature that does not exist. */
-.palette-foot .is-on {
-  color: var(--color-brand-accent-ink);
-  font-weight: 600;
 }
 
 /* ---- The key legend -----------------------------------------------------

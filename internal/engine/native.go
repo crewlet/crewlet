@@ -1629,6 +1629,28 @@ func LiveLeads(e *Engine) tracker.Leads { return liveLeads{engine: e} }
 // LiveUnits is the tracker's unit seam over the engine's current chart.
 func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
 
+// LiveDefaultProject is [ProjectOfSeat] over the engine's CURRENT chart, read
+// per call, for the surfaces built once and never rebuilt by an apply — the
+// operator surface, whose `create_work_item` files a PERSON's work, and the
+// dashboard's `viewer`, which says where that work lands. "" before any epoch
+// is running, and for a seat whose team and every team above it own no
+// project: the tool then refuses rather than guessing.
+//
+// ONE DERIVATION FOR BOTH, because the viewer promising one project while the
+// create files into another is the exact disagreement this seam exists to
+// rule out. The operator surface used to be handed a stub answering "" for
+// everybody, so a bound founder's create that named no project was refused
+// while the viewer's doc — and every seat's own surface — said it defaulted.
+func LiveDefaultProject(e *Engine) func(handle string) string {
+	return func(handle string) string {
+		c := e.Company()
+		if c == nil {
+			return ""
+		}
+		return ProjectOfSeat(c.Org, handle)
+	}
+}
+
 // Zone is the company's clock (ADR-0018) as the CURRENT epoch sets it, or UTC
 // before any epoch is running.
 //

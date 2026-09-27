@@ -49,7 +49,7 @@ import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
-import { CommandPalette } from "./CommandPalette.tsx";
+import { CommandPalette } from "./palette/Palette.tsx";
 import { PaletteBoundary } from "./boundaries.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
@@ -252,7 +252,7 @@ function Frame({ children }: { children: ReactNode }) {
   useKeymap({
     // IT OPENS, and closing is the palette's own: while it is up it is a
     // modal layer, every page key stands aside, and it answers this row
-    // itself (see `CommandPalette`).
+    // itself (see `palette/Palette.tsx`).
     palette: () => setPaletteOpen(true),
     // `/` IS "SEARCH WHAT I AM LOOKING AT": the screen's own box where it
     // registered one, the palette where it did not. It opened the palette

@@ -14,6 +14,7 @@ const BOUND: ViewerState = {
   handle: "jane",
   name: "Jane Founder",
   acts: ["set_pins"],
+  project: "",
   kind: "human",
   unbound: false,
   anonymous: false,

@@ -366,17 +366,17 @@ to go.
 
 ## 4. Watch the first turn
 
-Open the dashboard at <http://localhost:8000/>. It lands on the **Inbox**,
-which is what a person opening this wants first: whether anything is waiting on
-them. With no company activity yet it says so, and lists any condition the
-engine itself raised.
+Open the dashboard at <http://localhost:8000/>. It lands on **Home**, which is
+what a person opening this wants first: whether anything needs them, and what
+the company is doing. With no company activity yet it says so, and lists any
+condition the engine itself raised.
 
-The rail on the left is the product in eight rows — Inbox, My work, Work,
-Company, Knowledge, Activity, Cost, Admin — and each one opens its own tree
-beside it. `g` then a letter jumps between them.
+The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
+Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
+its page header. `g` then a letter jumps between them, and `?` lists every key.
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
-CEO. **Activity** shows it: *Live now* has the seat working, and **Turns**
+CEO. **Live** shows it: *Now running* has the seat working, and **Turns**
 shows the turn as it runs — Execute, then Review, each phase listing the rounds
 it took, the tools each round called, and the prompts the model actually saw.
 A turn has those two phases: Execute both decides and acts, because the frame
@@ -407,6 +407,18 @@ is the work list narrowed to that person: the same Filter, Display and scope
 controls, opening grouped by when each task is due. Until then the dashboard
 says so rather than guessing: an unbound token is an ordinary state, not a
 fault.
+
+**⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
+screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,
+`>` to actions — or paste an event, trace or turn id out of a log to open it.
+Type a question of three words or more and pause, and a bound token gets a
+short answer written from your company's own pages and tasks, with its sources
+and the tokens it spent, charged to the company's budget. From the same box you
+can assign the task you found to an agent, ask an agent about what you typed
+(the answer lands in your Inbox) or file it as a task — each made as you, filed
+in the project on screen or your team's, and where neither says, in the project
+you pick from the list it offers; on a token that is not bound to a person each
+row says why it cannot act instead.
 
 Once bound, **what you file through your own assistant counts as yours** on
 both screens. The record still names the token — a write through

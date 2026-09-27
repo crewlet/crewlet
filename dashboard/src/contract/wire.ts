@@ -43,6 +43,16 @@ export type PushKind =
 export const MAX_EVENTS = 400;
 
 /**
+ * The longest text `colleague{q}` resolves, in UTF-8 bytes.
+ *
+ * EXACTLY THE ENGINE'S OWN (`queries.ColleagueQueryMax`), held there by
+ * `internal/api/queries`'s colleague gate: the engine refuses a longer `q`
+ * as `bad_params`, so the command palette sends nothing past it rather than
+ * losing the engine's name tiers to a refusal nobody sees.
+ */
+export const COLLEAGUE_QUERY_MAX = 200;
+
+/**
  * What a seat is doing: the ONE seat-state vocabulary, served on every
  * `agents` row as `activity` and computed by the engine alone
  * (`internal/api/livestate/activity.go`) from the seat's turn, its coding

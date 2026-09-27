@@ -69,7 +69,7 @@ const INCOMPLETE: CoverageFacts = {
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   // jsdom implements no scrolling at all, and the palette keeps its cursor row
-  // in view — same stub as `CommandPalette.test.tsx`, for the same reason.
+  // in view — same stub as `palette/Palette.test.tsx`, for the same reason.
   Element.prototype.scrollIntoView = () => {};
   location.hash = "#/";
 });

@@ -3576,6 +3576,9 @@ export interface WorkRanked {
   type: string;
   status: string;
   assignee?: string;
+  /** The item's own priority, drawn as the Board draws it. Optional: an
+   *  older node's hit does not carry it. */
+  priority?: string;
   /** A PLACE, 1-based, and deliberately NOT a score. The arithmetic that
    *  ordered these — score within a method, reciprocal rank fusion across
    *  methods, per slice of the corpus — is finished before a coordinator sees
@@ -3754,6 +3757,29 @@ export interface Viewer {
    *  the operator catalogue holds for a token bound to a seat, and EMPTY for
    *  an anonymous or unbound caller, who may not act (ADR-0024). */
   acts?: string[];
+  /** The project this person's create lands in when it names none — the
+   *  engine's own default for their seat, which `create_work_item` applies.
+   *  "" when their team and every team above it owns none. Optional: an
+   *  older node does not send it. */
+  project?: string;
+}
+
+/** One seat a name could mean, and why. */
+export interface ColleagueCandidate {
+  handle: string;
+  /** The tier that found it, as a person reads it ("handle matches exactly"). */
+  why: string;
+}
+
+/**
+ * A name resolved through the engine's own four tiers — the ones an agent's
+ * `lookup_colleague` uses. `match` is set only when EXACTLY ONE seat is meant;
+ * several is a list for the person to choose from, never a pick.
+ */
+export interface ColleagueAnswer {
+  match: ColleagueCandidate | null;
+  /** Every seat the name could mean, best tier first (the match included). */
+  candidates: ColleagueCandidate[];
 }
 
 export interface QueryMap {
@@ -3797,6 +3823,7 @@ export interface QueryMap {
   conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;
   knowledge: KnowledgeAnswer;
+  colleague: ColleagueAnswer;
   config: CompanyDocument | null;
   config_audit: RevisionMeta[];
   config_diff: ConfigDiff;

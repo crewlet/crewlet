@@ -426,6 +426,10 @@ func Register(r *Registry, s Sources) {
 		// answer than an unknown query. A nil searcher IS the answer here,
 		// not the absence of one.
 		r.Register("knowledge", s.knowledgeSearch)
+		// A NAME TO A SEAT, through the tiers an agent's own lookup uses —
+		// the command palette's assign and ask pickers. A projection of
+		// the chart, so it rides the company like the others here.
+		r.Register("colleague", s.colleague)
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
