@@ -332,15 +332,11 @@ func TestAStructuralWriteLeavesTheObjectsOwnExpectationAlone(t *testing.T) {
 // "who manages this" — answer one seat twice for one edge, and a caller
 // counting managers would find two.
 //
-// WHAT THIS CASE DOES NOT CHECK is the sort that goes with the fold. The
-// table's primary key is (manager, target), so SQLite returns this scan in key
-// order whatever order the rows went in, and an assertion on the order read
-// back would pass with the sort deleted — a test that cannot fail. The sort is
-// there for the layer underneath: a b-tree built by inserting one key set in
-// two orders splits its pages at different points, so two nodes that reached
-// the same rows by different routes would hold different BYTES in a table this
-// domain claims is byte-identical. Nothing in Go observes that cheaply, so it
-// is stated at [sortedKeys] rather than asserted here.
+// THE SORT THAT GOES WITH THE FOLD is not this case's to check: the table's
+// primary key is (manager, target), so a read ordered on it returns key order
+// whatever order the rows went in, and an assertion on that order would pass
+// with the sort deleted. [TestAnAuthoredEdgeSetIsWrittenSorted] reads the order
+// the rows were WRITTEN in instead.
 func TestAnAuthoredEdgeSetIsFoldedAndDeduplicated(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -356,6 +352,38 @@ func TestAnAuthoredEdgeSetIsFoldedAndDeduplicated(t *testing.T) {
 		t.Errorf("the authored edge set is %v, want %v — one address per edge, "+
 			"folded, with the empty entry dropped rather than stored as an "+
 			"edge to nothing", got, want)
+	}
+}
+
+// AN AUTHORED EDGE SET IS WRITTEN IN SORTED ORDER, whatever order it was typed
+// in.
+//
+// The sort is for the layer underneath the rows: a b-tree built by inserting one
+// key set in two different orders splits its pages at different points, so two
+// nodes that reached the same rows by different routes would hold the same
+// logical table and different BYTES — in a table this domain claims is
+// byte-identical, and which nothing else in the tree compares.
+//
+// THE ROWID IS WHAT OBSERVES IT. `chart_manages` is an ordinary rowid table with
+// its primary key as a separate index, and a DELETE-then-INSERT hands the new
+// rows rowids in the order they were inserted — so ordering by rowid reads the
+// insertion order back, where ordering by the key would read the key's own order
+// and pass with the sort deleted.
+func TestAnAuthoredEdgeSetIsWrittenSorted(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	h.must(seatRecord("op-seat", "sarah-chen", "engineering", func(p *chart.SeatPayload) {
+		p.Manages = []string{"zoe", "Platform", "adam", "platform", "", "bob"}
+	}))
+
+	got := h.column(
+		`SELECT target FROM chart_manages WHERE manager = 'sarah-chen' ORDER BY rowid`)
+	want := []string{"adam", "bob", "platform", "zoe"}
+	if !slices.Equal(got, want) {
+		t.Errorf("the edge set went in as %v, want %v — inserted in the order "+
+			"it was typed, two nodes holding the same edges split their pages "+
+			"differently and their bytes differ", got, want)
 	}
 }
 

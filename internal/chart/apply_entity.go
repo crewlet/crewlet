@@ -637,6 +637,8 @@ func replaceEdgeSet(ctx context.Context, tx *sql.Tx, at applyContext,
 // hold the same logical table and different BYTES. This domain claims those
 // bytes are identical, and nothing else in the tree compares them — so the
 // cheapest place to make the claim true is here, before the insert.
+// [TestAnAuthoredEdgeSetIsWrittenSorted] reads the insertion order back by
+// rowid, which is what an assertion on the key's own order could never see.
 func sortedKeys(in []string) []string {
 	if len(in) == 0 {
 		return nil
