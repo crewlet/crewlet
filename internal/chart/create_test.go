@@ -116,6 +116,87 @@ func TestAVersionOnePlacementStillMovesWhatItFinds(t *testing.T) {
 	}
 }
 
+// A VERSION-1 RECORD LANDS WHERE ITS FIRST APPLY PUT IT.
+//
+// Version 2 added rules a creation is held to — the address's shape (a reserved
+// word, a seat handle outside the grammar), an edge declined under a unit its
+// own record failed to make, a history naming the first edge that LANDED — and
+// asked of a version-1 record each one makes this build derive different rows
+// from the same log than the build that applied it first: a node that applied a
+// version-1 placement of `jane.doe` holds the seat, and a node replaying it here
+// would not. One replicated estate, two rosters. So every rule version 2 added
+// is keyed on the record's own version, and a version-1 record is read for
+// ever as the placement, rekey or content write it was.
+func TestAVersionOneRecordLandsWhereItsFirstApplyPutIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	recorder := withDeclines(t, h)
+
+	// A PLACEMENT whose first edge meets a removed address — declined by
+	// every version — and whose others name a reserved word, handles
+	// outside the grammar and a unit filed under the declined one.
+	h.must(create("op-gone", chart.KindUnit, "gone", ""))
+	h.must(record(chart.TreeSubject(), chart.OpRemove, "op-remove",
+		chart.RemovePayload{V: chart.GateRecordVersion, Reason: "reorg",
+			Objects: []chart.ObjectRef{{Kind: chart.KindUnit, ID: "gone"}}},
+		chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermUnit, ID: "gone"}})))
+	h.must(v1(place("op-old-place",
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "gone"}},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "tree"}},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "orphans"},
+			Parent: "gone"},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "jane.doe"}},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ci:release"}})))
+	if got := h.column(`SELECT key FROM chart_units ORDER BY key`); !slices.Equal(
+		got, []string{"orphans", "tree"}) {
+		t.Errorf("the units are %v, want [orphans tree] — what the version-1 "+
+			"placement wrote when it was first applied", got)
+	}
+	if got := h.column(`SELECT handle FROM chart_seats ORDER BY handle`); !slices.Equal(
+		got, []string{"ci:release", "jane.doe"}) {
+		t.Errorf("the seats are %v, want [ci:release jane.doe]", got)
+	}
+	// ITS HISTORY NAMES ITS FIRST EDGE, which a version-1 apply wrote
+	// whether or not that edge landed.
+	if got := h.column(`SELECT object_id FROM chart_history
+		WHERE id = 'op-old-place'`); !slices.Equal(got, []string{"gone"}) {
+		t.Errorf("the placement's history names %v, want [gone]", got)
+	}
+
+	// A CONTENT RECORD creates its row on a reserved word, and a REKEY moves
+	// a seat onto one.
+	h.must(v1(seatRecord("op-old-content", "barrier", "", nil)))
+	h.must(create("op-omar", chart.KindSeat, "omar", ""))
+	h.must(seatRekey("op-old-rekey", "none", "omar"))
+	if got := h.column(`SELECT handle FROM chart_seats ORDER BY handle`); !slices.Equal(
+		got, []string{"barrier", "ci:release", "jane.doe", "none"}) {
+		t.Errorf("the seats are %v, want [barrier ci:release jane.doe none]", got)
+	}
+
+	// WHAT A VERSION-1 RECORD WAS ALWAYS DECLINED FOR, it still is: the
+	// removed address, once.
+	h.applier.Committed(t.Context())
+	if got := declines(recorder); len(got) != 1 || got["place/removed"] != 1 {
+		t.Errorf("the declines are %v, want place/removed once", got)
+	}
+
+	// THE CONTROL: the same names at version 2 are declined, on every path.
+	h.must(place("op-new-place",
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "root"}},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ana.lopez"}}))
+	h.must(create("op-lena", chart.KindSeat, "lena", ""))
+	h.must(place("op-new-rename", renameEdge(chart.KindSeat, "lena", "root", "", "")))
+	if got := h.column(`SELECT handle FROM chart_seats ORDER BY handle`); !slices.Equal(
+		got, []string{"barrier", "ci:release", "jane.doe", "lena", "none"}) {
+		t.Errorf("the seats are %v after the version-2 records — a version-2 "+
+			"record gave an address its shape forbids", got)
+	}
+	if got := h.column(`SELECT key FROM chart_units ORDER BY key`); !slices.Equal(
+		got, []string{"orphans", "tree"}) {
+		t.Errorf("the units are %v after the version-2 placement", got)
+	}
+}
+
 // A REDELIVERED CREATE IS ALREADY DONE, NOT A COLLISION.
 //
 // The row a create makes carries its record's position, so the same record met

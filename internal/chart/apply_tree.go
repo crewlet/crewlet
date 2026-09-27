@@ -107,7 +107,9 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 		case edge.Op == OpRename && !renamed[i]:
 			// DECLINED ALREADY, by the rename itself: the object is
 			// still on the address the batch found it at.
-		case parent != "" && missing[parent]:
+		case at.exact() && parent != "" && missing[parent]:
+			// FROM VERSION 2: a version-1 placement filed an edge under
+			// whatever address it named, and is read for ever as that.
 			a.declineChange(at, edgeOp(edge), ref, &addressRefusal{
 				Rule: RuleNoSuchParent, Reason: "parent",
 				Detail: fmt.Sprintf("%s is placed under %q, and the change "+
@@ -131,7 +133,13 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 	// THE HISTORY NAMES AN EDGE THAT LANDED, and a record none of whose
 	// edges did writes none: a row saying a unit was created, beside a
 	// decline saying the create never happened, is a history of something
-	// that did not occur.
+	// that did not occur. A VERSION-1 RECORD'S NAMES ITS FIRST EDGE, landed
+	// or not, which is the row its first apply wrote — `chart_history` is
+	// in the identity claim, so a replay writing another would be a second
+	// history of one log.
+	if !at.exact() && len(edges) > 0 {
+		first = &edges[0]
+	}
 	if first != nil {
 		n, err := a.writeHistory(ctx, tx, at, first.Object,
 			changeFor(first.Op, fallback))
@@ -162,7 +170,10 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 //     the chart — a rename's once [Applier.renameEdge] has moved it — and one
 //     that is not there any more is declined rather than created.
 //   - NO VERB is what every version-1 edge and every import's edge means: the
-//     object is created where it is absent and placed where it is not.
+//     object is created where it is absent and placed where it is not. A
+//     version-1 edge's creation is held to the rules its first apply asked —
+//     a removed address or another object's identity — and never to the
+//     address's shape, which version 2 added ([refuseAddress]).
 func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 	edge Edge, fallback ChangeKind) (rows int, landed bool, err error) {
 
@@ -284,12 +295,25 @@ func edgeOp(edge Edge) string {
 func (a *Applier) declineCreate(ctx context.Context, tx *sql.Tx, at applyContext,
 	op string, ref ObjectRef) (bool, error) {
 
-	refused, err := refuseCreate(ctx, txBook{tx: tx}, ref.Kind, ref.ID, "")
+	refused, err := refuseAddress(ctx, tx, at, ref.Kind, ref.ID, "")
 	if err != nil || refused == nil {
 		return false, err
 	}
 	a.declineChange(at, op, ref, refused)
 	return true, nil
+}
+
+// refuseAddress is why the record at hand may not give key to an object of
+// kind, asked under the rules that record was written under: every rule
+// ([refuseCreate]) from version 2, and for a version-1 record the ones it met
+// when it first applied ([refuseHeld]). SELF is [refuseCreate]'s.
+func refuseAddress(ctx context.Context, tx *sql.Tx, at applyContext,
+	kind ObjectKind, key, self string) (*addressRefusal, error) {
+
+	if at.exact() {
+		return refuseCreate(ctx, txBook{tx: tx}, kind, key, self)
+	}
+	return refuseHeld(ctx, txBook{tx: tx}, kind, key, self)
 }
 
 // absentRefusal is why an object a change named is not in the rows: a removal,

@@ -307,14 +307,20 @@ is present — because an import states a revision's complete structure and
 decides nothing about which of its objects exist.
 
 These are **version 2** of the chart's record. A record a version-1 build wrote
-is read for ever as what it meant: its edges are placements, and its content
-records may create their row. A version-1 build meeting a version-2 record
+is read for ever as what it meant, under the rules it met when it was first
+applied: its edges are placements, its content records may create their row,
+each creation is declined only onto a removed address or another object's
+identity (a rekey, onto any address somebody else answers to), its history
+names its first edge, and none of the rules version 2 added — the address's
+shape below, an edge declined under a unit its record failed to make — is asked
+of it. That is what keeps one log one chart: a node that applied a version-1
+placement of `jane.doe` holds the seat, and a node replaying the same record on
+this build must hold it too. A version-1 build meeting a version-2 record
 retains it rather than applying a create as a move, and applies it once it is
 upgraded.
 
 Every path that gives an address — a create, an import and a rename — asks
-**one** set of rules, so none of
-them can forget one: a reserved word (`root`, `tree`, `barrier`, and `none` for
+**one** set of rules on every version-2 record, so none of them can forget one: a reserved word (`root`, `tree`, `barrier`, and `none` for
 a seat), a seat handle outside the handle grammar (a `.` or a `:` is a login's
 shape, which every name lookup sends to the identity directory), a removed
 address, an address somebody answers to as a key, or somebody's identity. A

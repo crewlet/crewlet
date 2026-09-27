@@ -395,6 +395,12 @@ type applyContext struct {
 // subject is the record's own subject.
 func (c applyContext) subject() Subject { return c.record.Subject }
 
+// exact reports whether the record was written under version 2's rules
+// ([exactVersion]), which is the one question every rule version 2 added is
+// keyed on — so a version-1 record is applied as what it meant, identically on
+// the build that applied it first and on this one.
+func (c applyContext) exact() bool { return c.record.V >= exactVersion }
+
 // applyEviction records a node's removal from this log, or its readmission.
 //
 // A READMISSION IS AN INVERSE COMMIT rather than a delete, so an eviction's

@@ -25,21 +25,39 @@ import (
 //     structural edge on the tree's subject ([OpRename], [Edge.From]) rather
 //     than a claim on the address's own ([OpRekey], which only version 1
 //     carries); and a seat's kind is structure ([Edge.Kind], [OpSetKind]),
-//     which a content record neither carries nor changes.
+//     which a content record neither carries nor changes. Every address it
+//     gives an object is held to the address's SHAPE as well as to who holds
+//     it ([addressShape]), an edge under a unit the same record failed to
+//     make or keep is declined rather than filed under an address nobody
+//     meant, and its history names the first edge that landed.
 //
 // A LOWER VERSION IS READ FOR EVER, as what it meant when it was written: a
 // version-1 edge carries no verb and is a placement that creates what is
-// absent, and a version-1 content record may create its row and sets the
-// seat's kind. Nothing rewrites a
-// record on the log, and the fleet mid-upgrade still has version-1 writers, so
-// every change of meaning is read off the record itself at the apply — an
-// edge's verb, a content record's own version — and never off this constant.
+// absent, declined only for an address a removal took or another object's
+// identity; a version-1 content record may create its row, on the same terms,
+// and sets the seat's kind; a version-1 rekey is declined only for an address
+// somebody else answers to or a removal took; and a version-1 placement's
+// history names its first edge. Nothing rewrites a record on the log, and the
+// fleet mid-upgrade still has version-1 writers, so every change of meaning is
+// read off the record itself at the apply ([exactVersion]) — never off this
+// constant, which the next reshape moves. A rule added at version 2 and asked
+// of a version-1 record would have this build derive different rows from the
+// log than the build that applied it first: one replicated estate, two
+// rosters.
 //
 // A HIGHER ONE IS WHAT KEEPS AN OLDER PEER HONEST. A version-1 build reading a
 // version-2 edge would apply a create as a move — the very thing version 2
 // exists to stop — so it retains the record instead, and applies it once
 // upgraded.
 const RecordVersion = 2
+
+// exactVersion is the first record version whose structure is EXACT: its edges
+// state their verb, and every version-2 rule above is asked of it.
+//
+// PINNED AT 2, and never written as [RecordVersion]: the next reshape moves
+// that constant, and every rule version 2 introduced must go on being asked of
+// the version-2 records already on the log. See [applyContext.exact].
+const exactVersion = 2
 
 // BaseRecordVersion is the version a record that has never changed shape is
 // written at, so every build still on the stream reads it: the read index's

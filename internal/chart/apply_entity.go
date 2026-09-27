@@ -110,13 +110,13 @@ func (a *Applier) applyUnit(ctx context.Context, tx *sql.Tx, at applyContext) (i
 // a removal, a rename the log ordered first — is a record this one never
 // contended with, and creating the object back would be writing a seat into
 // the chart that no structural write arbitrated. A VERSION-1 RECORD CREATES
-// the row, as its writer meant, held to every creation's rules
-// ([refuseCreate]) — which is what it met at the apply when it was written.
+// the row, as its writer meant, held to the rules it met at the apply when it
+// was written ([refuseAddress]): never onto another object's identity.
 // Declined rather than raised either way: see [Applier.declineChange].
 func (a *Applier) declineContent(ctx context.Context, tx *sql.Tx, at applyContext,
 	ref ObjectRef) (bool, error) {
 
-	if at.record.V >= 2 {
+	if at.exact() {
 		refused, err := absentRefusal(ctx, tx, ref)
 		if err != nil {
 			return false, err
@@ -159,7 +159,7 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	seat.V = DocumentVersion
 	// THE KIND IS STRUCTURE FROM VERSION 2 ([OpSetKind]), so a content
 	// record keeps the row's; a version-1 record's is what it meant.
-	if at.record.V < 2 {
+	if !at.exact() {
 		seat.Kind = content.Kind
 	}
 	seat.Name = content.Name
@@ -609,7 +609,10 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 }
 
 // rekeyRefused is whether a rename's apply must DECLINE its new address, which
-// is [refuseCreate] asked again at the apply for the object being renamed.
+// is [refuseCreate] asked again at the apply for the object being renamed —
+// under the rules the record was written under ([refuseAddress]), so a
+// version-1 rekey onto a reserved word or an ill-formed handle lands as it did
+// when it was first applied.
 //
 // ASKED AGAIN because the decide cannot refuse all of it. A version-1 claim
 // filed under the address's own subject while a create and a removal filed
@@ -622,7 +625,7 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 func (a *Applier) rekeyRefused(ctx context.Context, tx *sql.Tx, at applyContext,
 	kind ObjectKind, key, former string) (bool, error) {
 
-	refused, err := refuseCreate(ctx, txBook{tx: tx}, kind, key, former)
+	refused, err := refuseAddress(ctx, tx, at, kind, key, former)
 	if err != nil || refused == nil {
 		return false, err
 	}

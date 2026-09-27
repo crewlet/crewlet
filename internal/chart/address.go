@@ -143,6 +143,20 @@ func refuseCreate(ctx context.Context, book addressBook, kind ObjectKind,
 	if refused := addressShape(kind, key); refused != nil {
 		return refused, nil
 	}
+	return refuseHeld(ctx, book, kind, key, self)
+}
+
+// refuseHeld is [refuseCreate] without the address's shape: whether the
+// address was removed and who answers to it, which is every rule a version-1
+// record was held to when it applied — a version-1 placement, content record
+// and rekey all declined an address a removal took or somebody's identity (a
+// rekey, any address somebody else answered to), and none asked whether the
+// address was reserved or a well-formed handle. The apply asks this of a
+// version-1 record ([Applier.refuseAddress]) so a replay derives the rows the
+// first apply did.
+func refuseHeld(ctx context.Context, book addressBook, kind ObjectKind,
+	key, self string) (*addressRefusal, error) {
+
 	gone, err := book.removed(ctx, kind, key)
 	if err != nil {
 		return nil, err
