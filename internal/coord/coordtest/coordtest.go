@@ -437,8 +437,10 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 	// Per class, because there is no all-classes listing: a class is the
 	// leading segment of a resource name and the empty one addresses
 	// nothing, so "every lease" is a question this surface deliberately
-	// does not answer. These three are what the suite itself claims.
-	for _, class := range []coord.Class{coord.ClassSeat, coord.ClassWorker, coord.ClassNode} {
+	// does not answer. These four are what the suite itself claims.
+	for _, class := range []coord.Class{
+		coord.ClassSeat, coord.ClassWorker, coord.ClassNode, coord.ClassObjects,
+	} {
 		if live := h.listLive(class); len(live) != 0 {
 			t.Fatalf("newBackend must return an empty store, got %d live %s lease(s): %v",
 				len(live), class, resources(live))

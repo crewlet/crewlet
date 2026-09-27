@@ -252,6 +252,11 @@ type Sources struct {
 	// Now is injectable so a test can pin the lease countdowns and the
 	// next-run projection.
 	Now func() time.Time
+
+	// layouts is the stored placement map's layout, kept per map by
+	// [Register] so the fleet question computes one when the map changes
+	// rather than on every poll — see [objectLayouts].
+	layouts *objectLayouts
 }
 
 // ScheduleRuns is the dispatch history a schedules answer reads.
@@ -359,6 +364,9 @@ func Register(r *Registry, s Sources) {
 		// was the one destination of the five where the client claimed
 		// a guard the server did not keep, and on a node with
 		// `api.allow_anonymous_read` an anonymous GET read all of it.
+		if s.Objects != nil {
+			s.layouts = &objectLayouts{}
+		}
 		r.RegisterOperator("fleet", s.fleet)
 	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company

@@ -715,6 +715,43 @@ func (b *Bootstrap) loggingLevelName() string {
 	return "`" + string(b.Logging.Level) + "`"
 }
 
+// TierWarnings is everything valid about a PAIR of documents that the operator
+// should still know — the warning half of [CheckTiers], printed by `crewlet
+// validate` given both files and logged by a node applying a revision.
+//
+// Separate from CheckTiers for the reason [Bootstrap.Warnings] is separate from
+// Validate: a warning takes no error path, and one printed beside a refusal is
+// noise at exactly the moment somebody is reading carefully.
+func TierWarnings(boot *Bootstrap, company *Company) []Warning {
+	if boot == nil || company == nil {
+		return nil
+	}
+	var out []Warning
+
+	// A DATA NODE MISSING THE COMPANY'S FAILURE-DOMAIN LABEL is placed on
+	// as a domain of its own, which is the safe degradation and a silent
+	// one: the founder asked for copies spread across zones, and a node
+	// with no `zone` is a zone of one, so two copies of a chunk can land
+	// in the one real zone this node shares with a labelled peer. Neither
+	// tier can see it alone — Tier B names the key and Tier A carries the
+	// labels — so it is said here, where both are in hand.
+	//
+	// A WARNING RATHER THAN A REFUSAL, because a fleet mid-way through
+	// labelling its nodes is a real and correct state, and refusing the
+	// revision there would refuse the one that asks for the spreading.
+	if key := company.Objects.FailureDomain; key != "" && boot.Node.Profile("").HoldsData() {
+		if _, labelled := boot.Node.Labels[key]; !labelled {
+			out = append(out, advisory(entry(field("node.labels"), key), fmt.Sprintf(
+				"the company spreads copies of its files across %q "+
+					"(objects.failure_domain), and this data node carries no "+
+					"%q label: it counts as a domain of its own, so a copy placed "+
+					"here may share a %s with another. Set node.labels.%s",
+				key, key, key, key)))
+		}
+	}
+	return out
+}
+
 // CheckTiers holds the rules that need BOTH documents, and it exists because
 // neither tier can see the other.
 //

@@ -9,7 +9,7 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
 | **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets, and how many copies of its files the object store keeps (`objects`) |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
@@ -94,10 +94,10 @@ node:
 
 | Role | What it does | What a fleet loses without it |
 |---|---|---|
-| `data` | Holds the company's durable state: a copy of the replicated estate, a member's share of the broker, and the event log. `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
+| `data` | Holds the company's durable state: a copy of the replicated estate, a member's share of the broker, the event log, and a share of the [object store](object-store.md)'s files. `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, the object store's placement map, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled, and a data node that joins or leaves is never placed on or taken off |
 
 Subtracting a role subtracts it from **this node, never from the
 company**, so the fleet as a whole still needs every role somewhere. That
@@ -130,7 +130,10 @@ store's membership lease — so a label change takes effect one heartbeat after
 the restart that made it — not at the next config activation.
 
 Nothing here means anything to the engine on its own: the org decides
-what to select on.
+what to select on, and the company's
+[`objects.failure_domain`](../getting-started/configuration.md#objects) names
+the key its file copies are spread across. A data node missing that key is
+warned about by `crewlet validate` given both files.
 
 ### Tier B example (`company.yaml`)
 

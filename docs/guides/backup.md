@@ -40,7 +40,7 @@ A deployment's durable state lives in six places:
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
 | **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — today the work tracker and the knowledge embeddings — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
-| **The object store** | `store.objects.dir` on each data node | The bytes of the company's [files](../concepts/object-store.md), cut into chunks. **Placed rather than replicated**: each node holds only the chunks the placement map puts on it, `stream.replicas` copies of each across the fleet, so no one node's directory is the whole of it. The rows naming the files are in the replicated estate |
+| **The object store** | `store.objects.dir` on each data node | The bytes of the company's [files](../concepts/object-store.md), cut into chunks. **Placed rather than replicated**: each node holds only the chunks the placement map puts on it, the company's `objects.replicas` copies of each across the fleet, so no one node's directory is the whole of it. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
@@ -56,10 +56,13 @@ Classify before you size the job:
   new node — so a store file lost with the stream estate intact costs at most
   the last sync cycle, and the seat re-hydrates the rest on its next
   acquisition.
-- **Placed, a few copies each:** the object store's chunks. A lost data node's
-  share is rebuilt from the other copies by repair; a chunk whose **every**
-  holder is lost is gone, and the `objects_missing` alarm names it. Only a
-  backup covers that case.
+- **Placed, a few copies each:** the object store's chunks — the company's
+  `objects.replicas` of each, in distinct values of its `objects.failure_domain`
+  where it names one — so while the fleet spans as many zones as there are
+  copies, losing a whole zone costs a chunk one copy. A lost data
+  node's share is rebuilt from the other copies by repair; a chunk whose
+  **every** holder is lost is gone, and the `objects_missing` alarm names it.
+  Only a backup covers that case.
 - **Derived, and rebuildable *only within the replay window*:** everything in
   the replicated estate. A node that loses that file replays the domain logs
   from the beginning and arrives at exactly the same rows — but only if the
@@ -86,7 +89,8 @@ why the manifest is written last.
 ├── store.db                               the node estate, self-contained
 ├── store-replicated.db                    the replicated estate, self-contained
 ├── objects/                               every chunk that copy names, in a
-│   └── 3f/3f9c…                             data node's own layout
+│   └── 3f/3f9c…                             data node's own layout: a directory
+│                                            per first byte of the chunk's name
 └── streams/
     ├── CREWLET_AGENT.snapshot             a mailbox stream
     ├── KV_crewlet_secrets.snapshot        a coordination bucket
@@ -353,7 +357,13 @@ one node's state, and a restore holding one of them has an audit log and a
 tracker from different moments.
 The object half is one directory copy: copy the backup's `objects/` into the
 `store.objects.dir` of **any one** data node — it is laid out as that
-directory is, so the copy is a plain `cp -r` merged into whatever is there.
+directory is, a directory per first byte of each chunk's name (the top eight
+bits of its [slot](../concepts/object-store.md#slots-and-groups-that-split)),
+so the copy is a plain `cp -r` merged into whatever is there. The layout does
+not depend on the placement map, so a backup restores into a fleet whose map
+has split its groups since; and a chunk file copied into the wrong directory is
+moved to its own by the store the next time it walks the directory, and logged
+once (`objects_chunk_relocated`), rather than sitting where no read looks.
 That node then holds every chunk, repair on the others fetches their shares
 from it, and its collection drops the copies the map does not place on it once
 their holders confirm theirs (see

@@ -88,14 +88,19 @@ func (h Hash) Valid() bool {
 	return true
 }
 
-// PG is the placement group h falls into. An invalid hash is group 0, which
-// nothing reaches: every entry point refuses one first.
-func (h Hash) PG() int {
-	raw, err := hex.DecodeString(string(h))
+// Slot is h's placement slot: the first two bytes of the address
+// ([placement.SlotOf]), fixed for ever whatever the map groups them into. An
+// invalid hash is slot 0, which nothing reaches: every entry point refuses one
+// first.
+func (h Hash) Slot() int {
+	if !h.Valid() {
+		return 0
+	}
+	raw, err := hex.DecodeString(string(h[:4]))
 	if err != nil {
 		return 0
 	}
-	return placement.PG(raw)
+	return placement.SlotOf(raw)
 }
 
 // Chunk is one piece of an object.
@@ -203,9 +208,13 @@ type ReferenceTable struct {
 	Table  string
 	Column string
 
-	// Group is the column holding each chunk's placement group, so a pass
-	// over one group reads one range of an index rather than the table.
-	Group string
+	// Slot is the column holding each chunk's slot ([Hash.Slot]), so a
+	// pass over one placement group — at whatever group count the map has,
+	// since every group is a run of slots — reads one range of an index
+	// rather than the table. The SLOT and never the group: a slot is fixed
+	// for ever by the chunk's bytes, where a group number stored in a row
+	// would be wrong the moment the map split its groups.
+	Slot string
 }
 
 // identifier is what a declared table or column may be spelled as, since each
@@ -218,7 +227,7 @@ func (t ReferenceTable) Validate() error {
 	if strings.TrimSpace(t.Domain) == "" {
 		return fmt.Errorf("objstore: %s names chunks and no state log that writes it", t.Table)
 	}
-	for _, name := range []string{t.Table, t.Column, t.Group} {
+	for _, name := range []string{t.Table, t.Column, t.Slot} {
 		if !identifier.MatchString(name) {
 			return fmt.Errorf("objstore: %q (declared by %s) is not an identifier "+
 				"this package will write into a statement", name, t.Table)
@@ -235,12 +244,12 @@ func (t ReferenceTable) Chunks() (string, error) {
 	return `SELECT DISTINCT ` + t.Column + ` FROM ` + t.Table, nil
 }
 
-// ChunksIn is the statement answering every chunk the table names in one
-// placement group, which is its one argument.
+// ChunksIn is the statement answering every chunk the table names in a run of
+// slots, whose two arguments are the first slot and the one past the last.
 func (t ReferenceTable) ChunksIn() (string, error) {
 	all, err := t.Chunks()
 	if err != nil {
 		return "", err
 	}
-	return all + ` WHERE ` + t.Group + ` = ?`, nil
+	return all + ` WHERE ` + t.Slot + ` >= ? AND ` + t.Slot + ` < ?`, nil
 }

@@ -313,6 +313,20 @@ from `node.labels` in each node's Tier A file and are compared exactly;
 they are advertised on the node's presence lease, so a label change takes
 effect one heartbeat after the restart that made it.
 
+**A selector is held to what a node can advertise.** Everything is matched
+exactly against a node's own Tier A values, so a selector no node could
+ever carry is refused when the company is validated rather than accepted
+and left unserved:
+
+| Part | Rule |
+|---|---|
+| `node` | A node id, under `node.id`'s own rule: starts with a letter or digit, then letters, digits, `.`, `_` or `-`, at most 64 characters. A `${VAR}` is **not** resolved here — Tier B compares the pin as written — so write the node id itself. The published schema carries the same pattern, so an editor flags a malformed pin as you type |
+| label key | 1 to 63 bytes of UTF-8 with no whitespace and no unprintable character. Dots, slashes and non-ASCII letters are fine (`topology.example.com/zone`). The same grammar governs `node.labels` in Tier A and the object store's `failure_domain`, so a key one of them accepts the others accept too |
+| label value | Any string, compared exactly: interior spaces and the empty string are both values a node can carry. What a selector's value may **not** have is whitespace around it — every node's label values are trimmed of theirs when its Tier A file loads, so `" eu"` could never match; it is refused rather than trimmed, because the difference is the one you cannot see in the file |
+
+A document with several bad keys reports every one of them, in the same
+order on every run, on both sides of the match.
+
 **The share is computed per placement group.** Nine seats pinned to one
 node and one seat free, across three nodes: a single fleet-wide
 `ceil(10/3)` would let the pinned node take four of its nine and leave
@@ -378,6 +392,41 @@ and a `Retry-After` rather than accepted, which sends it to a peer; reads
 and the dashboard keep answering. See
 [During a drain](../reference/api-endpoints.md#during-a-drain).
 
+**A data node's files stay put through its drain.** Its place in the
+[object store](../concepts/object-store.md) is a lease of its own, given back
+only once the node has stopped serving chunks, so a drain moves none of the
+company's files — and neither does a restart, if the node is back within ten
+minutes. Back after longer, its share has been re-placed, but what it still
+holds is read from the moment it returns: it rejoins the map **on probation**,
+placed on again only once it has stayed ten minutes. Between one data node and
+the next, wait for
+[`crewlet objects status`](../reference/cli.md#crewlet-objects-status) to say
+the fleet has settled: every member has repaired at the placement map's epoch
+with nothing pending. At three copies the fleet survives one data node down,
+not two. For maintenance that will keep a node away longer than ten minutes,
+hold the map first (`crewlet objects hold -for 2h`), so its share is not copied
+away and then back.
+
+### Removing a data node for good
+
+Take it **out** of the object store first, and stop it only once its data has
+moved:
+
+1. `crewlet objects out <node> -confirm <node>`. The placement map stops
+   placing on it, and its share is copied to the other data nodes *from it*,
+   while it keeps serving — so no chunk is a copy short at any point.
+2. Run `crewlet objects status` until it says the node **may be stopped for
+   good**: every member has repaired at the map's epoch with nothing pending,
+   and the node holds no strays. It counts those in a collection that starts
+   within about half a minute of the last member finishing its repair, not on
+   the hour.
+3. Stop it. Its seats and duties move as they would for any stopped node, and
+   the map removes it ten minutes later.
+
+Stopping a data node without taking it out first is a **recovery** instead:
+ten minutes later its share is re-placed and rebuilt from the copies on the
+others. See [Taking a data node away](../concepts/object-store.md#taking-a-data-node-away).
+
 **Upgrade one node at a time, and let each one finish.** Seat leases
 carry a protocol version, and a node refuses to claim seats while any
 live lease is held at an older one. The rule is asymmetric on purpose:
@@ -407,6 +456,12 @@ Two consequences worth stating plainly:
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
+- **`objects_degraded`** — some of the company's files have fewer copies than
+  it asked for; do not stop another data node until it clears on every member.
+  **`objects_missing`** is worse: a chunk no member holds. And
+  **`objects_store_unhealthy`** is a data node whose store has failed or
+  filled. `crewlet objects status` names the node and what the fleet is
+  waiting for.
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Fleet** screen puts every node's
   side by side, with seat ownership and per-node config epoch.

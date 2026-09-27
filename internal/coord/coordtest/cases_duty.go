@@ -113,7 +113,7 @@ var dutyCases = []testCase{
 		// a seat nobody claimed counted into capacity.
 		//
 		// So every assertion below names the class it asked for and the
-		// exact set it must get, on a fleet holding all three at once.
+		// exact set it must get, on a fleet holding all four at once.
 		//
 		// The duties are claimed at coord.MaxDutyTTL rather than at
 		// LongTTL deliberately. That is the TTL a backend cannot keep
@@ -128,6 +128,9 @@ var dutyCases = []testCase{
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
+		h.claim(coord.ObjectsResource("node-a"), coord.AcquireOptions{
+			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
+		})
 
 		// EVERY duty, and no seat. Both halves matter: a listing that
 		// reached the duty store but stopped at the first record would
@@ -140,6 +143,12 @@ var dutyCases = []testCase{
 		// a duty counted into it is every node believing the fleet is
 		// larger than it is and leaving seats dark.
 		h.requireResources("live nodes", h.listLive(coord.ClassNode), "node:node-a")
+		// And the object store's membership read, which the placement map
+		// is maintained from: a duty or a presence lease counted into it
+		// is a member that holds no chunks, and every write placed on it
+		// is a copy short.
+		h.requireResources("live object-store members", h.listLive(coord.ClassObjects),
+			"objects:node-a")
 
 		// ListOwned narrows by nothing at all, because the owner is in the
 		// record rather than in the key, so it is the one read that has to
@@ -147,7 +156,8 @@ var dutyCases = []testCase{
 		// converge to empty: a duty it never listed is a node that reports
 		// itself drained while its duty is still running.
 		h.requireResources("everything node-a:1 holds", h.listOwned("node-a:1"),
-			"node:node-a", "seat:ceo", "worker:scheduler", "worker:sandbox-waiter")
+			"node:node-a", "objects:node-a", "seat:ceo", "worker:scheduler",
+			"worker:sandbox-waiter")
 	}},
 
 	{"a_released_duty_is_free_at_once_and_its_epoch_keeps_climbing", func(h *harness) {

@@ -29,8 +29,8 @@ func fileWithChunks(t *testing.T, db *store.DB, chunks ...[]byte) {
 		for i, c := range chunks {
 			h := objstore.HashOf(c)
 			if _, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_file_chunks
-				(file_id, seq, chunk, size, pg) VALUES ('ENG.x', ?, ?, ?, ?)`,
-				i, string(h), len(c), h.PG()); err != nil {
+				(file_id, seq, chunk, size, slot) VALUES ('ENG.x', ?, ?, ?, ?)`,
+				i, string(h), len(c), h.Slot()); err != nil {
 				return err
 			}
 		}
@@ -71,6 +71,15 @@ func TestABackupCarriesTheChunksItsCopyNames(t *testing.T) {
 	if manifest.Objects == nil || manifest.Objects.Chunks != 2 ||
 		manifest.Objects.Bytes != int64(len("one chunk")+len("another chunk")) {
 		t.Fatalf("manifest objects = %+v", manifest.Objects)
+	}
+	// IN THE LAYOUT, AS WRITTEN — checked before anything opens the
+	// directory as a store, because opening one moves every chunk it finds
+	// out of place to where it belongs, and would hide a backup written in
+	// some other shape behind a store that quietly repaired it.
+	for h := range held {
+		if _, err := os.Stat(filepath.Join(dir, manifest.Objects.Dir, disk.Layout(h))); err != nil {
+			t.Fatalf("chunk %s is not where a node's chunk directory keeps it: %v", h, err)
+		}
 	}
 	// RESTORABLE AS A DIRECTORY: opened as a chunk store, it serves every
 	// chunk under its name.

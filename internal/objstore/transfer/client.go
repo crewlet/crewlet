@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/disk"
 	"github.com/crewlet/crewlet/internal/objstore/placement"
 )
 
@@ -26,8 +27,17 @@ var (
 	// ErrUnderReplicated is a write fewer members stored than a quorum.
 	ErrUnderReplicated = errors.New("objstore/transfer: too few members stored the chunk")
 
-	// ErrNotFound is a chunk no member could supply.
+	// ErrNotFound is a chunk every member of the map ANSWERED it does not
+	// hold: a definite absence, and the only failure that may be counted
+	// as a chunk the fleet has lost.
 	ErrNotFound = errors.New("objstore/transfer: no member holds the chunk")
+
+	// ErrUnreachable is a chunk no member supplied where at least one
+	// could not say whether it holds it — it did not answer, refused,
+	// failed to read its copy or sent bytes that did not match. The chunk
+	// may be intact on that member, so this is never counted as lost.
+	ErrUnreachable = errors.New("objstore/transfer: no member supplied the chunk, " +
+		"and some could not be asked")
 
 	// ErrNoAnswer is a member that did not answer in time.
 	ErrNoAnswer = errors.New("objstore/transfer: no answer")
@@ -44,8 +54,8 @@ type ClientOptions struct {
 	// Local is this node's own chunk store, nil on a node that holds none.
 	Local Chunks
 
-	// Maps is the placement map this node places by.
-	Maps Maps
+	// Layouts is the layout of the placement map this node places by.
+	Layouts Layouts
 
 	// Refresh re-reads the map. When set, a request that finds no map
 	// re-reads it once before refusing [ErrNoMap], so the first file a
@@ -64,13 +74,9 @@ type Client struct {
 	queue   Asker
 	self    string
 	local   Chunks
-	maps    Maps
+	layouts Layouts
 	refresh func(context.Context) error
 	now     func() time.Time
-
-	// attempt is [attemptBudget], held so a test can shorten it rather
-	// than wait out a dead member.
-	attempt time.Duration
 
 	mu      sync.Mutex
 	suspect map[string]time.Time
@@ -78,7 +84,7 @@ type Client struct {
 
 // NewClient builds a client.
 func NewClient(opts ClientOptions) (*Client, error) {
-	if opts.Queue == nil || opts.Maps == nil {
+	if opts.Queue == nil || opts.Layouts == nil {
 		return nil, errors.New("objstore/transfer: a client needs a queue and a map")
 	}
 	now := opts.Now
@@ -86,9 +92,9 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		now = time.Now
 	}
 	return &Client{
-		queue: opts.Queue, self: opts.Self, local: opts.Local, maps: opts.Maps,
+		queue: opts.Queue, self: opts.Self, local: opts.Local, layouts: opts.Layouts,
 		refresh: opts.Refresh, now: now,
-		attempt: attemptBudget, suspect: map[string]time.Time{},
+		suspect: map[string]time.Time{},
 	}, nil
 }
 
@@ -109,7 +115,8 @@ const attemptBudget = 10 * time.Second
 // would wait out a whole attempt first.
 const suspectFor = 30 * time.Second
 
-// placing is the map a request places by, re-read once where none is held.
+// placing is the layout a request places by, the map re-read once where none
+// is held.
 //
 // ONLY ON A MISS: a held map is placed by as it is, however old, because an
 // older map is correct until a newer one is read (see [CacheInterval]). A
@@ -117,25 +124,27 @@ const suspectFor = 30 * time.Second
 // fleet's first map is written moments after its nodes boot, so a node that
 // read the store just before it would otherwise refuse every upload until its
 // next refresh.
-func (c *Client) placing(ctx context.Context) (placement.Map, error) {
-	m, ok := c.maps()
-	if (!ok || len(m.Members) == 0) && c.refresh != nil {
+func (c *Client) placing(ctx context.Context) (*placement.Layout, error) {
+	l, ok := c.layouts()
+	if (!ok || len(l.Map().Members) == 0) && c.refresh != nil {
 		if err := c.refresh(ctx); err != nil {
-			return placement.Map{}, fmt.Errorf("%w (and re-reading it failed: %w)", ErrNoMap, err)
+			return nil, fmt.Errorf("%w (and re-reading it failed: %w)", ErrNoMap, err)
 		}
-		m, ok = c.maps()
+		l, ok = c.layouts()
 	}
-	if !ok || len(m.Members) == 0 {
-		return placement.Map{}, ErrNoMap
+	if !ok || len(l.Map().Members) == 0 {
+		return nil, ErrNoMap
 	}
-	return m, nil
+	return l, nil
 }
 
 // Put stores a chunk on its members and answers how many hold it.
 //
 // Its UP SET is asked in parallel; a member that refuses or does not answer is
 // replaced by the next one in the ranking, until the map's replica count is
-// met or the ranking runs out. Fewer than a quorum is [ErrUnderReplicated].
+// met or the ranking runs out. A member that is OUT is never written: it is
+// being emptied, and a copy put there is one more the fleet has to move off
+// it. Fewer than a quorum is [ErrUnderReplicated].
 func (c *Client) Put(ctx context.Context, h objstore.Hash, data []byte) (int, error) {
 	if !h.Valid() {
 		return 0, fmt.Errorf("%w: %q", objstore.ErrBadHash, h)
@@ -145,11 +154,12 @@ func (c *Client) Put(ctx context.Context, h objstore.Hash, data []byte) (int, er
 		// only refuse it.
 		return 0, fmt.Errorf("objstore/transfer: the bytes offered as %s do not hash to it", h)
 	}
-	m, err := c.placing(ctx)
+	l, err := c.placing(ctx)
 	if err != nil {
 		return 0, err
 	}
-	ranked := c.order(m.Ranked(h.PG()))
+	m := l.Map()
+	order := c.holders(l, l.Group(h.Slot()), true)
 	need, quorum := m.Size(), m.Quorum()
 
 	type result struct {
@@ -158,14 +168,20 @@ func (c *Client) Put(ctx context.Context, h objstore.Hash, data []byte) (int, er
 	}
 	results := make(chan result)
 	next, inflight, stored := 0, 0, 0
-	launch := func() {
-		node := ranked[next]
+	launch := func() bool {
+		node, ok := order.at(next)
+		if !ok {
+			return false
+		}
 		next++
 		inflight++
 		go func() { results <- result{node: node, err: c.putOne(ctx, node, h, data)} }()
+		return true
 	}
-	for inflight < need && next < len(ranked) {
-		launch()
+	for inflight < need {
+		if !launch() {
+			break
+		}
 	}
 	var failed []string
 	for inflight > 0 {
@@ -176,7 +192,7 @@ func (c *Client) Put(ctx context.Context, h objstore.Hash, data []byte) (int, er
 			continue
 		}
 		failed = append(failed, r.node+": "+r.err.Error())
-		if stored+inflight < need && next < len(ranked) && ctx.Err() == nil {
+		if stored+inflight < need && ctx.Err() == nil {
 			launch()
 		}
 	}
@@ -199,10 +215,13 @@ func (c *Client) putOne(ctx context.Context, node string, h objstore.Hash, data 
 	if err != nil {
 		return err
 	}
-	if rep.Status != statusOK {
-		return fmt.Errorf("%s", rep.Detail)
+	switch {
+	case rep.Status == statusOK:
+		return nil
+	case rep.Unhealthy != "":
+		return fmt.Errorf("refused, its object store is %s: %s", rep.Unhealthy, rep.Detail)
 	}
-	return nil
+	return fmt.Errorf("refused: %s", rep.Detail)
 }
 
 // Get reads a chunk: from this node's own disk when it holds it, else from the
@@ -211,26 +230,50 @@ func (c *Client) Get(ctx context.Context, h objstore.Hash) ([]byte, error) {
 	if !h.Valid() {
 		return nil, fmt.Errorf("%w: %q", objstore.ErrBadHash, h)
 	}
+	var unread error
 	if c.local != nil {
-		if data, err := c.local.Get(h); err == nil {
+		data, err := c.local.Get(h)
+		if err == nil {
 			return data, nil
 		}
+		if !errors.Is(err, disk.ErrNotFound) {
+			unread = err
+		}
 	}
-	return c.Fetch(ctx, h)
+	data, err := c.Fetch(ctx, h)
+	if unread != nil && errors.Is(err, ErrNotFound) {
+		// THIS NODE COULD NOT SAY: its own copy may be the one the others
+		// are missing, so the absence is not definite.
+		return nil, fmt.Errorf("%w: %s — this node could not read its own copy (%v), "+
+			"and every other member answered that it holds none", ErrUnreachable, h, unread)
+	}
+	return data, err
 }
 
 // Fetch reads a chunk from a PEER, never this node's own disk — the repair's
 // read, which is looking for a copy precisely because this node has none.
+//
+// It walks the whole ranking before it gives up, out members included, since
+// they may still hold what they are being emptied of — so the failure it
+// answers says which of two things is true: [ErrNotFound] when every member
+// answered that it does not hold the chunk, [ErrUnreachable] when any could
+// not say.
 func (c *Client) Fetch(ctx context.Context, h objstore.Hash) ([]byte, error) {
 	if !h.Valid() {
 		return nil, fmt.Errorf("%w: %q", objstore.ErrBadHash, h)
 	}
-	m, err := c.placing(ctx)
+	l, err := c.placing(ctx)
 	if err != nil {
 		return nil, err
 	}
+	order := c.holders(l, l.Group(h.Slot()), false)
 	var reasons []string
-	for _, node := range c.order(m.Ranked(h.PG())) {
+	definite := true
+	for i := 0; ; i++ {
+		node, ok := order.at(i)
+		if !ok {
+			break
+		}
 		if node == c.self {
 			continue
 		}
@@ -238,13 +281,18 @@ func (c *Client) Fetch(ctx context.Context, h objstore.Hash) ([]byte, error) {
 		switch {
 		case err != nil:
 			reasons = append(reasons, node+": "+err.Error())
+			definite = false
+		case rep.Status == statusMissing:
+			reasons = append(reasons, node+": not held")
 		case rep.Status != statusOK:
 			reasons = append(reasons, node+": "+rep.Detail)
+			definite = false
 		case objstore.HashOf(body) != h:
 			// A COPY THAT ARRIVED WRONG is no copy: the member checked it
 			// before sending, so this is the transport's, and the next
 			// member's is as good.
 			reasons = append(reasons, node+": sent bytes that do not match the hash")
+			definite = false
 		default:
 			return body, nil
 		}
@@ -252,7 +300,68 @@ func (c *Client) Fetch(ctx context.Context, h objstore.Hash) ([]byte, error) {
 			return nil, fmt.Errorf("objstore/transfer: read %s: %w", h, err)
 		}
 	}
-	return nil, fmt.Errorf("%w: %s (%s)", ErrNotFound, h, strings.Join(reasons, "; "))
+	if definite {
+		return nil, fmt.Errorf("%w: %s (%s)", ErrNotFound, h, strings.Join(reasons, "; "))
+	}
+	return nil, fmt.Errorf("%w: %s (%s)", ErrUnreachable, h, strings.Join(reasons, "; "))
+}
+
+// holders is one group's members in the order a request tries them: the up
+// set from the layout, and the rest of the map's ranking only once the up set
+// has run out — so the request that finds every holder answering never pays
+// for ranking every member.
+type holders struct {
+	c     *Client
+	m     placement.Map
+	pg    int
+	write bool
+
+	list  []string
+	whole bool // list holds the whole ranking
+}
+
+// holders orders a group's members for a request. An up set with a member
+// that did not answer lately is ranked whole at once, so that member goes
+// after every other rather than being tried first and waited out.
+func (c *Client) holders(l *placement.Layout, pg int, write bool) *holders {
+	h := &holders{c: c, m: l.Map(), pg: pg, write: write}
+	up := l.Up(pg)
+	if c.anySuspect(up) {
+		h.extend()
+	} else {
+		h.list = slices.Clone(up)
+	}
+	return h
+}
+
+// at is the i-th member to try, and false past the last.
+func (h *holders) at(i int) (string, bool) {
+	if i >= len(h.list) && !h.whole {
+		h.extend()
+	}
+	if i >= len(h.list) {
+		return "", false
+	}
+	return h.list[i], true
+}
+
+// extend appends every member of the ranking not yet listed, members that did
+// not answer lately last — and for a write, no member the map does not place
+// on ([placement.Member.Placeable]): one that is out, or on probation. What is
+// already listed keeps its place: a request has already tried it.
+func (h *holders) extend() {
+	h.whole = true
+	var rest []string
+	for _, node := range h.m.Ranked(h.pg) {
+		if slices.Contains(h.list, node) {
+			continue
+		}
+		if member, _ := h.m.Member(node); h.write && !member.Placeable() {
+			continue
+		}
+		rest = append(rest, node)
+	}
+	h.list = append(h.list, h.c.order(rest)...)
 }
 
 // Holding is one member's answer about a batch of chunks.
@@ -260,20 +369,28 @@ type Holding struct {
 	Node string
 
 	// Held and Placed are per hash, in the order asked: whether the member
-	// holds each chunk, and whether its own map places the chunk there.
+	// holds each chunk — an intact copy, read and checked, when the
+	// question asked for that — and whether its own map places the chunk
+	// there.
 	Held, Placed []bool
 
 	// Epoch is the map epoch the member judged Placed at.
 	Epoch uint64
 }
 
-// Has asks one member which of up to [MaxHas] chunks it holds.
-func (c *Client) Has(ctx context.Context, node string, hashes []objstore.Hash) (Holding, error) {
-	if len(hashes) > MaxHas {
-		return Holding{}, fmt.Errorf("objstore/transfer: %d hashes in one request, over %d",
-			len(hashes), MaxHas)
+// Has asks one member which of a batch of chunks it holds: up to [MaxHas] when
+// it only looks, up to [MaxVerify] when verify has it read and check every
+// copy it holds before counting it.
+func (c *Client) Has(ctx context.Context, node string, hashes []objstore.Hash, verify bool) (Holding, error) {
+	limit := MaxHas
+	if verify {
+		limit = MaxVerify
 	}
-	rep, _, err := c.ask(ctx, node, request{Op: opHas, Hashes: hashes}, nil)
+	if len(hashes) > limit {
+		return Holding{}, fmt.Errorf("objstore/transfer: %d hashes in one request, over %d",
+			len(hashes), limit)
+	}
+	rep, _, err := c.ask(ctx, node, request{Op: opHas, Hashes: hashes, Verify: verify}, nil)
 	if err != nil {
 		return Holding{}, err
 	}
@@ -294,7 +411,7 @@ func (c *Client) ask(ctx context.Context, node string, req request, body []byte)
 	if err != nil {
 		return reply{}, nil, err
 	}
-	attempt, cancel := attemptContext(ctx, c.attempt)
+	attempt, cancel := attemptContext(ctx)
 	defer cancel()
 	replies, err := c.queue.Ask(attempt, Subject(node), raw, 1)
 	if err != nil {
@@ -315,21 +432,34 @@ func (c *Client) ask(ctx context.Context, node string, req request, body []byte)
 	return rep, payload, nil
 }
 
-// order is a ranking with every suspect member moved to the end, the rest in
-// the ranking's own order.
-func (c *Client) order(ranked []string) []string {
+// suspects is every member currently asked last, forgetting those whose
+// cooldown has passed.
+func (c *Client) suspects() map[string]bool {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	now := c.now()
-	suspect := map[string]bool{}
+	out := map[string]bool{}
 	for node, until := range c.suspect {
 		if now.Before(until) {
-			suspect[node] = true
+			out[node] = true
 		} else {
 			delete(c.suspect, node)
 		}
 	}
-	c.mu.Unlock()
-	out := slices.Clone(ranked)
+	return out
+}
+
+// anySuspect reports whether any of nodes is currently asked last.
+func (c *Client) anySuspect(nodes []string) bool {
+	suspect := c.suspects()
+	return slices.ContainsFunc(nodes, func(node string) bool { return suspect[node] })
+}
+
+// order is nodes with every suspect member moved to the end, the rest in
+// their own order.
+func (c *Client) order(nodes []string) []string {
+	suspect := c.suspects()
+	out := slices.Clone(nodes)
 	slices.SortStableFunc(out, func(a, b string) int {
 		switch {
 		case suspect[a] == suspect[b]:
@@ -354,10 +484,11 @@ func (c *Client) markAnswered(node string) {
 	delete(c.suspect, node)
 }
 
-// attemptContext is one attempt's context: the caller's, capped by budget.
-func attemptContext(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < budget {
+// attemptContext is one attempt's context: the caller's, capped by
+// [attemptBudget].
+func attemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < attemptBudget {
 		return context.WithCancel(ctx)
 	}
-	return context.WithTimeout(ctx, budget)
+	return context.WithTimeout(ctx, attemptBudget)
 }

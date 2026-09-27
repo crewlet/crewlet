@@ -123,14 +123,27 @@ empty answer is the one this estate cannot survive, since "no rows" is
 legitimate everywhere it is asked.
 
 That is why a **resource name is segmented**. A lease is named
-`seat:{handle}`, `node:{id}` or `worker:{duty}`, and the part before the colon
-is the **class**; the key it becomes carries that class as a subject token of
-its own, so `seat` is a wildcard and the seats are addressable without the
-nodes. The two reads that pay for it run on a ticker: the membership read asks
-for the presence leases instead of every lease in the fleet, and the sweep's
+`seat:{handle}`, `node:{id}`, `worker:{duty}` or `objects:{id}`, and the part
+before the colon is the **class**; the key it becomes carries that class as a
+subject token of its own, so `seat` is a wildcard and the seats are addressable
+without the nodes. The reads that pay for it run on a ticker: the two
+membership reads — the fleet's, which asks for the presence leases, and the
+object store's, which asks for the `objects:` leases its data nodes hold —
+each read one class instead of every lease in the fleet, and the sweep's
 placement hints come from the `epochs` bucket — the one with no expiry at all,
 holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
+
+**The object store's membership is a class of its own** rather than a field of
+presence, and each reason cost a placement once. Presence is the seat host's,
+and a shutdown drain gives it up at its first step while the node is still
+serving every chunk it holds — so a drain longer than the placement map's grace
+moved the node's whole share of the company's files away and back. And
+presence carries what the node was configured with, so a node whose objects
+volume had failed stayed placed on for ever. An `objects:{id}` lease is
+claimed by the [object store](object-store.md#membership-is-the-objects-lease)
+itself, renewed on its own loop, released only once its chunk server has
+stopped, and carries the store's own account of its health.
 
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with
@@ -147,7 +160,7 @@ then returned by no listing at all, which every node reads as a free seat.
 ```mermaid
 flowchart LR
     subgraph COORD["coordination store — shared by the fleet"]
-        L[("leases<br/>seats · presence")]
+        L[("leases<br/>seats · presence · object-store membership")]
         D[("duties<br/>fleet singletons")]
         E[("epochs<br/>the fencing counter")]
         C[("config<br/>activation pointer")]
@@ -164,6 +177,7 @@ flowchart LR
         INT[("integrations<br/>reconcile status per surface")]
         MB[("mailboxes<br/>seat mailboxes that may exist")]
         POS[("positions<br/>what the state log may delete")]
+        OBJ[("objects<br/>the placement map")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -175,7 +189,7 @@ flowchart LR
 
 | Slot | Answers | Documented in |
 |---|---|---|
-| `leases` | Which node runs which seat, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
+| `leases` | Which node runs which seat, which nodes are alive at all, and which data nodes are members of the object store and how their stores are | [Seat Ownership](seat-ownership.md#the-lease), [Object Store](object-store.md#membership-is-the-objects-lease) |
 | `duties` | Which node holds which [singleton duty](seat-ownership.md#singleton-duties). Its own bucket because a duty and a seat want opposite TTLs: see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own) | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
 | `epochs` | The monotonic fencing counter each seat's, duty's and node's tokens are minted from. Its own bucket because it is the one thing here that must never expire (see the retention table below) | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` | Which company revision is current. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
@@ -192,6 +206,7 @@ flowchart LR
 | `integrations` | Where each external surface's reconcile pass got to: its phase, its findings, the address it was set up against, and whether a disconnect has been asked for. It is company-wide because the loop is a fleet singleton and moves — a status in a node's own database would be a screen that changed answer depending on which node served the page | [Integration Reconcile](integration-reconcile.md) |
 | `mailboxes` | Which seat mailboxes may exist, and since when a seat has been missing from the active revision. Every node records a handle before it creates the seat's durable subscription, because a removed seat's handle is gone from the org every node derives names from and the retirement's absence stamp and mark have nowhere else to live. A mailbox that escaped the record is found by listing the broker's subscriptions. Every change is a compare-and-set, since a returning seat's registration and the sweep that retires a mailbox write the same record | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
 | `follows` | Which chat threads each seat is following, one record per (backend, seat, channel, thread). It is company-wide because an inbound chat message is claimed and parsed by ONE node — `notify-inbound` is a competing consumer group — and the next reply in the same thread by whichever node wins that time: a follow only one node could see made a non-mention reply reach its seat by chance, less often the more nodes ran. It was the last table in a node's own database answering a question the company has to agree on. Rows written before the move are carried here at the next start rather than dropped — the local table survives, permanently empty, as that handoff's source, because a migration runs before any Go code and cannot reach this store | [Slack](../integrations/slack.md#thread-routing) |
+| `objects` | Where the company's files are placed: the one placement map every node places by — the copies the company asks for and what they are spread across, every data node's weight, share and domain, who is taken out — and what the `object-map` duty has to carry between its ticks, because the duty moves: each absent member's count of ticks, the nodes it removed, an operator's hold. Written only by compare-and-set, so an operator's gesture and the duty's tick cannot overwrite each other | [Object Store](object-store.md#the-map) |
 | `positions` | **What the state log may delete**, in four key classes: where every node stands per domain, the live pins a backup or a joining node holds, what each owner's newest backup covers, and the floor the trim itself published with the term that is holding it. Four classes in one bucket because all four answer one question and all four need the same retention, which is none. Three more share it for that retention alone — a log's capacity operation, each node's admission to publish, and each node's acknowledgement that it restarted for the operation — because each must outlive any clock: an expiring operation admits publishers, an expiring admission hides one, and an expiring acknowledgement un-seals a barrier that has already run | [Retention](../guides/retention.md), [Changing a log's ceiling](../guides/retention.md#changing-a-logs-ceiling) |
 
 **The page and work-item embeddings are not here.** They were a slot of their
@@ -258,6 +273,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `integrations` | none | A status is standing state, not a recent event: it says what the last pass found, and it is true until the next one. One that expired would make a converged surface read as never-reconciled and send the loop to re-provision what is already there. It is bounded by the number of surfaces a company has rather than by a horizon, and a row leaves when its block leaves the company document |
 | `follows` | 90 days | The one aged slot whose horizon is a **last-activity** stamp rather than a window: every re-assert — a mention, a collective address, the seat posting into the thread — rewrites the record, so the bucket's age tracks the conversation. Ninety days is where a chat thread stops being live on every backend that ships one, and the asymmetry makes it safe: a dropped follow costs at most one missed non-mention reply, which the next mention re-establishes, while keeping every follow for ever grows a record read on the hot path of every inbound message |
 | `mailboxes` | none | A record's age cannot tell a seat that is still in the company from one that left, so an age would forget a mailbox that still exists and leave it retaining mail for a seat nobody runs. It is bounded by the handles a company has ever used, and a record leaves when the [maintenance duty](seat-ownership.md#singleton-duties) retires its mailbox |
+| `objects` | none | The placement map is standing state for the life of the deployment, and one that expired would read as a fleet with nowhere to put a file — every upload refused until the duty wrote a new one, which a new generation then marks as a different map from the one every chunk was placed by |
 | `positions` | none | The sharpest case in the table. A node's position is what the trim reads to decide what every other node may delete, so a key that expired would read as a node that has applied **nothing** — which either pins the trim for ever or, read the other way round, lets it delete records that node still needs. A node stops being counted by an operator's audited eviction, never by a clock — and its row stays even then, because a readmission is judged by the position it holds |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.

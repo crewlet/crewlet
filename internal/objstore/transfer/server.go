@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/disk"
 	"github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/queue"
 )
@@ -19,11 +20,18 @@ type Chunks interface {
 	Put(h objstore.Hash, data []byte) error
 	Get(h objstore.Hash) ([]byte, error)
 	Has(h objstore.Hash) bool
+	Verify(h objstore.Hash) (bool, error)
 }
 
-// Maps answers the placement map this node currently places by, and false
-// when it has none yet.
-type Maps func() (placement.Map, bool)
+// Layouts answers the layout of the placement map this node currently places
+// by, and false when it has none yet.
+//
+// A LAYOUT, not a map: every group's holders computed once per map
+// ([placement.Map.Layout]), because the question asked of it — who holds this
+// chunk — comes once per chunk, and drawing a group's members again for every
+// one of them had a has request over a thousand hashes spending seconds at a
+// large fleet.
+type Layouts func() (*placement.Layout, bool)
 
 // Server is what registering an answerer needs from the queue.
 type Server interface {
@@ -36,7 +44,7 @@ type Server interface {
 // node that is about to be added is where writers will be sending within one
 // cache refresh, and a copy a displaced write left here is one a reader may
 // come looking for.
-func Serve(ctx context.Context, q Server, nodeID string, chunks Chunks, current Maps) (queue.Unsubscribe, error) {
+func Serve(ctx context.Context, q Server, nodeID string, chunks Chunks, current Layouts) (queue.Unsubscribe, error) {
 	if q == nil || chunks == nil || current == nil {
 		return nil, errors.New("objstore/transfer: serve needs a queue, a chunk store and a map")
 	}
@@ -50,7 +58,7 @@ func Serve(ctx context.Context, q Server, nodeID string, chunks Chunks, current 
 
 // answer runs one request and ALWAYS answers: silence reads as a node that is
 // down, and the asker would wait out its whole attempt before the next member.
-func answer(ctx context.Context, nodeID string, chunks Chunks, current Maps, raw []byte) []byte {
+func answer(ctx context.Context, nodeID string, chunks Chunks, current Layouts, raw []byte) []byte {
 	out := reply{Node: nodeID, Status: statusOK}
 	var req request
 	body, err := unframe(raw, &req)
@@ -64,37 +72,75 @@ func answer(ctx context.Context, nodeID string, chunks Chunks, current Maps, raw
 				len(body), objstore.ChunkSize)), nil)
 		}
 		if err := chunks.Put(req.Hash, body); err != nil {
-			log.WarnContext(ctx, "object_put_refused", "chunk", string(req.Hash), "from", req.From, "error", err)
+			// A STORE THAT CANNOT TAKE CHUNKS refuses, naming its state,
+			// so the writer takes the copy to the next member and can say
+			// why this one did not. It is not logged here: the node's own
+			// health says so once, where a line per refused chunk would
+			// repeat it for every write in the fleet.
+			switch {
+			case errors.Is(err, disk.ErrFull):
+				out.Unhealthy = string(disk.HealthFull)
+			case errors.Is(err, disk.ErrFailed):
+				out.Unhealthy = string(disk.HealthFailed)
+			default:
+				log.WarnContext(ctx, "object_put_refused", "chunk", string(req.Hash),
+					"from", req.From, "error", err)
+			}
 			return encodeReply(refuse(out, err.Error()), nil)
 		}
 		return encodeReply(out, nil)
 	case opGet:
 		data, err := chunks.Get(req.Hash)
-		if err != nil {
+		switch {
+		case err == nil:
+			return encodeReply(out, data)
+		case errors.Is(err, disk.ErrNotFound):
+			// NOT HELD, a definite answer: the asker may count it toward
+			// calling a chunk missing everywhere.
 			out.Status, out.Detail = statusMissing, err.Error()
-			return encodeReply(out, nil)
+		default:
+			// A READ THAT FAILED says nothing about whether the chunk is
+			// here, and answering missing would let one failing disk make
+			// a chunk read as lost.
+			out = refuse(out, err.Error())
 		}
-		return encodeReply(out, data)
+		return encodeReply(out, nil)
 	case opHas:
-		if len(req.Hashes) > MaxHas {
-			return encodeReply(refuse(out, fmt.Sprintf("%d hashes in one request, over %d",
-				len(req.Hashes), MaxHas)), nil)
+		limit := MaxHas
+		if req.Verify {
+			limit = MaxVerify
 		}
-		m, placed := current()
+		if len(req.Hashes) > limit {
+			return encodeReply(refuse(out, fmt.Sprintf("%d hashes in one request, over %d",
+				len(req.Hashes), limit)), nil)
+		}
+		layout, placed := current()
 		if placed {
-			out.Epoch = m.Epoch
+			out.Epoch = layout.Map().Epoch
 		}
 		out.Held = make([]bool, len(req.Hashes))
 		out.Placed = make([]bool, len(req.Hashes))
 		for i, h := range req.Hashes {
-			out.Held[i] = chunks.Has(h)
-			out.Placed[i] = placed && h.Valid() && slices.Contains(m.Up(h.PG()), nodeID)
+			out.Held[i] = holds(chunks, h, req.Verify)
+			out.Placed[i] = placed && h.Valid() &&
+				slices.Contains(layout.Up(layout.Group(h.Slot())), nodeID)
 		}
 		return encodeReply(out, nil)
 	}
 	// A NEWER PEER'S OPERATION. Refused by name, so the asker's error
 	// says which build to look at rather than that this node is down.
 	return encodeReply(refuse(out, fmt.Sprintf("%s does not know the operation %q", nodeID, req.Op)), nil)
+}
+
+// holds is whether this node holds a chunk — read and checked, when verify
+// asks. A read that fails is not held: the asker is deciding whether it may
+// delete its own copy, and a copy this node cannot read is no reason to.
+func holds(chunks Chunks, h objstore.Hash, verify bool) bool {
+	if !verify {
+		return chunks.Has(h)
+	}
+	ok, err := chunks.Verify(h)
+	return ok && err == nil
 }
 
 func refuse(out reply, detail string) reply {

@@ -47,6 +47,11 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Objects is the company's object store: how many copies every file
+	// chunk keeps and what they are spread across. The zero value is the
+	// shipped placement — see [Objects].
+	Objects Objects `yaml:"objects,omitempty" json:"objects,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -459,6 +464,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.TurnEngine.validate(field("turn_engine")))
 	p.wrap(c.Learning.validate(field("learning")))
 	p.wrap(c.Scheduling.validate(field("scheduling")))
+	p.wrap(c.Objects.validate(field("objects")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
 	p.wrap(c.validateContainerKeys())

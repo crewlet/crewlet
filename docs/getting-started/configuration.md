@@ -218,6 +218,43 @@ See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
 
+### Objects
+
+How the company keeps the bytes of its files in the
+[object store](../concepts/object-store.md): how many copies of every chunk,
+and what those copies are spread across.
+
+```yaml
+objects:                                 # optional — the zero block is the default
+  replicas: 3                            # copies of every chunk, each on a different
+                                         #   data node, 1..10; 0 or unset is 3
+  failure_domain: zone                   # a node label KEY; no two copies of a chunk
+                                         #   share its value while enough values exist
+```
+
+**`replicas`** is the company's, not a node's: every node applies it from the
+same activation, and a node applying an older revision late cannot set it back.
+Three is the default because it is the smallest count that survives losing a
+copy *while* a second is being rebuilt. A fleet with fewer data nodes than this
+keeps one copy on each rather than refusing to store anything, and reaches the
+full count as nodes join. Every write sends this many copies across the broker,
+which is why the ceiling is 10. It is **not** `stream.replicas` (Tier A), which
+is how many copies the broker keeps of its own streams.
+
+**`failure_domain`** names a key every data node sets under
+[`node.labels`](../concepts/configuration.md#nodelabels) — `zone`, `rack`,
+`host` — and copies of a chunk are spread so no two share its value. With
+fewer distinct values than copies, some chunks keep two copies in one domain
+rather than fewer copies. A data node **missing** the label counts as a domain
+of its own, which is the safe degradation and a silent one, so `crewlet
+validate` given both files warns about it at `node.labels.<key>`. The key
+follows the node-label grammar: at most 63 bytes, no whitespace or unprintable
+character. Unset spreads copies across nodes with no further constraint.
+
+A revision that changes either takes effect at the map duty's next tick, with
+no restart; changing either re-places data, so the fleet copies chunks to
+their new holders before anything is deleted from the old ones.
+
 ---
 
 ## Providers
@@ -434,10 +471,15 @@ stream:
                                     #   nobody
   # replicas: 3                     # 1 solo (the default); 3 across an EMBEDDED
                                     #   cluster, where it is what makes a publish
-                                    #   quorum-durable before it returns. It is
-                                    #   checked against `cluster.peers`, so >1
-                                    #   without them is refused — this node has
-                                    #   nothing to replicate to
+                                    #   quorum-durable before it returns. At most
+                                    #   5, JetStream's own ceiling, and on an
+                                    #   embedded cluster at most its members —
+                                    #   this node and `cluster.peers` — so >1
+                                    #   without peers is refused: this node has
+                                    #   nothing to replicate to. It is the
+                                    #   BROKER's copies of its streams and
+                                    #   buckets; the object store's copies of a
+                                    #   file are the company's `objects.replicas`
   # cluster:                        # an EMBEDDED server joining its peers, which
   #   name: crewlet                 #   is the fleet topology: every node embeds
                                     #   one member of one cluster. REQUIRED once
@@ -736,7 +778,9 @@ store:
                                     #   data nodes', 1..64 — a node of weight 2
                                     #   holds about twice what a weight-1 node
                                     #   does. Set it in proportion to the space
-                                    #   `dir` has. 0 is the default, 1
+                                    #   `dir` has. 0 is the default, 1. It rides
+                                    #   the store's own membership lease, with
+                                    #   `node.labels` and the store's health
 
 coordination:
   type: local                       # one node holding its own seat leases;

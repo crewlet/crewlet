@@ -665,5 +665,5 @@ func holdsData(b *config.Bootstrap) bool {
 	if b == nil {
 		return true
 	}
-	return b.Profile("").HoldsData()
+	return b.Node.Profile("").HoldsData()
 }

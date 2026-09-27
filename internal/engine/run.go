@@ -610,6 +610,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
+	logTierWarnings(ctx, opts.Bootstrap, opts.Company)
 	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
 	// sandbox: an apply can bring it its first, and the poll starts there.
 	// See [checkSandboxPollInterval].
@@ -822,9 +823,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.serveEstate(ctx); err != nil {
 		return nil, err
 	}
+	// THE LEASE TTL IN FORCE, before anything claims a lease on the seat
+	// heartbeat: the object store's membership below is the first, and the
+	// node's seats and the mailbox retirement follow.
+	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	// AND THE OBJECT STORE, on the same terms: a data node answers for its
 	// chunks from boot, whatever mode it started in, because a reader on
-	// another node may need the only copy it holds.
+	// another node may need the only copy it holds — and claims its
+	// membership from then, because a member serving its chunks is a member.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := e.startObjects(ctx, opts.Bootstrap); err != nil {
 		return nil, err
@@ -902,17 +908,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return nil, err
 		}
 	}
-	e.installEpoch(company)
+	e.installEpoch(company, opts.ActivatedAt)
 
 	// SET BEFORE the node, because the node is handed this exact value —
 	// two constructions of it would be two places to disagree about what
 	// this node does.
-	// THROUGH THE BOOTSTRAP'S OWN ACCESSOR, not a second construction of
+	// THROUGH THE NODE BLOCK'S OWN ACCESSOR, not a second construction of
 	// the same thing: it parses the roles with the validator that already
 	// refused an unknown one at load, and it is what the fleet view reads
 	// a peer's presence row back through.
-	e.profile = opts.Bootstrap.Profile(nodeID)
-	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
+	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	// BEFORE the node, which registers every seat's mailbox through it on
 	// its first walk, and AFTER the lease TTL, which a retirement claims a
 	// seat for.
@@ -1058,7 +1063,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// AND THE OBJECT STORE'S MAP, a singleton on the same terms: two nodes
 	// maintaining it at once would each read the other's write as a lost
 	// race, which is safe and is a map that moves twice as often.
-	if err := e.startObjectMap(ctx, opts.Bootstrap); err != nil {
+	if err := e.startObjectMap(ctx); err != nil {
 		return nil, err
 	}
 	// THE LOG'S OWN TRIM, beside the sweep and after the node exists for
@@ -1443,17 +1448,24 @@ func (e *Engine) teardown(ctx context.Context) {
 	// paid summarisation against a closed database.
 	e.stopLearning()
 	e.stopScheduler()
+	// THE OBJECT STORE'S MAP DUTY with the other duty loops, and only that
+	// half of the object store: the loop claims its duty afresh every turn,
+	// so one still running past the release below takes it straight back
+	// and the node exits holding the placement map. The passes, the chunk
+	// server and the directory stay below, for their own reasons.
+	e.stopObjectMap()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
-	// tick of this node runs once a peer can take the duty.
+	// tick of this node runs once a peer can take the duty, and no turn of
+	// this node can claim one again once it is given back.
 	e.releaseDuties(ctx)
 	e.stopCooldownRefresh()
 	// BEFORE the native backends, whose page projection its walk reads, and
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
 	e.stopServingEstate(ctx)
-	// THE OBJECT STORE, whole — the passes and the map duty first, then
-	// the chunk server, then the directory — and BEFORE the native runtime
-	// below, whose tracker reader the passes read the references through.
+	// THE REST OF THE OBJECT STORE — the passes first, then the chunk
+	// server, then the directory — and BEFORE the native runtime below,
+	// whose tracker reader the passes read the references through.
 	// The server goes with it for the estate's reason above: a node that
 	// is going away stops being asked for chunks before it stops being
 	// able to answer them.

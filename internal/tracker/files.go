@@ -65,7 +65,7 @@ const (
 	//
 	// FOUR THOUSAND AND NINETY-SIX: a gibibyte at the object store's own
 	// chunk size is 1 024, so this leaves room for a writer that cut
-	// smaller chunks, and a chunk entry is about ninety-five bytes of
+	// smaller chunks, and a chunk entry is about ninety-one bytes of
 	// record — so the largest manifest is under a third of
 	// [MaxCommitBytes], which TestTheMaximalFileFitsItsRecord measures.
 	MaxFileChunks = 4096
@@ -113,17 +113,17 @@ type File struct {
 }
 
 // FileChunk is one piece of a file's content.
+//
+// NO PLACEMENT ON THE RECORD. Where a chunk lives is the object store's
+// question, answered by its map, and the one fact a row needs to be found by a
+// pass over a placement group — the chunk's SLOT — is a pure function of the
+// hash that no configuration can move ([objstore.Hash.Slot]), so the applier
+// derives it rather than trusting a writer to state it. A group number carried
+// here was redundant with the hash while the group count was fixed, and wrong
+// on every record written before the map split its groups.
 type FileChunk struct {
 	Hash objstore.Hash `json:"hash"`
 	Size int64         `json:"size"`
-
-	// PG is the chunk's placement group, written by the WRITER and carried
-	// on the record, because the applier reads no configuration and
-	// computes nothing another node could compute differently — and it is
-	// what the object store's passes select a group's references on. It
-	// is a pure function of the hash; the applier refuses a record whose
-	// PG and hash disagree.
-	PG int `json:"pg"`
 }
 
 // Removed reports whether the file has been taken away.
@@ -138,11 +138,11 @@ func (f File) Manifest() objstore.Manifest {
 	return m
 }
 
-// chunksOf is a manifest's pieces with their placement groups.
+// chunksOf is a manifest's pieces as a record carries them.
 func chunksOf(m objstore.Manifest) []FileChunk {
 	out := make([]FileChunk, 0, len(m.Chunks))
 	for _, c := range m.Chunks {
-		out = append(out, FileChunk{Hash: c.Hash, Size: c.Size, PG: c.Hash.PG()})
+		out = append(out, FileChunk{Hash: c.Hash, Size: c.Size})
 	}
 	return out
 }
@@ -152,7 +152,7 @@ func chunksOf(m objstore.Manifest) []FileChunk {
 // [objstore.ReferenceTable] for why a table missing from that list is the
 // mistake that deletes files.
 var FileChunkReferences = objstore.ReferenceTable{
-	Domain: Domain{}.Name(), Table: "tracker_file_chunks", Column: "chunk", Group: "pg",
+	Domain: Domain{}.Name(), Table: "tracker_file_chunks", Column: "chunk", Slot: "slot",
 }
 
 // NormalizeFilePath is a path as it is stored and addressed: slash-separated

@@ -60,6 +60,18 @@ type Company struct {
 	// than here: it belongs to the seat's LEASE, and an epoch is replaced
 	// wholesale by every apply. See the seatTools field in run.go.
 	Tools *tools.Registry
+
+	// ActivatedAt is when the fleet activated this configuration — the
+	// activation pointer's own instant, or the active revision's
+	// `activated_at` a boot reads — stamped when the epoch is installed.
+	//
+	// ZERO FOR A CONFIGURATION NO ACTIVATION HAS NAMED: a Tier B file a
+	// node booted with, before its reconciler has published it. Everything
+	// that must agree across nodes about WHEN a configuration took effect
+	// reads this rather than a clock, and a zero instant is a
+	// configuration none of them may apply — the chart is not written from
+	// it, and the object store's placement takes nothing from it.
+	ActivatedAt time.Time
 }
 
 // NewCompany builds an epoch from a validated config.

@@ -77,7 +77,7 @@ func (f *fakeFiles) PutFile(_ context.Context, _ string, put tracker.FilePut) (t
 		Hash: put.Manifest.Hash, Size: put.Manifest.Size, Version: f.version,
 		UpdatedAt: time.Unix(1_700_000_000, 0).UTC()}
 	for _, c := range put.Manifest.Chunks {
-		file.Chunks = append(file.Chunks, tracker.FileChunk{Hash: c.Hash, Size: c.Size, PG: c.Hash.PG()})
+		file.Chunks = append(file.Chunks, tracker.FileChunk{Hash: c.Hash, Size: c.Size})
 	}
 	f.files[f.key(put.Project, put.Path)] = file
 	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied,

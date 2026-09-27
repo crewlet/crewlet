@@ -133,21 +133,21 @@ func TestRolesThatContradictTheNodeAreRefused(t *testing.T) {
 	}
 }
 
-// A DATA NODE OFFERS AN OBJECT SHARE ON ITS PRESENCE LEASE — the default one
-// when it names none — and a node without `data` offers none, which is what
-// keeps writers from sending it chunks it will not keep.
-func TestOnlyADataNodeOffersAnObjectShare(t *testing.T) {
+// A DATA NODE THAT NAMES NO WEIGHT OFFERS THE DEFAULT SHARE, and one that
+// names a weight offers exactly it. The share rides the object store's own
+// lease, which only a data node claims — so a node without `data` offers none
+// by never claiming one, and nothing here has to say so.
+func TestADataNodeOffersTheShareItNames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		boot Bootstrap
-		want int
+		name    string
+		objects StoreObjects
+		want    int
 	}{
-		{"every role, no block", Bootstrap{}, DefaultObjectWeight},
-		{"a weight named", Bootstrap{Store: Store{Objects: StoreObjects{Weight: 5}}}, 5},
-		{"no data role", Bootstrap{Node: Node{Roles: []string{"seats"}}}, 0},
+		{"no block", StoreObjects{}, DefaultObjectWeight},
+		{"a weight named", StoreObjects{Weight: 5}, 5},
 	} {
-		if got := tc.boot.Profile("n1").ObjectWeight; got != tc.want {
+		if got := tc.objects.ObjectWeight(); got != tc.want {
 			t.Errorf("%s: object weight %d, want %d", tc.name, got, tc.want)
 		}
 	}

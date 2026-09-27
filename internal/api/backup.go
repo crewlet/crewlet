@@ -88,7 +88,8 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 			answer["error"] = "objects_unreachable"
 			answer["hint"] = "the company's files name chunks no reachable data " +
 				"node could supply; bring back any data node that is down, check " +
-				"the objects_missing alarm, and take the backup again"
+				"the objects_missing and objects_degraded alarms, and take the " +
+				"backup again"
 		}
 		writeJSON(w, status, answer)
 		return

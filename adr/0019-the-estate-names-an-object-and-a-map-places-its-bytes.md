@@ -12,16 +12,17 @@ hold on every data node. Everything the company has to agree on about a file —
 that it exists, what it is called, where it lives, which chunks make it up —
 is a row in the replicated estate, written by a state log's applier like any
 other. What is divided is the BYTES: a file is cut into content-addressed
-chunks, each chunk belongs to one of 256 placement groups by its hash, and a
-placement map in the coordination store says which data nodes hold each group.
-Adding a data node adds space; the map is a pure function every node evaluates
-the same way, so nobody asks where a chunk is.
+chunks, each chunk belongs to a placement group by its hash, and a placement
+map in the coordination store says which data nodes hold each group. Adding a
+data node adds space; the map is a pure function every node evaluates the same
+way, so nobody asks where a chunk is. How many copies it keeps and what they
+are spread across are the company's — [ADR-0020](0020-the-company-decides-how-many-copies-and-across-what.md).
 
 Three rules hold it together, and each is stated once, at `internal/objstore`
 and its packages:
 
 - **The map is maintained by one node at a time and changed by
-  compare-and-set** (`objstore/upkeep`). A member is taken out only after it
+  compare-and-set** (`objstore/upkeep`). A member is removed only after it
   has been gone for a grace, so a restart moves nothing, and a write past a
   silent member lands on the next member of the same ranking a reader walks,
   so an absence costs a copy in another place rather than a copy fewer.
@@ -60,13 +61,16 @@ chunk that has to be trimmed is a record the log can never trim past.
 
 **A placement kept per object** (a location row per chunk) makes every write
 two writes and turns a node's failure into a rewrite of every row that named
-it. A map over placement groups changes in one record and is compared in 256
-entries.
+it. A map over placement groups changes in one record and is compared group by
+group.
 
-**Rendezvous weights computed with a logarithm** (CRUSH's straw2) is the
-standard formula and it is refused here: `math.Log` is per-architecture
-assembly, and two nodes disagreeing in the last bit would place a group on
-different holders. The draws are integers.
+**Rendezvous weights computed with a floating-point logarithm** — CRUSH's
+straw2 as it is usually written — was refused when this record was written,
+because `math.Log` is per-architecture assembly and two nodes disagreeing in
+the last bit would place a group on different holders. That objection was to
+the float and never to the formula: ADR-0020 adopted straw2 with its logarithm
+in integer fixed point, which every CPU computes to the bit. The draws are
+integers either way.
 
 ## What this does not decide
 

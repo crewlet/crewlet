@@ -95,7 +95,16 @@ func (e *Engine) RecheckGitHub() {
 //
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
-func (e *Engine) installEpoch(c *Company) {
+func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
+	if c != nil {
+		// STAMPED BEFORE IT IS PUBLISHED, so no reader ever sees this
+		// epoch without the instant its configuration took effect — the
+		// one fact about it every node agrees on. See [Company.ActivatedAt].
+		if !activatedAt.IsZero() {
+			activatedAt = activatedAt.UTC()
+		}
+		c.ActivatedAt = activatedAt
+	}
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(c)
 	}
@@ -116,6 +125,16 @@ func (e *Engine) installEpoch(c *Company) {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
 	e.auditSkills()
+}
+
+// logTierWarnings says what is valid about this node's pair of documents and
+// worth an operator knowing ([config.TierWarnings]) — once per boot and per
+// apply, on the node the warning is about, because it names THIS node's Tier A
+// file and no other node can see it.
+func logTierWarnings(ctx context.Context, boot *config.Bootstrap, company *config.Company) {
+	for _, w := range config.TierWarnings(boot, company) {
+		log.WarnContext(ctx, "config_tier_warning", "path", w.Path, "detail", w.Message)
+	}
 }
 
 // indexes reports whether the live party registry was built from exactly this
@@ -209,6 +228,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 				"this node still serves the previous epoch")
 		return configplane.StatusError, nil, fmt.Errorf("engine: apply: %w", err)
 	}
+	logTierWarnings(ctx, e.boot, cfg)
 	var applied []string
 	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
 	// the documented rotation gesture: the payload has not moved, so the
@@ -366,7 +386,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	e.installEpoch(next)
+	e.installEpoch(next, activatedAt)
 	applied = append(applied, "epoch")
 
 	// THE SWEEP, rebuilt when this apply started the native runtime — its

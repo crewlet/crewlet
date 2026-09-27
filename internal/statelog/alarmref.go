@@ -3,6 +3,8 @@ package statelog
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/objstore/disk"
 )
 
 // AlarmReference renders the alarm table as the published markdown page.
@@ -76,8 +78,22 @@ var alarmMeaning = map[Kind]string{
 	KindCensusDrift: "This company is doing more than twice the reads its " +
 		"log was sized for, so every sizing decision under it is stale.",
 	KindObjectsMissing: "Parts of the company's files that the placement map " +
-		"puts on this node are held by no member of the fleet, so those files " +
-		"cannot be read in full.",
+		"puts on this node are held by no member of the fleet — every member " +
+		"asked answered that it has no copy — so those files cannot be read " +
+		"in full.",
+	KindObjectsDegraded: "Copies the placement map puts on this node are not " +
+		"here: its last completed repair at the map's current epoch left some " +
+		"behind, or none has completed for more than twice the repair " +
+		"interval — counted from the last one that did at that epoch, or, if " +
+		"none has, from when this node first placed by it. Those files have " +
+		"fewer copies than the company asked for.",
+	KindObjectsUnhealthy: "This node's object store has failed, or its volume " +
+		"is full. A failed store is taken out of the placement map after the " +
+		"absence grace; a full one keeps serving while writes go elsewhere.",
+	// The two marks are the store's own, named once in internal/objstore/disk.
+	KindObjectsNearFull: fmt.Sprintf("This node's object store volume is past "+
+		"%.0f%% used. At %.0f%% it refuses every new chunk.",
+		disk.NearFullRatio*100, disk.FullRatio*100),
 }
 
 const alarmHeader = `# Alarms

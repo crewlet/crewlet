@@ -25,11 +25,12 @@ type Source interface {
 	// apply that far.
 	Barrier(ctx context.Context) (statelog.Position, error)
 
-	// Referenced answers every chunk the domain refers to in one
-	// placement group, read no earlier than at (zero: whatever this node
-	// holds), and whether the answer is COMPLETE — false while this node
-	// holds a record it could not apply that might refer to a chunk.
-	Referenced(ctx context.Context, pg int, at statelog.Position) (map[objstore.Hash]struct{}, bool, error)
+	// Referenced answers every chunk the domain refers to whose slot is
+	// in [lo, hi) — one placement group's, or a run of them — read no
+	// earlier than at (zero: whatever this node holds), and whether the
+	// answer is COMPLETE: false while this node holds a record it could
+	// not apply that might refer to a chunk.
+	Referenced(ctx context.Context, lo, hi int, at statelog.Position) (map[objstore.Hash]struct{}, bool, error)
 }
 
 // References is every source the engine runs.
@@ -120,7 +121,7 @@ func (s *tableSource) Barrier(ctx context.Context) (statelog.Position, error) {
 
 // Referenced reads every declared table of the domain in ONE read, so the
 // tables are judged at one position and one completeness.
-func (s *tableSource) Referenced(ctx context.Context, pg int,
+func (s *tableSource) Referenced(ctx context.Context, lo, hi int,
 	at statelog.Position) (map[objstore.Hash]struct{}, bool, error) {
 
 	out := map[objstore.Hash]struct{}{}
@@ -130,7 +131,7 @@ func (s *tableSource) Referenced(ctx context.Context, pg int,
 			if err != nil {
 				return err
 			}
-			if err := collect(ctx, tx, t, query, pg, out); err != nil {
+			if err := collect(ctx, tx, t, query, lo, hi, out); err != nil {
 				return err
 			}
 		}
@@ -142,13 +143,13 @@ func (s *tableSource) Referenced(ctx context.Context, pg int,
 	return out, complete, nil
 }
 
-// collect adds every chunk one table names in one group to out.
+// collect adds every chunk one table names in the slots [lo, hi) to out.
 func collect(ctx context.Context, tx *sql.Tx, t objstore.ReferenceTable, query string,
-	pg int, out map[objstore.Hash]struct{}) error {
+	lo, hi int, out map[objstore.Hash]struct{}) error {
 
-	rows, err := tx.QueryContext(ctx, query, pg)
+	rows, err := tx.QueryContext(ctx, query, lo, hi)
 	if err != nil {
-		return fmt.Errorf("read the chunks %s names in group %d: %w", t.Table, pg, err)
+		return fmt.Errorf("read the chunks %s names in slots [%d, %d): %w", t.Table, lo, hi, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -158,7 +159,7 @@ func collect(ctx context.Context, tx *sql.Tx, t objstore.ReferenceTable, query s
 		}
 		h, err := objstore.ParseHash(raw)
 		if err != nil {
-			return fmt.Errorf("%s.%s in group %d: %w", t.Table, t.Column, pg, err)
+			return fmt.Errorf("%s.%s in slots [%d, %d): %w", t.Table, t.Column, lo, hi, err)
 		}
 		out[h] = struct{}{}
 	}
@@ -168,8 +169,8 @@ func collect(ctx context.Context, tx *sql.Tx, t objstore.ReferenceTable, query s
 // view is what one pass read the references at: a floor per source.
 type view []statelog.Position
 
-// pin takes a barrier on every source, so a collection pass reads an estate
-// at least as new as the moment it began.
+// pin takes a barrier on every source, so a pass reads an estate at least as
+// new as the moment it began.
 func (r References) pin(ctx context.Context) (view, error) {
 	out := make(view, len(r))
 	for i, s := range r {
@@ -182,21 +183,17 @@ func (r References) pin(ctx context.Context) (view, error) {
 	return out, nil
 }
 
-// referenced is the union of every source's chunks in one group, and whether
-// every source answered completely. A nil view reads whatever each source
-// holds.
-func (r References) referenced(ctx context.Context, pg int, v view) (map[objstore.Hash]struct{}, bool, error) {
+// referenced is the union of every source's chunks in the slots [lo, hi), and
+// whether every source answered completely, each read no earlier than the
+// view pinned for it.
+func (r References) referenced(ctx context.Context, lo, hi int, v view) (map[objstore.Hash]struct{}, bool, error) {
 	all := map[objstore.Hash]struct{}{}
 	complete := true
 	for i, s := range r {
-		var at statelog.Position
-		if v != nil {
-			at = v[i]
-		}
-		set, whole, err := s.Referenced(ctx, pg, at)
+		set, whole, err := s.Referenced(ctx, lo, hi, v[i])
 		if err != nil {
-			return nil, false, fmt.Errorf("objstore/upkeep: read %s's references in group %d: %w",
-				s.Name(), pg, err)
+			return nil, false, fmt.Errorf("objstore/upkeep: read %s's references in slots [%d, %d): %w",
+				s.Name(), lo, hi, err)
 		}
 		for h := range set {
 			all[h] = struct{}{}

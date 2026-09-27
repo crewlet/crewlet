@@ -140,6 +140,13 @@ func wireAPI(
 			Events:  backends.Store.Events(),
 			Company: company,
 			NodeID:  nodeID,
+			// THE FLEET VIEW, over the lease table, the control plane and
+			// the stored placement map, as cmd/crewlet reads it: a case
+			// that makes a gesture on one member reads its effect off
+			// another's view of the fleet.
+			Coord:   backends.Coord,
+			Plane:   backends.Fleet,
+			Objects: backends.Fleet,
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,

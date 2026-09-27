@@ -570,7 +570,7 @@ to the adopted log.
 
 | Bucket | What it holds |
 |---|---|
-| **`crewlet_leases`** | `node:` · `seat:` ownership. The bucket's age **is** the lease TTL |
+| **`crewlet_leases`** | `node:` · `seat:` ownership, and `objects:` — a data node's membership in the object store, carrying its weight, labels and its store's health. The bucket's age **is** the lease TTL |
 | **`crewlet_duties`** | `worker:` ownership. Each record is judged by its own duty's deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
@@ -579,7 +579,7 @@ to the adopted log.
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
-| `crewlet_objects` | The object store's **placement map**: which data nodes hold each of the 256 placement groups, at what weight, and since when an absent one has been gone. One key, written by compare-and-set by the `object-map` duty. **No age** — an expired map would read as a fleet with nowhere to put a file |
+| `crewlet_objects` | The object store's **placement map**: the copies the company asks for and the label they are spread across, how many placement groups the slots are divided into, and every data node's weight, balanced share, domain and whether it is taken out or on probation — plus what the duty has to carry between ticks: each absent member's count of ticks, the nodes it removed and each one's probation, an operator's hold. One key, written by compare-and-set by the `object-map` duty — and by the node serving an operator's out, in, hold or release, the same way. **No age** — an expired map would read as a fleet with nowhere to put a file |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
@@ -601,12 +601,13 @@ to the adopted log.
 has to agree on it?" with *the row does, and the bytes do not*: the content of
 a company's files. The row naming a file — its path, its version, the hashes of
 its chunks — is in the replicated store like every other tracker row. The
-chunks themselves are kept only by the `stream.replicas` data nodes the
-placement map in `crewlet_objects` puts them on, under each node's
+chunks themselves are kept only by the data nodes the placement map in
+`crewlet_objects` puts them on — as many as the company's `objects.replicas`,
+spread across its `objects.failure_domain` — under each node's
 `store.objects.dir`, so adding a data node adds space rather than another copy
 of everything. Nothing here is derived by replay: repair copies a chunk from a
-node that holds it, and a chunk nothing names is collected. See
-[Object Store](object-store.md).
+node that holds it, a scrub finds the copies that rotted, and a chunk nothing
+names is collected. See [Object Store](object-store.md).
 
 **Mailboxes and event history are different kinds of stream.** The two
 mailbox streams use *interest* retention — a message lives until its durable
@@ -690,7 +691,10 @@ on the same heartbeat as its seats, carrying its roles, its labels and its
 status. Reading `node:*` back is the whole of fleet discovery — no gossip, no
 coordinator, no registry to configure — which is why adding a node is starting
 a process and removing one is stopping it. Dropping that row is the first thing
-a drain does.
+a drain does — which is why the object store does not read membership from it:
+a data node keeps serving chunks through its drain, so its place in the
+placement map is a lease of its own, `objects:{ID}`, given back only once its
+chunk server has stopped.
 
 **Placement is deliberately dumb.** Every node greedily claims up to a fair
 share — `ceil(seats / live nodes)`, live nodes being the presence leases of

@@ -8,7 +8,7 @@
 // kind of thing the lease is for. That is not decoration: the key a resource
 // becomes carries its class as a subject token of its own, so a whole class
 // is a wildcard the broker can match and a listing asks for one kind rather
-// than reading every lease in the fleet. Three classes name three kinds:
+// than reading every lease in the fleet. Four classes name four kinds:
 //
 //   - seat:{handle} — one agent seat this node runs.
 //   - worker:{duty} — a fleet singleton: the maintenance sweep, the
@@ -23,6 +23,18 @@
 //     roster, and the fair-share target every node computes for itself is
 //     ceil(seats / that count). A node that stops renewing its presence is
 //     not merely idle — it raises everyone else's share.
+//   - objects:{id} — a data node's membership in the OBJECT STORE, and the
+//     health of the store that membership offers. A class of its own
+//     rather than a field of node presence, for two reasons each of which
+//     cost a placement once. Presence is the SEAT HOST's, and a shutdown
+//     drain gives it up at its first step while the node is still serving
+//     every chunk it holds — so a drain longer than the map's grace moved
+//     the node's whole share away and then back. And presence carries
+//     what the node was CONFIGURED with, so a node whose objects volume had
+//     failed stayed placed on for ever. The objects lease is claimed by the
+//     object store itself, renewed on its own loop, released only once its
+//     chunk server has stopped, and carries the store's own account of its
+//     health (see internal/objstore's ObjectsMeta).
 //
 // What belongs here rather than in a node's own database is ADR-0003, the
 // tri-state below is ADR-0005, and why [ProtocolVersion] REFUSES an older
@@ -361,7 +373,7 @@ type AcquireOptions struct {
 	// Meta rides with the record; see Lease.Meta.
 	Meta map[string]any
 
-	// Ungated skips the lower-protocol refusal, and exactly two callers
+	// Ungated skips the lower-protocol refusal, and exactly three callers
 	// need it.
 	//
 	// Node presence: membership is not work. A newer-protocol node that
@@ -369,6 +381,13 @@ type AcquireOptions struct {
 	// for is invisible in the membership read — its peers then divide the
 	// seats by a count that excludes it and each take a larger share,
 	// while its own capacity also excludes itself.
+	//
+	// Object-store membership, for presence's reason with a longer tail: a
+	// data node that could not claim its `objects:` lease during an upgrade
+	// reads to the placement map as ABSENT, and past the map's grace its
+	// whole share of the company's files is copied to the other members —
+	// and copied back when the upgrade finishes — for a node that never
+	// stopped serving a chunk.
 	//
 	// Singleton duties: a duty record left at protocol 1 by a build that
 	// predates the gate would block every seat claim fleet-wide the moment
@@ -466,8 +485,9 @@ type Backend interface {
 	// ListOwned returns the live leases this owner holds.
 	ListOwned(ctx context.Context, owner string) ([]Lease, error)
 
-	// ListLive returns the live leases of one resource class. The
-	// membership read — ListLive(ClassNode) — is built on this.
+	// ListLive returns the live leases of one resource class. Both
+	// membership reads are built on this: the fleet's — ListLive(ClassNode)
+	// — and the object store's, ListLive(ClassObjects).
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
 
 	// PreferredResources returns resources of this class whose stickiness
@@ -504,7 +524,7 @@ const ResourceSeparator = ":"
 // key, and a listing that returns nothing is indistinguishable from a class
 // with no members at every caller. [Class.Valid] is what refuses one.
 //
-// Classes are deliberately NOT enumerated here. This package owns the three
+// Classes are deliberately NOT enumerated here. This package owns the four
 // the fleet itself leases; the tracker's claims are leases in the same bucket
 // under classes of their own, and an enumeration here would either be wrong
 // or drag every caller's vocabulary into this package.
@@ -512,9 +532,10 @@ type Class string
 
 // The classes the fleet leases directly.
 const (
-	ClassSeat   Class = "seat"
-	ClassWorker Class = "worker"
-	ClassNode   Class = "node"
+	ClassSeat    Class = "seat"
+	ClassWorker  Class = "worker"
+	ClassNode    Class = "node"
+	ClassObjects Class = "objects"
 )
 
 // Valid reports whether this class can address a key.
@@ -616,6 +637,14 @@ func WorkerResource(duty string) string { return ClassWorker.Resource(duty) }
 // seat.
 func NodeResource(nodeID string) string { return ClassNode.Resource(nodeID) }
 
+// ObjectsResource names a data node's object-store membership lease.
+//
+// Claimed by the OBJECT STORE rather than by the seat host, and held for as
+// long as the node's chunk server answers — see the package doc for what
+// reading membership off presence cost. What the lease carries is the
+// store's, and is read and written by internal/objstore.
+func ObjectsResource(nodeID string) string { return ClassObjects.Resource(nodeID) }
+
 // IsSeatResource reports whether a resource names a seat.
 func IsSeatResource(resource string) bool { return ClassSeat.Holds(resource) }
 
@@ -630,3 +659,8 @@ func SeatHandle(resource string) (string, bool) { return ClassSeat.Name(resource
 
 // NodeID recovers the node id from a presence resource name.
 func NodeID(resource string) (string, bool) { return ClassNode.Name(resource) }
+
+// ObjectsNode recovers the node id from an object-store membership resource
+// name, reporting false for a resource of any other class — a presence lease
+// included, which names the same node and says nothing about its store.
+func ObjectsNode(resource string) (string, bool) { return ClassObjects.Name(resource) }

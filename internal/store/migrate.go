@@ -84,12 +84,8 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 	migrateMu.Lock()
 	defer migrateMu.Unlock()
 
-	if _, err := d.sql.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version    TEXT    NOT NULL PRIMARY KEY,
-			applied_at INTEGER NOT NULL
-		)`); err != nil {
-		return nil, fmt.Errorf("store: create schema_migrations: %w", err)
+	if err := d.createMigrationLedger(ctx); err != nil {
+		return nil, err
 	}
 
 	applied, err := d.appliedVersions(ctx)
@@ -118,6 +114,24 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 		log.InfoContext(ctx, "schema_applied", "estate", string(d.estate), "version", name)
 	}
 	return done, nil
+}
+
+// createMigrationLedger creates `schema_migrations`, the table every applied
+// file is recorded in, if the database has none yet.
+//
+// ONE STATEMENT WITH TWO CALLERS: [DB.migrate], and the tests that stand a
+// database up at an OLDER schema to prove what a later migration does to rows
+// written under it. A second copy of this DDL there would be a ledger the real
+// migrator might one day read differently.
+func (d *DB) createMigrationLedger(ctx context.Context) error {
+	if _, err := d.sql.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    TEXT    NOT NULL PRIMARY KEY,
+			applied_at INTEGER NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("store: create schema_migrations: %w", err)
+	}
+	return nil
 }
 
 func (d *DB) applyOne(ctx context.Context, version, body string) error {

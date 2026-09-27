@@ -132,8 +132,10 @@ func copyObjects(ctx context.Context, dir string, hashes []objstore.Hash, objs *
 		if len(shown) > 5 {
 			shown = append(shown[:5:5], fmt.Sprintf("and %d more", len(missing)-5))
 		}
-		return nil, fmt.Errorf("%w: %d of %d (%v) — the objects_missing alarm names "+
-			"which node should hold them", ErrObjectsUnreachable, len(missing), len(hashes), shown)
+		return nil, fmt.Errorf("%w: %d of %d (%v) — the objects_missing alarm fires on "+
+			"the node that should hold a chunk no member has, and objects_degraded on one "+
+			"that could not reach a member that may", ErrObjectsUnreachable, len(missing),
+			len(hashes), shown)
 	}
 	return out, nil
 }

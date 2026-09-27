@@ -327,10 +327,9 @@ func TestProfileRoundTripsThroughLeaseMeta(t *testing.T) {
 	t.Parallel()
 
 	me := NodeProfile{
-		ID:           "n1",
-		Roles:        Roles(RoleSeats, RoleWorkers, RoleData),
-		Labels:       map[string]string{"zone": "eu"},
-		ObjectWeight: 3,
+		ID:     "n1",
+		Roles:  Roles(RoleSeats, RoleWorkers, RoleData),
+		Labels: map[string]string{"zone": "eu"},
 	}
 
 	back := FromMeta("n1", me.Meta())
@@ -816,33 +815,18 @@ func assertProfile(t *testing.T, got, want NodeProfile) {
 			t.Fatalf("labels = %v, want %v", got.Labels, want.Labels)
 		}
 	}
-	if got.ObjectWeight != want.ObjectWeight {
-		t.Fatalf("object weight = %d, want %d", got.ObjectWeight, want.ObjectWeight)
-	}
 }
 
-// A PEER THAT WROTE NO OBJECT WEIGHT HOLDS NO OBJECTS, and so does one whose
-// weight is not a positive whole number: a node read as holding objects is one
-// writers send chunks to and count toward a quorum, so the safe misreading is
-// the opposite of the roles' one.
-func TestAnUnreadableObjectWeightIsNoShare(t *testing.T) {
+// PRESENCE SAYS NOTHING ABOUT THE OBJECT STORE. Membership in it is a lease of
+// its own (coord.ClassObjects), and a share written onto presence as well would
+// be a second answer to "does this node hold objects" — one that a shutdown
+// drain withdraws while the node is still serving every chunk it holds.
+func TestPresenceCarriesNoObjectShare(t *testing.T) {
 	t.Parallel()
-	for name, raw := range map[string]any{
-		"absent":   nil,
-		"a string": "2",
-		"a half":   1.5,
-		"zero":     float64(0),
-		"negative": float64(-2),
-	} {
-		meta := map[string]any{"roles": []any{"data"}}
-		if raw != nil {
-			meta["object_weight"] = raw
+	meta := NodeProfile{ID: "n1", Roles: Roles(RoleData)}.Meta()
+	for key := range meta {
+		if key != "roles" && key != "labels" {
+			t.Errorf("presence carries %q: a node's profile is its roles and labels", key)
 		}
-		if got := FromMeta("n", meta).ObjectWeight; got != 0 {
-			t.Errorf("%s: object weight %d, want 0", name, got)
-		}
-	}
-	if got := FromMeta("n", map[string]any{"object_weight": float64(4)}).ObjectWeight; got != 4 {
-		t.Errorf("a JSON round-tripped weight read as %d, want 4", got)
 	}
 }

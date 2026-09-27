@@ -392,8 +392,8 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		}
 	}
 	out.SemanticCoverage = r.semanticCoverage(ctx, now)
-	if r.objectsMissing != nil {
-		out.ObjectsMissing = r.objectsMissing()
+	if r.objects != nil {
+		r.objects(now, &out)
 	}
 	r.space(&out)
 	r.maintenance(ctx, now, &out)

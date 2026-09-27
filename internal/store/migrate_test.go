@@ -1,11 +1,13 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -318,4 +320,45 @@ func TestEveryMigrationHasItsOwnNumberAndNoneAreMissing(t *testing.T) {
 			}
 		})
 	}
+}
+
+// migratedThrough stands an estate's file at path up at an OLDER schema: every
+// migration up to and including last applied and recorded, and none after —
+// the database a node that last ran an earlier build holds on disk. It answers
+// a pool on that file, for the caller to write rows in the old shape, and the
+// caller CLOSES it before opening the file again, since the next open is the
+// real migrator applying everything after last to those rows.
+//
+// THROUGH THE MIGRATOR'S OWN PARTS — [openPrepared], its ledger and
+// [DB.applyOne] — rather than a replay of the files' text, so what a case
+// proves about a later migration is proved against exactly the database the
+// migrator would have left behind.
+func migratedThrough(t *testing.T, estate Estate, path, last string) *sql.DB {
+	t.Helper()
+	versions := SchemaVersions(estate)
+	stop := slices.Index(versions, last)
+	if stop < 0 {
+		t.Fatalf("the %s estate has no migration %q, so a database 'through' it "+
+			"is either every migration or none — name one of %v", estate, last, versions)
+	}
+	pool, err := openPrepared(t.Context(), path, Options{}.forEstate(estate))
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	d := &DB{sql: pool, path: path, estate: estate}
+	if err := d.createMigrationLedger(t.Context()); err != nil {
+		_ = pool.Close()
+		t.Fatal(err)
+	}
+	for _, name := range versions[:stop+1] {
+		body, err := SchemaFile(estate, name)
+		if err == nil {
+			err = d.applyOne(t.Context(), name, string(body))
+		}
+		if err != nil {
+			_ = pool.Close()
+			t.Fatalf("apply %s: %v", name, err)
+		}
+	}
+	return pool
 }

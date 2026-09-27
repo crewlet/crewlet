@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -21,13 +20,21 @@ import (
 
 // fleet answers the fleet question.
 func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
-	// The three listings through ONE error path. Written out, they were
+	// The listings through ONE error path. Written out, they were
 	// three identical checks of which a test could only ever exercise the
 	// first — and three copies of "the lease table IS the fleet, so an
 	// unreadable one must not answer an empty company" is three chances
 	// for one of them to stop saying it.
+	//
+	// THE OBJECTS LEASES WITH THEM, where the view renders the placement
+	// card: a member's lease is what says whether it is live and healthy,
+	// and a card drawn without them would show every member as gone.
+	classes := []coord.Class{coord.ClassNode, coord.ClassSeat, coord.ClassWorker}
+	if s.Objects != nil {
+		classes = append(classes, coord.ClassObjects)
+	}
 	live := map[coord.Class][]coord.Lease{}
-	for _, class := range []coord.Class{coord.ClassNode, coord.ClassSeat, coord.ClassWorker} {
+	for _, class := range classes {
 		leases, err := s.Coord.ListLive(ctx, class)
 		if err != nil {
 			return nil, err
@@ -68,12 +75,6 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"protocol":   lease.Protocol,
 			"seats":      held[id],
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
-		}
-		// THE SHARE OF THE OBJECT STORE THIS NODE OFFERS, off its own
-		// presence — absent on a node that holds none, never a 0 that
-		// reads as a data node offering nothing.
-		if profile.ObjectWeight > 0 {
-			row["object_weight"] = profile.ObjectWeight
 		}
 		status := applied[id]
 		row["config_epoch"] = status.Epoch
@@ -162,53 +163,9 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		"activation":   target.detail,
 	}
 	if s.Objects != nil {
-		out["objects"] = s.objectMap(ctx)
+		out["objects"] = s.objectMap(ctx, live[coord.ClassObjects])
 	}
 	return out, nil
-}
-
-// ObjectMapReader is the stored placement map, read as every node reads it.
-type ObjectMapReader interface {
-	ObjectMap(ctx context.Context) (coord.ObjectMapRecord, bool, error)
-}
-
-// objectMap is the fleet's placement map as the fleet view shows it.
-//
-// THE STORED MAP, not this node's cached copy, for the reason the whole view
-// reads the lease table: every node gives the same answer. And THREE STATES
-// NAMED APART, never folded into an empty list — a map the store would not
-// give up (`available: false`), a fleet with no map yet (`placed: false`,
-// where no upload can land), and one a newer build wrote that this one cannot
-// read (`unreadable: true`) — because each sends an operator somewhere
-// different, and "no members" reads as the second of them whichever it was.
-func (s Sources) objectMap(ctx context.Context) map[string]any {
-	rec, found, err := s.Objects.ObjectMap(ctx)
-	switch {
-	case err != nil:
-		return map[string]any{"available": false}
-	case !found:
-		return map[string]any{"available": true, "placed": false}
-	}
-	state, err := objstore.DecodeMapState(rec.Value)
-	if err != nil {
-		return map[string]any{"available": true, "placed": true, "unreadable": true}
-	}
-	members := make([]map[string]any, 0, len(state.Map.Members))
-	for _, m := range state.Map.Members {
-		row := map[string]any{"node": m.Node, "weight": m.Weight}
-		if since, gone := state.Absent[m.Node]; gone {
-			row["absent_since"] = isoOrEmpty(since)
-		}
-		members = append(members, row)
-	}
-	// BOTH COUNTS: the replica count asked for, and how many members hold
-	// each chunk now — fewer while the fleet has fewer data nodes than it
-	// asks for, which is exactly the shortfall an operator is looking for.
-	return map[string]any{
-		"available": true, "placed": true,
-		"epoch": state.Map.Epoch, "replicas": state.Map.Replicas,
-		"copies": state.Map.Size(), "members": members,
-	}
 }
 
 // applyStatus is each node's last config outcome, keyed by node id.

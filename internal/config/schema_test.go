@@ -478,6 +478,10 @@ units:
 		},
 
 		{
+			name: "a company's files kept across zones", tier: TierCompany,
+			yaml: "name: Acme\nobjects:\n  replicas: 5\n  failure_domain: zone\n",
+		},
+		{
 			name: "a five-member fleet at the broker's ceiling", tier: TierBootstrap,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 5\n  cluster:\n" +
 				"    name: acme\n    peers: [nats://b:6222, nats://c:6222, nats://d:6222, nats://e:6222]\n",
@@ -641,12 +645,28 @@ units:
 			yaml: "name: Acme\nroles:\n  - {name: Builder, placement: {node: \"${BUILDER_NODE}\"}}\n",
 		},
 		{
+			name: "more object copies than the map keeps", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nobjects:\n  replicas: 11\n",
+		},
+		{
+			name: "negative object copies", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nobjects:\n  replicas: -1\n",
+		},
+		{
+			name: "a misspelt objects key", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nobjects:\n  replica: 3\n",
+		},
+		{
 			name: "more stream copies than JetStream keeps", tier: TierBootstrap, editorCatches: true,
 			yaml: "stream:\n  replicas: 6\n",
 		},
 		// A LABEL KEY NO NODE COULD CARRY — the grammar is a validator's
 		// (whitespace and unprintable runes), not a pattern the schema
 		// states, so only the engine refuses it.
+		{
+			name: "a failure domain with a space", tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nobjects:\n  failure_domain: \"zone a\"\n",
+		},
 		// MORE COPIES THAN THE CLUSTER NAMES MEMBERS — a cross-field
 		// bound the schema is not asked to carry.
 		// THIS NODE'S OWN ROUTE IN ITS PEERS is not another member, and

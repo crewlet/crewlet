@@ -725,7 +725,12 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// Inserted rather than appended onto Tier A's own list, which is nil
 	// for a document with no warnings at all: the payload promises both
 	// lists are arrays, and `append(nil)` of nothing stays nil.
-	res.Warnings = slices.Insert(res.Warnings, 0, boot.Warnings()...)
+	//
+	// AND THE PAIR'S OWN, after Tier A's: each is located in the Tier A
+	// document (a node label the company's placement reads), so it belongs
+	// beside that file's warnings rather than among the company's.
+	tiers := append(boot.Warnings(), config.TierWarnings(boot, company.Company)...)
+	res.Warnings = slices.Insert(res.Warnings, 0, tiers...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
@@ -1407,7 +1412,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// its box can reach. Gating the bridge on ingress as well took agent mode
 	// away from every node without that role, with the box launching and
 	// every one of its tool calls finding nothing listening.
-	if profile := boot.Profile(nodeID); !profile.RunsIngress() {
+	if profile := boot.Node.Profile(nodeID); !profile.RunsIngress() {
 		return serveBridgeOnly(ctx, boot, profile, e.Bridge(), nodeID, log)
 	}
 	// The config surface is the caller's, built before this function so a

@@ -933,23 +933,19 @@ func (n *Node) RoleSet() (placement.RoleSet, error) {
 // The id is passed in because it is RESOLVED (config, then environment,
 // then the default) rather than read raw off the field.
 //
-// A BOOTSTRAP'S rather than the node block's, because what a node offers its
-// peers is not all under `node:` — its share of the object store is a fact
-// about its disk.
-func (b *Bootstrap) Profile(id string) placement.NodeProfile {
-	roles, _ := placement.ParseRoles(b.Node.Roles) // validated already
-	labels := make(map[string]string, len(b.Node.Labels))
-	for k, v := range b.Node.Labels {
+// The node block's alone: its share of the object store is a fact about its
+// disk (store.objects) and rides the object store's own lease, never presence
+// — see [placement.NodeProfile].
+func (n *Node) Profile(id string) placement.NodeProfile {
+	roles, _ := placement.ParseRoles(n.Roles) // validated already
+	labels := make(map[string]string, len(n.Labels))
+	for k, v := range n.Labels {
 		labels[k] = v
 	}
 	if len(labels) == 0 {
 		labels = nil
 	}
-	profile := placement.NodeProfile{ID: id, Roles: roles, Labels: labels}
-	if profile.HoldsData() {
-		profile.ObjectWeight = b.Store.Objects.ObjectWeight()
-	}
-	return profile
+	return placement.NodeProfile{ID: id, Roles: roles, Labels: labels}
 }
 
 // ResolveNodeID answers what this process calls itself.
