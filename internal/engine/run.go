@@ -406,14 +406,13 @@ type Engine struct {
 	// loop this process runs, and rebuilding it on every apply would churn
 	// a duty that has nothing new to sweep.
 	//
-	// REBUILT ONCE MORE on a node's FIRST company, the one time its job
-	// list changes after boot: a node that booted unconfigured built it
-	// with no native runtime and no company, so it swept no operation
-	// ledger, ran none of the tracker's repairs and read the conversation
-	// horizon's floor. The old worker is stopped — its in-flight tick
-	// waited out — before the new one starts, so there is never a second
-	// loop. Atomic because that write happens while the process runs. See
-	// [Engine.rebuildMaintenance].
+	// REBUILT ONCE MORE when an apply starts the native runtime, the one
+	// time its job list changes after boot: a node that booted without one
+	// swept no operation ledger and ran none of the tracker's repairs. Its
+	// horizons need no rebuild — each is asked at every sweep. The old
+	// worker is stopped — its in-flight tick waited out — before the new
+	// one starts, so there is never a second loop. Atomic because that
+	// write happens while the process runs. See [Engine.rebuildMaintenance].
 	maintenance  atomic.Pointer[maintenance.Worker]
 	integrations *integration.Worker
 

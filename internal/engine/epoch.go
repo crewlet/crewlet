@@ -369,11 +369,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	e.installEpoch(next)
 	applied = append(applied, "epoch")
 
-	// THE SWEEP, rebuilt for a node's FIRST company — after the epoch is
-	// current, because it reads the conversation and inbox horizons off
-	// it, and only then: its job list is the one thing built once at boot
-	// that a first company changes. See [Engine.rebuildMaintenance].
-	if previous == nil || startedNative {
+	// THE SWEEP, rebuilt when this apply started the native runtime — its
+	// job list is the one thing built once at boot that the runtime's
+	// arrival changes. NOT for the horizons: every job asks the current
+	// epoch for its horizon at every sweep, so a revision that moves one
+	// needs no rebuild. See [Engine.rebuildMaintenance].
+	if startedNative {
 		e.rebuildMaintenance(ctx)
 		applied = append(applied, "maintenance")
 	}

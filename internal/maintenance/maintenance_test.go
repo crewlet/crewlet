@@ -56,7 +56,7 @@ func TestTheCutoffIsNowLessTheHorizon(t *testing.T) {
 	w := newWorker(t, maintenance.Options{
 		Now: fixed(base),
 		Jobs: []maintenance.Job{
-			{Name: "rows", Scope: maintenance.Fleet, Horizon: 2 * time.Hour, Run: r.run},
+			{Name: "rows", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(2 * time.Hour), Run: r.run},
 		},
 	})
 
@@ -106,7 +106,7 @@ func TestAHorizonBelowTheTickIsRaisedToIt(t *testing.T) {
 		Now:      fixed(base),
 		Interval: time.Hour,
 		Jobs: []maintenance.Job{
-			{Name: "shallow", Scope: maintenance.Fleet, Horizon: time.Minute, Run: r.run},
+			{Name: "shallow", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Minute), Run: r.run},
 		},
 	})
 
@@ -130,10 +130,10 @@ func TestOneFailingJobDoesNotStopTheRest(t *testing.T) {
 	w := newWorker(t, maintenance.Options{
 		Now: fixed(base),
 		Jobs: []maintenance.Job{
-			{Name: "first", Scope: maintenance.Fleet, Horizon: time.Hour, Run: first.run},
-			{Name: "second", Scope: maintenance.Fleet, Horizon: time.Hour, Run: failing.run},
-			{Name: "third", Scope: maintenance.Fleet, Horizon: time.Hour, Run: third.run},
-			{Name: "partial", Scope: maintenance.Fleet, Horizon: time.Hour, Run: partial.run},
+			{Name: "first", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: first.run},
+			{Name: "second", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: failing.run},
+			{Name: "third", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: third.run},
+			{Name: "partial", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: partial.run},
 		},
 	})
 
@@ -166,7 +166,7 @@ func TestANodeWithoutTheDutyDoesNotSweep(t *testing.T) {
 	var holds atomic.Bool
 	w := newWorker(t, maintenance.Options{
 		Now:       fixed(base),
-		Jobs:      []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run}},
+		Jobs:      []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: r.run}},
 		ClaimDuty: func(context.Context) (bool, error) { return holds.Load(), nil },
 	})
 
@@ -199,7 +199,7 @@ func TestAnUnknownDutySkipsTheTick(t *testing.T) {
 	var r recorder
 	w := newWorker(t, maintenance.Options{
 		Now:  fixed(base),
-		Jobs: []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run}},
+		Jobs: []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: r.run}},
 		ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
@@ -220,7 +220,7 @@ func TestAnUnknownDutySkipsTheTick(t *testing.T) {
 func TestACancelledTickReportsCancellation(t *testing.T) {
 	w := newWorker(t, maintenance.Options{
 		Now:  fixed(base),
-		Jobs: []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: time.Hour, Run: (&recorder{}).run}},
+		Jobs: []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: (&recorder{}).run}},
 		ClaimDuty: func(ctx context.Context) (bool, error) {
 			return false, ctx.Err()
 		},
@@ -348,10 +348,10 @@ func TestAnIncompleteJobIsRefused(t *testing.T) {
 	_, err := maintenance.New(maintenance.Options{
 		Now: fixed(base),
 		Jobs: []maintenance.Job{
-			{Name: "", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run},
-			{Name: "nameless", Scope: maintenance.Fleet, Horizon: time.Hour},
-			{Name: "unscoped", Horizon: time.Hour, Run: r.run},
-			{Name: "real", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run},
+			{Name: "", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: r.run},
+			{Name: "nameless", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour)},
+			{Name: "unscoped", Horizon: maintenance.Fixed(time.Hour), Run: r.run},
+			{Name: "real", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: r.run},
 		},
 	})
 	if err == nil {
@@ -377,7 +377,7 @@ func TestAnIncompleteJobIsRefused(t *testing.T) {
 	// one that refuses nothing.
 	w, err := maintenance.New(maintenance.Options{
 		Now:  fixed(base),
-		Jobs: []maintenance.Job{{Name: "real", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run}},
+		Jobs: []maintenance.Job{{Name: "real", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: r.run}},
 	})
 	if err != nil {
 		t.Fatalf("a well-formed job was refused: %v", err)
@@ -438,7 +438,11 @@ func TestStartIsIdempotent(t *testing.T) {
 // the next tick". The engine's own config validation refuses a value below
 // one day, so this floor is for a caller that built its stores directly.
 func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
-	for _, asked := range []time.Duration{0, -time.Hour} {
+	for name, asked := range map[string]maintenance.Horizon{
+		"zero":     maintenance.Fixed(0),
+		"negative": maintenance.Fixed(-time.Hour),
+		"none":     nil,
+	} {
 		jobs := maintenance.LedgerJobs(stubConversations{}, asked)
 		var found bool
 		for _, j := range jobs {
@@ -446,21 +450,73 @@ func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
 				continue
 			}
 			found = true
-			if j.Horizon != maintenance.ConversationRetention {
-				t.Fatalf("a retention of %v became %v, want the default %v",
-					asked, j.Horizon, maintenance.ConversationRetention)
+			if got := j.Horizon(); got != maintenance.ConversationRetention {
+				t.Fatalf("a %s retention became %v, want the default %v",
+					name, got, maintenance.ConversationRetention)
 			}
 		}
 		if !found {
-			t.Fatalf("a retention of %v dropped the job entirely", asked)
+			t.Fatalf("a %s retention dropped the job entirely", name)
 		}
 	}
 	// A real horizon is used as written.
-	jobs := maintenance.LedgerJobs(stubConversations{}, 72*time.Hour)
+	jobs := maintenance.LedgerJobs(stubConversations{}, maintenance.Fixed(72*time.Hour))
 	for _, j := range jobs {
-		if j.Name == "conversation_sessions" && j.Horizon != 72*time.Hour {
-			t.Fatalf("a configured horizon became %v", j.Horizon)
+		if got := j.Horizon(); j.Name == "conversation_sessions" && got != 72*time.Hour {
+			t.Fatalf("a configured horizon became %v", got)
 		}
+	}
+}
+
+// THE HORIZON IS ASKED AT EVERY SWEEP. Two of them are the company's, and an
+// apply moves them under a running node: read once when the sweep was built,
+// a shortened retention was honoured only after a restart, and a lengthened
+// one kept deleting rows the company had just asked to keep.
+func TestAHorizonThatMovesIsHonouredOnTheNextSweep(t *testing.T) {
+	var r recorder
+	var days atomic.Int64
+	days.Store(30)
+	// The ledger's own job, with the company's horizon read live; what is
+	// under test is the cutoff the worker hands it, so its purge is the
+	// recorder.
+	jobs := maintenance.LedgerJobs(stubConversations{}, func() time.Duration {
+		return time.Duration(days.Load()) * 24 * time.Hour
+	})
+	jobs[0].Run = r.run
+	w := newWorker(t, maintenance.Options{Now: fixed(base), Jobs: jobs})
+
+	if _, err := w.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got, want := r.lastCutoff(t), base.Add(-30*24*time.Hour); !got.Equal(want) {
+		t.Fatalf("first sweep cut off at %s, want %s", got, want)
+	}
+	days.Store(7)
+	if _, err := w.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got, want := r.lastCutoff(t), base.Add(-7*24*time.Hour); !got.Equal(want) {
+		t.Fatalf("after the company moved its horizon the sweep cut off at %s, "+
+			"want %s — the horizon it was built with", got, want)
+	}
+}
+
+// A HORIZON THAT ANSWERS NOTHING DELETES NOTHING. Its cutoff would be the
+// sweep's own instant — every row the table holds — and no retention anybody
+// configured means that, so the job is skipped and the sweep says so.
+func TestAHorizonThatAnswersZeroSkipsItsJob(t *testing.T) {
+	var r recorder
+	w := newWorker(t, maintenance.Options{
+		Now: fixed(base),
+		Jobs: []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet,
+			Horizon: maintenance.Fixed(0), Run: r.run}},
+	})
+	_, err := w.Tick(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "every row") {
+		t.Fatalf("tick = %v, want the job refused for deleting every row", err)
+	}
+	if r.calls() != 0 {
+		t.Fatal("a zero horizon ran its purge")
 	}
 }
 
@@ -493,8 +549,8 @@ func TestTheDiarySweepRunsOnNowNotACutoff(t *testing.T) {
 	// The durable half is bounded by a COUNT, so it has no horizon and
 	// ignores both clocks: a fact the agent marked durable has no deadline
 	// to pass.
-	if jobs[1].Horizon != 0 {
-		t.Errorf("the trim declares a horizon (%v); it is capped, not aged", jobs[1].Horizon)
+	if jobs[1].Horizon != nil {
+		t.Errorf("the trim declares a horizon (%v); it is capped, not aged", jobs[1].Horizon())
 	}
 	if n, err := jobs[1].Run(context.Background(), base, base); err != nil || n != 2 {
 		t.Fatalf("trim Run = (%d, %v), want (2, nil)", n, err)
@@ -503,8 +559,8 @@ func TestTheDiarySweepRunsOnNowNotACutoff(t *testing.T) {
 	if len(d.caps) != 1 || d.caps[0] != 0 {
 		t.Errorf("the trim passed caps %v, want the store's own default", d.caps)
 	}
-	if jobs[0].Horizon != 0 {
-		t.Fatalf("Horizon = %v, want 0: each entry carries its own deadline", jobs[0].Horizon)
+	if jobs[0].Horizon != nil {
+		t.Fatalf("Horizon = %v, want none: each entry carries its own deadline", jobs[0].Horizon())
 	}
 	n, err := jobs[0].Run(context.Background(), base, base.Add(-time.Hour))
 	if err != nil || n != 3 {
@@ -518,7 +574,7 @@ func TestTheDiarySweepRunsOnNowNotACutoff(t *testing.T) {
 // A missing store contributes no job rather than one that fails every tick:
 // a deployment without one is real, and its in-memory twins prune inline.
 func TestAbsentLedgersContributeNoJobs(t *testing.T) {
-	if jobs := maintenance.LedgerJobs(nil, time.Hour); len(jobs) != 0 {
+	if jobs := maintenance.LedgerJobs(nil, maintenance.Fixed(time.Hour)); len(jobs) != 0 {
 		t.Fatalf("nil stores produced %d jobs", len(jobs))
 	}
 	if jobs := maintenance.StoreJobs(nil); len(jobs) != 0 {
@@ -652,8 +708,8 @@ func TestTheIdleChannelJobDrivesTheServiceThatAnnounces(t *testing.T) {
 	if idle.Name != "a2a_channels_idle" || idle.Scope != maintenance.Fleet {
 		t.Fatalf("job = %q scope %v", idle.Name, idle.Scope)
 	}
-	if idle.Horizon != maintenance.ChannelIdleTimeout {
-		t.Errorf("horizon = %v, want the idle timeout", idle.Horizon)
+	if got := idle.Horizon(); got != maintenance.ChannelIdleTimeout {
+		t.Errorf("horizon = %v, want the idle timeout", got)
 	}
 	cutoff := base.Add(-maintenance.ChannelIdleTimeout)
 	n, err := idle.Run(context.Background(), base, cutoff)

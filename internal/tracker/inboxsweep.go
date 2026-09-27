@@ -44,7 +44,11 @@ import (
 // "the history it points at is untouched".
 
 // InboxJobs is the sweep for a person's inbox rows.
-func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
+//
+// retention is ASKED AT EVERY SWEEP, because the horizon is the company's
+// `tracker.native.inbox_retention_days` and an apply moves it under a running
+// node — see [maintenance.Horizon] for what reading it once cost.
+func InboxJobs(db *store.DB, retention maintenance.Horizon) []maintenance.Job {
 	if db == nil {
 		return nil
 	}

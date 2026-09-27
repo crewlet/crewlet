@@ -144,7 +144,7 @@ type OpsLedger interface {
 // — which looks exactly like a sweep that is working, to the operator who
 // checks the node it ran on. For a long time this was the ONLY job that said
 // so, while six others needed to; see [Scope].
-func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
+func StatelogJobs(ledgers map[string]OpsLedger, retention Horizon) []Job {
 	names := make([]string, 0, len(ledgers))
 	for name := range ledgers {
 		names = append(names, name)
@@ -243,7 +243,7 @@ func CounterpartyJobs(c CounterpartyStore) []Job {
 	if c == nil {
 		return nil
 	}
-	return []Job{Purge("counterparty_profiles", NodeLocal, CounterpartyRetention, c.Purge)}
+	return []Job{Purge("counterparty_profiles", NodeLocal, Fixed(CounterpartyRetention), c.Purge)}
 }
 
 // Channels is the half of the agent-to-agent surface this sweep drives.
@@ -290,13 +290,13 @@ func ChannelJobs(c Channels) []Job {
 			// not: the service reads its own clock for the close instant,
 			// so a channel's closed_at and the event's duration come from
 			// one reading rather than two.
-			Name: "a2a_channels_idle", Scope: Fleet, Horizon: ChannelIdleTimeout,
+			Name: "a2a_channels_idle", Scope: Fleet, Horizon: Fixed(ChannelIdleTimeout),
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
 				closed, err := c.SweepIdle(ctx, cutoff)
 				return int64(closed), err
 			},
 		},
-		Purge("a2a_channels", Fleet, ChannelRetention, c.Purge),
+		Purge("a2a_channels", Fleet, Fixed(ChannelRetention), c.Purge),
 	}
 }
 
@@ -310,7 +310,7 @@ func ScheduleJobs(l schedule.Ledger) []Job {
 	if l == nil {
 		return nil
 	}
-	return []Job{PurgeN("scheduled_runs", NodeLocal, ScheduledRunRetention, l.Purge)}
+	return []Job{PurgeN("scheduled_runs", NodeLocal, Fixed(ScheduledRunRetention), l.Purge)}
 }
 
 // LedgerJobs is the sweep for the turn ledgers.
@@ -324,17 +324,24 @@ func ScheduleJobs(l schedule.Ledger) []Job {
 // the node that ran the turn, so each node holds its own and no peer's sweep
 // reaches it.
 //
-// conversationRetention is the operator-facing horizon. Zero or less takes
-// [ConversationRetention] — the engine's config validation refuses a
-// retention below one day, so this floor is for a caller that built its
-// stores directly, and it exists because the alternative reading of zero is
-// "delete every conversation on the next tick".
-func LedgerJobs(s ledgerstore.Conversations, conversationRetention time.Duration) []Job {
-	if conversationRetention <= 0 {
-		conversationRetention = ConversationRetention
-	}
+// conversationRetention is the operator-facing horizon, asked at every sweep
+// because an apply can move it (see [Horizon]). An answer of zero or less —
+// or no function at all — takes [ConversationRetention]: the engine's config
+// validation refuses a retention below one day, so this floor is for a node
+// with no company yet and a caller that built its stores directly, and it
+// exists because the alternative reading of zero is "delete every
+// conversation on the next tick".
+func LedgerJobs(s ledgerstore.Conversations, conversationRetention Horizon) []Job {
 	if s == nil {
 		return nil
 	}
-	return []Job{Purge("conversation_sessions", NodeLocal, conversationRetention, s.Purge)}
+	horizon := func() time.Duration {
+		if conversationRetention != nil {
+			if d := conversationRetention(); d > 0 {
+				return d
+			}
+		}
+		return ConversationRetention
+	}
+	return []Job{Purge("conversation_sessions", NodeLocal, horizon, s.Purge)}
 }

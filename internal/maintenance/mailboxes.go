@@ -321,7 +321,7 @@ func (m *Mailboxes) Jobs() []Job {
 	// subscriptions and the mail they hold — which the whole company shares
 	// one copy of, so a second node running it would be deleting what the
 	// first already did. It is the one job here whose rows are not rows.
-	return []Job{{Name: mailboxesJobName, Scope: Fleet, Horizon: MailboxRetirementGrace, Run: m.sweep}}
+	return []Job{{Name: mailboxesJobName, Scope: Fleet, Horizon: Fixed(MailboxRetirementGrace), Run: m.sweep}}
 }
 
 // Register records that a seat's mailbox exists or is about to, and returns

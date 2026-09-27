@@ -42,6 +42,34 @@ const maintenanceDutyTTL = 3 * maintenance.Interval
 // Started LAST, like the sandbox waiter, because the duty is claimed under
 // the node's own incarnation.
 func (e *Engine) startMaintenance(ctx context.Context) {
+	w, err := maintenance.New(maintenance.Options{
+		Jobs: e.maintenanceJobs(),
+		ClaimDuty: maintenance.DutyFunc(
+			e.workerDuty(maintenanceDutyName, maintenanceDutyTTL)),
+	})
+	if err != nil {
+		// A JOB THIS WIRING GOT WRONG IS A WIRING BUG, not a runtime
+		// condition, and it is the same for every node of the fleet — so
+		// it cannot be recovered from here and must not be swallowed.
+		// Every table these jobs cover grows for the life of the
+		// deployment if its sweep never runs, and that has no other
+		// symptom until a volume fills. Logged at ERROR with the whole
+		// list rather than returned, because startMaintenance is the last
+		// thing a boot does and refusing to serve a company over a
+		// housekeeping misconfiguration is the worse of the two failures.
+		log.ErrorContext(ctx, "maintenance_worker_not_started", "error", err.Error())
+		return
+	}
+	e.maintenance.Store(w)
+	// Detached, for the same reason the node's loops are: a sweep loop
+	// bound to a signal context stops at SIGTERM, which is harmless here
+	// but would make the worker's lifetime differ from every other loop's
+	// for no reason a reader could find.
+	w.Start(context.WithoutCancel(ctx))
+}
+
+// maintenanceJobs is every job the sweep runs on this node, as it stands now.
+func (e *Engine) maintenanceJobs() []maintenance.Job {
 	var jobs []maintenance.Job
 	if db := e.backends.Store; db != nil {
 		// Every one of these tables lives in this one store, which is
@@ -51,9 +79,12 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		jobs = append(jobs, maintenance.LearningJobs(learning.NewDiary(db))...)
 		jobs = append(jobs, maintenance.CounterpartyJobs(learning.NewCounterparties(db))...)
 		jobs = append(jobs, maintenance.ScheduleJobs(sqlledger.New(db.SQL()))...)
+		// THE COMPANY'S HORIZON, READ AT EVERY SWEEP: an apply moves
+		// it under a running node, and a horizon read here, once, held
+		// the sweep to the revision the node booted on. See
+		// [maintenance.Horizon].
 		jobs = append(jobs, maintenance.LedgerJobs(
-			ledgerstore.NewConversations(db),
-			e.ConversationRetention())...)
+			ledgerstore.NewConversations(db), e.ConversationRetention)...)
 	}
 	if fleet := e.backends.Fleet; fleet != nil {
 		// The one shared surface swept here, and the exception the
@@ -123,8 +154,12 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 				// grow for ever. Contributed here rather than in
 				// tracker.Jobs because that list runs under the
 				// duty and this one must not.
+				//
+				// Its horizon is the company's and is read at
+				// every sweep, for the conversation ledger's
+				// reason above.
 				jobs = append(jobs, tracker.InboxJobs(
-					e.backends.Store, e.inboxRetention())...)
+					e.backends.Store, e.inboxRetention)...)
 			}
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
 			// registered domain. Every `<domain>_ops` migration says
@@ -135,7 +170,7 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 			// see [maintenance.StatelogJobs].
 			if n.log != nil {
 				jobs = append(jobs, maintenance.StatelogJobs(
-					n.log.opsLedgers(), statelog.OpsRetention)...)
+					n.log.opsLedgers(), maintenance.Fixed(statelog.OpsRetention))...)
 			}
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
 			// absence is a consequence rather than an omission. Its
@@ -155,42 +190,20 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// mailbox is a decision taken against the active revision.
 		jobs = append(jobs, e.mailboxes.Jobs()...)
 	}
-
-	w, err := maintenance.New(maintenance.Options{
-		Jobs: jobs,
-		ClaimDuty: maintenance.DutyFunc(
-			e.workerDuty(maintenanceDutyName, maintenanceDutyTTL)),
-	})
-	if err != nil {
-		// A JOB THIS WIRING GOT WRONG IS A WIRING BUG, not a runtime
-		// condition, and it is the same for every node of the fleet — so
-		// it cannot be recovered from here and must not be swallowed.
-		// Every table these jobs cover grows for the life of the
-		// deployment if its sweep never runs, and that has no other
-		// symptom until a volume fills. Logged at ERROR with the whole
-		// list rather than returned, because startMaintenance is the last
-		// thing a boot does and refusing to serve a company over a
-		// housekeeping misconfiguration is the worse of the two failures.
-		log.ErrorContext(ctx, "maintenance_worker_not_started", "error", err.Error())
-		return
-	}
-	e.maintenance.Store(w)
-	// Detached, for the same reason the node's loops are: a sweep loop
-	// bound to a signal context stops at SIGTERM, which is harmless here
-	// but would make the worker's lifetime differ from every other loop's
-	// for no reason a reader could find.
-	w.Start(context.WithoutCancel(ctx))
+	return jobs
 }
 
 // rebuildMaintenance replaces the sweep with one built against what the node
 // runs now.
 //
-// FOR A NODE'S FIRST COMPANY, and nothing else: [Engine.startMaintenance]
-// reads its job list once, and on a node that booted unconfigured "once" was
-// before there was a native runtime to contribute the operation ledgers, the
-// tracker's repairs and the inbox sweep, or a company to state the
-// conversation horizon. The old worker stops — its in-flight tick waited out
-// — before the new one is built, so two sweeps never run at once.
+// FOR THE NATIVE RUNTIME'S ARRIVAL, and nothing else: [Engine.startMaintenance]
+// reads its job list once, and on a node that booted without a native runtime
+// "once" was before there was one to contribute the operation ledgers, the
+// tracker's repairs and the inbox sweep. A company's HORIZONS are no reason to
+// rebuild — every job asks its horizon at every sweep ([maintenance.Horizon]),
+// so a revision that moves one is honoured by the next sweep of the worker
+// already running. The old worker stops — its in-flight tick waited out —
+// before the new one is built, so two sweeps never run at once.
 //
 // A node that does not publish never started a sweep, and does not start one
 // here either.
@@ -212,10 +225,12 @@ func (e *Engine) rebuildMaintenance(ctx context.Context) {
 // Exported alongside [Engine.Maintenance] for the same reason: what a
 // company actually forgets, and when, is an operator question.
 //
-// Read once at start, so a live config change lands at the next process
-// start like every other sweep parameter — the alternative is a worker whose
-// horizons move under it mid-tick, for a table whose horizon is measured in
-// weeks.
+// Read by the sweep at EVERY SWEEP, so a revision that moves it is honoured on
+// the next one. It was read once, when the sweep was built, and that held the
+// conversation ledger to the revision the node booted on: a company that
+// shortened its retention kept every conversation it had asked to forget for
+// as long as the node stayed up. A horizon cannot move under a sweep in
+// flight — each job asks it once, as it starts.
 //
 // The field has existed since the ledger shipped and nothing ever read it:
 // an operator setting `retention_days: 7` got thirty days of conversations,
@@ -366,7 +381,8 @@ func (e *Engine) stopMaintenance() {
 	}
 }
 
-// inboxRetention is how long this company's inbox rows live.
+// inboxRetention is how long this company's inbox rows live, asked by the
+// sweep at every sweep for the reason [Engine.ConversationRetention] is.
 //
 // A NODE WITH NO COMPANY STATES NO HORIZON, for the reason
 // [Engine.ConversationRetention] gives: a literal zero duration read as
