@@ -74,6 +74,16 @@ A few things worth knowing when deploying Crewlet:
   their second factor (`crewlet iam reset-mfa`, `POST
   /iam/people/{id}/mfa/reset`) so they re-enrol at their next sign-in —
   re-sealing the old value would leave the copies already written readable.
+- **An invitation link carries a secret, and the estate keeps only its hash.**
+  The invitation's id is the row's key — in its record, every snapshot and
+  backup, and every access log a request for it passed through — so it opens
+  nothing on its own. The link is `…/dashboard#/invite/<id>.<secret>`, the
+  secret after the `#`, which no browser sends to a server; the dashboard
+  presents it beside the id in a header or a body, never in a URL, and a wrong
+  one is refused exactly as an id nobody issued is. **Builds before this change
+  made the id itself the link**, so an invitation they issued is in every
+  backup as a working credential: such an invitation is now redeemable by
+  nobody, and the remedy is to issue it again.
 - **An identity provider's assertion is never a link by address.** A person is
   bound to a provider subject by an invitation somebody issued or by an
   administrator — never because the provider asserted an address that matches
