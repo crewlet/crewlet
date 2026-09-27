@@ -360,14 +360,21 @@ type Attempts interface {
 	Fail(ctx context.Context, subject string, now time.Time) error
 
 	// Failures reports what the window holds against subject at now —
-	// how many attempts, saturating at [AttemptCap], and the newest of
-	// them — WITHOUT recording one.
+	// EVERY attempt inside it, oldest first, at most [AttemptCap] of them —
+	// WITHOUT recording one.
 	//
-	// THE NEWEST AND NOT ONLY THE COUNT, because a throttle's delay runs
-	// from the last failure: a node seeding its curve from a count alone
-	// would have to date every failure somebody made elsewhere to the
-	// moment it asked, and a pair re-read on each attempt would then never
-	// see its delay end.
+	// THE INSTANTS AND NOT A SUMMARY OF THEM. A throttle's delay runs from
+	// the newest failure, so a count alone would have a node date every
+	// failure somebody made elsewhere to the moment it asked, and a pair
+	// re-read on each attempt would then never see its delay end. And the
+	// newest alone is not enough either, because every instant is the
+	// WRITING node's clock: a reader takes one its own clock has not
+	// reached yet as a writer running fast and re-dates it, and summarised
+	// to the newest, a fast writer's failure IS the newest for as long as
+	// the skew lasts — every real failure after it hidden behind it, so
+	// the wait stopped moving and a run spread across the fleet was
+	// admitted once per node per ceiling. Each instant is judged on its
+	// own.
 	//
 	// ONE READ AND NO CONSUMER. The throttle asks this before an attempt
 	// its curve admits — a clean pair once a window — which puts it on the
@@ -388,12 +395,22 @@ type Attempts interface {
 
 // Attempted is what [Attempts] holds against one subject.
 type Attempted struct {
-	// Count is how many attempts are inside the window, saturating at
-	// [AttemptCap].
-	Count int
+	// At are the attempts inside the window, OLDEST FIRST, at most
+	// [AttemptCap] of them, each dated by the clock of the node that
+	// recorded it.
+	At []time.Time
+}
 
-	// Last is the newest of them, and the zero instant when Count is zero.
-	Last time.Time
+// Count is how many attempts are inside the window, saturating at
+// [AttemptCap].
+func (a Attempted) Count() int { return len(a.At) }
+
+// Last is the newest of them, and the zero instant when there are none.
+func (a Attempted) Last() time.Time {
+	if len(a.At) == 0 {
+		return time.Time{}
+	}
+	return a.At[len(a.At)-1]
 }
 
 // Ledger is the fleet's record of work already done, behind the

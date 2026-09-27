@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -53,12 +54,13 @@ func (a *attempts) Failures(_ context.Context, subject string, now time.Time) (c
 	var out coord.Attempted
 	for _, at := range a.records[subject] {
 		if at.After(now.Add(-coord.AttemptWindow)) {
-			out.Count++
-			if at.After(out.Last) {
-				out.Last = at
-			}
+			out.At = append(out.At, at)
 		}
 	}
+	// OLDEST FIRST, as the contract states: the rig's nodes write in
+	// whatever order a case runs them, and the clocks they write with
+	// disagree.
+	slices.SortFunc(out.At, time.Time.Compare)
 	return out, nil
 }
 
@@ -813,7 +815,9 @@ func TestTheCeilingsFailuresAreSharedToo(t *testing.T) {
 // recorded and the stepped-back clock owes ten minutes; cap either at now on
 // every look instead of re-dating it once, and the attempt after the wait
 // owes the wait again; drop instants from a clock that is behind and the slow
-// writer's three failures owe nothing.
+// writer's three failures owe nothing; judge the fleet's failures by the
+// record's newest instant alone and the correct clocks' failures after a fast
+// writer's stop moving the wait.
 func TestANodesClockNeverStretchesTheCurve(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
@@ -859,6 +863,62 @@ func TestANodesClockNeverStretchesTheCurve(t *testing.T) {
 				"node's failure was dated afresh on the next read", got, err)
 		}
 		ticket.Release()
+	})
+
+	// NOR CAN A FAST CLOCK SHORTEN ONE. While a fast writer's failure is
+	// the newest instant in the record — the whole of its skew plus the
+	// window — every real failure after it lands behind it. Judged on the
+	// newest instant alone, it was re-dated once and the wait ran from
+	// there: the correct nodes' failures raised the count and never the
+	// instant, so each node owed only its own failures' waits, and a run
+	// going round the fleet was admitted once per node per ceiling. Each
+	// failure is judged on its own, so the newest REAL one is what the wait
+	// runs from — and the fast one, once its writer's clock has been
+	// reached, stays where it was first dated rather than arriving as a
+	// fresh failure.
+	t.Run("correct clocks' failures after a fast writer's", func(t *testing.T) {
+		t.Parallel()
+		store := newAttempts()
+		clock := &clockOf{at: start}
+		a, b := onTime(t, store, clock), onTime(t, store, clock)
+		fast, _, _ := onClock(t, store, &clockOf{at: start.Add(10 * time.Minute)})
+		if err := failOnce(t, fast, who); err != nil {
+			t.Fatal(err)
+		}
+		nodes := []*credential.Throttle{a, b}
+		for i := range credential.CurveSteps {
+			node := nodes[i%len(nodes)]
+			if err := failOnce(t, node, who); err != nil {
+				clock.advance(credential.RetryAfter(err))
+				if err := failOnce(t, node, who); err != nil {
+					t.Fatalf("real failure %d after its wait was refused: %v", i+1, err)
+				}
+			}
+		}
+		// AT THE CEILING, and every node owes it whole: the newest real
+		// failure is this instant's.
+		for i, node := range nodes {
+			_, err := node.Admit(t.Context(), who)
+			if got := credential.RetryAfter(err); got != credential.DelayCeiling {
+				t.Fatalf("after a fast writer's failure and %d real ones going round "+
+					"two nodes, node %d owes %s (%v), want the %s ceiling from the "+
+					"newest real failure", credential.CurveSteps, i, got, err,
+					credential.DelayCeiling)
+			}
+		}
+		// PAST THE FAST WRITER'S INSTANT the wait the run earned is over,
+		// and the fast failure — dated when it was first found ahead —
+		// does not come back as a new one now that this clock has reached
+		// what its writer's said.
+		clock.advance(10*time.Minute + time.Second)
+		for i, node := range nodes {
+			ticket, err := node.Admit(t.Context(), who)
+			if err != nil {
+				t.Fatalf("past the fast writer's instant node %d refused (%v): its "+
+					"failure was dated again as the clock reached it", i, err)
+			}
+			ticket.Release()
+		}
 	})
 
 	t.Run("this node's own clock stepping back", func(t *testing.T) {

@@ -264,12 +264,11 @@ func (f *Fleet) Failures(_ context.Context, subject string, now time.Time) (coor
 	defer f.mu.Unlock()
 	cutoff := now.Add(-f.ages.Attempt)
 	var out coord.Attempted
+	// Held oldest first ([Fleet.Fail] sorts on the way in), so the window
+	// answers in the order the contract states.
 	for _, at := range f.attempts[subject] {
 		if at.After(cutoff) {
-			out.Count++
-			if at.After(out.Last) {
-				out.Last = at
-			}
+			out.At = append(out.At, at)
 		}
 	}
 	return out, nil

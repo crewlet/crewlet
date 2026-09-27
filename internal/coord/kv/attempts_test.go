@@ -89,7 +89,7 @@ func TestReadingTheAttemptsWindowOpensNoConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failures: %v", err)
 	}
-	if got.Count != 3 || !got.Last.Equal(now) {
+	if got.Count() != 3 || !got.Last().Equal(now) {
 		t.Fatalf("Failures = %+v, want 3 attempts, the newest at %v", got, now)
 	}
 	requests := api.since(t, nc, mark)
@@ -131,7 +131,7 @@ func TestAnOlderBuildsAttemptStillCounts(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 	if got, err := store.Failures(ctx, "older-build", now); err != nil ||
-		got.Count != 1 || !got.Last.Equal(earlier) {
+		got.Count() != 1 || !got.Last().Equal(earlier) {
 		t.Fatalf("an older build's attempt reads %+v (%v), want one attempt at %v",
 			got, err, earlier)
 	}
@@ -139,7 +139,7 @@ func TestAnOlderBuildsAttemptStillCounts(t *testing.T) {
 		t.Fatalf("Fail: %v", err)
 	}
 	if got, err := store.Failures(ctx, "older-build", now); err != nil ||
-		got.Count != 2 || !got.Last.Equal(now) {
+		got.Count() != 2 || !got.Last().Equal(now) {
 		t.Fatalf("after a failure on top of it the window reads %+v (%v), want "+
 			"both attempts, the newest at %v", got, err, now)
 	}
@@ -149,7 +149,7 @@ func TestAnOlderBuildsAttemptStillCounts(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 	if got, err := store.Failures(ctx, "unreadable", now.Add(time.Minute)); err != nil ||
-		got.Count != 1 || got.Last.IsZero() {
+		got.Count() != 1 || got.Last().IsZero() {
 		t.Fatalf("an unreadable record reads %+v (%v), want one attempt dated "+
 			"by the broker", got, err)
 	}

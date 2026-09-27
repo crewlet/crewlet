@@ -178,9 +178,12 @@ import (
 // fast stamps its failures into every reader's future. So a reader takes none
 // of the fleet's failures as later than its own now, and none of its own as
 // later than the start it could have scheduled — each re-dated once, where it
-// is first found past that — and no clock anywhere can stretch a wait past the
-// ceiling: taken as written, one failure on a node ten minutes fast was a
-// ten-minute 429 for that login on every other node. See [standing.weight].
+// is first found past that, and each on its own — and no clock anywhere can
+// stretch a wait past the ceiling: taken as written, one failure on a node ten
+// minutes fast was a ten-minute 429 for that login on every other node. Nor
+// can one shorten it: read as the record's newest instant alone, the fast
+// writer's failure hid every real one after it, and the wait stopped moving
+// for the whole skew. See [standing.weight].
 //
 // Nothing the fleet holds is what was typed: a pair is a keyed digest, and the
 // key never leaves the deployment's keyring.
@@ -290,8 +293,10 @@ const (
 	FreshPairEvery = time.Second
 
 	// LocalKeys is how many pairs one throttle holds, the least recently
-	// used forgotten past it: 16384 — and as many sources' allowances. Every pair costs at most
-	// [CurveSteps] instants, so the bound is a few megabytes of memory an
+	// used forgotten past it: 16384 — and as many sources' allowances.
+	// Every pair costs at most [pairKeep] instants of its own and
+	// [coord.AttemptCap] of the fleet's, each held with the dating this
+	// node gave it, so the bound is about twenty megabytes of memory an
 	// unauthenticated caller cannot grow — where a map walked on every
 	// failure was both unbounded and O(keys) per write. A pair forgotten
 	// early is re-seeded from the fleet the next time it is met.
@@ -665,7 +670,7 @@ func (k *Ticket) Succeed(ctx context.Context) {
 	// failed nowhere since costs nothing, which is an honest sign-in's.
 	p := t.pairs.get(k.pair)
 	flush := t.attempts != nil &&
-		(p == nil || p.readIndex == 0 || len(p.fails) > 0 || p.fleet.Count > 0)
+		(p == nil || p.readIndex == 0 || len(p.fails) > 0 || len(p.fleet) > 0)
 	t.pairs.drop(k.pair)
 	t.mu.Unlock()
 	if flush {
@@ -1012,17 +1017,14 @@ type standing struct {
 	pending []time.Time
 
 	// fleet is the fleet's record of the pair as the newest read to land
-	// found it, readIndex which read that was (zero: none has landed),
-	// and readAt when it was issued. reads is how many have been issued.
-	fleet     coord.Attempted
+	// found it — every failure in it, each as this node dates it
+	// ([standing.weight]) — readIndex which read that was (zero: none has
+	// landed), and readAt when it was issued. reads is how many have been
+	// issued.
+	fleet     []dated
 	readIndex uint64
 	readAt    time.Time
 	reads     uint64
-
-	// fleetRaw is the newest instant the fleet's record carried as it
-	// was written, before [standing.weight] re-dated one it found ahead —
-	// kept so a record re-read unchanged keeps its first dating.
-	fleetRaw time.Time
 
 	// seq numbers this node's failures, so a write acknowledged after the
 	// lock was let go can find the one it recorded.
@@ -1038,6 +1040,14 @@ type standing struct {
 // pending, and no read ever issued: a pair this node has met only by name.
 func (s *standing) untouched() bool {
 	return len(s.fails) == 0 && len(s.pending) == 0 && s.reads == 0
+}
+
+// dated is one of the fleet's failures: raw, the instant its writer's clock
+// recorded, and at, when this node takes it to have happened — the same
+// instant, unless the writer's clock was ahead of this node's, in which case
+// at is the moment this node first found it ahead ([standing.weight]).
+type dated struct {
+	raw, at time.Time
 }
 
 // failure is one failed attempt on this node.
@@ -1064,7 +1074,14 @@ type failure struct {
 // ceiling at all. How far ahead an instant may be is where it came from:
 //
 //   - THE FLEET'S: not at all. A peer's failure had happened by the time the
-//     store answered, so one dated after now is the peer's clock.
+//     store answered, so one dated after now is the peer's clock. Each of
+//     the fleet's failures is judged ON ITS OWN, which is what lets the
+//     correct clocks' failures go on moving the wait while a fast one's is
+//     still ahead: judged as the record's newest instant alone, the fast
+//     writer's failure WAS the newest for the whole of the skew, so it was
+//     re-dated once and the wait ran from there however many real failures
+//     landed after it — every node owed only its own failures' waits, and a
+//     run spread across N nodes was admitted N times per ceiling.
 //   - THIS NODE'S OWN: up to [InlineDelay]. An attempt is dated no earlier
 //     than the start this node scheduled for it ([Ticket.Fail]), which is up
 //     to [InlineDelay] ahead of the clock at its admission, and an admitted
@@ -1086,13 +1103,19 @@ type failure struct {
 func (s *standing) weight(now time.Time) (int, time.Time) {
 	cut := now.Add(-coord.AttemptWindow)
 	s.prune(cut)
-	if s.fleet.Last.After(now) {
-		s.fleet.Last = now
-	}
 	var count int
 	var last time.Time
-	if s.readIndex > 0 && s.fleet.Count > 0 && s.fleet.Last.After(cut) {
-		count, last = s.fleet.Count, s.fleet.Last
+	for i := range s.fleet {
+		f := &s.fleet[i]
+		if f.at.After(now) {
+			f.at = now
+		}
+		if f.at.After(cut) {
+			count++
+			if f.at.After(last) {
+				last = f.at
+			}
+		}
 	}
 	lead := now.Add(InlineDelay)
 	for i := range s.fails {
@@ -1129,32 +1152,51 @@ func (s *standing) holds(f failure) bool {
 func (s *standing) clean(now time.Time) bool {
 	cut := now.Add(-coord.AttemptWindow)
 	s.prune(cut)
-	return s.readIndex > 0 && s.readAt.After(cut) && len(s.fails) == 0 &&
-		(s.fleet.Count == 0 || !s.fleet.Last.After(cut))
+	if s.readIndex == 0 || !s.readAt.After(cut) || len(s.fails) > 0 {
+		return false
+	}
+	for _, f := range s.fleet {
+		if f.at.After(cut) {
+			return false
+		}
+	}
+	return true
 }
 
 // learn folds a read that landed into the pair: the newest answer wins, and a
 // local failure that answer already counts is forgotten here, since the
 // record holds it and its instant.
 //
-// A RECORD READ BACK UNCHANGED KEEPS THE DATING IT WAS GIVEN. Every instant
-// in the fleet's record is the WRITING node's clock, and one a fast writer
-// stamped into this node's future is re-dated to the moment it is first
-// found ahead ([standing.weight]); the next read carries the same instant
-// again, and taken as written it would be found ahead — and re-dated to that
-// later moment — on every read, so the wait it earns would never run out
-// while the skew lasted. A writer running SLOW needs nothing: its failures
-// fall inside the window and count, and only their wait has already passed.
+// A FAILURE READ BACK KEEPS THE DATING IT WAS GIVEN. Every instant in the
+// fleet's record is the WRITING node's clock, and one a fast writer stamped
+// into this node's future is re-dated to the moment it is first found ahead
+// ([standing.weight]); the next read carries the same instant again, and taken
+// as written it would be found ahead — and re-dated to that later moment — on
+// every read, so the wait it earns would never run out while the skew lasted.
+// So each instant the last read held is matched, by what its writer recorded,
+// against the one this read holds, and keeps its dating — and ONLY that one:
+// every other instant is taken as written, which is what lets a real failure
+// landing after a fast writer's move the wait on. A writer running SLOW needs
+// nothing: its failures fall inside the window and count, and only their wait
+// has already passed.
 func (s *standing) learn(window coord.Attempted, index uint64, at time.Time) {
 	if index <= s.readIndex {
 		return
 	}
-	raw := window.Last
-	if s.readIndex > 0 && raw.Equal(s.fleetRaw) {
-		window.Last = s.fleet.Last
+	was := s.fleet
+	matched := make([]bool, len(was))
+	next := make([]dated, 0, len(window.At))
+	for _, raw := range window.At {
+		d := dated{raw: raw, at: raw}
+		for i := range was {
+			if !matched[i] && was[i].raw.Equal(raw) {
+				matched[i], d.at = true, was[i].at
+				break
+			}
+		}
+		next = append(next, d)
 	}
-	s.fleetRaw = raw
-	s.fleet, s.readIndex, s.readAt = window, index, at
+	s.fleet, s.readIndex, s.readAt = next, index, at
 	kept := s.fails[:0]
 	for _, f := range s.fails {
 		if !s.holds(f) {

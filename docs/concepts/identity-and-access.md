@@ -1087,7 +1087,13 @@ that saw it, and **no node's clock can stretch a wait past the ceiling**: a
 reader takes none of the fleet's failures as later than its own clock, so a
 node ten minutes fast costs a mistyped password the ordinary second elsewhere
 rather than ten minutes, and a node ten minutes slow still counts toward the
-curve — its failures are inside the window, only their wait has passed. What the fleet holds is a digest of the pair under a key
+curve — its failures are inside the window, only their wait has passed. Nor
+can a fast clock **shorten** a wait: each failure is judged on its own, so the
+failures made on correct clocks after a fast node's go on moving the wait
+while the fast one is still ahead of the reader's clock, and the fast one keeps
+the time it was first seen once the reader's clock reaches it rather than
+counting as a fresh failure then. What the fleet holds is a digest of the pair
+under a key
 derived from the active keyring entry, never what was typed — a password typed
 into the login box is what lands in that field often enough to matter. A node
 whose coordination store is unreachable goes on throttling on its own curve.

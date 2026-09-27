@@ -1070,6 +1070,8 @@ func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time
 	}
 	cutoff := now.Add(-f.attemptWindow)
 	var out coord.Attempted
+	// Held oldest first ([attemptsRecord.with] sorts every write), so the
+	// window answers in the order the contract states.
 	for _, at := range decodeAttempts(entry).At {
 		// THE INSTANT DECIDES, the way a cooldown's does: the bucket's
 		// age is what keeps the record set finite and the broker reaps
@@ -1079,19 +1081,10 @@ func (f *FleetStore) Failures(ctx context.Context, subject string, now time.Time
 		// each deciding a record has lapsed would both win it; a count
 		// has nothing to win.
 		if at.After(cutoff) {
-			out.Count++
-			out.Last = latest(out.Last, at)
+			out.At = append(out.At, at)
 		}
 	}
 	return out, nil
-}
-
-// latest is the later of two instants.
-func latest(a, b time.Time) time.Time {
-	if b.After(a) {
-		return b
-	}
-	return a
 }
 
 // Flush forgets every attempt against subject.

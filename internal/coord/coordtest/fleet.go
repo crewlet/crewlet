@@ -210,7 +210,7 @@ func (h *fleetHarness) window(subject string, at time.Time) coord.Attempted {
 
 func (h *fleetHarness) failures(subject string, at time.Time) int {
 	h.t.Helper()
-	return h.window(subject, at).Count
+	return h.window(subject, at).Count()
 }
 
 func (h *fleetHarness) flush(subject string) {
@@ -571,12 +571,13 @@ var attemptCases = []fleetCase{{
 		}
 	},
 }, {
-	// THE NEWEST ATTEMPT IS ANSWERED BESIDE THE COUNT, because a delay
-	// runs from the last failure: a node seeding its curve from a count
-	// alone has to date every failure made elsewhere to the moment it
-	// asked, and one that re-read on each attempt would never see its
-	// delay end.
-	name: "the window answers its newest attempt",
+	// EVERY ATTEMPT IS ANSWERED, OLDEST FIRST, and not a count and the
+	// newest. A delay runs from the last failure, so a node seeding its
+	// curve from a count alone has to date every failure made elsewhere to
+	// the moment it asked; and every instant is its writer's clock, so a
+	// reader judges each against its own — summarised to the newest, one
+	// written by a clock running fast hid every failure after it.
+	name: "the window answers every attempt, oldest first",
 	fn: func(h *fleetHarness) {
 		at := h.now()
 		later := at.Add(h.ages.Attempt / 4)
@@ -584,19 +585,24 @@ var attemptCases = []fleetCase{{
 		h.fail("token:op-1", later)
 		h.fail("token:op-1", at.Add(time.Second))
 		got := h.window("token:op-1", later)
-		if got.Count != 3 || !got.Last.Equal(later) {
+		if want := []time.Time{at, at.Add(time.Second), later}; !slices.EqualFunc(
+			got.At, want, time.Time.Equal) {
+			h.t.Fatalf("window = %v, want every attempt oldest first: %v",
+				got.At, want)
+		}
+		if got.Count() != 3 || !got.Last().Equal(later) {
 			h.t.Fatalf("window = %+v, want 3 attempts, the newest at %v",
 				got, later)
 		}
-		if empty := h.window("token:never-seen", later); empty.Count != 0 ||
-			!empty.Last.IsZero() {
+		if empty := h.window("token:never-seen", later); empty.Count() != 0 ||
+			!empty.Last().IsZero() {
 			h.t.Fatalf("an untouched subject's window = %+v, want the zero one",
 				empty)
 		}
 		// AND AN ATTEMPT THAT AGED OUT IS NOT THE NEWEST.
 		h.fail("token:op-2", at)
 		if got := h.window("token:op-2", at.Add(h.ages.Attempt+time.Second)); //
-		got.Count != 0 || !got.Last.IsZero() {
+		got.Count() != 0 || !got.Last().IsZero() {
 			h.t.Fatalf("a window whose only attempt aged out = %+v, want the "+
 				"zero one", got)
 		}
@@ -715,8 +721,8 @@ var attemptCases = []fleetCase{{
 		}
 		h.fail("token:late-arrival", at)
 		past := at.Add(h.ages.Attempt + time.Second)
-		if got := h.window("token:late-arrival", past); got.Count != coord.AttemptCap ||
-			!got.Last.Equal(later) {
+		if got := h.window("token:late-arrival", past); got.Count() != coord.AttemptCap ||
+			!got.Last().Equal(later) {
 			h.t.Fatalf("window once the late-arriving older attempt aged out = %+v, "+
 				"want the %d newer attempts at %v: the cap dropped a newer attempt to "+
 				"keep an older one", got, coord.AttemptCap, later)

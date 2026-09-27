@@ -269,9 +269,9 @@ func raceAttempts(ctx context.Context, f coord.Fleet, round int, at time.Time) [
 	if err != nil {
 		return []error{fmt.Errorf("reading the window back: %w", err)}
 	}
-	if got.Count != Racers {
+	if got.Count() != Racers {
 		return []error{fmt.Errorf("%d failures racing to a flushed record left "+
-			"%d counted, want every one", Racers, got.Count)}
+			"%d counted, want every one", Racers, got.Count())}
 	}
 	return nil
 }
