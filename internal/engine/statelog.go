@@ -873,6 +873,27 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.DomainLog,
 	runner *statelog.Runner) (*statelog.Publisher, func(context.Context) (bool, error), error) {
 
+	entry, found := registrationFor(domain.Name())
+	if !found {
+		return nil, nil, fmt.Errorf("engine: domain %q is not registered, so this "+
+			"build has no write authority for its log", domain.Name())
+	}
+	return s.publisherFrom(entry, appendTo, runner)
+}
+
+// publisherFrom is [stateLog.publisherFor] over one register entry, which is
+// what lets a test hand it an entry the shipped register does not hold — a
+// write authority built short of a seam has to be refused HERE, before the
+// domain starts, and the register's own entries cannot reach that arm.
+func (s *stateLog) publisherFrom(entry registration, appendTo *jetstream.DomainLog,
+	runner *statelog.Runner) (*statelog.Publisher, func(context.Context) (bool, error), error) {
+
+	domain := entry.Domain
+	if entry.NewSeams == nil {
+		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
+			"write authority, so nothing could ever append to its log",
+			domain.Name())
+	}
 	signer, err := s.signerFor(domain)
 	if err != nil {
 		return nil, nil, err
@@ -884,12 +905,6 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		// stamping the old one would write records every applier reads
 		// as safely stale.
 		Generation: func() uint32 { return runner.Committed().Generation },
-	}
-	entry, found := registrationFor(domain.Name())
-	if !found || entry.NewSeams == nil {
-		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
-			"write authority, so nothing could ever append to its log",
-			domain.Name())
 	}
 	seams, err := entry.NewSeams(s, runner)
 	if err != nil {

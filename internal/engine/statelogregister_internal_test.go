@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -405,34 +408,36 @@ func TestAPeerThatDeclaresNoRolesRunsEveryDomain(t *testing.T) {
 	}
 }
 
-// EVERY REGISTERED DOMAIN'S SEAMS ARE COMPLETE, and the boot check is where a
-// gap has to be found.
+// EVERY REGISTERED DOMAIN'S WRITE AUTHORITY BUILDS, over a real store.
 //
 // [statelog.NewPublisher] refuses a nil Rows, Fence or Gates BY NAME, so a
 // half-built write authority is a boot failure with an explanation rather than
-// a node that appends records the fleet drops one at a time. But it only
-// refuses at the moment a publisher is built, and `NewSeams` is a closure —
-// so a domain whose constructor returned two of three would boot every other
-// domain first and fail on one line deep inside the fifth.
+// a node that appends records the fleet drops one at a time. But `NewSeams` is
+// a closure the boot reaches one domain at a time, so a gap in the fifth entry
+// is found only after four domains have started.
 //
-// This is that check, run over the register directly. A domain that appends
-// AND declares an eviction reader needs all four, and the entries that leave
-// Evicted nil say why at the field.
+// So every entry is built HERE the way [stateLog.start] builds it: over a
+// migrated store, beside a real runner, through [stateLog.publisherFrom].
+// A case with no store could not tell a constructor that needs one from a
+// broken one, and an error it skipped past certified nothing — which is what
+// this case did while it handed every constructor a nil database. And each
+// fence is ASKED, because one built over the wrong handle constructs fine and
+// fails on the first append.
+//
+// A STRICT domain needs its eviction reader too: readiness asks it whether
+// this node was evicted, and one without it serves reads from rows the fleet
+// has abandoned. Only a compacted log may leave it nil — its values are derived
+// and a re-embed replaces anything an evicted node held.
 func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
+	t.Parallel()
+	s := seamsStateLog(t)
 	for _, entry := range register() {
 		name := entry.Domain.Name()
-		if entry.NewSeams == nil {
-			t.Errorf("%s declares no write authority at all", name)
-			continue
-		}
-		// A NIL STATELOG AND A NIL RUNNER ARE WHAT THIS CAN PASS, and
-		// what it therefore checks is the SHAPE: a constructor that
-		// reaches for a store handle answers an error, which is itself
-		// the signal that the seams are built from the engine rather
-		// than from constants. Either outcome is legitimate; a
-		// constructor that returned a PARTIAL set is not.
-		seams, err := entry.NewSeams(&stateLog{nodeID: "boot-check"}, nil)
+		runner := seamsRunner(t, s, entry)
+		seams, err := entry.NewSeams(s, runner)
 		if err != nil {
+			t.Errorf("%s's write authority could not be built over a migrated "+
+				"store: %v", name, err)
 			continue
 		}
 		for field, absent := range map[string]bool{
@@ -443,12 +448,114 @@ func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 			if absent {
 				t.Errorf("%s's write authority has no %s — statelog.NewPublisher "+
 					"refuses that by name, so this domain would fail the boot "+
-					"on one line inside the fifth constructor rather than here",
-					name, field)
+					"after every domain before it had started", name, field)
 			}
+		}
+		if seams.Fence != nil {
+			if evicted, err := seams.Fence.Evicted(t.Context()); err != nil || evicted {
+				t.Errorf("%s's fence over a fresh store answers evicted=%v (%v), "+
+					"want a definite no", name, evicted, err)
+			}
+		}
+		strict := entry.Domain.Stream().Replay == statelog.ReplayStrict
+		if strict && seams.Evicted == nil {
+			t.Errorf("%s is a strict log and declares no eviction reader, so "+
+				"readiness never asks whether this node was evicted and its "+
+				"reads go on serving rows the fleet has abandoned", name)
+		}
+		if _, _, err := s.publisherFrom(entry, nil, runner); err != nil {
+			t.Errorf("%s's write authority is refused at boot: %v", name, err)
 		}
 	}
 }
+
+// A REGISTER ENTRY SHORT OF A SEAM FAILS ITS DOMAIN'S START, BEFORE ANY APPEND.
+//
+// The register's own entries are complete, so they cannot reach this arm; an
+// entry whose constructor drops one seam is handed to the same path a boot
+// takes. The log it is given is NIL, so a publisher that got far enough to
+// append would panic rather than pass — the refusal has to come first.
+func TestAnEntryShortOfASeamFailsItsDomainsStart(t *testing.T) {
+	t.Parallel()
+	s := seamsStateLog(t)
+	entry, ok := registrationFor(tracker.Domain{}.Name())
+	if !ok {
+		t.Fatal("the register has no tracker domain")
+	}
+	for _, c := range []struct {
+		field string
+		drop  func(*writeSeams)
+		names string
+	}{
+		{"Rows", func(w *writeSeams) { w.Rows = nil }, "no rows"},
+		{"Fence", func(w *writeSeams) { w.Fence = nil }, "no fence"},
+		{"Gates", func(w *writeSeams) { w.Gates = nil }, "no gates"},
+	} {
+		short := entry
+		build := entry.NewSeams
+		short.NewSeams = func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
+			seams, err := build(s, runner)
+			c.drop(&seams)
+			return seams, err
+		}
+		_, _, err := s.publisherFrom(short, nil, seamsRunner(t, s, short))
+		if err == nil || !strings.Contains(err.Error(), c.names) {
+			t.Errorf("an entry whose seams have no %s starts as %v, want a refusal "+
+				"naming it (%q)", c.field, err, c.names)
+		}
+	}
+	// THE CONTROL: the same entry, unmodified, starts — so the refusals
+	// above are about the dropped seam and not about the rig.
+	if _, _, err := s.publisherFrom(entry, nil, seamsRunner(t, s, entry)); err != nil {
+		t.Fatalf("the unmodified tracker entry is refused on this rig: %v", err)
+	}
+}
+
+// seamsStateLog is a state log over a migrated store, holding what a domain's
+// constructors read: this node's id, the store and a keyring to sign under.
+func seamsStateLog(t *testing.T) *stateLog {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
+		store.Options{PinnedWriters: len(register())})
+	if err != nil {
+		t.Fatalf("open a store: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return &stateLog{nodeID: "boot-check", db: db,
+		ring: statelog.OneKey("k1", "boot-check-material")}
+}
+
+// seamsRunner is the runner [stateLog.start] builds beside a domain's write
+// authority, over the same estate, with a consumer that delivers nothing.
+func seamsRunner(t *testing.T, s *stateLog, entry registration) *statelog.Runner {
+	t.Helper()
+	applier, err := entry.NewApplier(s)
+	if err != nil {
+		t.Fatalf("build %s's applier: %v", entry.Domain.Name(), err)
+	}
+	verifier, err := s.verifierFor(entry.Domain)
+	if err != nil {
+		t.Fatalf("build %s's verifier: %v", entry.Domain.Name(), err)
+	}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: entry.Domain, Applier: applier, Fetch: nothingToFetch{},
+		DB: replicatedEstate{node: s.db}, Verifier: verifier, Generation: 1,
+	})
+	if err != nil {
+		t.Fatalf("build %s's runner: %v", entry.Domain.Name(), err)
+	}
+	return runner
+}
+
+// nothingToFetch is a consumer with nothing waiting: the runner is built, and
+// never run.
+type nothingToFetch struct{}
+
+func (nothingToFetch) Fetch(context.Context, int, int, time.Duration) ([]statelog.Message, error) {
+	return nil, nil
+}
+
+func (nothingToFetch) Pending(context.Context) (uint64, error) { return 0, nil }
 
 // THE IDENTITY LEDGER'S SESSION ROWS GO IN AN HOUR, and only a SHORTER kind
 // horizon is a declaration the boot accepts.
