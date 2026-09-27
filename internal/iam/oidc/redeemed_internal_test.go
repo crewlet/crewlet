@@ -1,7 +1,7 @@
 package oidc
 
 import (
-	"encoding/json"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 	"testing"
@@ -25,8 +25,8 @@ import (
 func TestAFlightIsRedeemedOnceAndTheSetIsBounded(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
-	flight := func(id string, expires time.Time) Flight {
-		return Flight{ID: id, ExpiresAt: expires}
+	flight := func(verifier string, expires time.Time) Flight {
+		return Flight{Verifier: verifier, ExpiresAt: expires}
 	}
 
 	r := newRedemptions(4)
@@ -38,10 +38,10 @@ func TestAFlightIsRedeemedOnceAndTheSetIsBounded(t *testing.T) {
 		t.Error("a flight redeemed a minute earlier was redeemed again")
 	}
 
-	// PAST ITS EXPIRY the entry makes way, and a flight bearing the id is
-	// a different flight — Open refused the old one.
+	// PAST ITS EXPIRY the entry makes way, and a flight of that name is a
+	// different flight — Open refused the old one.
 	if !r.Redeem(flight("f1", at.Add(2*FlightTTL)), at.Add(FlightTTL)) {
-		t.Error("an id whose flight had expired was refused")
+		t.Error("a name whose flight had expired was refused")
 	}
 
 	// AT THE BOUND, the oldest goes first and the newest are kept.
@@ -49,23 +49,31 @@ func TestAFlightIsRedeemedOnceAndTheSetIsBounded(t *testing.T) {
 		r.Redeem(flight(fmt.Sprintf("n%d", i), at.Add(2*FlightTTL)),
 			at.Add(FlightTTL))
 	}
-	if n := r.order.Len(); n != 4 || len(r.ids) != 4 {
-		t.Errorf("the set holds %d entries (%d ids), past its bound of 4", n,
-			len(r.ids))
+	if n := r.order.Len(); n != 4 || len(r.flights) != 4 {
+		t.Errorf("the set holds %d entries (%d names), past its bound of 4", n,
+			len(r.flights))
 	}
 	if r.Redeem(flight("n5", at.Add(2*FlightTTL)), at.Add(FlightTTL)) {
 		t.Error("the newest redemption was evicted before the oldest")
 	}
 }
 
-// A FLIGHT WITHOUT AN ID DOES NOT OPEN.
+// A FLIGHT ANY BUILD SEALED OPENS, AND IS EXCHANGED ONCE.
 //
-// The id is what a replay is refused on, so a flight carrying none could be
-// presented for as long as it lived: [Open] refuses it with the other values a
-// round trip cannot do without.
+// The flight is a cookie one node seals and whichever node the callback reaches
+// opens, so during a rolling upgrade the two are different builds — and a
+// replay defence keyed on a field this build added would refuse every sign-in
+// whose start reached the build before it. So a flight is named by the one
+// value every build has sealed, its verifier: sealed here exactly as that
+// build sealed it, with no field it never wrote, the flight opens, is redeemed
+// once, and its second presentation is refused. And the name is not the S256
+// challenge — the digest of the verifier alone, which travelled in the
+// authorization request's URL.
 //
-// Mutation: drop the id from Open's check and the id-less flight opens.
-func TestAFlightWithoutAnIDDoesNotOpen(t *testing.T) {
+// Mutation: require a field the previous build never sealed and the flight does
+// not open; key the set on anything the replay does not repeat and it is
+// redeemed twice; drop the label and the name is the challenge.
+func TestAFlightAnyBuildSealedIsExchangedOnce(t *testing.T) {
 	t.Parallel()
 	cipher, err := secrets.NewCipher(secrets.Keyring{
 		ActiveID: "k1", Keys: map[string][]byte{"k1": []byte(strings.Repeat("k", 32))},
@@ -74,25 +82,29 @@ func TestAFlightWithoutAnIDDoesNotOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
-	seal := func(f Flight) string {
-		t.Helper()
-		body, err := json.Marshal(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sealed, err := cipher.Encrypt(string(body), flightAAD)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return sealed
+	// THE PREVIOUS BUILD'S FLIGHT, field for field.
+	sealed, err := cipher.Encrypt(`{"state":"s","nonce":"n",`+
+		`"verifier":"a-verifier-the-previous-build-minted","return":"/work",`+
+		`"expires_at":"`+at.Add(FlightTTL).Format(time.RFC3339Nano)+`"}`, flightAAD)
+	if err != nil {
+		t.Fatal(err)
 	}
-	whole := Flight{ID: "an-id", State: "s", Nonce: "n", Verifier: "v",
-		ExpiresAt: at.Add(FlightTTL)}
-	if _, err := Open(cipher, seal(whole), at); err != nil {
-		t.Fatalf("a whole flight did not open: %v", err)
+	r := NewRedemptions()
+	for i, want := range []bool{true, false} {
+		flight, err := Open(cipher, sealed, at)
+		if err != nil {
+			t.Fatalf("a flight the previous build sealed did not open: %v", err)
+		}
+		if got := r.Redeem(flight, at); got != want {
+			t.Errorf("presentation %d was redeemed = %v, want %v", i+1, got, want)
+		}
 	}
-	whole.ID = ""
-	if _, err := Open(cipher, seal(whole), at); err == nil {
-		t.Error("a flight carrying no id opened, so nothing could refuse its replay")
+	other := Flight{Verifier: "another-flight's-verifier", ExpiresAt: at.Add(FlightTTL)}
+	if !r.Redeem(other, at) {
+		t.Error("a different flight was refused as a replay of the first")
+	}
+	if nameOf(other) == flightName(sha256.Sum256([]byte(other.Verifier))) {
+		t.Error("a flight is named by its S256 challenge, a value its " +
+			"authorization request carried in a URL")
 	}
 }

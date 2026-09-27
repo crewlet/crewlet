@@ -1317,7 +1317,13 @@ deployment, which a browser sets only from this exact host, `Secure`, at
 progress beside it — and `crewlet_oidc_flight` on plain http, which can hold
 no prefixed cookie. On https the bare name is never read: a flight a sibling
 host planted would be one its author began, finished with whatever provider
-account the browser holds.
+account the browser holds. That name — and `Path=/`, which the prefix requires
+— arrived with the prefix, so while a fleet on https rolls onto the build that
+introduced it, a provider sign-in that started on a node of one build and came
+back to a node of the other finds no flight under the name it reads and is
+refused; the person starts it again. A flight lives ten minutes, so that is the
+whole of the cost, and a deployment moving from http to https pays the same
+once for a sign-in begun in those minutes.
 
 ### What a sign-in wave costs the provider
 
@@ -1343,14 +1349,19 @@ one person closing their tab fails nobody else's sign-in.
 And a flight is exchanged **once**. Whoever started a flight holds its cookie
 and its `state`, and a made-up code is free, so the same cookie presented over
 and over would be an exchange at the provider per request for its whole ten
-minutes. Every flight carries a random id, and the node that finishes one
-remembers it until the flight would have expired anyway — up to 8,192 of them,
-about a megabyte, far more than a morning's wave finishes inside ten minutes
-— so a cookie presented a second time to that node is refused as a failed
-sign-in before the provider hears of it. The record is per node: a fleet's
-load balancer can hand the same cookie to each node once, which bounds the
-replay rather than removing it, and a coordination write per callback would
-put a fleet-wide write on a path anybody can drive.
+minutes. The node that finishes a flight remembers it until the flight would
+have expired anyway — up to 8,192 of them, about a megabyte, far more than a
+morning's wave finishes inside ten minutes — so a cookie presented a second
+time to that node is refused as a failed sign-in before the provider hears of
+it. A flight is remembered by a digest of its **PKCE verifier**, the random
+secret it has always carried sealed, rather than by a field added for the
+purpose: a flight is sealed by one node and opened by whichever node the
+callback reaches, which during a rolling upgrade may be a different build, and
+a field the older build never sealed would have refused every sign-in whose two
+halves straddled the upgrade. The record is per node: a fleet's load balancer
+can hand the same cookie to each node once, which bounds the replay rather than
+removing it, and a coordination write per callback would put a fleet-wide write
+on a path anybody can drive.
 
 ### What is checked in an ID token, and what each check is for
 

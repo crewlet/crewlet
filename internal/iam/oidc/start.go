@@ -22,16 +22,6 @@ import (
 // IT LIVES IN THE BROWSER, sealed, and on no node — see the package doc for
 // why a map here is why a fleet cannot serve logins.
 type Flight struct {
-	// ID names this flight to the node that finishes it, which remembers
-	// every id it has redeemed ([Redemptions]) so a flight is exchanged at
-	// the provider once however many times its cookie is presented.
-	//
-	// ITS OWN VALUE rather than the state, which the provider sees and
-	// echoes in the callback's query — a value that has travelled in a
-	// URL is not one to key a replay defence on when a fresh one costs
-	// sixteen bytes of randomness.
-	ID string `json:"id"`
-
 	// State is compared with what the provider sends back. It is what
 	// stops a third party's callback — a link somebody was sent —
 	// completing a login in this browser, because they cannot know the
@@ -47,6 +37,12 @@ type Flight struct {
 	// SEALED rather than signed: it is what proves the party redeeming
 	// the code is the party that asked for it, so a readable one is PKCE
 	// defeated.
+	//
+	// IT IS ALSO WHAT NAMES THE FLIGHT to the node that finishes it, which
+	// remembers every flight it has exchanged by a digest of this value
+	// ([Redemptions]) — thirty-two random bytes that are sealed here and
+	// never travel in a URL, which is everything a name for a replay
+	// defence needs, and a value every build has always sealed.
 	Verifier string `json:"verifier"`
 
 	// Return is where the browser goes once the login completes. It is
@@ -106,14 +102,6 @@ const flightAAD = "iam_oidc/flight"
 // the value every provider is tested against.
 const entropyBytes = 32
 
-// idBytes is how much randomness a flight's [Flight.ID] carries.
-//
-// 128 BITS, which is what an identifier drawn at random needs never to repeat
-// — it is a name, not a secret, since the envelope it travels in is sealed —
-// and it is the one value here whose size a browser pays for twice over: the
-// cookie holding it is bounded by the 4096 bytes RFC 6265 promises.
-const idBytes = 16
-
 // Start mints a flight and returns the provider URL to send the browser to,
 // with the sealed cookie value to set beside it.
 //
@@ -153,12 +141,9 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 			"AND its link's secret, or neither")
 	}
 	for _, into := range []*string{&flight.State, &flight.Nonce, &flight.Verifier} {
-		if *into, err = randomValue(entropyBytes); err != nil {
+		if *into, err = randomValue(); err != nil {
 			return "", "", err
 		}
-	}
-	if flight.ID, err = randomValue(idBytes); err != nil {
-		return "", "", err
 	}
 	body, err := json.Marshal(flight)
 	if err != nil {
@@ -233,10 +218,10 @@ func Open(cipher secrets.Cipher, sealed string, now time.Time) (Flight, error) {
 			ErrRefused, err)
 	}
 	switch {
-	case flight.ID == "" || flight.State == "" || flight.Nonce == "" ||
-		flight.Verifier == "":
-		// THE ID TOO, because it is what a replay is refused on: a flight
-		// without one could be presented as often as it lived.
+	case flight.State == "" || flight.Nonce == "" || flight.Verifier == "":
+		// THE VERIFIER is also what a replay is refused on ([Redemptions]),
+		// so a flight without one could never be told from its next
+		// presentation — which it never reaches, being refused here.
 		return Flight{}, fmt.Errorf("%w: the login cookie is missing one of "+
 			"the values a round trip carries", ErrRefused)
 	case !now.Before(flight.ExpiresAt):
@@ -292,9 +277,9 @@ func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
 	return at, nil
 }
 
-// randomValue is one unguessable URL-safe value of the given entropy.
-func randomValue(size int) (string, error) {
-	raw := make([]byte, size)
+// randomValue is one unguessable URL-safe value of [entropyBytes].
+func randomValue() (string, error) {
+	raw := make([]byte, entropyBytes)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("oidc: read randomness: %w", err)
 	}

@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"container/list"
+	"crypto/sha256"
 	"sync"
 	"time"
 )
@@ -14,9 +15,20 @@ import (
 // for ten minutes, each time making this node exchange a code at the provider.
 // The provider refuses every one; what it costs is an outbound request per
 // inbound request, aimed at somebody else's token endpoint by whoever can reach
-// this one. So the node that finishes a flight remembers its [Flight.ID], and
-// a flight whose id it has seen is refused before anything reaches the
-// provider.
+// this one. So the node that finishes a flight remembers it, and a flight it
+// has seen is refused before anything reaches the provider.
+//
+// # Named by its verifier, which every flight has always carried
+//
+// A flight is remembered by a digest of its PKCE [Flight.Verifier]: thirty-two
+// random bytes, sealed, and never in a URL — the authorization request carries
+// only its S256 challenge, and the digest here is taken under a label of its
+// own so it is not that challenge either. A field minted for the purpose would
+// be a field a flight sealed by the build before it does not carry, and during
+// a rolling upgrade every sign-in whose two halves reached different builds
+// would have been refused for lacking it; the verifier is in every flight any
+// build has sealed. A DIGEST and not the verifier itself, so the set never
+// holds a secret past the request that presented it.
 //
 // # Per node, bounded, and forgetting nothing that still matters
 //
@@ -26,8 +38,8 @@ import (
 // exchange per node rather than one per request, which is what the defence is
 // for. An entry is kept until its flight EXPIRES, after which [Open] refuses the
 // flight anyway, and the set is bounded at [MaxRedemptions] — so what a caller
-// can do by flooding it is evict an id early, which buys one more exchange for
-// every [MaxRedemptions] flights it started and called back first. A fresh
+// can do by flooding it is evict an entry early, which buys one more exchange
+// for every [MaxRedemptions] flights it started and called back first. A fresh
 // flight costs less than that, so nothing is lost.
 
 // MaxRedemptions is how many redeemed flights one node remembers.
@@ -36,8 +48,8 @@ import (
 // live: at the eight exchanges a provider admits at once and a hundred
 // milliseconds each, a node finishes at most 80 flights a second, and the
 // design's 3,000-person wave is over in under a minute — well inside one
-// [FlightTTL], and under half the set. An entry is an id, an expiry and a
-// list element, so the whole set is about a megabyte at its fullest.
+// [FlightTTL], and under half the set. An entry is a 32-byte digest, an expiry
+// and a list element, so the whole set is about a megabyte at its fullest.
 const MaxRedemptions = 8192
 
 // Redemptions remembers the flights this node has redeemed.
@@ -45,15 +57,31 @@ const MaxRedemptions = 8192
 // SAFE FOR CONCURRENT USE. The zero value is not usable; build one with
 // [NewRedemptions].
 type Redemptions struct {
-	mu    sync.Mutex
-	max   int
-	ids   map[string]*list.Element
-	order *list.List // of redemption, oldest first
+	mu      sync.Mutex
+	max     int
+	flights map[flightName]*list.Element
+	order   *list.List // of redemption, oldest first
 }
+
+// flightName is what a flight is remembered by — a digest of its verifier, for
+// the reasons at the top of this file.
+type flightName [sha256.Size]byte
+
+// nameOf is a flight's [flightName], the SHA-256 of its verifier under this
+// purpose's own label — which is what keeps it from being the S256 challenge,
+// the SHA-256 of the verifier alone.
+func nameOf(f Flight) flightName {
+	return sha256.Sum256([]byte(redemptionLabel + f.Verifier))
+}
+
+// redemptionLabel separates a flight's name from every other digest of its
+// verifier — the S256 challenge above all, which is the digest of the verifier
+// alone and has travelled in the authorization request's URL.
+const redemptionLabel = "crewlet/oidc/redemption\x00"
 
 // redemption is one remembered flight.
 type redemption struct {
-	id      string
+	name    flightName
 	expires time.Time
 }
 
@@ -63,7 +91,7 @@ func NewRedemptions() *Redemptions {
 }
 
 func newRedemptions(max int) *Redemptions {
-	return &Redemptions{max: max, ids: map[string]*list.Element{},
+	return &Redemptions{max: max, flights: map[flightName]*list.Element{},
 		order: list.New()}
 }
 
@@ -71,14 +99,15 @@ func newRedemptions(max int) *Redemptions {
 // the replay the caller refuses. Call it after [Open] has accepted the flight
 // and before the provider is asked anything.
 func (r *Redemptions) Redeem(f Flight, now time.Time) bool {
+	name := nameOf(f)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if held, seen := r.ids[f.ID]; seen {
+	if held, seen := r.flights[name]; seen {
 		if now.Before(held.Value.(*redemption).expires) {
 			return false
 		}
 		// EXPIRED, so [Open] would have refused this flight already; a
-		// flight with the id reaching here is a different flight.
+		// flight of that name reaching here is a different flight.
 		r.drop(held)
 	}
 	// EXPIRED ENTRIES GO FIRST, from the oldest: nothing depends on them.
@@ -91,12 +120,12 @@ func (r *Redemptions) Redeem(f Flight, now time.Time) bool {
 	for r.order.Len() >= r.max {
 		r.drop(r.order.Front())
 	}
-	r.ids[f.ID] = r.order.PushBack(&redemption{id: f.ID, expires: f.ExpiresAt})
+	r.flights[name] = r.order.PushBack(&redemption{name: name, expires: f.ExpiresAt})
 	return true
 }
 
 // drop forgets one entry. The caller holds the lock.
 func (r *Redemptions) drop(e *list.Element) {
-	delete(r.ids, e.Value.(*redemption).id)
+	delete(r.flights, e.Value.(*redemption).name)
 	r.order.Remove(e)
 }
