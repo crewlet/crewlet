@@ -75,11 +75,11 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 
-	// AND THE ARCHIVE STAMP, on the same rule and for a column that was
-	// written as NULL on every row: `archived` is a bool the patch
-	// carries, and when and by whom it was set had no writer at all —
-	// so a board filtered to the archive could order it by nothing and
-	// an operator asking who filed something away had no answer.
+	// AND THE ARCHIVE STAMP, on the same rule: `archived` is a bool the
+	// patch carries, and when and by whom it was set is derived here or
+	// nowhere — without it a board filtered to the archive could order it
+	// by nothing and an operator asking who filed something away would
+	// have no answer.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := stampArchive(&next, current, held, c); err != nil {
 		return 0, err
@@ -606,9 +606,8 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 			// blocker lists this task among its dependents is a fact
 			// about the OTHER end's rows, so a writer stating it would
 			// be stating something it read in a different transaction
-			// on a different subject — and, until this derivation
-			// existed, every record said nothing and the column was
-			// zero on every row a repair duty was supposed to find.
+			// on a different subject — and a column nothing derives is
+			// zero on every row a repair duty is supposed to find.
 			//
 			// `one_sided_final` is the opposite kind of fact and stays
 			// on the record: it is the duty's DECISION that this edge
@@ -721,8 +720,8 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 // still carries the edge in its own document — the `waiting_on` on a
 // dependent, the entry in a blocker's `Dependents` — and every commit to it
 // rewrites its rows from that document. So its next comment or status change
-// wrote the edge back: a dependent waited again on a task that no longer
-// exists, whose status can never move, and read as blocked for good. The purge
+// would write the edge back: a dependent waiting again on a task that no
+// longer exists, whose status can never move, and reading as blocked for good. The purge
 // record names its own task and project and no other subject, so it does not
 // rewrite those documents; each task drops the edge here instead, on its own
 // commits, against the deletion markers every node holds identically at this
@@ -893,10 +892,10 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 			blockers = append(blockers, relation)
 		}
 	}
-	// A ROW OF LITERAL SUBQUERIES rather than the INSERT ... SELECT this
-	// was: with no FROM clause the SELECT produced exactly one row, so the
-	// two forms insert the same row from the same four binds — and only
-	// the VALUES form is a row template a multi-row insert can repeat.
+	// A ROW OF LITERAL SUBQUERIES rather than an INSERT ... SELECT: with no
+	// FROM clause that SELECT produces exactly one row, so the two forms
+	// insert the same row from the same four binds — and only the VALUES
+	// form is a row template a multi-row insert can repeat.
 	// Each row's two probes read tracker_tasks while this statement writes
 	// tracker_task_deps, so batching cannot change what any of them sees.
 	written, err := insertMany(ctx, tx, c.maxVariables, `
@@ -1247,7 +1246,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		}
 	}
 	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
-	// it used to hold would be the content the purge exists to destroy.
+	// the row held would be the content the purge exists to destroy.
 	history, err := a.writeHistory(ctx, tx, c,
 		subjectKeys{Project: task.Project, Key: task.Key}, nil)
 	if err != nil {
@@ -1633,20 +1632,15 @@ func nullableStringPtr(v *string) any {
 // insertMany writes a whole collection as MULTI-ROW INSERTS, chunked to the
 // estate's parameter limit.
 //
-// It used to run one statement per element, on the reasoning that every
-// collection here is capped so the loop is "a handful of statements" and a
-// generated multi-row insert would be a second statement builder to keep
-// correct. Both halves were wrong. The caps are [MaxWatchers]'s 64,
-// [MaxTagsPerTask]'s 40 and [MaxTagsPerProject]'s 512 rather than "small", and
-// every one of those rows cost a statement of its own — the shape
-// BenchmarkLogApplyDrain names "unprepared" and measures as the slowest of the
-// three. And the statement builder is not a second one: it is
-// [store.InsertRows], written once beside the chunker it uses, which is the
-// arrangement [textcut] and [whsec] exist to record the cost of not having.
+// NOT A STATEMENT PER ELEMENT, although every collection here is capped: the
+// caps are [MaxWatchers]'s 64, [MaxTagsPerTask]'s 40 and [MaxTagsPerProject]'s
+// 512 rather than "small", and a statement per row is a round trip per row
+// inside the applier's one transaction. The statement builder is
+// [store.InsertRows], written once beside the chunker it uses, rather than a
+// second one here.
 //
-// WHAT IS KEPT FROM THE OLD SHAPE is the generic ergonomics: a caller hands a
-// typed slice and a per-item argument builder rather than an index closure, so
-// a call site reads as the collection it writes. What CHANGES is that the
+// A caller hands a typed slice and a per-item argument builder rather than an
+// index closure, so a call site reads as the collection it writes. The
 // statement arrives in three parts — the prefix through VALUES, one
 // parenthesised row template, and the ON CONFLICT clause that follows the
 // value list — because the row template is what gets repeated and the row
@@ -1654,7 +1648,7 @@ func nullableStringPtr(v *string) any {
 // splits a whole statement string on "VALUES" survives them.
 //
 // maxVariables is [applyContext.maxVariables]. Zero degrades to a row per
-// statement, which is exactly the behaviour this replaced.
+// statement.
 func insertMany[T any](ctx context.Context, tx *sql.Tx, maxVariables int,
 	prefix, row, suffix string, items []T, args func(T) []any) (int, error) {
 
@@ -1749,13 +1743,10 @@ func (a *Applier) settleDefaultView(ctx context.Context, tx *sql.Tx, id string,
 //
 // Because nothing seeks a declaration. Every reader of one goes through the
 // DOCUMENT — one row, one decode — since a company has tens of fields rather
-// than thousands and the whole set is wanted at once. The relational copy this
-// used to keep (`tracker_types`, `tracker_fields`, `tracker_field_options`)
-// was a delete-and-rewrite of the entire catalogue per apply, per node, over
-// four maintained indexes, answering no question; migration 0010 drops it.
-// The `shadowed` column is what gave it away: inserted as a literal 0 on every
-// row, and the reader that reports shadowing derives it in Go from the two
-// declaration documents.
+// than thousands and the whole set is wanted at once, and the reader that
+// reports shadowing derives it in Go from the two declaration documents. A
+// relational copy would be a delete-and-rewrite of the entire catalogue per
+// apply, per node, answering no question.
 //
 // What a catalogue apply DOES change about rows is the per-task VALUES, which
 // every `f.<ref>` filter seeks — and specifically their visibility.
@@ -1777,12 +1768,12 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 	// transaction.
 	//
 	// `hidden` on a value row is the DECLARATION's archived state, and
-	// nothing else propagated it: a task untouched since the archive kept
-	// `hidden = 0` for ever, so the DDL's own rule — "every filter and
-	// total adds `hidden = 0 AND kind <> 'foreign'`" — described a column
-	// that did not carry what it claimed. The filter is shielded anyway,
-	// because an archived field does not RESOLVE, but a row that lies
-	// about its own state is a trap for the next reader of it.
+	// nothing else propagates it: a task untouched since the archive would
+	// keep `hidden = 0` for ever, so the DDL's own rule — "every filter and
+	// total adds `hidden = 0 AND kind <> 'foreign'`" — would describe a
+	// column that does not carry what it claims. The filter is shielded
+	// anyway, because an archived field does not RESOLVE, but a row that
+	// lies about its own state is a trap for the next reader of it.
 	return a.settleFieldVisibility(ctx, tx, catalogue.Fields)
 }
 
@@ -1956,11 +1947,11 @@ type goalTargetRef struct {
 // Everything exploded there is a collection ON the task document, rebuilt from
 // it on every apply so a reprocess converges. A comment and a body revision
 // are not: they are append-only rows one RECORD produced, and rebuilding them
-// from the document is impossible because the document does not hold them —
-// which is exactly what made them vanish. A task carried its thread on the
-// wire and produced no row, so `get_task(include=comments)` answered an empty
-// thread for every task in the company, `has_open_asks` was false for every
-// one, and `my_work.asked_of_me` could not see a question anybody had asked.
+// from the document is impossible because the document does not hold them.
+// Written nowhere else, a task would carry its thread on the wire and produce
+// no row, so `get_task(include=comments)` would answer an empty thread for
+// every task in the company, `has_open_asks` would be false for every one, and
+// `my_work.asked_of_me` could not see a question anybody had asked.
 //
 // The checklists ARE a document collection and are exploded here rather than
 // beside the others only because the same guard covers all three: a redelivery

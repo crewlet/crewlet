@@ -67,12 +67,12 @@ func (e ProjectEdit) Empty() bool {
 // and this is [PersonAuthority]'s shape rather than a ladder. An OPERATOR is a
 // person acting through their own credential — the founder at the dashboard,
 // or the assistant they run the company through — and they are not a seat at
-// all, so a gate that admitted only the lead refused the one actor the whole
-// operator surface exists for. It was reachable: `/operator/mcp` resolves the
-// lead from the ORG CHART by handle, an operator token carries its own name
-// rather than a seat's, so the lookup answered false and `write_project` was
-// refused for every operator in every company — including the founder
-// declaring the fields a project files work under.
+// all, so a gate that admitted only the lead would refuse the one actor the
+// whole operator surface exists for: `/operator/mcp` resolves the lead from
+// the ORG CHART by handle, an operator token carries its own name rather than
+// a seat's, so the lookup answers false and `write_project` would be refused
+// for every operator in every company — including the founder declaring the
+// fields a project files work under.
 type ProjectAuthority struct {
 	// Lead reports whether the actor leads the project or sits above it.
 	Lead bool

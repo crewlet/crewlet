@@ -183,8 +183,9 @@ func (a *App) mountRetention(mux *http.ServeMux) {
 	mux.Handle("POST /work/retention/readmit/{node}", a.gate(false))
 	// THE PURGE, and it lives beside the eviction because they are the
 	// two gestures on this engine that DESTROY rather than change: one
-	// stops a machine's records applying, the other deletes a task's rows
-	// and every row naming it and empties its history. Both are guarded,
+	// stops a machine's records applying, the other deletes a task and its
+	// content, with every link another task has to it, and empties its
+	// history and its inbox notices. Both are guarded,
 	// both echo their subject back as a confirmation, and both answer the
 	// three-valued write outcome whole.
 	if a.purger != nil {
@@ -224,9 +225,11 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "confirm_required",
 			"detail": "repeat the task's KEY in ?confirm= — a purge deletes the " +
-				"task's rows and every row naming it on every node, empties the " +
-				"content of its history and moves its subtasks onto its parent, " +
-				"and there is nothing that undoes it",
+				"task and its content on every node, with every relation, " +
+				"dependency and reference between it and another task, empties " +
+				"the content of its history and of the inbox notices about it " +
+				"and moves its subtasks onto its parent, and there is nothing " +
+				"that undoes it",
 		})
 		return
 	case project == "":

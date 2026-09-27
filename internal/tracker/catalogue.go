@@ -207,10 +207,8 @@ func checkTypes(types []TaskType) ([]TaskType, error) {
 	}
 	// AND THE NAMES, case-insensitively, OVER THE EFFECTIVE SET. A type
 	// resolves by name as well as by slug — a model writes what it read
-	// off a board — and the schema has carried `name_norm` with an index
-	// annotated "the case-insensitive collision rule" the whole time, with
-	// nothing enforcing it: "Bug" and "bug " both landed, and a
-	// resolve-by-name picked whichever row was read first.
+	// off a board — so "Bug" and "bug " both admitted would leave a
+	// resolve-by-name picking whichever was read first ([checkNames]).
 	//
 	// THE EFFECTIVE SET RATHER THAN THE DECLARED ONE, because that is what
 	// resolves: a catalogue ADDS to the builtins, so a company declaring
@@ -290,6 +288,26 @@ func checkFields(fields []FieldDef) error {
 		}
 		if err := checkConfig(f); err != nil {
 			return err
+		}
+		// `applies_to` NAMES TYPES BY SLUG, and is held to the slug's own
+		// spelling here: the applier's hidden state, the required check
+		// and an item's `applies` each compare a task's type against these
+		// names, and a name only one of those comparisons folds — a
+		// trailing space, a capital — is a field the board hides while
+		// the item offers it. A fresh slice, so the caller's declaration
+		// is not rewritten underneath it.
+		if len(f.AppliesTo) > 0 {
+			types := make([]string, 0, len(f.AppliesTo))
+			for _, name := range f.AppliesTo {
+				slug := strings.ToLower(strings.TrimSpace(name))
+				if !ValidSlug(slug) {
+					return fmt.Errorf("tracker: field %s applies to %q, which "+
+						"is not a type slug — `applies_to` names the types that "+
+						"carry the field, by slug", f.Slug, name)
+				}
+				types = append(types, slug)
+			}
+			f.AppliesTo = types
 		}
 		ids[f.ID] = true
 		if !f.Archived {

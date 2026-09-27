@@ -41,6 +41,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -80,6 +81,11 @@ type Event struct {
 
 	// Payload is the free-form bag. Typed fields belong in Data; this
 	// stays for genuinely unstructured extras.
+	//
+	// ITS VALUES DECODE AS `any`, so a JSON number in it comes back a
+	// float64 and an integer past 2^53 is rewritten on a round trip, which
+	// no other member of an event is. A value that must survive exactly
+	// belongs in Data, or here as a string.
 	Payload map[string]any `json:"payload,omitempty"`
 
 	// Trace context, captured at construction from the active span.
@@ -99,25 +105,24 @@ type Event struct {
 	// build. Marshalled flat into the same JSON object as the envelope.
 	Data Payload `json:"-"`
 
-	// Extra holds fields that belong to neither the envelope nor a known
-	// Data type — which is what an event from a newer build looks like.
-	// Preserved verbatim so a round trip through an older node is lossless.
+	// Extra holds members that belong to neither the envelope nor a known
+	// Data type — which is what an event from a newer build looks like —
+	// kept verbatim so a round trip through an older node is lossless. Which
+	// members those are is decided as
+	// [github.com/crewlet/crewlet/internal/jsoncarry] decides it, since a
+	// decode that files a member the envelope or the body also decodes
+	// would write it twice.
 	//
-	// RAW JSON, not `any`. Decoding into `any` turns every JSON number into
-	// a float64, so a 19-digit id came back off by a hundred and any integer
-	// past 2^53 came back wrong — on the one path whose entire job is to
-	// change nothing. Holding the bytes is what makes "preserved verbatim"
-	// true rather than aspirational.
+	// RAW JSON, not `any`: decoding into `any` turns every JSON number into
+	// a float64, so a 19-digit id or any integer past 2^53 would be written
+	// back as a different number, on the one path whose entire job is to
+	// change nothing.
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// envelopeKeys are the JSON keys owned by the envelope itself. Anything else
+// envelopeMembers are the members the envelope itself decodes. Anything else
 // in an incoming object belongs to Data (if the type is known) or Extra.
-var envelopeKeys = map[string]struct{}{
-	"id": {}, "type": {}, "timestamp": {}, "source": {}, "payload": {},
-	"trace_id": {}, "span_id": {}, "parent_span_id": {},
-	"delegation_depth": {}, "parent_turn_id": {}, "delegation_chain": {},
-}
+var envelopeMembers = jsoncarry.MembersOf(reflect.TypeFor[envelope]())
 
 // New builds an event of the given type carrying data, stamping a fresh id,
 // the current time, and the caller-supplied trace context.
@@ -333,7 +338,12 @@ type envelope struct {
 // store's promoted filter columns, an operator reading a log — treats an
 // event's own fields as first-class, and a nested body would push every one
 // of them behind an extra hop.
-func (e *Event) MarshalJSON() ([]byte, error) {
+//
+// ON THE VALUE, so an event is written this way wherever it sits: a method
+// on the pointer is not called for a value encoding/json cannot address — an
+// event in a map, or held by value in a struct marshalled by value — and such
+// an event would be written as its bare fields, without its body.
+func (e Event) MarshalJSON() ([]byte, error) {
 	env := envelope{
 		ID: e.ID, Type: e.Type, Timestamp: e.Timestamp, Source: e.Source,
 		Payload: e.Payload, TraceID: e.TraceID, SpanID: e.SpanID,
@@ -345,32 +355,36 @@ func (e *Event) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("marshal event envelope: %w", err)
 	}
 	// RawMessage THROUGHOUT. The merge has to happen in one flat object, so
-	// something must hold each field between marshal and marshal — and
-	// `any` was silently re-typing every number on the way through, for
-	// KNOWN payloads as much as unknown ones, since the envelope and the
-	// typed body both went round this same loop on every publish.
+	// something must hold each member between marshal and marshal, and
+	// `any` would re-type every number on the way through — for known
+	// payloads as much as unknown ones, since the envelope and the typed
+	// body both go round this same loop on every publish.
 	merged := map[string]json.RawMessage{}
 	if err := json.Unmarshal(raw, &merged); err != nil {
 		return nil, fmt.Errorf("remap event envelope: %w", err)
 	}
-	// Unknown-type fields first, so a known Data field always wins over a
-	// stale copy of itself that rode in as Extra.
+	// A MEMBER THE ENVELOPE OR THE BODY DECODES IS NEVER WRITTEN FROM
+	// EXTRA, even one the body's own value leaves out: a field the body
+	// cleared is written absent, and a stale copy carried beside it would
+	// undo the clear.
+	body := membersOf(e.Type)
 	for k, v := range e.Extra {
-		if _, reserved := envelopeKeys[k]; !reserved {
-			merged[k] = v
+		if envelopeMembers.Decodes(k) || (e.Data != nil && body != nil && body.Decodes(k)) {
+			continue
 		}
+		merged[k] = v
 	}
 	if e.Data != nil {
-		body, err := json.Marshal(e.Data)
+		data, err := json.Marshal(e.Data)
 		if err != nil {
 			return nil, fmt.Errorf("marshal event data (%s): %w", e.Type, err)
 		}
 		fields := map[string]json.RawMessage{}
-		if err := json.Unmarshal(body, &fields); err != nil {
+		if err := json.Unmarshal(data, &fields); err != nil {
 			return nil, fmt.Errorf("remap event data (%s): %w", e.Type, err)
 		}
 		for k, v := range fields {
-			if _, reserved := envelopeKeys[k]; !reserved {
+			if !envelopeMembers.Decodes(k) {
 				merged[k] = v
 			}
 		}
@@ -379,78 +393,63 @@ func (e *Event) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON reconstructs an event, decoding the typed body when this
-// build knows the type and preserving unknown fields in Extra when it does
+// build knows the type and preserving unknown members in Extra when it does
 // not. It never fails on an unknown type — see the package doc.
+//
+// THE WHOLE EVENT IS REPLACED, not merged into: which body an event holds
+// follows from its type, so an event decoded into one that held another
+// type's body would otherwise keep that body under the new type.
 func (e *Event) UnmarshalJSON(data []byte) error {
 	var env envelope
-	if err := json.Unmarshal(data, &env); err != nil {
+	var rest map[string]json.RawMessage
+	if err := jsoncarry.Unmarshal(data, &env, &rest); err != nil {
 		return fmt.Errorf("unmarshal event envelope: %w", err)
 	}
-	e.ID, e.Type, e.Timestamp, e.Source = env.ID, env.Type, env.Timestamp, env.Source
-	e.Payload, e.TraceID, e.SpanID = env.Payload, env.TraceID, env.SpanID
-	e.ParentSpanID, e.DelegationDepth = env.ParentSpanID, env.DelegationDepth
-	e.ParentTurnID, e.DelegationChain = env.ParentTurnID, env.DelegationChain
-
-	all := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &all); err != nil {
-		return fmt.Errorf("scan event fields: %w", err)
+	out := Event{
+		ID: env.ID, Type: env.Type, Timestamp: env.Timestamp, Source: env.Source,
+		Payload: env.Payload, TraceID: env.TraceID, SpanID: env.SpanID,
+		ParentSpanID: env.ParentSpanID, DelegationDepth: env.DelegationDepth,
+		ParentTurnID: env.ParentTurnID, DelegationChain: env.DelegationChain,
 	}
-
 	if proto, ok := lookup(env.Type); ok {
 		body := proto()
-		if err := json.Unmarshal(data, body); err != nil {
-			// A malformed body must not lose the event: fall through to
-			// the envelope-plus-Extra representation, which is exactly
-			// how an unknown type is carried.
-			e.Data = nil
-		} else {
-			e.Data = body
+		// A malformed body must not lose the event: it falls through to
+		// the envelope-plus-Extra representation, which is exactly how an
+		// unknown type is carried — every member but the envelope's stays
+		// in Extra, or the event is silently gutted rather than carried.
+		if err := json.Unmarshal(data, body); err == nil {
+			out.Data = body
+			// The member set comes from the REGISTRY, read once off the
+			// type at Register, rather than from re-marshalling the body
+			// just decoded: which members a payload owns is a property of
+			// its type, and learning it by re-encoding would serialise
+			// every event's whole body a second time on every decode.
+			members := membersOf(env.Type)
+			for name := range rest {
+				if members.Decodes(name) {
+					delete(rest, name)
+				}
+			}
 		}
 	}
-
-	// GATED ON e.Data, not on registration. A registered type whose body
-	// failed to decode leaves Data nil on purpose — the fall-through above
-	// — and every wire key must then still reach Extra, or the event is
-	// silently gutted rather than carried.
-	//
-	// The field set comes from the REGISTRY, derived once at Register from
-	// the struct's own json tags, rather than from re-marshalling the body
-	// that was just decoded. Which keys a payload owns is a compile-time
-	// property of its type; learning it by re-encoding meant serialising
-	// every event's whole body a second time on every decode — tens of
-	// kilobytes of prompt text, per event, to compute a constant.
-	var known map[string]struct{}
-	if e.Data != nil {
-		known = fieldsOf(env.Type)
+	if len(rest) > 0 {
+		out.Extra = rest
 	}
-	for k, v := range all {
-		if _, reserved := envelopeKeys[k]; reserved {
-			continue
-		}
-		if _, isKnown := known[k]; isKnown {
-			continue
-		}
-		if e.Extra == nil {
-			e.Extra = map[string]json.RawMessage{}
-		}
-		// The BYTES, verbatim. Decoding into `any` here is what turned a
-		// 19-digit id into a float64 and re-published it wrong.
-		e.Extra[k] = slices.Clone(v)
-	}
+	*e = out
 	return nil
 }
 
 // --- registry -------------------------------------------------------------
 
 // entry is what the registry knows about one wire type: how to build its
-// body, and which JSON keys that body owns.
+// body, and which members that body decodes.
 //
-// The field set is derived ONCE, at registration, because it is a property of
-// the Go type rather than of any event. Computing it per decode meant
-// re-marshalling a body that had just been decoded, only to read its keys.
+// The member set is read ONCE, at registration, because it is a property of
+// the Go type rather than of any event; learning it per decode would
+// re-marshal a body that had just been decoded, only to read its members.
 type entry struct {
-	make   func() Payload
-	fields map[string]struct{}
+	make    func() Payload
+	members *jsoncarry.Members
 }
 
 var (
@@ -458,48 +457,12 @@ var (
 	registry   = map[string]entry{}
 )
 
-// jsonFieldsOf is the set of JSON object keys a payload type marshals to.
-//
-// Read off the struct tags rather than off an encoded instance, so it is
-// complete: an instance with a zero value in an `omitempty` field encodes
-// without that key, and a field set learned that way would send the key to
-// Extra on every event that happened to leave it empty.
-func jsonFieldsOf(t reflect.Type) map[string]struct{} {
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	fields := map[string]struct{}{}
-	if t.Kind() != reflect.Struct {
-		return fields
-	}
-	for i := range t.NumField() {
-		f := t.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
-		if name == "-" && opts == "" {
-			continue
-		}
-		// An EMBEDDED struct with no name of its own is flattened into
-		// the parent object, so its keys are the parent's too.
-		if name == "" && f.Anonymous {
-			maps.Copy(fields, jsonFieldsOf(f.Type))
-			continue
-		}
-		if name == "" {
-			name = f.Name
-		}
-		fields[name] = struct{}{}
-	}
-	return fields
-}
-
-// fieldsOf is the key set a registered type owns, or nil for an unknown one.
-func fieldsOf(t string) map[string]struct{} {
+// membersOf is the member set a registered type decodes, or nil for an
+// unknown one.
+func membersOf(t string) *jsoncarry.Members {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
-	return registry[t].fields
+	return registry[t].members
 }
 
 // Register associates a wire type string with a constructor for its payload:
@@ -517,6 +480,10 @@ func fieldsOf(t string) map[string]struct{} {
 //
 // Panics on a duplicate type string: two payloads under one name is a
 // programming error that would otherwise decode events into the wrong struct.
+// And panics on a payload type whose members the carry cannot answer for
+// ([jsoncarry.MembersOf]) — one with an encoding of its own, or a tag the two
+// implementations of encoding/json read differently — since which members
+// reach Extra is decided by that answer.
 func Register[T any, P PayloadPtr[T]]() {
 	var zero T
 	t := P(&zero).EventType()
@@ -529,8 +496,8 @@ func Register[T any, P PayloadPtr[T]]() {
 		panic("events.Register: duplicate event type " + t)
 	}
 	registry[t] = entry{
-		make:   func() Payload { return P(new(T)) },
-		fields: jsonFieldsOf(reflect.TypeFor[T]()),
+		make:    func() Payload { return P(new(T)) },
+		members: jsoncarry.MembersOf(reflect.TypeFor[T]()),
 	}
 }
 

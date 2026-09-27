@@ -18,10 +18,10 @@ import (
 
 // THE AUXILIARY SPEND.
 //
-// A learning worker, a background learning pass and the turn-start prefetch
-// make their completions outside the turn loop: each resolves a model through
-// [learningModels.Head] and calls Provider.Complete itself, so nothing the loop
-// does to a round reaches them. Their spend is RECORDED and CHARGED at that
+// A learning worker, a background learning pass, the turn-start prefetch and
+// the memory filter refresh_memory re-runs make their completions outside the
+// turn loop: each resolves a model through [learningModels.Head] and calls
+// Provider.Complete itself, so nothing the loop does to a round reaches them. Their spend is RECORDED and CHARGED at that
 // SEAM instead — one wrapper around the resolution rather than a record and a
 // charge at each call site — which is what records and charges a worker added
 // later without anyone remembering to wire it.
@@ -221,9 +221,16 @@ func seatHandle(seat *org.Role) string {
 }
 
 // meteredModelsFor is the seat-model seam every auxiliary caller resolves
-// through: the learning workers, the background passes and the turn-start
-// prefetch (prefetch.go). Every completion made through it is recorded, and
-// charged where the epoch has a ceiling to enforce.
+// through: the learning workers, the background passes, the turn-start
+// prefetch and the recall tools (prefetch.go). Every completion made through it
+// is recorded, and charged where the epoch has a ceiling to enforce.
+//
+// UNATTRIBUTED: a completion resolved through it names no worker and no turn
+// until the caller binds them — a learning worker through learning's own
+// resolution, which binds each call, and an engine caller through
+// [Engine.auxiliaryModelsFor]. A Head called on its result directly,
+// `e.meteredModelsFor(c).Head(...)`, binds nobody, and a test refuses it in
+// every file of this package.
 //
 // Nil for a company with no model registry, which is a valid company (see
 // nomodels.go) whose auxiliary callers are waiting for a provider.

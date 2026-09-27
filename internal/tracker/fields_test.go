@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -383,6 +384,102 @@ func TestAForeignValueIsOutOfEveryPredicate(t *testing.T) {
 	if total.Value == nil || *total.Value != 8 {
 		t.Fatalf("the total is %v, want 8 — a foreign value was added into a "+
 			"native sum", total.Value)
+	}
+}
+
+// AN ITEM'S `applies` IS THE RULE THE BOARD HIDES BY, NOT A SECOND ONE.
+//
+// A value's `applies` on an item says whether its field is carried by the
+// task's type, and the board decides the same thing when it hides the value.
+// Two rules that differ only in how they read a name — one trimming what the
+// declaration says and one not — draw an item offering a field as its own
+// while the board beside it filters the value out as not applying.
+//
+// This build writes `applies_to` as type slugs, so the declaration here is
+// written whole, as a build that did not normalise it could have: the log
+// keeps such a record, and every reader has to agree about it.
+//
+// Mutation: compare the declaration's names trimmed in the item's reader and
+// the item says the field applies.
+func TestAnItemsAppliesAgreesWithTheBoard(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteDocument(t.Context(), "op-fields",
+		tracker.CatalogueSubject(tracker.CatalogueFields), "",
+		tracker.FieldCatalogue{V: tracker.DocumentVersion, Fields: []tracker.FieldDef{
+			{ID: "f-sev", Slug: "severity", Name: "Severity",
+				Type: tracker.FieldNumber, AppliesTo: []string{"bug "}},
+		}}, tracker.ChangeCatalogue, nil); err != nil {
+		t.Fatalf("write the declaration: %v", err)
+	}
+	r.drain()
+	bug := newTask("t-bug")
+	bug.Type = "bug"
+	bug.Fields = map[string]json.RawMessage{"f-sev": json.RawMessage(`3`)}
+	if _, err := r.writer.CreateTask(t.Context(), "op-bug", bug, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+
+	onBoard := len(r.ask(map[string]any{
+		"container": "project:ENG", "f.severity": "gte:1",
+	}).Rows) == 1
+	detail, err := r.reader.Task(t.Context(), "t-bug", tracker.DetailWants{Fields: true},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read the item: %v", err)
+	}
+	at := slices.IndexFunc(detail.Fields, func(v tracker.FieldValue) bool {
+		return v.ID == "f-sev"
+	})
+	if at < 0 {
+		t.Fatalf("the item carries no severity value to compare: %+v", detail.Fields)
+	}
+	if got := detail.Fields[at].Applies; got != onBoard {
+		t.Fatalf("the item says severity applies=%v and the board %s it — one "+
+			"declaration read two ways", got,
+			map[bool]string{true: "filters on", false: "hides"}[onBoard])
+	}
+}
+
+// A FIELD'S `applies_to` IS HELD TO THE TYPE SLUG'S OWN SPELLING.
+//
+// Every reader compares a task's type against these names, and they do not
+// all fold a name the same way — so a declaration is normalised to the slug
+// when it is written, and a name that is no slug at all is refused naming the
+// field rather than stored as a type nothing can have.
+//
+// Mutation: drop the normalisation from checkFields and the field declared
+// for "Bug " is hidden on a bug.
+func TestAFieldAppliesToTypesBySlug(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteFields(t.Context(), "op-bad", []tracker.FieldDef{
+		{ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldNumber,
+			AppliesTo: []string{"a bug!"}},
+	}); err == nil || !strings.Contains(err.Error(), "applies_to") {
+		t.Fatalf("a declaration applying to %q answered %v, want it refused "+
+			"naming applies_to", "a bug!", err)
+	}
+	if _, err := r.writer.WriteFields(t.Context(), "op-fields", []tracker.FieldDef{
+		{ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldNumber,
+			AppliesTo: []string{"Bug "}},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	bug := newTask("t-bug")
+	bug.Type = "bug"
+	bug.Fields = map[string]json.RawMessage{"f-sev": json.RawMessage(`3`)}
+	if _, err := r.writer.CreateTask(t.Context(), "op-bug", bug, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	if rows := r.ask(map[string]any{
+		"container": "project:ENG", "f.severity": "gte:1",
+	}).Rows; len(rows) != 1 {
+		t.Fatalf("f.severity>=1 matched %d rows, want the bug a field "+
+			"declared for \"Bug \" applies to", len(rows))
 	}
 }
 

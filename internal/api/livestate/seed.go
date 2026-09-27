@@ -22,8 +22,9 @@ type History struct {
 	// Events are persisted feed rows, in any order.
 	Events []FeedRow
 
-	// Spend is the per-phase spend records inside [LiveSpendWindow], in any
-	// order. Past [SpendRecordLimit] only the newest are kept.
+	// Spend is the spend records inside [LiveSpendWindow] — each phase's and
+	// each auxiliary completion's — in any order. Past [SpendRecordLimit]
+	// only the newest are kept.
 	Spend []tokens.Record
 
 	// SpendTruncated says the store left older records of the window behind,

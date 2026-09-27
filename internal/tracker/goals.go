@@ -163,9 +163,9 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 			// THE UPDATE HISTORY IS CARRIED FORWARD, never taken from
 			// the caller. A goal save is a whole post-state replace, and
 			// `write_work_goal` builds its Goal from the tool's own
-			// arguments — which carry no updates — so every save through
-			// the only shipped surface DESTROYED the whole health
-			// history, silently, with `outcome: applied`.
+			// arguments — which carry no updates — so a history taken
+			// from the caller would be DESTROYED by every save through
+			// that tool, silently, with `outcome: applied`.
 			//
 			// APPEND-ONLY, because an update is something somebody WROTE
 			// on a date: a save that could rewrite one would let a

@@ -3,6 +3,8 @@ package kv
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -141,9 +143,9 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 
 // THE BROKER FILTERS THE CLASS, AND THE WALK ONLY SEES ITS OWN.
 //
-// Seven classes share the positions register, and a walk that read all of them
-// to use one was what this replaced — on a read the state-log write fence
-// takes on every first write to a subject. A key here is
+// Every ageless class shares the positions register, and a walk that read all
+// of them to use one would move every other class over the wire — on a read
+// the state-log write fence takes on every first write to a subject. A key here is
 // coord.DocumentKey(class, id), whose separator is a dot because a key IS a
 // subject token path, so the class is a token the broker can match.
 //
@@ -159,19 +161,29 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	store := openFleetForTest(t, nc, prefix)
 	ctx := context.Background()
 
-	// One key per class, all in the one register. All SEVEN of them, and
-	// `maintenance` beside `maintenance-ack` is the adversarial pair: one
-	// class name is a STRING PREFIX of the other, so a filter built by
-	// concatenation rather than by the grammar would hand every
-	// acknowledgement to the capacity walk. A subject wildcard matches per
-	// TOKEN, so it does not — and that is the property this pair pins.
-	classes := []string{
-		"node", "floor", "hold", "backup",
-		"maintenance", "admitted", "maintenance-ack",
+	// One key per class, all in the one register, each in the shape its own
+	// key builder writes. `maintenance` beside `maintenance-ack` is the
+	// adversarial pair: one class name is a STRING PREFIX of the other, so a
+	// filter built by concatenation rather than by the grammar would hand
+	// every acknowledgement to the capacity walk. A subject wildcard matches
+	// per TOKEN, so it does not — and that is the property this pair pins.
+	seeded := map[string]string{
+		"node":            coord.PositionKey("n-1"),
+		"floor":           coord.FloorKey("n-1"),
+		"hold":            coord.HoldKey("n-1"),
+		"backup":          coord.BackupPointKey("n-1"),
+		"maintenance":     coord.MaintenanceKey("n-1"),
+		"admitted":        coord.AdmissionKey("n-1"),
+		"maintenance-ack": coord.MaintenanceAckKey("n-1"),
+		"promotion":       coord.PromotionKey("n-1", "fp"),
 	}
+	classes := slices.Sorted(maps.Keys(seeded))
 	for _, class := range classes {
-		key := coord.DocumentKey(class, "n-1")
-		if _, err := store.positions.Put(ctx, key, []byte(`{}`)); err != nil {
+		if segs, ok := coord.DocumentSegments(seeded[class]); !ok || segs[0] != class {
+			t.Fatalf("the %s key builder wrote %q, whose class is not %s: this "+
+				"case would be measuring the wrong key", class, seeded[class], class)
+		}
+		if _, err := store.positions.Put(ctx, seeded[class], []byte(`{}`)); err != nil {
 			t.Fatalf("seed %s: %v", class, err)
 		}
 	}
@@ -207,11 +219,12 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 // between the `>` [coord.DocumentFilter] ends in and the `*` that would look
 // equivalent today.
 //
-// Every key class in this register is two segments deep right now, so `*`
-// matches all of them and the difference is invisible — until the first class
-// that composes a third segment, whose listing then silently returns nothing.
-// A walk that finds no rows and a class that has no rows are the same answer
-// at every caller, so the day that happens there is no symptom to notice.
+// A key class two segments deep is matched by `*` as well, so for such a class
+// the difference is invisible — until it composes a third segment, as a
+// promotion record's key does, and a listing built on `*` silently returns
+// nothing. A walk that finds no rows and a class that has no rows are the same
+// answer at every caller, so the day that happens there is no symptom to
+// notice.
 func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))

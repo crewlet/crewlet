@@ -231,8 +231,8 @@ var maintenanceCases = []fleetCase{
 
 	{"an acknowledgement round-trips and never reads back as anything else",
 		func(h *fleetHarness) {
-			// FOUR OTHER KEY CLASSES SHARE THIS BUCKET, so the filters
-			// are what make it safe. An acknowledgement decoded as a
+			// OTHER KEY CLASSES SHARE THIS BUCKET, so the filters are
+			// what make it safe. An acknowledgement decoded as a
 			// positions row is a node that has applied nothing, and a
 			// positions row decoded as an acknowledgement seals a
 			// barrier that never ran.

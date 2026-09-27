@@ -221,7 +221,7 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		out.Position)
 	// THE POSITION IS THE LAST COMMIT THIS CALL MADE, whatever its shape.
 	// A `blocking`-only change writes nothing on its own subject, so the
-	// authored branch above never ran — and a caller that settled at the
+	// authored branch above does not run — and a caller that settled at the
 	// zero position would barrier at nothing and read its own write back
 	// missing.
 	if last.Position.Seq > out.Position.Seq {

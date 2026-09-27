@@ -112,6 +112,69 @@ func TestASuspensionPartsKeyIsNeverACallsAndGoesWithItsLaunch(t *testing.T) {
 	}
 }
 
+// AN ANSWER PART IS NEVER DECODED AS ANYTHING ELSE, NOR ANOTHER ANSWER'S, AND
+// IT GOES WITH ITS LAUNCH.
+//
+// Its key sits under the launch's filter, which the purge removes, one segment
+// deeper than a call part's; every other decoder reads a key of exactly its own
+// depth, so the depth alone keeps an answer part from being read as a call, a
+// call's part or the suspension's. And an answer's own filter must select
+// neither another answer's parts nor any other key under the launch, or its
+// read would move them — and, for another answer's, hand them back as this
+// one's.
+func TestAnAnswerPartsKeyIsItsAnswersAloneAndGoesWithItsLaunch(t *testing.T) {
+	t.Parallel()
+	for _, ids := range [][2]string{{"turn-1", "launch-1"}, {"run.a", "launch.b"}, {"t:é", "l 1"}} {
+		turnID, launchID := ids[0], ids[1]
+		part := answerPartKey(turnID, launchID, "answer.1", 3)
+
+		if seq, ok := bridgeCallSeq(part); ok {
+			t.Errorf("%s: an answer part's key decodes as call %d", turnID, seq)
+		}
+		if seq, n, ok := bridgePartAddress(part); ok {
+			t.Errorf("%s: an answer part's key decodes as part %d of call %d", turnID, n, seq)
+		}
+		if n, ok := suspensionPart(part); ok {
+			t.Errorf("%s: an answer part's key decodes as suspension part %d", turnID, n)
+		}
+		if id, n, ok := answerPartAddress(part); !ok || id != "answer.1" || n != 3 {
+			t.Errorf("%s: the answer part's key decodes as answer %q part %d, %v", turnID, id, n, ok)
+		}
+		others := []string{
+			bridgeCallKey(turnID, launchID, 3), bridgePartKey(turnID, launchID, 3, 1),
+			suspensionPartKey(turnID, launchID, 1),
+		}
+		for _, other := range others {
+			if id, n, ok := answerPartAddress(other); ok {
+				t.Errorf("%s: the key %q decodes as part %d of answer %q", turnID, other, n, id)
+			}
+		}
+		// Every pair of ids, both ways round: one id that is a prefix of
+		// another's text must still select only its own answer's parts.
+		answers := []string{"answer.1", "answer.2", "answer"}
+		for _, id := range answers {
+			within := strings.TrimSuffix(answerPartFilter(turnID, launchID, id), ">")
+			for _, other := range others {
+				if strings.HasPrefix(other, within) {
+					t.Errorf("%s: answer %q's filter selects the key %q", turnID, id, other)
+				}
+			}
+			for _, another := range answers {
+				if key := answerPartKey(turnID, launchID, another, 3); another != id && strings.HasPrefix(key, within) {
+					t.Errorf("%s: answer %q's filter selects answer %q's part %q", turnID, id, another, key)
+				}
+			}
+		}
+		if suspension := strings.TrimSuffix(suspensionPartFilter(turnID, launchID), ">"); strings.HasPrefix(part, suspension) {
+			t.Errorf("%s: the suspension's filter selects the answer part %q", turnID, part)
+		}
+		if launch := strings.TrimSuffix(bridgeCallFilter(turnID, launchID), ">"); !strings.HasPrefix(part, launch) {
+			t.Errorf("%s: the answer part %q is outside the launch's filter, so a purge would leave it",
+				turnID, part)
+		}
+	}
+}
+
 // THE CLIENT'S SIZE REFUSAL IS PERMANENT, NOT A BLIP — AND IT NAMES THE LIMIT
 // THAT REFUSED IT.
 //
@@ -205,6 +268,10 @@ func TestAValueARealServerRefusesNamesThatServersLimit(t *testing.T) {
 		},
 		"a suspension part": func() error {
 			_, err := f.CreateSuspensionPart(ctx, "turn-1", "launch-1", 1, value)
+			return err
+		},
+		"an answer part": func() error {
+			_, err := f.CreateAnswerPart(ctx, "turn-1", "launch-1", "answer-1", 1, value)
 			return err
 		},
 		"an append": func() error {

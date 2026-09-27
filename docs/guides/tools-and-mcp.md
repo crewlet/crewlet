@@ -54,7 +54,7 @@ the tracker's fourteen in full.
 
 The writes on each side count as a **delivery** for the turn's own
 did-this-reach-anybody gate, and each waits for its own write to reach this
-node's projection before answering — so a turn that files an item and then
+node's own applied rows before answering — so a turn that files an item and then
 lists the project sees what it just filed.
 
 The same tools are served to **your** AI assistant over

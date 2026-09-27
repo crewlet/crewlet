@@ -1590,9 +1590,8 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 			status.Draining = host.Draining()
 		}
 	}
-	// The native replication loops — the wiki's projector and every
-	// state-log domain's applier — so an operator asking why a fresh node
-	// holds no seats can see the answer in the fleet view rather than
+	// Every state-log domain's applier, so an operator asking why a fresh
+	// node holds no seats can see the answer in the fleet view rather than
 	// inferring it from an empty claim list. See
 	// [coord.NodeStatus.ProjectionsReady] for why this is not a readiness
 	// signal.

@@ -593,6 +593,26 @@ func TestAnOpenCodeStepWithoutATotalIsCountedAsAFloor(t *testing.T) {
 	}
 }
 
+// A STEP THAT REPORTS NO FIGURES AT ALL STILL SPENT, so a run holding one is a
+// floor whatever its other steps said. Counted as nothing, it would leave a
+// run whose every OTHER step carried its total reported as whole — and the
+// spend of the step nobody measured read as zero.
+func TestAnOpenCodeStepWithNoFiguresMakesTheRunAFloor(t *testing.T) {
+	res := opencode().Parse(strings.Join([]string{
+		`{"type":"step_finish","part":{"id":"p1","reason":"tool-calls","cost":0.25,` +
+			`"tokens":{"total":1100,"input":100,"output":40,"reasoning":10,"cache":{"read":900,"write":50}}}}`,
+		`{"type":"text","part":{"text":"done"}}`,
+		`{"type":"step_finish","part":{"id":"p2","reason":"stop"}}`,
+	}, "\n"))
+	if res.InputTokens != 1050 || res.OutputTokens != 50 || res.CostUSD != 0.25 {
+		t.Errorf("tokens = %d/%d at $%v, want the exact step's 1050/50 at $0.25",
+			res.InputTokens, res.OutputTokens, res.CostUSD)
+	}
+	if res.UsageWhole {
+		t.Error("a run with a step that reported no figures was reported as its whole spend")
+	}
+}
+
 func TestAnErrorEventIsAFailure(t *testing.T) {
 	res := opencode().Parse(`{"type":"error","error":"model refused"}`)
 	if res.Success {

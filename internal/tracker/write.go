@@ -172,6 +172,16 @@ type Writer struct {
 	// of this writer — see [localClaims].
 	local *localClaims
 
+	// claimClock is what a claim's age is measured on ([held.holding]).
+	// A MONOTONIC clock, and never [Writer.Now]: that one is the wall
+	// clock in UTC, which carries no monotonic reading, and an NTP step
+	// backwards would lengthen a lease this walk believes it still has.
+	claimClock func() time.Time
+
+	// fence is the claim this writer's appends are made under, set by
+	// [Writer.under] for the appends of a walk; nil on every other write.
+	fence *held
+
 	// Actor and ActorKind are who this writer acts as, and OperatorID,
 	// TurnID and Chain the provenance that travels with it.
 	//
@@ -403,6 +413,27 @@ type WriterDeps struct {
 	ActorKind AuthorKind
 	Leads     Leads
 	Now       func() time.Time
+
+	// ClaimClock is what a walk's claim is measured on — see
+	// [Writer.claimClock]. Nil is [time.Now], whose readings carry the
+	// monotonic clock; a case that is about a lease running out sets it
+	// rather than sleeping through a lease.
+	ClaimClock func() time.Time
+}
+
+// under is this writer making the appends of a walk that holds claim: every
+// one is decided only while the walk still holds it ([held.holding]).
+//
+// A COPY, like [Writer.After], because the fence belongs to one walk — and
+// every writer a step derives from this one ([Writer.After],
+// [Writer.mergingInto] and the rest) copies it on, so a step cannot drop it.
+func (w *Writer) under(claim *held) *Writer {
+	if w == nil {
+		return nil
+	}
+	clone := *w
+	clone.fence = claim
+	return &clone
 }
 
 // As is this writer acting as somebody else, and it is the ONLY way the actor
@@ -566,9 +597,13 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	claimClock := d.ClaimClock
+	if claimClock == nil {
+		claimClock = time.Now
+	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		local:   newLocalClaims(),
+		local: newLocalClaims(), claimClock: claimClock,
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
 		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
 	}, nil
@@ -661,14 +696,14 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	// EVERY PATCH, not only a status one. The apply rewrites every row
 	// naming this task as a blocker on EVERY task apply — `maintainDeps`
 	// runs out of `explodeTask`, which nothing gates — so a patch that
-	// changed only a due date wrote a dependent's row under a scope that
-	// never named it.
+	// changes only a due date writes a dependent's row, and a scope that
+	// did not name it would be short.
 	//
-	// Gated on the status, this was UNRECOVERABLE rather than merely
+	// Gated on the status, this would be UNRECOVERABLE rather than merely
 	// narrow: [ScopeSet.covers] inside the decide refuses such a write and
-	// tells the caller to re-run, and the re-run took the same gate and
-	// came up short again. Any edit at all to a task somebody waits on was
-	// refused for ever, with an error promising it would not be.
+	// tells the caller to re-run, and the re-run would take the same gate
+	// and come up short again. Any edit at all to a task somebody waits on
+	// would be refused for ever, with an error promising it would not be.
 	if scope, err = w.scopeForDependents(ctx, id, project, scope); err != nil {
 		return WriteResult{}, err
 	}
@@ -939,10 +974,10 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 		muted = append(muted, handle)
 		// AND AN UNWATCH IS NEVER REFUSED, which is why the branch
 		// returns here rather than falling through to the cap below.
-		// That check used to run on both branches, over a set an unwatch
-		// can only SHRINK — so a task that had somehow grown past the
-		// cap was one nobody could leave, and the only gesture that
-		// could have brought it back under was the one being refused.
+		// That check is over a set an unwatch can only SHRINK — run on
+		// both branches, a task that had somehow grown past the cap
+		// would be one nobody could leave, and the only gesture that
+		// could bring it back under would be the one being refused.
 		patch.Watch = nil
 		patch.Watchers, patch.Muted = &watchers, &muted
 		return patch, nil
@@ -952,8 +987,7 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 		// THE ROUTING CAP, enforced at the one place a watcher set grows
 		// by one. Past it an item is a broadcast rather than a thing
 		// people follow, and the wake it sends is the company's whole
-		// inbox — which is what [MaxWatchers] was declared to bound and,
-		// until this gesture existed, nothing in this package did.
+		// inbox — which is what [MaxWatchers] is declared to bound.
 		//
 		// AN AUTOMATIC WATCH IS SKIPPED RATHER THAN REFUSED, which is
 		// [WatchIntent.Auto]'s whole purpose: a commenter picks up a
@@ -1248,10 +1282,9 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 // and a purge: those are the same operation on different subjects, and the
 // operation is all the applier has.
 //
-// It used to guess, from the operation and the moved fields, whenever a record
-// carried no [Notify]. The guess is still there for records an older build
-// wrote ([fallbackKind]) and it is no longer allowed to answer with a
-// non-[ChangeKind]; but a build that can state the fact states it.
+// A guess from the operation and the moved fields is kept for records an older
+// build wrote without one ([fallbackKind]), and it answers only in
+// [ChangeKind]s; a build that can state the fact states it.
 //
 // THE THIRD RULE IS THE ONE WORTH THE FUNCTION: when a record carries both a
 // kind and a notification, they must AGREE. One fact with two carriers is one
@@ -1407,6 +1440,20 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 	// site knows only its own instant, and the surface that minted the op
 	// id is the one that knows when.
 	req.MintedAt = w.mintedAt(req.MintedAt)
+	// AND A WALK'S CLAIM, checked INSIDE THE DECIDE rather than once before
+	// the publish: the framework runs the decide again on every round it
+	// takes and appends only what a round's decide returned, so a walk that
+	// loses its claim while one write waits out a peer or the broker's
+	// backpressure is stopped at that write's next round — see
+	// [held.holding] for what that leaves.
+	if fence, decide := w.fence, req.Decide; fence != nil && decide != nil {
+		req.Decide = func(tx *sql.Tx) (statelog.Decision, error) {
+			if err := fence.holding(); err != nil {
+				return statelog.Decision{}, err
+			}
+			return decide(tx)
+		}
+	}
 	result, err := w.publisher.Publish(ctx, req)
 	switch {
 	case err == nil:

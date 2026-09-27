@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -188,14 +189,17 @@ type Resume struct {
 	// every launch this build recorded; see [DroppedCalls].
 	BridgedDropped DroppedCalls
 
-	// Run describes the detached run this resume is collecting.
+	// Run describes the detached run this phase re-enters from: the one the
+	// resume collected, or the one that stopped to ask the question a
+	// person's answer resumes it with ([RunRecord]).
 	Run RunRecord
 
 	// CarriedCounted says an earlier attempt at this resume already
 	// published a record that counted the phase's CARRIED SPEND: the tokens
 	// its rounds billed before it suspended ([execstate.State.InputTokens]
-	// and OutputTokens) and what the collected run reported it cost
-	// ([RunRecord.CostUSD]).
+	// and OutputTokens, with their split, [execstate.State.Models]) and what
+	// the run it re-enters from reported about itself — its price
+	// ([RunRecord.CostUSD]) and its own model spend ([RunRecord.Spend]).
 	//
 	// That spend was billed once, and every record counts what it carries,
 	// so it is counted by exactly one: the first record the resumed phase
@@ -223,36 +227,46 @@ type DroppedCalls struct {
 	After int
 }
 
-// RunRecord is what a phase event says about the box a phase ran in.
+// RunRecord is what a phase record says about the detached coding run a
+// resumed phase re-entered from: the box it ran in, the agent that ran it, and
+// what the run reported about itself — its price, its own model spend and what
+// it delivered. It is what makes that phase's backend a sandbox on its record
+// (`backend`, `coding_agent`, `sandbox_id`, `cost_usd`, `delivered_refs`), and
+// what brings the run's tokens into the record's own.
 //
-// It exists because nothing could say it. Every publisher stamped
-// [types.BackendNative] unconditionally, so a phase that spent twenty minutes
-// in a remote box and one that ran three rounds in this process were reported
-// identically: the sandbox badge could never render, and `coding_agent`,
-// `sandbox_id`, `cost_usd` and `delivered_refs` had no producer at all —
-// despite the coding agents reporting every one of them.
+// The run is the one the resume collected, or — when a person's answer resumes
+// a parked clarification — the one that stopped to ask the question, whose
+// price and spend were kept when it parked. That run finished, since its agent
+// stops once it asks, so the record its answer resumes is the one its figures
+// reach; the run the answer leads to is a launch of its own.
 //
 // Carried rather than re-derived, for the same reason the run's placement is:
 // the resume may be another process on another node, days later, under a
 // company configuration that has been applied again since.
 type RunRecord struct {
 	// CodingAgent is the CLI that did the work; SandboxID the box it ran in.
-	// Both are empty on a resume that is not collecting a run — a person
-	// answering a clarification — and their absence is what says so.
 	CodingAgent string
 	SandboxID   string
 
-	// CostUSD is what the run's own provider billed, where the agent reports
-	// it. A subscription CLI's spend never passes through the engine's token
-	// meter, so this is the only number that sees it.
+	// CostUSD is what the run's agent reported the run cost, where it
+	// reports a price at all.
 	CostUSD float64
 
-	// DeliveredRefs are the branches and pull requests the run produced.
+	// Spend is the run's own model spend as its agent reported it — its
+	// tokens by model, and whether they are the whole run's — which the
+	// phase's record takes in with [types.AgentPhaseCompleted.AddRun]. The
+	// agent calls its models from inside the box, so no round of this
+	// process billed them and this is the only account a record can carry.
+	Spend types.RunSpend
+
+	// DeliveredRefs are the branches and pull requests the run produced,
+	// and nil when a person's answer resumed the phase: nothing was
+	// collected then.
 	DeliveredRefs []string
 }
 
-// Sandboxed reports whether this resume is collecting a detached coding run,
-// which is what makes its phase's backend a sandbox rather than this process.
+// Sandboxed reports whether this phase re-entered from a detached coding run,
+// which is what makes its backend a sandbox rather than this process.
 func (r RunRecord) Sandboxed() bool { return r.CodingAgent != "" || r.SandboxID != "" }
 
 // Runner implements [turn.Phases] against real models and real tools.
@@ -330,10 +344,14 @@ func (r *Runner) noteCountedCarried() {
 // carried is the resumed phase's carried spend as this attempt's records
 // count it: all of it, or — when an earlier attempt's record already counted
 // it — none, leaving the pre-suspend rounds on the record as evidence.
+//
+// NONE MEANS EVERY PART OF IT: the pre-suspend tokens and their split, the
+// run's price and the run's own spend. A part left standing would be counted
+// by the first attempt's record and again by this one's.
 func (r *Runner) carried(prior toolloop.Result, run RunRecord) (toolloop.Result, RunRecord) {
 	if r.cfg.Resume != nil && r.cfg.Resume.CarriedCounted {
-		prior.InputTokens, prior.OutputTokens = 0, 0
-		run.CostUSD = 0
+		prior.InputTokens, prior.OutputTokens, prior.Models = 0, 0, nil
+		run.CostUSD, run.Spend = 0, types.RunSpend{}
 	}
 	return prior, run
 }
@@ -1383,13 +1401,20 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	// was cut at the model's output cap has prose in its record that stops
 	// mid-word however cleanly the extension ends.
 	res.Truncated = res.Truncated || done.Result.Truncated
-	// The model that served the phase, not the model that served the round
-	// that died. An invocation which failed before its first completion
-	// names nobody, and a record with no model on it reads as a phase that
-	// never reached a provider.
-	if res.Model == "" {
+	// THE PHASE'S FIRST MODEL, which is what a record's `model` names: the
+	// model the earlier rounds began on, where they began on one, and the
+	// invocation's own otherwise — which is also what keeps a record whose
+	// latest invocation failed before its first completion from naming no
+	// model at all, and so reading as a phase that never reached a provider.
+	if done.Result.Model != "" {
 		res.Model = done.Result.Model
 	}
+	// THE SPLIT FOLDS WITH THE TOKENS: the invocation's list names only its
+	// own rounds, so a phase kept whole in its totals but not in its split
+	// would bill every earlier round to the models that served the last
+	// invocation — or to the record's one model, where the last invocation
+	// served none.
+	res.Models = toolloop.FoldModelTokens(done.Result.Models, live.Models)
 	return res
 }
 

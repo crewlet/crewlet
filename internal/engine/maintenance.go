@@ -91,21 +91,15 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 				// the tasks a close unblocked. Every one is GATED,
 				// so a tick with nothing to do costs one indexed
 				// read.
-				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
-					DB: e.backends.Store, Writer: e.native.writer,
-					NodeID: e.native.nodeID,
-					// The merge repair decides from a LINEARIZABLE read,
-					// so a lagging applier cannot act on a merge that
-					// closed before the tick ([tracker.DutyDeps.Reader]).
-					Reader: e.native.trackerReader,
-					// AND THE LEAD MAP, for the one repair whose
-					// commit carries a wake. Read per call against
-					// the epoch current when the job runs, for the
-					// reason every other live seam here is: the duty
-					// outlives a revision, and a captured map would
-					// route by an org chart that has since moved.
-					Leads: liveLeads{engine: e},
-				})...)
+				tracked, err := e.trackerJobs()
+				if err != nil {
+					// THE SAME WIRING BUG as a job the worker refuses
+					// below, and answered the same way, for its reason.
+					log.ErrorContext(ctx, "maintenance_worker_not_started",
+						"error", err.Error())
+					return
+				}
+				jobs = append(jobs, tracked...)
 				// AND THE INBOX'S OWN SWEEP, which is a range
 				// delete rather than a repair and is therefore
 				// PER NODE — `tracker_notifications` is
@@ -171,6 +165,29 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 	// but would make the worker's lifetime differ from every other loop's
 	// for no reason a reader could find.
 	e.maintenance.Start(context.WithoutCancel(ctx))
+}
+
+// trackerJobs is the tracker duty's jobs over this node's own writer, read
+// authority and store.
+//
+// ITS OWN FUNCTION so the wiring is testable without starting a worker:
+// [tracker.Jobs] refuses a missing dependency by name, and a case asking this
+// for the jobs is asking whether the engine hands every one over.
+func (e *Engine) trackerJobs() ([]maintenance.Job, error) {
+	return tracker.Jobs(tracker.DutyDeps{
+		DB: e.backends.Store, Writer: e.native.writer,
+		NodeID: e.native.nodeID,
+		// The merge repair decides from a LINEARIZABLE read, so a lagging
+		// applier cannot act on a merge that closed before the tick
+		// ([tracker.DutyDeps.Reader]).
+		Reader: e.native.trackerReader,
+		// AND THE LEAD MAP, for the one repair whose commit carries a
+		// wake. Read per call against the epoch current when the job runs,
+		// for the reason every other live seam here is: the duty outlives
+		// a revision, and a captured map would route by an org chart that
+		// has since moved.
+		Leads: liveLeads{engine: e},
+	})
 }
 
 // ConversationRetention reads the operator's horizon for the conversation

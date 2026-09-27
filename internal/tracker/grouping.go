@@ -62,7 +62,7 @@ const MaxGroups = 64
 // MaxGroupsWithSubgroups and MaxSubgroups bound a SWIMLANE board, which costs
 // a different shape entirely.
 //
-// # The arithmetic, which the single-axis cap was never sized for
+// # The arithmetic, which the single-axis cap is not sized for
 //
 // One axis is `1 + G` statements: a count over the predicate and one paged
 // read per column. A SECOND axis repeats that pattern inside every column, so
@@ -163,16 +163,16 @@ type Group struct {
 	// follows: a board that drew sixteen of two hundred lanes and reported
 	// nothing looks like a company with sixteen.
 	//
-	// A FLAG RATHER THAN A COUNT, and it was a count that could only ever
-	// read 1. [groupCounts] selects `LIMIT limit+1` — one row past the
-	// bound, as evidence — so `len(out) - limit` was 0 or 1 whatever the
-	// company's real shape, and a board with two hundred lanes reported
-	// "1 more". A wrong number stated as a fact is worse than the silence
-	// the rule was written against, because a reader acts on it. The honest
-	// alternative is what [checkGroupBreadth] already concludes about its
-	// own bound — "the honest thing to report is the ceiling that was
-	// crossed rather than a total nobody counted" — and here the ceiling is
-	// already in the answer as the number of lanes returned.
+	// A FLAG RATHER THAN A COUNT, because no count here could be true.
+	// [groupCounts] selects `LIMIT limit+1` — one row past the bound, as
+	// evidence — so `len(out) - limit` is 0 or 1 whatever the company's
+	// real shape, and a board with two hundred lanes would report "1
+	// more". A wrong number stated as a fact is worse than the silence
+	// the rule was written against, because a reader acts on it. The
+	// honest alternative is what [checkGroupBreadth] already concludes
+	// about its own bound — "the honest thing to report is the ceiling
+	// that was crossed rather than a total nobody counted" — and here the
+	// ceiling is already in the answer as the number of lanes returned.
 	SubgroupsTruncated bool `json:"subgroups_truncated,omitempty"`
 }
 

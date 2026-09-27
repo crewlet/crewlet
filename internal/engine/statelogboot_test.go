@@ -86,15 +86,12 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 		t.Errorf("no row for the vector domain, so an operator cannot see the "+
 			"company's embeddings fall behind; rows = %+v", rows)
 	}
-	// AND THE WIKI'S, which is still a projector rather than a domain —
-	// the count is over REPLICATION LOOPS, not over one mechanism.
+	// AND THE KNOWLEDGE BASE'S.
 	if _, held := byName["pages"]; !held {
-		t.Errorf("no row for the wiki's projection; rows = %+v", rows)
+		t.Errorf("no row for the knowledge base's own log; rows = %+v", rows)
 	}
 	for _, row := range rows {
 		switch {
-		case row.Kind != "projection" && row.Kind != "domain":
-			t.Errorf("%s reports kind %q, which is neither", row.Name, row.Kind)
 		case !row.Ready && strings.TrimSpace(row.Detail) == "":
 			t.Errorf("%s is not ready and says nothing about why — an operator "+
 				"reading the fleet view has no next step", row.Name)

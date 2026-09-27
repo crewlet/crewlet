@@ -1656,8 +1656,10 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			"duplicate_of": map[string]any{
 				"type": "string",
 				"description": "Closing this as a duplicate: the item that " +
-					"survives. Set the status as well — the link records WHY, " +
-					"and the status records that it is closed.",
+					"survives. It replaces any `duplicate_of` link this item " +
+					"already had — an item is a duplicate of one other. Set " +
+					"the status as well — the link records WHY, and the " +
+					"status records that it is closed.",
 			},
 			"watch": map[string]any{
 				"type": "boolean",

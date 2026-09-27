@@ -195,11 +195,11 @@ type Answer struct {
 	// company with sixty-four assignees.
 	//
 	// A FLAG RATHER THAN A COUNT — see [Group.SubgroupsTruncated], which
-	// carried the same arithmetic. It was `len(out) - limit` over a query
-	// that takes `limit+1`, so it could only ever read 0 or 1: a board with
-	// two hundred assignee columns reported "1 more column did not fit",
-	// which is a wrong number stated as a fact and therefore worse than the
-	// silence the rule was written against.
+	// has the same arithmetic: `len(out) - limit` over a query that takes
+	// `limit+1` can only ever read 0 or 1, so a board with two hundred
+	// assignee columns would report "1 more column did not fit", which is a
+	// wrong number stated as a fact and therefore worse than the silence
+	// the rule was written against.
 	GroupsTruncated bool `json:"groups_truncated,omitempty"`
 
 	// GroupsOverlap marks an axis on which one task is on several columns
@@ -502,10 +502,10 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 // subtask mode rewrites the whole predicate to be about roots.
 //
 // Run again inside a branch, each of those emits its DEFAULT and is ANDed
-// inside the OR — so `show_closed=true` at the top level was defeated by every
-// branch's own `status_group IN (not_started, active)`, and the identical
-// predicate written as a disjunction answered a strictly smaller set than the
-// one written flat. [Query.parseAny] refuses those keys in a branch for the
+// inside the OR — so `show_closed=true` at the top level would be defeated by
+// every branch's own `status_group IN (not_started, active)`, and the
+// identical predicate written as a disjunction would answer a strictly smaller
+// set than the one written flat. [Query.parseAny] refuses those keys in a branch for the
 // same reason; this is the other half, because refusing the key does not stop
 // the default the absent key resolves to.
 //
@@ -902,9 +902,9 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		if scope != "" {
 			// AND THE CONTAINER SURVIVES THE REWRITE.
 			//
-			// Without it the outer row carried no scope at all, so
+			// Without it the outer row carries no scope at all, so
 			// EVERY container-scoped query in the default subtask
-			// mode — which is every board — was a scan of every task
+			// mode — which is every board — is a scan of every task
 			// in the COMPANY, filtered afterwards by the subquery.
 			// The planner has nothing else to enter on out here: the
 			// only other outer predicate is a tombstone every row
@@ -961,8 +961,8 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 //
 // A cursor says where this PAGE starts. The count hint and the totals are
 // about the whole matched set, and they share the compiled predicate — so a
-// cursor folded into it made page two's header report the sum of page two
-// ONWARDS. A number on a header that changes as somebody pages is the same
+// cursor folded into it would make page two's header report the sum of page
+// two ONWARDS. A number on a header that changes as somebody pages is the same
 // failure as one that changes as they scroll, which is what the totals were
 // built to avoid.
 //
@@ -1124,12 +1124,12 @@ func flagColumn(flag string) (string, bool) {
 //
 // # The set is an OR, not an AND
 //
-// Each flag was ANDed with the last, so `flag=cycle,too_deep` meant a task
-// that is BOTH in a cycle and too deep — which is not what an attention queue
-// asks, and not what the screen that reads this passes: it names every flag
-// there is and expects the tasks carrying any of them. With conjunction that
-// screen answered nothing, on every company, for ever, and looked exactly like
-// a company with nothing wrong.
+// ANDed, `flag=cycle,too_deep` would mean a task that is BOTH in a cycle and
+// too deep — which is not what an attention queue asks, and not what the
+// screen that reads this passes: it names every flag there is and expects the
+// tasks carrying any of them. With conjunction that screen would answer
+// nothing, on every company, for ever, and look exactly like a company with
+// nothing wrong.
 //
 // # And two of the six are not on the task row
 //
@@ -1264,12 +1264,9 @@ var sortColumns = map[string]sortColumn{
 // holds and the parser refuses is unreachable, and one the parser admits and
 // this map lacks is DROPPED by [sortTerms] — the answer then comes back in the
 // default order with nothing saying the caller's own ordering was ignored.
-// `removed` was the first kind and is now the counter-example: it sat here for
-// a long time with a comment about the trash's order while the parser refused
-// `sort=removed`, so it was unreachable and was deleted. It is back because
-// the trash became a TAB — [ViewKeyTrash] — and a tab whose one natural column
-// cannot be clicked is a column that lies about being sortable. The default
-// order [sortTerms] gives a removed listing is unchanged and is still what an
+// `removed` is here because the trash is a TAB — [ViewKeyTrash] — and a tab
+// whose one natural column cannot be clicked is a column that lies about being
+// sortable. The default order [sortTerms] gives a removed listing is what an
 // unsorted trash gets; this is the key that lets a reader ask for the oldest
 // removal instead of the newest.
 
@@ -1487,11 +1484,11 @@ func cursorClause(q Query, fields map[string]resolvedField) (string, []any, erro
 // `sort=due` and every `sort=f.<slug>` reach columns that are genuinely NULL
 // for some rows — the custom-field join is a LEFT JOIN precisely so a task that
 // set no value still appears — and a comparison written with bare `>`, `<` and
-// `=` is NULL for every one of them. Written that way the boundary matched
-// nothing the moment a page ended on a row with no value, so the caller was
-// handed a short list with no next_cursor and no way to tell; and in the
-// descending direction the NULL rows were unreachable at every page, because
-// `col < ?` excludes them.
+// `=` is NULL for every one of them. Written that way the boundary would match
+// nothing the moment a page ended on a row with no value, so the caller would
+// be handed a short list with no next_cursor and no way to tell; and in the
+// descending direction the NULL rows would be unreachable at every page,
+// because `col < ?` excludes them.
 //
 // SQLite sorts NULL below every value, so it leads an ascending order and
 // trails a descending one, and each direction needs both halves spelled out:
@@ -1684,8 +1681,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	// AND THE DEPENDENCY EDGES, in ONE statement over the page rather than
 	// one per row: the page's ids are already in hand, and the alternative
 	// — a correlated subquery in the SELECT above — cannot return a
-	// collection at all, which is why `blocked` was a bit in the first
-	// place.
+	// collection at all.
 	if err := loadBlockers(ctx, tx, out); err != nil {
 		return nil, "", err
 	}
@@ -1774,10 +1770,9 @@ func countHint(ctx context.Context, tx *sql.Tx, where string,
 // clamped.
 //
 // SEPARATE FROM THE QUERY because the boundary is the whole of the rule and
-// exercising it through SQL means seeding ten thousand and one tasks — which
-// is why it was never exercised: the answer reported 10001 as an exact total,
-// and the one renderer that noticed carried its own copy of the ceiling and
-// was wrong at exactly 10000.
+// exercising it through SQL means seeding ten thousand and one tasks, which no
+// suite does — so the boundary is tested here, where reporting 10001 as an
+// exact total would show.
 func capHint(counted int) (int, bool) {
 	if counted > TotalHintCeiling {
 		return TotalHintCeiling, true

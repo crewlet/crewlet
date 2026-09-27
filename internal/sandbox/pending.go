@@ -658,8 +658,8 @@ const MaxBridgeCalls = 200
 // carries it through [PendingStore.BeginLaunch] as it carries every member it
 // does not know, so a fact about one job that did not name the job would read
 // as the next job's once such a build had relaunched the run.
-// [PendingRun.HeldAnswer] names its launch for that reason, and so must every
-// launch-scoped field added after it.
+// [PendingRun.HeldAnswer] names its launch, and so must every launch-scoped
+// field added after it.
 type PendingRun struct {
 	// TurnID is the RUN this record belongs to — one execution of a turn,
 	// and this record's own key. See ADR-0017.
@@ -883,30 +883,39 @@ type PendingRun struct {
 	// held on the row because the seat's budget had no room for the turn it
 	// resumes; nil when none is held. See [HeldAnswer].
 	//
-	// Cleared by [PendingStore.BeginLaunch] alone, like every launch-scoped
-	// record: a resume that fails hands its claim back with the answer still
-	// held, for the retry. And it names its launch, so one a build that does
-	// not know the field carried through a relaunch is read as nobody's
+	// ONE MEMBER FOR THE ONE FACT, whichever form the answer takes: the
+	// answer itself, or — for one the row cannot hold — its launch, its
+	// instant and where its whole is kept ([HeldAnswer.Parts]). Written
+	// onto a row holding none for its launch: by [PendingStore.HoldAnswer],
+	// and by the release of a completion's claim, which took a row holding
+	// none, with a job's result ([Release.Held]). Cleared by
+	// [PendingStore.BeginLaunch] alone, like every launch-scoped record, so
+	// a resume that fails hands its claim back with the answer still held,
+	// for the retry. It names its launch, as every launch-scoped field does
+	// (see the type's doc), and is read only for the launch the row holds
 	// ([PendingRun.Held]).
-	HeldAnswer *HeldAnswer `json:"held_answer,omitempty"`
-
-	// HeldAnswerParts is where the held answer's whole is, when the row
-	// holds only its launch and its instant: a person's reply that, held
-	// with the event that delivered it, would have put the row past
-	// [MaxHeldAnswerBytes], or that the row's record refused beside what it
-	// already carries. Its whole — the answer as it would have been held,
-	// its text and its trigger with it — is in part records filed under the
-	// run's launch ([HeldParts]), and [PendingStore.Answer] reads it back
-	// from them. Nil when the row holds its answer whole, or none.
 	//
-	// A MEMBER OF THE ROW rather than of the held answer, and it names the
-	// answer it goes with: a build that does not know it carries a member
-	// of the row through every write it makes ([PendingRun.Extra]), and
-	// reads the answer beside it as one with no text. Cleared with the
-	// held answer by [PendingStore.BeginLaunch] alone, and read only beside
-	// the answer whose launch and instant it names, so one such a build
-	// carried through a relaunch is nobody's.
-	HeldAnswerParts *HeldParts `json:"held_answer_parts,omitempty"`
+	// A BUILD THAT PREDATES HELD ANSWERS has no member of this name and
+	// carries nothing it does not know: its decode drops it, and every write
+	// it makes to the row re-encodes the row without it. Nothing on this side can prevent that, so while a node of
+	// that build shares the fleet:
+	//
+	//   - a held reply is erased by the first write such a node makes to its
+	//     parked run — the claim of the next message on the conversation,
+	//     which that build takes as the answer, or the reap of the paused
+	//     box — and is lost, its delivery having been acknowledged when it
+	//     was held;
+	//   - a held result is erased by the first write such a node makes to
+	//     its running run — taking the run's seat, or the claim of a
+	//     completion: that build's poll reads the run as an ordinary running
+	//     one, reconnects to the paused box and fires the completion, and
+	//     its coordinator collects the result again from the box, charging
+	//     nothing twice ([PendingRun.Charged]), and resumes the turn at once,
+	//     since that build does not wait for budget room.
+	//
+	// Parts an erased answer was kept in are named by nothing, and go with
+	// the purge of the launch.
+	HeldAnswer *HeldAnswer `json:"held_answer,omitempty"`
 
 	// TriggeredAt is the instant the turn that launched this run could first
 	// have minted an operation id — the TriggeredAt of that turn's context
@@ -951,8 +960,7 @@ func (r PendingRun) Paused() bool { return !r.PausedAt.IsZero() }
 func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 
 // Held is the answer held on the row for the launch it holds now, and false
-// when there is none — including one held for an earlier launch, which a build
-// that does not know the field carried through a relaunch and which answers a
+// when there is none — including one naming another launch, which answers a
 // call this launch never made.
 func (r PendingRun) Held() (HeldAnswer, bool) {
 	if r.HeldAnswer == nil || r.HeldAnswer.Launch != r.LaunchID {
@@ -996,7 +1004,7 @@ func (r PendingRun) TriggerInstant() time.Time {
 // reply left with the queue would be redelivered with backoff and
 // dead-lettered once its delivery budget was spent, with the run still parked
 // on a question somebody had answered; so it is held here, whatever its size
-// ([PendingRun.HeldAnswerParts]), and its delivery acknowledged. Either way the
+// ([HeldAnswer.Parts]), and its delivery acknowledged. Either way the
 // run keeps the status it had — running for a job's result, holding its seat,
 // and waiting on its question for a person's reply, which frees it — and the
 // completion poll, which reads the budget on every tick, signals the seat's
@@ -1019,8 +1027,7 @@ type HeldAnswer struct {
 	// then; for a job's result it is the reply already framed, with its
 	// secrets redacted, when the collect held it.
 	//
-	// Empty when InBox is set, and when the row holds the answer's parts
-	// ([PendingRun.HeldAnswerParts]).
+	// Empty when InBox is set, and when Parts is.
 	Text string `json:"text,omitempty"`
 
 	// InBox says the job's result is not on the row: held with it, the row
@@ -1029,7 +1036,7 @@ type HeldAnswer struct {
 	// resume collects it again from there; its tokens are already charged
 	// ([PendingRun.Charged]). A person's reply is never held this way —
 	// there is nowhere else it is kept — and one past the bound is held in
-	// parts instead ([PendingRun.HeldAnswerParts]).
+	// parts instead ([HeldAnswer.Parts]).
 	InBox bool `json:"in_box,omitempty"`
 
 	// Success, CostUSD and DeliveredRefs are what the job reported, for the
@@ -1051,9 +1058,26 @@ type HeldAnswer struct {
 	// Trigger is the event that delivered the answer — the completion, or
 	// the person's message — which the resumed turn names as what woke it.
 	// Nil when it could not be held with the answer, and the resumed turn
-	// then names none. In the parts rather than on the row when the row
-	// holds the answer's parts ([PendingRun.HeldAnswerParts]).
+	// then names none. In the parts rather than on the row when Parts is
+	// set.
 	Trigger *events.Event `json:"trigger,omitempty"`
+
+	// Parts is where the answer's whole is, when the row holds only a
+	// reference to it: a person's reply that, held with the event that
+	// delivered it, would have put the row past [MaxHeldAnswerBytes], or
+	// that the row's record refused beside what it already carries. The
+	// row's answer is then its Launch, its At and this, and nothing else;
+	// the whole — the answer as it would have been held, its text and its
+	// trigger with it — is in part records of its own under the run's
+	// launch, and [PendingStore.Answer] reads it back from them. Nil on an
+	// answer held whole.
+	//
+	// INSIDE THE ANSWER rather than beside it on the row, because it is
+	// where this answer is and nothing else: the write that holds the
+	// answer and the relaunch that drops it each move both in one
+	// assignment, and it is read only as part of the answer [PendingRun.Held]
+	// finds for the run's launch.
+	Parts *HeldParts `json:"parts,omitempty"`
 
 	// At is when the answer was held.
 	At time.Time `json:"at"`
@@ -1065,27 +1089,23 @@ type HeldAnswer struct {
 }
 
 // HeldParts is where a held answer's whole is kept when its run's row cannot
-// hold it ([PendingRun.HeldAnswerParts]): part records filed under the run's
-// launch, from part First.
+// hold it ([HeldAnswer.Parts]): the answer's own part records under the run's
+// launch ([coord.BridgeCalls.CreateAnswerPart]), numbered from 1 under ID.
 //
 // UNDER THE LAUNCH, because a held answer is the launch's: a relaunch drops
 // it, and every purge of the launch — the relaunch's and the run's end —
-// takes its parts too, as it takes the launch's suspension. The launch's
-// suspension, when its row could not hold that either, is in the same
-// numbering from part 1 ([PendingRun.ExecuteState]), so an answer's parts
-// start past every part the launch already holds, and each whole is read
-// from where its own reference says it starts.
+// takes its parts too, as it takes the launch's suspension. UNDER AN ID OF
+// ITS OWN, minted by the hold that files them, so the whole starts at part 1
+// of an address nothing else files at: not the suspension's
+// ([PendingRun.ExecuteState]), and not another hold's — two holds of one
+// launch can file parts before either writes the row, only one of them
+// lands, and the other's parts are named by nothing.
 type HeldParts struct {
-	// Launch and At are the held answer's own ([HeldAnswer.Launch],
-	// [HeldAnswer.At]): the reference is read only beside the answer it
-	// was written with.
-	Launch string    `json:"launch"`
-	At     time.Time `json:"at"`
+	// ID is what the parts are filed under within the launch: minted by the
+	// hold that filed them, and named by nothing else.
+	ID string `json:"id"`
 
-	// First is the number of the whole's first part.
-	First int `json:"first"`
-
-	// Parts is how many parts, from First, hold the whole.
+	// Parts is how many parts, from part 1, hold the whole.
 	Parts int `json:"parts"`
 
 	// Bytes is the whole's length, encoded.
@@ -1107,9 +1127,8 @@ type HeldParts struct {
 // one record together. Measured on the encoding, since escaping makes what a
 // text costs a property of its bytes rather than of its length.
 //
-// A PERSON'S REPLY PAST IT IS HELD IN PARTS ([PendingRun.HeldAnswerParts]),
-// whole: it is
-// kept nowhere else, and its delivery is acknowledged once it is held, so it
+// A PERSON'S REPLY PAST IT IS HELD IN PARTS ([HeldAnswer.Parts]), whole: it
+// is kept nowhere else, and its delivery is acknowledged once it is held, so it
 // is neither cut nor left to a redelivery that stops once the delivery's
 // budget is spent. A JOB'S RESULT PAST IT is held without its text
 // ([HeldAnswer.InBox]), because the whole of it is still in the job's paused
@@ -1187,8 +1206,8 @@ type PendingStore interface {
 	//
 	// WHOLE, WHATEVER ITS SIZE. A reply the row cannot hold — past
 	// [MaxHeldAnswerBytes], or refused by the row's record beside what it
-	// already carries — is kept in parts filed under the run's launch BEFORE
-	// the write that names them ([PendingRun.HeldAnswerParts]), so a row
+	// already carries — is kept in parts of its own under the run's launch
+	// BEFORE the write that names them ([HeldAnswer.Parts]), so a row
 	// holding the reference is never visible without them. Parts a server
 	// refuses are split smaller, down to the floor a suspension's are; a
 	// whole that cannot be kept is an ERROR naming the limit that refused
@@ -1202,8 +1221,8 @@ type PendingStore interface {
 
 	// Answer returns the answer held on a run for the launch it holds now,
 	// WHOLE, and false when it holds none ([PendingRun.Held]): the answer
-	// its row holds, or, when the row names its parts
-	// ([PendingRun.HeldAnswerParts]), the answer reassembled from them.
+	// its row holds, or, when the row holds a reference to its parts
+	// ([HeldAnswer.Parts]), the answer reassembled from them.
 	//
 	// Parts that do not make the whole the reference names — one missing,
 	// one short, one holding another answer — are [ErrAnswerUnreadable],

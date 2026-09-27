@@ -116,12 +116,7 @@ func (g Group) parts(r Record, units map[string]string) []part {
 	case GroupPhase:
 		return []part{{orUnknown(r.Phase), r}}
 	case GroupModel:
-		shares := r.shares()
-		out := make([]part, 0, len(shares))
-		for _, share := range shares {
-			out = append(out, part{orUnknown(share.Model), share})
-		}
-		return out
+		return r.shares()
 	case GroupSeat:
 		return []part{{orUnknown(r.AgentRole), r}}
 	case GroupUnit:

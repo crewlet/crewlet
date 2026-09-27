@@ -252,12 +252,12 @@ func resolveOneField(ref string, byID map[string]FieldDef,
 // OptionIDs maps every spelling of an option onto its ID — its own id, its
 // slug and its name, case-folded.
 //
-// ONE SPELLING OF THE RULE, because BOTH SIDES need it and they disagreed. The
-// read resolved a caller's word to the option's id before comparing; the write
-// stored whatever text it was handed. So a task written as `{region: "eu"}` —
-// the option SLUG, which is what a person types and what the read accepts —
-// stored "eu" where the filter looked for "o-eu", and that task was invisible
-// to every filter, grouping and total on the field it had set.
+// ONE SPELLING OF THE RULE, because BOTH SIDES need it and must agree. The
+// read resolves a caller's word to the option's id before comparing; a write
+// that stored whatever text it was handed would store "eu" for a task written
+// as `{region: "eu"}` — the option SLUG, which is what a person types and what
+// the read accepts — where the filter looks for "o-eu", and that task would be
+// invisible to every filter, grouping and total on the field it had set.
 //
 // An ARCHIVED option still resolves. Its values stay on their tasks and a
 // filter naming it must still find them; what archiving stops is CHOOSING it,
@@ -322,14 +322,13 @@ func collectFieldRefs(q Query, into map[string]bool) {
 // `EXISTS (… WHERE v.task_id = t.id AND v.field_id = ?)` leads with `task_id`,
 // which is the value table's own primary key — so the planner takes the key,
 // probes once per task, and the four partial indexes the DDL declares for this
-// filter are read by nothing. Measured on the plan fixture it picked
-// `sqlite_autoindex_tracker_field_values_1` every time.
+// filter are read by nothing.
 //
 // Written as `t.id IN (SELECT task_id … WHERE v.field_id = ? AND <column> …)`
 // the subquery stands alone, so `(field_id, <column>) WHERE hidden = 0` is a
 // seek the planner can drive on — and it is still free to drive on the tasks
 // instead when the container is the more selective side. The IN gives it both;
-// the EXISTS gave it one.
+// the EXISTS gives it one.
 //
 // A clause that compared the WRONG column would be an index the planner cannot
 // use AND a predicate that matches nothing — see [FieldValueColumn].

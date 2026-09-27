@@ -154,7 +154,10 @@ type TaskDetail struct {
 	// the browser would be a second definition of blocked.
 	Blocked bool `json:"blocked,omitempty"`
 
-	// The coverage half, identical in meaning to a board's — see [Answer].
+	// The coverage half, in a board's shape — see [Answer] — with the one
+	// difference a point read makes: a task a retained record covers is
+	// refused rather than answered with a gap ([Reader.Task]), so an answer
+	// carries Complete true and no Incomplete.
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
 	AppliedThrough uint64             `json:"applied_through"`
@@ -224,8 +227,11 @@ type HistoryEntry struct {
 //
 // ONE READ TRANSACTION for every part and the coverage probe, which is what
 // stops a comment appearing under a task the same answer says does not have
-// it yet, and stops a completeness claim being made against state the rows
-// were not read from.
+// it yet, and stops the probe answering for state the rows were not read
+// from.
+//
+// A TASK A RETAINED RECORD COVERS IS REFUSED, as [statelog.RefuseDeferred],
+// rather than answered with a gap the way a listing is — see the scope below.
 func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	fresh statelog.Freshness) (TaskDetail, error) {
 
@@ -239,18 +245,34 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	// record this node cannot decode covering it means the rows it is
 	// about to read may already be wrong.
 	//
-	// THE SCOPE IS THE TASK ITSELF and cannot be formed until the id is
-	// resolved, which happens inside the transaction — so the framework
-	// read is given the object's own term once, from the reference, and
-	// the coverage probe inside the transaction is what catches an alias.
+	// THE SCOPE IS THE TASK UNDER ITS OWN PROJECT, and both are resolved
+	// from this node's rows BEFORE the framework read, because a scope
+	// path nests the object under its container: a record deferred on the
+	// task, or on its project, is filed under that project's path, and a
+	// term naming the reference alone resolves to the workspace's, which
+	// meets neither — the framework's refusal would never fire on the one
+	// task it is about.
+	//
+	// A TASK THIS NODE DOES NOT HOLD YET is scoped by the reference alone,
+	// because a linearizable read may be about to wait for it and nothing
+	// here can name its project until then. The probe inside the
+	// transaction is what covers that, and any reference whose resolution
+	// moved between the two reads: it is the same scope, formed from the
+	// rows the answer is read from, and it refuses the same way.
 	//
 	// THE WHOLE FRESHNESS, not the level alone: a staleness bound is
 	// about this node's lag rather than about a set, so one row's read
 	// is exactly as far behind as a listing's, and a floor the caller
 	// named is the position its own write landed at.
-	served, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{Paths: []string{ScopeTerm{
-		Kind: TermObject, ID: idOrKey,
-	}.Path()}}.Normalised(), false), func(tx *sql.Tx) error {
+	term := ScopeTerm{Kind: TermObject, ID: idOrKey}
+	if id, project, held, err := r.locate(ctx, idOrKey); err != nil {
+		return TaskDetail{}, err
+	} else if held {
+		term = taskTerm(id, project)
+	}
+	served, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{
+		Paths: []string{term.Path()},
+	}.Normalised(), false), func(tx *sql.Tx) error {
 		id, err := resolveTaskID(ctx, tx, idOrKey)
 		if err != nil {
 			return err
@@ -320,36 +342,82 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 
 		// SCOPED TO THE TASK, not to the company. A deferred record
 		// somewhere else in the tracker makes a BOARD incomplete and
-		// says nothing about this task — reporting it here would put a
-		// permanent warning on every task in a company holding one
-		// undecodable record about one other task.
+		// says nothing about this task — refusing here would refuse
+		// every task in a company holding one undecodable record about
+		// one other task.
+		//
+		// AND A REFUSAL, returned for the framework to answer with, for
+		// the point read's reason above: this probe meets what the scope
+		// formed before the read could not — a task this node did not
+		// hold then, or a reference that resolves differently now.
 		incomplete, err := coverageOf(ctx, tx, statelog.ScopeSet{
-			Paths: []string{ScopeTerm{
-				Kind: TermObject, ID: id, Container: out.Task.Project,
-			}.Path()},
+			Paths: []string{taskTerm(id, out.Task.Project).Path()},
 		}.Normalised())
 		if err != nil {
 			return err
 		}
 		if incomplete != nil {
-			out.Incomplete = incomplete
-		} else {
-			out.Complete = true
+			return &statelog.Refused{
+				Code: statelog.RefuseDeferred, Level: fresh.Level,
+				Detail: fmt.Sprintf("this node retains %d record(s) covering "+
+					"task %s that it has not applied — the lowest at %s, "+
+					"written at version %d — so its rows for the task may "+
+					"already be wrong", incomplete.Records, id,
+					incomplete.From, incomplete.Version),
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	// THE LEVEL SERVED, never the level asked for. Assigning the argument
-	// here — which is the only thing this function used to do with it —
-	// is what made the level a label: a read that refused and one that
-	// went through a quorum-committed barrier reported the same word.
-	out.Level = served.Level
-	if !served.Complete {
-		out.Complete = false
-	}
+	// THE LEVEL SERVED, never the level asked for: a read that refused
+	// and one that went through a quorum-committed barrier must not
+	// report the same word.
+	out.Level, out.Complete = served.Level, served.Complete
 	return out, nil
+}
+
+// taskTerm is one task's own scope term, under the project that holds it.
+func taskTerm(id, project string) ScopeTerm {
+	return ScopeTerm{Kind: TermObject, ID: id, Container: project}
+}
+
+// locate resolves a reference to a task's id and project from this node's own
+// rows, reporting whether this node holds the task at all.
+//
+// IT FORMS A SCOPE AND ANSWERS NOTHING: it is read outside the framework, so
+// the refusals and the wait a read is owed have not happened yet, and nothing
+// it returns reaches a caller except as the scope [Reader.Task] asks about.
+func (r *Reader) locate(ctx context.Context, idOrKey string) (string, string, bool, error) {
+	var id, project string
+	var held bool
+	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		resolved, err := resolveTaskID(ctx, tx, idOrKey)
+		switch {
+		case errors.Is(err, ErrNoTask):
+			return nil
+		case err != nil:
+			return err
+		}
+		err = tx.QueryRowContext(ctx,
+			`SELECT project_key FROM tracker_tasks WHERE id = ?`, resolved).
+			Scan(&project)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// A FORMER KEY NAMING A TASK WHOSE ROW IS GONE, which is a
+			// task this node does not hold.
+			return nil
+		case err != nil:
+			return fmt.Errorf("tracker: read %s's project: %w", resolved, err)
+		}
+		id, held = resolved, true
+		return nil
+	})
+	if err != nil {
+		return "", "", false, fmt.Errorf("tracker: locate %q: %w", idOrKey, err)
+	}
+	return id, project, held, nil
 }
 
 // resolveTaskID turns an id or a key — current or former — into an id.
@@ -394,13 +462,13 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 // document is marshalled, because it reads the history row the same apply
 // writes after the upsert. So the document always carries a zero here.
 //
-// Reading it from the document is what made the published field silently
-// empty while the column behind `sort=status_entered` was maintained
-// correctly: `omitzero` dropped it, and `GET /work/item`, the operator MCP's
-// `get_work_item` and the dashboard's "In status since" row all showed
-// nothing. Writing it INTO the document instead would mean a second write of
-// the whole document per status change, to store a value that is a function
-// of rows already committed.
+// Read from the document alone, the published field would be silently empty
+// while the column behind `sort=status_entered` was maintained correctly:
+// `omitzero` would drop it, and every surface showing it — `GET /work/item`,
+// the operator MCP's `get_work_item`, the dashboard's "In status since" row —
+// would show nothing. Writing it INTO the document instead would mean a second
+// write of the whole document per status change, to store a value that is a
+// function of rows already committed.
 func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) {
 	var body []byte
 	var entered int64
@@ -443,11 +511,10 @@ const DetailComments = 20
 // answer, for a thread nobody asked to read in full. The excerpt is what a
 // reader skims; [DetailWants.Comment] is how they open one.
 //
-// THAT SECOND HALF IS WHAT MAKES THE CUT LEGITIMATE, and it did not exist:
-// the excerpt was documented as a pointer to a read the engine did not have,
-// so a body written at more than 2 KiB — which every wake excerpt, every
-// `my_work` ask row and every detail read shortened further — could not be
-// recovered by any seat through any tool. A cut with no way back is not a
+// THAT SECOND HALF IS WHAT MAKES THE CUT LEGITIMATE: without the read it
+// points at, a body written at more than 2 KiB — which every wake excerpt,
+// every `my_work` ask row and every detail read shortens further — could not
+// be recovered by any seat through any tool. A cut with no way back is not a
 // pointer, it is a silent loss of what somebody wrote.
 const CommentBodyShown = 2 << 10
 
@@ -606,11 +673,11 @@ func parseCommentCursor(cursor string) (commentCursor, error) {
 // readHistory is the activity feed, NEWEST FIRST and capped, and it SAYS when
 // it capped.
 //
-// The second return is what this read was missing. A task with five hundred
-// changes answered fifty of them and reported nothing, so a reader — a model
-// deciding whether anybody has touched this since Tuesday, a person reading the
-// panel — could not tell a task with a long life from one with fifty changes in
-// it. That is the failure [readGroups] names one file over: "a board that drew
+// The second return is what makes the cap honest. Without it a task with
+// five hundred changes would answer fifty of them and report nothing, so a
+// reader — a model deciding whether anybody has touched this since Tuesday, a
+// person reading the panel — could not tell a task with a long life from one
+// with fifty changes in it. That is the failure [readGroups] names one file over: "a board that drew
 // sixty-four of two hundred columns and reported nothing would look like a
 // company with sixty-four assignees."
 //

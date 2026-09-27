@@ -15,11 +15,18 @@ import (
 // re-implementation in the browser, and whatever a reconnect left behind —
 // and a refresh routinely disagreed with the page it replaced.
 
-// foldSpend records one completed phase's spend, reporting whether it counted.
+// foldSpend records one spend record — a completed phase's, or an auxiliary
+// completion's — reporting whether it counted.
 //
 // Deduped by event id so a redelivered envelope cannot inflate the rollup, and
 // window-pruned so a long-lived process does not keep aggregating spend that
 // has aged out.
+//
+// THE SPLIT AND THE UNREPORTED MARK TRAVEL WITH THE RECORD, read through the
+// fold's own decoding rule ([tokens.ModelsOf]): the live rollup and the stored
+// one are the same arithmetic only if both are handed the same record, and one
+// that dropped `models` would count every phase under its first model here
+// while the store's read split it.
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	if env.ID != "" {
 		if _, counted := s.spendIDs[env.ID]; counted {
@@ -48,6 +55,8 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
 		CostUSD:      fraction(payload, "cost_usd"),
+		Models:       tokens.ModelsOf(payload["models"]),
+		Unreported:   flag(payload, "run_spend_unreported"),
 	}})
 	s.pruneSpend(env.Timestamp)
 	return true

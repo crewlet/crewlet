@@ -152,7 +152,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.LaunchID = uuid.NewString()
 	// Nor the count, which only the store raises: a new row has opened one
 	// launch, and it holds no answer and nothing a newer build wrote.
-	run.Launches, run.HeldAnswer, run.HeldAnswerParts, run.Extra = 1, nil, nil, nil
+	run.Launches, run.HeldAnswer, run.Extra = 1, nil, nil
 	run.UpdatedAt = now
 	raw, err := encodeRun(run)
 	if err != nil {
@@ -219,9 +219,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Charged = false
 		existing.CarriedCounted = false
 		// And an answer held for the previous job's call answers a call
-		// this job has not made. Its parts, if the row named any, are the
+		// this job has not made. Its parts, if it named any, are the
 		// replaced launch's and go with its purge below.
-		existing.HeldAnswer, existing.HeldAnswerParts = nil, nil
+		existing.HeldAnswer = nil
 		return true
 	})
 	if err != nil || !reset || replaced == "" {
@@ -299,7 +299,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			// is held as a reference to its box ([HeldAnswer.InBox]), so
 			// it names no parts.
 			held := *release.Held
-			run.HeldAnswer, run.HeldAnswerParts = &held, nil
+			run.HeldAnswer = &held
 		}
 		return true
 	})
@@ -309,10 +309,11 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 // HoldAnswer holds a person's reply on the run parked on the question its
 // launch asked. See the contract on [PendingStore].
 //
-// ON THE ROW WHEN IT FITS: one write, and the form every build reads. A reply
-// past [MaxHeldAnswerBytes], or one the row's record refuses beside what it
-// already carries — which only a server set below the contract's ceiling does
-// to a reply within the bound — is kept whole in parts ([CoordStore.holdInParts]).
+// ON THE ROW WHEN IT FITS: one write, and no part to file now or to read at the
+// resume. A reply past [MaxHeldAnswerBytes], or one the row's record refuses
+// beside what it already carries — which only a server set below the
+// contract's ceiling does to a reply within the bound — is kept whole in parts
+// ([CoordStore.holdInParts]).
 func (s *CoordStore) HoldAnswer(ctx context.Context, turnID string, held HeldAnswer) (bool, error) {
 	whole, err := json.Marshal(held)
 	if err != nil {
@@ -323,7 +324,7 @@ func (s *CoordStore) HoldAnswer(ctx context.Context, turnID string, held HeldAns
 			"held with the event that delivered it, it is %d bytes, past the %d a run's record "+
 				"holds an answer within (sandbox.MaxHeldAnswerBytes)", len(whole), MaxHeldAnswerBytes))
 	}
-	landed, err := s.hold(ctx, turnID, held, nil)
+	landed, err := s.hold(ctx, turnID, held)
 	if errors.Is(err, coord.ErrTooLarge) {
 		return s.holdInParts(ctx, turnID, held, whole, fmt.Sprintf(
 			"the run's record refused its %d bytes beside what the record already carries (%v)",
@@ -332,15 +333,15 @@ func (s *CoordStore) HoldAnswer(ctx context.Context, turnID string, held HeldAns
 	return landed, err
 }
 
-// hold writes a held answer onto the row, with the reference to its parts when
-// it is kept in them, while the run waits on the answer's launch and holds none
-// for it.
-func (s *CoordStore) hold(ctx context.Context, turnID string, held HeldAnswer, parts *HeldParts) (bool, error) {
+// hold writes a held answer onto the row — the answer, or the reference to the
+// parts it is kept in — while the run waits on the answer's launch and holds
+// none for it.
+func (s *CoordStore) hold(ctx context.Context, turnID string, held HeldAnswer) (bool, error) {
 	_, landed, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if !holdable(*run, held.Launch) {
 			return false
 		}
-		run.HeldAnswer, run.HeldAnswerParts = &held, parts
+		run.HeldAnswer = &held
 		return true
 	})
 	return landed, err
@@ -353,7 +354,7 @@ func holdable(run PendingRun, launch string) bool {
 	return !already && run.LaunchID == launch && slices.Contains(Awaiting, run.Status)
 }
 
-// holdInParts keeps a held answer's whole in parts filed under the run's
+// holdInParts keeps a held answer's whole in parts of its own under the run's
 // launch, then writes the row that names them, in one write.
 //
 // THE ROW IS READ FIRST, so a reply the run can no longer take — claimed,
@@ -363,11 +364,10 @@ func holdable(run PendingRun, launch string) bool {
 // visible without them: the completion poll signals a held answer the moment
 // it reads one.
 //
-// PAST EVERY PART THE LAUNCH ALREADY HOLDS ([HeldParts]): its suspension's,
-// and any a hold that did not land left behind. A part another hold filed at
-// one of those numbers first is [errAddressTaken], and the numbering is read
-// again; parts filed before that are named by nothing and go with the purge of
-// the launch.
+// UNDER AN ID THIS HOLD MINTS ([HeldParts]), from part 1, so nothing is read to
+// find where the whole starts, and a hold racing this one for the same launch
+// files at addresses of its own. The parts of whichever hold did not land are
+// named by nothing, and go with the purge of the launch.
 //
 // A WHOLE THAT CANNOT BE KEPT IS AN ERROR naming the limit that refused its
 // parts, and why the row could not hold it (why): nothing is held.
@@ -376,67 +376,55 @@ func (s *CoordStore) holdInParts(ctx context.Context, turnID string, held HeldAn
 	if err != nil || !found || !holdable(run, held.Launch) {
 		return false, err
 	}
-	// casRetries, for the reason every lost race here takes it: the only
-	// party that files at the numbers this read finds free is another hold
-	// of the same launch, and each pass reads the numbering again.
-	for range casRetries {
-		filed, err := s.calls.SuspensionParts(ctx, turnID, held.Launch)
-		if err != nil {
-			return false, fmt.Errorf("sandbox: read the parts run %s's launch holds, to hold its answer "+
-				"past them: %w", turnID, err)
-		}
-		first := 1
-		if n := len(filed); n > 0 {
-			first = filed[n-1].Part + 1
-		}
-		count, err := fileParts(whole, func(part int, value []byte) (bool, error) {
-			return s.calls.CreateSuspensionPart(ctx, turnID, held.Launch, first+part-1, value)
-		})
-		if errors.Is(err, errAddressTaken) {
-			continue
-		}
-		if err != nil {
-			return false, fmt.Errorf("sandbox: the answer to run %s could not be held: %s, and its parts "+
-				"could not all be filed (%d were): %w", turnID, why, count, err)
-		}
-		ref := HeldParts{Launch: held.Launch, At: held.At, First: first, Parts: count, Bytes: len(whole)}
-		stub := HeldAnswer{Launch: held.Launch, At: held.At}
-		landed, err := s.hold(ctx, turnID, stub, &ref)
-		if err != nil {
-			return false, fmt.Errorf("sandbox: hold the answer to run %s, kept in %d parts: %w",
-				turnID, count, err)
-		}
-		if landed {
-			s.logger().InfoContext(ctx, "sandbox_answer_held_in_parts", "turn_id", turnID,
-				"launch_id", held.Launch, "answer_bytes", ref.Bytes, "answer_parts", ref.Parts,
-				"first_part", ref.First, "held_limit_bytes", MaxHeldAnswerBytes,
-				"detail", why+"; the run's record names the parts the answer is kept in, and the "+
-					"resume reads it back whole")
-		}
-		return landed, nil
+	ref := HeldParts{ID: uuid.NewString(), Bytes: len(whole)}
+	ref.Parts, err = fileParts(whole, func(part int, value []byte) (bool, error) {
+		return s.calls.CreateAnswerPart(ctx, turnID, held.Launch, ref.ID, part, value)
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: the answer to run %s could not be held: %s, and its parts "+
+			"could not all be filed (%d were): %w", turnID, why, ref.Parts, err)
 	}
-	return false, fmt.Errorf("sandbox: hold the answer to run %s: the parts its launch holds kept "+
-		"changing under the hold", turnID)
+	landed, err := s.hold(ctx, turnID, HeldAnswer{Launch: held.Launch, At: held.At, Parts: &ref})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: hold the answer to run %s, kept in %d parts: %w",
+			turnID, ref.Parts, err)
+	}
+	if landed {
+		s.logger().InfoContext(ctx, "sandbox_answer_held_in_parts", "turn_id", turnID,
+			"launch_id", held.Launch, "answer_id", ref.ID, "answer_bytes", ref.Bytes,
+			"answer_parts", ref.Parts, "held_limit_bytes", MaxHeldAnswerBytes,
+			"detail", why+"; the run's record names the parts the answer is kept in, and the "+
+				"resume reads it back whole")
+	}
+	return landed, nil
 }
 
 // Answer returns the answer held on a run for its launch, whole. See the
 // contract on [PendingStore].
 func (s *CoordStore) Answer(ctx context.Context, run PendingRun) (HeldAnswer, bool, error) {
 	held, ok := run.Held()
-	ref := run.HeldAnswerParts
-	if !ok || ref == nil || ref.Launch != held.Launch || !ref.At.Equal(held.At) {
-		// Held whole on the row, or none held; and a reference naming
-		// another answer is nobody's (see [PendingRun.HeldAnswerParts]).
+	if !ok || held.Parts == nil {
+		// Held whole on the row, or none held.
 		return held, ok, nil
 	}
-	parts, err := s.calls.SuspensionParts(ctx, run.TurnID, held.Launch)
+	ref := *held.Parts
+	if ref.ID == "" {
+		// A reference with no id names parts no address can hold: no write
+		// files one without the id its parts are under. Refused here as the
+		// permanent fault it is, for [CoordStore.Suspension]'s reason: asked
+		// of the store it would be refused as an address, and read as a
+		// failed read the caller retries for ever.
+		return HeldAnswer{}, true, fmt.Errorf("%w: run %s's answer names no id its parts could be filed under",
+			ErrAnswerUnreadable, run.TurnID)
+	}
+	parts, err := s.calls.AnswerParts(ctx, run.TurnID, held.Launch, ref.ID)
 	if err != nil {
 		return HeldAnswer{}, true, fmt.Errorf("sandbox: read the answer held on run %s: %w", run.TurnID, err)
 	}
-	joined, why := joinParts(parts, ref.First, ref.Parts, ref.Bytes)
+	joined, why := joinParts(parts, ref.Parts, ref.Bytes)
 	if why != "" {
-		return HeldAnswer{}, true, fmt.Errorf("%w: run %s's answer, %d bytes kept in %d parts from part %d: %s",
-			ErrAnswerUnreadable, run.TurnID, ref.Bytes, ref.Parts, ref.First, why)
+		return HeldAnswer{}, true, fmt.Errorf("%w: run %s's answer, %d bytes kept in %d parts: %s",
+			ErrAnswerUnreadable, run.TurnID, ref.Bytes, ref.Parts, why)
 	}
 	var whole HeldAnswer
 	if err := json.Unmarshal(joined, &whole); err != nil {
@@ -839,13 +827,16 @@ func (s *CoordStore) fileRecord(ctx context.Context, run PendingRun, call Bridge
 }
 
 // errAddressTaken is a part or a record already filed at an address a caller
-// took for itself: a stray a late write left after the launch was purged.
+// took for itself. Create never overwrites, so what is there is another
+// write's. Only a bridged call has another address to step to — a stray a late
+// write left after its launch was purged ([CoordStore.recordInParts]) — and a
+// suspension's and a held answer's filing report it as the failure it is.
 var errAddressTaken = errors.New("sandbox: the address already holds a record")
 
 // fileParts files a whole as parts through create, in order from part 1, and
 // reports how many it filed. It is how every whole a record cannot hold is kept
-// — a bridged call's, and a suspension's — so the two split, refuse and stop
-// by one rule.
+// — a bridged call's, a suspension's and a held answer's — so they split,
+// refuse and stop by one rule.
 //
 // A PART REFUSED AS TOO LARGE IS RETRIED SMALLER — at half its size, or at
 // [partFloorBytes] when half would be smaller — and so is every part after it,
@@ -1151,7 +1142,7 @@ func unreadable(cut BridgeCall, why string) BridgeCall {
 // reassemble is [CoordStore.whole]'s check and join, answering the reason in
 // place of the call when the parts do not make the whole the record names.
 func reassemble(cut BridgeCall, parts []coord.Part) (BridgeCall, string) {
-	joined, why := joinParts(parts, 1, cut.WholeParts, cut.WholeBytes)
+	joined, why := joinParts(parts, cut.WholeParts, cut.WholeBytes)
 	if why != "" {
 		return BridgeCall{}, why
 	}
@@ -1168,37 +1159,29 @@ func reassemble(cut BridgeCall, parts []coord.Part) (BridgeCall, string) {
 	return whole, ""
 }
 
-// joinParts joins count parts, numbered from first, into the whole a record
-// names, or answers why they do not make it: a part missing or out of order,
-// or a length other than size. The parts are checked against the record's
-// reference before any byte is believed, and a part outside the reference's
-// numbers belongs to another whole and is not read — the one check and join
-// every whole kept in parts is read back by. parts is in part order, as every
-// listing of them is.
-func joinParts(parts []coord.Part, first, count, size int) ([]byte, string) {
-	switch {
-	case count < 1:
+// joinParts joins count parts, numbered from 1, into the whole a record names,
+// or answers why they do not make it: a part missing or out of order, or a
+// length other than size. The parts are checked against the record's reference
+// before any byte is believed, and a part past the reference's count is not
+// read — the one check and join every whole kept in parts is read back by.
+// Every whole starts at part 1 of an address of its own (see
+// [coord.BridgeCalls]). parts is in part order, as every listing of them is.
+func joinParts(parts []coord.Part, count, size int) ([]byte, string) {
+	if count < 1 {
 		return nil, fmt.Sprintf("its record names %d parts", count)
-	case first < 1:
-		return nil, fmt.Sprintf("its record names parts from part %d", first)
 	}
-	start := slices.IndexFunc(parts, func(p coord.Part) bool { return p.Part >= first })
-	if start < 0 {
-		start = len(parts)
-	}
-	named := parts[start:]
 	held := 0
 	for i := range count {
-		if i >= len(named) || named[i].Part != first+i {
+		if i >= len(parts) || parts[i].Part != i+1 {
 			return nil, fmt.Sprintf("part %d of %d is missing", i+1, count)
 		}
-		held += len(named[i].Value)
+		held += len(parts[i].Value)
 	}
 	if held != size {
 		return nil, fmt.Sprintf("its parts hold %d bytes, not %d", held, size)
 	}
 	joined := make([]byte, 0, held)
-	for _, part := range named[:count] {
+	for _, part := range parts[:count] {
 		joined = append(joined, part.Value...)
 	}
 	return joined, ""
@@ -1657,7 +1640,7 @@ func (s *CoordStore) Suspension(ctx context.Context, run PendingRun) (map[string
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: read the suspended conversation of run %s: %w", run.TurnID, err)
 	}
-	whole, why := joinParts(parts, 1, ref.Parts, ref.Bytes)
+	whole, why := joinParts(parts, ref.Parts, ref.Bytes)
 	if why != "" {
 		return nil, fmt.Errorf("%w: run %s's suspended conversation, %d bytes kept in %d parts: %s",
 			ErrSuspensionUnreadable, run.TurnID, ref.Bytes, ref.Parts, why)

@@ -116,6 +116,24 @@ func (h *fleetHarness) suspensionParts(turnID, launchID string) []coord.Part {
 	return got
 }
 
+func (h *fleetHarness) createAnswerPart(turnID, launchID, answerID string, part int, value string) bool {
+	h.t.Helper()
+	created, err := h.f.CreateAnswerPart(h.ctx, turnID, launchID, answerID, part, []byte(value))
+	if err != nil {
+		h.t.Fatalf("CreateAnswerPart(%s/%s/%s#%d): %v", turnID, launchID, answerID, part, err)
+	}
+	return created
+}
+
+func (h *fleetHarness) answerParts(turnID, launchID, answerID string) []coord.Part {
+	h.t.Helper()
+	got, err := h.f.AnswerParts(h.ctx, turnID, launchID, answerID)
+	if err != nil {
+		h.t.Fatalf("AnswerParts(%s/%s/%s): %v", turnID, launchID, answerID, err)
+	}
+	return got
+}
+
 var bridgeCallCases = []fleetCase{{
 	// THE REASON THE LOG LEFT THE RUN'S ROW. An agent-mode resume rebuilds
 	// the whole phase from these calls — its submission, its delivery check,
@@ -811,6 +829,135 @@ var bridgeCallCases = []fleetCase{{
 		}
 	},
 }, {
+	// AN ANSWER'S PARTS ARE A WHOLE OF THEIR OWN. An answer held for a
+	// launch that its run's record cannot hold keeps its whole in parts under
+	// the launch, beside the launch's calls and its suspension, and numbered
+	// from 1 under the answer's own id — so the parts of two answers of one
+	// launch, and the suspension's, share no address and no read. A part read
+	// as a call, a call's part or the suspension's would corrupt that whole,
+	// and a part of another answer read as this one's would splice two
+	// replies into one.
+	name: "an answer's parts come back in order under its own id, and as nothing else",
+	fn: func(h *fleetHarness) {
+		first := h.appendCall("turn-1", "launch-1", "small")
+		seq := h.reserveCall("turn-1", "launch-1")
+		h.createPart("turn-1", "launch-1", seq, 1, "call-piece")
+		h.createCall("turn-1", "launch-1", seq, "fitted")
+		h.createSuspensionPart("turn-1", "launch-1", 1, "state-1")
+		for _, part := range []int{3, 1, 2} {
+			if !h.createAnswerPart("turn-1", "launch-1", "answer-a", part, fmt.Sprintf("a-%d", part)) {
+				h.t.Fatalf("answer part %d was reported already filed", part)
+			}
+		}
+		if !h.createAnswerPart("turn-1", "launch-1", "answer-b", 1, "b-1") {
+			h.t.Fatal("another answer's first part was reported already filed: two answers shared an address")
+		}
+
+		if got, want := renderParts(h.answerParts("turn-1", "launch-1", "answer-a")),
+			[]string{"1=a-1", "2=a-2", "3=a-3"}; !slices.Equal(got, want) {
+			h.t.Errorf("the answer's parts = %q, want %q", got, want)
+		}
+		if got := renderParts(h.answerParts("turn-1", "launch-1", "answer-b")); !slices.Equal(got, []string{"1=b-1"}) {
+			h.t.Errorf("the other answer's parts = %q, want its own one", got)
+		}
+		if got := renderParts(h.suspensionParts("turn-1", "launch-1")); !slices.Equal(got, []string{"1=state-1"}) {
+			h.t.Errorf("the suspension's parts = %q: an answer's part was read as the suspension's", got)
+		}
+		calls := h.calls("turn-1", "launch-1")
+		if len(calls) != 2 || calls[0].Seq != first || calls[1].Seq != seq {
+			h.t.Fatalf("the calls read back = %q: an answer's part was read as a call", callValues(calls))
+		}
+		if len(calls[0].Parts) != 0 || !slices.Equal(partsOf(calls[1]), []string{"1=call-piece"}) {
+			h.t.Errorf("the calls' parts = %q and %q: an answer's part was read as a call's",
+				partsOf(calls[0]), partsOf(calls[1]))
+		}
+		page := h.callPage(coord.BridgeCallQuery{TurnID: "turn-1", LaunchID: "launch-1", Limit: 10, MaxBytes: 1 << 20})
+		if page.Total != 2 || len(page.Calls) != 2 {
+			h.t.Errorf("a page counted %d calls and carried %d, want the launch's 2", page.Total, len(page.Calls))
+		}
+		if got := h.answerParts("turn-1", "launch-2", "answer-a"); len(got) != 0 {
+			h.t.Errorf("another launch of the run read this one's answer: %q", renderParts(got))
+		}
+	},
+}, {
+	// Written once, for a suspension part's reason: overwriting one could
+	// splice two wholes.
+	name: "an answer part is filed once and never overwritten",
+	fn: func(h *fleetHarness) {
+		if !h.createAnswerPart("turn-1", "launch-1", "answer-a", 1, "first") {
+			h.t.Fatal("a new answer part was reported already filed")
+		}
+		if h.createAnswerPart("turn-1", "launch-1", "answer-a", 1, "second") {
+			h.t.Error("an answer part already filed was reported created again")
+		}
+		if got := renderParts(h.answerParts("turn-1", "launch-1", "answer-a")); !slices.Equal(got, []string{"1=first"}) {
+			h.t.Errorf("the part = %q, want the first write kept", got)
+		}
+	},
+}, {
+	// THE PARTS END WITH THE LAUNCH, for the suspension's reason, and a
+	// launch holding nothing but an answer's parts — a hold that filed them
+	// after its launch was purged — is one the sweep has to find.
+	name: "an answer's parts go with their launch, and a launch holding only them is listed",
+	fn: func(h *fleetHarness) {
+		h.createAnswerPart("turn-1", "launch-1", "answer-a", 1, "reply")
+		h.createAnswerPart("turn-2", "launch-2", "answer-a", 1, "kept")
+		listed := h.launches()
+		if !slices.Contains(listed, coord.BridgeLaunch{TurnID: "turn-1", LaunchID: "launch-1"}) {
+			h.t.Fatalf("a launch holding only an answer's parts was not listed: %+v", listed)
+		}
+		if err := h.f.PurgeBridgeCalls(h.ctx, "turn-1", "launch-1"); err != nil {
+			h.t.Fatalf("PurgeBridgeCalls: %v", err)
+		}
+		if got := h.answerParts("turn-1", "launch-1", "answer-a"); len(got) != 0 {
+			h.t.Errorf("the purge left the answer's parts: %q", renderParts(got))
+		}
+		if slices.Contains(h.launches(), coord.BridgeLaunch{TurnID: "turn-1", LaunchID: "launch-1"}) {
+			h.t.Error("a purged launch is still listed")
+		}
+		if got := renderParts(h.answerParts("turn-2", "launch-2", "answer-a")); !slices.Equal(got, []string{"1=kept"}) {
+			h.t.Errorf("the purge of one launch reached another's answer: %q", got)
+		}
+	},
+}, {
+	name: "an answer part at the ceiling is stored whole, and one past it is refused",
+	fn: func(h *fleetHarness) {
+		whole := bytes.Repeat([]byte("a"), coord.MaxRecordBytes)
+		if created, err := h.f.CreateAnswerPart(h.ctx, "turn-1", "launch-1", "answer-a", 1, whole); err != nil || !created {
+			h.t.Fatalf("an answer part of exactly coord.MaxRecordBytes = %v, %v", created, err)
+		}
+		_, err := h.f.CreateAnswerPart(h.ctx, "turn-1", "launch-1", "answer-a", 2, append(whole, 'z'))
+		switch {
+		case err == nil:
+			h.t.Error("an answer part one byte past coord.MaxRecordBytes was accepted")
+		case !errors.Is(err, coord.ErrTooLarge) || errors.Is(err, coord.ErrUnavailable):
+			h.t.Errorf("the refusal = %v, want coord.ErrTooLarge and not coord.ErrUnavailable", err)
+		}
+		got := h.answerParts("turn-1", "launch-1", "answer-a")
+		if len(got) != 1 || !bytes.Equal(got[0].Value, whole) {
+			h.t.Fatalf("the part at the ceiling did not come back whole, or the refused one was kept "+
+				"(%d parts)", len(got))
+		}
+	},
+}, {
+	name: "an unaddressed answer part is an error, not an empty answer",
+	fn: func(h *fleetHarness) {
+		for _, ids := range [][3]string{{"", "launch-1", "answer-a"}, {"turn-1", "", "answer-a"}, {"turn-1", "launch-1", ""}} {
+			if _, err := h.f.CreateAnswerPart(h.ctx, ids[0], ids[1], ids[2], 1, []byte("x")); err == nil {
+				h.t.Errorf("CreateAnswerPart(%q, %q, %q) was accepted", ids[0], ids[1], ids[2])
+			}
+			if _, err := h.f.AnswerParts(h.ctx, ids[0], ids[1], ids[2]); err == nil {
+				h.t.Errorf("AnswerParts(%q, %q, %q) answered", ids[0], ids[1], ids[2])
+			}
+		}
+		if _, err := h.f.CreateAnswerPart(h.ctx, "turn-1", "launch-1", "answer-a", 0, []byte("x")); err == nil {
+			h.t.Error("an answer part numbered 0 was accepted: nothing numbers from zero")
+		}
+		if got := h.answerParts("turn-1", "launch-1", "answer-a"); len(got) != 0 {
+			h.t.Errorf("a refused part was filed: %q", renderParts(got))
+		}
+	},
+}, {
 	name: "a caller mutating a read value cannot reach the store",
 	fn: func(h *fleetHarness) {
 		h.createSuspensionPart("turn-1", "launch-1", 1, "state")
@@ -821,6 +968,15 @@ var bridgeCallCases = []fleetCase{{
 		}
 		if got := renderParts(h.suspensionParts("turn-1", "launch-1")); !slices.Equal(got, []string{"1=state"}) {
 			h.t.Errorf("the store took a caller's mutation of a suspension part: %q", got)
+		}
+		h.createAnswerPart("turn-1", "launch-1", "answer-a", 1, "reply")
+		for _, p := range h.answerParts("turn-1", "launch-1", "answer-a") {
+			for i := range p.Value {
+				p.Value[i] = 'x'
+			}
+		}
+		if got := renderParts(h.answerParts("turn-1", "launch-1", "answer-a")); !slices.Equal(got, []string{"1=reply"}) {
+			h.t.Errorf("the store took a caller's mutation of an answer part: %q", got)
 		}
 		seq := h.reserveCall("turn-1", "launch-1")
 		h.createPart("turn-1", "launch-1", seq, 1, "piece")

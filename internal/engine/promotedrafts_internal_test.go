@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,12 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// draftingProvider answers every auxiliary call with one promotion draft.
-type draftingProvider struct{ answer string }
+// draftingProvider answers every auxiliary call with one promotion draft, and
+// counts the calls — a call is what a convergence already drafted must not
+// cost again.
+type draftingProvider struct {
+	answer string
+	calls  atomic.Int32
+}
 
-func (draftingProvider) Model() string { return "draft-test" }
+func (*draftingProvider) Model() string { return "draft-test" }
 
-func (p draftingProvider) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+func (p *draftingProvider) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	p.calls.Add(1)
 	return &llm.Completion{Model: "draft-test", Content: p.answer}, nil
 }
 
@@ -61,8 +68,9 @@ const (
 )
 
 // promotingEngine boots a node on promotionTeam and hands back the promotion
-// pass the engine would arm, over a model that answers rotationDraft.
-func promotingEngine(t *testing.T) (*Engine, *learning.Promoter) {
+// pass the engine would arm, and the model it asks, which answers
+// rotationDraft.
+func promotingEngine(t *testing.T) (*Engine, *learning.Promoter, *draftingProvider) {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(promotionTeam))
 	if err != nil {
@@ -83,13 +91,16 @@ func promotingEngine(t *testing.T) (*Engine, *learning.Promoter) {
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	waitUntil(t, 20*time.Second, "the native backends to hydrate", e.NativeHydrated)
 
-	// THE ENGINE'S OWN RESOLVER AND ROSTER, and only the model replaced:
-	// the wiring under test is which knowledge base the pass is handed and
-	// which container each unit files in.
+	// THE ENGINE'S OWN RESOLVER, ROSTER AND LEDGER, and only the model
+	// replaced: the wiring under test is which knowledge base the pass is
+	// handed, which container each unit files in, and what the fleet
+	// remembers of it.
+	model := &draftingProvider{answer: rotationDraft}
 	promoter, err := learning.NewPromoter(learning.PromoterOptions{
 		Writer:      e.promotionWriter,
+		Ledger:      e.backends.Fleet,
 		Skills:      learning.NewSkills(e.backends.Store),
-		Models:      staticModels{provider: draftingProvider{answer: rotationDraft}},
+		Models:      staticModels{provider: model},
 		Units:       e.promotionUnits,
 		MinSiblings: 3,
 	})
@@ -108,7 +119,7 @@ func promotingEngine(t *testing.T) (*Engine, *learning.Promoter) {
 			t.Fatalf("seed %s's skill: %v", handle, err)
 		}
 	}
-	return e, promoter
+	return e, promoter, model
 }
 
 // A NATIVE COMPANY'S PROMOTION DRAFTS A PAGE ITS SEARCH HIDES UNTIL A LEAD
@@ -128,7 +139,7 @@ func promotingEngine(t *testing.T) (*Engine, *learning.Promoter) {
 // created, is announced again.
 func TestANativeCompanysPromotionDraftIsHiddenUntilItIsMovedOut(t *testing.T) {
 	t.Parallel()
-	e, promoter := promotingEngine(t)
+	e, promoter, model := promotingEngine(t)
 	ctx := t.Context()
 
 	out := promoter.Pass(ctx)
@@ -168,6 +179,12 @@ func TestANativeCompanysPromotionDraftIsHiddenUntilItIsMovedOut(t *testing.T) {
 	if !strings.Contains(draft.Body, "publish the new fingerprint") {
 		t.Errorf("the draft does not carry the procedure it promotes:\n%s", draft.Body)
 	}
+	// THE ENGINE'S PAGE, WATCHED BY NOBODY: its creation reaches the
+	// container's lead, and no seat is subscribed to a page it never wrote.
+	if draft.Author != pages.SystemName || len(draft.Watchers) != 0 {
+		t.Errorf("the draft is authored by %q and watched by %v, want the engine "+
+			"and nobody", draft.Author, draft.Watchers)
+	}
 
 	// HIDDEN, and hidden because of where it is: indexed and found when
 	// the exclusion is turned off, and absent from the default search. A
@@ -198,6 +215,11 @@ func TestANativeCompanysPromotionDraftIsHiddenUntilItIsMovedOut(t *testing.T) {
 		t.Fatalf("a second pass announced %d promotion(s) of a draft that "+
 			"already exists", len(again))
 	}
+	// AND ASKED NO MODEL: the fleet's record of the convergence is read
+	// first, so an unchanged cluster costs no auxiliary call.
+	if n := model.calls.Load(); n != 1 {
+		t.Errorf("model calls = %d after two passes over one convergence, want 1", n)
+	}
 
 	// MOVED OUT, IT IS AN ORDINARY PAGE: the review gesture, made the way
 	// a lead's own assistant makes it, with nothing renamed.
@@ -213,4 +235,115 @@ func TestANativeCompanysPromotionDraftIsHiddenUntilItIsMovedOut(t *testing.T) {
 	}
 	waitUntil(t, 20*time.Second, "the published draft in the default search",
 		func() bool { return found(knowledge.Query{Text: rotationWords, Org: chart}) })
+}
+
+// A NATIVE DRAFT A LEAD LABELS `rejected` IS NOT DRAFTED AGAIN, and the fleet
+// records the rejection.
+//
+// The draft's own page tells the lead the gesture, the pass reads it on its
+// next run, and after that neither the model nor the page is asked again: the
+// seats' skills still converge, and the rejection is the fleet's.
+func TestANativeDraftALeadLabelsRejectedIsNotDraftedAgain(t *testing.T) {
+	t.Parallel()
+	e, promoter, model := promotingEngine(t)
+	ctx := t.Context()
+
+	out := promoter.Pass(ctx)
+	if len(out) != 1 {
+		t.Fatalf("the pass announced %d promotion(s), want 1", len(out))
+	}
+	id := out[0].(types.SkillPromoted).PageID
+	detail, err := e.Pages().Get(ctx, id, statelog.Freshness{Level: statelog.ReadLinearizable})
+	if err != nil {
+		t.Fatalf("read the draft: %v", err)
+	}
+	gesture := "add the label `" + rejectedDraftLabel + "` to it"
+	if !strings.Contains(detail.Page.Body, gesture) {
+		t.Fatalf("the draft does not tell its reviewer %q:\n%s", gesture, detail.Page.Body)
+	}
+
+	labels := []string{rejectedDraftLabel}
+	labelled, err := e.PagesStore().SavePage(ctx,
+		pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ops-1"},
+		id, pages.Save{BaseVersion: detail.Page.Version, Labels: &labels})
+	if err != nil {
+		t.Fatalf("label the draft rejected: %v", err)
+	}
+	if err := e.WaitCommitted(ctx, labelled.Outcome.Position); err != nil {
+		t.Fatalf("wait for the label to apply: %v", err)
+	}
+
+	for pass := 2; pass <= 3; pass++ {
+		if again := promoter.Pass(ctx); len(again) != 0 {
+			t.Fatalf("pass %d announced %v after the lead rejected the draft", pass, again)
+		}
+	}
+	if n := model.calls.Load(); n != 1 {
+		t.Errorf("model calls = %d, want 1: a rejected convergence was paid for again", n)
+	}
+	held, err := e.backends.Fleet.Promotions(ctx, "Platform")
+	if err != nil {
+		t.Fatalf("read the ledger: %v", err)
+	}
+	if len(held) != 1 || !strings.Contains(string(held[0].Value), `"state":"rejected"`) {
+		t.Fatalf("the fleet holds %d record(s), want the one convergence rejected: %+v",
+			len(held), held)
+	}
+}
+
+// A NATIVE DRAFT IN THE TRASH OR PURGED IS REJECTED, and one that stands —
+// under review or published — is not. The store can trash and purge a page
+// although no page tool offers it, and a draft somebody put out of reach is
+// not one they want drafted again.
+func TestANativeDraftOutOfReachReadsAsRejected(t *testing.T) {
+	t.Parallel()
+	e, promoter, _ := promotingEngine(t)
+	ctx := t.Context()
+	out := promoter.Pass(ctx)
+	if len(out) != 1 {
+		t.Fatalf("the pass announced %d promotion(s), want 1", len(out))
+	}
+	id := out[0].(types.SkillPromoted).PageID
+	writer := e.native.drafts
+	operator := pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ops-1"}
+	rejected := func(want string) {
+		t.Helper()
+		how, err := writer.Rejected(ctx, "ENG", id)
+		if err != nil {
+			t.Fatalf("Rejected: %v", err)
+		}
+		if how != want {
+			t.Fatalf("the draft reads as rejected %q, want %q", how, want)
+		}
+	}
+	rejected("")
+
+	trashed, err := e.PagesStore().Trash(ctx, operator, id)
+	if err != nil {
+		t.Fatalf("trash the draft: %v", err)
+	}
+	if err := e.WaitCommitted(ctx, trashed.Outcome.Position); err != nil {
+		t.Fatalf("wait for the trash to apply: %v", err)
+	}
+	rejected("it is in the trash")
+
+	purged, err := e.PagesStore().Purge(ctx, operator, id, "rejected")
+	if err != nil {
+		t.Fatalf("purge the draft: %v", err)
+	}
+	if err := e.WaitCommitted(ctx, purged.Outcome.Position); err != nil {
+		t.Fatalf("wait for the purge to apply: %v", err)
+	}
+	rejected("it was purged")
+}
+
+// THE NATIVE WRITER NAMES ITS KNOWLEDGE BASE AS ITS SEARCHER DOES. A record
+// carries the name, and a draft recorded under another name would read as one
+// in a knowledge base the company left, and be drafted again.
+func TestTheNativeWriterNamesItsKnowledgeBaseAsItsSearcherDoes(t *testing.T) {
+	t.Parallel()
+	var searcher *pages.Searcher
+	if got, want := (&nativeDrafts{}).Backend(), searcher.Backend(); got != want {
+		t.Fatalf("the native writer calls its knowledge base %q, its searcher %q", got, want)
+	}
 }

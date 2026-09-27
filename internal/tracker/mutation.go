@@ -47,8 +47,9 @@ const RankOrderRecordVersion = 2
 // PurgeRecordVersion is the version a purge is written at.
 //
 // A purge at it does everything one at [RecordVersion] does — the task's rows
-// deleted with every row naming it, the deletion marker written, its children
-// moved onto its own parent — and five things more, none of which a purge at
+// deleted with its relations, its dependency edges and the references between
+// it and another task, the deletion marker written, its children moved onto
+// its own parent — and five things more, none of which a purge at
 // [RecordVersion] does ([Applier.purgeTask]):
 //
 //   - it empties the CONTENT of the task's history and inbox rows
@@ -226,12 +227,12 @@ func (a AuthorKind) Valid() bool { return slices.Contains(AuthorKinds, a) }
 // than as a seat: somebody at the dashboard, or the token they run the company
 // through.
 //
-// IT IS THE PREDICATE EVERY AUTHORITY GATE ASKS, and it is here because it was
-// written out at each of them and they did not agree: `set_priorities` tested
-// both kinds, while `write_project` tested only `operator`. So a human
-// teammate could arrange somebody's priority list from the dashboard and could
-// not declare their own team's fields — one rule, two answers, and no single
-// place a reader could go to find out which was meant.
+// IT IS THE PREDICATE EVERY AUTHORITY GATE ASKS, and it is here so that none
+// of them spells it out: written at each gate, one could test both kinds and
+// another `operator` alone, and a human teammate could then arrange somebody's
+// priority list from the dashboard and not declare their own team's fields —
+// one rule, two answers, and no single place a reader could go to find out
+// which was meant.
 //
 // (`pages` carries its own `Actor.IsHuman` over its own three-valued
 // `AuthorKind`. That is a different closed set answering a different question
@@ -497,11 +498,11 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 
 // Resolve renders the scope as the framework's own path set.
 //
-// ONE ARGUMENT, deliberately: the container used to be passed in beside the
-// subject, and a scope resolved with it on the write path and without it on
-// the decode path is two different paths for one record — the writer probing
-// the project's closure and the applier filing under the workspace's. It takes
-// the subject alone now, and the container comes from the record itself.
+// ONE ARGUMENT, deliberately: a container passed in beside the subject could
+// be passed on the write path and left off on the decode path, which is two
+// different paths for one record — the writer probing the project's closure
+// and the applier filing under the workspace's. It takes the subject alone,
+// and the container comes from the record itself.
 func (s ScopeSet) Resolve(subject Subject) statelog.ScopeSet {
 	if s.Subject || len(s.Terms) == 0 {
 		return statelog.ScopeSet{Paths: []string{subjectPath(subject, s.Container)}}
@@ -704,16 +705,14 @@ type MutationRecord struct {
 	//
 	// # Why it is not simply read off the Notify
 	//
-	// Because it was, and that made the activity feed's own vocabulary a
+	// Because that would make the activity feed's own vocabulary a
 	// property of whether the change happened to have an audience. A
 	// history row's `kind` is what the feed's `kinds=` filter, the report
-	// windows and the unblocked repair's own scan all select on; when a
-	// record carried no Notify the applier fell back to guessing one from
-	// the OPERATION, which is a different vocabulary altogether. A quiet
-	// catalogue edit filed as `patch`, a purge as `purge` — and `patch`
-	// and `purge` are not
-	// [ChangeKind]s at all, so no filter could name them and nothing
-	// noticed.
+	// windows and the unblocked repair's own scan all select on; a record
+	// with no Notify would leave the applier guessing one from the
+	// OPERATION, which is a different vocabulary altogether — a quiet
+	// catalogue edit filed as `patch`, a purge as `purge`, and neither is
+	// a [ChangeKind] at all, so no filter could name them.
 	//
 	// The file that writes the history row opens by stating the principle
 	// this field exists to make true: "the activity feed is a complete
@@ -799,33 +798,15 @@ func Decode(payload []byte) (MutationRecord, error) {
 			Got: env.V, Want: ReadableRecordVersion, Subject: env.Subject,
 		}
 	}
+	// THE MEMBERS THIS BUILD DOES NOT KNOW ARE KEPT in [MutationRecord.Extra],
+	// at every depth that carries (extra.go), so a relay writes back what
+	// the writer wrote.
 	var rec MutationRecord
 	if err := json.Unmarshal(payload, &rec); err != nil {
 		return MutationRecord{RecordEnvelope: env}, fmt.Errorf("tracker: decode "+
 			"the record on %s: %w", env.Subject, err)
 	}
-	var extra map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &extra); err == nil {
-		for _, known := range knownKeys {
-			delete(extra, known)
-		}
-		if len(extra) > 0 {
-			rec.Extra = extra
-		}
-	}
 	return rec, nil
-}
-
-// knownKeys are the top-level keys this build writes, so Extra holds exactly
-// what it does not.
-//
-// LISTED RATHER THAN REFLECTED, because the list is the format's own reserved
-// set: a key added to the struct and not here would be carried in Extra as
-// well as in its field, and re-encoded twice.
-var knownKeys = []string{
-	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "operator_id", "turn_id",
-	"chain", "batch_id", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.
@@ -858,40 +839,15 @@ func (r MutationRecord) Encode() ([]byte, error) {
 	if err := r.Scope.Validate(); err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(r)
-	if err != nil || len(r.Extra) == 0 {
-		return body, err
-	}
-
-	// A RECORD FROM A NEWER BUILD RE-ENCODES WITH ITS UNKNOWN FIELDS.
-	//
-	// [Extra] is what the decoder kept and this is what puts it back:
-	// without it a relayed record loses everything the writer wrote that
-	// this build has no field for, and the "decodes, round-trips and
-	// re-publishes losslessly" contract that makes a rolling upgrade
-	// possible is false. The change feed is where it shows: a parser on a
-	// newer node reads a record an older node relayed, and sees only the
-	// half its relay understood.
-	//
-	// The map path is taken ONLY when there is something to add. A record
-	// this build wrote has no unknown fields, so its bytes are the
-	// struct's own — which is what keeps the barrier's literal
-	// byte-identical, and its size is the figure the read index's whole
-	// cost model rests on.
-	var merged map[string]json.RawMessage
-	if err := json.Unmarshal(body, &merged); err != nil {
-		return nil, fmt.Errorf("tracker: re-encode a record carrying %d "+
-			"field(s) this build does not know: %w", len(r.Extra), err)
-	}
-	for key, value := range r.Extra {
-		// A KNOWN KEY WINS. Extra should never hold one — the decoder
-		// only files what is not in the struct — and if it somehow does,
-		// this build's own value is the one it can be held to.
-		if _, taken := merged[key]; !taken {
-			merged[key] = value
-		}
-	}
-	return json.Marshal(merged)
+	// A RECORD FROM A NEWER BUILD RE-ENCODES WITH ITS UNKNOWN FIELDS, and a
+	// record this build wrote is its struct's own bytes (extra.go): without
+	// the first a relayed record loses everything its writer wrote that the
+	// relay has no field for, and the change feed shows it — a parser on a
+	// newer node reads a record an older node relayed and sees only the
+	// half the relay understood. Without the second the barrier's literal
+	// moves, and its size is the figure the read index's whole cost model
+	// rests on.
+	return json.Marshal(r)
 }
 
 // ChangeKind is what happened, as a recipient needs to be told it.
@@ -942,10 +898,10 @@ const (
 	//
 	// ITS OWN KIND BECAUSE THE ROW EXISTS EITHER WAY. A person record's
 	// apply writes a history row like every other document's, so the
-	// choice was never "name this or write nothing"; it was "name this or
-	// file it under the OPERATION", which is what it did — every pin
-	// toggle landing in the company's account of itself as a `patch`, a
-	// word no filter can select and no card can render.
+	// choice is not "name this or write nothing"; it is "name this or file
+	// it under the OPERATION" — every pin toggle landing in the company's
+	// account of itself as a `patch`, a word no filter can select and no
+	// card can render.
 	//
 	// IT IS NOT ROUTABLE and carries no notification: a person's own
 	// bookkeeping wakes nobody, which is what separates it from
@@ -1010,6 +966,8 @@ type TaskParty struct {
 	Task     string `json:"task"`
 	Key      string `json:"key,omitempty"`
 	Assignee string `json:"assignee,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Snapshot is the routing state of a task at the moment of a change.
@@ -1141,6 +1099,8 @@ type Snapshot struct {
 	// duplicating the id a record already carries is a second place for it
 	// to disagree with itself.
 	Task string `json:"task,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // TaskID is the task this wake points at, or empty when it points at none.
@@ -1194,6 +1154,8 @@ type Notify struct {
 	Late bool `json:"late,omitempty"`
 
 	Snapshot Snapshot `json:"snapshot"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Batched reports a record written as part of a BULK GESTURE.
@@ -1248,11 +1210,10 @@ func (n *Notify) Validate() error {
 // and read back by every applier — so a collection that grew without a bound
 // is not one screen rendering badly, it is bytes every member of the fleet
 // stores for a year. The design's own arithmetic sums these eleven caps to
-// about 19 KiB worst and sizes [MaxCommitBytes] from it, and until this
-// existed [Notify.Validate] read `Kind`, `Fields` and `Excerpt` and NOTHING
-// on the snapshot: the caps that held were incidental properties of whichever
-// builder happened to read a bounded table, and the ones that did not hold
-// were invisible.
+// about 19 KiB worst and sizes [MaxCommitBytes] from it, and a snapshot
+// checked nowhere would hold them only as incidental properties of whichever
+// builder happened to read a bounded table — and the ones that did not hold
+// would be invisible.
 //
 // # And it is a REFUSAL rather than a trim
 //
@@ -1292,17 +1253,17 @@ func (n *Notify) checkSnapshot() error {
 // The two folds, and what each one saves.
 //
 // A FOLD is a record class this design does NOT have because its content
-// rides one it already has. Both are stated here because both were separate
-// record classes first, and both were removed on arithmetic rather than on
+// rides one it already has. Both are stated here because each is a class a
+// reader would expect to find, and each is absent on arithmetic rather than on
 // taste.
 
 // TurnSpend is a turn's cost, and it rides the turn record it is computed
 // from.
 //
-// THE FIRST FOLD. Carried as its own class it was 1 095 000 records a year —
-// a third of a naive census — and it made a task's running total a separately
-// transmitted number that could disagree with the turns it was meant to
-// summarise. Riding the turn makes the total a FUNCTION of the applied
+// THE FIRST FOLD. Carried as its own class it would be 1 095 000 records a
+// year — a third of a naive census — and it would make a task's running total
+// a separately transmitted number that could disagree with the turns it is
+// meant to summarise. Riding the turn makes the total a FUNCTION of the applied
 // records: the applier inserts the turn, and adds these counters only when
 // that insert affected a row, in the same transaction. A redelivery therefore
 // cannot double-count, and an update affecting zero rows is a malformed record
@@ -1315,6 +1276,8 @@ type TurnSpend struct {
 	CacheRead  int `json:"cache_read,omitempty"`
 	CacheWrite int `json:"cache_write,omitempty"`
 	WallMs     int `json:"wall_ms,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Tokens is the derived eighth counter, so nothing else adds the two halves.
@@ -1326,9 +1289,8 @@ func (s TurnSpend) Tokens() int { return s.Input + s.Output }
 // The read index owns WHEN a barrier is appended and what it proves; the
 // domain owns what a record on its log LOOKS like, and the two meet here.
 // Without it [statelog.NewReadIndex] cannot be built for this domain at all,
-// which is why the barrier — and with it every `linearizable` read — had no
-// production caller: the level was parsed, validated, echoed back in the
-// answer and never honoured.
+// and every `linearizable` read would be parsed, validated, echoed back in
+// the answer and never honoured.
 //
 // NO OP ID, carried through from the envelope and asserted rather than
 // assumed. An op id becomes the Nats-Msg-Id, a repeat inside the duplicate

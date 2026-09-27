@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
@@ -170,6 +171,40 @@ func TestTheHintNamesTheWikiSpaceField(t *testing.T) {
 	}
 }
 
+// promotionEngine is an engine over a store and the fleet's shared state: the
+// skills a promotion pass reads, and the ledger it records what it did in.
+func promotionEngine(t *testing.T) *Engine {
+	t.Helper()
+	e := engineOver(t)
+	e.backends.Fleet = memory.NewFleet()
+	return e
+}
+
+// THE PASS IS NOT ARMED WITHOUT THE FLEET'S LEDGER. Armed without it, every
+// tick would draft again what the last one drafted and what a lead rejected;
+// the ledger is what the node that holds the duty tomorrow reads to know.
+func TestAPromotionPassIsNotArmedWithoutTheFleetsLedger(t *testing.T) {
+	t.Parallel()
+	c := promotionCompany(t, `units:
+  - name: Platform
+    space: ENG
+    roles:
+      - name: Engineer
+        handle: eng
+        llm: gateway
+`)
+	without := engineOver(t)
+	setEpoch(without, c)
+	if without.buildPromoter(c) != nil {
+		t.Error("a promoter was armed with no ledger to record what it drafts")
+	}
+	with := promotionEngine(t)
+	setEpoch(with, c)
+	if with.buildPromoter(c) == nil {
+		t.Error("a promoter over the fleet's ledger was not armed")
+	}
+}
+
 // THE TOGGLE DECIDES WHETHER THE PASS IS BUILT, and it is on by default. The
 // knowledge base does not: the pass resolves its writer at every tick, so
 // one wired after the pass was armed is found — see the case below.
@@ -185,7 +220,7 @@ func TestPromotionIsBuiltByItsToggle(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e := engineOver(t)
+			e := promotionEngine(t)
 			c := promotionCompany(t, tc.block+`units:
   - name: Platform
     space: ENG
@@ -210,7 +245,7 @@ func TestPromotionIsBuiltByItsToggle(t *testing.T) {
 // nowhere to draft. A pass that runs after the wiring catches up must find it.
 func TestAPromoterArmedBeforeTheKnowledgeBaseStillFindsIt(t *testing.T) {
 	t.Parallel()
-	e := engineOver(t)
+	e := promotionEngine(t)
 	c := promotionCompany(t, confluenceKnowledge+`units:
   - name: Platform
     space: ENG
@@ -329,7 +364,7 @@ func TestPromotionDraftsWhereTheKnowledgeSearchReads(t *testing.T) {
 // and no knowledge base yet is armed; the pass itself reports the idleness.
 func TestPromotionIsArmedBeforeTheKnowledgeBaseIsWired(t *testing.T) {
 	t.Parallel()
-	e := engineOver(t)
+	e := promotionEngine(t)
 	c := promotionCompany(t, `units:
   - name: Platform
     space: ENG
@@ -349,7 +384,7 @@ func TestPromotionIsArmedBeforeTheKnowledgeBaseIsWired(t *testing.T) {
 // unbuilt rather than built and skipping.
 func TestPromotionFollowsItsToggle(t *testing.T) {
 	t.Parallel()
-	e := engineOver(t)
+	e := promotionEngine(t)
 	c := companyFor(t, `
 name: Acme
 providers:

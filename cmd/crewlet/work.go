@@ -17,10 +17,11 @@ import (
 // Everything a company does to its tasks is done by seats, through their own
 // tools, and that is the design: an engine whose operator edits work by hand is
 // one whose org chart is decoration. The exception is the operation no seat may
-// ever perform — a purge, which deletes a task's own rows and every row naming
-// it on every node and empties the content of its history, and which the write
-// path restricts to a person or an operator token precisely because nothing
-// else can be asked to confirm it.
+// ever perform — a purge, which deletes a task and its content on every node,
+// with every relation, dependency and reference between it and another task,
+// and empties the content of its history and of the inbox notices about it —
+// and which the write path restricts to a person or an operator token
+// precisely because nothing else can be asked to confirm it.
 //
 // No seat tool reaches it, so this verb and the route behind it are how a
 // company destroys a task at all: an erasure request needs a mechanism, and a
@@ -68,8 +69,9 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 		reason = fs.String("reason", "", "why; required, and refused rather "+
 			"than cut if too long to travel whole")
 		confirm = fs.String("confirm", "",
-			"the task's KEY — this deletes the task's rows and every row naming "+
-				"it, and empties its history")
+			"the task's KEY — this deletes the task, its content and every "+
+				"link another task has to it, and empties its history and "+
+				"its inbox notices")
 		opID = fs.String("op-id", "",
 			"retry an `unknown` outcome with the id it printed, so the retry "+
 				"cannot append a second purge")
@@ -81,10 +83,11 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 	case id == "" || strings.TrimSpace(*confirm) == "":
 		fmt.Fprintln(stderr, "usage: crewlet work purge <task-id> "+
 			"-project KEY -reason TEXT -confirm <task-key>")
-		return fmt.Errorf("a purge deletes the task's rows and every row naming " +
-			"it on every node, empties the content of its history and moves its " +
-			"subtasks onto its parent, and nothing undoes it — name the task's " +
-			"KEY in -confirm to run it")
+		return fmt.Errorf("a purge deletes the task and its content on every " +
+			"node, with every relation, dependency and reference between it and " +
+			"another task, empties the content of its history and of the inbox " +
+			"notices about it and moves its subtasks onto its parent, and " +
+			"nothing undoes it — name the task's KEY in -confirm to run it")
 	case strings.TrimSpace(*project) == "":
 		return fmt.Errorf("name the task's project in -project: it is the " +
 			"container the record arbitrates under, and a purge filed under " +

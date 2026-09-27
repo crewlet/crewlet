@@ -14,11 +14,12 @@ import (
 // The bridged-call log, in memory.
 //
 // Keyed by LAUNCH, with each launch's own numbering beside its records, the
-// parts filed under them and the parts of its suspension, which is the shape
-// the KV backend has: one counter key, one record key per call and one key per
-// part, all under the launch. A purge removes the launch's entry and so all of
-// them together, so the next append to a purged launch starts again at 1 on
-// either backend, and no part outlives the purge of its launch.
+// parts filed under them, the parts of its suspension and those of every
+// answer held for it, which is the shape the KV backend has: one counter key,
+// one record key per call and one key per part, all under the launch. A purge
+// removes the launch's entry and so all of them together, so the next append
+// to a purged launch starts again at 1 on either backend, and no part outlives
+// the purge of its launch.
 
 // bridgeLaunch is one launch's log.
 type bridgeLaunch struct {
@@ -36,6 +37,11 @@ type bridgeLaunch struct {
 	// suspension is the parts of the launch's suspended conversation, by
 	// part: apart from both maps above, because they belong to no call.
 	suspension map[int][]byte
+
+	// answers is the parts of each answer held for the launch, by the
+	// answer's id and then by part: apart from the suspension's, because
+	// each answer is a whole numbered from 1 of its own.
+	answers map[string]map[int][]byte
 }
 
 // launch returns a launch's entry, creating it: a write to a purged launch
@@ -50,7 +56,7 @@ func (f *Fleet) launch(turnID, launchID string) *bridgeLaunch {
 	if launch == nil {
 		launch = &bridgeLaunch{
 			calls: map[uint64][]byte{}, parts: map[uint64]map[int][]byte{},
-			suspension: map[int][]byte{},
+			suspension: map[int][]byte{}, answers: map[string]map[int][]byte{},
 		}
 		f.bridge[key] = launch
 	}
@@ -175,6 +181,52 @@ func (f *Fleet) SuspensionParts(_ context.Context, turnID, launchID string) ([]c
 	return out, nil
 }
 
+// CreateAnswerPart files one part of an answer held for a launch, under the
+// answer's id.
+func (f *Fleet) CreateAnswerPart(_ context.Context, turnID, launchID, answerID string, part int, value []byte) (bool, error) {
+	if err := validAnswerAddress(turnID, launchID, answerID); err != nil {
+		return false, err
+	}
+	if part < 1 {
+		return false, fmt.Errorf("coord/memory: a part of a held answer is numbered from 1, got %d", part)
+	}
+	if err := withinCeiling("a part of a held answer", value); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	launch := f.launch(turnID, launchID)
+	parts := launch.answers[answerID]
+	if parts == nil {
+		parts = map[int][]byte{}
+		launch.answers[answerID] = parts
+	}
+	if _, taken := parts[part]; taken {
+		return false, nil
+	}
+	parts[part] = slices.Clone(value)
+	return true, nil
+}
+
+// AnswerParts returns every part of one answer held for a launch, in order.
+func (f *Fleet) AnswerParts(_ context.Context, turnID, launchID, answerID string) ([]coord.Part, error) {
+	if err := validAnswerAddress(turnID, launchID, answerID); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []coord.Part{}
+	launch := f.bridge[coord.BridgeLaunch{TurnID: turnID, LaunchID: launchID}]
+	if launch == nil {
+		return out, nil
+	}
+	parts := launch.answers[answerID]
+	for _, part := range slices.Sorted(maps.Keys(parts)) {
+		out = append(out, coord.Part{Part: part, Value: slices.Clone(parts[part])})
+	}
+	return out, nil
+}
+
 // BridgeCalls returns every call of one launch, in Seq order, with its parts.
 func (f *Fleet) BridgeCalls(_ context.Context, turnID, launchID string) ([]coord.BridgeCallRecord, error) {
 	if err := validBridgeLaunch(turnID, launchID); err != nil {
@@ -240,8 +292,8 @@ func (f *Fleet) BridgeCallPage(_ context.Context, q coord.BridgeCallQuery) (coor
 //
 // Every entry in the map, whatever it holds: an entry exists only once
 // something was written under its launch, and a counter, a record or a part —
-// a call's or the suspension's — alone is each a key the KV backend lists the
-// launch for.
+// a call's, the suspension's or a held answer's — alone is each a key the KV
+// backend lists the launch for.
 func (f *Fleet) BridgeLaunches(context.Context) ([]coord.BridgeLaunch, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -253,7 +305,8 @@ func (f *Fleet) BridgeLaunches(context.Context) ([]coord.BridgeLaunch, error) {
 }
 
 // PurgeBridgeCalls removes every record of one launch, the parts under them,
-// the parts of its suspension, and its numbering.
+// the parts of its suspension and of every answer held for it, and its
+// numbering.
 func (f *Fleet) PurgeBridgeCalls(_ context.Context, turnID, launchID string) error {
 	if err := validBridgeLaunch(turnID, launchID); err != nil {
 		return err
@@ -272,8 +325,8 @@ func bridgeRecord(turnID, launchID string, seq uint64, value []byte) coord.Bridg
 	}
 }
 
-// withinCeiling refuses a value the KV backend's broker would refuse: a run's
-// record, a bridged call, or a part.
+// withinCeiling refuses a record's value the KV backend's broker would
+// refuse.
 //
 // THE KV BACKEND'S CEILING, stated by the contract so that this twin refuses
 // what the real broker refuses rather than storing a record production never
@@ -290,6 +343,16 @@ func withinCeiling(what string, value []byte) error {
 func validBridgeLaunch(turnID, launchID string) error {
 	if turnID == "" || launchID == "" {
 		return errors.New("coord/memory: a bridged call needs a turn id and a launch id")
+	}
+	return nil
+}
+
+// validAnswerAddress refuses an answer the KV backend could not file: an empty
+// segment is a key its grammar refuses, and this twin refuses what that
+// backend refuses.
+func validAnswerAddress(turnID, launchID, answerID string) error {
+	if turnID == "" || launchID == "" || answerID == "" {
+		return errors.New("coord/memory: a held answer's parts need a turn id, a launch id and an answer id")
 	}
 	return nil
 }

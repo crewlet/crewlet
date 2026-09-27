@@ -188,8 +188,9 @@ func Statuses() []Status { return []Status{StatusPublished, StatusDraft, StatusT
 // Valid reports whether s is a status this build serves.
 func (s Status) Valid() bool { return slices.Contains(Statuses(), s) }
 
-// AuthorKind is who wrote something, on the same three values the tracker
-// uses and for the same reasons.
+// AuthorKind is who wrote something, on the values the tracker's
+// [github.com/crewlet/crewlet/internal/tracker.AuthorKind] takes and for the
+// same reasons.
 type AuthorKind string
 
 // The author kinds.
@@ -197,10 +198,41 @@ const (
 	AuthorAgent    AuthorKind = "agent"
 	AuthorHuman    AuthorKind = "human"
 	AuthorOperator AuthorKind = "operator"
+
+	// AuthorSystem is the engine itself: a container the company's
+	// configuration names, made by [Store.EnsureContainer]; a draft the
+	// skill-promotion pass files. The tracker's word for the same author.
+	//
+	// NOT A SEAT AND NOT A PERSON, which is why it is a kind of its own. A
+	// write the engine makes is nobody's decision, so it must not read as
+	// an operator's in an audit narrowed to operators; and it carries no
+	// handle, because on a create the author's handle becomes the page's
+	// watcher — a system write under a handle would subscribe whichever
+	// seat holds that handle to a page it never asked to watch. It is
+	// recorded under [SystemName].
+	//
+	// A PEER THAT PREDATES IT APPLIES IT. A build that knows only the other
+	// three decodes a record's actor kind without checking it against its
+	// own list and writes it to the page's history row as the string the
+	// record carries; what such a build refuses is a READ narrowed to a kind
+	// it does not know, so its activity feed cannot be filtered to this one.
+	AuthorSystem AuthorKind = "system"
 )
 
+// SystemName is how an [AuthorSystem] write is recorded ([Actor.Name]).
+//
+// OUTSIDE THE HANDLE GRAMMAR, as an operator's `operator:` name is: a seat's
+// handle is lowercase letters, digits and dashes, so a name with a colon is
+// never one. The change feed does not wake a write's own author, comparing
+// the recorded name with each recipient's handle, so a name a seat could hold
+// would keep that seat from hearing about the engine's writes in its own
+// container.
+const SystemName = "system:engine"
+
 // AuthorKinds is every kind.
-func AuthorKinds() []AuthorKind { return []AuthorKind{AuthorAgent, AuthorHuman, AuthorOperator} }
+func AuthorKinds() []AuthorKind {
+	return []AuthorKind{AuthorAgent, AuthorHuman, AuthorOperator, AuthorSystem}
+}
 
 // Valid reports whether k is a kind this build serves.
 func (k AuthorKind) Valid() bool { return slices.Contains(AuthorKinds(), k) }

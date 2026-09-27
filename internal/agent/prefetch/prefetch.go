@@ -131,9 +131,6 @@ type Request struct {
 	// filtering against a bare pointer returns noise wearing the shape of
 	// relevance.
 	RequiresRecon bool
-
-	// TurnID identifies the turn, for the auxiliary calls' telemetry.
-	TurnID string
 }
 
 // Models resolves the model a seat's auxiliary work runs on.

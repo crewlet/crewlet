@@ -40,7 +40,7 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	if given != 2 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet confluence import <company.yaml> <directory> "+
-				"[-space KEY] [-prune] [-dry-run]")
+				"[-space KEY] [-prune] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document and one directory")
 	}
 
@@ -187,7 +187,8 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 	companyPath, given := onePositional(fs, companyPath)
 	if given != 1 {
 		fmt.Fprintln(stderr,
-			"usage: crewlet confluence resync <company.yaml> [-space KEY]")
+			"usage: crewlet confluence resync <company.yaml> [-space KEY] "+
+				"[-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -273,7 +274,7 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr,
 			"usage: crewlet confluence provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhooks] [-dry-run]")
+				"[-recreate-webhooks] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 

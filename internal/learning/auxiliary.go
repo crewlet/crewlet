@@ -10,13 +10,14 @@ import (
 // where the work answers one — the turn it answers.
 //
 // It exists so that spend can be ATTRIBUTED. The engine records every
-// completion made through a model it resolved for a learning worker or the
-// prefetch (internal/engine's learningbudget.go), and a record that said only
+// completion made through a model it resolved for a seat's auxiliary work — a
+// learning worker's, a background pass's, the prefetch's and the recall
+// tools' (internal/engine's learningbudget.go) — and a record that said only
 // "the auxiliary model spent this on this seat" could not tell a company whose
 // profiler is expensive from one whose skill synthesis is. So the caller says
-// who it is, explicitly, at the one point every auxiliary call passes through
-// ([auxiliary]) — never through the context, which a goroutine shares with
-// whatever captured it.
+// who it is, explicitly, where it resolves its model — a learning worker at
+// the one point every one of them passes through ([auxiliary]) — never
+// through the context, which a goroutine shares with whatever captured it.
 type Attribution struct {
 	// Worker is the asking worker's name: a reflection worker's [Worker.Name],
 	// or one of the names below for the work that is not a reflection worker.
@@ -50,7 +51,10 @@ const (
 	PrefetchWorker = "prefetch"
 
 	// RecallWorker is the same assembly re-run on demand from inside a turn,
-	// by the tools that re-filter a seat's memory and search its episodes.
+	// by the tools that re-filter a seat's memory and search its episodes
+	// (internal/agent/builtin), which bind the turn each recall serves. Of
+	// the two, only the memory re-filter makes an auxiliary call; the
+	// episode search embeds its text and ranks.
 	RecallWorker = "recall"
 )
 

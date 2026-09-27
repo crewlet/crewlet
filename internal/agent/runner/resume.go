@@ -266,6 +266,11 @@ func priorRounds(state execstate.State, answer string) toolloop.Result {
 		RoundsUsed:   state.RoundsUsed,
 		InputTokens:  state.InputTokens,
 		OutputTokens: state.OutputTokens,
+		// The model the phase began on and what each model served before
+		// the suspend — absent on a row a build that kept neither wrote,
+		// which leaves those tokens unsplit ([execstate.State.Models]).
+		Model:  state.Model,
+		Models: loopModels(state.Models),
 	}
 	for _, exec := range state.ToolExecutions {
 		name, _ := exec["name"].(string)
@@ -294,6 +299,18 @@ func priorRounds(state execstate.State, answer string) toolloop.Result {
 	}
 	out.Narration = narrationRows(state.RoundNarration)
 	out.Abandoned = narrationRows(state.AbandonedAttempts)
+	return out
+}
+
+// loopModels reads a carried split back into the loop's shape.
+func loopModels(models []types.ModelSpend) []toolloop.ModelTokens {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]toolloop.ModelTokens, len(models))
+	for i, m := range models {
+		out[i] = toolloop.ModelTokens{Model: m.Model, InputTokens: m.InputTokens, OutputTokens: m.OutputTokens}
+	}
 	return out
 }
 
@@ -354,7 +371,12 @@ func (r *Runner) recordSuspension(ctx context.Context, round int, surface *tools
 		Round:           round,
 		InputTokens:     res.InputTokens,
 		OutputTokens:    res.OutputTokens,
-		ToolExecutions:  toolExecutions(res.Executions),
+		// WHICH MODEL SERVED THEM, beside the tokens, so the resumed
+		// phase's record — this phase's only one — splits the rounds
+		// before the suspend as the rounds after it are split.
+		Model:          res.Model,
+		Models:         modelSpend(res.Models),
+		ToolExecutions: toolExecutions(res.Executions),
 		// The rounds themselves, so the resumed phase continues the count
 		// instead of restarting it — and so they reach the store at all.
 		// Nothing else records them: this phase publishes no completed event

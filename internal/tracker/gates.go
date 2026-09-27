@@ -65,16 +65,13 @@ import (
 // stream of records every node drops while this one collects acknowledgements
 // for them.
 //
-// There WAS a cache in front of that read — "the coordination-derived answer,
-// refreshed on the same loop that reads the tombstones", declared as an
-// optimisation that "can be stale, because the durable row below is what makes
-// staleness safe". Nothing ever assigned it, in this package or any other, and
-// the safety argument does not survive being written out: the lookup returned
-// the cached answer in BOTH directions, so a stale `false` is precisely an
-// evicted node going on publishing — the one failure this type exists to
-// prevent, bought to save an indexed single-row read. It was removed rather
-// than wired, and [pages.Fence] never had one, so the two fences now answer the
-// same question the same way.
+// NO CACHE IN FRONT OF THAT READ, although "it can be stale, because the
+// durable row is what makes staleness safe" is the tempting argument for one.
+// It does not survive being written out: a cache answers in BOTH directions,
+// so a stale `false` is precisely an evicted node going on publishing — the
+// one failure this type exists to prevent, bought to save an indexed
+// single-row read. [pages.Fence] reads the same rows the same way, so the two
+// fences answer the same question alike.
 type Fence struct {
 	db     *store.DB
 	nodeID string
@@ -267,56 +264,15 @@ func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
 // object's does.
 const GateRecordVersion = 1
 
-// PurgeResult is what an operator is told after a purge, in THREE SIBLING
-// GROUPS.
-//
-// # And there is no duration in it
-//
-// A purge destroys rows on every node that applies the record. What it cannot
-// do is reach a node that is not applying — one that is offline, or evicted,
-// or holding a store file nobody has replayed — and a copy on such a disk ends
-// in exactly three ways, NONE OF THEM A CLOCK: the node returns and replays,
-// it adopts a snapshot (whose install replaces the store file), or the disk is
-// replaced or destroyed.
-//
-// The tempting sentence — "gone from every copy within seven days" — reads the
-// log's minimum trim age as a retention ceiling. It is a FLOOR on trimming,
-// which is a LOWER bound on how long the log keeps a record, and it says
-// nothing whatever about any node's own store file. So the `stale` group below
-// is a REPORTING word: the fleet has passed the window the operator's own
-// retention configured, and that triggers nothing, evicts nobody, and makes no
-// claim about whether that node has been trimmed past.
-type PurgeResult struct {
-	// Position is where the purge record landed.
-	Position statelog.Position
-
-	// Applied are the nodes that have consumed the record and destroyed
-	// their rows.
-	Applied []string
-
-	// Pending are counted nodes that have not reached it yet. They will:
-	// the applier is contiguous, so a node below this position applies it
-	// on the way past.
-	Pending []string
-
-	// Stale are counted nodes the fleet has not heard from within the
-	// window its own retention configures. A REPORTING GROUP: it triggers
-	// nothing and says nothing about whether that node has been trimmed
-	// past — only that nobody can currently say when it will apply.
-	Stale []string
-}
-
 // purgeWake is what the one irreversible operation announces, and to whom.
 //
 // # Why it exists at all
 //
-// Because it did not, and the absence was invisible from both ends. Every
-// purge published with a nil notification, so nobody was ever told that a
-// task, its comments and its revisions had been destroyed — while
-// [Candidates] carried a `ChangePurged` branch and
-// [ReasonPurged] sat in the reason list, neither of which any record could
-// ever reach. Dead code on one side, silence on the other, and the two looked
-// like each other's explanation.
+// Because a purge published with no notification tells nobody that a task,
+// its comments and its revisions have been destroyed — and nothing on either
+// side says so: [Candidates]' `ChangePurged` branch and [ReasonPurged] would
+// sit unreachable while the purge went silent, and the two would look like
+// each other's explanation.
 //
 // # The project lead, and only the project lead
 //

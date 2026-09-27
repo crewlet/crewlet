@@ -270,8 +270,8 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 // gateActivityQuery refuses what this feed cannot serve.
 //
 // THE GATE IS ON WHAT THE QUERY WOULD SCAN, never on which keys were named.
-// Written as "requires `task`, `container` or a `since:` bound" it was a gate
-// a caller satisfied in one attempt and learned nothing from:
+// Written as "requires `task`, `container` or a `since:` bound" it would be a
+// gate a caller satisfies in one attempt and learns nothing from:
 // `container=workspace&q=` names a container, an unbounded `since:` names a
 // bound, and both run the same full scan the gate exists to stop.
 func gateActivityQuery(q ActivityQuery, now time.Time) error {

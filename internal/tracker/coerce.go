@@ -290,9 +290,8 @@ func coerceNumber(field FieldDef, raw json.RawMessage) (coerced, error) {
 		// A NUMBER TYPED AS TEXT IS ACCEPTED AND NORMALISED, because
 		// that is what a model sends when it copies a value out of prose
 		// — and the alternative is refusing "3" for not being 3. What is
-		// NOT accepted is text that is not a number: the apply side used
-		// to salvage a number out of any string, so "about 7 hours" was
-		// stored as 7.
+		// NOT accepted is text that is not a number: salvaging a number
+		// out of any string would store "about 7 hours" as 7.
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return coerced{}, fmt.Errorf("tracker: field %q is a number and "+
@@ -547,12 +546,12 @@ func coerceURL(field FieldDef, raw json.RawMessage) (coerced, error) {
 		// is a dead link rather than a hint, and composing it from the
 		// quote is the exact bug [MaxRefusalQuote] records.
 		//
-		// The quote is uncut here too, but by a narrower margin than that
-		// doc used to claim: `text` came back from [coerceText] at
+		// The quote is uncut here too, by exactly as wide a margin as it
+		// needs: `text` came back from [coerceText] at
 		// [MaxFieldValueBytes] above, and [MaxRefusalQuote] is EQUAL to
-		// that cap rather than wider, so [textcut.Ellipsis] returns it
-		// unchanged. Equal is the whole requirement — a longer value is
-		// refused by size before it can reach this line.
+		// that cap, so [textcut.Ellipsis] returns it unchanged. Equal is
+		// the whole requirement — a longer value is refused by size before
+		// it can reach this line.
 		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q has no "+
 			"scheme — write https://%s", field.Slug, clip(text), text)
 	case parsed.Host == "" && parsed.Opaque == "":
@@ -648,25 +647,21 @@ func clip(s string) string { return textcut.Ellipsis(s, MaxRefusalQuote) }
 // So this is a guard against a caller pasting a document into a scalar field,
 // not a budget.
 //
-// IT WAS 64 BYTES, on the reasoning that a fragment is enough to recognise
-// what was sent. It is not, and internal/agent/builtin's own `clip`
-// already says why for the same gesture: what is echoed here is the caller's
-// OWN value, quoted back so it can see what failed to match, and "a shortened
-// echo names a query the model never sent — which is worse than a long line,
-// because the model then retries against the wrong string". Sixty-four bytes
-// is under the length of an ordinary URL, so the refusal a model reads most
-// often was the one it could least act on.
+// NOT A FRAGMENT'S WORTH, which is the tempting size — "enough to recognise
+// what was sent". What is echoed here is the caller's OWN value, quoted back
+// so it can see what failed to match, and internal/agent/builtin's own `clip`
+// says why a fragment fails that: "a shortened echo names a query the model
+// never sent — which is worse than a long line, because the model then
+// retries against the wrong string". A cap under the length of an ordinary
+// URL makes the refusal a model reads most often the one it can least act on.
 //
-// [coerceURL] is where that turned from unhelpful into WRONG: its refusal
-// composes the correction — "write https://<value>" — out of this same quote,
-// so a URL past the old cap was answered with an instruction to store a
-// truncated address with an ellipsis inside it. That value then PARSES, and
-// lands on the board as a dead link nobody typed. Any refusal that prescribes
-// a value has to build it from the whole one, which [coerceURL] now does
-// EXPLICITLY, from the unclipped value — rather than resting on this cap being
-// generous enough, since a cap is a number somebody will tune and a
-// prescription that is only correct while it stays large is that dead link
-// waiting for the next edit.
+// AND NO PRESCRIPTION IS BUILT FROM IT. [coerceURL]'s refusal composes its
+// correction — "write https://<value>" — from the unclipped value. Built from
+// this quote, a URL past the cap would be answered with an instruction to
+// store a truncated address with an ellipsis inside it; that value PARSES, and
+// lands on the board as a dead link nobody typed. A prescription that is
+// correct only while this cap stays large is that dead link waiting for the
+// next edit to a number somebody will tune.
 const MaxRefusalQuote = MaxFieldValueBytes
 
 // settleFields runs the table inside the decide, against the declarations this

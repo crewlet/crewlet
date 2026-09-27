@@ -55,11 +55,18 @@ import (
 // makes "the engine holds this database" an answer with a pid on it — and the
 // command says which one it used after every write.
 //
-// # Every command here needs the keyring, and the keyring is Tier A
+// # The keyring is Tier A, and a command that names its node needs neither
 //
 // The store holds only ciphertext. The key material lives in the bootstrap
 // config — on disk or in the environment, never in the database it opens —
-// which is why these commands read Tier A and not the company document.
+// which is why these commands read Tier A and not the company document. A
+// command that picks its store by the lock reads the keyring before it looks,
+// because the store it finds may be this node's own table, which it seals and
+// opens itself. One that names a node with -api seals nothing here: the node
+// seals with its own keyring, so it needs no keyring and no Tier A on this
+// machine — only a token the node accepts, from CREWLET_API_TOKEN or from a
+// Tier A that is there — except `rekey`, which reads the key it re-seals onto
+// from the keyring's secrets.active_key_id. And `keygen` needs nothing at all.
 
 const secretsUsage = `crewlet secrets — read and rotate the encrypted secret store
 
@@ -302,10 +309,10 @@ func runningNodeClient(boot *config.Bootstrap, bootstrapPath string, err error) 
 		//
 		// AND NO ROUTE ROUND THE API, because there is none. This node's
 		// own table is not one: the running engine holds its file, and a
-		// row there reaches the fleet only at the engine's next start
-		// ([fleetsecrets.Migrate]), never while the fleet is serving. Nor
-		// is the environment: the store is read before it, so an export is
-		// shadowed by any value the fleet holds under that name.
+		// row there reaches the fleet only at this engine's next start
+		// ([fleetsecrets.Migrate]). Nor is the environment: the store is
+		// read before it, so an export is shadowed by any value the fleet
+		// holds under that name.
 		return nil, fmt.Errorf("%w\n\nthe engine for %s is running (`crewlet "+
 			"run`) and holds its store files, so the fleet's secret store is "+
 			"reached through its API — and it cannot be: %w\n\nMake the API "+

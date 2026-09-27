@@ -65,14 +65,14 @@ type PersonAuthority struct {
 	// the chart, so no ancestor walk can ever match it, and `Lead` is
 	// false for every operator by construction.
 	//
-	// Without it the ONE shipped surface for this verb could not use it.
-	// `set_priorities` is registered on the operator MCP alone; an
-	// operator could therefore never satisfy `own || Lead`, so a founder
-	// re-ordering an agent's queue through the only tool that exists got
-	// "<token> is not <handle> and does not lead them" every time — while
-	// omitting the handle silently wrote a PERSON RECORD FOR THE TOKEN.
+	// Without it the surface this verb is served on could not use it.
+	// `set_priorities` is registered on the operator MCP, and an operator
+	// can never satisfy `own || Lead`, so a founder re-ordering an agent's
+	// queue there would get "<token> is not <handle> and does not lead
+	// them" every time — and omitting the handle would write a PERSON
+	// RECORD FOR THE TOKEN.
 	//
-	// The rule this restores is the design's own: a person's priorities
+	// The rule is the design's own: a person's priorities
 	// are written by the owner, by lead-or-above, by a human, or by an
 	// operator. A SEAT is the one party that may not, which is the whole
 	// point — an agent re-ordering a colleague's list is a hand-off in
@@ -158,17 +158,12 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 // told what to do next by somebody else is news, and re-ordering your own list
 // is not.
 //
-// # Why it is a wake AND a stamp, when it used to be only a stamp
+// # Why it is a wake AND a stamp
 //
-// This verb used to argue that a notification "would not do it", because every
-// Notify the domain carried was task-shaped and one attached to a person record
-// "renders no card and reaches nobody". That was an accurate description of the
-// code and a wrong conclusion from it: the parser dropped every non-task
-// subject outright (see [ObjectKind.Routable]) and the prompt had no frame but
-// a task's, so the wake was unreachable — while recipients.go already routed
-// `prioritised` off Snapshot.Person, the reason was already in the enum and
-// already Primary, and the spec already called this write "the one that
-// produces a `prioritised` Notify".
+// A notification on a person record reaches somebody only because the parser
+// routes the person subject ([ObjectKind.Routable]), recipients.go routes
+// `prioritised` off Snapshot.Person, and the prompt has a frame for it — so
+// the wake is a path end to end rather than a Notify attached for show.
 //
 // The stamp alone is only half an answer, and which half it is matters: a
 // stamp is seen by somebody who OPENS A SCREEN, and the recipients of this

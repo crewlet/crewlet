@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -770,8 +771,8 @@ func TestARowCarriesItsType(t *testing.T) {
 	}
 }
 
-// A DETAIL READ COUNTS EACH RETAINED RECORD ONCE, AND NAMES THE EARLIEST ONE'S
-// VERSION.
+// A DETAIL READ'S REFUSAL COUNTS EACH RETAINED RECORD ONCE, AND NAMES THE
+// EARLIEST ONE'S POSITION AND VERSION.
 //
 // A record's scope is stored one row per path, and a record can meet a task on
 // more than one of them — its container and the task itself. Counted over
@@ -780,8 +781,8 @@ func TestARowCarriesItsType(t *testing.T) {
 // where a build that can read them resumes — not the smallest version among
 // the records, which can belong to a later one held back behind it.
 //
-// Mutation: count scope rows rather than records and the answer reports three;
-// take the smallest version and it reports the later record's.
+// Mutation: count scope rows rather than records and the refusal reports
+// three; take the smallest version and it reports the later record's.
 func TestADetailReadCountsEachRetainedRecordOnceAndNamesTheEarliest(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -821,24 +822,28 @@ func TestADetailReadCountsEachRetainedRecordOnceAndNamesTheEarliest(t *testing.T
 	retain(earliest, tracker.ReadableRecordVersion+2, container, object)
 	retain(later, tracker.ReadableRecordVersion, object)
 
-	detail, err := r.reader.Task(t.Context(), task.ID, tracker.DetailWants{},
+	_, err := r.reader.Task(t.Context(), task.ID, tracker.DetailWants{},
 		statelog.Freshness{Level: statelog.ReadSession})
-	if err != nil {
-		t.Fatalf("read: %v", err)
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+		t.Fatalf("a task two retained records meet answered %v, want the read "+
+			"refused as deferred", err)
 	}
-	if detail.Complete || detail.Incomplete == nil {
-		t.Fatalf("a task two retained records meet reads complete: %+v", detail.Incomplete)
+	if !strings.Contains(refused.Detail, "retains 2 record(s)") {
+		t.Errorf("the refusal says %q, want it to count 2 records — one record "+
+			"meeting the task on two of its paths is still one record", refused.Detail)
 	}
-	if got := detail.Incomplete.Records; got != 2 {
-		t.Errorf("the answer counts %d record(s), want 2 — one record meeting the "+
-			"task on two of its paths is still one record", got)
+	from := statelog.Position{
+		Stream:     tracker.Domain{}.Stream().Name,
+		Generation: uint32(earliest / statelog.GenerationStride),
+		Seq:        uint64(earliest % statelog.GenerationStride),
 	}
-	if got := detail.Incomplete.From.Packed(); got != earliest {
-		t.Errorf("the answer names position %d, want the earliest, %d", got, earliest)
+	if !strings.Contains(refused.Detail, "the lowest at "+from.String()) {
+		t.Errorf("the refusal says %q, want it to name the earliest, %s",
+			refused.Detail, from)
 	}
-	if got := detail.Incomplete.Version; got != tracker.ReadableRecordVersion+2 {
-		t.Errorf("the answer names record version %d, want %d — the earliest "+
-			"record's, which is the build a node resumes with", got,
-			tracker.ReadableRecordVersion+2)
+	if want := fmt.Sprintf("written at version %d", tracker.ReadableRecordVersion+2); !strings.Contains(refused.Detail, want) {
+		t.Errorf("the refusal says %q, want %q — the earliest record's version, "+
+			"which is the build a node resumes with", refused.Detail, want)
 	}
 }

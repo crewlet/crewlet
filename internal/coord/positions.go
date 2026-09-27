@@ -145,7 +145,7 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS SEVEN KEY CLASSES, and every one needs the same
+// THE REGISTER HOLDS EVERY AGELESS KEY CLASS, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
@@ -153,18 +153,20 @@ type PositionRegister interface {
 // window's: [MaintenanceKey], whose existence IS the exclusion,
 // [AdmissionKey], which is one node's positive record that it intends to
 // publish, and [MaintenanceAckKey], which is one participant's evidence that
-// its process restarted.
+// its process restarted. And [PromotionKey] is the skill-promotion pass's
+// record of a convergence it drafted and whether a lead rejected it.
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention
 // decision of its own. What none of them may have is an AGE: an expiring
 // position reads as a node that has applied nothing, an expiring operation
-// admits every publisher in the fleet, an expiring admission hides one, and an
-// expiring acknowledgement un-seals a barrier that has already run. A listing over either class
-// filters on the first segment, and that filter is load-bearing rather than
-// tidy: a hold decoded as a positions row is a node id of "" with a domains
-// map of zero values, which the trim reads as a node that has applied nothing
-// and pins the floor at zero for ever.
+// admits every publisher in the fleet, an expiring admission hides one, an
+// expiring acknowledgement un-seals a barrier that has already run, and an
+// expiring promotion record drafts again what a lead rejected. A listing over
+// any class filters on the first segment, and that filter is load-bearing
+// rather than tidy: a hold decoded as a positions row is a node id of "" with
+// a domains map of zero values, which the trim reads as a node that has
+// applied nothing and pins the floor at zero for ever.
 func PositionKey(nodeID string) string { return DocumentKey("node", nodeID) }
 
 // Validate reports why a row cannot be written.

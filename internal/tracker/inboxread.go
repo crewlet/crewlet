@@ -15,16 +15,15 @@ import (
 // One person's inbox — what the company asked of them, in the order the log
 // asked it.
 //
-// # The rows were always here
+// # The rows are the applier's
 //
-// The applier has written `tracker_notifications` since the domain landed: one
-// row per (commit, recipient), carrying the reason that handle hears under,
-// the subject, the excerpt and the log position. The table ships two indexes
-// naming this reader — `(recipient, log_seq DESC)` and `(recipient, reason,
-// log_seq DESC)` for the primary/other split — and until now NOTHING read a
-// single row of it. A company routed every change to the people it concerned,
-// wrote them all down, replicated them, snapshotted them, and offered no way
-// to ask what was in them.
+// The applier writes `tracker_notifications`: one row per (commit,
+// recipient), carrying the reason that handle hears under, the subject, the
+// excerpt and the log position. The table ships two indexes naming this
+// reader — `(recipient, log_seq DESC)` and `(recipient, reason, log_seq
+// DESC)` for the primary/other split — and without this reader a company
+// would route every change to the people it concerned, write them all down,
+// replicate them, snapshot them, and offer no way to ask what was in them.
 //
 // # Why it is not [Person]
 //

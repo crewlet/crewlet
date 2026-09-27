@@ -831,17 +831,25 @@ carries `models`, its tokens split by the model each completion reported: a
 fallback chain can move a phase from one member to the next round by round,
 and a breakdown keyed on the first name would bill every later round to a
 model that did not serve it. A completion that names no model is counted under
-the configured model of the provider that served it. The spend rollups read
-the split, and count a record without one — or the part of a record's tokens
-its split does not cover — under its `model` (see
+the configured model of the provider that served it. The split is the whole
+phase's, folded like its tokens: an extended phase's covers every invocation of
+the loop, and a resumed phase's covers the rounds before its suspension too,
+which the pending-run row carries with their tokens. A delegated worker's
+record carries its own. The spend rollups read the split, and count a record
+without one — or the part of a record's tokens its split does not cover, such
+as the rounds a build that kept no split suspended — under its `model` (see
 [`GET /tokens/breakdown`](../reference/api-endpoints.md#get-tokensbreakdown)).
 
 **An auxiliary call is recorded, and is not a phase.** The learning workers,
-the background learning passes and the turn-start prefetch call the seat's
-auxiliary model outside the tool loop, and every one of those completions goes
-through one seam in the engine: it publishes an `auxiliary_call_completed` —
-the seat, the worker that made the call, the turn it served, the model and the
-tokens — and charges the tokens to the budget where a cap is set. It is not an
+the background learning passes, the turn-start prefetch and the memory filter
+`refresh_memory` re-runs call the seat's auxiliary model outside the tool
+loop, and every one of those completions goes through one seam in the engine:
+it publishes an `auxiliary_call_completed` — the seat, the worker that made
+the call, the turn it served (named by the prefetch and the recall tools, and
+by the reflection workers for the turn they learn from; a background pass
+serves none), the model and the tokens — and charges the tokens to the budget
+where a cap is set. The spend rollups and the live projection fold it under
+phase `auxiliary`. It is not an
 `agent_phase_completed` with phase `auxiliary`, because an auxiliary call is
 not a leg of the turn — the reflection workers run after the turn they learn
 from has ended, and a background pass serves no turn at all — and a phase
@@ -860,13 +868,16 @@ picked up when the detached run landed — both events cover the **whole**
 phase. A suspending phase publishes no completed record and its frames are
 stream-only, so the pending-run row carries what the rounds before the
 suspension did — their calls, their narration, their abandoned attempts, their
-tokens and their clock — and the resumed phase continues from it: its frames
+tokens with the model each was billed to, and their clock — and the resumed
+phase continues from it: its frames
 carry those rounds and number the new ones after them, and its one record
 reports the phase from its first round, with the `run_sandbox` call that
 suspended it in the round it was made in, answered with what the resume gave
 it — the run's findings, or a person's reply to its question. Neither carries
 the phase's prompt again — the resumed phase re-entered a conversation rather
-than opening one — so the live row and the record agree across a suspend.
+than opening one — so the live row and the record agree across a suspend. The
+record's tokens also take in the coding run's own spend, under the models its
+agent named (see [Code Sandbox](code-sandbox.md#budgets)).
 
 ### Turn source (the triggering event)
 

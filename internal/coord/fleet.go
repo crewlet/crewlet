@@ -772,12 +772,13 @@ type Record struct {
 //
 // A record is one message, so a run's value is bounded by [MaxRecordBytes],
 // on both backends, and a write past it is [ErrTooLarge] — stored neither
-// whole nor cut. ONE FIELD HAS ANOTHER HOME: a suspended conversation the
-// record cannot hold goes to part records filed under the run's launch
-// ([BridgeCalls.CreateSuspensionPart]), and the record names them in its
-// place. Nothing else does — a question too large for the record is refused,
-// and older builds' view of the run's calls is fitted into the record rather
-// than filed in parts.
+// whole nor cut. TWO VALUES HAVE ANOTHER HOME, each in part records filed
+// under the run's launch and named by the record in its place: a suspended
+// conversation the record cannot hold ([BridgeCalls.CreateSuspensionPart]),
+// and an answer held for the launch that it cannot hold
+// ([BridgeCalls.CreateAnswerPart]). Nothing else does — a question too large
+// for the record is refused, and older builds' view of the run's calls is
+// fitted into the record rather than filed in parts.
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
@@ -919,8 +920,8 @@ type BridgeCallRecord struct {
 }
 
 // Part is one piece of a whole that a record could not hold, filed under the
-// address of the record that names it: a bridged call's, or a run's launch for
-// its suspended conversation (see [BridgeCalls]).
+// address of the whole it belongs to: a bridged call's, a launch's suspended
+// conversation, or an answer held for a launch (see [BridgeCalls]).
 type Part struct {
 	// Part is its place in the whole, from 1.
 	Part int
@@ -1017,7 +1018,7 @@ const recordHeadroom = 64 << 10
 
 // BridgeCalls is the fleet's log of the tool calls bridged coding runs make,
 // and of what else a launch keeps outside its run's own record: the parts of
-// its suspended conversation.
+// its suspended conversation, and of an answer held for it.
 //
 // # Why every call is its own record
 //
@@ -1068,6 +1069,21 @@ const recordHeadroom = 64 << 10
 // KV backend a suspension part is a key of a call part's depth whose segment
 // in the place of a call's number is a word, which the decoder of a call's
 // number refuses.
+//
+// # So does an answer held for a launch, in a class of its own
+//
+// An answer held for a launch's pending call rides the run's record too, and
+// one the record cannot hold goes to part records of its OWN class
+// ([BridgeCalls.CreateAnswerPart]), filed before the record that names them.
+// Under the launch, for the suspension's reason: the answer is the launch's,
+// and its parts go with every purge of it. Numbered from 1 under an id the
+// holder gives the answer, so each whole starts at part 1 of its own address
+// and nothing has to be read to find where one starts; and two holds of one
+// launch — only one of which lands — never file at the same address, so the
+// parts of the one that did not land are named by nothing. A reader of calls,
+// of a call's parts or of the suspension is never handed one: on the KV
+// backend an answer part's key is one segment deeper than a call part's,
+// which every other decoder refuses by its depth.
 //
 // # No retention
 //
@@ -1120,7 +1136,8 @@ type BridgeCalls interface {
 	// the parts filed under it in [BridgeCallRecord.Parts]. A launch with
 	// none answers an empty slice and no error. A part filed under a number
 	// that holds no record belongs to no call and is not returned, and
-	// neither is a part of the launch's suspension.
+	// neither is a part of the launch's suspension or of an answer held for
+	// it.
 	BridgeCalls(ctx context.Context, turnID, launchID string) ([]BridgeCallRecord, error)
 
 	// BridgeCallPage returns one page of one launch's calls. See
@@ -1144,18 +1161,36 @@ type BridgeCalls interface {
 	// record's business: coordination owns only where they are filed.
 	SuspensionParts(ctx context.Context, turnID, launchID string) ([]Part, error)
 
+	// CreateAnswerPart files one part of the whole of an answer held for a
+	// launch, under the launch and the answer's id, reporting false when
+	// that part is already filed — never overwritten, for the reason a
+	// call's record is not.
+	//
+	// The id is the holder's, and names one whole: parts are numbered from
+	// 1 under it, apart from the suspension's and every other answer's. A
+	// part of zero is an error, as is an empty turn id, launch id or answer
+	// id; a value longer than [MaxRecordBytes] is [ErrTooLarge], stored
+	// neither whole nor cut.
+	CreateAnswerPart(ctx context.Context, turnID, launchID, answerID string, part int, value []byte) (bool, error)
+
+	// AnswerParts returns every part filed for one answer held for a launch,
+	// in part order. An answer with none answers an empty slice and no
+	// error. How many there should be, and what they reassemble into, is the
+	// run record's business: coordination owns only where they are filed.
+	AnswerParts(ctx context.Context, turnID, launchID, answerID string) ([]Part, error)
+
 	// BridgeLaunches returns every launch that holds any key in the log — a
-	// call, a part of one, a part of its suspension or its numbering —
-	// ordered by turn id and then launch id: the orphan sweep's read. A
-	// launch holding only parts is listed too, so a part filed after its
-	// launch was purged is found and purged again.
+	// call, a part of one, a part of its suspension or of an answer held for
+	// it, or its numbering — ordered by turn id and then launch id: the
+	// orphan sweep's read. A launch holding only parts is listed too, so a
+	// part filed after its launch was purged is found and purged again.
 	BridgeLaunches(ctx context.Context) ([]BridgeLaunch, error)
 
 	// PurgeBridgeCalls removes every record of one launch, every part filed
-	// under them, the parts of its suspension, and the launch's numbering:
-	// an append that lands afterwards starts again at 1, which is harmless
-	// because a purged launch is one no reader asks about, and the sweep
-	// purges what such an append leaves.
+	// under them, the parts of its suspension and of every answer held for
+	// it, and the launch's numbering: an append that lands afterwards starts
+	// again at 1, which is harmless because a purged launch is one no reader
+	// asks about, and the sweep purges what such an append leaves.
 	PurgeBridgeCalls(ctx context.Context, turnID, launchID string) error
 }
 
@@ -1435,6 +1470,7 @@ type Fleet interface {
 	FloorRegister
 	BackupRegister
 	MaintenanceRegister
+	Promotions
 }
 
 // Follows is which chat threads each seat is following.

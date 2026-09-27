@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -150,20 +151,34 @@ func RecordFor(ev *events.Event) (EventRecord, bool, error) {
 	}, true, nil
 }
 
-// spendEventType is the one event that carries an LLM call's cost.
+// spendEventTypes are the events that carry an LLM call's cost: a turn's phase
+// record, and one completion on a seat's auxiliary model — which is not a leg
+// of a turn and so publishes no phase record (internal/events/types'
+// AuxiliaryCallCompleted says why).
 //
 // Gated on the type rather than on "does the payload happen to have these
 // fields", because several other events carry a `model` or a `turn_id` and a
-// rollup that counted them would be counting calls that never happened.
-const spendEventType = "agent_phase_completed"
+// rollup that counted them would be counting calls that never happened — and
+// `agent_turn_completed` carries the very token fields, as the SUM of its
+// phase records, so counting it too would count every phase twice.
+//
+// A LIST, ordered, because [EventLog.PhaseTokens] reads each type on its own
+// index range: one statement over both types is planned as a scan of every
+// row of either type the table holds, since the (type, time) index then
+// constrains only the type.
+var spendEventTypes = []string{"agent_phase_completed", "auxiliary_call_completed"}
 
-// SpendFor pulls one LLM call's cost out of a phase completion.
+// spendEvent reports whether eventType is one of [spendEventTypes].
+func spendEvent(eventType string) bool { return slices.Contains(spendEventTypes, eventType) }
+
+// SpendFor pulls one LLM call's cost out of a spend record — a phase
+// completion or an auxiliary completion ([spendEventTypes]).
 //
 // Read from the event's serialized form for the same reason [tagsOf] is: an
 // event type this build has never heard of still arrives with its fields
-// intact in the envelope, so a newer node's phase completions are recorded
-// here exactly as a known one's are. Reaching through the decoded payload
-// instead would see nothing at all on an unknown type.
+// intact in the envelope, so a newer node's spend records are recorded here
+// exactly as a known one's are. Reaching through the decoded payload instead
+// would see nothing at all on an unknown type.
 //
 // Nil for every other event, which is what leaves the promoted columns at
 // their defaults — see schema/0015 for why they are columns.
@@ -176,7 +191,7 @@ const spendEventType = "agent_phase_completed"
 // per-field accessors exist: it fails the whole call on one wrong-typed
 // field, where these zero only the offender.
 func SpendFor(eventType string, payload []byte) *Spend {
-	if eventType != spendEventType {
+	if !spendEvent(eventType) {
 		return nil
 	}
 	var body map[string]json.RawMessage
@@ -189,7 +204,7 @@ func SpendFor(eventType string, payload []byte) *Spend {
 // and dropping it because its payload would not decode understates the spend
 // this exists to report.
 func spendOf(eventType string, body map[string]json.RawMessage, decoded bool) *Spend {
-	if eventType != spendEventType {
+	if !spendEvent(eventType) {
 		return nil
 	}
 	if !decoded {

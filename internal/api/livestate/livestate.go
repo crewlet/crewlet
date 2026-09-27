@@ -73,16 +73,17 @@ const (
 	// holds. Any wider window the Tokens view offers is a store query.
 	LiveSpendWindow = 24 * time.Hour
 
-	// SpendRecordLimit is a memory and latency backstop on retained
-	// per-phase records. The real bound is the window above; this only
-	// binds for an org emitting more than this in a day. Truncation drops
-	// the OLDEST records, so an org past the cap sees a rollup covering
-	// slightly less than a day rather than a wrong total.
+	// SpendRecordLimit is a memory and latency backstop on retained spend
+	// records — phase records and auxiliary completions alike, one cap for
+	// both. The real bound is the window above; this only binds for an org
+	// emitting more than this in a day. Truncation drops the OLDEST records,
+	// so an org past the cap sees a rollup covering slightly less than a day
+	// rather than a wrong total.
 	//
 	// Exported so a caller seeding [History.Spend] from a store can bound
 	// its read by the same number: a record past it is dropped on arrival.
-	// A seed that fills it is headed as cut — see [History.Spend] for why a
-	// full page is read that way.
+	// A seed is headed as cut when the store says the window held more than
+	// the read kept — see [History.SpendTruncated].
 	SpendRecordLimit = 8000
 
 	// sandboxEntryMaxAge is how long an in-flight sandbox entry survives
@@ -513,6 +514,15 @@ func (s *LiveState) Apply(env *Envelope) Change {
 
 	if env.Type == "agent_phase_completed" {
 		change.Tokens = s.foldSpend(*env, payload)
+	}
+	// A SPEND RECORD AND NOTHING ELSE, which is why it returns here: an
+	// auxiliary completion is no leg of a turn — most run after the turn
+	// they learn from has ended, and a background pass serves none — so it
+	// neither moves a seat's state nor makes one appear. The seat state
+	// machine below reads a phase record as the seat working.
+	if env.Type == "auxiliary_call_completed" {
+		change.Tokens = s.foldSpend(*env, payload)
+		return change
 	}
 
 	role := str(payload, "role", "agent_role")

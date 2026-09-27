@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -22,11 +23,45 @@ import (
 // something the freeze did not surface asks for it with a tool call —
 // search_knowledge — which is an ordinary entry in its own log.
 
-// prefetcher builds the fetcher the memory tools recall through (equip.go):
-// the recall behind refresh_memory and query_episodes, whose auxiliary calls
-// are recorded under [learning.RecallWorker].
-func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
-	return e.fetcher(company, learning.Attribution{Worker: learning.RecallWorker})
+// recaller is what the memory tools recall through (equip.go): the turn-start
+// prefetch's own searches, re-run on demand by refresh_memory and
+// query_episodes.
+func (e *Engine) recaller(company *Company) builtin.Recaller {
+	return recaller{engine: e, company: company,
+		who: learning.Attribution{Worker: learning.RecallWorker}}
+}
+
+// recaller answers each recall with a fetcher attributed to whom it serves.
+//
+// BOUND PER RECALL rather than per revision, because the revision is where the
+// tools are built and the turn a recall serves exists only at the call: the
+// memory filter refresh_memory re-runs is an auxiliary completion, recorded
+// under the worker and the turn bound here ([builtin.AttributingRecaller]).
+// Bound once per revision instead, every recall's record would name no turn,
+// and read as the spend of a background pass that served none.
+type recaller struct {
+	engine  *Engine
+	company *Company
+	who     learning.Attribution
+}
+
+var _ builtin.AttributingRecaller = recaller{}
+
+// For is this recaller with whom its recalls serve bound. See
+// [builtin.AttributingRecaller].
+func (r recaller) For(who learning.Attribution) builtin.Recaller {
+	r.who = who
+	return r
+}
+
+func (r recaller) RecallEpisodes(ctx context.Context, seat *org.Role, text string,
+	filter learning.EpisodeFilter, offset, limit int,
+) ([]learning.Hit, error) {
+	return r.engine.fetcher(r.company, r.who).RecallEpisodes(ctx, seat, text, filter, offset, limit)
+}
+
+func (r recaller) RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string) ([]learning.DiaryEntry, error) {
+	return r.engine.fetcher(r.company, r.who).RecallMemories(ctx, seat, agentID, hint)
 }
 
 // fetcher builds a fetcher whose auxiliary calls are attributed to who.
@@ -87,12 +122,7 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	agentID, _ := company.Org.AgentIDFor(seat)
 	r := prefetch.Request{
 		Seat: seat, AgentID: agentID.String(), Org: company.Org,
-		// THE RUN, not the unit of work, which is the id every record of
-		// this turn is filed under (ADR-0017). The auxiliary calls the
-		// fetch makes are attributed to the run by the fetcher's model
-		// binding below, and the summary by publishPrefetchSummary's own
-		// argument; this field is the request's statement of the same run.
-		Task: task, TurnID: req.RunID,
+		Task: task,
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's
@@ -108,6 +138,11 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// reference to it.
 		RequiresRecon: requiresRecon(req.Ask()),
 	}
+	// THE RUN, not the unit of work, is the turn the fetch's auxiliary calls
+	// name — the id every record of this turn is filed under (ADR-0017) —
+	// with the unit of work beside it. Bound on the fetcher's models, and
+	// the summary takes the same two from publishPrefetchSummary's own
+	// arguments.
 	blocks := e.fetcher(company, learning.Attribution{
 		Worker: learning.PrefetchWorker, TurnID: req.RunID, WorkKey: req.WorkKey,
 	}).Fetch(ctx, r)

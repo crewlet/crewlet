@@ -129,12 +129,12 @@ type MyWork struct {
 	// Truncated names the blocks that hold more than they carry.
 	//
 	// WITHOUT IT THE ANSWER IS UNFALSIFIABLE. Every block is capped at
-	// [MyWorkRows] and a seat with two hundred assignments rendered exactly
-	// like a seat with twenty, so the one question this answer exists to
-	// settle — what is on my plate — was answered with a number the reader
-	// could neither check nor doubt. It is the rule this package states
-	// against itself everywhere else and did not apply here: an overflow is
-	// counted and said, never silently cut (see [readGroups], [readHistory],
+	// [MyWorkRows], so a seat with two hundred assignments would render
+	// exactly like a seat with twenty, and the one question this answer
+	// exists to settle — what is on my plate — would be answered with a
+	// number the reader could neither check nor doubt. It is the rule this
+	// package states against itself everywhere else: an overflow is counted
+	// and said, never silently cut (see [readGroups], [readHistory],
 	// [readRoutingRecipients], [Projects] and [readWorkload]).
 	//
 	// PER BLOCK, because the seven are seven different claims and "you have
@@ -250,8 +250,8 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 
 	// THE CUT FLAG COMES FROM THE READ ITSELF. [readTasks] already fetches
 	// one row past its limit and mints a cursor when it finds one, so "is
-	// there more" was computed on every one of these blocks and thrown away
-	// four times over. Nothing here costs a second query.
+	// there more" is computed on every one of these blocks anyway. Nothing
+	// here costs a second query.
 	priorities, cut, err := readPriorityRows(ctx, tx, handle, dayStart)
 	if err != nil {
 		return err
@@ -379,19 +379,19 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 	}
 	// EVERY STORED ID GOES TO THE FILTER, and the cut comes after it.
 	//
-	// This took the first twenty ids and then asked SQL which of THOSE are
-	// open and not removed — so a list whose first twenty entries had all
-	// been finished rendered EMPTY while positions 21 to [MaxPriorities]
+	// Cut first — the first twenty ids, then SQL asked which of THOSE are
+	// open and not removed — a list whose first twenty entries had all been
+	// finished would render EMPTY while positions 21 to [MaxPriorities]
 	// held live work somebody had deliberately put there. The block that
 	// can silently come back blank is the highest-signal one in the whole
 	// answer: it is a person's own ordering, and "you have nothing
 	// prioritised" is the one thing it must not say falsely.
 	//
-	// The doc four lines above already states the rule this broke — a
-	// finished task is filtered out HERE rather than rewritten out of the
-	// list — and a cut before the filter is that rule applied to the wrong
-	// set. [MaxPriorities] is 32 against [MyWorkRows]' 20, so the widest
-	// read this can make is twelve ids more than it used to.
+	// The doc above states the rule — a finished task is filtered out HERE
+	// rather than rewritten out of the list — and a cut before the filter
+	// is that rule applied to the wrong set. [MaxPriorities] is 32 against
+	// [MyWorkRows]' 20, so the widest read this makes is twelve ids more
+	// than the rows it answers.
 	ids := person.Priorities
 	open := openGroups()
 	args := make([]any, 0, len(ids)+len(open))

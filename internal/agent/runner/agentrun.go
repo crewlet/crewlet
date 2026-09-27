@@ -207,8 +207,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, round int, state execstate.
 	}
 	surface = built
 
-	// What the run reported it cost is its carried spend, counted by this
-	// record unless an earlier attempt's did — see [Resume.CarriedCounted].
+	// What the run reported about itself — its price and its own model
+	// spend — is its carried spend, counted by this record unless an earlier
+	// attempt's did — see [Resume.CarriedCounted].
 	_, run := r.carried(toolloop.Result{}, r.cfg.Resume.Run)
 	work, described := r.finishWork(ctx, round, work{
 		submit:   submit,
