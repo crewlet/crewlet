@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -175,7 +176,8 @@ type SeatContent struct {
 // ON THE UNIT'S OWN SUBJECT, so two leads editing two units never contend and
 // two editing one do. It carries no parent and no lead: both are structure,
 // and a content record that could move a unit would be a second writer of the
-// tree contending with nobody.
+// tree contending with nobody. Its channel, project and space are the
+// company's to change, whoever leads the unit — see grant.go's header.
 func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent) (
 	WriteResult, error) {
 
@@ -214,8 +216,17 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 			if !found {
 				return statelog.Decision{}, notPlaced(ctx, tx, object)
 			}
-			runtime, changed, err := nextRuntime(object, prior.Runtime,
-				content.Runtime, content.ClearRuntime)
+			runtime, runtimeChanges, err := nextRuntime(object,
+				prior.Runtime, content.Runtime, content.ClearRuntime)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			changed, err := fieldChanges(KindUnit, map[string]bool{
+				"channel": statedChanges(content.Channel, prior.Channel),
+				"project": statedChanges(content.Project, prior.Project),
+				"space":   statedChanges(content.Space, prior.Space),
+				"runtime": runtimeChanges,
+			})
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -245,11 +256,12 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 
 // WriteSeat publishes one seat's content.
 //
-// IT READS THE ROW IT PATCHES for three things only that row can say: whether
-// its runtime half changes, what to carry when the caller left that half out,
-// and — because a seat's email is a value a read MASKS — the stored value a
-// write that hands the mask back is restored from, rather than written as
-// eight characters of `__redacted__`.
+// IT READS THE ROW IT PATCHES for what only that row can say: which of the
+// fields that ask for the company's grant it changes (grant.go's header), what
+// to carry when the caller left the runtime half out, and — because a seat's
+// email is a value a read MASKS — the stored value a write that hands the mask
+// back is restored from, rather than written as eight characters of
+// `__redacted__`.
 func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent) (
 	WriteResult, error) {
 
@@ -298,8 +310,22 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 					"record's own blast radius is filed under that value: %w",
 					object, unit, prior.UnitKey, ErrRefused)
 			}
-			runtime, changed, err := nextRuntime(object, prior.Runtime,
-				content.Runtime, content.ClearRuntime)
+			runtime, runtimeChanges, err := nextRuntime(object,
+				prior.Runtime, content.Runtime, content.ClearRuntime)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			manages, err := readManagesOf(ctx, tx, handle)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			changed, err := fieldChanges(KindSeat, map[string]bool{
+				"email":   emailChanges(content.Email, prior.Email),
+				"manages": managesChanges(content.Manages, manages),
+				"project": statedChanges(content.Project, prior.Project),
+				"space":   statedChanges(content.Space, prior.Space),
+				"runtime": runtimeChanges,
+			})
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -469,7 +495,7 @@ func (w *Writer) publishContent(ctx context.Context, object ObjectRef,
 }
 
 // nextRuntime is the runtime half a content write publishes for object, and
-// which of its fields — none, or the runtime itself — CHANGE the row's.
+// whether it CHANGES the row's.
 //
 // FOUR ANSWERS. Left out, it is the row's own, carried verbatim and changing
 // nothing ([SeatContent.Runtime]). Cleared, it is none, and a clear is a change
@@ -480,22 +506,21 @@ func (w *Writer) publishContent(ctx context.Context, object ObjectRef,
 // the row where the two differ as JSON — key order and whitespace aside — and
 // is the row's own bytes where they do not.
 func nextRuntime(object ObjectRef, prior, stated json.RawMessage, clear bool) (
-	json.RawMessage, []string, error) {
+	json.RawMessage, bool, error) {
 
-	changed := []string{"runtime"}
 	switch {
 	case clear && len(stated) > 0:
-		return nil, nil, fmt.Errorf("chart: the write on %s states a runtime "+
+		return nil, false, fmt.Errorf("chart: the write on %s states a runtime "+
 			"half and clears it — leave the runtime out to keep what the "+
 			"object holds, or clear it, but not both: %w", object, ErrRefused)
 	case clear:
-		return nil, changed, nil
+		return nil, true, nil
 	case len(stated) == 0:
-		return prior, nil, nil
+		return prior, false, nil
 	}
 	restated, err := canonicalObject(stated)
 	if err != nil {
-		return nil, nil, fmt.Errorf("chart: the runtime half of the write on "+
+		return nil, false, fmt.Errorf("chart: the runtime half of the write on "+
 			"%s is not a JSON object (%v) — it is decoded onto the object, and "+
 			"a value of any other shape decodes onto nothing, so the object "+
 			"would run with no model chain and no credentials. Leave it out "+
@@ -506,12 +531,45 @@ func nextRuntime(object ObjectRef, prior, stated json.RawMessage, clear bool) (
 	// grant, never the way that skips it.
 	held, err := canonicalObject(prior)
 	if err != nil || held != restated {
-		return stated, changed, nil
+		return stated, true, nil
 	}
 	// THE SAME HALF, RESTATED, IS THE ROW'S OWN: the record carries the
 	// bytes the row holds, so a restatement in another key order is no
 	// change on any node rather than a rewrite that reads as one.
-	return prior, nil, nil
+	return prior, false, nil
+}
+
+// statedChanges reports whether a caller's value for a field some authority is
+// derived from differs from the row's.
+//
+// THE VALUE AS STATED AND THE VALUE AS STORED, compared as strings, because
+// both are exactly what the apply writes and reads back: the row holds the
+// caller's spelling verbatim, so a spelling that differs is a different value
+// on every node, and a lead sending back what they read changes nothing.
+func statedChanges(stated, stored string) bool { return stated != stored }
+
+// emailChanges is [statedChanges] for a seat's email, which a read may MASK and
+// a write may SEAL.
+//
+// THREE ANSWERS. The mask is the stored value handed back, so it changes
+// nothing ([Writer.resolveMasked] restores it). A stated value equal to the
+// stored one changes nothing — the stored one is a sealed value's `${VAR}`
+// reference, which is what a read serves and a lead therefore sends back.
+// Anything else is a change: a literal would be SEALED under the seat's own
+// name, overwriting the address in the secret store while the reference the
+// row carries stays the same bytes, so a comparison of what the row would hold
+// could never see it — which is exactly the redirect of somebody's attribution
+// this class exists to refuse.
+func emailChanges(stated, stored string) bool {
+	return stated != redact.FieldMask && stated != stored
+}
+
+// managesChanges reports whether a caller's `manages:` list differs from the
+// edges the row authored, compared as the apply stores them — folded,
+// de-duplicated and sorted ([sortedKeys]) — so the order a lead sends back
+// what they read in, and its spelling's case, change nothing.
+func managesChanges(stated, stored []string) bool {
+	return !slices.Equal(sortedKeys(stated), sortedKeys(stored))
 }
 
 // canonicalObject is one runtime half as a comparable string: a JSON object

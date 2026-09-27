@@ -98,16 +98,23 @@ and the seat is nowhere, with their own document saying it exists.
 `POST /chart/units/{key}/rename` for an address (a one-operation batch),
 `POST /chart/import` for a
 whole revision's authored placement, and `GET /company/export` for the document
-back out. What decides them is **which half of an object you are writing**: the
-public half is whoever leads that object, and anything under `runtime` — a
-seat's model chain, its credentials, its sandbox cell, its `mcp_env` — takes
-the company's own `config:write` grant, because a stdio MCP server is
-`exec.Command` with the config's command. What a write asks for is what it
-**changes**, read against the object's row inside the write's own snapshot, so a
-content write that leaves the runtime half out keeps the one the object has —
-which is how a lead corrects a seat's goal without holding its credentials —
-and taking the half away is a clear of its own. Reads split the same way and
-default to **stripped**. See
+back out. What decides them is **which class of field you are changing**, and
+there are four. A unit's and a seat's **prose** — a name, a purpose, a goal,
+responsibilities — is whoever leads that object. The **relations somebody's
+authority is derived from** — a seat's `manages`, `project`, `space` and
+`email`, a unit's `project`, `space` and `channel` — take the company's own
+`config:write` grant, because a lead who could write them could make themselves
+the founder's manager or take over another team's project. The **runtime** half
+— a seat's model chain, its credentials, its sandbox cell, its `mcp_env`, its
+`contact` and `availability` — takes `config:write` too, because a stdio MCP
+server is `exec.Command` with the config's command. And **structure** is the
+batch's, below. What a write asks for is what it **changes**, read against the
+object's row inside the write's own snapshot: a lead sending back the relations
+they read changes nothing, a content write that leaves the runtime half out
+keeps the one the object has — which is how a lead corrects a seat's goal
+without holding its credentials — and taking the half away is a clear of its
+own. Reads split prose and runtime the same way and default to **stripped**.
+See
 [the `/chart/*` reference](../reference/api-endpoints.md#chart--the-org-chart-auth-gated)
 and [Configure via the API](../guides/configure-via-api.md#evolving-the-org-chart).
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -361,6 +362,173 @@ func TestAWriteAsksForWhatItChangesAndCarriesTheRuntimeItLeftOut(t *testing.T) {
 				t.Errorf("the object still holds %s after a clear", runtime)
 			}
 		})
+	}
+}
+
+// THE FIELDS LEADERSHIP IS DERIVED FROM TAKE THE COMPANY'S GRANT.
+//
+// A seat's `manages` says who its manager is, and its `project`, `space` and
+// `email` which tracker project and page container it leads and whose vendor
+// actions are attributed to it; a unit's `project`, `space` and `channel` the
+// same for the team. Decided on the lead relation, each was a way for a lead
+// to grow their own authority: adding the founder to a report's `manages` made
+// the lead the founder's ancestor, and pointing their unit at another team's
+// project key gave them that project's removals, archive and policy. So a
+// write CHANGING one asks for config:write in the decide, and is refused with
+// a GrantRefusal naming exactly the fields that asked — while a lead sending
+// back what they read, in any order and any case the apply folds, changes
+// nothing and writes their prose.
+//
+// A SEALED EMAIL IS NEVER RESEALED BY A REFUSED WRITE: the refusal is decided
+// before the seal, so the address in the secret store is the one it was.
+//
+// Mutation: answer false for any one field's comparison, and its case lands.
+func TestTheFieldsLeadershipIsDerivedFromTakeTheCompanysGrant(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-tree",
+		op(chart.OpCreateUnit, chart.KindUnit, "eng", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "report", "eng"),
+		op(chart.OpCreateSeat, chart.KindSeat, "intern", "eng"),
+		op(chart.OpCreateSeat, chart.KindSeat, "ceo", ""),
+	)
+	authored := chart.SeatContent{
+		Handle: "report", Unit: "eng", Name: "Report", Goal: "ship",
+		Email: "report@example.com", Manages: []string{"intern"},
+		Project: "ENG", Space: "ENG",
+	}
+	unit := chart.UnitContent{
+		Key: "eng", Name: "Engineering", Purpose: "ships the product",
+		Channel: "eng-chat", Project: "ENG", Space: "ENG",
+	}
+	// EVERY CASE STARTS FROM THIS, put back by the company's grant once the
+	// case's own admitted write has landed.
+	restore := func(opID string) {
+		t.Helper()
+		r.whileDraining(func() {
+			if _, err := r.writer.WriteSeat(t.Context(), opID+"-seat", authored); err != nil {
+				t.Errorf("write the seat: %v", err)
+			}
+			if _, err := r.writer.WriteUnit(t.Context(), opID+"-unit", unit); err != nil {
+				t.Errorf("write the unit: %v", err)
+			}
+		})
+	}
+	restore("op-seed")
+	// WHAT A READ SERVES, which is what a lead sends back: the sealed
+	// email's reference, and the edges in whatever order and case.
+	seat := authored
+	seat.Email = r.mustSeat("report").Email
+	seat.Manages = []string{"INTERN"}
+	sealed := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "report"}, "email")
+
+	lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
+	admin := r.writer.As("ops", chart.AuthorHuman,
+		[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{})
+
+	prose := seat
+	prose.Goal = "ship faster"
+	if _, err := lead.WriteSeat(t.Context(), "op-prose", prose); err != nil {
+		t.Fatalf("a lead's prose edit sending back what they read: %v", err)
+	}
+	r.drain()
+	masked := prose
+	masked.Email = redacted()
+	if _, err := lead.WriteSeat(t.Context(), "op-masked", masked); err != nil {
+		t.Fatalf("a lead's prose edit sending back the masked email: %v", err)
+	}
+	unitProse := unit
+	unitProse.Purpose = "ships and runs the product"
+	if _, err := lead.WriteUnit(t.Context(), "op-unit-prose", unitProse); err != nil {
+		t.Fatalf("a lead's edit of a unit's purpose: %v", err)
+	}
+	r.drain()
+	if got := r.mustSeat("report"); got.Goal != "ship faster" || got.Email != seat.Email {
+		t.Fatalf("after the lead's edits the seat reads goal %q and email %q, "+
+			"want theirs and the email it had", got.Goal, got.Email)
+	}
+
+	edit := func(change func(*chart.SeatContent)) chart.SeatContent {
+		next := seat
+		change(&next)
+		return next
+	}
+	editUnit := func(change func(*chart.UnitContent)) chart.UnitContent {
+		next := unit
+		change(&next)
+		return next
+	}
+	for _, c := range []struct {
+		name   string
+		write  func(w *chart.Writer, opID string) error
+		fields []string
+	}{
+		{"manages gains a top seat", seatWrite(edit(func(s *chart.SeatContent) {
+			s.Manages = []string{"intern", "ceo"}
+		})), []string{"manages"}},
+		{"the seat's project moves to another team's", seatWrite(edit(func(s *chart.SeatContent) {
+			s.Project = "OPS"
+		})), []string{"project"}},
+		{"the seat's space moves to the org root's", seatWrite(edit(func(s *chart.SeatContent) {
+			s.Space = "ORG"
+		})), []string{"space"}},
+		{"the seat's email changes", seatWrite(edit(func(s *chart.SeatContent) {
+			s.Email = "somebody.else@example.com"
+		})), []string{"email"}},
+		{"the seat's email is cleared", seatWrite(edit(func(s *chart.SeatContent) {
+			s.Email = ""
+		})), []string{"email"}},
+		{"two at once, named in order", seatWrite(edit(func(s *chart.SeatContent) {
+			s.Space, s.Manages = "ORG", nil
+		})), []string{"manages", "space"}},
+		{"the unit's project moves to another team's", unitWrite(editUnit(func(u *chart.UnitContent) {
+			u.Project = "OPS"
+		})), []string{"project"}},
+		{"the unit's space moves to the org root's", unitWrite(editUnit(func(u *chart.UnitContent) {
+			u.Space = "ORG"
+		})), []string{"space"}},
+		{"the unit's channel changes", unitWrite(editUnit(func(u *chart.UnitContent) {
+			u.Channel = "ops-chat"
+		})), []string{"channel"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.write(lead, "op-lead-"+c.name)
+			var refusal *chart.GrantRefusal
+			if !errors.As(err, &refusal) || !errors.Is(err, chart.ErrRefused) {
+				t.Fatalf("a lead's write: err = %v, want a grant refusal", err)
+			}
+			if !slices.Equal(refusal.Fields, c.fields) ||
+				!slices.Equal(refusal.Grants, []iam.Grant{iam.GrantConfigWrite}) {
+				t.Errorf("refused naming fields %v and grants %v, want %v and "+
+					"[config:write]", refusal.Fields, refusal.Grants, c.fields)
+			}
+			if got, _ := r.sealer.get(sealed); got != "report@example.com" {
+				t.Errorf("a refused write left the sealed email as %q", got)
+			}
+			// APPLIED AS THEY LAND, so each write finds the one before
+			// it rather than waiting out the resolve budget for it.
+			r.whileDraining(func() {
+				if err := c.write(admin, "op-admin-"+c.name); err != nil {
+					t.Errorf("the company's grant making the same change: %v", err)
+				}
+			})
+			restore("op-restore-" + c.name)
+		})
+	}
+}
+
+// seatWrite and unitWrite are one content write, as a case states it.
+func seatWrite(content chart.SeatContent) func(*chart.Writer, string) error {
+	return func(w *chart.Writer, opID string) error {
+		_, err := w.WriteSeat(context.Background(), opID, content)
+		return err
+	}
+}
+
+func unitWrite(content chart.UnitContent) func(*chart.Writer, string) error {
+	return func(w *chart.Writer, opID string) error {
+		_, err := w.WriteUnit(context.Background(), opID, content)
+		return err
 	}
 }
 

@@ -618,6 +618,47 @@ func TestAWriteRefusedOnItsBodyNamesTheGrant(t *testing.T) {
 	}
 }
 
+// A REFUSAL THE DOMAIN MADE ON A GRANT IS THE TABLE'S REFUSAL.
+//
+// Whether a lead's body CHANGES a seat's `manages`, its project, its space or
+// its email is a comparison against the row, which only the domain's decide
+// can make — so the route admits the lead and the domain refuses the fields.
+// Rendered as the chart's own rule (`400 invalid_body`), that refusal told the
+// caller their body was malformed and never which grant would have admitted
+// it; it is `403 unauthorized`, `no_grant`, the grants, and the fields that
+// asked. Mutation: drop the arm and the refusal answers 400.
+func TestADomainGrantRefusalIsTheTablesRefusal(t *testing.T) {
+	t.Parallel()
+	r := serve(t, nil, leadOf(), rel{seats: map[[2]string]bool{{"cto", "sre"}: true}})
+	r.writer.err = fmt.Errorf("chart: publish: %w", &chart.GrantRefusal{
+		Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sre"},
+		Class:  chart.ClassPrivileged, Grants: []iam.Grant{iam.GrantConfigWrite},
+		Fields: []string{"manages", "project"}, Actor: "cto",
+	})
+	rec := patch(r.mux, "/chart/seats/sre", `{"name":"SRE","manages":["ceo"]}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("answered %d, want 403: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Error  string   `json:"error"`
+		Reason string   `json:"reason"`
+		Grants []string `json:"grants"`
+		Fields []string `json:"fields"`
+		Detail string   `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the refusal is not JSON: %v (%s)", err, rec.Body)
+	}
+	if body.Error != string(httpjson.CodeUnauthorized) ||
+		body.Reason != string(authz.ReasonNoGrant) ||
+		!slices.Equal(body.Grants, []string{string(iam.GrantConfigWrite)}) ||
+		!slices.Equal(body.Fields, []string{"manages", "project"}) ||
+		!strings.Contains(body.Detail, "manages, project") {
+		t.Errorf("refusal = %+v, want unauthorized, no_grant, [config:write], "+
+			"the fields and the domain's sentence", body)
+	}
+}
+
 // A BATCH GOES TO THE VERB ITS OPERATIONS NAME.
 //
 // internal/chart publishes a placement and a removal as different records and

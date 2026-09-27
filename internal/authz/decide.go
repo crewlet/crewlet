@@ -92,9 +92,11 @@ const (
 	// object's KIND picks which of the two relations is asked.
 	ClassContainer Class = "container"
 
-	// ClassChartObject — one object in the org chart's own public half: a
-	// unit's name and purpose, a seat's goal and responsibilities.
-	// Whoever leads that object, or the admin path.
+	// ClassChartObject — one object in the org chart's PROSE: a unit's
+	// name and purpose, a seat's goal and responsibilities. Whoever leads
+	// that object, or the admin path. The relations authority is derived
+	// from and the runtime half are the company's grant, whoever leads
+	// it, and are asked separately ([ActionChartContent]).
 	//
 	// ITS OWN CLASS RATHER THAN [ClassContainer], because the chart holds
 	// FOUR lead relations and they are four questions: who leads a seat,

@@ -151,3 +151,59 @@ func TestALeadsPatchThroughTheSurfaceKeepsTheRuntimeItLeftOut(t *testing.T) {
 			rec.Code, rec.Body, iam.GrantConfigWrite)
 	}
 }
+
+// A LEAD'S PATCH OF A FIELD AUTHORITY IS DERIVED FROM IS REFUSED AS THE TABLE
+// REFUSES, AND THE COMPANY'S GRANT MAKES IT.
+//
+// The route admits a lead to the seat they lead and cannot see which fields
+// the body changes; the domain can, and refuses the one that would make the
+// lead the founder's manager. The caller reads the refusal the authority table
+// would have written — `403`, `no_grant`, `config:write` — with the field that
+// asked, and the same lead holding the company's grant makes the change.
+func TestALeadsPatchOfAFieldAuthorityComesFromIsRefusedAsTheTableRefuses(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-tree",
+		op(chart.OpCreateSeat, chart.KindSeat, "report", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "founder", ""),
+	)
+	if _, err := r.writer.WriteSeat(t.Context(), "op-seed", chart.SeatContent{
+		Handle: "report", Name: "Report",
+	}); err != nil {
+		t.Fatalf("seed the seat: %v", err)
+	}
+	r.drain()
+	body := `{"name":"Report","manages":["founder"]}`
+
+	rec := serveChart(r, signedIn(), "report").send(http.MethodPatch,
+		"/chart/seats/report", body)
+	var refusal struct {
+		Error  string   `json:"error"`
+		Reason string   `json:"reason"`
+		Grants []string `json:"grants"`
+		Fields []string `json:"fields"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &refusal)
+	if rec.Code != http.StatusForbidden || refusal.Error != "unauthorized" ||
+		refusal.Reason != "no_grant" ||
+		strings.Join(refusal.Grants, ",") != string(iam.GrantConfigWrite) ||
+		strings.Join(refusal.Fields, ",") != "manages" {
+		t.Fatalf("the lead's PATCH answered %d %s, want 403 unauthorized, "+
+			"no_grant, [config:write] and the field [manages]", rec.Code, rec.Body)
+	}
+	if got := r.column(`SELECT target FROM chart_manages WHERE manager = ?`,
+		"report"); len(got) != 0 {
+		t.Fatalf("the refused edge reached the rows: %v", got)
+	}
+
+	rec = serveChart(r, signedIn(iam.GrantConfigWrite), "report").send(
+		http.MethodPatch, "/chart/seats/report", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the lead holding the company's grant answered %d: %s",
+			rec.Code, rec.Body)
+	}
+	if got := r.column(`SELECT target FROM chart_manages WHERE manager = ?`,
+		"report"); strings.Join(got, ",") != "founder" {
+		t.Errorf("after the company's grant the seat manages %v, want [founder]", got)
+	}
+}

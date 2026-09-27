@@ -124,9 +124,13 @@ const (
 	// internal/chart can say what a unit key and a parent mean and cannot
 	// say what an `mcp_env` key is for. That half is equivalent to shell on
 	// every engine host: a stdio MCP server is exec.Command with the
-	// config's command. So it is decided as an operator surface, and the
-	// public half — a name, a goal, who somebody manages — is decided by
-	// whoever leads the unit.
+	// config's command. So it is decided as an operator surface, and so
+	// are the RELATIONS somebody's authority is derived from — a seat's
+	// manages, project, space and email, a unit's project, space and
+	// channel — which internal/chart refuses below the company's grant
+	// because only its decide can see whether a write changes one. The
+	// PROSE — a name, a purpose, a goal — is decided by whoever leads the
+	// object ([ActionChartContent]).
 	ActionChartRead        Action = "chart.read"
 	ActionChartReadRuntime Action = "chart.runtime.read"
 	ActionChartContent     Action = "chart.content.write"
@@ -425,10 +429,14 @@ var rules = map[Action]rule{
 	// the company holds — so it takes the grant that reads that document
 	// rather than the one that reads the board.
 	ActionChartReadRuntime: {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
-	// A CONTENT EDIT IS THE UNIT'S LEAD'S, which is what makes the chart
+	// A CONTENT EDIT IS THE OBJECT'S LEAD'S, which is what makes the chart
 	// writable by somebody other than whoever holds the deployment: a lead
 	// renaming their own team, restating its purpose or correcting a seat's
-	// goal is not a configuration change.
+	// goal is not a configuration change. It admits the lead to the WRITE;
+	// what the body turns out to change — the runtime half, a relation
+	// leadership is derived from — is asked again with the company's grant,
+	// by the route where the body shows it and by internal/chart where only
+	// the row does.
 	ActionChartContent: {class: ClassChartObject, recency: iam.RecencyStepUp},
 	// STRUCTURE IS THE COMPANY'S. The domain serialises every structural
 	// record on ONE subject for the whole chart, deliberately, because two

@@ -192,8 +192,8 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/chart/units/{key}` | One unit, what it directly holds, and its own history |
 | `GET` | `/chart/seats/{handle}` | One seat, what it manages, and its own history |
 | `GET` | `/chart/history` | The company-wide **reorganisation feed**, newest first: who moved, who was hired, which team was dissolved — quiet changes included |
-| `PATCH` | `/chart/units/{key}` | Edit one unit's content. The **public half** is whoever leads that unit; a body carrying `runtime` takes `config:write` (see [below](#the-two-halves-of-every-object)) |
-| `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same split — decided by whoever leads **that seat**. It carries no `kind`: that is structure, a batch's `set_kind` |
+| `PATCH` | `/chart/units/{key}` | Edit one unit's content. Its **prose** is whoever leads that unit; changing its `project`, `space` or `channel`, or a body carrying `runtime`, takes `config:write` (see [below](#who-may-write-which-part-of-an-object)) |
+| `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same classes — its prose decided by whoever leads **that seat**, and a change to its `manages`, `project`, `space` or `email` taking `config:write`. It carries no `kind`: that is structure, a batch's `set_kind` |
 | `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write` |
 | `POST` | `/chart/units/{key}/rename` `/chart/seats/{handle}/rename` | Change an object's **address**, as a one-operation structural batch. The former one goes on resolving. Takes `config:write` |
 | `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Each edge is `{"object":{...},"parent":...,"lead":...}`, and a seat's edge states its `seat_kind` too — the content writes that follow carry none. Takes `config:write` |
@@ -523,21 +523,42 @@ one document describing a company. `crewlet validate` reads it whole and
 `crewlet config import` is what divides it — the settings to a revision, the
 chart to its log.
 
-#### The two halves of every object
+#### Who may write which part of an object
 
-A unit and a seat each carry a **public** half — a name, a purpose, a goal, who
-somebody manages — and a **runtime** half: a seat's model chain, its
-credentials, its sandbox cell, its worker grants, its schedules, its `mcp_env`.
-The second is the company's configuration under another name, and writing it is
-equivalent to shell on every engine host, because a stdio MCP server is
-`exec.Command` with the config's command.
+Every field of a unit and a seat is in one of four classes, and only the first
+is decided by who leads the object:
 
-So the two are decided differently, and the **payload picks the question**:
+| Class | Fields | Who may write it |
+|---|---|---|
+| **Prose** | a seat's `name`, `backstory`, `goal`, `responsibilities`, `behavioral_guidelines`; a unit's `name`, `type`, `purpose`, `goals`, `knowledge_refs` | whoever **leads that object** — the unit's lead for a unit, the seat's lead for a seat — or `config:write` |
+| **Authority-bearing relations** | a seat's `manages`, `project`, `space`, `email`; a unit's `project`, `space`, `channel` | `config:write` |
+| **Runtime** | `runtime` (a seat's model chain, its credentials, its sandbox cell, its worker grants, its schedules, its `mcp_env`, its `contact` and `availability`), and `clear_runtime` | `config:write` |
+| **Structure** | create, move, lead, kind, rename, remove — [`POST /chart/batch`](#structure-is-neither) | `config:write` |
 
-| What the body carries | Who may write it |
-|---|---|
-| the public half alone | whoever **leads that object** — the unit's lead for a unit, the seat's lead for a seat |
-| anything under `runtime`, or `clear_runtime: true` | `config:write`, the company's own grant |
+The **relations** are what somebody's authority is derived from, which is why
+leading the object does not reach them: a seat's `manages` says who its manager
+is, so a lead adding the founder to a report's list would become the founder's
+ancestor; `project` and `space` are which tracker project and which page
+container a seat or unit leads, so a lead pointing their unit at another team's
+key — or the org root's container — would take over its removals, its archive
+and its policy; a unit's `channel` is which chat channel it answers; and a
+seat's `email` is whose vendor actions — a Jira comment, a push — are
+attributed and routed to it. The **runtime** half is the company's
+configuration under another name, and writing it is equivalent to shell on
+every engine host, because a stdio MCP server is `exec.Command` with the
+config's command.
+
+**What a write asks for is what it CHANGES.** A body is full post-state, so a
+lead's `PATCH` carries the relations too — and sending back the values they
+read (the `email` as the read served it, the `manages` list in any order)
+changes nothing and asks for nothing. Only a relation whose value differs from
+the one the object holds, compared inside the write's own snapshot, asks for
+`config:write`. The route can see the runtime half in the body and asks for the
+grant before it writes; it cannot see which relations a body changes, so the
+domain refuses those — and both refusals are the same answer: `403
+unauthorized` with `reason: no_grant` and `grants: ["config:write"]`, the
+domain's naming the `fields` that asked. A `503 unavailable` with a
+`Retry-After` is a node that cannot decide.
 
 **A body that leaves `runtime` out keeps the runtime half the object has.** It is
 the one field that is not full post-state, because the person editing a goal
@@ -548,11 +569,6 @@ clear that could be spelled by leaving something out is one a caller makes by
 accident. A `runtime` of `null` is refused `400`, since it could mean either,
 and one stated beside `clear_runtime` is refused too. A stated `runtime` must
 be a JSON object.
-
-A body refused on the second question answers exactly as a route refused at its
-pattern does: `403 unauthorized` with `reason` and the `grants` that would have
-admitted it — here `["config:write"]` — and a `503 unavailable` with a
-`Retry-After` when this node cannot decide.
 
 **Every chart write asks for a proof inside `step_up`**, a lead's edit of their
 own team included: it changes what the company executes. The reads — the import
@@ -591,12 +607,12 @@ be placed on it again.
 
 The same rules are enforced a second time **inside the domain**, against the
 grants the authoring party holds — so a surface that skipped its own check
-still cannot write a seat's credentials. The domain decides on what the write
-**changes**, read against the object's row in the same snapshot the write is
-decided in: a `runtime` identical to the one the object holds (key order and
-whitespace aside) changes nothing and asks for nothing, while a different one
-or a clear asks for `config:write` — which is what the route asked for already
-on seeing the field.
+still cannot write a seat's credentials or its relations. A `runtime` identical
+to the one the object holds (key order and whitespace aside) changes nothing
+and asks for nothing there, while a different one or a clear asks for
+`config:write` — which is what the route asked for already on seeing the field.
+A refused write publishes nothing and seals nothing: a literal `email` is sealed
+into the secret store only once the write is admitted.
 
 #### Structure is neither
 

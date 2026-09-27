@@ -69,7 +69,7 @@ type Writer struct {
 	// A WRITER WITH NONE IS A REAL PARTY rather than a misconfiguration —
 	// an agent editing its own team's content holds no capability and
 	// should not — so the zero value is fail-closed instead of refused:
-	// it may author the public half and nothing else.
+	// it may author the prose of an object and nothing else.
 	Grants []iam.Grant
 
 	// Revision is the company configuration revision a write came from,
@@ -187,7 +187,7 @@ type Provenance struct {
 // Carrying the previous party's grants forward is the defect this signature
 // exists to make unwritable: a surface resolving an anonymous caller would
 // hand them whatever the node itself holds. A party with no capabilities
-// passes nil and may author the public half, which is the honest answer for
+// passes nil and may author an object's prose, which is the honest answer for
 // an agent editing its own team.
 //
 // AND SO DOES THE PROVENANCE, replaced rather than carried, for the same

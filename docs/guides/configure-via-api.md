@@ -259,11 +259,15 @@ is nothing to splice into.
 ## Evolving the org chart
 
 The chart is a domain of its own, so it has its own verbs. What decides them is
-**which half of an object you are writing**, and the payload picks the
-question: the public half is whoever leads that object, and anything under
-`runtime` — a seat's model chain, its credentials, its sandbox cell, its
-`mcp_env` — is the company's own `config:write` grant, because a stdio MCP
-server is `exec.Command` with the config's command.
+**which fields your write changes**: an object's prose — a name, a purpose, a
+goal — is whoever leads that object; the relations authority is derived from —
+a seat's `manages`, `project`, `space` and `email`, a unit's `project`, `space`
+and `channel` — and anything under `runtime` — a seat's model chain, its
+credentials, its sandbox cell, its `mcp_env` — are the company's own
+`config:write` grant, because a lead who could write the first could make
+themselves anybody's manager and a stdio MCP server is `exec.Command` with the
+config's command. Sending back what you read changes nothing, so a lead's
+`PATCH` of a goal carries the seat's relations unchanged and lands.
 
 ### Edit one seat's goal
 

@@ -142,10 +142,14 @@ func runtimeStated(w http.ResponseWriter, runtime json.RawMessage) bool {
 // exec.Command on every engine host, and therefore the company's own grant.
 // Whether the half it states actually DIFFERS from the one the object holds
 // is the domain's to say, inside its own snapshot: this is the upper bound a
-// route can decide from the body alone.
-// A body that carries only the public half is a lead editing their team, and
-// the ROUTE has already decided that: its policy names the object the pattern
-// names, and the authority table asked who leads it.
+// route can decide from the body alone. The fields leadership is derived from
+// — a seat's `manages`, `project`, `space` and `email`, a unit's `project`,
+// `space` and `channel` — are in every body, so which of them a write CHANGES
+// is the domain's alone, and its refusal reaches the caller through
+// [refuseGrant] in the same words this one uses.
+// A body that states no runtime is a lead editing their team, and the ROUTE has
+// already decided that: its policy names the object the pattern names, and the
+// authority table asked who leads it.
 //
 // So this is an UPGRADE rather than a second gate. Deciding both the same way
 // makes one of them wrong: gate everything on the company grant and a lead
@@ -211,7 +215,11 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 //     defeat the ledger that exists for exactly this case. So the answer
 //     carries it, and the route accepts it back.
 func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, err error) {
+	var grant *chart.GrantRefusal
 	switch {
+	case errors.As(err, &grant):
+		refuseGrant(w, grant)
+		return
 	case errors.Is(err, chart.ErrRefused):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": err.Error()})
@@ -257,6 +265,29 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}
+}
+
+// refuseGrant renders a record the domain refused for a capability its party
+// does not hold — and it is the refusal a route refused at its pattern gives:
+// `403 unauthorized`, `no_grant`, and the `grants` that would have admitted it.
+//
+// # Why the domain's refusal is rendered as the table's
+//
+// Some of what a write asks for is visible only inside the decide: whether a
+// lead's body CHANGES a seat's `manages`, its project, its space or its email
+// is a comparison against the row, which the route cannot read. So the route
+// admits a lead to the write and the domain refuses the fields — and a refusal
+// on authority must say the same thing wherever it was made, or a client that
+// learned to read `grants` off one would find `invalid_body` on the other and
+// be sent to fix a body that was never wrong. `fields` names what asked, so
+// the person refused knows which edit to take back.
+func refuseGrant(w http.ResponseWriter, refusal *chart.GrantRefusal) {
+	detail := authz.RefusalDetail(authz.ReasonNoGrant, refusal.Grants)
+	if len(refusal.Fields) > 0 {
+		detail["fields"] = refusal.Fields
+	}
+	detail["detail"] = refusal.Error()
+	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 }
 
 // readBody decodes one request body at this surface's bound.

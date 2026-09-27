@@ -41,6 +41,30 @@ import (
 // nowhere here; everything a grant can decide is refused here as well as at
 // the door.
 //
+// # Four classes of field, and the one a lead may write
+//
+// Every field of a chart object is in exactly one of four classes, and only
+// the first is the lead's:
+//
+//   - PROSE — a seat's name, backstory, goal, responsibilities and behavioural
+//     guidelines; a unit's name, type, purpose, goals and knowledge refs.
+//     Whoever leads the object, decided at the door.
+//   - AUTHORITY-BEARING RELATIONS — a seat's `manages`, `project`, `space` and
+//     `email`; a unit's `project`, `space` and `channel`. The company's grant,
+//     because each is what somebody's AUTHORITY is derived from: `manages` is
+//     who a seat's manager is, so a lead adding the founder to a report's list
+//     made themselves the founder's ancestor, with every owner-or-lead read and
+//     every further edit that brings; `project` and `space` are which tracker
+//     project and which page container a seat or unit leads, so a lead pointing
+//     their unit at another team's key — or at the org root's container — took
+//     over its removals, its archive and its policy; a unit's `channel` is
+//     which chat channel's messages it answers; and a seat's `email` is whose
+//     vendor actions — a Jira comment, a push — are attributed and routed to
+//     it. [ownFields] names them per kind, and a write CHANGING one is
+//     [ClassPrivileged].
+//   - RUNTIME — the opaque half. The company's grant.
+//   - STRUCTURE — create, move, lead, kind, rename, remove: [ClassStructure].
+//
 // # Fail-closed, including for a record this file does not name
 //
 // [Writer.record] takes the class as an argument every decide must state, so a
@@ -63,7 +87,9 @@ const (
 	// ClassPrivileged is a content record that CHANGES the OPAQUE half,
 	// which travels on the row's `document` because this domain can say
 	// what a unit key and a parent mean and cannot say what an `mcp_env`
-	// key is for. That is the company's configuration by another name.
+	// key is for — that is the company's configuration by another name —
+	// or that changes a field somebody's authority is derived from (see
+	// this file's header).
 	//
 	// A CHANGE, NOT A PRESENCE. A content record is full post-state, so
 	// every one carries the runtime half its object will hold — the one
@@ -128,7 +154,94 @@ func contentRequirement(changed []string) requirement {
 	return requirement{class: ClassPrivileged, fields: changed}
 }
 
-// mayAuthor refuses a record this writer's party is not entitled to publish.
+// ownFields are the content fields whose change asks for the company's grant,
+// per kind of object — the authority-bearing relations of this file's header,
+// and the runtime half.
+//
+// ONE LIST PER KIND, in the order a refusal names them, and the decides read
+// their comparisons off it ([fieldChanges]) rather than spelling the fields a
+// second time: a field added to a decide and not here would be compared by
+// nothing, which is a lead's write the company's grant was meant to decide.
+var ownFields = map[ObjectKind][]string{
+	KindSeat: {"email", "manages", "project", "space", "runtime"},
+	KindUnit: {"channel", "project", "space", "runtime"},
+}
+
+// fieldChanges is which of kind's [ownFields] a write changes, given whether
+// each one does — every field in the list must be answered, and an answer for
+// a field the list does not hold is a build mistake reported as one.
+func fieldChanges(kind ObjectKind, changed map[string]bool) ([]string, error) {
+	fields := ownFields[kind]
+	if len(changed) != len(fields) {
+		return nil, fmt.Errorf("chart: a %s write compared %d of its %d "+
+			"privileged fields (%v) — every one has to be answered, or a "+
+			"change nothing compared is a change nobody may refuse",
+			kind, len(changed), len(fields), fields)
+	}
+	var out []string
+	for _, field := range fields {
+		differs, answered := changed[field]
+		if !answered {
+			return nil, fmt.Errorf("chart: a %s write did not say whether it "+
+				"changes %s", kind, field)
+		}
+		if differs {
+			out = append(out, field)
+		}
+	}
+	return out, nil
+}
+
+// GrantRefusal is a record refused because the party publishing it does not
+// hold a capability the record needs.
+//
+// TYPED, because the surface renders it as the refusal it is — `403
+// unauthorized` naming the grant — where every other refusal of this domain's
+// rules is the caller's to fix in the body. It answers [ErrRefused] too, since
+// it is one: a decision a retry will not change.
+type GrantRefusal struct {
+	// Object is what the record was about: the object a content write
+	// names, or the tree for a structural record.
+	Object ObjectRef
+
+	// Class is what the record asked for.
+	Class PayloadClass
+
+	// Grants are the capabilities the record needs and the party does not
+	// hold — every one of them needed.
+	Grants []iam.Grant
+
+	// Fields are the content fields whose change asked for them, in
+	// [ownFields]' order; empty for a record whose whole kind asks.
+	Fields []string
+
+	// Actor and Held are the party refused, and what it holds.
+	Actor string
+	Held  []iam.Grant
+}
+
+func (e *GrantRefusal) Error() string {
+	if len(e.Fields) > 0 {
+		return fmt.Sprintf("chart: %s acts with %v, and this write to %s changes "+
+			"%s, which needs %v. A chart object's runtime half is the company's "+
+			"configuration (a seat's models, its credentials, its sandbox cell, "+
+			"its mcp_env), and a seat's manages, project, space and email and a "+
+			"unit's project, space and channel are what leadership and "+
+			"attribution are derived from — so none of them is one team's to "+
+			"change. Send the value you read to keep it, and leave the runtime "+
+			"out", e.Actor, e.Held, e.Object, strings.Join(e.Fields, ", "),
+			e.Grants)
+	}
+	return fmt.Sprintf("chart: %s acts with %v and a %s record needs %v — the "+
+		"chart's structure is the company's shape, so it is not one team's to "+
+		"change", e.Actor, e.Held, e.Class, e.Grants)
+}
+
+// Is makes a grant refusal answer [ErrRefused].
+func (e *GrantRefusal) Is(target error) bool { return target == ErrRefused }
+
+// mayAuthor refuses a record this writer's party is not entitled to publish,
+// with a [GrantRefusal].
 //
 // [ErrRefused] rather than a bare error, so the three outcomes a surface
 // renders stay three: this is a decision that will not change on a retry, not
@@ -138,17 +251,8 @@ func (w *Writer) mayAuthor(object ObjectRef, need requirement) error {
 	if grant == "" || slices.Contains(w.Grants, grant) {
 		return nil
 	}
-	if len(need.fields) > 0 {
-		return fmt.Errorf("chart: %s acts with %v and this write to %s changes "+
-			"%s, which needs %q — the half of a chart object this domain holds "+
-			"as opaque bytes is the company's configuration (a seat's models, "+
-			"its credentials, its sandbox cell, its mcp_env), so it is not one "+
-			"team's to change. Leave it out to keep what the object holds: %w",
-			w.Actor, w.Grants, object, strings.Join(need.fields, ", "), grant,
-			ErrRefused)
+	return &GrantRefusal{
+		Object: object, Class: need.class, Grants: []iam.Grant{grant},
+		Fields: need.fields, Actor: w.Actor, Held: slices.Clone(w.Grants),
 	}
-	return fmt.Errorf("chart: %s acts with %v and a %s record needs %q — "+
-		"the chart's structure is the company's shape, so it is not one "+
-		"team's to change: %w",
-		w.Actor, w.Grants, need.class, grant, ErrRefused)
 }

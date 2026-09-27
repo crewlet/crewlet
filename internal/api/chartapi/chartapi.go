@@ -10,24 +10,28 @@
 // for that refusal to point: a node's first chart was seeded from the company
 // file at boot and there was no way to hire, move or edit anybody afterwards.
 //
-// # Half of every object is decided differently, and the domain drew the line
+// # The fields of an object are decided differently, and the domain drew the line
 //
-// A unit and a seat each carry a PUBLIC half — a name, a purpose, a goal, who
-// somebody manages — and a RUNTIME half that internal/chart holds as opaque
-// bytes on the row's `document`, because that domain can say what a unit key
-// and a parent mean and cannot say what an `mcp_env` key is for. That opaque
-// half is a seat's model chain, its credentials, its sandbox cell, its worker
-// grants and its schedules: a stdio MCP server is exec.Command with the
-// config's command, so writing it is equivalent to shell on every engine
-// host.
+// A unit and a seat each carry PROSE — a name, a purpose, a goal — the
+// RELATIONS somebody's authority is derived from — a seat's `manages`,
+// `project`, `space` and `email`, a unit's `project`, `space` and `channel` —
+// and a RUNTIME half that internal/chart holds as opaque bytes on the row's
+// `document`, because that domain can say what a unit key and a parent mean
+// and cannot say what an `mcp_env` key is for. That opaque half is a seat's
+// model chain, its credentials, its sandbox cell, its worker grants and its
+// schedules: a stdio MCP server is exec.Command with the config's command, so
+// writing it is equivalent to shell on every engine host.
 //
 // So this surface does not invent a privileged-field table. It reads the one
-// the domain already draws, and asks internal/authz a DIFFERENT question for
-// each half — the runtime half on the grant that writes the company document,
-// the public half on whoever leads the unit. A reader gets the same split: the
-// stripped posture is the default and the runtime half takes the grant that
-// reads the company document, because the names of a company's credentials
-// are a map of what to attack.
+// the domain already draws (internal/chart's grant.go), and asks
+// internal/authz a DIFFERENT question for each — the prose on whoever leads
+// the object, the runtime half on the grant that writes the company document
+// as soon as a body states it. Which RELATIONS a body changes is a comparison
+// against the row only the domain's decide can make, so the domain refuses
+// those and this surface renders its refusal as the table's own ([refuseGrant]).
+// A reader gets the runtime split too: the stripped posture is the default and
+// the runtime half takes the grant that reads the company document, because
+// the names of a company's credentials are a map of what to attack.
 //
 // # And structure is neither
 //

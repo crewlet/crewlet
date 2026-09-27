@@ -41,11 +41,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /chart/seats", at(authz.ActionChartRead), s.getSeats)
 	mount("GET /chart/seats/{handle}", at(authz.ActionChartRead), s.getSeat)
 	mount("GET /chart/history", at(authz.ActionChartRead), s.getHistory)
-	// THE PATTERN'S VERB IS THE PUBLIC ONE, and a body carrying the
-	// runtime half re-asks for the operator verb before it writes. The
-	// other order — mount at the operator verb and relax for a public
-	// body — would refuse a lead editing their own team at the door,
-	// before anything had looked at what they sent.
+	// THE PATTERN'S VERB IS THE LEAD'S, and a body carrying the runtime
+	// half re-asks for the operator verb before it writes — while a body
+	// changing a relation somebody's authority is derived from is refused
+	// by the domain, which alone can compare it with the row. The other
+	// order — mount at the operator verb and relax for a prose body —
+	// would refuse a lead editing their own team at the door, before
+	// anything had looked at what they sent.
 	//
 	// EACH NAMES THE OBJECT ITS PATTERN CAN NAME, and they are different
 	// objects: a unit is decided by who leads THE UNIT and a seat by who
