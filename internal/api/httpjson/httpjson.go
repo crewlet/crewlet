@@ -165,10 +165,13 @@ const (
 	CodeBadParams Code = "bad_params"
 
 	// CodeUnavailable is a question this node understood and cannot answer
-	// YET: a projection still catching up, or a coordination store that
-	// could not be reached. It is the code that must never be flattened
-	// into an empty result — "this company has no work" is an answer a
-	// person acts on.
+	// HERE: a projection still catching up, a coordination store that
+	// could not be reached, or a refusal by its state log — including the
+	// ones no wait clears, a full log or a record this node cannot decode.
+	// Whether waiting helps is the Retry-After's to say ([Unavailable]),
+	// and its absence says it will not. It is the code that must never be
+	// flattened into an empty result — "this company has no work" is an
+	// answer a person acts on.
 	CodeUnavailable Code = "unavailable"
 
 	// CodeIdentityUnavailable is a request this node could not decide WHO
@@ -603,8 +606,9 @@ var codes = map[Code]string{
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
 	CodeBadParams: "That query was asked with a parameter this endpoint does not accept.",
-	CodeUnavailable: "This node cannot answer that yet — something it reads " +
-		"is still catching up. Ask again in a moment.",
+	CodeUnavailable: "This node cannot answer that right now — ask it again " +
+		"when it says to, or, where it gives no time, ask another node or an " +
+		"operator.",
 	CodeCSRFOrigin: "That request came from a page this deployment does not " +
 		"serve, so it was refused without being carried out.",
 	CodeIdentityUnavailable: "This node cannot tell who you are at the moment — " +
