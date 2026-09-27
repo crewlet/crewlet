@@ -301,7 +301,7 @@ Before any grant is consulted, a principal has to be *enrolled*.
 | Stage | May act | Means |
 |---|---|---|
 | `invited` | no | Created, has proved nothing yet |
-| `enrolling` | no | Mid-proof — setting a credential, completing a second factor |
+| `enrolling` | no | Part-way through proving who they are. Nothing moves a person here on its own; an administrator may set it. A person who must [enrol a required second factor](#a-required-second-factor-is-enrolled-before-anything-else) first is `active`, holding a session that may only do that |
 | `active` | **yes** | Enrolled |
 | `suspended` | no | Enrolled and blocked, reversibly, with the record kept |
 | `retired` | no | Has left; the record is kept so their audit rows still resolve to a name |

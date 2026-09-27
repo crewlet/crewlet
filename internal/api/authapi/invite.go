@@ -391,8 +391,9 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 
 // refuseSpentInvitationID is every 410 this surface answers: an invitation
 // nobody issued, one redeemed, one aged out, and one whose address somebody is
-// already enrolled under. ONE ANSWER for all of them, for
-// [Service.invitationByID]'s reason.
+// already enrolled under — and one presented with a secret that is not its
+// link's. ONE ANSWER for all of them, for [Service.presentedInvitation]'s
+// reason.
 //
 // # It is a FAILED ATTEMPT, counted like every other
 //

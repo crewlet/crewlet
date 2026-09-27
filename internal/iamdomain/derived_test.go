@@ -293,8 +293,8 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 // named a second object that the first attempt's claim on the address then
 // refused. Derived from the operation key, every attempt of one operation names
 // one id — and an invitation's is derived under the company's key, because the
-// id is the verifier its link carries and a guessable key must not make it a
-// guessable link.
+// id is what its link's secret is derived from and a guessable key must not
+// make it a guessable link.
 func TestACreatesIdentityIsItsOperationKeys(t *testing.T) {
 	t.Parallel()
 	key := operationKey()
