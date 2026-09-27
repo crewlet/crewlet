@@ -520,7 +520,7 @@ func forgetApp(log *routeLog) func(context.Context, string) error {
 	}
 }
 
-// countingSink is the loop's read-only sink with every Record counted.
+// countingSink is a sink with every Record counted.
 //
 // The sink is as much a surface this suite counts writes at as GitHub is:
 // what it records is a credential, and one recorded on a converged world is a
