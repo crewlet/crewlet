@@ -185,7 +185,7 @@ func (r *providerStepUp) confirm(t *testing.T, query string,
 	t.Helper()
 	start := httptest.NewRequest(http.MethodGet,
 		auth.PathAuthOIDCStart+"?"+query+"&return_to=/settings", nil)
-	start.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: r.cookie})
+	start.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: r.cookie})
 	start = start.WithContext(as(start.Context()))
 	started = httptest.NewRecorder()
 	r.mux.ServeHTTP(started, start)
@@ -196,7 +196,7 @@ func (r *providerStepUp) confirm(t *testing.T, query string,
 	callback := httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCCallback+
 		"?state="+url.QueryEscape(state)+"&code="+url.QueryEscape(code), nil)
 	callback.RemoteAddr = "198.51.100.7:5100"
-	callback.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: r.cookie})
+	callback.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: r.cookie})
 	for _, c := range started.Result().Cookies() {
 		callback.AddCookie(c)
 	}

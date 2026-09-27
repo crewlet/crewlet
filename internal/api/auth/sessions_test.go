@@ -746,3 +746,48 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// ON HTTPS A SESSION AUTHENTICATES ONLY UNDER ITS `__Host-` NAME.
+//
+// A browser sets `__Host-crewlet_session` only from this exact host;
+// `crewlet_session` any sibling host can write with a Domain covering this
+// one. The guard read both, so a sibling that planted ITS OWN valid session
+// under the bare name signed a visitor who held none in as that session's
+// person, and everything they then did landed in an account the sibling's
+// author reads. The same bearer — signed, live, one the rows hold — is
+// resolved under the issued name and is anonymous under the other.
+//
+// Mutation: read the bare name too and the planted cookie resolves.
+func TestOnHTTPSASessionAuthenticatesOnlyUnderItsPrefixedName(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	b := config.DefaultBootstrap()
+	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token"}}
+	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.ExternalURL = "https://crewlet.example.com"
+	arm, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: rig.signer, Directory: rig.dir, Applier: rig.dir, Chart: rig.chart,
+		External: b.API.ExternalBase(), Audit: newAuditTrail(t),
+		Now: func() time.Time { return rig.at },
+	})
+	if err != nil {
+		t.Fatalf("build the session arm: %v", err)
+	}
+	g := auth.New(&b).WithSessions(arm)
+
+	issued := rig.call(g, http.MethodGet, "/agents", func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: rig.cookie})
+	})
+	if issued.how != iam.Resolved {
+		t.Fatalf("the bearer under the issued name resolved as %v, want resolved; "+
+			"the planted case below would say nothing", issued.how)
+	}
+	planted := rig.call(g, http.MethodGet, "/agents", func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: rig.cookie})
+	})
+	if planted.how == iam.Resolved || planted.status == http.StatusOK {
+		t.Errorf("the same bearer under the bare name answered %d as %v: a "+
+			"sibling host that plants its own session signs a visitor in as "+
+			"its author", planted.status, planted.how)
+	}
+}

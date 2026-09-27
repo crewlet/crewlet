@@ -35,14 +35,14 @@ func (w *closingWriter) CloseSession(_ context.Context, lineage, person, _,
 	return applied(statelog.Position{}), nil
 }
 
-// A SIGN-OUT ENDS WHICHEVER COOKIE THE GUARD ACCEPTED.
+// A SIGN-OUT ENDS THE BEARER UNDER EITHER NAME.
 //
-// The guard reads a bearer under either name, because a deployment that
-// corrected `api.external_url` from http to https has every signed-in browser
-// still holding the bare one. The sign-out read and cleared only the name this
-// deployment issues — so a person holding the other clicked "sign out", was
-// told they were signed out, and was not: their session was never closed and
-// their cookie was never deleted, and the guard went on accepting it.
+// The guard authenticates only the name this deployment issues — the bare name
+// is one a sibling host can plant on https — but a deployment that corrected
+// `api.external_url` from http to https has every browser that signed in
+// before still HOLDING the bare one, behind a session that is live in the rows
+// until its deadline. A sign-out that reached only the issued name left that
+// session open and its cookie in the jar; this one closes it and clears both.
 //
 // AND THE CLOSE NAMES THE SESSION'S PERSON, off the same verified bearer as
 // the lineage, which is the bucket the record has to be filed under.

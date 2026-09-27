@@ -261,13 +261,26 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // signOut is [Service.Logout] up to its answer: the cookie cleared under
-// every name, and the session it named closed and announced when this node's
-// rows still hold it. Both sign-outs answer after it — the plain one with a
-// body, the provider one with a redirect — so they end a session identically.
+// every name, and each session a cookie named closed and announced when this
+// node's rows still hold it. Both sign-outs answer after it — the plain one
+// with a body, the provider one with a redirect — so they end a session
+// identically.
+//
+// EVERY BEARER THE BROWSER HOLDS, under either name ([session.Held]), where
+// the guard authenticates only the name this deployment issues: a browser
+// still holding the name an http deployment issued before it moved to https
+// is signed in by nothing any more, and its session is closed here rather
+// than left live behind a cookie the sign-out merely forgot.
 func (s *Service) signOut(w http.ResponseWriter, r *http.Request) {
 	s.clearSession(w)
+	for _, cookie := range session.Held(r, s.boot.API.ExternalBase()) {
+		s.endHeld(r, s.signer.Validate(r.Context(), s.directoryFor(), cookie))
+	}
+}
 
-	presented := s.presentedSession(r)
+// endHeld closes and announces one session a sign-out found, when this node's
+// rows still hold it — see [Service.Logout].
+func (s *Service) endHeld(r *http.Request, presented session.Validation) {
 	bearer := presented.Bearer
 	if bearer.Lineage == uuid.Nil {
 		// NOTHING TO END, and it is not an error: a client that clears
@@ -499,13 +512,11 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 // absolute deadline, whether the named lineage is this cookie's — is the
 // bearer's own.
 //
-// EITHER NAME, by [session.Presented]'s rule — the guard's own. Reading only
-// the name this deployment issues left a browser that still held the other
-// (every one signed in before `api.external_url` moved from http to https)
-// signed in after it signed out: the guard went on accepting the cookie, and
-// the sign-out neither closed its session nor cleared it.
+// THE NAME THIS DEPLOYMENT ISSUES, by [session.Presented]'s rule — the
+// guard's own, so what this reads is what the request was authenticated with.
+// The sign-out alone reaches the other name too, through [session.Held].
 func (s *Service) presentedSession(r *http.Request) session.Validation {
-	cookie := session.Presented(r)
+	cookie := session.Presented(r, s.boot.API.ExternalBase())
 	if cookie == "" {
 		return session.Validation{}
 	}
@@ -616,8 +627,12 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 // named sign-out ended, so a person who ends the session they are using is not
 // left looking at a signed-in page.
 func (s *Service) clearIfPresented(w http.ResponseWriter, r *http.Request, lineage string) {
-	if lineage == s.presentedSession(r).Bearer.Lineage.String() {
-		s.clearSession(w)
+	for _, cookie := range session.Held(r, s.boot.API.ExternalBase()) {
+		held := s.signer.Validate(r.Context(), s.directoryFor(), cookie)
+		if lineage == held.Bearer.Lineage.String() {
+			s.clearSession(w)
+			return
+		}
 	}
 }
 

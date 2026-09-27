@@ -85,7 +85,7 @@ func (r *stepUpRig) stepUp(t *testing.T) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/step-up",
 		strings.NewReader(string(body)))
 	req.RemoteAddr = "203.0.113.9:4711"
-	req.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: r.cookie})
+	req.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: r.cookie})
 	req = req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
 		ID:    uuid.MustParse(r.estate.person.ID),
 		Login: "jane.doe", Kind: iam.KindPerson, Stage: iam.StageActive,

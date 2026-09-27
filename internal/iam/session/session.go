@@ -202,31 +202,61 @@ func Clear(externalURL string) *http.Cookie {
 	return out
 }
 
-// CookieNames are the two names a browser can be holding a bearer under, in
-// the order a request's are read.
+// CookieNames are the two names a browser can be holding a bearer under, the
+// prefixed one first.
 //
 // BOTH, AND IN ONE PLACE. The scheme of `api.external_url` decides which name
 // a node ISSUES, but a browser keeps whatever it was issued: a deployment that
 // corrected its URL from http to https has every signed-in browser still
-// presenting the bare name. Everything that READS a bearer therefore reads
-// both, and everything that ENDS one clears both — and the sign-out read only
-// the configured name and cleared only it, so after such a correction a
-// person who signed out stayed signed in, their session never closed. The
-// prefixed name first, because it is the one this deployment issues when it
-// can and the only one a sibling host cannot plant.
+// holding the bare name. Everything that ENDS a bearer therefore reaches both
+// — [Held] and [Clears] — while only the issued name AUTHENTICATES, which is
+// [Presented]'s rule.
 var CookieNames = []string{HostCookieName, CookieBaseName}
 
-// Presented is the bearer a request carries under either name, or empty.
+// Presented is the bearer a request carries under the name a deployment
+// reachable at externalURL issues — [CookieName] — or empty.
 //
-// It reads nothing else and decides nothing: a value under either name still
-// has to verify, so reading both discloses nothing and costs a map lookup.
-func Presented(r *http.Request) string {
-	for _, name := range CookieNames {
-		if c, err := r.Cookie(name); err == nil && c.Value != "" {
-			return c.Value
-		}
+// ONE NAME, READ AS ISSUED, because the prefix is the whole of what keeps a
+// sibling host's cookie out: a browser sets `__Host-crewlet_session` only from
+// this exact host, while `crewlet_session` any host under the same registrable
+// domain can write, with a Domain covering this one. Read under either name —
+// as it was, so that a deployment moving from http to https kept its browsers
+// signed in — a sibling that planted ITS OWN valid session under the bare name
+// signed a visitor who held none in as that session's person: every change
+// they then made landed in an account the sibling's author can read, which is
+// the fixation the prefix exists to close. So a move to https signs each
+// browser in again once, and [Held] is what lets the sign-out still end what
+// the old name held.
+func Presented(r *http.Request, externalURL string) string {
+	if c, err := r.Cookie(CookieName(externalURL)); err == nil {
+		return c.Value
 	}
 	return ""
+}
+
+// Held is every bearer a request carries under either name, the one a
+// deployment reachable at externalURL issues first.
+//
+// FOR ENDING AND NEVER FOR AUTHENTICATING: a sign-out closes each one that
+// verifies and is still live, so a browser holding the name an http deployment
+// issued before it moved to https — a name [Presented] no longer reads — has
+// that session closed rather than merely its cookie forgotten. Reaching a
+// planted cookie here ends its planter's own session, which is theirs to lose.
+func Held(r *http.Request, externalURL string) []string {
+	issued := CookieName(externalURL)
+	var out []string
+	if c, err := r.Cookie(issued); err == nil && c.Value != "" {
+		out = append(out, c.Value)
+	}
+	for _, name := range CookieNames {
+		if name == issued {
+			continue
+		}
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			out = append(out, c.Value)
+		}
+	}
+	return out
 }
 
 // Clears are the cookies that end a session in a browser under EVERY name one

@@ -375,14 +375,16 @@ func (g *Guard) WithSessions(s *Sessions) *Guard {
 	return g
 }
 
-// cookieOf is the bearer a request presents, or empty.
+// cookieOf is the bearer a request presents under the name this deployment
+// issues, or empty.
 //
-// BOTH NAMES ARE READ, because a deployment's scheme decides which one a
-// browser holds and a node whose `api.external_url` was just corrected from
-// http to https would otherwise refuse every cookie already in every jar
-// until each person signed in again. The rule is [session.Presented]'s, so the
-// sign-out that ends a bearer reads exactly the ones this resolves.
-func cookieOf(r *http.Request) string { return session.Presented(r) }
+// ONE NAME, never either: the bare name is one a sibling host can plant on an
+// https deployment, and a planted session read as the visitor's is a sign-in
+// they never made — see [session.Presented], whose rule this is, so the
+// sign-in surface reads exactly the bearer this resolves.
+func (s *Sessions) cookieOf(r *http.Request) string {
+	return session.Presented(r, s.external)
+}
 
 // needOf is which column of the session table this request reads.
 //
@@ -440,7 +442,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	ceiling []iam.Grant, proof proofWindows,
 	tokens func(login string) (config.APIToken, bool)) sessionAnswer {
 
-	cookie := cookieOf(r)
+	cookie := s.cookieOf(r)
 	if cookie == "" {
 		return sessionAnswer{how: iam.Anonymous}
 	}

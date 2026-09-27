@@ -391,7 +391,8 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 func (s *Service) replacedSession(w http.ResponseWriter, r *http.Request,
 	held iamdomain.Sighting) (session.Validation, bool) {
 
-	v := s.signer.Validate(r.Context(), s.directoryFor(), session.Presented(r))
+	v := s.signer.Validate(r.Context(), s.directoryFor(),
+		session.Presented(r, s.boot.API.ExternalBase()))
 	switch {
 	case v.Row == session.RowValid && v.Bearer.Person == held.ID:
 		return v, true

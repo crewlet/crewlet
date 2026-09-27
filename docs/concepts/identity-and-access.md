@@ -1560,12 +1560,18 @@ sign-in would appear to succeed and then not stick. The scheme comes from the
 *configured* url rather than from the request, because the engine sits behind a
 TLS-terminating proxy and reads no `r.TLS`.
 
-A node **issues** one name and **accepts** either: a deployment that corrects
-its url from http to https has every signed-in browser still holding the bare
-one, and refusing those would sign everybody out. Signing out follows the same
-rule — it ends the session behind whichever name the browser presented and
-clears **both** — so a browser can never be accepted under a name the sign-out
-does not reach.
+A node **issues** one name and **authenticates only that one**. The prefix is
+the whole of what keeps another host's cookie out: a browser sets
+`__Host-crewlet_session` only from this exact host, while `crewlet_session` any
+sibling host under the same registrable domain can write, with a `Domain`
+covering this one. Were the bare name read on https too, a sibling that planted
+its *own* valid session would sign a visitor who held none in as that session's
+person — and everything they then did would land in an account the sibling's
+author can read. So a deployment that corrects its url from http to https
+signs each browser in again once. **Signing out reaches both names** — it ends
+the session behind either one the browser holds and clears both — so a browser
+still holding the bare name from before the move has that session closed, not
+merely its cookie forgotten.
 
 A sign-out closes and announces only a session this node's rows still hold. A
 cookie past its deadline, a revoked person's cookie and one naming a session a
