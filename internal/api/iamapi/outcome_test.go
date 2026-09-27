@@ -304,7 +304,33 @@ func TestABootstrapMintFailureSaysWhetherWaitingHelps(t *testing.T) {
 				t.Errorf("answered %d with Retry-After %q (%v), want %d with %q",
 					got.status, got.header.Get("Retry-After"), got.body, tc.want, tc.retry)
 			}
+			// A FAULT'S OWN WORDS STAY IN THE LOG, where `internal_error`
+			// sends a reader: a path on this host is not the caller's.
+			if tc.want == http.StatusInternalServerError {
+				if detail, _ := got.body["detail"].(string); strings.Contains(detail, "permission denied") {
+					t.Errorf("the fault's own words reached the caller: %v", got.body)
+				}
+			}
 		})
+	}
+}
+
+// A WRITE THAT FAULTED KEEPS ITS OWN WORDS IN THE LOG.
+//
+// `internal_error` says the reason is in this node's log, and a fault's reason
+// is a store's or a driver's words — a database path here — which the directory
+// sent as the answer's `detail`. The control is a refusal by the domain, whose
+// sentence is written for the caller and still travels.
+func TestADirectoryWriteThatFaultedKeepsItsWordsInTheLog(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.err = errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+	got := r.as(administrator(), http.MethodDelete, "/iam/people/"+bob.String()+"/sessions", nil)
+	if got.status != http.StatusInternalServerError {
+		t.Fatalf("a write that faulted answered %d (%v), want 500", got.status, got.body)
+	}
+	if detail, _ := got.body["detail"].(string); strings.Contains(detail, "/var/lib") {
+		t.Errorf("the fault's own words reached the caller: %v", got.body)
 	}
 }
 

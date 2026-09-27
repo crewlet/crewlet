@@ -103,10 +103,12 @@ func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		// A FAULT WAITING DOES NOT CLEAR — the file beside the store
 		// could not be written, this node's randomness failed — so a 500
 		// rather than a 503 telling a client to retry for ever.
+		// LOGGED AND NOT ANSWERED: the envelope's sentence sends a
+		// reader to this node's log, and a fault's own words — a path
+		// on this host — are for whoever reads it there.
 		log.ErrorContext(r.Context(), "api_iam_bootstrap_mint_failed",
 			"error", err)
-		httpjson.FailWith(w, http.StatusInternalServerError,
-			httpjson.CodeInternalError, map[string]string{"detail": err.Error()})
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
 	log.WarnContext(r.Context(), "iam_bootstrap_code_minted",

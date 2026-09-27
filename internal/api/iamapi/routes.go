@@ -413,8 +413,15 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 			withExtra(extra, httpjson.Detail{"detail": err.Error(), "op_id": opID}))
 		return
 	case err != nil:
+		// THE FAULT'S OWN WORDS GO TO THE LOG, which is where the
+		// envelope's sentence sends a reader: they are a store's or a
+		// driver's, and administering people does not make a caller
+		// somebody a database path is for. What the caller passed and
+		// what already landed still travel.
+		log.WarnContext(r.Context(), "api_iam_write_failed", "op_id", opID,
+			"error", err)
 		refuse(http.StatusInternalServerError, httpjson.CodeInternalError,
-			httpjson.Detail{"detail": err.Error()})
+			httpjson.Detail{})
 		return
 	}
 

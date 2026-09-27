@@ -896,6 +896,45 @@ func TestAFloorOnAnotherLogIsABadRequest(t *testing.T) {
 	}
 }
 
+// A FAULT'S OWN WORDS STAY IN THE LOG.
+//
+// `internal_error` says the reason is in this node's log, and a fault's reason
+// is a store's or a driver's words — a database path here. This surface sent
+// them as the answer's `detail` and logged nothing, on a read and on a write
+// alike. The control is a state-log refusal, whose detail is written for the
+// caller and still travels.
+func TestAFaultsOwnWordsStayInTheLog(t *testing.T) {
+	t.Parallel()
+	fault := errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+
+	read := serve(t, &reader{err: fault}, leadOf(iam.GrantStateRead), leads())
+	rec := httptest.NewRecorder()
+	read.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x/chart", nil))
+	if rec.Code != http.StatusInternalServerError ||
+		strings.Contains(rec.Body.String(), "/var/lib") {
+		t.Errorf("a read that faulted answered %d: %s — want 500 without the "+
+			"store's words", rec.Code, rec.Body)
+	}
+
+	write := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	write.writer.err = fault
+	if rec := post(write.mux, "/chart/units/engineering/rename",
+		`{"to":"platform"}`); rec.Code != http.StatusInternalServerError ||
+		strings.Contains(rec.Body.String(), "/var/lib") {
+		t.Errorf("a write that faulted answered %d: %s — want 500 without the "+
+			"store's words", rec.Code, rec.Body)
+	}
+
+	refused := serve(t, &reader{err: &statelog.Refused{Code: statelog.RefuseDeferred,
+		Level: statelog.ReadStale, Detail: "a record at version 9 this node cannot decode"}},
+		leadOf(iam.GrantStateRead), leads())
+	rec = httptest.NewRecorder()
+	refused.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x/chart", nil))
+	if !strings.Contains(rec.Body.String(), "version 9") {
+		t.Errorf("a refusal lost its own words: %s", rec.Body)
+	}
+}
+
 // A RENAME NAMES THE ADDRESS IT IS ADDRESSED BY, and refuses the one that
 // changes nothing.
 func TestARenameGoesToTheRekeyVerb(t *testing.T) {

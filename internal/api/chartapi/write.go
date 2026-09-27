@@ -191,8 +191,7 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 			httpjson.Detail{"detail": err.Error()})
 		return
 	case err != nil:
-		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeInternalError,
-			map[string]string{"detail": err.Error()})
+		internalError(w, "api_chart_write_failed", err)
 		return
 	}
 	body := map[string]any{

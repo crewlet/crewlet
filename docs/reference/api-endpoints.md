@@ -83,6 +83,12 @@ one JSON object, and it always has the same three parts in the same places:
   poll this one. The reason is in the detail; [Read
   consistency](../guides/consistency.md#a-writes-refusals) says what each one
   asks of whom.
+- **A `500 internal_error` carries no reason.** Its sentence says the reason
+  is in this node's log, and that is where it is: a fault's own words are a
+  store's or a driver's — a database path, a connection string — and holding
+  a grant does not make a caller somebody they are meant for. A route may
+  still say what the request itself carried and what of it already landed
+  (`/iam` does, beside the code), never what failed underneath.
 
 `error` and `message` are RESERVED: a route's own detail can never displace
 them, so a client that branches on the code cannot find it missing because a

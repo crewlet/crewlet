@@ -223,8 +223,21 @@ func (s *Service) readFailed(w http.ResponseWriter, err error) {
 			httpjson.Detail{"detail": err.Error()})
 		return
 	}
-	httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeInternalError,
-		map[string]string{"detail": err.Error()})
+	internalError(w, "api_chart_read_failed", err)
+}
+
+// internalError answers a fault: `internal_error`, whose sentence says the
+// reason is in this node's log — so the reason is LOGGED here, and never put
+// in the body.
+//
+// A FAULT'S OWN WORDS ARE A STORE'S OR A DRIVER'S — a database path, a
+// connection string — and holding a grant on the chart does not make a caller
+// somebody they are meant for; the query registry and the socket keep them to
+// the log for the same reason. This surface sent them as `detail` and logged
+// nothing, so the envelope pointed a reader at a log that did not have them.
+func internalError(w http.ResponseWriter, event string, err error) {
+	log.Warn(event, "error", err)
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 
 // retryAfter is the Retry-After on one of this surface's 503s, in seconds, and
