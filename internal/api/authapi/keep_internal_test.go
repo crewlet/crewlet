@@ -3,9 +3,6 @@ package authapi
 import (
 	"context"
 	"errors"
-	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,6 +10,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"

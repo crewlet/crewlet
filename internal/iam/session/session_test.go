@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/runtoken"
-	"github.com/google/uuid"
 )
 
 // --- the rig ----------------------------------------------------------------- //
