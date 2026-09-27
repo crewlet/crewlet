@@ -176,12 +176,12 @@ const (
 	// guesser reach: somebody mistyping their own login presents one or
 	// two, and one node's source curve admits one client sixteen VERIFIED
 	// attempts in its first minute (credential.SourceAllowance free, then
-	// a wait that doubles) and two a minute after that — and a bearer
-	// spray meets the same source curve in the request guard. What reaches
-	// past it is a client a load balancer spreads across a fleet, one curve
-	// per node, and for that "at least 256" is already all an operator does
-	// anything with. At eight bytes a digest it bounds the counting to about
-	// 130 KiB across every tally a minute can hold.
+	// a wait that doubles) and two a minute after that. The one arm that
+	// can present hundreds of distinct values in a minute from one client
+	// is a bearer spray, which no curve slows because a bearer's value is
+	// its protection — and for that, "at least 256" is already all an
+	// operator does anything with. At eight bytes a digest it bounds the
+	// counting to about 130 KiB across every tally a minute can hold.
 	MaxSubjectsCounted = 256
 
 	// MaxPeopleNamed is how many resolved people one row names.

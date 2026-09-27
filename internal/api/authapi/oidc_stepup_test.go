@@ -461,14 +461,13 @@ func TestAProviderStepUpForSomebodyElseReplacesNothing(t *testing.T) {
 
 // THE STEP-UP START ANSWERS EVERY BEARER ALIKE.
 //
-// The start is unguarded, so the curve a bearer meets on a guarded route does
-// not stand in front of it — and it read the guard's resolution: a Tier A
-// token that matched was a `403 step_up_required`, one that did not was a
-// `401`. That difference was a way to test bearer values that nothing
-// throttled. Every presented bearer is now the same refusal, in the same
-// bytes, before its resolution is read — through the REAL guard here, since
-// the property is about what the guard hands the route. Mutation: read the
-// resolution first and the wrong value answers 401 while the right one
+// The start is unguarded, and it read the guard's resolution: a Tier A token
+// that matched was a `403 step_up_required`, one that did not was a `401`.
+// That difference was a way to test bearer values on a route the guard does
+// not judge them on. Every presented bearer is now the same refusal, in the
+// same bytes, before its resolution is read — through the REAL guard here,
+// since the property is about what the guard hands the route. Mutation: read
+// the resolution first and the wrong value answers 401 while the right one
 // answers 403.
 func TestAProviderStepUpStartAnswersEveryBearerAlike(t *testing.T) {
 	t.Parallel()

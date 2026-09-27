@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,9 +60,6 @@ import (
 // reached — a 400 for a missing parameter, a 503 for a tracker this fixture
 // does not run — because what the matrix asserts is that the authority layer
 // let it through, and 401 and 403 are the only two answers that layer gives.
-// postureClients numbers the matrix's requests, each its own client.
-var postureClients atomic.Uint32
-
 func TestThePostureMatrix(t *testing.T) {
 	t.Parallel()
 	const (
@@ -267,13 +263,6 @@ func TestThePostureMatrix(t *testing.T) {
 					body = strings.NewReader(row.body)
 				}
 				req := httptest.NewRequest(row.method, row.path, body)
-				// A CLIENT OF ITS OWN PER REQUEST: the refused shapes
-				// are failed attempts on their source's bearer curve,
-				// and from one address the matrix would be measuring
-				// the curve rather than the authority layer.
-				n := postureClients.Add(1)
-				req.RemoteAddr = fmt.Sprintf("10.%d.%d.%d:5100",
-					n>>16&0xff, n>>8&0xff, n&0xff)
 				if s.header != "" {
 					req.Header.Set("Authorization", s.header)
 				}

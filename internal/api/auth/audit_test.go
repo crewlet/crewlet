@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -131,11 +130,8 @@ func TestARefusedBearerIsCountedAndNeverPublished(t *testing.T) {
 	t.Parallel()
 	tr := newAuditTrail(t)
 	g := tierA(t, tr, false)
-	// Twenty-five clients, one refusal each: the source's own curve is a
-	// different case's, and would turn most of these into 429s.
-	for i := range 25 {
-		if got, _ := from(g, http.MethodGet, "/agents", "not-the-token",
-			"203.0.113."+strconv.Itoa(i+1)); got != http.StatusUnauthorized {
+	for range 25 {
+		if got := call(g, answering(http.StatusOK), "/agents", "not-the-token"); got != http.StatusUnauthorized {
 			t.Fatalf("a wrong bearer answered %d", got)
 		}
 	}

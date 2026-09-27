@@ -1031,35 +1031,36 @@ failure: that is the link's holder, or a mail scanner re-reading it. Counted, a
 scanner re-fetching one old link put the address it scans from on the curve.
 A guesser who does not hold the link can never reach the difference.
 
-### A bearer meets the same curve
+### A bearer is protected by its value, not by a curve
 
 The password routes are not the only place a guess is answered. Every guarded
-route compares the bearer it is handed — a Tier A token or a machine token —
-and whether it matched is the whole of what the caller learns: `401`, or the
-route's own answer. That comparison used to run as fast as requests arrived, on
-every route, `POST /auth/token` among them. The request guard now admits each
-presented bearer on the **source's** curve before comparing it: ten refusals in
-the window free, then the same doubling wait, `429` with a `Retry-After` past
-five seconds.
+route compares the bearer it is handed — a Tier A token, a machine token or a
+session cookie — and whether it matched is the whole of what the caller learns:
+`401`, or the route's own answer. That comparison is answered as fast as
+requests arrive, on every guarded route alike, and what makes guessing through
+it hopeless is the value itself: a machine token carries 32 bytes from
+`crypto/rand`, a session cookie is an HMAC under the fleet's keyring, and a
+Tier A value is at least 26 characters — `crewlet validate` refuses a shorter
+one, and `crewlet secrets keygen` mints one.
 
-- **Admitted before the comparison**, because a curve consulted afterwards
-  would let a correct guess through whatever it said. So a valid bearer from a
-  source that is spraying waits with it — one more reason to name your proxy
-  in `api.trusted_proxies`, since otherwise every source is the proxy's.
-- **A match clears nothing.** It proves the caller holds one credential, not
-  that the other values from their address were theirs; clearing the source
-  would let anybody holding a token wipe the record of their guesses at
-  another by presenting their own between them.
-- **Local to the node.** The curve never touches the coordination store: a
-  Tier A token is the way back in when the provider or the store is down, and
-  a shared window a spray could fill would make that way back in something an
-  outsider can close fleet-wide.
-- **Only where the guard relies on the bearer.** A bearer this node could not
-  check (`503`) counts as nothing, and an unguarded route's own credential —
-  the Forge relay's JWT on `/webhooks/forge` — never meets the curve. That
-  line holds only while no unguarded route answers differently for a good
-  bearer and a bad one, which is why the provider step-up start refuses every
-  presented bearer alike.
+No curve stands in front of the comparison, deliberately. A bearer names
+nobody until it is compared, so the only thing a curve there could be keyed on
+is the **address**, and a refusal decided on an address is one anybody sharing
+it holds shut for everybody else — an office behind one NAT, a VPN's egress, or
+the whole internet behind a proxy not named in `api.trusted_proxies`. One was
+tried, and one stranger's guess every twenty-five seconds kept every valid
+token at that address, the break-glass Tier A token included, answering `429`
+on every guarded route; a client with a dozen *valid* requests in flight met
+the same `429` with nobody guessing at all. A curve on `POST /auth/token` alone
+would slow nobody who is guessing — every other guarded route answers the same
+guess the same way — and would still let a stranger at the address close the
+one route a break-glass holder uses to reach the dashboard.
+
+What a guess costs the guesser is **visibility**: every refused bearer on a
+guarded route is a failed attempt in the audit trail's per-client, per-minute
+tally — `iam_login_failures`, naming the client and how many different values
+it tried — and an unguarded route's own credential, such as the Forge relay's
+JWT on `/webhooks/forge`, is not this guard's to count.
 
 ---
 

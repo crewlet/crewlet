@@ -281,10 +281,7 @@ type Throttle struct {
 type ThrottleDeps struct {
 	// Attempts is the fleet's window the pair curve is seeded from. NIL IS
 	// A REAL POSTURE, not a misconfiguration: a single node with no
-	// coordination backend still throttles on its own curve, and the
-	// request guard's bearer throttle never touches the fleet at all — the
-	// documented way back in must not be closable by a spray that fills a
-	// shared bucket.
+	// coordination backend still throttles on its own curve.
 	Attempts coord.Attempts
 
 	// Key digests a (subject, source) pair before it is held anywhere,
@@ -313,16 +310,6 @@ func NewThrottle(deps ThrottleDeps) (*Throttle, error) {
 			"fleet")
 	}
 	return build(deps), nil
-}
-
-// LocalThrottle is a throttle on this node's own curve alone, on the wall
-// clock: what the request guard throttles bearer credentials with.
-//
-// IT CANNOT FAIL because it has no fleet window, which is the one input
-// [NewThrottle] refuses — so it answers no error rather than one nothing can
-// produce.
-func LocalThrottle(logger *slog.Logger) *Throttle {
-	return build(ThrottleDeps{Logger: logger})
 }
 
 // build is [NewThrottle] past its one refusal.
