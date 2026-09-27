@@ -49,11 +49,11 @@ func TestASealedSeedIsTheOnlyFormOfItAnyRowHolds(t *testing.T) {
 			if err := rig.during(func() error {
 				_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 					PersonID: id, OpID: "op-enrol-app", Reason: "enrolled a second factor",
-					Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+					Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 						return append(held, iamdomain.Credential{
 							V: iamdomain.DocumentVersion, ID: "app",
 							Method: iamdomain.MethodTOTP, Verifier: stored,
-						})
+						}), nil
 					},
 				})
 				return err

@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -117,6 +118,14 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	person := principal.ID.String()
+	// WHICH SESSION IS ENROLLING, decided before anything is offered or
+	// written: an enrolment-only one is held to a rule a whole one is not
+	// (see [errFactorHeld]), and is the session the enrolment replaces.
+	replaced, restricted, ok := s.enrolmentSession(w, r, person)
+	if !ok {
+		return
+	}
 
 	if in.Secret == "" || in.Code == "" {
 		s.offerTOTPSeed(w, r, principal.Login)
@@ -138,7 +147,6 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	person := principal.ID.String()
 	// THE ID IS MINTED ONCE, outside the apply: the decide may run again
 	// against a fresh snapshot, and an id minted inside it would be a
 	// different credential on each run — and a different one again in the
@@ -165,13 +173,32 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	const reason = "enrolled a second factor"
 	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
+			// IN THE SNAPSHOT THE FACTOR LANDS ON, never from a read
+			// made first: a factor enrolled between that read and this
+			// write is exactly the one this refusal is about.
+			if restricted && holdsFactor(held) {
+				return nil, errFactorHeld
+			}
 			return append(without(held, iamdomain.MethodTOTP),
-				totpCredential(id, sealed, step))
+				totpCredential(id, sealed, step)), nil
 		},
 		OpID:   "totp:" + person + ":" + id,
 		Reason: reason,
 	})
+	if errors.Is(err, errFactorHeld) {
+		log.WarnContext(r.Context(), "api_totp_enrol_refused_factor_held",
+			"person", person, "lineage", replaced.Bearer.Lineage.String())
+		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeSecondFactorRequired,
+			map[string]string{
+				"detail": "this account holds a second factor now, and this " +
+					"session was opened on a password alone, so it cannot " +
+					"enrol another over it",
+				"hint": "sign in again with the code from your authenticator " +
+					"app, or one of your recovery codes",
+			})
+		return
+	}
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_totp_enrol_failed", "error", err)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
@@ -181,6 +208,10 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		// NOT "enrolled": nothing can say the factor is on the log. The
 		// second leg carries its secret, so presenting it again with a
 		// fresh code enrols it — the same factor whichever attempt lands.
+		// Through a session that may only enrol, a retry that finds the
+		// first attempt landed after all is refused as [errFactorHeld]:
+		// the factor it holds is the seed in hand, so signing in with it
+		// is the way on.
 		unresolved(w, r, "api_totp_enrol_unresolved", stored)
 		return
 	}
@@ -190,11 +221,39 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		OperatorID: iam.ActorFor(principal).OperatorID, Reason: reason,
 	})
 	log.InfoContext(r.Context(), "api_totp_enrolled", "person", person)
-	if replaced, restricted := s.enrolmentSession(r, person); restricted {
+	if restricted {
 		s.completeEnrolment(w, r, principal, replaced)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, totpEnrolled{Status: "enrolled"})
+}
+
+// errFactorHeld refuses an enrolment-only session's enrolment over a second
+// factor its person has come to hold since the session opened.
+//
+// # A password must never override a factor
+//
+// An enrolment-only session was proved by a password alone, and its proof is
+// fresh for the sensitive window, so it satisfies what an enrolment asks of
+// a whole session. Without this, whoever holds such a session — somebody who
+// knows the password of a person who held no factor, signed in before that
+// person enrolled their own — could enrol THEIR authenticator over the
+// owner's, lock the owner out and be handed a whole session for it. Every
+// other path already refuses a password alone once a factor is held: the
+// sign-in and the step-up both demand the code. A whole session may still
+// replace its own factor, which is what enrolling one again is for.
+var errFactorHeld = errors.New("authapi: an enrolment-only session cannot " +
+	"enrol over a second factor its person already holds")
+
+// holdsFactor reports whether a credential set holds any live second factor —
+// a revoked one is not held, which is [firstCredential]'s rule.
+func holdsFactor(held []iamdomain.Credential) bool {
+	for _, method := range iamdomain.SecondFactorMethods {
+		if _, ok := firstCredential(held, method); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // totpEnrolled is what a completed enrolment answers.
@@ -210,20 +269,42 @@ type totpEnrolled struct {
 }
 
 // enrolmentSession is the session this request presented when it is one that
-// may only enrol a second factor, and the person's own — or false.
+// may only enrol a second factor — or false when it is not — and whether the
+// caller may go on, false once it has written the refusal.
 //
-// READ UNDER THE SIGNATURE AND THE ROWS, as a step-up reads the session it
-// replaces: the lineage it ends and the deadline it keeps are the presented
-// session's, and neither may come off a cookie nobody verified.
-func (s *Service) enrolmentSession(r *http.Request, person string) (
-	session.Validation, bool) {
+// # Read off the bearer, and held to the rows
+//
+// WHETHER it is one is the bearer's own signed mark with the row's
+// ([session.Validation.EnrolmentOnly]), readable on a node that has not
+// applied the session. But what the enrolment ENDS and what its replacement
+// KEEPS — the lineage, the deadline, the carried grants — are the presented
+// session's, read under the signature and the rows as a step-up reads the
+// session it replaces: neither may come off a cookie nobody verified, nor off
+// a session this node cannot say is live. So a restricted session this node
+// is behind on is `503` and one that is over is `401`, before anything is
+// offered or written.
+//
+// A HEADER CREDENTIAL CARRIES NO SESSION, so it is never one — and every
+// credential in a header that could reach an enrolment at all was refused by
+// [Service.mayChangeProof] already.
+func (s *Service) enrolmentSession(w http.ResponseWriter, r *http.Request,
+	person string) (session.Validation, bool, bool) {
 
 	if r.Header.Get("Authorization") != "" {
-		return session.Validation{}, false
+		return session.Validation{}, false, true
 	}
 	v := s.presentedSession(r)
-	return v, v.Row == session.RowValid && v.EnrolmentOnly() &&
-		v.Bearer.Person == person
+	switch {
+	case !v.EnrolmentOnly():
+		return v, false, true
+	case v.Row == session.RowValid && v.Bearer.Person == person:
+		return v, true, true
+	case v.Row == session.RowBehind || v.Row == session.RowStalled:
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+	default:
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+	}
+	return session.Validation{}, false, false
 }
 
 // completeEnrolment replaces an enrolment-only session with a whole one, once
@@ -278,9 +359,9 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	const reason = "regenerated the recovery codes"
 	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			return append(without(held, iamdomain.MethodRecovery),
-				recoveryCredential(id, verifiers))
+				recoveryCredential(id, verifiers)), nil
 		},
 		OpID:   "recovery:" + person + ":" + id,
 		Reason: reason,

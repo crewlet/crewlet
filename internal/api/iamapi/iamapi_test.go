@@ -406,9 +406,15 @@ func (w *fakeWriter) SetCredentials(_ context.Context, in iamdomain.CredentialSe
 
 	w.creds = in
 	if in.Apply != nil {
-		w.held = in.Apply(w.held)
+		held, err := in.Apply(w.held)
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		w.held = held
 		if w.rerun != nil {
-			w.held = in.Apply(w.rerun)
+			if w.held, err = in.Apply(w.rerun); err != nil {
+				return statelog.Result{}, err
+			}
 		}
 	}
 	return w.did("credentials")

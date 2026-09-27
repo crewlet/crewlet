@@ -846,6 +846,14 @@ enrol one**:
   answer carries the new session beside `"status": "enrolled"`, its cookie on
   the response. The code that proved the seed is the second factor the new
   session was proved with. Recovery codes come after, from the whole session.
+- A restricted session enrols **only while its person holds no second
+  factor**, decided in the snapshot the factor would land on. Its proof is a
+  password alone, and fresh enough for the enrolment's window, so without this
+  whoever held such a session — signed in before the person enrolled their own
+  authenticator from somewhere else — could enrol theirs over it, lock the
+  person out and be handed a whole session. Once a factor is held that
+  enrolment is `403 second_factor_required` and nothing is stored: sign in
+  again with the factor. A whole session may still replace its own.
 
 The restriction is **the session's own fact**, decided by the sign-in that
 opened it rather than re-derived on each request from the person's credentials

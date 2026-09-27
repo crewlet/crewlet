@@ -440,11 +440,11 @@ func TestAContentWriteNeverTouchesALink(t *testing.T) {
 	if err := rig.during(func() error {
 		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 			PersonID: ada, OpID: "set-password", Reason: "a password",
-			Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+			Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 				return append(held, iamdomain.Credential{
 					ID: uuid.NewString(), Method: iamdomain.MethodPassword,
 					Verifier: "$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA",
-				})
+				}), nil
 			},
 		})
 		return err
@@ -472,11 +472,11 @@ func TestAContentWriteNeverTouchesALink(t *testing.T) {
 		"a credential set adding one": func() error {
 			_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 				PersonID: ada, OpID: "set-oidc", Reason: "smuggled",
-				Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+				Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 					return append(held, iamdomain.Credential{
 						ID: uuid.NewString(), Method: iamdomain.MethodOIDC,
 						SubjectBlind: rig.subject("second").Blind,
-					})
+					}), nil
 				},
 			})
 			return err

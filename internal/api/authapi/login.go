@@ -279,7 +279,7 @@ func (s *Service) rehashPassword(r *http.Request, arrived time.Time, person stri
 	digest := sha256.Sum256([]byte(stale.Verifier))
 	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
 		PersonID: person,
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			out := slices.Clone(held)
 			for i, c := range out {
 				if c.ID == stale.ID && c.Method == iamdomain.MethodPassword &&
@@ -287,7 +287,7 @@ func (s *Service) rehashPassword(r *http.Request, arrived time.Time, person stri
 					out[i].Verifier = fresh
 				}
 			}
-			return out
+			return out, nil
 		},
 		OpID:   "rehash:" + person + ":" + hex.EncodeToString(digest[:8]),
 		Reason: "re-hashed the password at the current cost",
@@ -389,13 +389,11 @@ func firstCredential(held []iamdomain.Credential, method iamdomain.CredentialMet
 // deployment says. A deployment that REQUIRES one does not refuse a person who
 // holds none here — they could never sign in to enrol it — but opens them a
 // session that may do nothing else ([Service.enrolmentOnly]).
+//
+// ONE READING WITH THE ENROLMENT'S, which asks the same of the set a decide
+// read rather than of a sighting ([holdsFactor]).
 func holdsSecondFactor(held iamdomain.Sighting) bool {
-	for _, method := range iamdomain.SecondFactorMethods {
-		if _, ok := firstCredential(held.Credentials, method); ok {
-			return true
-		}
-	}
-	return false
+	return holdsFactor(held.Credentials)
 }
 
 // factorUse is a second factor that checked out, and what spending it takes.
@@ -519,7 +517,7 @@ func (s *Service) spendSecondFactor(ctx context.Context, person string,
 	remaining := use.remaining
 	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
 		PersonID: person,
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			spent = true
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
@@ -544,7 +542,7 @@ func (s *Service) spendSecondFactor(ctx context.Context, person string,
 				}
 				out = append(out, c)
 			}
-			return out
+			return out, nil
 		},
 		OpID:   "second-factor:" + person + ":" + uuid.NewString(),
 		Reason: "spent a " + string(use.factor) + " second factor",

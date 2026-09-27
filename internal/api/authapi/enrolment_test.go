@@ -393,3 +393,111 @@ func TestARestrictedSessionIsRestrictedBeforeAnyNodeHasAppliedIt(t *testing.T) {
 		})
 	}
 }
+
+// A PASSWORD NEVER ENROLS OVER A SECOND FACTOR.
+//
+// An enrolment-only session is proved by a password alone, and its proof is
+// fresh for the sensitive window, so it satisfied everything an enrolment asks
+// of a whole session. Somebody who knew the password of a person holding no
+// factor could sign in restricted, wait for that person to enrol their own
+// authenticator, and then enrol THEIRS through the still-live restricted
+// session: the owner's factor replaced, the owner locked out, and a whole
+// session handed over for it. Once the person holds a factor, a session that
+// proved only a password is refused — decided in the snapshot the factor would
+// land on — and the stored factor is untouched.
+//
+// The CONTROL is a whole session, proved with the factor, replacing its own
+// factor: that is what enrolling one again is for, so the refusal is the
+// restriction's and not the factor's. Mutation: drop the check from the
+// enrolment's Apply and the first row enrols the stranger's seed and opens a
+// whole session.
+func TestAPasswordNeverEnrolsOverASecondFactor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		restricted bool
+	}{
+		{"an enrolment-only session, a factor enrolled since it opened", true},
+		{"a whole session replacing its own factor (the control)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newSignInRigWith(t, func(o *authapi.Options) {
+				requiring(o, iam.SecondFactorRequired)
+				o.Sessions = o.Writer.(*estate)
+			})
+			code := appCode(t, clock)
+			if tc.restricted {
+				passwordOnly(r.estate)
+				code = ""
+			}
+			h := guarded(t, r)
+			login, _ := json.Marshal(map[string]string{
+				"login": "jane.doe", "password": password, "code": code,
+			})
+			signedIn, cookie := send(t, h, http.MethodPost, auth.PathAuthLogin,
+				string(login), "")
+			if signedIn.Code != http.StatusOK || cookie == "" {
+				t.Fatalf("the sign-in answered %d (%s)", signedIn.Code, signedIn.Body)
+			}
+			if tc.restricted {
+				// THE OWNER ENROLS THEIR OWN, from somewhere else, while
+				// the restricted session is still live.
+				r.estate.mu.Lock()
+				r.estate.person.Credentials = append(r.estate.person.Credentials,
+					iamdomain.Credential{ID: "owners-app", Method: iamdomain.MethodTOTP,
+						Verifier: sealedSeed(t, r.estate.person.ID, "owners-app", totpSeed)})
+				r.estate.mu.Unlock()
+			}
+			r.estate.mu.Lock()
+			before := slices.Clone(r.estate.person.Credentials)
+			opened := len(r.estate.starts)
+			r.estate.mu.Unlock()
+
+			// THE STRANGER'S AUTHENTICATOR, both legs.
+			offered, _ := send(t, h, http.MethodPost, auth.PathAuthTOTP, "{}", cookie)
+			var seed struct{ Secret string }
+			if err := json.Unmarshal(offered.Body.Bytes(), &seed); err != nil ||
+				offered.Code != http.StatusOK || seed.Secret == "" {
+				t.Fatalf("the first leg answered %d (%s)", offered.Code, offered.Body)
+			}
+			theirs, err := credential.TOTPCode(seed.Secret, credential.TOTPStep(clock))
+			if err != nil {
+				t.Fatal(err)
+			}
+			proof, _ := json.Marshal(map[string]string{"secret": seed.Secret, "code": theirs})
+			enrolled, replacement := send(t, h, http.MethodPost, auth.PathAuthTOTP,
+				string(proof), cookie)
+
+			r.estate.mu.Lock()
+			after := slices.Clone(r.estate.person.Credentials)
+			starts := len(r.estate.starts)
+			r.estate.mu.Unlock()
+			if !tc.restricted {
+				if enrolled.Code != http.StatusOK || slices.EqualFunc(before, after,
+					func(a, b iamdomain.Credential) bool { return a.ID == b.ID }) {
+					t.Errorf("a whole session could not replace its own factor: "+
+						"%d (%s)", enrolled.Code, enrolled.Body)
+				}
+				return
+			}
+			var refusal map[string]any
+			_ = json.Unmarshal(enrolled.Body.Bytes(), &refusal)
+			if enrolled.Code != http.StatusForbidden ||
+				refusal["error"] != string(httpjson.CodeSecondFactorRequired) {
+				t.Errorf("a password-only session enrolling over the owner's "+
+					"factor answered %d %v, want 403 %s", enrolled.Code, refusal,
+					httpjson.CodeSecondFactorRequired)
+			}
+			if !slices.EqualFunc(before, after, func(a, b iamdomain.Credential) bool {
+				return a.ID == b.ID && a.Verifier == b.Verifier
+			}) {
+				t.Errorf("the stored credentials moved from %+v to %+v", before, after)
+			}
+			if starts != opened || replacement != "" {
+				t.Errorf("opened %d sessions and set cookie %t for a refused "+
+					"enrolment", starts-opened, replacement != "")
+			}
+		})
+	}
+}

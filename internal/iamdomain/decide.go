@@ -2055,9 +2055,15 @@ func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
 func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 	statelog.Result, error) {
 
-	if in.PersonID == "" || in.OpID == "" {
+	switch {
+	case in.PersonID == "" || in.OpID == "":
 		return statelog.Result{}, errors.New("iamdomain: setting credentials " +
 			"needs a person and an operation id")
+	case in.Apply == nil:
+		return statelog.Result{}, errors.New("iamdomain: setting credentials " +
+			"needs the function that forms the new set inside the snapshot — " +
+			"a caller holding the current set read it in another transaction, " +
+			"which is the pairing the write authority forbids")
 	}
 	var mutation []byte
 	decide := func(tx *sql.Tx) error {
@@ -2065,7 +2071,9 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 		if err != nil {
 			return err
 		}
-		person.Credentials = in.Apply(person.Credentials)
+		if person.Credentials, err = in.Apply(person.Credentials); err != nil {
+			return err
+		}
 		mutation, err = authoredPerson(person)
 		return err
 	}
@@ -2096,7 +2104,15 @@ type CredentialSet struct {
 	// decide read and returns what should replace it, which is the only
 	// shape in which the expectation and the decision come from one
 	// snapshot.
-	Apply func([]Credential) []Credential
+	//
+	// IT MAY REFUSE, as [PersonUpdate.Apply] may, for a rule this package
+	// cannot judge but that is about the set the write LANDS on — an
+	// enrolment-only session enrolling over a second factor its person
+	// has come to hold since it opened is one. The refusal travels out of
+	// the decide unwrapped and nothing is published: decided from a read
+	// the caller made first, it would be decided on a set that may have
+	// moved.
+	Apply func([]Credential) ([]Credential, error)
 
 	OpID   string
 	Reason string

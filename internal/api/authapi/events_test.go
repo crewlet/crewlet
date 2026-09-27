@@ -188,15 +188,20 @@ func (e *estate) SetCredentials(_ context.Context, in iamdomain.CredentialSet) (
 	if e.before != nil {
 		held = e.before(held)
 	}
+	formed, err := in.Apply(held)
+	if err != nil {
+		// A REFUSAL IN THE SNAPSHOT publishes nothing, as the domain's
+		// decide does.
+		return statelog.Result{}, err
+	}
 	result := e.outcome("SetCredentials", in.OpID, 10)
 	if result.Outcome == statelog.OutcomeUnknown {
 		// WHETHER IT LANDED IS WHAT NOBODY CAN SAY; the estate here
 		// keeps the set it had, which is the harder of the two for the
 		// surface — a spend it cannot confirm and a code still usable.
-		in.Apply(held)
 		return result, nil
 	}
-	e.person.Credentials = in.Apply(held)
+	e.person.Credentials = formed
 	return result, nil
 }
 

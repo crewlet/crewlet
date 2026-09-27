@@ -399,6 +399,11 @@ const (
 	// factor, so it discloses nothing to a stranger — and because without
 	// it a client cannot tell "your password is wrong" from "now type
 	// your code", which are different screens.
+	//
+	// A SIGN-IN'S 401, AND ALSO THE ENROLMENT'S 403: a session that may
+	// only enrol a second factor, whose person has come to hold one since
+	// it opened, has proved only the first factor and may not enrol over
+	// the second — the remedy there is the same, sign in with it.
 	CodeSecondFactorRequired Code = "second_factor_required"
 
 	// CodeStepUpRequired is a session that is valid and has not proved
