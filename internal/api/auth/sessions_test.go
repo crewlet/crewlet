@@ -76,7 +76,7 @@ func newSignedIn(t *testing.T) *signedIn {
 		dir: &fakeDirectory{identity: session.Identity{
 			Applied:    sessionStart,
 			Generation: 1,
-			Session: session.SessionRow{Found: true, Epoch: 3,
+			Session: session.LineageRow{Found: true, Epoch: 3,
 				ProvedAt: at.Add(-10 * time.Minute)},
 			Person: session.PersonRow{
 				Found: true, Epoch: 3, Stage: iam.StageActive,
@@ -569,7 +569,7 @@ func TestAWriteStraightAfterSigningInWaitsForItsSession(t *testing.T) {
 	rig := newSignedIn(t)
 	applied := rig.dir.identity
 	rig.dir.identity.Applied = sessionStart - 1
-	rig.dir.identity.Session = session.SessionRow{}
+	rig.dir.identity.Session = session.LineageRow{}
 	rig.dir.caughtUp = &applied
 
 	write := rig.call(rig.guard(), http.MethodPost, "/work/items", rig.withCookie)

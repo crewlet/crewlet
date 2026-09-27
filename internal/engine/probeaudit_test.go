@@ -117,10 +117,10 @@ func TestTheNodesDeactivationProbeAnnouncesWhatItEnds(t *testing.T) {
 	if !ok {
 		t.Fatalf("the event carries %T", ev.Data)
 	}
-	if row.Reason != types.EndIdPRevoked || row.Lineage != sessions.live[0].Lineage ||
+	if row.Reason != types.EndIDPRevoked || row.Lineage != sessions.live[0].Lineage ||
 		row.Person != sessions.live[0].Person || ev.Source == "" {
 		t.Errorf("heard %+v from %q, want the off-boarded session ended as %q "+
-			"under this node's name", row, ev.Source, types.EndIdPRevoked)
+			"under this node's name", row, ev.Source, types.EndIDPRevoked)
 	}
 }
 

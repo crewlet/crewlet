@@ -106,9 +106,9 @@ func TestTheProbeEndsRevokesRotatesAndCollectsThroughTheEstate(t *testing.T) {
 	// INVALID_GRANT: a close record, reason idp_revoked, and no custody.
 	if why := rig.column(`SELECT ended_reason FROM iam_sessions
 		WHERE lineage = ? AND ended_at > 0`, deactivated); len(why) != 1 ||
-		why[0] != oidc.ReasonIdPRevoked {
+		why[0] != oidc.ReasonIDPRevoked {
 		t.Errorf("the deactivated session reads %v, want ended as %s", why,
-			oidc.ReasonIdPRevoked)
+			oidc.ReasonIDPRevoked)
 	}
 	// EVERY OTHER ANSWER ENDS NOTHING.
 	for _, lineage := range []string{rotating, flaky} {
@@ -313,9 +313,9 @@ func TestAnUnreadableGrantDoesNotStopTheProbe(t *testing.T) {
 	}
 	if why := rig.column(`SELECT ended_reason FROM iam_sessions
 		WHERE lineage = ? AND ended_at > 0`, lineage); len(why) != 1 ||
-		why[0] != oidc.ReasonIdPRevoked {
+		why[0] != oidc.ReasonIDPRevoked {
 		t.Errorf("the deactivated session reads %v, want ended as %s", why,
-			oidc.ReasonIdPRevoked)
+			oidc.ReasonIDPRevoked)
 	}
 	// AND THE UNREADABLE GRANT IS LEFT ALONE: it may be a newer peer's, and
 	// a build that cannot read it has no business deleting it.

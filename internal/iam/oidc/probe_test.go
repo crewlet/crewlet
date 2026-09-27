@@ -83,9 +83,9 @@ func TestTheProbeEndsASessionAsIdpRevokedOnInvalidGrant(t *testing.T) {
 	if checked != 1 || ended != 1 {
 		t.Fatalf("the pass checked %d and ended %d, want 1 and 1", checked, ended)
 	}
-	if sessions.ended["lin-1"] != oidc.ReasonIdPRevoked {
+	if sessions.ended["lin-1"] != oidc.ReasonIDPRevoked {
 		t.Errorf("the session ended as %q, want %q", sessions.ended["lin-1"],
-			oidc.ReasonIdPRevoked)
+			oidc.ReasonIDPRevoked)
 	}
 }
 
@@ -258,9 +258,9 @@ func TestASkippedSessionDoesNotStopThePass(t *testing.T) {
 	if pass.Skipped != 1 {
 		t.Errorf("the pass counted %d skipped sessions, want 1", pass.Skipped)
 	}
-	if sessions.ended["lin-1"] != oidc.ReasonIdPRevoked {
+	if sessions.ended["lin-1"] != oidc.ReasonIDPRevoked {
 		t.Errorf("the deactivated session ended as %q, want %q",
-			sessions.ended["lin-1"], oidc.ReasonIdPRevoked)
+			sessions.ended["lin-1"], oidc.ReasonIDPRevoked)
 	}
 
 	// THE WHOLE-FAILURE ARM: a listing that failed outright ends nothing.

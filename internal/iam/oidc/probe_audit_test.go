@@ -49,13 +49,13 @@ func TestAnEndedSessionIsAnnouncedAsIdpRevoked(t *testing.T) {
 		t.Fatalf("announced %d events, want 1", len(audit.seen))
 	}
 	row, ok := audit.seen[0].(types.IAMSessionEnded)
-	if !ok || row.Reason != types.EndIdPRevoked || row.Lineage != "lin-1" ||
+	if !ok || row.Reason != types.EndIDPRevoked || row.Lineage != "lin-1" ||
 		row.Person != "p-1" || row.By != "" {
 		t.Errorf("announced %#v", audit.seen[0])
 	}
-	if oidc.ReasonIdPRevoked != string(types.EndIdPRevoked) {
+	if oidc.ReasonIDPRevoked != string(types.EndIDPRevoked) {
 		t.Errorf("the record says %q and the event %q: one fact, two spellings",
-			oidc.ReasonIdPRevoked, types.EndIdPRevoked)
+			oidc.ReasonIDPRevoked, types.EndIDPRevoked)
 	}
 
 	failing := newSessions(oidc.LiveSession{

@@ -151,12 +151,12 @@ type Sessions interface {
 	Rotated(ctx context.Context, lineage, refresh string) error
 }
 
-// ReasonIdPRevoked is what a session ended by the probe records.
+// ReasonIDPRevoked is what a session ended by the probe records.
 //
 // THE AUDIT TRAIL'S OWN SPELLING, taken from it rather than written twice: the
 // record's reason and the event's are one fact, and a reader joining
 // `iam_history` to the live feed matches on the word.
-const ReasonIdPRevoked = string(types.EndIdPRevoked)
+const ReasonIDPRevoked = string(types.EndIDPRevoked)
 
 // Audit is where the probe announces a session it ended.
 //
@@ -241,7 +241,7 @@ func (p *Prober) Run(ctx context.Context) (Pass, error) {
 		verdict, rotated := p.check(ctx, metadata.TokenEndpoint, session)
 		switch verdict {
 		case VerdictDeactivated:
-			if err := p.sessions.End(ctx, session, ReasonIdPRevoked); err != nil {
+			if err := p.sessions.End(ctx, session, ReasonIDPRevoked); err != nil {
 				pass.Failed++
 				p.logger.WarnContext(ctx, "oidc_probe_end_failed",
 					"lineage", session.Lineage, "error", err.Error())
@@ -250,14 +250,14 @@ func (p *Prober) Run(ctx context.Context) (Pass, error) {
 			pass.Ended++
 			p.logger.InfoContext(ctx, "iam_session_ended",
 				"lineage", session.Lineage, "person", session.Person,
-				"reason", ReasonIdPRevoked)
+				"reason", ReasonIDPRevoked)
 			// ONLY ONCE THE RECORD LANDED, and naming nobody as its
 			// author: the provider said the account is gone, and the
 			// engine's duty acted on it.
 			if p.audit != nil {
 				p.audit.Emit(ctx, types.IAMSessionEnded{
 					Person: session.Person, Lineage: session.Lineage,
-					Reason: types.EndIdPRevoked,
+					Reason: types.EndIDPRevoked,
 				})
 			}
 		case VerdictLive:

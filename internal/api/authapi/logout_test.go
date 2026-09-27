@@ -124,7 +124,7 @@ func TestASignOutEndsOnlyASessionStillLive(t *testing.T) {
 	live := func(r *signInRig) session.Identity {
 		return session.Identity{
 			Applied: ^uint64(0) >> 1, Generation: 2,
-			Session: session.SessionRow{Found: true, Epoch: 3,
+			Session: session.LineageRow{Found: true, Epoch: 3,
 				ProvedAt: clock.Add(-2 * time.Hour)},
 			Person: session.PersonRow{Found: true, Epoch: 3,
 				Stage: iam.StageActive, Login: r.estate.person.Login},
@@ -145,7 +145,7 @@ func TestASignOutEndsOnlyASessionStillLive(t *testing.T) {
 	}, {
 		name: "opened on a node ahead of this one",
 		rows: func(id *session.Identity) {
-			id.Applied, id.Session = 0, session.SessionRow{}
+			id.Applied, id.Session = 0, session.LineageRow{}
 		},
 		closes: true, announces: true,
 	}, {

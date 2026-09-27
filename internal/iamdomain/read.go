@@ -286,7 +286,7 @@ func reservation(kind string) bool { return kind == "" }
 
 // readSessionRow fills one session's facts.
 func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
-	out *session.SessionRow) error {
+	out *session.LineageRow) error {
 
 	if lineage == "" {
 		return nil

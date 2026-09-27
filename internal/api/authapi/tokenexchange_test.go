@@ -529,7 +529,7 @@ func (e *sessionEstate) Resolve(_ context.Context, lineage, person string) (
 	defer e.mu.Unlock()
 	out := session.Identity{Applied: e.applied}
 	if row, ok := e.sessions[lineage]; ok && row.person == person {
-		out.Session = session.SessionRow{Found: true, Ended: row.ended,
+		out.Session = session.LineageRow{Found: true, Ended: row.ended,
 			Epoch: row.epoch}
 	}
 	// NOBODY IS ENROLLED: a token's subject has no person row, and the

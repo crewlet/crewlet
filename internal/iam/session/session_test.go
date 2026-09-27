@@ -79,7 +79,7 @@ func newSignedIn(t *testing.T) *signedIn {
 		dir: &directory{identity: session.Identity{
 			Applied:    startPos,
 			Generation: 1,
-			Session:    session.SessionRow{Found: true, Epoch: 3},
+			Session:    session.LineageRow{Found: true, Epoch: 3},
 			Person: session.PersonRow{
 				Found: true, Epoch: 3, Stage: iam.StageActive,
 				Login: "sarah.chen", Seat: "platform-lead", SeatAt: 900,

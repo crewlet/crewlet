@@ -370,7 +370,7 @@ func TestADeadlineEndsOnlyASessionNoRecordEnded(t *testing.T) {
 		{"the person's epoch moved", func(id *session.Identity) { id.Person.Epoch = 4 }},
 		{"the company's generation moved", func(id *session.Identity) { id.Generation = 2 }},
 		{"the person was suspended", func(id *session.Identity) { id.Person.Stage = iam.StageSuspended }},
-		{"the sweep collected the row", func(id *session.Identity) { id.Session = session.SessionRow{} }},
+		{"the sweep collected the row", func(id *session.Identity) { id.Session = session.LineageRow{} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

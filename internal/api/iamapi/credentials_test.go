@@ -360,7 +360,7 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 	b.API.Auth.MaxGrants = iam.AllGrants
 	b.API.ExternalURL = "http://127.0.0.1:8080"
 	rows := sessionRows{session.Identity{Applied: 10,
-		Session: session.SessionRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
+		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
 		Person: session.PersonRow{Found: true, Epoch: 1,
 			Stage: iam.StageActive, Login: "bob.sre",
 			Grants: []iam.Grant{iam.GrantStateRead}},

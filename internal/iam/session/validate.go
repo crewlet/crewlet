@@ -57,15 +57,15 @@ type Identity struct {
 
 	// Session and Person are the rows, each three-valued in its own right
 	// through its Found field.
-	Session SessionRow
+	Session LineageRow
 	Person  PersonRow
 
 	// Generation is the fleet-wide session generation this node holds.
 	Generation uint64
 }
 
-// SessionRow is the session's own row.
-type SessionRow struct {
+// LineageRow is the session's own row, the one its lineage names.
+type LineageRow struct {
 	Found bool
 
 	// Ended reports a session that stopped — signed out, revoked, expired
@@ -317,7 +317,7 @@ type Validation struct {
 	// proved — and the zero row on [RowBehind], whose whole meaning is that
 	// this node has not applied it: a node that is behind serves reads on
 	// the signature and the epoch, and claims no proof it cannot see.
-	Session SessionRow
+	Session LineageRow
 
 	// Detail says which fact decided, for a log line. It is NEVER sent to
 	// the caller: the code is, and the code is the same for every refusal.

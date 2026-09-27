@@ -152,9 +152,9 @@ const (
 	// session or every session a person holds.
 	EndRevoked SessionEndReason = "revoked"
 
-	// EndIdPRevoked is the deactivation probe hearing `invalid_grant` from
+	// EndIDPRevoked is the deactivation probe hearing `invalid_grant` from
 	// the identity provider — an off-boarding done centrally.
-	EndIdPRevoked SessionEndReason = "idp_revoked"
+	EndIDPRevoked SessionEndReason = "idp_revoked"
 
 	// EndPersonRemoved is the person being removed, which ends every
 	// session they hold along with everything else about them.
@@ -165,7 +165,7 @@ const (
 func (r SessionEndReason) Valid() bool {
 	switch r {
 	case EndLogout, EndLogoutAll, EndIdle, EndAbsolute, EndRevoked,
-		EndIdPRevoked, EndPersonRemoved:
+		EndIDPRevoked, EndPersonRemoved:
 		return true
 	}
 	return false

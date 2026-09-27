@@ -132,7 +132,7 @@ func newProviderStepUp(t *testing.T) *providerStepUp {
 	audit := &recordingAudit{}
 	identity := session.Identity{
 		Applied: ^uint64(0) >> 1, Generation: 2,
-		Session: session.SessionRow{Found: true, Epoch: 3,
+		Session: session.LineageRow{Found: true, Epoch: 3,
 			ProvedAt: clock.Add(-2 * time.Hour)},
 		Person: session.PersonRow{Found: true, Epoch: 3,
 			Stage: iam.StageActive, Login: "jane.doe"},
