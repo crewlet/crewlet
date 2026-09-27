@@ -25,6 +25,11 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet objects status [config] [-json]` | Where the company's files are placed: the [object store's](../concepts/object-store.md) placement map read from a running node — its epoch, copies, groups and failure domain, how evenly it spreads the copies over the weights, a hold, and one row per data node with its domain, weight, measured share, whether it is out or on probation, how far an absence has run, its store's health and what its last repair left pending — then the members on probation, the removed nodes and what a scrub could not read, and **what to wait for before stopping the next data node**, in words. `-json` prints the block as the node answered it |
+| `crewlet objects out <node> -confirm <node> [-reason TEXT]` | Take a data node out of the placement map: nothing new is placed on it, and its share is copied to the other members while it keeps serving what it holds — the first step of taking a node away for good |
+| `crewlet objects in <node> -confirm <node>` | Put a member back, or vouch for a node the map removed for being gone: one on probation is placed on at once, one not seen since from its next sighting |
+| `crewlet objects hold -for DURATION [-reason TEXT]` | Hold the map through planned maintenance, at most 24h: no member is removed however long it is gone |
+| `crewlet objects release` | End a hold |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -668,6 +673,129 @@ broker would carry it as a different id.
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no
 duration to state, and `crewlet retention status` names which nodes those are.
+
+## `crewlet objects`
+
+```
+crewlet objects status [-json] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet objects out <node> -confirm <node> [-reason TEXT] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet objects in <node> -confirm <node> [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet objects hold -for DURATION [-reason TEXT] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet objects release [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+Where the company's files are placed, and the operator's gestures on the
+[object store's](../concepts/object-store.md) placement map. Every verb talks to
+a running node, for `backup`'s reason: the map is one record in the
+coordination store, which on the default topology is the engine's own embedded
+broker and binds no socket. `status` reads the fleet view (`GET /fleet`); the
+gestures are clients of the `/objects/*` routes in the
+[API reference](api-endpoints.md#gestures-on-the-placement-map).
+
+### `crewlet objects status`
+
+The question it answers is **may I stop the next data node yet?** — during a
+rolling restart, and while taking a node away for good. It prints the map
+line (epoch, copies of every chunk against the copies the company asks for,
+groups, and the failure-domain label with how many of its values the members
+span), how evenly the map spreads its copies over the members' weights, the
+notices that are the map's rather than a member's — a hold in force, groups a
+copy short right now, copies that must share a domain — and one row per data
+node. The balance line reads `Balanced within 1.5%` when every placeable member
+holds that close to the copies its weight entitles it to, and `NOT CONVERGED`
+with the deviation and the rounds when a balance stopped short of the 2% it
+aims within — the map is then the closest it measured, and a member's
+weight is an intent rather than a promise, which the `SHARE` column shows for
+whom (see [weights](../concepts/object-store.md#weights-and-the-shares-a-balance-finds)).
+Two more readings are the tick after a split: `Balance last measured at epoch
+N` while the split's own epoch waits to be measured on the maintainer's next
+tick, and `Within X% of every member's weight` once it has been, when the split
+placed the copies close enough — within twice the 2% — that no balance ran. A
+map nothing has measured prints no balance line.
+
+| Column | What it is |
+|---|---|
+| `DOMAIN` | the node's value of the map's failure-domain label, `-` for none |
+| `WEIGHT` | its `store.objects.weight` |
+| `SHARE` | its measured share of every copy the stored map places |
+| `PLACED` | why the map places nothing on it: `out` for a member taken out, `probation 12/40` for one the map removed and has seen back — ticks present in a row, of the ticks that place on it again — or both; `-` for a member it places on |
+| `ABSENT` | how many of the maintainer's ticks have counted it gone, of the ticks that remove it (`12/40`); `back N` once it is present again, since a member keeps its count until it has been back as long; `no lease` for a member holding no objects lease yet counted by no tick |
+| `HEALTH` | its store's own state and how full its volume is, `-` when it reported none |
+| `PENDING` | the chunks its last repair left unheld — marked `@N` when that pass ran at an older epoch and `unfinished` when it did not reach every group, since either makes a zero mean nothing; for a member taken out, the **strays** it still holds (`strays 14`); for one on probation, the copies it **keeps** by rule for when the map places on it again (`kept 37`) |
+
+Under the table it says, in words, what the fleet is still waiting for: a
+member to come back, a store to recover, a repair to complete at the map's own
+epoch, a member to fetch what is pending, degraded groups to heal. Only the
+members the map places on are waited for — a member out or on probation holds
+no copy anybody is counting on, which is how the map itself judges a settled
+fleet. When nothing is left it says the fleet is settled and one data node may
+be stopped. For a
+member taken out it says whether it may be stopped **for good** — once every
+member is settled and it holds no strays. That count comes only from a
+collection that walked the member's whole disk at the map's own epoch, and until
+one has run the status says so and asks you to keep waiting rather than reading
+the missing count as zero. That collection is not the hourly one: every node
+runs it once the fleet has settled at the epoch, so it starts within about half
+a minute of the last member finishing its repair. Strays still held after it
+are tried again on a backoff capped at the hour.
+
+A member **on probation** is said under the table (`ON PROBATION:`): read from
+and repaired from while it proves itself, placed on nothing, and removed again
+by a tick that misses it. A node the map removed and has not seen back is listed
+too (`REMOVED and remembered:`) with how many ticks it has been gone: seen
+present and healthy, it rejoins on probation at once; gone 40 ticks in a row, it
+is forgotten. Both lines name the `in` that vouches for the node now. And a
+member whose scrub found chunks rotten or **unreadable** this cycle, or was
+stopped, is said on a `SCRUB` line — the scrub steps past a chunk its disk will
+not read, so a count that keeps rising is a disk failing chunk by chunk, and
+nothing else here would show it.
+
+`-json` prints the block exactly as the node answered it, for a script waiting
+on the same conditions. The exit status is non-zero when the node cannot say —
+its coordination store did not answer, or the map was written by a newer build
+— and zero otherwise, whatever the fleet is doing: an unsettled fleet is an
+answer.
+
+### `crewlet objects out` / `in`
+
+`out` takes a member out: the map stops placing on it and its share is copied
+to the other members **while it keeps serving every chunk it holds**, so taking
+a node away is a copy rather than a recovery. The runbook is: take it out, run
+`status` until it says the node may be stopped for good, then stop it. It is
+refused (`objects_refused`) when it would leave no member present on the latest
+tick to write to, and (`removed_member`) for a node the map has removed and not
+seen back — nothing is placed on it to move, and `in` is the gesture that names
+it. A member on probation can be taken out, and stays out once its probation
+ends.
+
+`in` puts a member back, and its share moves back to it. For a node the map
+removed for being gone, it vouches for the node rather than waiting for it to
+prove itself stable: a member on probation is placed on at once, and a node not
+seen since is placed on the next time the maintainer sees it present and
+healthy.
+
+Both repeat the node id in `-confirm`. `-reason` is recorded on the map beside
+the operator who took the member out, and shown by `status` and the dashboard.
+
+### `crewlet objects hold` / `release`
+
+`hold` holds the map for `-for` (at most 24h, and required — there is no
+default length): no member is removed for being gone until the hold ends or is
+released, while its absence keeps being counted — a member on probation
+excepted, which holds no share for a hold to protect. It is the gesture for a node
+going down for maintenance and coming back, whose share would otherwise be
+copied away and then back. Its groups stay a copy short while it is gone,
+which is why a hold always ends by itself. `release` ends it, and a member
+gone past its grace is removed at the maintainer's next tick.
+
+Every gesture is a compare-and-set on the stored map, so what it prints is
+whether the map **now says** what was asked. One that lost every race to the
+map's maintainer exits non-zero saying it did not land. One the node never
+answered is safe to run again, and the message says what running it again does:
+an `out`, an `in` or a `release` the map already says changes nothing — the
+record of who took a member out, why and when included — and writes nothing,
+while a `hold` always writes, replacing the hold in force with its length
+counted from the resend. Read `status` before re-sending a hold.
 
 ## `crewlet retention`
 

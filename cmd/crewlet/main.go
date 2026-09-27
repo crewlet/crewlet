@@ -181,6 +181,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runRetention(rest, stdout, stderr)
 	case "work":
 		return runWork(rest, stdout, stderr)
+	case "objects":
+		return runObjects(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "search":
@@ -210,6 +212,8 @@ Usage:
   crewlet work <cmd>          The gestures on work items that belong to a person:
                               purge, which destroys a task and every row it
                               produced and which nothing undoes
+  crewlet objects <cmd>       Where the company's files are placed, and the gestures
+                              on it: take a data node out, put it back, hold the map
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
