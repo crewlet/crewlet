@@ -474,6 +474,12 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	if h.Deferred > 0 {
 		gap, err := r.coverage(ctx, q.Scope)
 		if err != nil {
+			// A CALLER THAT GAVE UP is not a scope this node could not
+			// read, exactly as it is not a node that fell behind in
+			// the wait below.
+			if ctx.Err() != nil {
+				return Answer{}, ctx.Err()
+			}
 			return r.refuse(h, q, RefuseDeferredScopeUnknown, r.scopeUnread(err), started)
 		}
 		if gap != nil {
@@ -656,6 +662,15 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 		}
 		at, err := r.index.Read(ctx)
 		if err != nil {
+			// A CALLER THAT GAVE UP IS NOT A MISSED QUORUM. The read
+			// index answers a caller's own cancellation or deadline with
+			// that context's error, and mapped onto `no_quorum` it was
+			// counted as a refusal, handed an election's retry hint, and
+			// — on a deadline the caller set — told a caller still
+			// listening that the broker's members had not agreed.
+			if ctx.Err() != nil {
+				return Position{}, ctx.Err()
+			}
 			return Position{}, barrierRefusal(q.Level, r.index.subject, err)
 		}
 		// THE FLOOR CANNOT BE PAST THE BARRIER on the stream the barrier

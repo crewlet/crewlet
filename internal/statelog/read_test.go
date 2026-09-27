@@ -367,6 +367,81 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	}
 }
 
+// A CALLER THAT GAVE UP IS NOT A REFUSAL.
+//
+// The read index answers a caller's own cancellation or deadline with that
+// context's error, and the coverage probe's store read fails the same way —
+// and each was mapped onto a refusal: `no_quorum`, counted in the refusal
+// metric and handed an election's four-second hint, and
+// `deferred_scope_unknown`, logged as a store this node could not read. On a
+// deadline the CALLER set, a caller still listening was told the broker's
+// members had not agreed. The read answers the context's own error instead,
+// exactly as the wait for a floor already did.
+func TestACallerThatGaveUpIsNotARefusal(t *testing.T) {
+	t.Parallel()
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	t.Run("waiting on a barrier", func(t *testing.T) {
+		t.Parallel()
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		index, err := statelog.NewReadIndex(probeDomain{}, blockingAppender{release: release},
+			testSigner(t, probeDomain{}), probeEncode, func() uint32 { return 1 }, nil)
+		if err != nil {
+			t.Fatalf("NewReadIndex: %v", err)
+		}
+		r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, index)
+		_, err = r.Read(gone, pointQuery(statelog.ReadLinearizable),
+			func(*sql.Tx) error { return nil })
+		if !errors.Is(err, context.Canceled) || errors.Is(err, statelog.ErrUnavailable) {
+			t.Errorf("a linearizable read whose caller gave up = %v, want %v and "+
+				"no refusal", err, context.Canceled)
+		}
+	})
+
+	t.Run("probing a deferred scope", func(t *testing.T) {
+		t.Parallel()
+		deferredHealth := func() statelog.Health {
+			s := healthy()
+			s.Deferred = 1
+			s.DeferredFrom = 1
+			return s
+		}
+		r := newReader(t, ctxStore{}, deferredHealth, &stubWaiter{at: healthy().Position}, nil)
+		_, err := r.Read(gone, pointQuery(statelog.ReadStale),
+			func(*sql.Tx) error { return nil })
+		if !errors.Is(err, context.Canceled) || errors.Is(err, statelog.ErrUnavailable) {
+			t.Errorf("a read whose caller gave up during the coverage probe = %v, "+
+				"want %v and no refusal", err, context.Canceled)
+		}
+	})
+}
+
+// blockingAppender is a broker whose append does not return until release is
+// closed, so a caller that gives up is the only way out of a read.
+type blockingAppender struct{ release chan struct{} }
+
+func (a blockingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
+	<-a.release
+	return 0, false, errors.New("released")
+}
+
+func (blockingAppender) LastSeq(context.Context, string) (uint64, bool, error) {
+	return 0, false, nil
+}
+
+// ctxStore is a store whose every read fails the way a real one does under a
+// context that is done: with that context's error.
+type ctxStore struct{}
+
+func (ctxStore) Read(ctx context.Context, fn func(*sql.Tx) error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("begin read: %w", err)
+	}
+	return fn(nil)
+}
+
 // refusingAppender is a broker that answers every append with err.
 type refusingAppender struct{ err error }
 
