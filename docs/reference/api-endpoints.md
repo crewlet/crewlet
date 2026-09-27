@@ -75,9 +75,9 @@ one JSON object, and it always has the same three parts in the same places:
   (`log_full`), a record larger than the broker takes in one message
   (`record_too_large`), one the broker refused for a reason of its own
   (`broker_refused`), a deleted object — on every surface that answers one
-  with a `503` (`/chart`, `/work`, `/pages`, and every question the query
-  registry answers, `/query/{what}` and its named read routes): the same
-  request is
+  with a `503` (`/chart`, `/work`, `/pages`, `/iam`, `/auth`, and every
+  question the query registry answers, `/query/{what}` and its named read
+  routes): the same request is
   refused however often it is sent, so the answer is to ask another node, to
   split the change, or for an operator to readmit, upgrade or resize, never to
   poll this one. The reason is in the detail; [Read
@@ -744,8 +744,14 @@ event only once the record is durable; an invitation whose outcome is unknown
 hands out no link and a mint hands out no token, because either would be a
 value that answers `410` or `401` the first time somebody uses it. A write this
 node refused to decide at all — it is behind, below the trim floor, or holding
-a record it cannot decode — is `503 unavailable` with the same `Retry-After`
-and op id. A write whose snapshot kept moving under it until the framework
+a record it cannot decode — is `503 unavailable` with the op id, and a
+`Retry-After` only where waiting clears it: a node that is behind or below the
+floor carries the identity estate's two seconds, while one that is evicted or
+holds a record it cannot decode, a log at its byte ceiling, a record larger
+than the broker takes and a refusal the broker named carry **none** — the same
+request is refused the same however often it is sent, as on `/chart` and
+`/work`. The sign-in surface, `/auth`, follows the same rule on every write it
+makes. A write whose snapshot kept moving under it until the framework
 gave up is `409 stale`, as on `/chart` and `/work`: nothing about the request
 was wrong, and the same request read again lands.
 

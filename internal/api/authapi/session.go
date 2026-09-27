@@ -167,7 +167,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		// discards the cookie, so answering it during an identity
 		// outage signs the whole company out and stampedes the provider
 		// with re-authentications.
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -350,7 +350,7 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 		// again.
 		log.WarnContext(r.Context(), "api_sign_out_all_failed",
 			"error", err, "person", person)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if !landed(revoked) {
@@ -433,7 +433,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	switch resolution {
 	case iam.Resolved:
 	case iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -447,7 +447,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 
 	owner, live, err := s.directory.SessionStanding(r.Context(), lineage, s.now())
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if owner == "" {
@@ -480,7 +480,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.WarnContext(r.Context(), "api_sign_out_one_failed",
 			"error", err, "lineage", lineage)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if !landed(closed) {

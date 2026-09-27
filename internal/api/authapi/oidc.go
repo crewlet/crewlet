@@ -82,7 +82,7 @@ func (s *Service) launch(w http.ResponseWriter, r *http.Request, want oidc.Fligh
 	metadata, err := s.provider.Metadata(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_discovery_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	redirect, sealed, err := s.provider.Config().Start(
@@ -161,7 +161,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	metadata, err := s.provider.Metadata(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_discovery_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	tokens, err := s.provider.Exchange(r.Context(),
@@ -174,7 +174,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	keys, err := s.provider.Keys(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_keys_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	claims, err := s.provider.Config().Verify(r.Context(), keys,
@@ -215,7 +215,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	attempt.Person = held.ID
@@ -312,7 +312,7 @@ func (s *Service) stepUpFlight(w http.ResponseWriter, r *http.Request,
 	principal, how := iam.From(r.Context())
 	switch {
 	case how == iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
 		return oidc.Flight{}, false
 	case how != iam.Resolved:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)

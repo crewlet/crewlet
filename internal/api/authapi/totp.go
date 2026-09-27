@@ -155,7 +155,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_totp_enrol_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if !landed(stored) {
@@ -204,7 +204,7 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_recovery_store_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if !landed(stored) {
@@ -251,7 +251,7 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 	switch resolution {
 	case iam.Resolved:
 	case iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
 		return iam.Principal{}, false
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)

@@ -93,7 +93,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	view := inviteView{
@@ -162,7 +162,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_holder_unreadable",
 			"error", err, "invitation", held.ID)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	if holder.ID != "" && !holder.Reserved {
@@ -177,7 +177,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return
 	}
 	verifier, err := s.hasher.Hash(in.Password)
@@ -282,7 +282,7 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err e
 			map[string]string{"detail": detail})
 	default:
 		log.ErrorContext(r.Context(), event, "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
 	}
 }
 
@@ -307,7 +307,7 @@ func (s *Service) invitationByID(w http.ResponseWriter, r *http.Request,
 	held, err := s.directory.InvitationByID(r.Context(), id)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 		return iamdomain.InvitationRow{}, false
 	}
 	if held.ID == "" || held.Spent(s.now()) {

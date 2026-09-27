@@ -270,8 +270,11 @@ forever.
 
 A **write** refused by the log names a reason from the same vocabulary, and a
 reason spelled like one of the codes above agrees with it about waiting — the
-two describe one state of one node. A surface answers every one of them `503`,
-with a `Retry-After` only for the four that clear on their own.
+two describe one state of one node. Every surface that writes to a state log —
+`/chart`, `/work`, `/pages`, `/iam` and `/auth` — answers every one of them
+`503`, with a `Retry-After` only for the four that clear on their own; the
+other nine carry none, because the same write is refused the same however
+often it is sent here.
 
 | Reason | What happened | What to do |
 |---|---|---|

@@ -81,13 +81,14 @@ func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, statelog.ErrUnavailable):
 		// THE ESTATE COULD NOT BE READ, OR A RECORD COULD NOT BE LANDED
-		// OR CONFIRMED: waiting clears it, so a 503 with the hint every
-		// identity 503 carries. It was a bare 503, which a client cannot
-		// tell from a node that is gone for good.
+		// OR CONFIRMED: a 503 with the hint the refusal's own rule gives
+		// ([auth.RetryIdentity]) — the identity estate's where waiting
+		// clears it, none where it does not. It was a bare 503, which a
+		// client cannot tell from a node that is gone for good.
 		log.WarnContext(r.Context(), "api_iam_bootstrap_mint_unavailable",
 			"error", err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-			auth.RetryIdentitySeconds, httpjson.Detail{"detail": err.Error()})
+			auth.RetryIdentity(err), httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrConflict):
 		// OUTSTANDING CODES KEPT ARRIVING as fast as the re-issue ended
