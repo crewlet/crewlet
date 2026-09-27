@@ -108,7 +108,10 @@ the founder's manager or take over another team's project. The **runtime** half
 — a seat's model chain, its credentials, its sandbox cell, its `mcp_env`, its
 `contact` and `availability` — takes `config:write` too, because a stdio MCP
 server is `exec.Command` with the config's command. And **structure** is the
-batch's, below. What a write asks for is what it **changes**, read against the
+batch's, below, at `config:write` — with `fleet:operate` beside it for a
+**removal**, the one structural change nothing undoes: the address is tombstoned
+for ever and the seat's mailbox goes with it, which is a purge's reach and takes
+a purge's grant. What a write asks for is what it **changes**, read against the
 object's row inside the write's own snapshot: a lead sending back the relations
 they read changes nothing, a content write that leaves the runtime half out
 keeps the one the object has — which is how a lead corrects a seat's goal

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
 )
 
@@ -79,6 +80,17 @@ func (s *Service) postBatch(w http.ResponseWriter, r *http.Request) {
 			Parent: op.Parent, Lead: op.Lead, To: op.To,
 			SeatKind: chart.SeatKind(op.SeatKind),
 		})
+	}
+	// A REMOVAL TAKES THE DEPLOYMENT'S GRANT AS WELL, asked the moment the
+	// body shows one — the pattern's verb is the company's grant alone,
+	// and whether a batch removes anything is not visible from it. Asked
+	// for ANY removal, a batch that also places included: the domain
+	// refuses that mix in its own words, and a caller who could not have
+	// removed is told what they lack first, rather than sent to split a
+	// batch into halves one of which will still be refused.
+	if removals > 0 && !s.decide(w, r, authz.Policy{Action: authz.ActionChartRemove},
+		authz.Object{Kind: authz.KindCompany}) {
+		return
 	}
 	batch := chart.Batch{Operations: ops, Reason: body.Reason}
 	writer := s.writerFor(r)

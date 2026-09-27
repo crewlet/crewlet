@@ -115,11 +115,11 @@ func newWriteRig(t *testing.T) *writeRig {
 	writer, err := chart.NewWriter(chart.WriterDeps{
 		Publisher: publisher, DB: db, Seal: sealer,
 		Actor: "ana", ActorKind: chart.AuthorHuman,
-		// THE RIG'S PARTY AUTHORS EVERYTHING, so every case here is
-		// about the rule it names rather than about the grant gate.
-		// What the gate itself does is in grant_test.go, where a party
-		// holding less is the point.
-		Grants: []iam.Grant{iam.GrantConfigWrite},
+		// THE RIG'S PARTY AUTHORS EVERYTHING — every class, a removal
+		// included — so every case here is about the rule it names
+		// rather than about the grant gate. What the gate itself does is
+		// in grant_test.go, where a party holding less is the point.
+		Grants: []iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate},
 		Now:    func() time.Time { return brokerAt },
 	})
 	if err != nil {

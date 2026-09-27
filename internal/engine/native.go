@@ -821,11 +821,12 @@ func (n *native) openChart(e *Engine, sl *stateLog, nodeID string) error {
 		ActorKind: chart.AuthorOperator,
 		// THE NODE ITSELF IS THE DEPLOYMENT, so it authors every class
 		// the chart has: the seeding import, the structural tidying a
-		// duty does, and the runtime half of every seat a revision
-		// describes. Every surface then narrows it with
+		// duty does, the runtime half of every seat a revision
+		// describes — and a removal, which takes the deployment's grant
+		// beside the company's. Every surface then narrows it with
 		// [chart.Writer.As], which REPLACES these rather than adding to
 		// them — a caller's party is never this one.
-		Grants: []iam.Grant{iam.GrantConfigWrite},
+		Grants: []iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate},
 	})
 	if err != nil {
 		return fmt.Errorf("engine: chart writer: %w", err)

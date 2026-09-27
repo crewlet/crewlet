@@ -63,7 +63,10 @@ import (
 //     it. [ownFields] names them per kind, and a write CHANGING one is
 //     [ClassPrivileged].
 //   - RUNTIME — the opaque half. The company's grant.
-//   - STRUCTURE — create, move, lead, kind, rename, remove: [ClassStructure].
+//   - STRUCTURE — create, move, lead, kind, rename: [ClassStructure], the
+//     company's grant. And a REMOVAL, [ClassRemoval], which takes the
+//     deployment's grant as well: it is the one structural change nothing
+//     undoes (see that class).
 //
 // # Fail-closed, including for a record this file does not name
 //
@@ -101,23 +104,44 @@ const (
 	ClassPrivileged PayloadClass = "privileged"
 
 	// ClassStructure is every record the chart serialises on one subject
-	// for the whole tree — a create, a move, a rename, a removal, an import.
-	// A rename is among them for the same reason a create is: an address is
-	// how every other domain refers to an object, so reassigning one in a
-	// namespace the whole company shares is not a fact about one team.
+	// for the whole tree that PLACES something — a create, a move, a lead,
+	// a kind, a rename, an import. A rename is among them for the same
+	// reason a create is: an address is how every other domain refers to
+	// an object, so reassigning one in a namespace the whole company
+	// shares is not a fact about one team.
 	ClassStructure PayloadClass = "structure"
+
+	// ClassRemoval is the record that takes objects OUT of the chart —
+	// structure too, and the one structural change nothing undoes. A
+	// removed address is tombstoned for ever, so no create, rename or
+	// import may take it again; the seat's mailbox, lease and diary go
+	// with it; and every node's removal gate drops whatever is still in
+	// flight to the object. So it takes the deployment's grant beside the
+	// company's — a purge's bar, for a purge's blast radius — and an
+	// automation holding only the grant that applies a configuration
+	// cannot dissolve a team between two of its runs.
+	ClassRemoval PayloadClass = "removal"
 )
 
-// GrantFor is the capability a class requires, or empty where none does.
+// GrantsFor is the capabilities a class requires — every one of them — or
+// none where no grant decides it.
 //
 // EXPORTED so a door can state the same requirement without spelling it
 // again — a second copy of this mapping is how one surface starts asking for
 // a grant the domain does not want and another stops asking for one it does.
-func GrantFor(c PayloadClass) iam.Grant {
-	if c == ClassPublic {
-		return ""
+// A fresh slice each call, so a caller appending to one answer is not editing
+// the next.
+func GrantsFor(c PayloadClass) []iam.Grant {
+	switch c {
+	case ClassPublic:
+		return nil
+	case ClassRemoval:
+		return []iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate}
 	}
-	return iam.GrantConfigWrite
+	// FAIL-CLOSED for a class nobody named here, as for the two that are:
+	// a record is refused below the company's grant unless a decide said
+	// it is public.
+	return []iam.Grant{iam.GrantConfigWrite}
 }
 
 // requirement is what one record asks of the party publishing it, decided by
@@ -142,8 +166,12 @@ type requirement struct {
 	fields []string
 }
 
-// structural is the requirement every record on the tree's subject states.
-var structural = requirement{class: ClassStructure}
+// structural is the requirement every placing record on the tree's subject
+// states, and removal the requirement of the record that takes objects out.
+var (
+	structural = requirement{class: ClassStructure}
+	removal    = requirement{class: ClassRemoval}
+)
 
 // contentRequirement is the requirement of a content record whose changed
 // fields ask for the company's grant: public where none did.
@@ -221,6 +249,13 @@ type GrantRefusal struct {
 }
 
 func (e *GrantRefusal) Error() string {
+	if e.Class == ClassRemoval {
+		return fmt.Sprintf("chart: %s acts with %v and a removal needs %v — a "+
+			"removed address is tombstoned for ever and the seat's mailbox goes "+
+			"with it, so taking an object out of the chart is the company's "+
+			"shape to change AND the deployment's to make irreversible",
+			e.Actor, e.Held, e.Grants)
+	}
 	if len(e.Fields) > 0 {
 		return fmt.Sprintf("chart: %s acts with %v, and this write to %s changes "+
 			"%s, which needs %v. A chart object's runtime half is the company's "+
@@ -241,18 +276,28 @@ func (e *GrantRefusal) Error() string {
 func (e *GrantRefusal) Is(target error) bool { return target == ErrRefused }
 
 // mayAuthor refuses a record this writer's party is not entitled to publish,
-// with a [GrantRefusal].
+// with a [GrantRefusal] naming what the party LACKS.
 //
 // [ErrRefused] rather than a bare error, so the three outcomes a surface
 // renders stay three: this is a decision that will not change on a retry, not
 // a contention and not a fault.
+//
+// THE MISSING ONES AND NOT ALL OF THEM, which is how internal/authz names a
+// refusal of a row asking for two grants: an administrator holding the
+// company's grant refused a removal is told the deployment's is missing, and
+// not sent to ask for one they already hold.
 func (w *Writer) mayAuthor(object ObjectRef, need requirement) error {
-	grant := GrantFor(need.class)
-	if grant == "" || slices.Contains(w.Grants, grant) {
+	var missing []iam.Grant
+	for _, grant := range GrantsFor(need.class) {
+		if !slices.Contains(w.Grants, grant) {
+			missing = append(missing, grant)
+		}
+	}
+	if len(missing) == 0 {
 		return nil
 	}
 	return &GrantRefusal{
-		Object: object, Class: need.class, Grants: []iam.Grant{grant},
+		Object: object, Class: need.class, Grants: missing,
 		Fields: need.fields, Actor: w.Actor, Held: slices.Clone(w.Grants),
 	}
 }

@@ -143,6 +143,11 @@ const (
 	// was, under a verb of its own because it asks for no step-up: a client
 	// polling its import is reading.
 	ActionChartImportRead Action = "chart.import.read"
+	// ActionChartRemove takes an object OUT of the chart — a structural
+	// batch whose operations remove something. Its own verb beside
+	// [ActionChartStructure] because it asks for the deployment's grant as
+	// well as the company's ([rule.also]): see its row.
+	ActionChartRemove Action = "chart.remove"
 
 	// --- the company's own controls --------------------------------- //
 	ActionConfigRead   Action = "config.read"
@@ -227,9 +232,11 @@ type rule struct {
 
 	// also is a SECOND capability an operator row requires beside grant:
 	// the row admits only a principal holding BOTH. Empty on every row but
-	// the one gesture that belongs to two parties at once — ending every
+	// the two gestures that belong to two parties at once — ending every
 	// session in the company, which is the deployment's to run and the
-	// directory's to decide ([ActionSessionInvalidate]).
+	// directory's to decide ([ActionSessionInvalidate]), and taking an
+	// object out of the org chart, which is the company's shape to change
+	// and the deployment's to make irreversible ([ActionChartRemove]).
 	//
 	// A FIELD AND NOT A SECOND VERB ASKED FROM INSIDE THE HANDLER, because
 	// the table is what a REST route, a socket question and a walk all read:
@@ -444,6 +451,20 @@ var rules = map[Action]rule{
 	// jointly produce a cycle — so a move is never a fact about one unit
 	// and is not one lead's to make.
 	ActionChartStructure: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
+	// A REMOVAL TAKES BOTH HATS, the design's rule and the one
+	// internal/chart's own record holds too: the company's grant, because
+	// a removal is structure like any other, AND the deployment's, because
+	// it is the one structural change nothing can undo. A removed address
+	// is tombstoned for ever — no create, rename or import may take it
+	// again — the seat's mailbox, lease and diary go with it, and every
+	// node's removal gate drops whatever is still in flight to the object.
+	// That is a purge's blast radius, and a purge is whoever runs the
+	// deployment's to make. Admitted on the company's grant alone, an
+	// automation that applies a configuration could dissolve a team
+	// between two pipeline runs, and nothing a later run wrote would bring
+	// its address back.
+	ActionChartRemove: {class: ClassOperator, grant: iam.GrantFleetOperate,
+		also: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
 	// A RENAME IS THE COMPANY'S, as every structural change is — the domain
 	// publishes it as a one-operation batch on the structure's one subject.
 	// Its own verb because its route is its own, and the reason it takes

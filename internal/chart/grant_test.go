@@ -623,6 +623,65 @@ func TestStructureIsNeverOneTeamsToChange(t *testing.T) {
 	}
 }
 
+// A REMOVAL TAKES THE DEPLOYMENT'S GRANT AS WELL AS THE COMPANY'S, AT THE
+// RECORD.
+//
+// It is the one structural change nothing undoes: the address is tombstoned
+// for ever and the seat's mailbox goes with it. internal/authz asks both hats
+// at the route; the record asks them too, because a door that skipped its own
+// check would otherwise publish a removal on the company's grant alone. A
+// party holding only the company's grant is refused naming exactly what it
+// lacks, and the chart still holds the seat; the same party holding both
+// removes it. A placement on the company's grant alone is the control that the
+// second hat is the removal's.
+//
+// Mutation: state `structural` for the removal record and the first party
+// removes the seat; name every required grant in the refusal and it names
+// config:write too.
+func TestARemovalTakesTheDeploymentsGrantAtTheRecord(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
+	removal := chart.Batch{Reason: "left", Operations: []chart.Operation{
+		op(chart.OpRemoveObject, chart.KindSeat, "sarah-chen", ""),
+	}}
+	admin := r.writer.As("ops", chart.AuthorHuman,
+		[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{}).WithHolders(noHolders{})
+
+	_, err := admin.WriteRemoval(t.Context(), "op-remove", removal)
+	var refusal *chart.GrantRefusal
+	if !errors.As(err, &refusal) || !errors.Is(err, chart.ErrRefused) ||
+		refusal.Class != chart.ClassRemoval ||
+		!slices.Equal(refusal.Grants, []iam.Grant{iam.GrantFleetOperate}) {
+		t.Fatalf("a removal on the company's grant alone: err = %v, want a "+
+			"grant refusal naming exactly [%s]", err, iam.GrantFleetOperate)
+	}
+	r.drain()
+	if got := r.column(`SELECT handle FROM chart_seats`); len(got) != 1 {
+		t.Fatalf("the refused removal reached the rows: the chart holds %v", got)
+	}
+	// THE CONTROL: the same party places a seat on the company's grant.
+	if _, err := admin.WriteBatch(t.Context(), "op-hire", chart.Batch{
+		Operations: []chart.Operation{
+			op(chart.OpCreateSeat, chart.KindSeat, "omar", ""),
+		}}); err != nil {
+		t.Fatalf("a placement on the company's grant was refused: %v", err)
+	}
+	r.drain()
+
+	both := r.writer.As("ops", chart.AuthorHuman,
+		[]iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate},
+		chart.Provenance{}).WithHolders(noHolders{})
+	if _, err := both.WriteRemoval(t.Context(), "op-remove-both", removal); err != nil {
+		t.Fatalf("a removal holding both grants: %v", err)
+	}
+	r.drain()
+	if got := r.column(`SELECT handle FROM chart_seats WHERE handle = 'sarah-chen'`); len(got) != 0 {
+		t.Errorf("the seat is still in the chart after a removal holding both "+
+			"grants: %v", got)
+	}
+}
+
 // TestAsReplacesAPartysGrantsRatherThanCarryingThemForward — the signature is
 // what makes this unwritable, and this is what says so.
 //
@@ -642,7 +701,8 @@ func TestAsReplacesAPartysGrantsRatherThanCarryingThemForward(t *testing.T) {
 	}
 	// AND THE ORIGINAL IS UNTOUCHED, which is what makes one writer per
 	// party safe to derive concurrently.
-	if len(r.writer.Grants) != 1 {
+	if !slices.Equal(r.writer.Grants,
+		[]iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate}) {
 		t.Fatalf("deriving a party changed the writer it came from: %v",
 			r.writer.Grants)
 	}
@@ -702,16 +762,26 @@ func TestTheDomainAndTheAuthorityTableAgreeAboutTheChart(t *testing.T) {
 		{chart.ClassStructure, authz.ActionChartStructure},
 		{chart.ClassStructure, authz.ActionChartRename},
 		{chart.ClassStructure, authz.ActionChartImport},
+		// TWO GRANTS, both needed — the row's `also` and the class's
+		// second one, compared as a set.
+		{chart.ClassRemoval, authz.ActionChartRemove},
 	}
 	for _, c := range cases {
 		t.Run(string(c.action), func(t *testing.T) {
 			t.Parallel()
-			want, known := authz.GrantOf(c.action)
+			grant, known := authz.GrantOf(c.action)
 			if !known {
 				t.Fatalf("the authority table has no rule for %q", c.action)
 			}
-			if got := chart.GrantFor(c.class); got != want {
-				t.Errorf("a %s record needs %q and %q asks for %q",
+			want := []iam.Grant{grant}
+			if also, _ := authz.AlsoGrantOf(c.action); also != "" {
+				want = append(want, also)
+			}
+			got := chart.GrantsFor(c.class)
+			slices.Sort(want)
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Errorf("a %s record needs %v and %q asks for %v",
 					c.class, got, c.action, want)
 			}
 		})
@@ -719,8 +789,8 @@ func TestTheDomainAndTheAuthorityTableAgreeAboutTheChart(t *testing.T) {
 	// AND THE PUBLIC HALF ASKS FOR NOTHING, because it is decided by a
 	// RELATION. A grant here would be this domain having an opinion about
 	// who leads a unit, which is the one thing it must not decide.
-	if got := chart.GrantFor(chart.ClassPublic); got != "" {
-		t.Errorf("a public content record asks for %q, want no capability — "+
+	if got := chart.GrantsFor(chart.ClassPublic); len(got) != 0 {
+		t.Errorf("a public content record asks for %v, want no capability — "+
 			"it is the unit lead's, and a lead relation is not a grant", got)
 	}
 	if want, _ := authz.GrantOf(authz.ActionChartContent); want != "" {

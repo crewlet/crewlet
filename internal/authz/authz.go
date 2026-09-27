@@ -88,9 +88,10 @@
 // ([iam.PersonPresentGrants]), and internal/api/auth's refuses a token every
 // sensitive row about its own owner.
 //
-// A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]), and one does: ending every
+// A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]), and two do: ending every
 // session in the company is the deployment's to run and the directory's to
-// decide, so it takes both.
+// decide, and taking an object out of the org chart is the company's shape to
+// change and the deployment's to make irreversible, so each takes both.
 // No TOOL asks for a proof (a walk holds that too): a seat has no keyboard, and
 // the operator's MCP surface is not a step-up surface.
 package authz
@@ -242,7 +243,7 @@ type Decision struct {
 
 	// Grants are the capabilities the deciding rule would have admitted
 	// THIS principal on, for THIS object — any one of them is enough, on
-	// every row but the one that asks for two at once ([rule.also]), where a
+	// every row but the ones that ask for two at once ([rule.also]), where a
 	// refusal names the ones this principal LACKS and every one of them is
 	// needed.
 	// The capability a grant rule asks for, the admin grant a relation

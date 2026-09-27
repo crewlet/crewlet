@@ -40,7 +40,10 @@
 // reparents through a common ancestor can each be locally valid and jointly
 // produce a cycle no node could see from the subject it arbitrated on. A move
 // is therefore not a fact about one unit and not one lead's to make: it takes
-// the company's own grant.
+// the company's own grant. A REMOVAL takes the deployment's grant beside it —
+// the one structural change nothing undoes, a tombstoned address and a retired
+// mailbox — asked the moment a batch's body shows one, since the pattern
+// cannot see it.
 package chartapi
 
 import (

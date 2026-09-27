@@ -194,7 +194,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/chart/history` | The company-wide **reorganisation feed**, newest first: who moved, who was hired, which team was dissolved — quiet changes included |
 | `PATCH` | `/chart/units/{key}` | Edit one unit's content. Its **prose** is whoever leads that unit; changing its `project`, `space` or `channel`, or a body carrying `runtime`, takes `config:write` (see [below](#who-may-write-which-part-of-an-object)) |
 | `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same classes — its prose decided by whoever leads **that seat**, and a change to its `manages`, `project`, `space` or `email` taking `config:write`. It carries no `kind`: that is structure, a batch's `set_kind` |
-| `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write` |
+| `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, rename, set a kind, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write`, and a batch that **removes** anything takes `fleet:operate` as well |
 | `POST` | `/chart/units/{key}/rename` `/chart/seats/{handle}/rename` | Change an object's **address**, as a one-operation structural batch. The former one goes on resolving. Takes `config:write` |
 | `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Each edge is `{"object":{...},"parent":...,"lead":...}`, and a seat's edge states its `seat_kind` too — the content writes that follow carry none. Takes `config:write` |
 | `GET` | `/chart/imports` `/chart/imports/{revision}` | Which revision this company's structure is running, and when it landed |
@@ -382,7 +382,7 @@ told they lead nobody goes looking for an authority they already hold.
 | `knowledge:write` | Writing the company's own pages. A rename, the trash and a restore are also the container's lead's; see [the write surface](#the-human-write-surface) |
 | `config:write` | Every write under `/config*`, `/chart/batch`, the rename and import routes, a chart object's runtime half and the relations authority is derived from, and `/setup`'s writes — with `secrets:write` as well wherever the write seals a credential — and, on top of the page's own rule, the create, save, rename, trash, restore and purge of a page in the tool-skills container (a comment on one is not gated: a remark is not the skill). It is also the **admin path** over the org chart's prose: a holder corrects any unit's or seat's name, purpose and goal, leading nothing |
 | `secrets:write` | `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, and on top of `config:write` a `/setup` write that seals a credential: a submission carrying one, a provisioning pass, a GitHub App |
-| `fleet:operate` | The deployment rather than the company: `/fleet`, every `/work/retention*` route (the maintenance status and the reanchor value included), `/backup`, `/budgets/reset`, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds. It is also the **admin path** of every relation rule but the org chart's: a holder is admitted where a lead or an owner would be — on everybody's work, and not on what a seat is told to do |
+| `fleet:operate` | The deployment rather than the company: `/fleet`, every `/work/retention*` route (the maintenance status and the reanchor value included), `/backup`, `/budgets/reset`, the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds — and, beside `config:write`, taking an object out of the org chart (a `remove` in `POST /chart/batch`). It is also the **admin path** of every relation rule but the org chart's: a holder is admitted where a lead or an owner would be — on everybody's work, and not on what a seat is told to do |
 | `sandbox:run` | Starting a coding run |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -533,7 +533,7 @@ is decided by who leads the object:
 | **Prose** | a seat's `name`, `backstory`, `goal`, `responsibilities`, `behavioral_guidelines`; a unit's `name`, `type`, `purpose`, `goals`, `knowledge_refs` | whoever **leads that object** — the unit's lead for a unit, the seat's lead for a seat — or `config:write` |
 | **Authority-bearing relations** | a seat's `manages`, `project`, `space`, `email`; a unit's `project`, `space`, `channel` | `config:write` |
 | **Runtime** | `runtime` (a seat's model chain, its credentials, its sandbox cell, its worker grants, its schedules, its `mcp_env`, its `contact` and `availability`), and `clear_runtime` | `config:write` |
-| **Structure** | create, move, lead, kind, rename, remove — [`POST /chart/batch`](#structure-is-neither) | `config:write` |
+| **Structure** | create, move, lead, kind, rename, remove — [`POST /chart/batch`](#structure-is-neither) | `config:write`; a removal also `fleet:operate` |
 
 The **relations** are what somebody's authority is derived from, which is why
 leading the object does not reach them: a seat's `manages` says who its manager
@@ -617,7 +617,16 @@ into the secret store only once the write is admitted.
 #### Structure is neither
 
 A create, a move, a lead change and a removal go through `POST /chart/batch`,
-and they take `config:write` whoever leads the team. The domain serialises
+and they take `config:write` whoever leads the team. **A removal takes
+`fleet:operate` as well**, because it is the one structural change nothing
+undoes: the removed address is tombstoned for ever — no create, rename or import
+may take it again — the seat's mailbox goes with it, and every node drops what
+is still in flight to the object. That is a purge's reach, and it takes a
+purge's grant: an automation holding only `config:write` to apply a
+configuration cannot dissolve a team between two of its runs. The route asks for
+it the moment a batch carries a `remove`, and the domain asks again at the
+record, so a caller holding only `config:write` is refused `403` naming
+`fleet:operate` and nothing is published. The domain serialises
 every structural record on **one subject for the whole chart**, deliberately:
 two reparents through a common ancestor can each be locally valid and jointly
 produce a cycle no node could see from the subject it arbitrated on. A caller

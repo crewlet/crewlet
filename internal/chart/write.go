@@ -446,7 +446,7 @@ func (w *Writer) decideRemoval(subject Subject, opID string, at time.Time,
 	// might not know.
 	return w.record(subject, OpRemove, opID, at, scope,
 		RemovePayload{V: GateRecordVersion, Objects: removed, Reason: reason},
-		structural)
+		removal)
 }
 
 // record encodes one record with this writer's own provenance.

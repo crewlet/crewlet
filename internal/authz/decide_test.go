@@ -615,6 +615,57 @@ func TestAChartObjectsAdminPathIsTheCompanysGrant(t *testing.T) {
 	}
 }
 
+// TAKING AN OBJECT OUT OF THE CHART TAKES BOTH HATS.
+//
+// A removal is structure, so the company's grant; and it is the one structural
+// change nothing undoes — the address is tombstoned for ever and the seat's
+// mailbox goes with it — so the deployment's grant as well, which is the bar a
+// purge has. A refusal names what the caller LACKS: an administrator holding
+// the company's grant is told the deployment's is missing, and nothing else.
+// An ordinary structural batch still takes the company's grant alone, which is
+// the control that the second hat is the removal's and not the batch's.
+//
+// Mutation: admit a removal on either grant alone and one case lets it
+// through; drop `also` from its row and the config:write holder is admitted.
+func TestARemovalFromTheChartTakesBothHats(t *testing.T) {
+	t.Parallel()
+	decide := func(p iam.Principal, a authz.Action) authz.Decision {
+		return authz.Decide(t.Context(), p, a,
+			authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
+	}
+	for _, c := range []struct {
+		name    string
+		holds   []iam.Grant
+		missing []iam.Grant
+	}{
+		{"the company's grant alone", []iam.Grant{iam.GrantConfigWrite},
+			[]iam.Grant{iam.GrantFleetOperate}},
+		{"the deployment's grant alone", []iam.Grant{iam.GrantFleetOperate},
+			[]iam.Grant{iam.GrantConfigWrite}},
+		{"neither", []iam.Grant{iam.GrantStateRead},
+			[]iam.Grant{iam.GrantFleetOperate, iam.GrantConfigWrite}},
+	} {
+		d := decide(person("jane.doe", c.holds...), authz.ActionChartRemove)
+		if d.Allowed || d.Reason != authz.ReasonNoGrant ||
+			!slices.Equal(d.Grants, c.missing) {
+			t.Errorf("%s decided %+v, want refused naming exactly %v", c.name,
+				d, c.missing)
+		}
+	}
+	both := person("jane.doe", iam.GrantConfigWrite, iam.GrantFleetOperate)
+	if d := decide(both, authz.ActionChartRemove); !d.Allowed || d.Reason != authz.ReasonGrant {
+		t.Errorf("both grants decided %+v, want admitted on the grant", d)
+	}
+	if recency, _ := authz.RecencyOf(authz.ActionChartRemove); recency != iam.RecencyStepUp {
+		t.Errorf("a removal asks for a %q proof, want %q — it is a structural "+
+			"write like every other", recency, iam.RecencyStepUp)
+	}
+	if d := decide(person("jane.doe", iam.GrantConfigWrite),
+		authz.ActionChartStructure); !d.Allowed {
+		t.Errorf("an ordinary structural batch refused the company's grant: %+v", d)
+	}
+}
+
 // A VERB WITH NO RULE IS REFUSED, AND SAYS IT IS THIS BUILD'S MISTAKE.
 //
 // The alternative is a default class, which is how a new verb ships ungated —

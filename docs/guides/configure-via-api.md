@@ -319,7 +319,10 @@ can follow the first straight away.
 
 Removals go in a batch of their own and carry a `reason`, which rides into the
 tombstone so somebody asking where their team went reads "merged into
-infrastructure" rather than an absence.
+infrastructure" rather than an absence. A removal takes `fleet:operate` as well
+as `config:write`: it is the one structural change nothing undoes — the address
+is tombstoned for ever and the seat's mailbox goes with it — so a pipeline token
+that applies configuration cannot dissolve a team.
 
 ### Rename
 

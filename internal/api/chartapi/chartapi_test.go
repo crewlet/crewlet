@@ -700,7 +700,9 @@ func TestABatchReachesThePlacementOrTheRemovalVerb(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+			// BOTH HATS, because two of these remove: which grants a
+			// removal takes is the next case's question, not this one's.
+			r := serve(t, nil, leadOf(iam.GrantConfigWrite, iam.GrantFleetOperate), leads())
 			rec := post(r.mux, "/chart/batch", c.body)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("answered %d: %s", rec.Code, rec.Body)
@@ -709,6 +711,54 @@ func TestABatchReachesThePlacementOrTheRemovalVerb(t *testing.T) {
 				t.Errorf("reached %v, want %q", r.writer.calls, c.want)
 			}
 		})
+	}
+}
+
+// A BATCH THAT REMOVES ANYTHING TAKES THE DEPLOYMENT'S GRANT AS WELL.
+//
+// The pattern's verb is the company's grant, and whether a batch removes
+// anything is visible only in its body — so the route asks again the moment it
+// sees a `remove`, a batch that also places included, and a caller holding the
+// company's grant alone is refused naming `fleet:operate` before anything is
+// published. A placement on that grant alone is the control, and so is a
+// removal holding both.
+//
+// Mutation: drop the re-ask and the config:write holder's removal reaches the
+// writer.
+func TestARemovalBatchTakesTheDeploymentsGrant(t *testing.T) {
+	t.Parallel()
+	removal := `{"operations":[{"kind":"remove","object":{"kind":"seat","id":"ana"}}],"reason":"left"}`
+	mixed := `{"operations":[` +
+		`{"kind":"rename","object":{"kind":"seat","id":"ana"},"to":"ana-ops"},` +
+		`{"kind":"remove","object":{"kind":"seat","id":"ana-ops"}}]}`
+	for _, body := range []string{removal, mixed} {
+		r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+		rec := post(r.mux, "/chart/batch", body)
+		var refusal struct {
+			Error  string   `json:"error"`
+			Reason string   `json:"reason"`
+			Grants []string `json:"grants"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &refusal)
+		if rec.Code != http.StatusForbidden || refusal.Reason != string(authz.ReasonNoGrant) ||
+			!slices.Equal(refusal.Grants, []string{string(iam.GrantFleetOperate)}) {
+			t.Errorf("a removal on the company's grant alone answered %d %s, "+
+				"want 403 no_grant naming [fleet:operate]", rec.Code, rec.Body)
+		}
+		if len(r.writer.calls) != 0 {
+			t.Errorf("a refused removal reached the writer: %v", r.writer.calls)
+		}
+	}
+	placing := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	if rec := post(placing.mux, "/chart/batch", `{"operations":[{"kind":"create_seat",`+
+		`"object":{"kind":"seat","id":"ana"},"seat_kind":"human"}]}`); rec.Code != http.StatusOK {
+		t.Errorf("a placement on the company's grant answered %d: %s", rec.Code, rec.Body)
+	}
+	both := serve(t, nil, leadOf(iam.GrantConfigWrite, iam.GrantFleetOperate), leads())
+	if rec := post(both.mux, "/chart/batch", removal); rec.Code != http.StatusOK ||
+		len(both.writer.calls) != 1 || both.writer.calls[0] != "removal" {
+		t.Errorf("a removal holding both grants answered %d and reached %v: %s",
+			rec.Code, both.writer.calls, rec.Body)
 	}
 }
 
