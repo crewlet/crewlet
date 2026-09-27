@@ -138,12 +138,13 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 //
 // # When there is no store
 //
-// A node with no bootstrap at this path, or one declaring no keyring,
-// resolves from the environment alone. That is the pre-store deployment and
-// it is supported — so it is a NOTE rather than a failure, and it is a note
+// A run with no bootstrap at this path resolves from the environment alone —
+// the command is run somewhere other than a node, with `-public-url` naming
+// the deployment — so it is a NOTE rather than a failure, and it is a note
 // rather than silence: a mistyped -config resolving nothing has exactly the
 // destructive outcome above, and an operator has to be able to see which
-// chain ran.
+// chain ran. A bootstrap that exists always names a keyring, because Tier A
+// refuses one that does not.
 //
 // A bootstrap that exists and cannot be read fails the run instead. Someone
 // who configured a store and did not get it must not have their secrets
@@ -159,21 +160,14 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer) (
 	*config.Resolver, *config.Bootstrap, func(), error) {
 
-	envOnly := func(why string, boot *config.Bootstrap) (
-		*config.Resolver, *config.Bootstrap, func(), error) {
-
-		fmt.Fprintf(notes, "%s: resolving ${VAR} from the environment only.\n", why)
-		return config.EnvOnly(), boot, func() {}, nil
-	}
 	if _, err := os.Stat(bootstrapPath); errors.Is(err, os.ErrNotExist) {
-		return envOnly("no "+bootstrapPath, nil)
+		fmt.Fprintf(notes, "no %s: resolving ${VAR} from the environment only.\n",
+			bootstrapPath)
+		return config.EnvOnly(), nil, func() {}, nil
 	}
 	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
 		return nil, nil, nil, err
-	}
-	if len(boot.Secrets.Keys) == 0 {
-		return envOnly(bootstrapPath+" declares no secrets.keys", boot)
 	}
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err != nil {

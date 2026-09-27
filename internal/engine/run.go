@@ -604,6 +604,17 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
+	// THE KEYRING FIRST, because everything below derives from it — the
+	// per-run token issuers, the state logs' signatures, the secret store
+	// and the company document a peer fetches — and because building it
+	// opens nothing, so a node without one (or with a broken one) is
+	// refused before there is anything to unwind. It used to be built
+	// after the backends were open, and it used to answer nil for a node
+	// with none.
+	cipher, err := openCipher(opts.Bootstrap)
+	if err != nil {
+		return nil, err
+	}
 
 	// EVERYTHING THAT CAN FAIL WITH NOTHING OPEN COMES FIRST, which is why
 	// the telemetry receiver, the bridge and this node's identity are
@@ -620,7 +631,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// launched in between exporting nowhere, silently.
 	otel := opts.OtelReceiver
 	if otel == nil {
-		built, err := sandbox.BuildOtelReceiver(os.Getenv,
+		otel, err = sandbox.BuildOtelReceiver(os.Getenv,
 			tokenMaterial(opts.Bootstrap))
 		if err != nil {
 			// A receiver URL that is set and unusable is a deployment
@@ -629,7 +640,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			// config that looks complete and exports nothing.
 			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
 		}
-		otel = built
 	}
 	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
 	// receiver above is built here: a fleet mints on one node and may
@@ -683,7 +693,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	e := &Engine{
-		backends: backends, ownsBackends: ownsBackends,
+		backends: backends, ownsBackends: ownsBackends, cipher: cipher,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
@@ -759,21 +769,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("engine: tool skills: %w", err)
 	}
 
-	// THE KEYRING AND THE SNAPSHOT BEFORE THE FIRST EPOCH, because the
-	// epoch resolves every ${VAR} it holds as it is built — the provider
-	// keys, the integration tokens, the per-role MCP env. Loading the
-	// snapshot afterwards would give the first epoch environment-only
-	// resolution and every later one the store, so a rotated secret would
-	// work on the second apply and not on boot.
-	//
-	// A node whose keyring is CONFIGURED but broken fails here rather than
-	// resolving everything from the environment and looking healthy.
-	cipher, err := openCipher(opts.Bootstrap)
-	if err != nil {
-		return nil, err
-	}
-	e.cipher = cipher
-
 	// THE ADMISSION HANDSHAKE, BEFORE ANY PUBLISHER — and this is the
 	// earliest point at which it can run, because it needs the
 	// coordination backend and nothing else. Everything below it starts
@@ -788,6 +783,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	e.acknowledge(ctx, maintenanceStreams())
 
+	// THE SNAPSHOT BEFORE THE FIRST EPOCH, because the epoch resolves every
+	// ${VAR} it holds as it is built — the provider keys, the integration
+	// tokens, the per-role MCP env. Loading the snapshot afterwards would
+	// give the first epoch environment-only resolution and every later one
+	// the store, so a rotated secret would work on the second apply and not
+	// on boot.
+	//
 	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
 	// engine was stopped is on the fleet before anything resolves it —
 	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].

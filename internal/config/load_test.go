@@ -109,19 +109,37 @@ func TestParseCompanyRequiresAName(t *testing.T) {
 	}
 }
 
-// An empty Tier A file is legitimate — every field defaults, and a company
-// runs on the defaults alone.
-func TestEmptyBootstrapIsTheDefaults(t *testing.T) {
+// AN EMPTY TIER A FILE IS REFUSED, NAMING THE ONE THING IT CANNOT DEFAULT.
+//
+// It used to load: every field defaulted, and a company ran on the defaults
+// alone. The keyring has no default — a key the engine invented would be one
+// no other node holds, and every record on every state log is signed under
+// it — so an empty file is a node that cannot start, and saying so here is
+// what `crewlet validate` is for.
+func TestAnEmptyBootstrapIsRefusedForItsKeyring(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap(nil, EnvOnly())
+	_, err := ParseBootstrap(nil, EnvOnly())
+	if !errors.Is(err, ErrMissing) {
+		t.Fatalf("an empty bootstrap: err = %v, want ErrMissing", err)
+	}
+	if !strings.Contains(err.Error(), "secrets.keys") {
+		t.Errorf("the refusal does not name the keyring: %v", err)
+	}
+}
+
+// AND A KEYRING IS ALL A TIER A FILE NEEDS: everything else defaults, and a
+// company runs on the defaults alone.
+func TestAKeyringAloneTakesEveryOtherDefault(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseKeyedBootstrap(nil, EnvOnly())
 	if err != nil {
-		t.Fatalf("an empty bootstrap should load: %v", err)
+		t.Fatalf("a bootstrap holding only its keyring should load: %v", err)
 	}
 	want := DefaultBootstrap()
 	if cfg.Store.Path != want.Store.Path || cfg.Stream.Type != want.Stream.Type ||
 		cfg.Coordination.Type != want.Coordination.Type ||
 		cfg.API.Host != want.API.Host || cfg.API.Serving() {
-		t.Fatalf("empty bootstrap did not take the defaults: %+v", cfg)
+		t.Fatalf("a keyring-only bootstrap did not take the defaults: %+v", cfg)
 	}
 }
 

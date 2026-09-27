@@ -16,7 +16,7 @@ import (
 // beside the audit log. It fails as DATA, months later, on a restore.
 func TestTheTwoStoreEstatesCannotBeOneFile(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := config.KeyedBootstrap()
 	b.Store.Path = "/var/lib/crewlet/company.db"
 	b.Store.ReplicatedPath = "/var/lib/crewlet/company.db"
 
@@ -44,7 +44,7 @@ func TestTheReplicatedPathAcceptsWhatADeploymentSets(t *testing.T) {
 		"whitespace only": "   ",
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.KeyedBootstrap()
 			b.Store.Path = "/var/lib/crewlet/company.db"
 			b.Store.ReplicatedPath = path
 			if err := b.Validate(); err != nil {

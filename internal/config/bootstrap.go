@@ -52,8 +52,9 @@ type Bootstrap struct {
 	// API is the HTTP surface: the dashboard, the REST API, the webhooks.
 	API API `yaml:"api,omitempty" json:"api"`
 
-	// Secrets is the encryption keyring for company secrets at rest. It is
-	// the root of trust and lives ONLY here — never in the store it opens.
+	// Secrets is the fleet's keyring. It is the root of trust and lives
+	// ONLY here — never in the store it opens — and every node requires
+	// one: see [Secrets].
 	Secrets Secrets `yaml:"secrets,omitempty" json:"secrets"`
 
 	// Logging is how loud this node is, and in what shape.
@@ -405,25 +406,37 @@ func (b *Bootstrap) Validate() error {
 func (b *Bootstrap) validateTopology() error {
 	var p problems
 
-	// THE KEYRING IS REQUIRED ONCE THE API IS SERVED, and this is the
-	// cross-block rule that says so: the keyring is `secrets:` and the
-	// surface is `api:`, so neither block's own validator can see both.
+	// THE KEYRING IS REQUIRED ON EVERY NODE, whatever its roles and
+	// whether or not it serves the API.
 	//
-	// It is no longer only about sealing the company's credentials, which
-	// is what made it optional — a deployment with no integrations
-	// genuinely had nothing to seal. It is now what SIGNS every session
-	// cookie this deployment issues and what derives the key each per-run
-	// token is verified with. Without it the API serves and nobody can
-	// sign in, which is a deployment that boots cleanly, binds its port
-	// and answers 401 to its own dashboard.
-	if b.API.Serving() && len(b.Secrets.Keys) == 0 {
+	// It used to be required only once `api.port` was set, which is where
+	// it signs every session cookie and derives the key each per-run token
+	// is verified with. That left a node serving no API free to leave it
+	// out — and every node runs state-log domains, whatever its roles (the
+	// tracker, the vectors, the pages and the org chart run everywhere),
+	// every record on every one of those logs is signed and verified under
+	// this keyring because the broker authenticates nothing, and the
+	// company document a peer fetches from the coordination store is
+	// authenticated by its seal. So a keyless satellite validated here and
+	// was then refused by the engine the moment it started its logs, which
+	// is a configuration this command called sound and the node could not
+	// run.
+	//
+	// A CROSS-BLOCK RULE ONLY IN WHERE IT USED TO BE: the refusal no longer
+	// reads `api:`, and it sits here beside the other deployment-shape
+	// rules rather than inside `secrets:`'s own validator so that the
+	// message can name the whole deployment rather than the block.
+	if len(b.Secrets.Keys) == 0 {
 		p.add(field("secrets.keys"), ErrMissing,
-			"required once `api.port` is set: the keyring signs every session "+
-				"cookie and derives the key that verifies each per-run token, "+
-				"so an API served without one accepts nobody. It is also what "+
-				"seals the company's own credentials at rest. Generate a key "+
+			"required on every node: every record on every state log is "+
+				"signed and verified under the keyring, because the broker "+
+				"authenticates nothing, and every node runs state logs "+
+				"whatever its roles. It also authenticates the company "+
+				"document a node fetches from its peers, seals the company's "+
+				"own credentials at rest and — on a node serving the API — "+
+				"signs every session cookie and per-run token. Generate a key "+
 				"with `crewlet secrets keygen` and point `material:` at a "+
-				"${VAR} holding it")
+				"${VAR} holding it; every node of a fleet holds the same keys")
 	}
 
 	// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members
@@ -1535,16 +1548,20 @@ func (c *Coordination) LeaseTTL() time.Duration {
 // (enc:v1:<id>:...) parses.
 var secretKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// Secrets is the Tier A encryption keyring for company secrets at rest.
+// Secrets is the Tier A keyring every node of a fleet holds.
 //
 // The keyring is the SOLE ROOT OF TRUST: the store holds only ciphertext,
 // and the key material lives here — on disk or in the environment, never in
-// the database it opens. Empty (the default) means secret encryption is
-// disabled; the engine then fails closed only if the active revision
-// actually contains sealed values.
+// the database it opens. It is REQUIRED ON EVERY NODE ([Bootstrap.Validate]
+// refuses a file without one), because far more than the company's
+// credentials rest on it: every state-log record is signed and verified
+// under it, the company document a node fetches from its peers is
+// authenticated by its seal, and a node serving the API signs every session
+// cookie and per-run token with it. There is no default: a key the engine
+// invented would be one no other node holds.
 type Secrets struct {
-	// ActiveKeyID names the key that seals new writes. Required once keys
-	// is non-empty.
+	// ActiveKeyID names the key that seals new writes. Required, and it
+	// must name one of Keys.
 	ActiveKeyID string `yaml:"active_key_id,omitempty" json:"active_key_id,omitempty" desc:"Which key seals new writes."`
 
 	// Keys is the keyring. More than one entry supports online rotation:
@@ -1598,7 +1615,10 @@ func (s *Secrets) validate(path Path) error {
 	return p.err()
 }
 
-// Enabled reports whether secret encryption is configured at all.
+// Enabled reports whether this value carries a keyring at all.
+//
+// Every Tier A that validated does; false answers only a Secrets value built
+// in code, which [Secrets.Cipher] refuses.
 func (s *Secrets) Enabled() bool { return len(s.Keys) > 0 }
 
 // TokenMaterial is this keyring as a per-run token issuer reads it.
@@ -1629,22 +1649,28 @@ func (s *Secrets) TokenMaterial() runtoken.Material {
 	return out
 }
 
-// Cipher builds the sealing cipher this Tier A configures, or nil when secret
-// encryption is disabled.
+// Cipher builds the sealing cipher this Tier A configures.
 //
-// NIL IS A POSTURE, not a failure: a deployment with no keyring stores its
-// company config in plaintext, which is the documented opt-out and the state
-// every deployment starts in. What must fail is a keyring that is configured
-// and unusable — key material that is not 32 bytes of base64 is an operator
-// error, and booting past it would seal the next revision under a key nobody
-// can reproduce.
+// AN EMPTY KEYRING IS REFUSED, and it used to be a posture: a deployment with
+// no keyring stored its company document in plaintext and read peers'
+// documents in plaintext, which was the documented opt-out. The keyring is
+// required on every node now ([Bootstrap.Validate]), and a nil cipher handed
+// back here was the one way a caller could still reach that posture — a
+// document read unauthenticated off the coordination store, or a revision
+// written in the clear — so the value that would have produced it is
+// refused where it is built rather than at every caller. What also fails
+// here is a keyring that is configured and unusable: key material that is not
+// 32 bytes of base64 is an operator error, and booting past it would seal the
+// next revision under a key nobody can reproduce.
 //
 // ${VAR} references in the material are already resolved: Tier A expands its
 // document before decoding, because the values it carries are needed the
 // instant the process starts.
 func (s *Secrets) Cipher() (secrets.Cipher, error) {
 	if !s.Enabled() {
-		return nil, nil
+		return nil, fault(field("secrets.keys"), ErrMissing,
+			"there is no keyring to seal or open with, and every node needs one: "+
+				"generate a key with `crewlet secrets keygen` and add it")
 	}
 	ring := secrets.Keyring{
 		ActiveID: s.ActiveKeyID,

@@ -388,7 +388,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+		filepath.Join(dir, "index.db")) + fixtureKeyring
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

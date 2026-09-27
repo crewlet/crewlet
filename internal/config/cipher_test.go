@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,9 +12,9 @@ import (
 
 // The keyring is the deployment's SOLE ROOT OF TRUST: the store holds only
 // ciphertext, and the key material lives in Tier A, never in the database it
-// opens. What these pin is the boundary between "encryption is off" — a real,
-// documented posture — and "encryption is on and broken", which must never
-// boot.
+// opens. What these pin is that there is no "encryption is off" any more —
+// every node holds a keyring — and that "encryption is on and broken" never
+// boots either.
 
 func keyMaterial(t *testing.T) string {
 	t.Helper()
@@ -24,18 +25,25 @@ func keyMaterial(t *testing.T) string {
 	return base64.StdEncoding.EncodeToString(key)
 }
 
-func TestNoKeyringIsAPostureNotAFailure(t *testing.T) {
+// NO KEYRING IS A REFUSAL, NOT A POSTURE.
+//
+// It was the documented opt-out: a nil cipher stored the company document in
+// plaintext and read a peer's in plaintext too, which is a document anybody
+// who can reach the coordination store can author. Every node requires a
+// keyring now, and the value that would have reached that posture is refused
+// where it is built, naming the field.
+func TestNoKeyringIsRefusedRatherThanAPosture(t *testing.T) {
 	t.Parallel()
-	// A deployment with no keyring stores its company config in plaintext.
-	// That is the opt-out and the state every deployment starts in, so
-	// refusing here would make the first run of one impossible.
 	var none config.Secrets
 	cipher, err := none.Cipher()
-	if err != nil {
-		t.Fatalf("an unconfigured keyring errored: %v", err)
+	if !errors.Is(err, config.ErrMissing) {
+		t.Fatalf("an empty keyring: err = %v, want ErrMissing", err)
+	}
+	if !strings.Contains(err.Error(), "secrets.keys") {
+		t.Errorf("the refusal does not name the field: %v", err)
 	}
 	if cipher != nil {
-		t.Error("no keyring produced a cipher, so plaintext storage is unreachable")
+		t.Error("an empty keyring produced a cipher")
 	}
 }
 

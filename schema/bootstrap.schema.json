@@ -775,6 +775,28 @@
           "stream"
         ]
       }
+    },
+    {
+      "$comment": "every node needs secrets.keys: every state-log record is signed under it.",
+      "allOf": [
+        {
+          "properties": {
+            "secrets": {
+              "properties": {
+                "keys": {
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "keys"
+              ]
+            }
+          },
+          "required": [
+            "secrets"
+          ]
+        }
+      ]
     }
   ],
   "properties": {

@@ -57,9 +57,8 @@ func (e *Engine) LookupSecret(name string) (string, bool) { return e.resolver().
 
 // resolver is the chain this node resolves ${VAR} through.
 //
-// Never nil: a node with no store, or no keyring, resolves from the
-// environment alone — which is the pre-store behaviour and a supported
-// deployment, not a degraded one.
+// Never nil: until a snapshot is installed — and on an engine holding no
+// store at all — it resolves from the environment alone.
 func (e *Engine) resolver() *config.Resolver {
 	if r := e.env.Load(); r != nil {
 		return r
@@ -90,13 +89,11 @@ func (e *Engine) resolver() *config.Resolver {
 func (e *Engine) refreshSecrets(ctx context.Context) bool {
 	values, err := e.secretSnapshot(ctx)
 	if err != nil {
-		if errors.Is(err, secrets.ErrNoKeyring) {
-			// No keyring is a supported deployment: secrets come from the
-			// environment and the store is simply not in use. Logged once
-			// at debug rather than warned on every apply.
-			log.DebugContext(ctx, "secret_store_unused", "reason", "this node has no keyring")
-			return false
-		}
+		// NO KEYRING IS NOT A QUIET CASE ANY MORE. It was a supported
+		// deployment, logged at debug; [openCipher] now refuses to build
+		// an engine without one, so meeting it here is a fault like any
+		// other unreadable store, and it keeps the previous snapshot for
+		// the same reason.
 		log.ErrorContext(ctx, "secret_store_unreadable", "error", err,
 			"detail", "the previous snapshot keeps serving; rotated secrets "+
 				"will not be picked up until the store is readable")
@@ -201,16 +198,21 @@ func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) 
 	return merged, nil
 }
 
-// openCipher builds this node's keyring cipher, or reports that it has none.
+// openCipher builds this node's keyring cipher, or refuses the boot.
 //
-// A NODE WITH NO KEYRING IS SUPPORTED, and gets nil rather than an error:
-// secrets then come from the environment and the store is simply not in use.
-// A keyring that is CONFIGURED but broken is a different thing entirely —
-// an operator asked for encryption and did not get it — so that fails the
-// boot rather than degrading quietly to plaintext resolution.
+// A NODE WITH NO KEYRING DOES NOT START. It used to be a supported posture —
+// secrets from the environment, the store unused, the company document read
+// in plaintext — and every node needs the keyring now: every state-log record
+// is signed and verified under it, and the document a peer fetches from the
+// coordination store is authenticated by its seal. Tier A refuses a file
+// without one ([config.Bootstrap.Validate]); this is the engine's own
+// refusal, for a Bootstrap that did not come through that door, and it is
+// what an unconfigured node — which starts no state log, and so meets no
+// signer — would otherwise boot past. A keyring that is configured but broken
+// fails here too, naming the key.
 func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
-	if boot == nil || len(boot.Secrets.Keys) == 0 {
-		return nil, nil
+	if boot == nil {
+		return nil, fmt.Errorf("engine: no bootstrap config, so no keyring")
 	}
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {

@@ -161,7 +161,7 @@ func TestDocumentResolutionNeverTouchesKeys(t *testing.T) {
 // as a type error.
 func TestSubstitutedScalarStaysAString(t *testing.T) {
 	t.Setenv("ACME_STORE_NAME", "8080")
-	cfg, err := ParseBootstrap([]byte("store:\n  path: ${ACME_STORE_NAME}\n"), EnvOnly())
+	cfg, err := ParseKeyedBootstrap([]byte("store:\n  path: ${ACME_STORE_NAME}\n"), EnvOnly())
 	if err != nil {
 		t.Fatal(err)
 	}

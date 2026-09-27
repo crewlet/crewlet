@@ -116,10 +116,15 @@ func TestWithoutAStoreTheRunSaysWhichChainItUsed(t *testing.T) {
 	}
 }
 
-// A KEYRINGLESS BOOTSTRAP IS ALSO ENVIRONMENT-ONLY, and also says so — the
-// node has a store but nothing to decrypt it with, which is the same
-// deployment from this command's point of view.
-func TestABootstrapWithNoKeyringResolvesFromTheEnvironment(t *testing.T) {
+// A KEYRINGLESS BOOTSTRAP IS REFUSED, NOT RESOLVED FROM THE ENVIRONMENT.
+//
+// It used to be the second environment-only case, beside a missing file: a
+// node with a store and nothing to decrypt it with. Every node needs a keyring
+// now, so a Tier A without one is a file no node can run, and resolving a
+// company's values from whatever this shell holds on the strength of it would
+// be the stale-export shadowing this chain exists to prevent. The refusal
+// names the field, and the environment note is never written.
+func TestABootstrapWithNoKeyringIsRefused(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("node:\n  id: cli-test\n"), 0o600); err != nil {
@@ -127,13 +132,16 @@ func TestABootstrapWithNoKeyringResolvesFromTheEnvironment(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	if _, _, closeEnv, err := companyResolver(t.Context(), path, &notes); err != nil {
-		t.Fatalf("a keyringless bootstrap is a supported deployment: %v", err)
-	} else {
-		defer closeEnv()
+	_, _, _, err := companyResolver(t.Context(), path, &notes)
+	if err == nil {
+		t.Fatal("a keyringless bootstrap was resolved rather than refused")
 	}
-	if !strings.Contains(notes.String(), "secrets.keys") {
-		t.Errorf("the note does not say what is missing: %q", notes.String())
+	if !strings.Contains(err.Error(), "secrets.keys") {
+		t.Errorf("the refusal does not name the keyring: %v", err)
+	}
+	if strings.Contains(notes.String(), "environment only") {
+		t.Errorf("a refused bootstrap still announced an environment-only run: %q",
+			notes.String())
 	}
 }
 

@@ -1615,9 +1615,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// writes through the engine rather than through the config
 		// surface beside it.
 		Seats: e,
-		// The fleet's own store, sealed with the same keyring. A node with
-		// no secrets.keys still gets one, and every secret write through
-		// it refuses with no_keyring rather than storing plaintext.
+		// The fleet's own store, sealed with the same keyring — the one
+		// every node holds, since Tier A refuses a file without it.
 		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
 		// THIS NODE'S resolution chain, so a requirement can say whether
 		// a ${VAR} actually resolved rather than only whether somebody

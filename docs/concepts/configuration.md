@@ -790,17 +790,32 @@ that can match, and every guarded route answers `401`. That is the only safe
 reading of "an app was built without being told who may act", and it removes the
 possibility of a process serving `/config` writes with nothing in front of them.
 
+### What Tier A must state on every node
+
+**`secrets.keys` is required on every node**, whatever its roles and whether or
+not it serves the API, and `crewlet validate` refuses a Tier A file without it.
+It has no default — a key the engine invented would be one no other node holds
+— and far more than the company's credentials rest on it:
+
+- every record on every state log is signed and verified under it, because the
+  broker authenticates nothing, and every node runs state logs (the tracker,
+  the vectors, the pages and the org chart run on a seats-only satellite too);
+- the company document a node fetches from its peers is authenticated by its
+  seal, so a node refuses one that arrives unsealed (see [Secrets](#secrets));
+- on a node serving the API it signs every session cookie and derives the key
+  that verifies each per-run token.
+
 ### What Tier A must state once the API is served
 
-Four settings stop being optional the moment `api.port` is non-zero, and each is
-refused by `crewlet validate` on a laptop rather than by a process at bind time:
+Three more settings stop being optional the moment `api.port` is non-zero, and
+each is refused by `crewlet validate` on a laptop rather than by a process at
+bind time:
 
 | Setting | Why it cannot be defaulted |
 |---------|----------------------------|
 | `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, it is the OIDC redirect base, and it is what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
 | `api.auth.max_grants` | The ceiling on what a directory record or an identity provider's group mapping may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
 | `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when the identity provider is down. Required on **every** backend, `none` included |
-| `secrets.keys` | The keyring signs every session cookie and derives the key that verifies each per-run token. An API served without one accepts nobody |
 
 ### What `crewlet validate` warns about
 

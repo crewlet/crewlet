@@ -40,10 +40,11 @@ func rejects(t *testing.T, doc, wantPath string) error {
 	return err
 }
 
-// rejectsBootstrap is [rejects] for Tier A.
+// rejectsBootstrap is [rejects] for Tier A, over a document carrying the
+// keyring every node needs, so the refusal it finds is the one it names.
 func rejectsBootstrap(t *testing.T, doc, wantPath string) error {
 	t.Helper()
-	_, err := ParseBootstrap([]byte(doc), EnvOnly())
+	_, err := ParseKeyedBootstrap([]byte(doc), EnvOnly())
 	if err == nil {
 		t.Fatalf("expected %s to be rejected", wantPath)
 	}

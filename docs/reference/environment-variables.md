@@ -221,13 +221,13 @@ Four more `stream:` fields carry no `${VAR}` convention because they are paths o
 
 ---
 
-## Secret Encryption (Optional)
+## The Keyring (Required on Every Node)
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `CREWLET_SECRET_KEY_<ID>` | Base64-encoded 32-byte key referenced by a Tier A `secrets.keys[].material`. **Required once `api.port` is set**: the keyring signs every session cookie this deployment issues and derives the key that verifies each per-run token, so an API served without one accepts nobody. It also stores the **entire** Tier B config encrypted at rest in the DB as one opaque blob instead of as verbatim `${VAR}` references. | `crewlet secrets keygen` |
+| `CREWLET_SECRET_KEY_<ID>` | Base64-encoded 32-byte key referenced by a Tier A `secrets.keys[].material`. **Required on every node**, whatever its roles and whether or not it serves the API: every record on every state log is signed and verified under the keyring, and the company document a node fetches from its peers is authenticated by its seal. On a node serving the API it also signs every session cookie and derives the key that verifies each per-run token. The **entire** Tier B config is stored encrypted at rest in the DB as one opaque blob. Every node of a fleet holds the same keys. | `crewlet secrets keygen` |
 
-The keyring lives in Tier A (`crewlet.yaml`) and is the sole root of trust — the DB holds only the encrypted document, never the key, and the key is required for **every** config read. Without a keyring, Crewlet keeps the default `${VAR}`-reference behaviour and every env var on this page is resolved from the environment at construction time. See [Configuration § Secrets](../concepts/configuration.md#secrets).
+The keyring lives in Tier A (`crewlet.yaml`) and is the sole root of trust — the DB holds only the encrypted document, never the key, and the key is required for **every** config read. `crewlet validate` refuses a Tier A file without one, and a node refuses to start. The `${VAR}` references *inside* the config still resolve from the environment at construction time — behind the secret store below, which is consulted first. See [Configuration § Secrets](../concepts/configuration.md#secrets).
 
 A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `ATLASSIAN_TOKEN_<SEAT>`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, and the rest) two different ways:
 

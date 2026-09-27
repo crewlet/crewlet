@@ -106,7 +106,23 @@ stream:
 coordination:
   type: embedded-kv               # the fleet's replicated KV, reached over
                                   #   the same NATS cluster
+
+secrets:                          # REQUIRED on every node, this one too
+  active_key_id: k1
+  keys:
+    - {id: k1, material: "${CREWLET_SECRET_KEY_K1}"}   # the SAME keys
+                                  #   every other node of the fleet holds
 ```
+
+The `secrets:` block is not optional on a satellite, although it serves no
+API and signs no session cookie. It runs state logs like every other node —
+the tracker, the vectors, the pages and the org chart, whatever its roles —
+and every record on every one of them is signed and verified under this
+keyring, because the broker authenticates nothing. The company document the
+satellite fetches from its peers is authenticated by its seal under the same
+keys. `crewlet validate` refuses a Tier A file without it, naming
+`secrets.keys`; generate a key once with `crewlet secrets keygen` and give
+every node the same material.
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
 anywhere else, so an orchestrator injects both from the environment

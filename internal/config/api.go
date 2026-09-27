@@ -103,8 +103,9 @@ type API struct {
 // Serving reports whether this configuration binds an HTTP surface at all.
 //
 // The one predicate every rule below turns on, in one place: a deployment that
-// serves nothing needs no external URL, no keyring and no credential, and a
-// deployment that serves needs all three.
+// serves nothing needs no external URL, no grant ceiling and no credential,
+// and a deployment that serves needs all three. The keyring is not among them:
+// every node needs it, serving or not ([Bootstrap.Validate]).
 func (a API) Serving() bool { return a.Port != 0 }
 
 // ExternalBase is [API.ExternalURL] without its trailing slash, which is the

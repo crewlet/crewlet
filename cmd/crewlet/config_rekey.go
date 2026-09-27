@@ -32,15 +32,12 @@ import (
 
 // sealConfig re-stores a plaintext active revision as a sealed one.
 //
-// The one-time migration off plaintext-at-rest: a deployment that ran before
-// a keyring existed has a plaintext revision, and nothing re-seals it on its
-// own — `import` seals what it writes, but only when something is imported.
-func sealConfig(ctx context.Context, cs *configStore, bootstrapPath string, stdout io.Writer) error {
-	if cs.cipher == nil {
-		return fmt.Errorf(
-			"%s declares no secrets.keys, so there is no key to seal with; "+
-				"run `crewlet secrets keygen` and add one", bootstrapPath)
-	}
+// The one-time migration off plaintext-at-rest: a store written before the
+// keyring was required holds a plaintext revision, and nothing re-seals it on
+// its own — `import` seals what it writes, but only when something is
+// imported. There is no keyring check here: the store this command opened was
+// named by a Tier A that loaded, and Tier A refuses a file without one.
+func sealConfig(ctx context.Context, cs *configStore, stdout io.Writer) error {
 	rev, err := revisionOrActive(ctx, cs, "")
 	if err != nil {
 		return err
@@ -70,15 +67,7 @@ func sealConfig(ctx context.Context, cs *configStore, bootstrapPath string, stdo
 // IDEMPOTENT, and the check is on the DENORMALISED key id rather than on a
 // decrypt: a document already under the active key is left alone, so this is
 // safe in a deploy script and a dry run costs no decryption at all.
-func rekeyConfig(ctx context.Context, cs *configStore, bootstrapPath string,
-	dryRun bool, stdout io.Writer,
-) error {
-	if cs.cipher == nil {
-		return fmt.Errorf(
-			"%s declares no secrets.keys, so there is no active key to "+
-				"re-seal under; run `crewlet secrets keygen` and add one",
-			bootstrapPath)
-	}
+func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Writer) error {
 	active := activeKeyID(cs)
 	rev, err := revisionOrActive(ctx, cs, "")
 	if err != nil {

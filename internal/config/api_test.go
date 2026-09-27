@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -76,9 +77,6 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 		{"no credential at all", func(b *Bootstrap) {
 			b.API.Auth.Tokens = nil
 		}, "at least one token is required"},
-		{"no keyring to sign a session with", func(b *Bootstrap) {
-			b.Secrets = Secrets{}
-		}, "signs every session cookie"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -89,18 +87,52 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 	}
 }
 
-// THE COUNTERFACTUAL, and it is what keeps the four rules above from being
+// THE COUNTERFACTUAL, and it is what keeps the three rules above from being
 // ceremony every node pays. A worker or a seats-only node binds nothing, so it
-// needs no address, no ceiling, no credential and no keyring — and the default
-// Tier A, which is what an empty file decodes to, is exactly that node.
+// needs no address, no ceiling and no credential — and the keyed default Tier
+// A is exactly that node.
 func TestANodeThatServesNoApiNeedsNoneOfIt(t *testing.T) {
 	t.Parallel()
-	b := DefaultBootstrap()
+	b := KeyedBootstrap()
 	if b.API.Serving() {
 		t.Fatal("the default binds a port, so this case is not the one it names")
 	}
 	if err := b.Validate(); err != nil {
 		t.Errorf("a node serving no API was refused: %v", err)
+	}
+}
+
+// BUT EVERY NODE NEEDS THE KEYRING, whatever its roles and whether or not it
+// binds a port.
+//
+// It used to be one of the rules above, required only once `api.port` was
+// set. Every node runs state logs, though — the tracker, the vectors, the
+// pages and the chart run on a seats-only satellite too — and every record on
+// every log is signed and verified under the keyring, so the engine refused
+// the keyless satellite the moment it started its logs, after this command had
+// called its file sound. The satellite is the case, because it is the one the
+// old rule let through.
+func TestASatelliteServingNoApiIsRefusedWithoutAKeyring(t *testing.T) {
+	t.Parallel()
+	const satellite = "node:\n  roles: [seats]\napi:\n  port: 0\n"
+	_, err := ParseBootstrap([]byte(satellite), EnvOnly())
+	if err == nil {
+		t.Fatal("a seats-only node with no keyring validated, and the engine " +
+			"refuses it the moment it starts its state logs")
+	}
+	if !errors.Is(err, ErrMissing) {
+		t.Errorf("err = %v, want ErrMissing", err)
+	}
+	for _, says := range []string{"secrets.keys", "every state log", "crewlet secrets keygen"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+
+	// THE CONTROL: the same node holding a keyring is sound, so the refusal
+	// above is about the keyring and nothing else in the file.
+	if _, err := ParseKeyedBootstrap([]byte(satellite), EnvOnly()); err != nil {
+		t.Fatalf("the same satellite with a keyring was refused: %v", err)
 	}
 }
 

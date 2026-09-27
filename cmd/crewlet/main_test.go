@@ -64,7 +64,7 @@ func configPair(t *testing.T, bootstrapYAML, company string) []string {
 	comp := filepath.Join(dir, "company.yaml")
 	if bootstrapYAML == "" {
 		bootstrapYAML = "store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
-			"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n"
+			"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n" + fixtureKeyring
 	}
 	if err := os.WriteFile(boot, []byte(bootstrapYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -1065,7 +1065,8 @@ func TestValidateDetectsWhichTierADocumentIs(t *testing.T) {
 		{"a company under any name", companyYAML, "company"},
 		{"a bootstrap under any name",
 			"store:\n  path: " + filepath.Join(dir, "c.db") + "\n" +
-				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n", "bootstrap"},
+				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n" + fixtureKeyring,
+			"bootstrap"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

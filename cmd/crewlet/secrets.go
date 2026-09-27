@@ -266,15 +266,12 @@ type secretTarget struct {
 // API instead would confuse "the node is stopped" with "the node is up but
 // its HTTP port is bound elsewhere", and those need opposite answers.
 func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secretTarget, func(), error) {
+	// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
+	// document that loaded carries it, and the refusal an operator sees
+	// names `secrets.keys` in the file's own terms.
 	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
 		return nil, nil, err
-	}
-	if len(boot.Secrets.Keys) == 0 {
-		return nil, nil, fmt.Errorf(
-			"%s declares no secrets.keys, so there is no keyring to open the "+
-				"store with; run `crewlet secrets keygen` and add one",
-			bootstrapPath)
 	}
 	// AN EXPLICIT -api SKIPS THE PROBE ENTIRELY. Naming a node is an
 	// instruction to write through it, and it is also how this command
@@ -366,7 +363,7 @@ func loadBootstrapForStore(bootstrapPath string) (*config.Bootstrap, error) {
 }
 
 // openSecretValues opens the store a loaded bootstrap names, under its
-// keyring. The caller has already established that a keyring exists.
+// keyring — which a Tier A that loaded always carries.
 func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.SecretValues, func(), error) {
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {

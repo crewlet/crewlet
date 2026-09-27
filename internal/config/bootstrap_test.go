@@ -221,7 +221,7 @@ func TestSupportedTopologiesLoad(t *testing.T) {
 		// server held them and died with it.
 		"stream:\n  type: nats\n  url: nats://localhost:4222\n  replicas: 3\ncoordination:\n  type: embedded-kv\n",
 	} {
-		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+		if _, err := ParseKeyedBootstrap([]byte(doc), EnvOnly()); err != nil {
 			t.Fatalf("%q should load:\n%v", doc, err)
 		}
 	}
@@ -298,7 +298,7 @@ func TestIncarnationIsUniquePerCall(t *testing.T) {
 // deployment. Reading it as "no roles" would be a node that does nothing.
 func TestUndeclaredRolesMeanEveryRole(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap(nil, EnvOnly())
+	cfg, err := ParseKeyedBootstrap(nil, EnvOnly())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestUndeclaredRolesMeanEveryRole(t *testing.T) {
 
 func TestNodeProfileCarriesRolesAndLabels(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap([]byte("node:\n  roles: [seats]\n  labels:\n    zone: eu\n"), EnvOnly())
+	cfg, err := ParseKeyedBootstrap([]byte("node:\n  roles: [seats]\n  labels:\n    zone: eu\n"), EnvOnly())
 	if err != nil {
 		t.Fatal(err)
 	}

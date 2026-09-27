@@ -84,7 +84,7 @@ func TestStreamSyncRefusals(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.KeyedBootstrap()
 			b.Stream = tc.stream
 			err := b.Validate()
 			if err == nil {
@@ -101,7 +101,7 @@ func TestStreamSyncRefusals(t *testing.T) {
 // the fsync, which is the whole point of the field being a choice.
 func TestStreamSyncAcceptsARealFleet(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := config.KeyedBootstrap()
 	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 	b.Stream = config.Stream{
 		Replicas: 3, Sync: "30s", StoreDir: t.TempDir(),

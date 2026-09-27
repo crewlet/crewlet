@@ -462,7 +462,17 @@ func bootstrapRules() []any {
 		"then": has("stream", has("url", map[string]any{"minLength": 1})),
 	}
 
-	return []any{noFleetOnLocal, noTwoNodeFleet, replicasNeedPeers, externalNeedsURL}
+	// Every node carries a keyring, whatever its roles: every state-log
+	// record is signed and verified under it. Not a `required` directive
+	// on the field, because what the validator refuses is an EMPTY list
+	// as much as an absent one, and a directive can say only the second.
+	keyringOnEveryNode := map[string]any{
+		"$comment": "every node needs secrets.keys: every state-log record is signed under it.",
+		"allOf":    []any{has("secrets", has("keys", map[string]any{"minItems": 1}))},
+	}
+
+	return []any{noFleetOnLocal, noTwoNodeFleet, replicasNeedPeers, externalNeedsURL,
+		keyringOnEveryNode}
 }
 
 // SchemaTiers is every tier a schema can be generated for — what a

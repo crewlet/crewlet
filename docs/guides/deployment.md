@@ -162,6 +162,12 @@ stream:
 coordination:
   type: embedded-kv                    # the leases ride the stream's own
                                        #   connection; nothing else to set
+
+secrets:                               # the SAME keys on every member: each
+  active_key_id: "2026-01"             #   one verifies what the others sign
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 **Bind the route port to the network the peers are on.** `cluster.host` is the
@@ -362,6 +368,12 @@ stream:
 
 coordination:
   type: embedded-kv
+
+secrets:                                     # required on every node, and the
+  active_key_id: "2026-01"                   #   same keys on each of them
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 **The URL goes to the NATS client verbatim**, so a comma-separated list of a
@@ -588,14 +600,18 @@ api:
     tokens: [{id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}",
               grants: [...]}]   # at least one, on every backend
 secrets:
-  active_key_id: k1          # REQUIRED once port is set: the keyring signs
-  keys: [{id: k1, material: "${CREWLET_SECRET_KEY_K1}"}]   # every session
+  active_key_id: k1          # REQUIRED on EVERY node, serving or not
+  keys: [{id: k1, material: "${CREWLET_SECRET_KEY_K1}"}]
 ```
 
-**Four settings stop being optional the moment `api.port` is non-zero** —
-`api.external_url`, `api.auth.max_grants`, at least one `api.auth.tokens` entry
-and `secrets.keys`. `crewlet validate` refuses each by name, so a deployment
-finds out on a laptop rather than at bind time. See
+**`secrets.keys` is required on every node**, whether or not it serves the
+API: every record on every state log is signed and verified under the keyring,
+the company document a node fetches from its peers is authenticated by its
+seal, and — once a port is set — it signs every session cookie and per-run
+token too. **Three more settings stop being optional the moment `api.port` is
+non-zero** — `api.external_url`, `api.auth.max_grants` and at least one
+`api.auth.tokens` entry. `crewlet validate` refuses each by name, so a
+deployment finds out on a laptop rather than at bind time. See
 [the Tier A example](../getting-started/configuration.md#tier-a) and
 [Configuration § Auth](../concepts/configuration.md#auth) for what each one
 decides.

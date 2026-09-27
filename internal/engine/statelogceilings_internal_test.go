@@ -52,7 +52,7 @@ func TestEveryRegisteredDomainIsSizedFromTierA(t *testing.T) {
 			// A's own validation rather than against a constant here,
 			// so a new domain inherits the rule without this test
 			// learning its field's bounds.
-			boot := config.DefaultBootstrap()
+			boot := testBootstrap(t)
 			boot.Stream.StoreDir = t.TempDir()
 			reflect.ValueOf(&boot.Stream).Elem().
 				FieldByIndex(keys[strings.TrimPrefix(derived.Field, "stream.")]).
