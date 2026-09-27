@@ -377,7 +377,7 @@ const (
 	//
 	// ONE CODE FOR ALL OF THEM, deliberately. It is paired with the
 	// timing defence in internal/iam/credential — both arms padded to one
-	// wall-clock deadline measured from arrival — because a code that
+	// wall-clock deadline measured from admission — because a code that
 	// distinguished them would make the pad pointless, and a pad with a
 	// distinguishing code would make the code pointless. Neither half
 	// works alone.

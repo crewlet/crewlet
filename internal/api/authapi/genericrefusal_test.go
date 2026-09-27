@@ -127,7 +127,7 @@ func (p *padRecorder) take() []time.Duration {
 // enrolment, somebody who signs in only through a provider, a wrong password,
 // a directory this node could not read, or the right password with a wrong app
 // code or a recovery code already spent — the caller gets ONE status, ONE
-// body, byte for byte, padded to ONE deadline measured from arrival, and one
+// body, byte for byte, padded to ONE deadline measured from admission, and one
 // failed attempt on the trail. The last two leave by a path of their own, the
 // second-factor check, so they are held here with the rest rather than
 // assumed to answer alike. Told apart by any of the three, the refusal
@@ -230,7 +230,7 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 		}
 		if got := pads.take(); len(got) != 1 || got[0] != credential.PadDeadline {
 			t.Errorf("%s was padded %v, want once to the %s deadline measured "+
-				"from arrival", arm.name, got, credential.PadDeadline)
+				"from admission", arm.name, got, credential.PadDeadline)
 		}
 	}
 	_, failures := audit.snapshot()
