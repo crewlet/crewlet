@@ -1,6 +1,10 @@
 package statelog
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
 
 // Freshness is everything a caller may say about how fresh an answer must be,
 // and the ONE shape every read entry point takes for it.
@@ -38,9 +42,11 @@ import "time"
 // lag, and a node that has not reached the floor within [ReadBudget] refuses
 // `behind` rather than serving rows from before the write.
 //
-// A floor on ANOTHER stream is refused `wrong_stream`, never waited for: a
-// position names its stream, and a caller pasting one across domains would
-// otherwise wait out the whole budget for a sequence that means nothing here.
+// A floor on ANOTHER stream is refused, never waited for — and refused as the
+// REQUEST's mistake ([ErrForeignFloor]) rather than as a state of the node: a
+// position names its stream, a caller pasting one across domains would
+// otherwise wait out the whole budget for a sequence that means nothing here,
+// and every node in the fleet refuses it the same.
 type Freshness struct {
 	// Level is the level asked for, EMPTY when the caller said nothing —
 	// which is not a fifth state: the SURFACE resolves it, through
@@ -77,6 +83,52 @@ func (f Freshness) Query(scope ScopeSet, set bool) Query {
 
 // Bounded reports whether this ask carries a staleness bound in either unit.
 func (f Freshness) Bounded() bool { return f.MaxLag > 0 || f.MaxLagSeq > 0 }
+
+// ErrForeignFloor is a read floored at a position on ANOTHER log: the caller's
+// mistake about the request, never a state of the node answering it.
+//
+// # Why it is not a refusal
+//
+// A [Refused] is a state of THIS node, and it unwraps to [ErrUnavailable],
+// which every surface answers as "this node cannot answer here": a client acts
+// on it by coming back later or by asking another node, and an operator by
+// acting on this one. A floor on another log is none of that. Every node in the
+// fleet refuses it identically however long anybody waits, so answered as a
+// refusal — it was `wrong_stream`, the code this node's own recreated stream
+// answers — it sent a client to a node that would refuse it the same, and a
+// dashboard told a person an operator had to act on a node with nothing wrong
+// with it. It is [ReadLevel.Valid]'s kind of failure instead: the request,
+// refused before the read looks at anything, which a surface answers as a bad
+// request.
+var ErrForeignFloor = errors.New("statelog: the read's floor is a position on another log")
+
+// floorOn is the ONE rule a caller's floor is held to: it names this read's
+// own log, or nothing.
+//
+// A zero position and one that names no stream name nothing to compare, and a
+// floor is honoured only where it names something, so neither is refused.
+//
+// # Why it is checked before anything else
+//
+// [Position.Packed] deliberately carries the generation and the sequence and
+// NOT the stream, so a foreign floor compared against a local target is two
+// coordinates from two number spaces. Selecting the later of the two first
+// DISCARDED a foreign floor whenever it happened to sort low (`OTHER@0:0`
+// against any live barrier), and a guard applied afterwards then inspected a
+// purely local position and waved it through: the read was served as though no
+// floor had been named, labelled with the level the caller asked for. And a
+// request that can never be answered is refused as the same request on every
+// node, so it is refused before this node's own state — an evicted node, a
+// stalled one — is consulted and could answer something else.
+func floorOn(floor Position, stream string) error {
+	if floor.IsZero() || floor.Stream == "" || floor.Stream == stream {
+		return nil
+	}
+	return fmt.Errorf("%w: this read floors at %s, a position on %s, and it is "+
+		"answered from %s — a position names the log it is a position in, so "+
+		"send one a write on %s answered with, or none", ErrForeignFloor,
+		floor, floor.Stream, stream, stream)
+}
 
 // furthest is the later of two positions, which is what a read waits for when
 // the caller's floor and the level's own target both apply.

@@ -373,6 +373,53 @@ func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 	}
 }
 
+// A FLOOR ON ANOTHER DOMAIN'S LOG IS THE CALLER'S MISTAKE ON BOTH TRANSPORTS,
+// AND A NODE ON A REBUILT STREAM IS STILL THIS NODE'S REFUSAL.
+//
+// `min_position=CREWLET_PAGES_LOG@1:5` on a tracker question is refused
+// identically by every node however long anybody waits, so it is `400
+// bad_params` over REST and `bad_params` on the socket — the request is what
+// has to change. It was answered as the reader's `wrong_stream` refusal: a 503
+// with no Retry-After, a frame telling the dashboard to send the person to
+// another node or an operator. The control is that refusal's other meaning,
+// which is a state of the node: a checkpoint past its log's end, or a stream
+// rebuilt under it, stays `unavailable` on both.
+func TestAFloorOnAnotherLogIsABadRequestOnBothTransports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"a min_position on another domain's log",
+			fmt.Errorf("read the board: %w: this read floors at CREWLET_PAGES_LOG@1:5",
+				statelog.ErrForeignFloor),
+			http.StatusBadRequest, "bad_params"},
+		{"a node whose stream was rebuilt under it, the control",
+			fmt.Errorf("read the board: %w", &statelog.Refused{
+				Code: statelog.RefuseWrongStream, Level: statelog.ReadStale,
+				Detail: "the stream was recreated under this node"}),
+			http.StatusServiceUnavailable, "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := seededApp(t, nil)
+			a.Queries().Register("floored", iam.GrantStateRead,
+				func(context.Context, queries.Params) (any, error) { return nil, tc.err })
+
+			status, answered := overREST(t, a, "floored", nil)
+			body, _ := answered.(map[string]any)
+			if status != tc.status || body["error"] != tc.code {
+				t.Errorf("REST = %d %v, want %d %s", status, body, tc.status, tc.code)
+			}
+			if socket := overSocket(t, a, "floored", nil); socket["error"] != tc.code {
+				t.Errorf("socket answer = %v, want %s", socket, tc.code)
+			}
+		})
+	}
+}
+
 func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	t.Parallel()
 	// A dashboard drawing "no pages" for "this company keeps its knowledge

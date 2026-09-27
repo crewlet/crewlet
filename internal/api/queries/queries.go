@@ -388,7 +388,7 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 			Grants: []iam.Grant{e.needs}}
 	}
 	data, err := e.answer(ctx, p)
-	return data, unavailableOnThisNode(err)
+	return data, classifyFailure(err)
 }
 
 // unresolved is the refusal for a question asked on a context whose principal
@@ -420,8 +420,10 @@ func unresolved(ctx context.Context, what string) error {
 		"read identity: %w", ErrUnavailable, what, why)
 }
 
-// unavailableOnThisNode turns a read THIS NODE could not serve into
-// [ErrUnavailable], leaving every other failure alone.
+// classifyFailure sorts a failed answer into this registry's own vocabulary: a
+// read THIS NODE could not serve becomes [ErrUnavailable], a read whose request
+// named another log's position becomes [ErrBadParams], and every other failure
+// is left alone.
 //
 // AT THE REGISTRY, ONCE, rather than at each answer that reads something
 // that can be unreachable or refused. It was per answer, and the answers that
@@ -453,7 +455,16 @@ func unresolved(ctx context.Context, what string) error {
 // A refusal about the REQUEST is never reclassified, even when it wraps one of
 // those: the caller has to change what it asks, and "come back" would send the
 // identical request round a loop.
-func unavailableOnThisNode(err error) error {
+//
+// AND ONE REQUEST MISTAKE IS RAISED ONLY BY THE READ ITSELF, so it is
+// classified here as [ErrBadParams]: a `min_position` on another domain's log
+// ([statelog.ErrForeignFloor]). The grammar that parses the position cannot
+// know which log a question reads, and the reader can — so the reader refuses
+// it, before it consults anything about this node, and this is where that
+// refusal becomes the caller's. It was a `wrong_stream` refusal, answered
+// `unavailable`: a 503 telling a client to ask another node, which refused it
+// identically, and a dashboard telling a person an operator had to act.
+func classifyFailure(err error) error {
 	switch {
 	case err == nil,
 		errors.Is(err, ErrUnavailable),
@@ -462,6 +473,8 @@ func unavailableOnThisNode(err error) error {
 		errors.Is(err, ErrUnauthenticated),
 		errors.Is(err, ErrUnauthorized):
 		return err
+	case errors.Is(err, statelog.ErrForeignFloor):
+		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	if errors.Is(err, statelog.ErrUnavailable) || errors.Is(err, coord.ErrUnavailable) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and

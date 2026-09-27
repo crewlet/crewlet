@@ -183,7 +183,12 @@ answer and the retention routes alike, and every read takes it back as
   — with the same derived retry hint — rather than serving rows from before
   the write.
 
-A position on another domain's log is refused `wrong_stream`, not waited for.
+A position on another domain's log is refused, not waited for — and refused
+as a **bad request** rather than as one of the refusals below, because it is
+the caller's mistake and every node answers it the same: `400 bad_params` over
+REST and on `/chart`, and `bad_params` on the socket. The read checks it before
+anything about the node answering, so an evicted or stalled node says the same
+thing about it as a healthy one.
 
 Two spellings, one triple: inside an answer a position is the object
 `{stream, generation, seq}` (`seen_through`, `incomplete.from`, a listing's
@@ -258,7 +263,7 @@ rather than downgraded. Each code names a different thing to do.
 | `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply, so the node adopts a peer's snapshot — on its own: the position heartbeat requests the rejoin. Come back after the hint (one heartbeat, 15 s), or ask another node meanwhile; see [Retention](retention.md). |
 | `floor_unknown` | The published trim floor could not be read. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. It clears the next time the floor is read, so come back after the hint (one heartbeat, 15 s); if it persists, check coordination. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
-| `wrong_stream` | The position this read was asked to reach is on another stream — including a `min_position` naming another domain's log, which is refused at every level rather than quietly dropped. Or this node's own log is not the one its rows are keyed to: its checkpoint is past the log's end, or the stream was deleted and rebuilt under it, which the position heartbeat names from the broker's own creation instant. | A caller bug, a cursor from before a reanchor, or a recreated stream; see [Retention](retention.md#re-anchoring-a-recreated-stream). |
+| `wrong_stream` | This node's own log is not the one its rows are keyed to: its checkpoint is past the log's end, or the stream was deleted and rebuilt under it, which the position heartbeat names from the broker's own creation instant. A **state of this node**, never of the request — a `min_position` on another domain's log is the caller's mistake and is refused as a bad request instead (above). | Ask another node meanwhile; an operator re-anchors the stream — see [Retention](retention.md#re-anchoring-a-recreated-stream). No wait clears it. |
 
 Six of them are worth coming back to **this** node for — `behind`,
 `no_quorum`, `broker_unreachable`, `stalled`, `below_floor` and

@@ -206,7 +206,18 @@ func (s *Service) freshness(r *http.Request) (statelog.Freshness, error) {
 // framework refuses rather than answering from rows below the position a
 // caller named, and a surface that reported that as 500 would have an
 // operator chasing a broken engine over a node that is merely catching up.
+//
+// AND A FLOOR ON ANOTHER LOG IS THE CALLER'S, answered `400 bad_params` like
+// every other parameter this surface refuses. Only the read can say it — the
+// grammar that parses `min_position` does not know which log a route reads —
+// so it is classified here rather than in [Service.readParams]; answered as a
+// refusal it told a client to ask another node, which refused it the same.
 func (s *Service) readFailed(w http.ResponseWriter, err error) {
+	if errors.Is(err, statelog.ErrForeignFloor) {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": err.Error()})
+		return
+	}
 	if errors.Is(err, statelog.ErrUnavailable) {
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retryAfter(err),
 			httpjson.Detail{"detail": err.Error()})

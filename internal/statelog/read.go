@@ -113,8 +113,16 @@ const (
 	// do not keep answering. Not a missed quorum: the broker answered.
 	RefuseBrokerRefused ReadRefusal = "broker_refused"
 
-	// RefuseWrongStream — the position this read was asked to reach is on
-	// another stream, which is a caller bug rather than a state.
+	// RefuseWrongStream — this node's rows are keyed to a log that is not
+	// the one the broker now holds: its checkpoint is past the log's end,
+	// or the stream was deleted and rebuilt under it — or a position this
+	// node derived for the read, a session mark or a barrier, is on another
+	// log. A STATE of this node, which an operator answers by re-anchoring
+	// — see [Health.Refusal].
+	//
+	// A CALLER'S floor on another log is not this refusal. It is the
+	// request's mistake, which every node answers the same, so it is
+	// [ErrForeignFloor] and not a refusal at all.
 	RefuseWrongStream ReadRefusal = "wrong_stream"
 
 	// RefuseTooStale — this node's lag is past what the caller said it
@@ -414,6 +422,9 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 //
 // # The order, and why every step is where it is
 //
+//  0. The REQUEST: a level this build knows, and a floor on this read's own
+//     log ([ErrForeignFloor]). Neither is a state of this node, so neither
+//     waits behind one — every node refuses the same request the same way.
 //  1. The cheap LOCAL refusals, so a doomed read never appends: eviction,
 //     then the floor, then a stall. Each is answered from what this node
 //     already knows, for nothing.
@@ -434,6 +445,13 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	if !q.Level.Valid() {
 		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %v)",
 			q.Level, ReadLevels)
+	}
+	// THE CALLER'S FLOOR NAMES A STREAM, and it is checked before any
+	// level — or this node's own health — looks at anything.
+	// [Query.MinPosition] is the one value here that came off a wire; the
+	// session mark and the barrier are this domain's own.
+	if err := floorOn(q.MinPosition, r.domain.Stream().Name); err != nil {
+		return Answer{}, err
 	}
 	h := r.health()
 
@@ -490,6 +508,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 
 	// 4. The wait, holding nothing.
 	if !target.IsZero() {
+		// THE CALLER'S FLOOR WAS HELD TO THIS LOG in step 0, so what
+		// can still name another here is a position this node derived
+		// for the read — a session mark, a barrier — which is this
+		// node's own state rather than the request's.
 		if target.Stream != "" && target.Stream != r.domain.Stream().Name {
 			return r.refuse(h, q, RefuseWrongStream,
 				fmt.Sprintf("this read names a position on %s and this domain "+
@@ -592,34 +614,10 @@ func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
 
 // target is the position this read must wait for, by level.
 func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error) {
-	// THE CALLER'S FLOOR NAMES A STREAM, AND IT IS CHECKED BEFORE ANY
-	// LEVEL LOOKS AT IT.
-	//
-	// [Query.MinPosition] is the one value here that came off a wire; the
-	// session mark and the barrier are this domain's own. A position is a
-	// triple, but [Position.Packed] deliberately carries only two of it —
-	// the stream is not in the number — so comparing a foreign floor
-	// against a local target is comparing coordinates from two number
-	// spaces. Selecting the maximum first therefore DISCARDS a foreign
-	// floor whenever it happens to sort low (`OTHER@0:0` against any live
-	// barrier), and the post-selection guard below then inspects a purely
-	// local position and waves it through: the read is served as though no
-	// floor was named, labelled with the level the caller asked for.
-	//
-	// Refusing here instead makes the answer honest at every level, and it
-	// is the caller's bug rather than a state that clears — see
-	// [RefuseWrongStream].
-	if !q.MinPosition.IsZero() && q.MinPosition.Stream != "" &&
-		q.MinPosition.Stream != r.domain.Stream().Name {
-
-		return Position{}, &Refused{
-			Code: RefuseWrongStream, Level: q.Level,
-			Detail: fmt.Sprintf("this read floors at a position on %s and this "+
-				"domain reads %s — a position names the log it is a position "+
-				"in, and this one is not from this log",
-				q.MinPosition.Stream, r.domain.Stream().Name),
-		}
-	}
+	// THE CALLER'S FLOOR IS ON THIS LOG: [Reader.Read] refused one that is
+	// not before it got here, because comparing a foreign floor against a
+	// local target is comparing coordinates from two number spaces — see
+	// [floorOn].
 	switch q.Level {
 	case ReadLinearizable:
 		if r.index == nil {

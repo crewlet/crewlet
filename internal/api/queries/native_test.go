@@ -543,6 +543,49 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	}
 }
 
+// A FLOOR ON ANOTHER LOG IS THE REQUEST'S MISTAKE, AND A REBUILT STREAM IS
+// THIS NODE'S.
+//
+// The reader refuses a `min_position` naming another domain's log before it
+// looks at anything about this node, because every node refuses it the same:
+// the caller has to change what it asks, so it is [queries.ErrBadParams]. It
+// used to arrive as a `wrong_stream` refusal and be answered unavailable — a
+// 503 sending a client to another node that refused it identically. The code
+// keeps its other meaning, which IS a state of this node (its checkpoint past
+// the log's end, or a stream rebuilt under it), and that one stays
+// unavailable: the control.
+func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"a min_position on another domain's log",
+			fmt.Errorf("tracker: read: %w: this read floors at CREWLET_PAGES_LOG@1:5",
+				statelog.ErrForeignFloor),
+			queries.ErrBadParams},
+		{"a node whose stream was rebuilt under it",
+			&statelog.Refused{Code: statelog.RefuseWrongStream, Level: statelog.ReadStale},
+			queries.ErrUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := queries.NewRegistry()
+			queries.Register(r, queries.Sources{Work: &stubWork{err: tc.err}})
+			_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items",
+				map[string]any{})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("answered %v, want %v", err, tc.want)
+			}
+			if errors.Is(tc.want, queries.ErrBadParams) && errors.Is(err, queries.ErrUnavailable) {
+				t.Errorf("answered %v, which is also unavailable — a request "+
+					"every node refuses is not this node's to come back to", err)
+			}
+		})
+	}
+}
+
 // AND A REFUSAL WAITING CANNOT CLEAR IS UNAVAILABLE TOO — WITH NO HINT.
 //
 // A node holding a record it cannot decode will not catch up however long the

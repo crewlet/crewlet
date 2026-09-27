@@ -324,7 +324,7 @@ func (s Sources) clock() time.Time {
 // reporting them as a fault.
 //
 // Answers do not return it themselves. The registry classifies at one boundary
-// (see unavailableOnThisNode), so an answer that reads a store which can be
+// (see classifyFailure), so an answer that reads a store which can be
 // briefly unreachable cannot forget to.
 var ErrUnavailable = errors.New("queries: not available on this node")
 

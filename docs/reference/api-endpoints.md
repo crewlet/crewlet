@@ -2702,7 +2702,9 @@ is served from no earlier than it, at whatever level. At `stale` it turns
 "whatever this node holds" into "whatever this node holds, from here on", still
 labelled with its lag; a node that has not reached it within the read budget
 refuses `behind` rather than serving rows from before the write, and a position
-on another domain's log is refused `wrong_stream` rather than waited for. It is
+on another domain's log is refused `400 bad_params` rather than waited for —
+the caller's mistake, which every node answers the same, so it is never an
+`unavailable` telling a client to ask another node. It is
 also what makes `read_level=session` an honest ask here: a session read waits
 for the caller's own last write, so it is accepted **only beside a
 `min_position`** and refused without one, the refusal naming the key and the

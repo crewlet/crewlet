@@ -853,6 +853,49 @@ func TestAReadRefusalSaysWhetherAndWhenToComeBack(t *testing.T) {
 	}
 }
 
+// A FLOOR ON ANOTHER LOG IS A BAD REQUEST, NOT A REFUSAL TO COME BACK FROM.
+//
+// Only the read can tell a `min_position` from the pages log apart from one
+// from the chart's, and every node refuses it the same — so the route answers
+// `400 bad_params` as it does every other parameter it cannot take. It was the
+// reader's `wrong_stream` refusal and a 503, sending a client to another node.
+// The control is the refusal a node on a rebuilt stream gives, which stays a
+// 503.
+func TestAFloorOnAnotherLogIsABadRequest(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		err    error
+		status int
+		code   httpjson.Code
+	}{
+		{"a min_position on another domain's log",
+			fmt.Errorf("chart: read: %w: this read floors at CREWLET_PAGES_LOG@1:5",
+				statelog.ErrForeignFloor),
+			http.StatusBadRequest, httpjson.CodeBadParams},
+		{"a node whose stream was rebuilt under it, the control",
+			&statelog.Refused{Code: statelog.RefuseWrongStream, Level: statelog.ReadStale},
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := serve(t, &reader{err: c.err}, leadOf(iam.GrantStateRead), leads())
+			rec := httptest.NewRecorder()
+			r.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x/chart", nil))
+			if rec.Code != c.status {
+				t.Fatalf("answered %d, want %d: %s", rec.Code, c.status, rec.Body)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v: %s", err, rec.Body)
+			}
+			if body["error"] != string(c.code) {
+				t.Errorf("error = %v, want %s", body["error"], c.code)
+			}
+		})
+	}
+}
+
 // A RENAME NAMES THE ADDRESS IT IS ADDRESSED BY, and refuses the one that
 // changes nothing.
 func TestARenameGoesToTheRekeyVerb(t *testing.T) {

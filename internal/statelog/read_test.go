@@ -882,10 +882,9 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	q := pointQuery(statelog.ReadStale)
 	q.MinPosition = statelog.Position{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
-	var refusal *statelog.Refused
-	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseWrongStream {
-		t.Fatalf("a stale read with a floor on another stream = %v, want "+
-			"wrong_stream", err)
+	if !errors.Is(err, statelog.ErrForeignFloor) {
+		t.Fatalf("a stale read with a floor on another stream = %v, want %v",
+			err, statelog.ErrForeignFloor)
 	}
 	if got := w.waited.Load(); got != 0 {
 		t.Errorf("the wrong-stream read waited %d time(s) before refusing", got)
@@ -893,7 +892,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 }
 
 // A FLOOR ON ANOTHER STREAM IS REFUSED AT EVERY LEVEL, INCLUDING WHEN IT
-// SORTS LOW.
+// SORTS LOW — AND AS THE REQUEST'S MISTAKE, NOT AS A STATE OF THE NODE.
 //
 // [statelog.Position.Packed] deliberately carries the generation and the
 // sequence and NOT the stream, so a foreign floor compared against a local
@@ -903,10 +902,19 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 // inspected a purely local position and waved it through. The read was served
 // as though no floor had been named, under the level the caller asked for.
 //
-// The two cases here are the two sides of that comparison: a foreign floor
+// The two floors here are the two sides of that comparison: a foreign floor
 // BELOW the barrier (silently dropped before) and one above it (refused
 // before). They must answer the same way, because which side of a local
 // barrier a foreign sequence happens to fall on says nothing about anything.
+//
+// AND THE ANSWER IS [statelog.ErrForeignFloor], NEVER A [statelog.Refused]. It
+// was `wrong_stream`, the refusal a node on a recreated stream gives, so every
+// surface answered a pasted position from another log as "this node cannot
+// answer here" — a 503 with no Retry-After that sent a client to another node
+// which refused it identically. The two healths are the rest of that: a
+// request every node refuses the same is refused before this node's own state
+// is consulted, so an EVICTED node answers the request's mistake too rather
+// than a refusal about itself.
 func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -914,31 +922,57 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
-	for _, floor := range []statelog.Position{
-		{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1},
-		{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1 << 30},
-	} {
-		for _, level := range []statelog.ReadLevel{
-			statelog.ReadLinearizable, statelog.ReadSession,
-			statelog.ReadStale, statelog.ReadConsistentPrefix,
+	evicted := func() statelog.Health {
+		out := healthy()
+		out.Evicted = true
+		return out
+	}
+	for _, health := range []struct {
+		name string
+		fn   func() statelog.Health
+	}{{"healthy", healthy}, {"evicted", evicted}} {
+		for _, floor := range []statelog.Position{
+			{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1},
+			{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1 << 30},
 		} {
-			w := &stubWaiter{at: healthy().Position}
-			r := newReader(t, &stubStore{}, healthy, w, index)
-			q := pointQuery(level)
-			q.MinPosition = floor
-			_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
-			var refusal *statelog.Refused
-			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseWrongStream {
-				t.Errorf("a %s read floored at %s answered %v, want a "+
-					"wrong_stream refusal", level, floor, err)
-				continue
-			}
-			if got := w.waited.Load(); got != 0 {
-				t.Errorf("a %s read floored at %s waited %d time(s) before "+
-					"refusing — a sequence from another log is a caller bug "+
-					"rather than a position this node can reach", level, floor, got)
+			for _, level := range []statelog.ReadLevel{
+				statelog.ReadLinearizable, statelog.ReadSession,
+				statelog.ReadStale, statelog.ReadConsistentPrefix,
+			} {
+				w := &stubWaiter{at: healthy().Position}
+				r := newReader(t, &stubStore{}, health.fn, w, index)
+				q := pointQuery(level)
+				q.MinPosition = floor
+				_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+				if !errors.Is(err, statelog.ErrForeignFloor) {
+					t.Errorf("a %s read floored at %s on a node that is %s "+
+						"answered %v, want %v", level, floor, health.name, err,
+						statelog.ErrForeignFloor)
+					continue
+				}
+				if errors.Is(err, statelog.ErrUnavailable) {
+					t.Errorf("a %s read floored at %s answered %v, which is a "+
+						"refusal — the caller's mistake reported as this "+
+						"node's state", level, floor, err)
+				}
+				if got := w.waited.Load(); got != 0 {
+					t.Errorf("a %s read floored at %s waited %d time(s) before "+
+						"refusing — a sequence from another log is a caller bug "+
+						"rather than a position this node can reach", level, floor, got)
+				}
 			}
 		}
+	}
+	// THE CONTROL: a floor on this read's own log is no mistake, and the
+	// evicted node answers it with its own refusal.
+	r := newReader(t, &stubStore{}, evicted, &stubWaiter{at: healthy().Position}, index)
+	q := pointQuery(statelog.ReadStale)
+	q.MinPosition = statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}
+	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseEvicted {
+		t.Errorf("an evicted node's read floored on its own log answered %v, "+
+			"want its evicted refusal", err)
 	}
 }
 
