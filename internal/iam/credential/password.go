@@ -206,25 +206,34 @@ func (h *Hasher) Rehash(ctx context.Context, password string) (string, error) {
 }
 
 // derive runs the cost at params, under the concurrency cap: this hasher's own
-// for a new verifier, the stored verifier's for a verification — ONE path, so
-// no derivation this package runs can skip the cap.
+// for a new verifier, the stored verifier's for a verification — and, with
+// [Hasher.deriveWithin], the only two callers of [argon2id], so no derivation
+// this package runs can skip the cap.
+//
+// IT WAITS FOR A SLOT FOR AS LONG AS THAT TAKES: a sign-in VERIFYING is the
+// caller the cap queues rather than refuses, and one given up on would answer
+// as a wrong password.
 func (h *Hasher) derive(password string, salt []byte, params Params) []byte {
-	// A CONTEXT THAT NEVER ENDS, so the wait is the cap's alone: a sign-in
-	// VERIFYING is the caller the cap queues rather than refuses.
-	digest, _ := h.deriveWithin(context.Background(), password, salt, params)
-	return digest
+	// THE CAP IS TAKEN AROUND THE DERIVATION AND NOTHING ELSE. Holding it
+	// across a store read as well would make one slow database turn the
+	// password cost into a queue, which is the shape that takes a node
+	// down under exactly the load the cap exists for.
+	h.admit <- struct{}{}
+	defer func() { <-h.admit }()
+	return argon2id(password, salt, params)
 }
 
 // deriveWithin is [Hasher.derive] for a caller that may stop waiting for the
 // cap: it answers ctx's error if ctx ends first, and never runs the cost
 // outside the cap.
+//
+// A SECOND FUNCTION rather than derive over a context that never ends, because
+// derive's callers each hold their request's context: handing them one they
+// did not pass would be a context nobody can cancel standing in for theirs,
+// which is the shape the linter's contextcheck exists to catch.
 func (h *Hasher) deriveWithin(ctx context.Context, password string, salt []byte,
 	params Params) ([]byte, error) {
 
-	// THE CAP IS TAKEN AROUND THE DERIVATION AND NOTHING ELSE. Holding it
-	// across a store read as well would make one slow database turn the
-	// password cost into a queue, which is the shape that takes a node
-	// down under exactly the load the cap exists for.
 	select {
 	case h.admit <- struct{}{}:
 	case <-ctx.Done():
@@ -232,8 +241,14 @@ func (h *Hasher) deriveWithin(ctx context.Context, password string, salt []byte,
 			"before the caller's deadline: %w", ctx.Err())
 	}
 	defer func() { <-h.admit }()
+	return argon2id(password, salt, params), nil
+}
+
+// argon2id is the one derivation, and it is called only with a slot of the
+// cap held — by [Hasher.derive] and [Hasher.deriveWithin].
+func argon2id(password string, salt []byte, params Params) []byte {
 	return argon2.IDKey([]byte(password), salt, params.Time, params.Memory,
-		params.Threads, params.KeyLen), nil
+		params.Threads, params.KeyLen)
 }
 
 // encode writes the PHC string this engine stores.
