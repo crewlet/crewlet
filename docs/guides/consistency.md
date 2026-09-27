@@ -221,6 +221,24 @@ an isolated former leader answers with a last sequence it believes and the
 majority has moved past. An append cannot be served that way, because there is
 nothing to commit against.
 
+## Which logs can be read at `linearizable`
+
+Four of the five state logs grant it; the vectors do not.
+
+| Log | `linearizable` | Why |
+|---|---|---|
+| The tracker (`CREWLET_TRACKER_LOG`) | Yes | It encodes the barrier as one of its own records. |
+| The knowledge base (`CREWLET_PAGES_LOG`) | Yes | Likewise. |
+| The org chart (`CREWLET_CHART_LOG`) | Yes | Likewise. |
+| The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise. |
+| The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
+
+The decision is **declared per log**, in the engine's register of domains
+(`internal/engine/statelogregister.go`): each entry states either the barrier
+encoder it appends with or `NoBarrier`, and a boot refuses an entry that states
+neither or both. It used to be a switch, where a log that grants no
+`linearizable` read and a log whose author forgot it looked the same.
+
 ## The thirteen refusals
 
 A read that cannot be served at the level asked for is **refused with a code**
