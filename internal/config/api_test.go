@@ -767,6 +767,47 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 	})
 }
 
+// THE GROUP WARNINGS COME OUT IN ONE ORDER, whatever order the map ranges in.
+//
+// `crewlet validate` prints the warnings as returned, and the mapping is a map:
+// ranged directly, two warned groups came out in a different order from one
+// run to the next, so diffing the output of two runs over one file showed a
+// change that was not there. Asked many times, because one run of a random
+// order can come out sorted by chance. Mutation: range the map directly and
+// the order differs within a few runs.
+func TestTheGroupWarningsComeOutInOneOrder(t *testing.T) {
+	t.Parallel()
+	b := serving()
+	b.API.Auth.Backend = AuthBackendOIDC
+	b.API.Auth.OIDC = &APIOIDC{
+		Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+		Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
+		GroupsClaim: "groups",
+		GroupGrants: map[string][]iam.Grant{
+			"platform": {iam.GrantSecretWrite}, "audit": {iam.GrantSecretRead},
+			"ops": {iam.GrantSecretRead}, "billing": {iam.GrantSecretWrite},
+		},
+	}
+	paths := func() []string {
+		var out []string
+		for _, w := range b.Warnings() {
+			if strings.Contains(w.Path, "group_grants") {
+				out = append(out, w.Path)
+			}
+		}
+		return out
+	}
+	first := paths()
+	if !slices.IsSorted(first) || len(first) != 4 {
+		t.Fatalf("the group warnings are %v, want the four in sorted order", first)
+	}
+	for range 64 {
+		if got := paths(); !slices.Equal(got, first) {
+			t.Fatalf("the group warnings came out as %v after %v", got, first)
+		}
+	}
+}
+
 // AND THE COUNTERFACTUAL: a deployment doing none of those warns about none
 // of them. Without this the table above would pass on a build that warned
 // unconditionally, which is the same as a build that warns about nothing.
