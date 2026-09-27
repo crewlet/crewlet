@@ -39,14 +39,20 @@ const EnvelopeKey = "__encrypted__"
 // under the fleet's keyring (AES-GCM), a forged body fails to open; a
 // plaintext one would open as whatever its author wrote. So a node holding a
 // keyring — which is every node — reads only sealed payloads, and a plaintext
-// one is refused rather than applied, adopted or shown. The one that can
-// legitimately exist is a revision an older build wrote into a node's own
-// store before the keyring was required, and `crewlet config seal` is how it
-// is sealed.
+// one is refused rather than applied, adopted or shown.
+//
+// IT STATES THE FACT AND NAMES NO REMEDY, because the remedy depends on which
+// document it is and only the caller knows that. This node's ACTIVE revision
+// is sealed by `crewlet config seal`, which seals the active revision and
+// nothing else; a SUPERSEDED revision is sealed in place by nothing, and comes
+// back only by importing its document again; a body a PEER published is fixed
+// on that peer; a STAGED CHART is fixed by re-running the import against a
+// running node. It used to name `crewlet config seal` for all of them, so
+// every reader but the first carried a remedy that did nothing.
 var ErrUnsealedWithKey = errors.New("secrets: this document is stored unsealed, " +
 	"and a node holding a keyring reads only sealed ones — a plaintext payload is " +
 	"one anything that can write the store or the coordination bucket could have " +
-	"authored. Seal it with `crewlet config seal`")
+	"authored")
 
 // Sealed reports whether a stored payload is a sealed envelope.
 //

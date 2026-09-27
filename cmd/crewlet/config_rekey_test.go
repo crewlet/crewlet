@@ -256,6 +256,10 @@ func TestASupersededUnsealedRevisionNamesTheImport(t *testing.T) {
 				t.Errorf("%s: the refusal does not say %q: %v", args[0], says, err)
 			}
 		}
+		if strings.Contains(err.Error(), "config seal") {
+			t.Errorf("%s: the refusal names a command that seals only the active "+
+				"revision: %v", args[0], err)
+		}
 	}
 }
 

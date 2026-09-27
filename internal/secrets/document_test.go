@@ -120,8 +120,9 @@ func TestSealingIsIdempotent(t *testing.T) {
 // opens as whatever its author wrote — and anything that reaches the
 // coordination store can author one. It used to come back verbatim whatever
 // the reader held, so a node with a keyring applied a forged plaintext
-// document as readily as its own. The refusal names the command that seals
-// the one legitimate plaintext revision left, an older build's.
+// document as readily as its own. The refusal states the fact and names NO
+// command: which one fixes it depends on the document, and each caller names
+// its own — a remedy here was wrong for every reader but one.
 //
 // Mutation: hand a plaintext payload back whatever the cipher, and this fails.
 func TestAPlaintextDocumentIsRefusedByAReaderHoldingAKeyring(t *testing.T) {
@@ -137,8 +138,9 @@ func TestAPlaintextDocumentIsRefusedByAReaderHoldingAKeyring(t *testing.T) {
 	if opened != nil {
 		t.Errorf("a refused open still produced %s", opened)
 	}
-	if !strings.Contains(err.Error(), "crewlet config seal") {
-		t.Errorf("the refusal does not name the command that seals it: %v", err)
+	if strings.Contains(err.Error(), "crewlet") {
+		t.Errorf("the refusal names a command, which only its caller can "+
+			"choose: %v", err)
 	}
 
 	// THE CONTROL: the same document sealed under the ring opens, so the

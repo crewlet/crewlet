@@ -904,7 +904,7 @@ The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine and the API it serves, migrations, and the CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** A revision sealed under a key this node's keyring does not hold is refused rather than run as an opaque blob it can't read.
-- **Authenticated, not only hidden.** The document a node fetches from its peers comes through the coordination store, which anything reaching the broker can write, so the seal is also what proves a node of this fleet wrote it. A revision stored **unsealed** is refused — never applied, adopted, shown or reverted to — with an error naming `crewlet config seal`. See [Control Plane § The design](control-plane.md#the-design).
+- **Authenticated, not only hidden.** The document a node fetches from its peers comes through the coordination store, which anything reaching the broker can write, so the seal is also what proves a node of this fleet wrote it. A revision stored **unsealed** is refused — never applied, adopted, shown or reverted to — with an error naming what brings it back, which depends on the revision: `crewlet config seal` for this node's active revision, importing its document again for a superseded one (nothing seals one in place), and the publishing node's own `crewlet config seal` for a body a peer sent. See [Control Plane § The design](control-plane.md#the-design).
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
 
 Because the key gates every read, keep it as available as the database itself: the API, dashboard, migrations, and CLI all fail closed without it.
@@ -919,7 +919,7 @@ Every write path seals, so the only plaintext revision a store can hold is one a
 crewlet config seal                          # re-stores the active revision sealed
 ```
 
-`crewlet config seal` writes a new revision holding the encrypted document — the one read of a plaintext revision the engine allows, because it is the operator vouching for the revision their own node was running. It's idempotent: a second run on an already-sealed revision is a no-op. Superseded plaintext revisions stay unreadable to every other reader; `crewlet config scrub` still reaches them, and writes back sealed what it erases.
+`crewlet config seal` writes a new revision holding the encrypted document — the one read of a plaintext revision the engine allows, because it is the operator vouching for the revision their own node was running. It's idempotent: a second run on an already-sealed revision is a no-op. Superseded plaintext revisions stay unreadable to every other reader, which says so and names importing the document again as the way to have it back; `crewlet config scrub` still reaches them, and writes back sealed what it erases.
 
 ### Rotation
 

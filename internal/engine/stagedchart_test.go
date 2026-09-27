@@ -122,6 +122,12 @@ func TestAStageThatDoesNotOpenNamesTheImport(t *testing.T) {
 			t.Errorf("the refusal does not say %q: %v", says, err)
 		}
 	}
+	// AND ONLY THAT: the keyring's refusal used to name `crewlet config
+	// seal`, which seals a revision and never a stage, so the boot's
+	// warning named two remedies and one of them did nothing.
+	if strings.Contains(err.Error(), "config seal") {
+		t.Errorf("the refusal names a command that seals a revision, not a stage: %v", err)
+	}
 }
 
 // A STAGE REPLACES A STAGE, because it is a PENDING INTENT and not a history:

@@ -48,9 +48,9 @@ func sealConfig(ctx context.Context, cs *configStore, stdout io.Writer) error {
 	}
 	// THE MIGRATION'S READ, and the one place a plaintext revision is read
 	// with a keyring in hand: every other reader refuses it
-	// ([secrets.ErrUnsealedWithKey] names this command), because an
-	// unsealed payload is one anything that reaches the store could have
-	// written. Sealing it is the operator vouching for the revision their
+	// ([secrets.ErrUnsealedWithKey]; a reader of the active revision names
+	// this command), because an unsealed payload is one anything that
+	// reaches the store could have written. Sealing it is the operator vouching for the revision their
 	// own node has been running.
 	document, err := secrets.OpenToReseal(cs.cipher, rev.Payload)
 	if err != nil {
