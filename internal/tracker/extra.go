@@ -26,14 +26,25 @@ import "github.com/crewlet/crewlet/internal/jsoncarry"
 //
 // [Subject] is an address: every member of it is recovered from the log
 // subject a record is published on ([ParseSubject]), so there is nothing a
-// carry could hold that the address does not already say. [ScopeSet] is
-// written by a method of its own, as a bare sentinel string or a list of
-// terms. [ScopeTerm], [Relation], [ChecklistItem] and [Delta] are compared by
-// value where the tree reads them — checklistAssignees compares two items with
-// `!=`, and tests compare terms, relations and deltas the same way — which a
-// type holding a map does not compile under. And [GoalTarget] is embedded in
-// [GoalTargetRow], which a MarshalJSON of its own would be promoted onto: the
-// row would be written as the bare target, without the progress beside it.
+// carry could hold that the address does not already say. [ScopeSet] is not
+// an object at all — its own method writes it as a bare sentinel string or as
+// the list of its terms — and each [ScopeTerm] in that list carries like any
+// other object.
+//
+// # A read model that embeds a carrying object
+//
+// [GoalTargetRow] embeds [GoalTarget], so the target's MarshalJSON and
+// UnmarshalJSON would be promoted onto the row and write it as the bare
+// target, its progress gone. The row has methods of its own (goalsread.go):
+// the target's members, what the target carries, and the row's own members.
+//
+// # A value compared, and what it is compared on
+//
+// A type holding a map cannot be compared with `==`, so where the tree
+// compares two of these it says what equality means there: a checklist item
+// is news to its assignee on the members [itemNews] names, and a term, a
+// relation or a delta a writer formed from nothing is compared on every
+// member, the carried ones included.
 
 // MarshalJSON writes [Task.Extra] back beside the members this build knows.
 func (t Task) MarshalJSON() ([]byte, error) {
@@ -530,4 +541,73 @@ func (s TurnSpend) MarshalJSON() ([]byte, error) {
 func (s *TurnSpend) UnmarshalJSON(b []byte) error {
 	type fields TurnSpend
 	return jsoncarry.Unmarshal(b, (*fields)(s), &s.Extra)
+}
+
+// MarshalJSON writes [Relation.Extra] back beside the members this build
+// knows.
+func (r Relation) MarshalJSON() ([]byte, error) {
+	type fields Relation
+	return jsoncarry.Marshal(fields(r), r.Extra)
+}
+
+// UnmarshalJSON keeps every member of the relation this build does not know in
+// [Relation.Extra].
+func (r *Relation) UnmarshalJSON(b []byte) error {
+	type fields Relation
+	return jsoncarry.Unmarshal(b, (*fields)(r), &r.Extra)
+}
+
+// MarshalJSON writes [ChecklistItem.Extra] back beside the members this build
+// knows.
+func (i ChecklistItem) MarshalJSON() ([]byte, error) {
+	type fields ChecklistItem
+	return jsoncarry.Marshal(fields(i), i.Extra)
+}
+
+// UnmarshalJSON keeps every member of the item this build does not know in
+// [ChecklistItem.Extra].
+func (i *ChecklistItem) UnmarshalJSON(b []byte) error {
+	type fields ChecklistItem
+	return jsoncarry.Unmarshal(b, (*fields)(i), &i.Extra)
+}
+
+// MarshalJSON writes [Delta.Extra] back beside the members this build knows.
+func (d Delta) MarshalJSON() ([]byte, error) {
+	type fields Delta
+	return jsoncarry.Marshal(fields(d), d.Extra)
+}
+
+// UnmarshalJSON keeps every member of the delta this build does not know in
+// [Delta.Extra].
+func (d *Delta) UnmarshalJSON(b []byte) error {
+	type fields Delta
+	return jsoncarry.Unmarshal(b, (*fields)(d), &d.Extra)
+}
+
+// MarshalJSON writes [ScopeTerm.Extra] back beside the members this build
+// knows.
+func (t ScopeTerm) MarshalJSON() ([]byte, error) {
+	type fields ScopeTerm
+	return jsoncarry.Marshal(fields(t), t.Extra)
+}
+
+// UnmarshalJSON keeps every member of the term this build does not know in
+// [ScopeTerm.Extra].
+func (t *ScopeTerm) UnmarshalJSON(b []byte) error {
+	type fields ScopeTerm
+	return jsoncarry.Unmarshal(b, (*fields)(t), &t.Extra)
+}
+
+// MarshalJSON writes [GoalTarget.Extra] back beside the members this build
+// knows.
+func (t GoalTarget) MarshalJSON() ([]byte, error) {
+	type fields GoalTarget
+	return jsoncarry.Marshal(fields(t), t.Extra)
+}
+
+// UnmarshalJSON keeps every member of the target this build does not know in
+// [GoalTarget.Extra].
+func (t *GoalTarget) UnmarshalJSON(b []byte) error {
+	type fields GoalTarget
+	return jsoncarry.Unmarshal(b, (*fields)(t), &t.Extra)
 }

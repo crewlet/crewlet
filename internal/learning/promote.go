@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,21 +75,35 @@ import (
 // first skill anybody wrote of the procedure and a seat that later writes
 // another joins that cluster rather than displacing its leader.
 //
-// A RECORD IS IN ONE OF FOUR STATES. Drafting: the pass has decided what the
+// A RECORD IS IN ONE OF FIVE STATES. Drafting: the pass has decided what the
 // page says and has not yet seen the page it made, so the next pass makes it
 // from the record, with no model call. Drafted: the page exists, and the next
 // pass asks its knowledge base whether a lead rejected it. Rejected: a lead
-// did, by the gesture the draft's own page describes ([PromotionWriter]). And
-// declined: the model looked and found no shared procedure, which holds until
-// more seats have converged than it saw — a decline answered the evidence it
-// was shown, and paying again for the same evidence buys the same answer.
+// did, by the gesture the draft's own page describes ([PromotionWriter]).
+// Declined: the model answered exactly `{}` — it looked and found no shared
+// procedure — which holds until more seats have converged than it saw, because
+// a decline answered the evidence it was shown and paying again for the same
+// evidence buys the same answer. And refused: the knowledge base will not take
+// a page in the unit's container at all, which holds while the unit files
+// there and is made, from the record, in the container the unit names next
+// ([PromotionWriter.CreateDraft] says which refusals those are).
+//
+// ONLY A DECISION IS RECORDED. A decline is permanent for the evidence it saw,
+// so only the model's explicit `{}` is one: an answer that is absent, empty,
+// undecodable or a draft missing a part decided nothing ([skillAnswer]), and
+// recording it as a decline would silence a real convergence for good on one
+// malformed reply. Such a pass files nothing and the next tick asks again.
 //
 // NO RECORD EXPIRES (see [coord.Promotions]). A rejection holds for the life
 // of the deployment, and so does a draft for as long as the company drafts
 // into the knowledge base the draft is in, because each is a decision about a
 // procedure rather than an observation that goes stale. What ends one is the
-// procedure changing: seats whose tools drift past the threshold are a
-// different convergence, and that one is drafted.
+// procedure changing — seats whose tools drift past the threshold are a
+// different convergence, and that one is drafted — or a delete: the pass
+// retires a drafting record whose page its knowledge base will never accept,
+// and an operator clears a record the pass got wrong, through
+// `POST /learning/promotions/clear` or `crewlet promotions clear`, having read
+// it through [PromotionReports].
 //
 // # The knobs this closes
 //
@@ -163,7 +179,10 @@ type PromotionUnit struct {
 // depends on what the knowledge base lets a person do to a page, and the
 // sentence the draft carries to say so ([PromotionWriter.Rejection]) and the
 // read that recognises it ([PromotionWriter.Rejected]) are declared side by
-// side so the two cannot describe different gestures.
+// side so the two cannot describe different gestures. So are the knowledge
+// base's limits on a page ([PromotionWriter.CheckDraft]) and which of its
+// refusals never clear ([PromotionWriter.CreateDraft]): only the writer knows
+// either.
 type PromotionWriter interface {
 	// Backend names the knowledge base this writer drafts into, in the
 	// words its knowledge search reports ([knowledge.Searcher]'s Backend).
@@ -176,12 +195,40 @@ type PromotionWriter interface {
 	// page completes its sentence with: "To reject it, " + Rejection() + ".".
 	Rejection() string
 
+	// CheckDraft reports why this knowledge base would refuse a page with
+	// this title and body however often it was asked, or nil.
+	//
+	// ASKED BEFORE A RECORD IS FILED. The record is filed before its page
+	// is made, so a page the knowledge base can never take would otherwise
+	// be a record offered to it on every tick; refused here, it is an answer
+	// the pass could not use, which files nothing.
+	CheckDraft(title, body string) error
+
 	// CreateDraft creates the draft under the container's auto-drafted
 	// parent, or returns the page already there under this title.
 	//
 	// The bool reports whether this call CREATED it: a pass announces
 	// SkillPromoted only for a page it made, and a page it found is either
-	// one an earlier attempt made or one somebody else holds the title of.
+	// one an earlier attempt made or one somebody else holds the title of —
+	// which of the two is the record's to say ([Promoter.finish]).
+	//
+	// AN ERROR THAT WILL NEVER CLEAR SAYS SO, through a method on the error
+	// (or on one it wraps) that answers true:
+	//
+	//   - RefusesPage() bool: this knowledge base will never take this page
+	//     under this title with this body. The record is RETIRED — deleted
+	//     at the version read — so the next pass asks the model for another
+	//     answer rather than offering the same page on every tick.
+	//   - RefusesContainer() bool: the container takes no page — it does not
+	//     exist, the writer's credential cannot see it, or it refuses the
+	//     drafts parent every draft there is filed under. The record
+	//     becomes REFUSED and keeps its page, because another answer from
+	//     the model would be refused in the same place; it stands while the
+	//     unit files into that container, and is made from the record, with
+	//     no model call, in the next container the unit's `space` names.
+	//
+	// Every other error is retried by the next pass, and does not use up
+	// the unit's pass: the walk goes on to the unit's other convergences.
 	CreateDraft(ctx context.Context, container, name, markdown string) (knowledge.DraftPage, bool, error)
 
 	// Rejected reports whether a lead has rejected a draft this writer
@@ -195,12 +242,42 @@ type PromotionWriter interface {
 	Rejected(ctx context.Context, container, pageID string) (string, error)
 }
 
+// draftRefusal is what a writer's failure to make a draft's page means for the
+// record that describes the page. See [PromotionWriter.CreateDraft]. It is
+// read off an error in this process and never stored or sent, so the three
+// values are the whole of it.
+type draftRefusal string
+
+const (
+	draftRetry            draftRefusal = "retry"
+	draftRefusedPage      draftRefusal = "page"
+	draftRefusedContainer draftRefusal = "container"
+)
+
+// refusalOf reads what a writer's error says about itself.
+//
+// A METHOD ON THE ERROR rather than a sentinel or a type this package exports,
+// so a writer states it without importing this package — which would link the
+// node's store into every vendor package that drafts a page.
+func refusalOf(err error) draftRefusal {
+	var page interface{ RefusesPage() bool }
+	if errors.As(err, &page) && page.RefusesPage() {
+		return draftRefusedPage
+	}
+	var container interface{ RefusesContainer() bool }
+	if errors.As(err, &container) && container.RefusesContainer() {
+		return draftRefusedContainer
+	}
+	return draftRetry
+}
+
 // PromotionLedger is the fleet's record of the convergences this pass has
 // acted on: [coord.Promotions], which the coordination store serves.
 type PromotionLedger interface {
 	Promotions(ctx context.Context, unit string) ([]coord.PromotionRecord, error)
 	CreatePromotion(ctx context.Context, rec coord.PromotionRecord) (coord.PromotionRecord, bool, error)
 	UpdatePromotion(ctx context.Context, rec coord.PromotionRecord) (coord.PromotionRecord, bool, error)
+	DeletePromotion(ctx context.Context, unit, fingerprint string, version uint64) (bool, error)
 }
 
 // PromotionUnits lists the units a pass walks, read fresh each tick.
@@ -399,16 +476,15 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 				continue
 			}
 			settled[rec.fingerprint] = true
-			payload, spent, err := p.settle(ctx, writer, unit, c, rec)
-			if spent || err != nil {
-				return payload, err
+			if payload, spent := p.settle(ctx, writer, unit, c, rec); spent {
+				return payload, nil
 			}
 		}
 	}
 	log.DebugContext(ctx, "skill_promotion_all_recorded", "unit", unit.ID,
 		"convergences", len(candidates), "records", len(records),
-		"detail", "every convergence here has been drafted, rejected or "+
-			"declined, so nothing was drafted and no model was asked")
+		"detail", "every convergence here has a record that stands for it, "+
+			"so nothing was drafted and no model was asked")
 	return nil, nil
 }
 
@@ -421,8 +497,9 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 //   - a REJECTION always does, whatever knowledge base the company runs now;
 //     it is a person's decision about a procedure;
 //   - a DECLINE does while no more seats have converged than the model saw;
-//   - a DRAFT does while the company drafts into the knowledge base the draft
-//     is in — one in a knowledge base it has left is a page nobody reviews;
+//   - a DRAFT — being made, made, or refused its container — does while the
+//     company drafts into the knowledge base the draft is in, because one in
+//     a knowledge base it has left is a page nobody reviews;
 //   - a record this build cannot read — a newer version, a state it does not
 //     know — always does, because drafting over it would overwrite what a
 //     newer build decided.
@@ -450,20 +527,39 @@ func (p *Promoter) standingFor(records []promotionEntry, c SiblingCluster, backe
 
 // settle brings one standing record up to date, reporting whether that spent
 // this unit's one write for the tick.
+//
+// A FAILED FINISH SPENDS NOTHING. It is logged here and the walk goes on to
+// the unit's other convergences, because a page the knowledge base would not
+// make today is no reason for a team's next procedure to wait behind it.
 func (p *Promoter) settle(ctx context.Context, writer PromotionWriter, unit PromotionUnit,
-	c SiblingCluster, rec promotionEntry) (events.Payload, bool, error) {
+	c SiblingCluster, rec promotionEntry) (events.Payload, bool) {
 
 	if !rec.readable() {
-		return nil, false, nil
+		return nil, false
 	}
 	switch rec.State {
+	case promotionRefused:
+		if sameContainer(rec.Container, unit.Container) {
+			return nil, false
+		}
+		// THE UNIT FILES SOMEWHERE ELSE NOW, and the page the record holds
+		// is made there with no model call.
+		rec.State, rec.Refused, rec.At = promotionDrafting, "", time.Now().UTC()
+		fallthrough
 	case promotionDrafting:
-		payload, err := p.finish(ctx, writer, unit, c, rec)
-		return payload, true, err
+		payload, spent, err := p.finish(ctx, writer, unit, c, rec)
+		if err != nil {
+			log.WarnContext(ctx, "skill_promotion_unfinished", "unit", unit.ID,
+				"title", rec.Title, "container", unit.Container, "error", err.Error(),
+				"detail", "the record keeps the page and the next pass makes it; "+
+					"this unit's other convergences are not held behind it")
+			return nil, false
+		}
+		return payload, spent
 	case promotionDrafted:
 		p.observe(ctx, writer, unit, rec)
 	}
-	return nil, false, nil
+	return nil, false
 }
 
 // observe asks the knowledge base whether a lead rejected a draft, and records
@@ -488,7 +584,7 @@ func (p *Promoter) observe(ctx context.Context, writer PromotionWriter, unit Pro
 		return
 	}
 	rec.State, rec.Rejection, rec.At = promotionRejected, how, time.Now().UTC()
-	if ok, err := p.write(ctx, unit, rec); err != nil || !ok {
+	if _, ok, err := p.write(ctx, unit, rec); err != nil || !ok {
 		log.WarnContext(ctx, "skill_promotion_rejection_unrecorded", "unit", unit.ID,
 			"page_id", rec.PageID, "title", rec.Title, "error", errString(err),
 			"detail", "the next pass records it; until then the draft's own "+
@@ -545,10 +641,12 @@ func (p *Promoter) draft(ctx context.Context, writer PromotionWriter, unit Promo
 	}
 	now := time.Now().UTC()
 
-	draft, ok := parseSkillDraft(ctx, completion)
-	if !ok {
+	draft, answer := readSkillDraft(ctx, completion)
+	switch answer {
+	case skillDrafted:
+	case skillDeclined:
 		// The model looked at several seats' near-identical procedures and
-		// could not name a shared one. Rare and still not an error — and
+		// answered that they share none. Rare and still not an error — and
 		// RECORDED, so the same evidence is not paid for again tomorrow.
 		declined := promotionEntry{V: promotionEntryVersion, State: promotionDeclined,
 			Tools: tools, Agents: c.DistinctAgents(), At: now}
@@ -560,6 +658,12 @@ func (p *Promoter) draft(ctx context.Context, writer PromotionWriter, unit Promo
 		log.DebugContext(ctx, "skill_promotion_declined", "unit", unit.ID,
 			"distinct_agents", c.DistinctAgents())
 		return nil, nil
+	default:
+		// AN ANSWER THAT DECIDED NOTHING RECORDS NOTHING. The answer itself
+		// is on the skill_draft_* lines [readSkillDraft] logged.
+		return nil, fmt.Errorf("the model's answer about %d seats' convergence in "+
+			"%s was neither a draft nor the {} that declines one; nothing is "+
+			"recorded, and the next pass asks again", c.DistinctAgents(), unit.ID)
 	}
 
 	// THE PREFIX IS THE BACKSTOP THAT HIDES IT. The knowledge search leaves
@@ -568,10 +672,21 @@ func (p *Promoter) draft(ctx context.Context, writer PromotionWriter, unit Promo
 	// the prefix ([knowledge.Excludes]) — so a draft without it would reach
 	// every agent in the company unreviewed on exactly that answer.
 	title := knowledge.AutoDraftTitlePrefix + draft.Name
+	body := renderPromotion(unit, c, draft, writer.Rejection())
+	// BOTH TITLES THE RECORD CAN BE MADE UNDER, checked before it is filed:
+	// the model's, and the one a title collision re-titles it to
+	// ([collisionTitle]). A record whose page could never be made would be
+	// offered to the knowledge base on every tick.
+	for _, candidate := range []string{title, collisionTitle(title, unit.ID, fingerprint, now)} {
+		if err := writer.CheckDraft(candidate, body); err != nil {
+			return nil, fmt.Errorf("the model's draft %q for %s cannot be made "+
+				"in this knowledge base, so nothing is recorded and the next "+
+				"pass asks again: %w", draft.Name, unit.ID, err)
+		}
+	}
 	drafting := promotionEntry{V: promotionEntryVersion, State: promotionDrafting,
 		Tools: tools, Agents: c.DistinctAgents(), Backend: writer.Backend(),
-		Container: unit.Container, Title: title,
-		Body: renderPromotion(unit, c, draft, writer.Rejection()), At: now}
+		Container: unit.Container, Name: draft.Name, Title: title, Body: body, At: now}
 	// FILED BEFORE THE PAGE IS MADE. A draft that lands with no record is a
 	// convergence the next pass pays for again, and names again — possibly
 	// differently, which is a second page. Filed first, a failure between
@@ -587,32 +702,99 @@ func (p *Promoter) draft(ctx context.Context, writer PromotionWriter, unit Promo
 				"convergence first; the next pass reads what it recorded")
 		return nil, nil
 	}
-	return p.finish(ctx, writer, unit, c, stored)
+	payload, _, err := p.finish(ctx, writer, unit, c, stored)
+	return payload, err
 }
 
-// finish makes the page a drafting record describes, and records the page.
+// finish makes the page a drafting record describes and records it, reporting
+// whether that made or recorded a page — the unit's one write for the tick.
+//
+// # In the unit's current container
+//
+// A drafting record describes a page, and the container it was filed for is
+// only where the unit filed then: the page is made where the unit's `space`
+// points NOW, so a company that corrects a unit's space has its drafts follow
+// it rather than wait on a container nobody reads.
+//
+// # Whose page a found one is
+//
+// Both writers hand back the page already holding a title rather than making a
+// second. That page is this record's only when an earlier finish of THIS
+// record asked for it in this container — which the record says
+// ([promotionEntry.Tried]), written BEFORE the create is asked for, so a create
+// that landed and was never answered still leaves a record that adopts what it
+// finds. On a finish that has not asked yet, a page holding the title is
+// somebody else's: another unit filing into the same space, a published draft
+// that kept its prefix, a person's page. Recording it would file this
+// convergence as drafted on a page about something else and drop its own body,
+// so the record is re-titled ([collisionTitle]) and made there instead; a
+// re-titled title that is held too retires the record.
 func (p *Promoter) finish(ctx context.Context, writer PromotionWriter, unit PromotionUnit,
-	c SiblingCluster, rec promotionEntry) (events.Payload, error) {
+	c SiblingCluster, rec promotionEntry) (events.Payload, bool, error) {
 
-	page, created, err := writer.CreateDraft(ctx, rec.Container, rec.Title, rec.Body)
-	if err != nil {
-		return nil, fmt.Errorf("drafting %q into %s: %w", rec.Title, rec.Container, err)
+	if !sameContainer(rec.Container, unit.Container) {
+		// NO CREATE WAS ASKED FOR THERE, so no page there is this record's.
+		rec.Container, rec.Tried = unit.Container, false
 	}
-	rec.State, rec.PageID, rec.Body, rec.At = promotionDrafted, page.ID, "", time.Now().UTC()
-	if ok, err := p.write(ctx, unit, rec); err != nil || !ok {
-		// THE PAGE EXISTS and the record still says drafting, so the next
-		// pass finishes it again: the writer finds the page by its title
-		// and reports it not created, and only the record moves.
+	for {
+		asked := rec.Tried
+		if !asked {
+			rec.Tried = true
+			stored, ok, err := p.write(ctx, unit, rec)
+			if err != nil {
+				return nil, false, fmt.Errorf("recording that %q is being made in %s: %w",
+					rec.Title, rec.Container, err)
+			}
+			if !ok {
+				log.InfoContext(ctx, "skill_promotion_raced", "unit", unit.ID,
+					"title", rec.Title, "detail", "another holder of the promotion "+
+						"duty moved this record first; the next pass reads what it wrote")
+				return nil, false, nil
+			}
+			rec = stored
+		}
+		page, created, err := writer.CreateDraft(ctx, rec.Container, rec.Title, rec.Body)
+		if err != nil {
+			return nil, false, p.unmade(ctx, unit, rec, err)
+		}
+		if created || asked {
+			return p.recordPage(ctx, unit, c, rec, page, created)
+		}
+		if rec.Title != knowledge.AutoDraftTitlePrefix+rec.Name {
+			return nil, false, p.retire(ctx, unit, rec, fmt.Errorf(
+				"the page %s already holds %q, the title this record took when "+
+					"another page held the one the model chose", page.ID, rec.Title))
+		}
+		next := collisionTitle(rec.Title, unit.ID, rec.fingerprint, time.Now().UTC())
+		log.InfoContext(ctx, "skill_promotion_title_held", "unit", unit.ID,
+			"title", rec.Title, "held_by", page.ID, "retitled", next,
+			"detail", "a page this record never asked for holds the title, so "+
+				"the draft is made under one no other record's draft carries")
+		rec.Title, rec.Tried = next, false
+	}
+}
+
+// recordPage moves a drafting record to drafted, and announces a page this
+// pass made.
+func (p *Promoter) recordPage(ctx context.Context, unit PromotionUnit, c SiblingCluster,
+	rec promotionEntry, page knowledge.DraftPage, created bool) (events.Payload, bool, error) {
+
+	rec.State, rec.PageID, rec.Body, rec.Tried, rec.At =
+		promotionDrafted, page.ID, "", false, time.Now().UTC()
+	if _, ok, err := p.write(ctx, unit, rec); err != nil || !ok {
+		// THE PAGE EXISTS and the record still says drafting, with a create
+		// asked for, so the next pass adopts the page by its title and only
+		// the record moves.
 		log.WarnContext(ctx, "skill_promotion_page_unrecorded", "unit", unit.ID,
 			"page_id", page.ID, "title", page.Title, "error", errString(err))
 	}
 	if !created {
-		// A page already holds this title — made by an earlier attempt
-		// whose record did not move, or somebody else's. Announcing it
-		// would put a promotion in the feed that this pass did not make.
+		// The page an earlier attempt of this record made and could not
+		// record. Announcing it would put in the feed a promotion this pass
+		// did not make.
 		log.DebugContext(ctx, "skill_promotion_already_drafted", "unit", unit.ID,
 			"page_id", page.ID, "title", page.Title)
-		return nil, nil
+		return nil, true, nil
 	}
 
 	log.InfoContext(ctx, "skill_promoted", "unit", unit.ID, "title", page.Title,
@@ -621,13 +803,63 @@ func (p *Promoter) finish(ctx context.Context, writer PromotionWriter, unit Prom
 	return types.SkillPromoted{
 		RoleName:       seatName(unit.Lead),
 		UnitID:         unit.ID,
-		SkillName:      strings.TrimPrefix(rec.Title, knowledge.AutoDraftTitlePrefix),
+		SkillName:      rec.Name,
 		PageID:         page.ID,
 		PageTitle:      page.Title,
 		ContainerKey:   rec.Container,
 		SiblingCount:   len(c.Skills),
 		DistinctAgents: c.DistinctAgents(),
-	}, nil
+	}, true, nil
+}
+
+// unmade acts on a writer's failure to make a record's page, by what the error
+// says it is ([PromotionWriter.CreateDraft]), and returns the error to report
+// when the record stays as it is.
+func (p *Promoter) unmade(ctx context.Context, unit PromotionUnit, rec promotionEntry,
+	cause error) error {
+
+	switch refusalOf(cause) {
+	case draftRefusedPage:
+		return p.retire(ctx, unit, rec, cause)
+	case draftRefusedContainer:
+		rec.State, rec.Refused, rec.Tried, rec.At =
+			promotionRefused, cause.Error(), false, time.Now().UTC()
+		if _, ok, err := p.write(ctx, unit, rec); err != nil || !ok {
+			return fmt.Errorf("%s refuses the draft %q (%w), and recording that "+
+				"failed, so the next pass asks it again: %s",
+				rec.Container, rec.Title, cause, errString(err))
+		}
+		log.WarnContext(ctx, "skill_promotion_container_refused", "unit", unit.ID,
+			"container", rec.Container, "title", rec.Title, "error", cause.Error(),
+			"detail", "this convergence is not drafted again while the unit's "+
+				"`space` names this container; set it to one the knowledge base "+
+				"takes pages in and the draft is made there with no model call")
+		return nil
+	}
+	return fmt.Errorf("drafting %q into %s: %w", rec.Title, rec.Container, cause)
+}
+
+// retire deletes a drafting record whose page can never be made, at the
+// version it was read at, so the next pass asks the model for another answer
+// rather than offering the knowledge base the same page on every tick.
+func (p *Promoter) retire(ctx context.Context, unit PromotionUnit, rec promotionEntry, cause error) error {
+	deleted, err := p.ledger.DeletePromotion(ctx, unit.ID, rec.fingerprint, rec.version)
+	switch {
+	case err != nil:
+		return fmt.Errorf("the draft %q can never be made (%w), and retiring its "+
+			"record failed, so the next pass offers it again: %w", rec.Title, cause, err)
+	case !deleted:
+		log.InfoContext(ctx, "skill_promotion_raced", "unit", unit.ID,
+			"title", rec.Title, "detail", "another holder of the promotion duty "+
+				"moved this record before it could be retired; the next pass "+
+				"reads what it wrote")
+		return nil
+	}
+	log.WarnContext(ctx, "skill_promotion_draft_retired", "unit", unit.ID,
+		"container", rec.Container, "title", rec.Title, "error", cause.Error(),
+		"detail", "the knowledge base will never take this page, so its record "+
+			"is deleted and the next pass asks the model again")
+	return nil
 }
 
 // file writes a new record at a convergence's address — over the record that
@@ -656,19 +888,21 @@ func (p *Promoter) file(ctx context.Context, unit PromotionUnit, fingerprint str
 }
 
 // write moves one record to its next state, at the version it was read at,
-// reporting false when that version no longer held.
-//
-// Each caller writes a record once and reads the ledger afresh on its next
-// pass, so the version the write returns is not kept.
-func (p *Promoter) write(ctx context.Context, unit PromotionUnit, rec promotionEntry) (bool, error) {
+// and returns it with the version the store now holds, or false when the
+// version it carried no longer held.
+func (p *Promoter) write(ctx context.Context, unit PromotionUnit, rec promotionEntry) (promotionEntry, bool, error) {
 	value, err := rec.encode()
 	if err != nil {
-		return false, err
+		return promotionEntry{}, false, err
 	}
-	_, ok, err := p.ledger.UpdatePromotion(ctx, coord.PromotionRecord{
+	stored, ok, err := p.ledger.UpdatePromotion(ctx, coord.PromotionRecord{
 		Unit: unit.ID, Fingerprint: rec.fingerprint, Value: value, Version: rec.version,
 	})
-	return ok, err
+	if err != nil || !ok {
+		return promotionEntry{}, ok, err
+	}
+	rec.version = stored.Version
+	return rec, true, nil
 }
 
 // errString is an error's text for a log line, or empty for a lost race.
@@ -677,6 +911,31 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// sameContainer reports whether two container names are one container: both
+// writers upper-case the name they are handed ([PromotionWriter.CreateDraft]),
+// so a record and a unit that spell one space in two cases name one place.
+func sameContainer(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// collisionSuffixBytes is how much of a digest a re-titled draft's suffix
+// carries: four bytes, eight hex characters. The suffix has to tell one
+// record's draft from another's among the pages holding one title in one
+// container — a handful — and it lengthens a title a person reads, so it is
+// no longer than that job needs.
+const collisionSuffixBytes = 4
+
+// collisionTitle is the title a draft takes when a page it never asked for
+// holds its own: the title with a suffix derived from the unit, the
+// convergence and the instant of the re-titling, which no other record's
+// draft carries. The record keeps the title it is given, so a retry after a
+// create that was never answered asks for the same one and adopts its page.
+func collisionTitle(title, unit, fingerprint string, at time.Time) string {
+	sum := sha256.Sum256([]byte(unit + "\x00" + fingerprint + "\x00" +
+		strconv.FormatInt(at.UnixNano(), 10)))
+	return title + " (" + hex.EncodeToString(sum[:collisionSuffixBytes]) + ")"
 }
 
 // ---- the ledger's records ---------------------------------------------- //
@@ -690,12 +949,14 @@ const (
 	promotionDrafted  promotionState = "drafted"
 	promotionRejected promotionState = "rejected"
 	promotionDeclined promotionState = "declined"
+	promotionRefused  promotionState = "refused"
 )
 
 // Valid reports whether s is a state this build knows.
 func (s promotionState) Valid() bool {
 	switch s {
-	case promotionDrafting, promotionDrafted, promotionRejected, promotionDeclined:
+	case promotionDrafting, promotionDrafted, promotionRejected, promotionDeclined,
+		promotionRefused:
 		return true
 	}
 	return false
@@ -728,22 +989,38 @@ type promotionEntry struct {
 	// ([PromotionWriter.Backend]); empty on a decline.
 	Backend string `json:"backend,omitempty"`
 
+	// Name is the model's name for the procedure: the draft's title is the
+	// auto-draft prefix and this, and a title that is not is one a
+	// collision re-titled ([Promoter.finish]).
+	Name string `json:"name,omitempty"`
+
 	// Container, Title and PageID are where the draft is. PageID is empty
 	// until the page is made.
 	Container string `json:"container,omitempty"`
 	Title     string `json:"title,omitempty"`
 	PageID    string `json:"page_id,omitempty"`
 
-	// Body is the draft's page, held only while it is being made so the
-	// next pass can make it without asking the model again; the page holds
-	// it after that.
+	// Body is the draft's page, held until the page is made so a pass can
+	// make it without asking the model again — while drafting, and while
+	// refused its container; the page holds it after that.
 	Body string `json:"body,omitempty"`
+
+	// Tried is set, on a drafting record, once a create has been asked for
+	// under Title in Container, and it is WRITTEN BEFORE the create is asked
+	// for: a page found under the title is this record's only when it is set
+	// (see [Promoter.finish]). A build that predates the field carries it
+	// back unread and adopts whatever page holds the title.
+	Tried bool `json:"tried,omitempty"`
 
 	// At is when the record entered its state.
 	At time.Time `json:"at"`
 
 	// Rejection is how a lead's rejection was seen, in the writer's words.
 	Rejection string `json:"rejection,omitempty"`
+
+	// Refused is, on a refused record, what the knowledge base answered when
+	// it refused the container.
+	Refused string `json:"refused,omitempty"`
 
 	// carried is every field of the stored value this build does not know,
 	// written back as it was read.
@@ -758,8 +1035,8 @@ type promotionEntry struct {
 // promotionFields are the keys [promotionEntry] reads, which every write
 // replaces rather than carries.
 var promotionFields = []string{
-	"v", "state", "tools", "agents", "backend", "container", "title",
-	"page_id", "body", "at", "rejection",
+	"v", "state", "tools", "agents", "backend", "name", "container", "title",
+	"page_id", "body", "tried", "at", "rejection", "refused",
 }
 
 // readable reports whether this build may act on the record: a version it
@@ -799,27 +1076,116 @@ func (e promotionEntry) encode() ([]byte, error) {
 func decodePromotions(held []coord.PromotionRecord) ([]promotionEntry, error) {
 	out := make([]promotionEntry, 0, len(held))
 	for _, rec := range held {
-		var entry promotionEntry
-		if err := json.Unmarshal(rec.Value, &entry); err != nil {
-			return nil, fmt.Errorf("the promotion record %s of unit %s does not "+
-				"decode, and it may be a lead's rejection: %w",
-				rec.Fingerprint, rec.Unit, err)
+		entry, err := decodePromotion(rec)
+		if err != nil {
+			return nil, err
 		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(rec.Value, &fields); err != nil {
-			return nil, fmt.Errorf("the promotion record %s of unit %s does not "+
-				"decode: %w", rec.Fingerprint, rec.Unit, err)
-		}
-		for _, known := range promotionFields {
-			delete(fields, known)
-		}
-		if len(fields) > 0 {
-			entry.carried = fields
-		}
-		entry.fingerprint, entry.version = rec.Fingerprint, rec.Version
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+// decodePromotion reads one record, keeping every field this build does not
+// know for the next write to carry back.
+func decodePromotion(rec coord.PromotionRecord) (promotionEntry, error) {
+	var entry promotionEntry
+	if err := json.Unmarshal(rec.Value, &entry); err != nil {
+		return promotionEntry{}, fmt.Errorf("the promotion record %s of unit %s "+
+			"does not decode, and it may be a lead's rejection: %w",
+			rec.Fingerprint, rec.Unit, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Value, &fields); err != nil {
+		return promotionEntry{}, fmt.Errorf("the promotion record %s of unit %s "+
+			"does not decode: %w", rec.Fingerprint, rec.Unit, err)
+	}
+	for _, known := range promotionFields {
+		delete(fields, known)
+	}
+	if len(fields) > 0 {
+		entry.carried = fields
+	}
+	entry.fingerprint, entry.version = rec.Fingerprint, rec.Version
+	return entry, nil
+}
+
+// PromotionReport is one ledger record as an operator reads it, through the
+// API's `GET /learning/promotions` and `crewlet promotions list`.
+//
+// RENDERED HERE, because the record's value is this package's vocabulary: a
+// route or a command that decoded it itself would be a second reader to keep
+// in step with every field this package adds.
+type PromotionReport struct {
+	Unit        string `json:"unit"`
+	Fingerprint string `json:"fingerprint"`
+
+	// Version is the store's version of the record as read, which is what a
+	// clear is conditioned on.
+	Version uint64 `json:"version"`
+
+	// State is drafting, drafted, rejected, declined or refused — or a state
+	// a newer build wrote, which Unreadable then explains.
+	State     string    `json:"state,omitempty"`
+	Tools     []string  `json:"tools,omitempty"`
+	Agents    int       `json:"agents,omitempty"`
+	Backend   string    `json:"backend,omitempty"`
+	Name      string    `json:"name,omitempty"`
+	Container string    `json:"container,omitempty"`
+	Title     string    `json:"title,omitempty"`
+	PageID    string    `json:"page_id,omitempty"`
+	Body      string    `json:"body,omitempty"`
+	At        time.Time `json:"at,omitzero"`
+	Rejection string    `json:"rejection,omitempty"`
+	Refused   string    `json:"refused,omitempty"`
+
+	// Unreadable says why this build leaves the record alone, and is empty
+	// for a record it acts on. A value that does not decode stops the pass
+	// for the record's whole unit ([decodePromotions]); a newer version, or
+	// a state this build does not know, stands for its convergence. Either
+	// holds on every pass until somebody clears it, which is why an
+	// operator is shown it.
+	Unreadable string `json:"unreadable,omitempty"`
+
+	// Raw is the stored value, whole, for a record that does not decode:
+	// the only thing there is to show of it.
+	Raw string `json:"raw,omitempty"`
+}
+
+// PromotionReports renders ledger records for an operator, one report per
+// record, in the order given.
+//
+// A RECORD THAT DOES NOT DECODE IS REPORTED, NOT REFUSED — the opposite of the
+// pass, which stops its unit on one: the pass must not act without reading a
+// possible rejection, and an operator is looking for exactly the record the
+// pass cannot read.
+func PromotionReports(held []coord.PromotionRecord) []PromotionReport {
+	out := make([]PromotionReport, 0, len(held))
+	for _, rec := range held {
+		report := PromotionReport{Unit: rec.Unit, Fingerprint: rec.Fingerprint,
+			Version: rec.Version}
+		entry, err := decodePromotion(rec)
+		if err != nil {
+			report.Unreadable, report.Raw = err.Error(), string(rec.Value)
+			out = append(out, report)
+			continue
+		}
+		report.State, report.Tools, report.Agents = string(entry.State), entry.Tools, entry.Agents
+		report.Backend, report.Name, report.Container = entry.Backend, entry.Name, entry.Container
+		report.Title, report.PageID, report.Body = entry.Title, entry.PageID, entry.Body
+		report.At, report.Rejection, report.Refused = entry.At, entry.Rejection, entry.Refused
+		switch {
+		case entry.V > promotionEntryVersion:
+			report.Unreadable = fmt.Sprintf("written at version %d by a newer build, "+
+				"which this build reads as standing for its convergence and never "+
+				"writes", entry.V)
+		case !entry.State.Valid():
+			report.Unreadable = fmt.Sprintf("in state %q, which this build does not "+
+				"know; it reads the record as standing for its convergence and "+
+				"never writes it", entry.State)
+		}
+		out = append(out, report)
+	}
+	return out
 }
 
 // convergenceTools is a tool run as the set a convergence is judged by:

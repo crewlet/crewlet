@@ -100,7 +100,9 @@ func (t *writeWorkCatalogue) Name() string { return tracker.WriteWorkCatalogueTo
 func (t *writeWorkCatalogue) Description() string {
 	return "Declare the company's task types or its custom fields. Each list " +
 		"REPLACES the one it names, so send the whole set — read " +
-		"get_work_catalogue first. The two are separate writes: sending only " +
+		"get_work_catalogue first. A field you name by its id keeps the types " +
+		"it applies to, its default and its configuration beyond its options. " +
+		"The two are separate writes: sending only " +
 		"`types` leaves the fields alone, and the reverse. The built-in types " +
 		"(task, bug, epic, story, spike, chore, milestone) are always " +
 		"available; carry one here only to rename it or to archive it."
@@ -274,6 +276,13 @@ func catalogueTypes(args map[string]any) ([]tracker.TaskType, string) {
 // send and one it invented would be a uuid it has to keep. An id it DOES send
 // is kept exactly, which is what lets an edit reach the field it names — and
 // what makes the archive rule enforceable at all.
+//
+// WHAT THIS SCHEMA HAS NO ARGUMENT FOR IS UNSTATED — the types a field
+// applies to, its default and every member of its configuration but the
+// options — so the writer keeps each from the stored declaration the id names
+// ([tracker.Unstated]) rather than clearing it, and a list restating every
+// field as it is publishes nothing. The members the schema does have are the
+// caller's whole statement of them, on the list's own replace rule.
 func catalogueFields(args map[string]any) ([]tracker.FieldDef, string) {
 	raw, ok := args["fields"].([]any)
 	if !ok {
@@ -296,6 +305,7 @@ func catalogueFields(args map[string]any) ([]tracker.FieldDef, string) {
 			Archived:           argBool(spec, "archived"),
 			Pinned:             argBool(spec, "pinned"),
 			HideFromAgents:     argBool(spec, "hide_from_agents"),
+			Unstated:           tracker.Unstated{AppliesTo: true, Default: true, Config: true},
 		}
 		if field.ID == "" {
 			field.ID = uuid.NewString()

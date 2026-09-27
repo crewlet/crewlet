@@ -35,6 +35,38 @@ func (f *Fleet) Promotions(_ context.Context, unit string) ([]coord.PromotionRec
 	return out, nil
 }
 
+// AllPromotions returns every record of every unit, ordered by unit and then
+// by fingerprint.
+func (f *Fleet) AllPromotions(_ context.Context) ([]coord.PromotionRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []coord.PromotionRecord{}
+	for _, rec := range f.promotions {
+		rec.Value = slices.Clone(rec.Value)
+		out = append(out, rec)
+	}
+	slices.SortFunc(out, func(a, b coord.PromotionRecord) int {
+		return cmp.Or(cmp.Compare(a.Unit, b.Unit), cmp.Compare(a.Fingerprint, b.Fingerprint))
+	})
+	return out, nil
+}
+
+// DeletePromotion removes a record at the version it was read at.
+func (f *Fleet) DeletePromotion(_ context.Context, unit, fingerprint string, version uint64) (bool, error) {
+	if err := (coord.PromotionRecord{Unit: unit, Fingerprint: fingerprint}).Validate(); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	addr := promotionAddress{unit, fingerprint}
+	current, ok := f.promotions[addr]
+	if !ok || version == 0 || current.Version != version {
+		return false, nil
+	}
+	delete(f.promotions, addr)
+	return true, nil
+}
+
 // CreatePromotion files a new record, leaving an existing one alone.
 func (f *Fleet) CreatePromotion(_ context.Context, rec coord.PromotionRecord) (coord.PromotionRecord, bool, error) {
 	if err := rec.Validate(); err != nil {

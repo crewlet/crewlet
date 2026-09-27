@@ -44,6 +44,15 @@ func suspended() execstate.State {
 		AbandonedAttempts: []types.RoundNarration{
 			{"round": 2, "reasoning": "the primary gave up", "content": "Starting a cod"},
 		},
+		// A run the phase collected before an earlier suspension, whose
+		// agent accounted for part of it.
+		CollectedRuns: &execstate.Runs{
+			CostUSD: 0.9, Collected: true,
+			Models: []types.ModelSpend{
+				{Model: "claude-sonnet", InputTokens: 600, OutputTokens: 60, CostUSD: 0.9},
+			},
+			DeliveredRefs: []string{"https://github.com/acme/app/pull/1"},
+		},
 		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
 		Task:       "fix the flake",
 	}
@@ -98,8 +107,50 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 		got.AbandonedAttempts[0]["round"] != float64(2) {
 		t.Fatalf("the pre-suspend abandoned attempt did not survive: %+v", got.AbandonedAttempts)
 	}
+	// AND THE RUNS IT COLLECTED BEFORE: a suspending phase publishes no
+	// record, so the row is the only thing that carries their spend to the
+	// record the phase finally publishes.
+	runs, wantRuns := got.CollectedRuns, want.CollectedRuns
+	if runs == nil || runs.CostUSD != wantRuns.CostUSD || runs.Collected != wantRuns.Collected ||
+		runs.Whole != wantRuns.Whole || len(runs.Models) != 1 || runs.Models[0] != wantRuns.Models[0] ||
+		len(runs.DeliveredRefs) != 1 || runs.DeliveredRefs[0] != wantRuns.DeliveredRefs[0] {
+		t.Fatalf("the collected runs did not survive: %+v, want %+v", runs, wantRuns)
+	}
 	if got.Task != "fix the flake" {
 		t.Fatalf("task = %q", got.Task)
+	}
+}
+
+// THE COLLECTED RUNS ARE READ UNDER THE NAMES THE ROW WRITES, and a row
+// without them carries none.
+//
+// The round trip above cannot notice a renamed tag, since one build writes and
+// reads it. Two builds share the row, so the names are the contract: a build
+// that renamed one would read every row a peer suspended as carrying no run,
+// and the price and spend on it would reach no record. A row a build that
+// predates the member wrote holds no such key, and decodes to no earlier run.
+func TestTheCollectedRunsTravelUnderTheirWireNames(t *testing.T) {
+	blob, err := execstate.Encode(suspended())
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	runs, ok := blob["collected_runs"].(map[string]any)
+	if !ok {
+		t.Fatalf("the row carries no collected_runs object: %v", blob["collected_runs"])
+	}
+	for _, key := range []string{"cost_usd", "collected", "models", "delivered_refs"} {
+		if _, ok := runs[key]; !ok {
+			t.Errorf("collected_runs carries no %q: %v", key, runs)
+		}
+	}
+
+	delete(blob, "collected_runs")
+	got, ok, err := execstate.Decode(blob)
+	if err != nil || !ok {
+		t.Fatalf("Decode = %v, %v", ok, err)
+	}
+	if got.CollectedRuns != nil {
+		t.Fatalf("a row without collected_runs decoded to %+v, want none", got.CollectedRuns)
 	}
 }
 

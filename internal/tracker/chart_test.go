@@ -11,8 +11,8 @@ import (
 //
 // A create is a sequence: it takes the next number from its project's own
 // counter and only then writes the task. So a project that is not an object
-// refuses every write into it — which, before the chart apply was wired, is
-// what a company that had just booted did with the first task anybody filed.
+// refuses every write into it — which, without the chart's apply, is what a
+// company that had just booted would do with the first task anybody filed.
 //
 // Creating the project inside the create instead is the shape that gives two
 // nodes two projects, two counters and two ENG-1s when they file at once, so

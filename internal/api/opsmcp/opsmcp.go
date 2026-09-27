@@ -451,22 +451,24 @@ func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 	}, nil
 }
 
-// PageActor is [WorkActor] for the knowledge base, and records the SAME
-// operator under the SAME name.
+// PageActor is [WorkActor] for the knowledge base: the operator, named by the
+// token they presented, and no seat.
 //
-// THE HANDLE IS THE TOKEN'S OWN NAME, exactly as above. It used to be left
-// empty here, and `pages.Actor.Name` falls back to `"operator:" + OperatorID`
-// for an actor with no handle — so one person writing through one surface was
-// recorded as `founder` on a work commit and `operator:founder` on a page
-// commit. The kind is already on the row, in its own column, so the prefix was
-// a second encoding of a fact the row carries; what it bought was that the
-// audit feed, which is the one screen that reads both histories, showed the
-// same person as two people three rows apart, and that a reader filtering on
-// a name matched half of what they did.
+// NO HANDLE, which is where the two differ. A page actor's handle is a SEAT'S
+// handle to the knowledge base: a create makes it the page's watcher,
+// [pages.Actor.Name] records it as the author, and the change feed wakes
+// nobody whose handle equals the author it recorded — neither a watcher nor a
+// container's lead. A token's name in that field would subscribe a seat that
+// happens to share it to every page the operator creates, so that seat is
+// woken by every later save of them; would keep that seat from hearing about
+// the operator's own changes, its container's included; and would record
+// each change as the seat's. With the handle empty the author is recorded as
+// `operator:<token name>`, which no seat handle can spell ([pages.SystemName]
+// says why), and OperatorID carries the token for an audit to ask about.
 func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
 	id, ok := auth.OperatorFrom(ctx)
 	if !ok || id == "" {
 		return pages.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
 	}
-	return pages.Actor{Handle: id, Kind: pages.AuthorOperator, OperatorID: id}, nil
+	return pages.Actor{Kind: pages.AuthorOperator, OperatorID: id}, nil
 }

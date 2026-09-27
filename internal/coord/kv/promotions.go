@@ -58,6 +58,63 @@ func (f *FleetStore) Promotions(ctx context.Context, unit string) ([]coord.Promo
 	return out, nil
 }
 
+// AllPromotions returns every record of every unit, ordered by unit and then
+// by fingerprint.
+//
+// ONE PASS under the class's own filter, for the reason [FleetStore.Promotions]
+// gives: a listing cut off part way must fail rather than come back short.
+func (f *FleetStore) AllPromotions(ctx context.Context) ([]coord.PromotionRecord, error) {
+	out := []coord.PromotionRecord{}
+	err := f.eachUnder(ctx, f.positions, coord.AllPromotionsFilter(),
+		"the promotion records",
+		func(kve jetstream.KeyValueEntry) error {
+			unit, fingerprint, ok := coord.PromotionOf(kve.Key())
+			if !ok {
+				// A key this grammar did not write: skipped rather than
+				// guessed at, as the one-unit listing skips it.
+				return nil
+			}
+			out = append(out, coord.PromotionRecord{
+				Unit: unit, Fingerprint: fingerprint,
+				Value: bytes.Clone(kve.Value()), Version: kve.Revision(),
+			})
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b coord.PromotionRecord) int {
+		return cmp.Or(cmp.Compare(a.Unit, b.Unit), cmp.Compare(a.Fingerprint, b.Fingerprint))
+	})
+	return out, nil
+}
+
+// DeletePromotion removes a record at the version it was read at.
+//
+// A PURGE rather than a delete marker, so the address holds nothing a listing
+// has to step over and a later create files it afresh.
+func (f *FleetStore) DeletePromotion(ctx context.Context, unit, fingerprint string, version uint64) (bool, error) {
+	if err := (coord.PromotionRecord{Unit: unit, Fingerprint: fingerprint}).Validate(); err != nil {
+		return false, err
+	}
+	if version == 0 {
+		// The client drops a LastRevision of 0 and purges unconditionally,
+		// so a caller that never read a version would delete whatever is
+		// there — a lead's rejection included.
+		return false, nil
+	}
+	err := f.positions.Purge(ctx, coord.PromotionKey(unit, fingerprint),
+		jetstream.LastRevision(version))
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound):
+		return false, nil
+	default:
+		return false, unavailable("delete a promotion record", err)
+	}
+}
+
 // CreatePromotion files a new record, leaving an existing one alone.
 //
 // Create rather than Put, so the first writer wins and every other is told:

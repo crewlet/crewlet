@@ -26,11 +26,11 @@ func removed(t *testing.T, r *roundTrip, id string) bool {
 
 // THE TRASH IS REACHABLE FROM BOTH ENDS.
 //
-// Tombstone was defined, applied, routed as a `removed` notification and
-// readable with `removed=true` — and nothing in the tree could produce one. A
-// task could be PURGED, destroying every row on every node with no inverse,
-// and could not be removed; the restore path the applier carries could never
-// run at all.
+// A tombstone is applied, routed as a `removed` notification and readable with
+// `removed=true`, and a writer that could not produce one would leave a task
+// that can be PURGED — destroying every row on every node with no inverse —
+// and cannot be removed, with the restore path the applier carries
+// unreachable.
 func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -182,14 +182,13 @@ func TestRemovingAndRestoringAreIdempotent(t *testing.T) {
 	}
 }
 
-// A CROSS-PROJECT MOVE CARRIES THE SUBTREE, and until now it could not read
-// one.
+// A CROSS-PROJECT MOVE CARRIES THE SUBTREE.
 //
-// readSubtree's recursive CTE named the column `parent`, and the column is
-// `parent_id` — so every walk that had a descendant to carry failed at the
-// first statement with a parse error, and the only reason nothing noticed is
-// that MoveTaskToProject had no test at all. It is the trash's own walk too:
-// a subtree removal reads the same function.
+// readSubtree is a recursive CTE over `parent_id`, and a statement naming a
+// column the table does not have fails only when a walk has a descendant to
+// carry — a move of a lone task never runs it, so this case moves one with
+// children. It is the trash's own walk too: a subtree removal reads the same
+// function.
 func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

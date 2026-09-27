@@ -423,7 +423,10 @@ type resumeInput struct {
 	// parked clarification — the run that stopped to ask, whose price and
 	// spend were kept when it parked. DeliveredRefs are only ever a
 	// collected result's, and nil on a person's answer
-	// ([sandbox.ResumeRequest]).
+	// ([sandbox.ResumeRequest]). They describe that run alone: the runs the
+	// phase collected before an earlier suspension ride on State
+	// ([execstate.State.CollectedRuns]), and the runner adds them to the
+	// record ([runner.Runner.Resume]).
 	CostUSD       float64
 	RunSpend      types.RunSpend
 	DeliveredRefs []string

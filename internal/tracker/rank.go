@@ -14,8 +14,8 @@ import (
 // byte-comparable, dense, and mintable strictly between any two neighbours —
 // and this file is the arithmetic, with no database, no broker and no applier
 // anywhere in it. That is deliberate: the algebra is the part that is hard to
-// get right and impossible to exercise through a live fleet, and the two bugs
-// it has had were both reachable with two integers and a loop.
+// get right and impossible to exercise through a live fleet, and a defect in
+// it is reachable with two integers and a loop.
 //
 // # The key has two parts, and the split is what bounds its growth
 //

@@ -482,11 +482,11 @@ func planFields(q Query) map[string]resolvedField {
 // outer row has to enter on.
 //
 // The rollup replaces the whole predicate with `root_id IN (<the predicate>)`,
-// and it used to drop the container with it — so every container-scoped query
-// in the default subtask mode, which is every board, read the outer row with
-// nothing but a tombstone every task shares. This asserts the compiled SQL
-// rather than the plan because it is the CLAUSE that was missing: a planner
-// that happened to pick some other index would hide it.
+// and dropping the container with it would leave every container-scoped query
+// in the default subtask mode, which is every board, reading the outer row
+// with nothing but a tombstone every task shares. This asserts the compiled
+// SQL rather than the plan because it is the CLAUSE that matters: a planner
+// that happened to pick some other index would hide its absence.
 func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 	t.Parallel()
 	for name, params := range map[string]map[string]any{

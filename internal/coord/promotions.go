@@ -28,16 +28,18 @@ import (
 // in the value: coordination stores the bytes that package composed, for the
 // reason [SandboxRuns] stores a run's.
 //
-// # No retention
+// # No retention, and one way out
 //
 // The KV backend files a record in the positions register, the bucket with no
-// age, and the memory twin ages nothing: a
-// rejection is a person's decision rather than an observation that goes stale,
-// and a clock that forgot it would draft again, on a schedule nobody chose,
-// the procedure the lead said no to. Nothing removes a record. They are
-// bounded by what is written: the pass files at most one per unit per tick —
-// a draft, or the model's decline — and a record changes state rather than
-// multiplying.
+// age, and the memory twin ages nothing: a rejection is a person's decision
+// rather than an observation that goes stale, and a clock that forgot it would
+// draft again, on a schedule nobody chose, the procedure the lead said no to.
+// A record leaves the ledger by a delete conditioned on the version its caller
+// read ([Promotions.DeletePromotion]) and by nothing else: the pass retires a
+// record whose page its knowledge base will never accept, and an operator
+// clears one the pass got wrong. They are bounded by what is written: the pass
+// files at most one per unit per tick — a draft, or the model's decline — and
+// a record changes state rather than multiplying.
 //
 // # An older build
 //
@@ -113,6 +115,19 @@ type Promotions interface {
 	// to re-read, never an unconditional write. Refused as CreatePromotion
 	// refuses.
 	UpdatePromotion(ctx context.Context, rec PromotionRecord) (PromotionRecord, bool, error)
+
+	// AllPromotions returns every record of every unit, ordered by unit and
+	// then by fingerprint: the operator's read of the whole ledger, which
+	// has to show a record filed under a unit the company has since renamed
+	// or removed as well as the units it runs now.
+	AllPromotions(ctx context.Context) ([]PromotionRecord, error)
+
+	// DeletePromotion removes one record at the version its caller read,
+	// reporting false when that version no longer holds, when the record is
+	// gone, and when version is zero — a lost race, never an unconditional
+	// delete, because the record may have become a lead's rejection since it
+	// was read. An address whose record was deleted can be filed again.
+	DeletePromotion(ctx context.Context, unit, fingerprint string, version uint64) (bool, error)
 }
 
 // promotionClass is the class of a [PromotionRecord]'s key in the positions
@@ -128,6 +143,10 @@ func PromotionKey(unit, fingerprint string) string {
 
 // PromotionsFilter selects the records of one unit.
 func PromotionsFilter(unit string) string { return DocumentFilter(promotionClass, unit) }
+
+// AllPromotionsFilter selects every record of the ledger, and no key of any
+// other class in the register.
+func AllPromotionsFilter() string { return DocumentFilter(promotionClass) }
 
 // PromotionOf recovers the unit and the fingerprint a [PromotionKey] names,
 // reporting false for any other key — every other class of the register among

@@ -430,7 +430,7 @@ func (e *Engine) gateOn(ctx context.Context, running *runningDomain, req GateReq
 		if err != nil {
 			return statelog.Result{}, err
 		}
-		actor := pages.Actor{Handle: req.By, Kind: pages.AuthorOperator, OperatorID: req.By}
+		actor := operatorPageActor(req.By)
 		gate := pagesStore.EvictNode
 		if readmit {
 			gate = pagesStore.ReadmitNode
@@ -439,6 +439,18 @@ func (e *Engine) gateOn(ctx context.Context, running *runningDomain, req GateReq
 	}
 	return statelog.Result{}, fmt.Errorf("engine: %s installs an eviction gate "+
 		"and has no writer for its record", running.domain.Name())
+}
+
+// operatorPageActor is the operator an operator gesture's page record names:
+// the token they presented, and no handle.
+//
+// A PAGE ACTOR'S HANDLE IS A SEAT'S. [pages.Actor.Name] records it as the
+// author, so a token's name there would record the gesture as a seat's — any
+// seat whose handle happens to match — and the change feed wakes nobody whose
+// handle equals the recorded author. Without one the record names
+// `operator:` and the token's name, which no seat handle can spell.
+func operatorPageActor(by string) pages.Actor {
+	return pages.Actor{Kind: pages.AuthorOperator, OperatorID: by}
 }
 
 // run ticks every [AlarmInterval] until the context ends.

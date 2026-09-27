@@ -1119,14 +1119,12 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	// everything it found and the surface answering over a wire is the one
 	// that bounds it.
 	detail.Task.Body = shownBody(detail.Task.Body, wholeBody)
-	narrow := "Ask for less with `include`: the parts are comments, history, " +
-		"links and fields."
-	if !detail.Complete {
-		return jsonAnswer(map[string]any{
-			"task": detail, "incomplete": incompleteNote(detail.Incomplete),
-		}, narrow)
-	}
-	return jsonAnswer(detail, narrow)
+	// NO INCOMPLETE ARM: an item a record this node cannot read covers is
+	// refused by the tracker rather than answered with a gap
+	// ([tracker.Reader.Task]), and the switch above answers that refusal
+	// through [readFailure].
+	return jsonAnswer(detail, "Ask for less with `include`: the parts are "+
+		"comments, history, links and fields.")
 }
 
 // TaskBodyShown is how much of a task's description ONE tool answer carries
@@ -2389,7 +2387,25 @@ func readFailure(name string, err error) string {
 // check: a seat told the tracker is unreadable when it was the knowledge base
 // reports an outage nobody has, and goes looking for its answer in a store
 // that was never down.
+//
+// A DEFERRED REFUSAL IS NOT TOLD TO TRY AGAIN. This node holds a change it
+// cannot apply covering what was asked for — one a newer build of the engine
+// wrote, or one queued behind such a change ([statelog.RefuseDeferred]) — so
+// its copy may already be wrong, waiting changes nothing, and the next call
+// from the same seat asks the same node the same question. A model told "try
+// again" spends its rounds on a loop that cannot end; told what resolves it,
+// it says it could not check.
 func unservedRead(name, store, what string, err error) string {
+	var refused *statelog.Refused
+	if errors.As(err, &refused) && refused.Code == statelog.RefuseDeferred {
+		return fmt.Sprintf("%s could not read %s (%v). This node holds a change "+
+			"to %s that it cannot apply — written by a newer build of the "+
+			"engine, or queued behind one that was — so its copy may already "+
+			"be wrong and it will not answer from it. This is NOT an empty "+
+			"result — do not conclude %s does not exist. Calling again will "+
+			"not help: a build that can read that change is what resolves it. "+
+			"Say you could not check.", name, store, err, what, what)
+	}
 	return fmt.Sprintf("%s could not read %s right now (%v). This is NOT an "+
 		"empty result — do not conclude %s does not exist. Try again, or say "+
 		"you could not check.", name, store, err, what)

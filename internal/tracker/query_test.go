@@ -338,11 +338,11 @@ func TestMinPositionIsCarriedAtEveryLevelAndRefusedMalformed(t *testing.T) {
 // AND THE BOUND IS CARRIED, IN BOTH OF ITS UNITS.
 //
 // A bound refused where it is inconsistent and dropped where it is not is a
-// bound that never bounded anything — the defect `max_lag_seconds` was fixed
-// for and `max_lag_seq` was left in: it was validated against the level above
-// and then read by nothing at all, so a caller declaring how many records
-// behind it would accept was served an answer of any distance and told it came
-// back at the level asked for.
+// bound that bounds nothing: validated against the level above and then read
+// by nothing at all, it would serve a caller declaring how far behind it would
+// accept an answer of any distance, told it came back at the level asked for.
+// So both units — `max_lag_seconds` and `max_lag_seq` — are held to reach the
+// read.
 func TestBothStalenessBoundsReachTheRead(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -181,8 +180,16 @@ func applyProjectEdit(current Project, edit ProjectEdit, at time.Time) (
 		if err := archiveIsOneWay(current.Fields, *edit.Fields); err != nil {
 			return Project{}, false, err
 		}
-		if !sameFields(current.Fields, *edit.Fields) {
-			next.Fields = *edit.Fields
+		// MERGED ONTO THE STORED DECLARATIONS, and "unchanged" measured
+		// on the merge: a declaration keeps what its caller cannot state
+		// ([mergeFields]), so a list restating every field as it is — a
+		// form submitting every control — says nothing, while one
+		// compared as it arrived would differ from the stored list by
+		// exactly what it could not state, publish, bump the policy
+		// version and erase it.
+		merged := mergeFields(current.Fields, *edit.Fields)
+		if !sameDeclarations(merged, current.Fields) {
+			next.Fields = merged
 			changed, policy = true, true
 		}
 	}
@@ -209,14 +216,3 @@ func applyProjectEdit(current Project, edit ProjectEdit, at time.Time) (
 	next.UpdatedAt = at
 	return next, true, nil
 }
-
-// sameFields reports a facet that would be written back as what it already
-// is.
-//
-// DEEP EQUALITY OVER THE WHOLE VALUE rather than an enumeration of the fields
-// that matter, and the reason is what an enumeration does when somebody adds a
-// field: it keeps compiling, keeps passing, and silently stops noticing the new
-// one — so a project's policy version would stop moving for a change that is
-// exactly what the version records. A comparison that is total by construction
-// has no such day.
-func sameFields(a, b []FieldDef) bool { return reflect.DeepEqual(a, b) }

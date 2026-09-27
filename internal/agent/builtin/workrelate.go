@@ -270,9 +270,9 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 	// one edge on one item with no second end, exactly as a link is.
 	//
 	// IN THE SAME INTENT, because a patch carries ONE relation gesture —
-	// stated apart, whichever ran last silently dropped the other's edges,
-	// and stated as the whole collection (which is what this used to do)
-	// it dropped every relation the item already had.
+	// stated apart, whichever ran last would silently drop the other's
+	// edges, and stated as the whole collection it would drop every
+	// relation the item already had.
 	//
 	// A SCALAR rather than the `set` grammar the two above use: an item is
 	// a duplicate of ONE other item, and offering a list would invite one

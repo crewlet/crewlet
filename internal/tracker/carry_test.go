@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,7 +136,8 @@ func TestEveryObjectEncodesAsItAlwaysHas(t *testing.T) {
 }
 
 // EVERY OBJECT THE TRACKER SHARES CARRIES WHAT IT DOES NOT KNOW, at every
-// depth, bar the ones extra.go names with the reason each does not.
+// depth — the terms of a scope written by a method of its own among them —
+// bar its subject, an address extra.go names with the reason it does not.
 func TestEveryObjectTheTrackerSharesCarries(t *testing.T) {
 	t.Parallel()
 	roots := []reflect.Type{}
@@ -143,13 +145,48 @@ func TestEveryObjectTheTrackerSharesCarries(t *testing.T) {
 		roots = append(roots, tc.typ)
 	}
 	for _, missing := range jsoncarrytest.Uncarried(map[reflect.Type]string{
-		reflect.TypeFor[tracker.Subject]():       "an address recovered from the log subject",
-		reflect.TypeFor[tracker.Relation]():      "compared by value",
-		reflect.TypeFor[tracker.ChecklistItem](): "compared by value",
-		reflect.TypeFor[tracker.Delta]():         "compared by value",
-		reflect.TypeFor[tracker.GoalTarget]():    "embedded in GoalTargetRow, which its methods would take over",
+		reflect.TypeFor[tracker.Subject](): "an address recovered from the log subject",
 	}, roots...) {
 		t.Error(missing)
+	}
+}
+
+// A MEMBER A NEWER BUILD ADDED INSIDE A SCOPE'S TERM SURVIVES THIS BUILD'S
+// DECODE AND ENCODE of the record. The scope is written by a method of its own
+// as the list of its terms, so the member-by-member plant above never reaches
+// inside one; this is that term, planted by hand.
+//
+// Mutation: drop ScopeTerm's UnmarshalJSON in extra.go and the member is gone.
+func TestAMemberInsideAScopeTermSurvivesARecordsRoundTrip(t *testing.T) {
+	t.Parallel()
+	rec := jsoncarrytest.Filled[tracker.MutationRecord]()
+	rec.V = tracker.RecordVersion
+	rec.Subject = tracker.TaskSubject("t-1")
+	rec.Op = tracker.OpPatch
+	rec.Scope = tracker.ScopeSet{Terms: []tracker.ScopeTerm{
+		{Kind: tracker.TermObject, Container: "ENG", ID: "t-1"},
+		{Kind: tracker.TermObject, Container: "ENG", ID: "t-2"},
+	}}
+	body, err := rec.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	const plain = `"scope":[{"k":"object","c":"ENG","i":"t-1"},{"k":"object","c":"ENG","i":"t-2"}]`
+	if !strings.Contains(string(body), plain) {
+		t.Fatalf("the enumerated scope is written as something other than %s: %s", plain, body)
+	}
+	newer := strings.Replace(string(body), `"i":"t-2"}`,
+		`"i":"t-2","`+jsoncarrytest.PlantedName+`":`+jsoncarrytest.PlantedValue+`}`, 1)
+	back, err := tracker.Decode([]byte(newer))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	again, err := back.Encode()
+	if err != nil {
+		t.Fatalf("encode again: %v", err)
+	}
+	if string(again) != newer {
+		t.Errorf("the record came back as\n  %s\nnot\n  %s", again, newer)
 	}
 }
 
@@ -262,27 +299,359 @@ func TestAMemberInsideANotificationReachesTheFeedBody(t *testing.T) {
 	}
 }
 
-// A GOAL'S TARGET ROW IS WRITTEN WITH ITS PROGRESS. It embeds the target, so a
-// MarshalJSON on the target would be promoted onto it and write the row as the
-// bare target — which is why the target does not carry (extra.go).
+// A GOAL'S TARGET ROW IS WRITTEN WITH ITS PROGRESS, AND WITH WHAT ITS TARGET
+// CARRIES. It embeds the target, whose MarshalJSON would be promoted onto it
+// and write the row as the bare target; the row's own methods (goalsread.go)
+// write the target's members, what the target carries and the row's members,
+// in the order encoding/json lays an embedding out — so a row whose target
+// carries nothing is the bytes it always was.
+//
+// Mutation: delete GoalTargetRow's MarshalJSON and the progress is gone.
 func TestAGoalsTargetRowIsWrittenWithItsProgress(t *testing.T) {
 	t.Parallel()
 	half := 0.5
-	out, err := json.Marshal(tracker.GoalTargetRow{
-		GoalTarget: tracker.GoalTarget{ID: "g-1", Name: "ship"}, Progress: &half, Finished: 1, Total: 2,
-	})
+	row := tracker.GoalTargetRow{
+		GoalTarget: tracker.GoalTarget{ID: "g-1", Name: "ship", Type: "tasks"},
+		Progress:   &half, Finished: 1, Total: 2,
+	}
+	out, err := json.Marshal(row)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(out, &members); err != nil {
+	const golden = `{"id":"g-1","name":"ship","type":"tasks","progress":0.5,"finished_tasks":1,"total_tasks":2}`
+	if string(out) != golden {
+		t.Errorf("the row is written as\n  %s\nnot\n  %s", out, golden)
+	}
+
+	// What the target carries is written once, after the row's own
+	// members; a carried member under a name the row decodes is the row's.
+	row.Extra = map[string]json.RawMessage{
+		"lane": json.RawMessage(`"urgent"`), "progress": json.RawMessage(`9`),
+	}
+	out, err = json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshal with a carry: %v", err)
+	}
+	const carried = `{"id":"g-1","name":"ship","type":"tasks","progress":0.5,"finished_tasks":1,"total_tasks":2,"lane":"urgent"}`
+	if string(out) != carried {
+		t.Errorf("the row carrying a member is written as\n  %s\nnot\n  %s", out, carried)
+	}
+	var back tracker.GoalTargetRow
+	if err := json.Unmarshal(out, &back); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for member, want := range map[string]string{
-		"id": `"g-1"`, "progress": "0.5", "finished_tasks": "1", "total_tasks": "2",
+	if back.Progress == nil || *back.Progress != half || back.Finished != 1 || back.Total != 2 ||
+		back.ID != "g-1" || string(back.Extra["lane"]) != `"urgent"` || len(back.Extra) != 1 {
+		t.Errorf("the row reads back as %+v (progress %v)", back, back.Progress)
+	}
+}
+
+// A CHECKLIST ITEM IS NEWS TO ITS ASSIGNEE ON WHAT THE ASSIGNEE READS — its
+// text, its done flag, its owner, the subtask it became — and on nothing else.
+// A drag that renumbers the list and nests one item under another wakes
+// nobody, and neither does a member a newer build wrote that this build
+// carries and cannot read: the build that can wrote its own recipients.
+//
+// Mutation: compare the items with reflect.DeepEqual in wake.go and both
+// assignees are woken.
+func TestAChecklistItemIsNewsOnlyOnWhatItsAssigneeReads(t *testing.T) {
+	t.Parallel()
+	before := tracker.Task{ID: "t", Key: "ENG-1", Project: "ENG",
+		Checklists: []tracker.Checklist{{ID: "l", Items: []tracker.ChecklistItem{
+			{ID: "a", Name: "first", Assignee: "ana", Order: 0},
+			{ID: "b", Name: "second", Assignee: "bo", Order: 1},
+		}}}}
+	nested := "b"
+	after := before
+	after.Checklists = []tracker.Checklist{{ID: "l", Items: []tracker.ChecklistItem{
+		{ID: "b", Name: "second", Assignee: "bo", Order: 0},
+		{ID: "a", Name: "first", Assignee: "ana", Order: 1, Parent: &nested,
+			Extra: map[string]json.RawMessage{"lane": json.RawMessage(`"urgent"`)}},
+	}}}
+	got := tracker.Wake{Kind: tracker.ChangeChecklist, Before: before, After: after}.Notify(fixedLeads{})
+	if len(got.Snapshot.ChecklistAssignees) != 0 {
+		t.Errorf("a drag and a carried member name %v as having had their item changed",
+			got.Snapshot.ChecklistAssignees)
+	}
+	after.Checklists[0].Items[1].Name = "first, renamed"
+	got = tracker.Wake{Kind: tracker.ChangeChecklist, Before: before, After: after}.Notify(fixedLeads{})
+	if len(got.Snapshot.ChecklistAssignees) != 1 || got.Snapshot.ChecklistAssignees[0] != "ana" {
+		t.Errorf("a renamed item names %v, want its assignee alone", got.Snapshot.ChecklistAssignees)
+	}
+}
+
+// storedDeclaration is a field as a newer build left it: a member this build
+// does not know on the declaration, its configuration and one of its options,
+// and the members a tool has no argument for.
+func storedDeclaration() tracker.FieldDef {
+	return tracker.FieldDef{
+		ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldDropdown,
+		AppliesTo: []string{"bug"}, Default: json.RawMessage(`"o-high"`),
+		Config: tracker.FieldConfig{
+			Options: []tracker.Option{{ID: "o-high", Slug: "high", Name: "High",
+				Extra: map[string]json.RawMessage{"lane": json.RawMessage(`"option"`)}}},
+			Unit:  "sev",
+			Extra: map[string]json.RawMessage{"lane": json.RawMessage(`"config"`)},
+		},
+		CreatedBy: "bo",
+		Extra:     map[string]json.RawMessage{"lane": json.RawMessage(`"field"`)},
+	}
+}
+
+// statedDeclaration is the same field as write_work_catalogue states it: the
+// members its schema has, and the rest left to the stored declaration.
+func statedDeclaration() tracker.FieldDef {
+	return tracker.FieldDef{
+		ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldDropdown,
+		Config: tracker.FieldConfig{
+			Options: []tracker.Option{{ID: "o-high", Slug: "high", Name: "High"}},
+		},
+		Unstated: tracker.Unstated{AppliesTo: true, Default: true, Config: true},
+	}
+}
+
+// keptDeclaration reads back, from the stored document at prefix, every member
+// storedDeclaration holds that its caller did not state.
+func keptDeclaration(t *testing.T, r *roundTrip, table, key, column, prefix string) {
+	t.Helper()
+	for path, want := range map[string]string{
+		prefix + ".lane":                    "field",
+		prefix + ".config.lane":             "config",
+		prefix + ".config.options[0].lane":  "option",
+		prefix + ".config.unit":             "sev",
+		prefix + ".applies_to[0]":           "bug",
+		prefix + ".default":                 "o-high",
+		prefix + ".created_by":              "bo",
+		prefix + ".config.options[0].name":  "High",
+		prefix + ".config.options[0].slug":  "high",
+		prefix + ".config.options[0].id":    "o-high",
+		prefix + ".type":                    string(tracker.FieldDropdown),
+		prefix + ".id":                      "f-sev",
+		prefix + ".config.options[0].color": "",
 	} {
-		if string(members[member]) != want {
-			t.Errorf("the row writes %s as %s, want %s: %s", member, members[member], want, out)
+		got := r.strings(`SELECT COALESCE(json_extract(CAST(document AS TEXT), '`+path+`'), '')
+			FROM `+table+` WHERE `+column+` = ?`, key)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("the stored declaration holds %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// A FIELDS WRITE KEEPS WHAT ITS CALLER CANNOT STATE, and a restatement of the
+// declarations as they are publishes nothing.
+//
+// The caller's list is the whole set, and each element is laid onto the
+// stored declaration with its id: a member a newer build wrote — on the
+// declaration, its configuration or an option — and what the tool has no
+// argument for are kept, so a restatement is measured on what the caller can
+// say and moves no policy version, and a rename keeps them all.
+//
+// Mutation: replace the mergeFields call in WriteFields with the caller's list
+// and the no-op publishes and every kept member is gone.
+func TestAFieldsWriteKeepsWhatItsCallerCannotState(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteDocument(t.Context(), "op-newer",
+		tracker.CatalogueSubject(tracker.CatalogueFields), "", tracker.FieldCatalogue{
+			V: tracker.DocumentVersion, PolicyVersion: 3, UpdatedAt: wednesday,
+			Fields: []tracker.FieldDef{storedDeclaration(),
+				{ID: "f-note", Slug: "note", Name: "Note", Type: tracker.FieldText}},
+			Extra: map[string]json.RawMessage{"lane": json.RawMessage(`"catalogue"`)},
+		}, tracker.ChangeCatalogue, nil); err != nil {
+		t.Fatalf("store the newer catalogue: %v", err)
+	}
+	r.drain()
+
+	// THE NOTE'S OPTIONS ARRIVE AS AN EMPTY LIST, as the tool builds them
+	// for `options: []`, where the stored declaration has none at all: the
+	// same declaration written, and so no change.
+	note := tracker.FieldDef{ID: "f-note", Slug: "note", Name: "Note", Type: tracker.FieldText,
+		Config: tracker.FieldConfig{Options: []tracker.Option{}}}
+	result, err := r.writer.WriteFields(t.Context(), "op-same", []tracker.FieldDef{statedDeclaration(), note})
+	if err != nil {
+		t.Fatalf("restate the fields: %v", err)
+	}
+	if result.Position.Seq != 0 {
+		t.Errorf("restating the fields as they are published a record at %+v", result.Position)
+	}
+	r.drain()
+	if got := r.catalogue(tracker.CatalogueQuery{}).PolicyVersion; got != 3 {
+		t.Errorf("restating the fields as they are moved the policy version to %d", got)
+	}
+
+	renamed := statedDeclaration()
+	renamed.Name = "Sev"
+	if result, err = r.writer.WriteFields(t.Context(), "op-rename", []tracker.FieldDef{renamed, note}); err != nil {
+		t.Fatalf("rename the field: %v", err)
+	}
+	if result.Position.Seq == 0 {
+		t.Fatal("a rename published nothing")
+	}
+	r.drain()
+	key := tracker.CatalogueSubject(tracker.CatalogueFields).ID
+	keptDeclaration(t, r, "tracker_catalogues", key, "name", "$.fields[0]")
+	for path, want := range map[string]string{"$.lane": "catalogue", "$.fields[0].name": "Sev"} {
+		if got := r.strings(`SELECT json_extract(CAST(document AS TEXT), '`+path+`')
+			FROM tracker_catalogues WHERE name = ?`, key); len(got) != 1 || got[0] != want {
+			t.Errorf("after the rename the catalogue holds %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// A PROJECT'S FIELDS EDIT KEEPS WHAT ITS CALLER CANNOT STATE, on the
+// workspace catalogue's rule — the same merge, the same measure of
+// "unchanged", so a restatement publishes nothing and bumps no policy version.
+func TestAProjectsFieldsEditKeepsWhatItsCallerCannotState(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteDocument(t.Context(), "op-newer",
+		tracker.ProjectSubject("ENG"), "", tracker.Project{
+			V: 1, Key: "ENG", Name: "Engineering", PolicyVersion: 3,
+			Fields:    []tracker.FieldDef{storedDeclaration()},
+			CreatedAt: wednesday, UpdatedAt: wednesday,
+		}, tracker.ChangeProjectUpdated, nil); err != nil {
+		t.Fatalf("store the newer project: %v", err)
+	}
+	r.drain()
+
+	same := []tracker.FieldDef{statedDeclaration()}
+	result, err := r.writer.WriteProject(t.Context(), "op-same", "ENG",
+		tracker.ProjectEdit{Fields: &same}, tracker.ProjectAuthority{Lead: true})
+	if err != nil {
+		t.Fatalf("restate the project's fields: %v", err)
+	}
+	if result.Position.Seq != 0 {
+		t.Errorf("restating the project's fields as they are published a record at %+v", result.Position)
+	}
+
+	renamed := []tracker.FieldDef{statedDeclaration()}
+	renamed[0].Name = "Sev"
+	if result, err = r.writer.WriteProject(t.Context(), "op-rename", "ENG",
+		tracker.ProjectEdit{Fields: &renamed}, tracker.ProjectAuthority{Lead: true}); err != nil {
+		t.Fatalf("rename the project's field: %v", err)
+	}
+	if result.Position.Seq == 0 {
+		t.Fatal("a rename published nothing")
+	}
+	r.drain()
+	keptDeclaration(t, r, "tracker_projects", "ENG", "key", "$.fields[0]")
+	if got := r.strings(`SELECT json_extract(CAST(document AS TEXT), '$.policy_version')
+		FROM tracker_projects WHERE key = 'ENG'`); len(got) != 1 || got[0] != "4" {
+		t.Errorf("after one real edit the policy version is %v, want 4", got)
+	}
+}
+
+// A TYPES WRITE KEEPS WHAT A NEWER BUILD WROTE on a type it names and on the
+// catalogue itself, and a restatement publishes nothing.
+func TestATypesWriteKeepsWhatItsCallerCannotState(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteDocument(t.Context(), "op-newer",
+		tracker.CatalogueSubject(tracker.CatalogueTypes), "", tracker.TypeCatalogue{
+			V: tracker.DocumentVersion, UpdatedAt: wednesday,
+			Types: []tracker.TaskType{{Slug: "incident", Name: "Incident",
+				Extra: map[string]json.RawMessage{"lane": json.RawMessage(`"type"`)}}},
+			Extra: map[string]json.RawMessage{"lane": json.RawMessage(`"catalogue"`)},
+		}, tracker.ChangeCatalogue, nil); err != nil {
+		t.Fatalf("store the newer catalogue: %v", err)
+	}
+	r.drain()
+
+	result, err := r.writer.WriteTypes(t.Context(), "op-same",
+		[]tracker.TaskType{{Slug: "incident", Name: "Incident"}})
+	if err != nil {
+		t.Fatalf("restate the types: %v", err)
+	}
+	if result.Position.Seq != 0 {
+		t.Errorf("restating the types as they are published a record at %+v", result.Position)
+	}
+	if result, err = r.writer.WriteTypes(t.Context(), "op-rename",
+		[]tracker.TaskType{{Slug: "incident", Name: "Outage"}}); err != nil {
+		t.Fatalf("rename the type: %v", err)
+	}
+	if result.Position.Seq == 0 {
+		t.Fatal("a rename published nothing")
+	}
+	r.drain()
+	key := tracker.CatalogueSubject(tracker.CatalogueTypes).ID
+	for path, want := range map[string]string{
+		"$.lane": "catalogue", "$.types[0].lane": "type", "$.types[0].name": "Outage",
+	} {
+		if got := r.strings(`SELECT json_extract(CAST(document AS TEXT), '`+path+`')
+			FROM tracker_catalogues WHERE name = ?`, key); len(got) != 1 || got[0] != want {
+			t.Errorf("after the rename the catalogue holds %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// A PERSON'S INBOX AND STARS KEEP WHAT A NEWER BUILD WROTE ON AN ENTRY the
+// person restates — an entry moved from unread to read included, since it is
+// the same record's entry in another list.
+func TestAPersonsEntriesKeepWhatANewerBuildWrote(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	newer := map[string]json.RawMessage{"lane": json.RawMessage(`"newer"`)}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-newer",
+		tracker.PersonSubject("ana"), "", tracker.Person{
+			V: tracker.DocumentVersion, Handle: "ana", UpdatedAt: wednesday,
+			Unread:    []tracker.InboxEntry{{RecordID: "rec-1", Position: 5, Extra: newer}},
+			Favorites: []tracker.Favorite{{Kind: "task", ID: "t-1", Extra: newer}},
+		}, tracker.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("store the newer person: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.writer.WriteInbox(t.Context(), "op-read", "ana",
+		[]tracker.InboxEntry{{RecordID: "rec-1", Position: 5}}, nil, nil, nil,
+		tracker.Position{}); err != nil {
+		t.Fatalf("mark the entry read: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.WritePins(t.Context(), "op-star", "ana", nil,
+		[]tracker.Favorite{{Kind: "task", ID: "t-1"}, {Kind: "goal", ID: "g-1"}}); err != nil {
+		t.Fatalf("star another thing: %v", err)
+	}
+	r.drain()
+	key := tracker.PersonSubject("ana").ID
+	for _, column := range []string{"read_json", "favorites_json"} {
+		got := r.strings(`SELECT COALESCE(json_extract(CAST(`+column+` AS TEXT), '$[0].lane'), '')
+			FROM tracker_persons WHERE handle = ?`, key)
+		if len(got) != 1 || got[0] != "newer" {
+			t.Errorf("after the write the person's %s holds lane %q, want %q", column, got, "newer")
+		}
+	}
+}
+
+// AN INTEGER PAST 2^53 LEAVES THE FEED AS THE WRITER WROTE IT — the version a
+// record was decided against, and one a newer build carried inside the
+// notification. The body is a map, and a number decoded into `any` is a
+// float64; the body holds each as the digits it was read from instead.
+//
+// Mutation: decode recordBody without UseNumber and both come out rounded.
+func TestAnIntegerPast2To53LeavesTheFeedExactly(t *testing.T) {
+	t.Parallel()
+	record := feedRecord(tracker.TaskSubject("t-1"), tracker.OpPatch, &tracker.Notify{
+		Kind:     tracker.ChangeStatus,
+		Snapshot: tracker.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "ana"},
+		Extra:    map[string]json.RawMessage{"later": json.RawMessage(`9007199254740993`)},
+	}, time.Unix(1_700_000_000, 0).UTC())
+	record.Expect = 1<<60 + 1
+	payload, err := record.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	delivery, wakes, err := tracker.NewTranslator().Translate(t.Context(),
+		changefeed.Record{ID: record.OpID, Key: "k", Payload: payload})
+	if err != nil || !wakes {
+		t.Fatalf("Translate = %v, %v", wakes, err)
+	}
+	out, err := json.Marshal(delivery.Body)
+	if err != nil {
+		t.Fatalf("encode the body: %v", err)
+	}
+	for _, exact := range []string{`"expect":1152921504606846977`, `"later":9007199254740993`} {
+		if !strings.Contains(string(out), exact) {
+			t.Errorf("the body lost %s: %s", exact, out)
 		}
 	}
 }

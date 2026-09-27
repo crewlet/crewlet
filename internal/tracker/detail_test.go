@@ -55,9 +55,6 @@ func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 		t.Fatalf("the feed is oldest-first: %d then %d",
 			detail.History[0].LogSeq, detail.History[len(detail.History)-1].LogSeq)
 	}
-	if !detail.Complete {
-		t.Fatalf("a healthy node reports the answer incomplete: %+v", detail.Incomplete)
-	}
 	if detail.LogSeq == 0 {
 		t.Fatal("the answer names no position, so a caller cannot tell how far " +
 			"behind it may be")
@@ -108,7 +105,7 @@ func TestAMissingTaskIsItsOwnAnswer(t *testing.T) {
 // never runs and the refusal is the one the read's transaction makes — the
 // probe that covers a task this node did not hold before the read.
 //
-// Mutation: answer the probe's hit with Complete false instead of a refusal,
+// Mutation: answer a held task from refuseUnaccounted without refuseCovered,
 // and the affected task reads back.
 func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	t.Parallel()
@@ -118,17 +115,12 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 
 	r.deferRecordOn(other.ID, other.Project)
 
-	detail, err := r.reader.Task(t.Context(), mine.ID, tracker.DetailWants{},
-		statelog.Freshness{Level: statelog.ReadSession})
-	if err != nil {
+	if _, err := r.reader.Task(t.Context(), mine.ID, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession}); err != nil {
 		t.Fatalf("a deferred record about another task refused this one: %v", err)
 	}
-	if !detail.Complete {
-		t.Fatalf("a deferred record about another task made this one "+
-			"incomplete: %+v", detail.Incomplete)
-	}
 
-	_, err = r.reader.Task(t.Context(), other.ID, tracker.DetailWants{},
+	_, err := r.reader.Task(t.Context(), other.ID, tracker.DetailWants{},
 		statelog.Freshness{Level: statelog.ReadSession})
 	var refused *statelog.Refused
 	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
@@ -140,16 +132,19 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	}
 }
 
-// A RECORD DEFERRED ON A TASK'S PROJECT REFUSES THE TASK BEFORE THE READ WAITS.
+// A RECORD DEFERRED ON A TASK'S PROJECT REFUSES THE TASK BEFORE THE READ WAITS
+// — its detail and its thread alike.
 //
 // A scope path nests an object under its container, so the record filed under
 // the project covers every task in it. The framework's own probe runs before
 // any wait and meets it only when the read names the task under that project —
-// named under the workspace, the read waited out a floor this node never
-// reaches and was refused as behind, for a task whose rows no wait can fix.
+// named under the workspace, the read waits out a floor this node never
+// reaches and is refused as behind, for a task whose rows no wait can fix. The
+// thread a comment routes from is a point read about the same task, so it is
+// scoped the same way.
 //
-// Mutation: form the framework read's scope from the reference alone and this
-// answers `behind`.
+// Mutation: form the framework read's scope from the reference alone in
+// Reader.pointTerm and both answer `behind`.
 func TestARecordDeferredOnTheProjectRefusesTheTaskBeforeItWaits(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -181,14 +176,115 @@ func TestARecordDeferredOnTheProjectRefusesTheTaskBeforeItWaits(t *testing.T) {
 
 	// A FLOOR THIS NODE NEVER REACHES, so a read the probe let through
 	// waits and is refused as behind.
-	_, err = reader.Task(t.Context(), task.Key, tracker.DetailWants{},
-		statelog.Freshness{Level: statelog.ReadSession, MinPosition: statelog.Position{
+	unreached := statelog.Freshness{Level: statelog.ReadSession,
+		MinPosition: statelog.Position{
 			Stream: at.Stream, Generation: at.Generation, Seq: at.Seq + 1,
-		}})
+		}}
+	for name, read := range map[string]func() error{
+		"the detail": func() error {
+			_, err := reader.Task(t.Context(), task.Key, tracker.DetailWants{}, unreached)
+			return err
+		},
+		"the thread": func() error {
+			_, err := reader.Thread(t.Context(), tracker.ThreadQuery{
+				Task: task.ID, Author: "ana",
+			}, unreached)
+			return err
+		},
+	} {
+		var refused *statelog.Refused
+		if err := read(); !errors.As(err, &refused) ||
+			refused.Code != statelog.RefuseDeferred {
+			t.Errorf("%s of a task in a project a deferred record covers "+
+				"answered %v, want the read refused as deferred before it "+
+				"waited", name, err)
+		}
+	}
+}
+
+// A THREAD ON A TASK A RETAINED RECORD COVERS IS REFUSED, AND ONE ON ITS
+// NEIGHBOUR IS NOT.
+//
+// A comment routes its wake from this read — who is already in the thread,
+// whose question it answers — so a thread read over rows a record this node
+// cannot decode may have made wrong would wake the wrong people and close the
+// wrong ask. It is refused as the detail read is, and scoped as narrowly: a
+// record about one task says nothing about the thread on another.
+//
+// This harness's node reports nothing deferred, so the framework's own probe
+// never runs and the refusal is the one the read's transaction makes.
+//
+// Mutation: drop the refuseUnaccounted call from readThread and the covered
+// thread answers.
+func TestAThreadOnATaskARetainedRecordCoversIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	mine := r.createTask("mine")
+	other := r.createTask("somebody else's")
+	r.deferRecordOn(other.ID, other.Project)
+
+	if _, err := r.reader.Thread(t.Context(), tracker.ThreadQuery{
+		Task: mine.ID, Author: "ana",
+	}, statelog.Freshness{Level: statelog.ReadSession}); err != nil {
+		t.Fatalf("a deferred record about another task refused this one's "+
+			"thread: %v", err)
+	}
+	_, err := r.reader.Thread(t.Context(), tracker.ThreadQuery{
+		Task: other.ID, Author: "ana",
+	}, statelog.Freshness{Level: statelog.ReadSession})
 	var refused *statelog.Refused
 	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
-		t.Fatalf("a task in a project a deferred record covers answered %v, "+
-			"want the read refused as deferred before it waited", err)
+		t.Fatalf("the thread on the task the deferred record is ABOUT "+
+			"answered %v, want the read refused as deferred", err)
+	}
+}
+
+// AN ABSENT TASK A RETAINED RECORD COULD CREATE IS REFUSED, NOT ANSWERED ABSENT.
+//
+// "There is no such task" is an answer a caller acts on: a seat files the
+// duplicate, a screen shows a dead link. A node retaining the record that
+// creates ENG-77 holds no row for it, so the answer it can give is that it
+// cannot say — by the key, whose project names where that create is filed, and
+// by the id, which names no project and is probed across all of them.
+//
+// Scoped by the key's project, so a record retained in ENG says nothing about
+// OPS-77. And a PURGED task is absent whatever is retained, because the
+// deletion gate drops every later record about it on every node.
+//
+// Mutations: return ErrNoTask from refuseAbsent without probing and all three
+// references answer absent; scope a key across every project and OPS-77 is
+// refused; drop the purge check and the purged key and id are refused.
+func TestAnAbsentTaskARetainedRecordCouldCreateIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	gone := r.createTask("filed twice")
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", gone.ID, gone.Project,
+		"filed twice"); err != nil {
+		t.Fatalf("purge %s: %v", gone.Key, err)
+	}
+	r.drain()
+	r.deferRecordOn("t-unapplied", "ENG")
+
+	session := statelog.Freshness{Level: statelog.ReadSession}
+	for _, ref := range []string{"ENG-77", "eng-77", "t-unapplied"} {
+		_, err := r.reader.Task(t.Context(), ref, tracker.DetailWants{}, session)
+		var refused *statelog.Refused
+		if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+			t.Errorf("%s, which a retained record could create, answered %v — "+
+				"want the read refused as deferred rather than told there is "+
+				"no such task", ref, err)
+			continue
+		}
+		if isNoTask(err) {
+			t.Errorf("%s was refused AND answered absent: %v", ref, err)
+		}
+	}
+	for _, ref := range []string{"OPS-77", gone.Key, gone.ID} {
+		if _, err := r.reader.Task(t.Context(), ref, tracker.DetailWants{},
+			session); !isNoTask(err) {
+			t.Errorf("%s answered %v, want no such task — nothing retained "+
+				"can create it", ref, err)
+		}
 	}
 }
 
@@ -319,13 +415,12 @@ func strptr(s string) *string { return &s }
 
 func isNoTask(err error) bool { return errors.Is(err, tracker.ErrNoTask) }
 
-// A COMMENT IS A ROW, and until one was written the whole thread was invisible.
+// A COMMENT IS A ROW.
 //
-// `tracker_comments` was DELETEd on purge, READ by get_task's thread, by
-// `has_open_asks`, by `asked_of`, by `asked_by` and by my_work's own block —
-// and INSERTed by nothing. Every comment the company had ever written landed
-// in its task's document and produced no row, so every one of those answered
-// as though nobody had ever said anything.
+// `tracker_comments` is deleted on purge and read by the detail read's thread,
+// by `has_open_asks`, by `asked_of`, by `asked_by` and by my_work's own block —
+// so a comment that landed in its task's document and produced no row would
+// leave every one of those answering as though nobody had ever said anything.
 func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -365,8 +460,8 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 	}
 
 	// AN ANSWER CLOSES IT. The two are separate rows — a reply is its own
-	// comment — so without the stamp the ask stayed open on every board
-	// and in the answerer's own queue for ever.
+	// comment — so without the stamp the ask would stay open on every
+	// board and in the answerer's own queue for ever.
 	answers := "cm-1"
 	if _, err := r.writer.UpdateTask(t.Context(), "op-answer", created.ID, "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
@@ -414,9 +509,10 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 
 // A CHECKLIST ITEM IS A ROW TOO, and it lives on somebody else's task.
 //
-// No assignee filter over tasks reaches one, so a seat holding six checklist
-// items and no assignment read its queue as empty — and `checklist_assignee=`,
-// which the shipped partial index is named for, matched nothing at all.
+// No assignee filter over tasks reaches one, so without its own row a seat
+// holding six checklist items and no assignment would read its queue as empty,
+// and `checklist_assignee=`, which the partial index is named for, would match
+// nothing at all.
 func TestAChecklistItemIsARow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -463,11 +559,10 @@ func TestAChecklistItemIsARow(t *testing.T) {
 //
 // The page is excerpted because twenty bodies at [tracker.MaxCommentBody] is
 // ten times the ceiling on one tool answer. That is only legitimate if the
-// rest is reachable, and for a long time it was not: the excerpt was
-// documented as a pointer to a read the engine did not have, so anything a
-// person wrote past 2 KiB could not be recovered by any seat through any
-// tool. This is that read, and the assertion that the two halves disagree —
-// one cut and marked, one exactly what was written — is the whole point.
+// rest is reachable: an excerpt pointing at a read the engine does not have
+// leaves anything a person wrote past 2 KiB unrecoverable by any seat through
+// any tool. This is that read, and the assertion that the two halves disagree
+// — one cut and marked, one exactly what was written — is the whole point.
 func TestALongCommentBodyIsAnExcerptWithAWayBackToTheWhole(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -668,8 +763,8 @@ func TestAnUnknownCommentIsItsOwnAnswer(t *testing.T) {
 
 // A CAPPED HISTORY FEED SAYS IT WAS CAPPED.
 //
-// The cut was silent: a task with five hundred changes and a task with fifty
-// answered identically, so a reader deciding "has anybody touched this" was
+// A silent cut would answer a task with five hundred changes and a task with
+// fifty identically, so a reader deciding "has anybody touched this" would be
 // told the whole story either way and could not tell which it had. That is the
 // failure the board reader refuses one file over — an overflow is counted and
 // said, never silently cut — and the escape hatch it points at, `task_activity`,

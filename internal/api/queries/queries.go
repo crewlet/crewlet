@@ -36,6 +36,20 @@ var (
 
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
+
+	// ErrDeferred is a read this node refused because it holds a change
+	// covering the record asked about that it cannot apply — one a newer
+	// build wrote, or one queued behind such a change
+	// ([statelog.RefuseDeferred]).
+	//
+	// ITS OWN ANSWER, because it is neither of the two it sits between.
+	// Not [ErrUnavailable]: waiting on THIS node never clears it, so a
+	// retry hint sends a client round a loop that cannot end. Not a plain
+	// failure: nothing on the node is broken, another node running a build
+	// that can read the change answers the same question, and a person has
+	// to be told the record exists and cannot be shown here rather than
+	// that the query failed.
+	ErrDeferred = errors.New("queries: held back by a change this node cannot apply")
 )
 
 // operatorKey is the context key this package carries the caller's operator id
@@ -304,16 +318,14 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 	return data, unavailableIfTransient(err)
 }
 
-// unavailableIfTransient turns a read this node could not serve YET into
-// [ErrUnavailable], leaving every other failure alone.
+// unavailableIfTransient classifies a read this node refused: one it could not
+// serve YET becomes [ErrUnavailable], one a change it cannot apply holds back
+// becomes [ErrDeferred], and every other failure is left alone.
 //
-// AT THE REGISTRY, ONCE, rather than at each answer that reads something
-// that can be briefly unreachable. It was per answer, and the answers that
-// did not call it were exactly the ones reported: an unreadable lease table
-// reached `fleet` as a plain failure and `sandbox_runs` likewise, so a
-// coordination blip rendered as `query_failed` and a 500, telling a client to
-// give up on a screen that would work in a few seconds. The reference had
-// promised a 503 for both.
+// AT THE REGISTRY, ONCE, rather than at each answer that reads something that
+// can be briefly unreachable: an answer that forgot to classify would report a
+// coordination blip as `query_failed` and a 500, telling a client to give up
+// on a screen that would work in a few seconds.
 //
 // Two sources of "not yet", and each is its own subsystem's classification
 // rather than a second list here:
@@ -321,9 +333,12 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 //   - a state-log read refusal whose code is retryable
 //     ([statelog.ReadRefusal.Retryable]). A node that is behind will catch
 //     up; a node holding a record it cannot decode will not, however long a
-//     caller waits, so that one stays a failure.
+//     caller waits, so that one is never "not yet".
 //   - [coord.ErrUnavailable], the coordination contract's own third answer:
 //     the store could not be reached, which is neither "held" nor "absent".
+//
+// And one source of "not here": a [statelog.RefuseDeferred] refusal, which is
+// that record-it-cannot-decode case on a point read.
 //
 // A refusal about the REQUEST is never reclassified, even when it wraps one of
 // those: the caller has to change what it asks, and "come back" would send the
@@ -332,16 +347,22 @@ func unavailableIfTransient(err error) error {
 	switch {
 	case err == nil,
 		errors.Is(err, ErrUnavailable),
+		errors.Is(err, ErrDeferred),
 		errors.Is(err, ErrBadParams),
 		errors.Is(err, ErrNotFound),
 		errors.Is(err, ErrUnauthorized):
 		return err
 	}
 	var refused *statelog.Refused
-	if errors.As(err, &refused) && refused.Code.Retryable() {
+	if errors.As(err, &refused) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and
 		// derived hint survive for [RetryAfter] and for the log.
-		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+		switch {
+		case refused.Code.Retryable():
+			return fmt.Errorf("%w: %w", ErrUnavailable, err)
+		case refused.Code == statelog.RefuseDeferred:
+			return fmt.Errorf("%w: %w", ErrDeferred, err)
+		}
 	}
 	if errors.Is(err, coord.ErrUnavailable) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)

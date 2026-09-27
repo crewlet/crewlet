@@ -21,17 +21,15 @@ import (
 // see: one row per statement, six rows per statement and the whole collection
 // in one must leave byte-identical tables.
 //
-// It is the guard the conversion to [store.InsertRows] needs and could not get
-// anywhere else. Every other case in this package runs at the probed limit,
+// It is the guard [store.InsertRows] needs and gets nowhere else. Every other case in this package runs at the probed limit,
 // where the caps put every collection inside a single statement — so a bind
 // that drifted one column at a chunk boundary, or a row template that is only
 // valid when it appears once, would pass the whole suite. Here the SAME record
 // is applied at five limits and the tables are compared against each other.
 //
 // Zero is one of them deliberately: an [statelog.ApplyOptions] with no probed
-// limit degrades to a row per statement, which is the shape this applier had
-// before the conversion and therefore the reference the other four are judged
-// against.
+// limit degrades to a row per statement, the shape with no chunk boundary at
+// all and therefore the reference the other four are judged against.
 func TestACollectionsRowsSurviveEveryChunkWidth(t *testing.T) {
 	t.Parallel()
 

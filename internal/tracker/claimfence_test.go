@@ -99,6 +99,73 @@ func TestASweepWhoseLeaseLapsesMidWalkWritesNothingAfter(t *testing.T) {
 	assertStoppedAtTheLapse(t, r)
 }
 
+// A CROSS-PROJECT MOVE WHOSE LEASE LAPSES MID-SUBTREE MOVES NOTHING AFTER IT.
+//
+// A move re-keys a whole subtree, one append per descendant, under a claim on
+// the root — and nothing in the log stops a descendant's append from a holder
+// whose lease has lapsed, while a second move of the same root takes the claim
+// and re-keys the same subtree beside it. So every append the walk makes is
+// fenced on the claim, and a holder that can no longer vouch for its lease
+// stops before its next one: here, the second subtask's. The error names the
+// lost claim inside the partial, because the root and the first subtask have
+// already moved and re-issuing the move is refused.
+//
+// Mutation: drop `w = w.under(claim)` from MoveTaskToProject and the second
+// subtask moves after the lapse.
+func TestAMoveWhoseLeaseLapsesMidSubtreeMovesNothingAfter(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	r.applyWhileWriting()
+	if _, err := r.writer.WriteDocument(t.Context(), "op-ops",
+		tracker.ProjectSubject("OPS"), "", tracker.Project{
+			V: 1, Key: "OPS", Name: "Operations",
+			CreatedAt: wednesday, UpdatedAt: wednesday,
+		}, tracker.ChangeProjectCreated, nil); err != nil {
+		t.Fatalf("seed the target project: %v", err)
+	}
+	r.drain()
+	root := newTask("m-root")
+	root.Key = ""
+	if _, err := r.writer.CreateTask(t.Context(), "op-root", root, nil); err != nil {
+		t.Fatalf("CreateTask m-root: %v", err)
+	}
+	r.drain()
+	parent := "m-root"
+	for _, id := range []string{"m-kid-1", "m-kid-2"} {
+		kid := newTask(id)
+		kid.Key = ""
+		kid.Parent, kid.Depth = &parent, 1
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, kid, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	claims, clock := memory.New(), newCaseClock()
+	holder := writerOverClaims(t, r, claims, clock)
+	hooked.arm(func(_, opID string) bool { return opID == "op-move.d/m-kid-1" },
+		func() { lapse(claims, clock) })
+
+	_, err := holder.MoveTaskToProject(t.Context(), "op-move", "m-root", "OPS", nil)
+	if !hooked.didFire() {
+		t.Fatal("the lease never lapsed inside the walk, so this case is not " +
+			"the shape it names")
+	}
+	var stopped *tracker.PartialError
+	if !errors.Is(err, tracker.ErrClaimLost) || !errors.As(err, &stopped) ||
+		stopped.Rerun {
+		t.Fatalf("a move whose lease lapsed mid-subtree answered %v, want it "+
+			"to say it lost its claim, partial and not re-run — its root moved", err)
+	}
+	r.drain()
+	for id, want := range map[string]string{
+		"m-root": "OPS", "m-kid-1": "OPS", "m-kid-2": "ENG",
+	} {
+		if got := oneTask(t, r, id).Project; got != want {
+			t.Errorf("%s is in %s after the walk's lease lapsed, want %s", id, got, want)
+		}
+	}
+}
+
 // mergeFixture files the item a merge folds into and a duplicate with two
 // subtasks, which a walk moves in id order.
 func mergeFixture(t *testing.T, r *roundTrip) {

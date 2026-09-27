@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -57,9 +58,12 @@ func (r *Runner) Suspended() (Suspension, bool) {
 // store: this record is the only durable account the phase has, and one that
 // covered the re-entry alone would lose every round before the suspend, the
 // `run_sandbox` call that caused it included. Their TOKENS, and what the
-// collected run cost, are counted by the first record any attempt at this
-// resume publishes, success or failure, and by no later one; see
-// [Resume.CarriedCounted].
+// collected runs cost — the one this resume collected and any an earlier
+// suspension of the phase carried ([execstate.State.CollectedRuns]) — are
+// counted by the first record any attempt at this resume publishes, success
+// or failure, and by no later one; see [Resume.CarriedCounted]. A re-entry
+// that suspends again publishes no record, and its new suspension carries
+// what its record would have counted ([Runner.recordSuspension]).
 //
 // ROUND IS THE LOOP'S, and the record is filed under it rather than under
 // the round the state names: the loop numbers the re-entered round on from
@@ -115,10 +119,11 @@ func (r *Runner) Resume(ctx context.Context, round int, history []ledger.Iterati
 
 	// WHICH BOX. This phase suspended on a coding run and is being
 	// re-entered with its result, which is the one thing that makes it a
-	// sandbox phase rather than a native one. With the pre-suspend rounds,
-	// it is the carried spend the record below counts, unless an earlier
-	// attempt's record already did.
-	prior, run := r.carried(priorRounds(state, answer), r.cfg.Resume.Run)
+	// sandbox phase rather than a native one. With the pre-suspend rounds
+	// and the runs the phase collected before an earlier suspension, it is
+	// the carried spend the record below counts, unless an earlier attempt's
+	// record already did.
+	prior, run := r.carried(priorRounds(state, answer), resumedRun(r.cfg.Resume.Run, state.CollectedRuns))
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface,
 		rounds: r.cfg.Caps.ExecutorRounds, ceiling: r.cfg.Caps.ExecutorCeiling,
@@ -149,13 +154,14 @@ func (r *Runner) Resume(ctx context.Context, round int, history []ledger.Iterati
 	if res.Suspended {
 		// Published only if recording the suspension panics; see
 		// [closing]. No prompts, as on the record below. Nothing counted
-		// the carried spend: it is in res, and so in the suspension the
-		// next resume counts it from.
+		// the carried spend: the pre-suspend rounds' is in res and the
+		// runs' is in run, and the suspension carries both to the resume
+		// that counts them.
 		base := ranRecord(phase.Execute, round, "", "", res, surface)
 		base.Run = run
 		closer := r.closing(phaseCtx, base)
 		defer closer.onPanic()
-		r.recordSuspension(phaseCtx, round, surface, res.Result, history, res.Elapsed)
+		r.recordSuspension(phaseCtx, round, surface, res.Result, run, history, res.Elapsed)
 		return turn.Work{
 			Text: res.Text, Calls: phaseCalls, Carried: carried, Suspended: true,
 		}, describe(surface), nil
@@ -355,12 +361,18 @@ func intField(v any) (int, bool) {
 // holds the loop's messages and the phase's live surface. The engine reads it
 // back through [Runner.Suspended] and writes it to the pending-run row.
 //
+// runs is the run half of the record the phase would have published: zero on
+// a phase's first suspension, and on a resumed phase that suspends again the
+// runs it collected, as [Runner.carried] left them for this attempt to count.
+// The suspension carries them because nothing else will
+// ([execstate.State.CollectedRuns]).
+//
 // A state that fails its invariants is NOT recorded, and the absence is what
 // the engine reports: a run whose conversation could not be serialized is one
 // nothing can resume, and it must fail while the box is still in the engine's
 // hands rather than at a resume days later.
 func (r *Runner) recordSuspension(ctx context.Context, round int, surface *tools.Surface,
-	res toolloop.Result, history []ledger.Iteration, elapsed time.Duration,
+	res toolloop.Result, runs RunRecord, history []ledger.Iteration, elapsed time.Duration,
 ) {
 	state := execstate.State{
 		Version:         execstate.Version,
@@ -374,8 +386,12 @@ func (r *Runner) recordSuspension(ctx context.Context, round int, surface *tools
 		// WHICH MODEL SERVED THEM, beside the tokens, so the resumed
 		// phase's record — this phase's only one — splits the rounds
 		// before the suspend as the rounds after it are split.
-		Model:          res.Model,
-		Models:         modelSpend(res.Models),
+		Model:  res.Model,
+		Models: modelSpend(res.Models),
+		// AND WHAT THE RUNS IT COLLECTED COST, beside the rounds' tokens
+		// and for the same reason: the record that would have counted
+		// them is not being published.
+		CollectedRuns:  collectedRuns(runs),
 		ToolExecutions: toolExecutions(res.Executions),
 		// The rounds themselves, so the resumed phase continues the count
 		// instead of restarting it — and so they reach the store at all.
@@ -409,6 +425,76 @@ func (r *Runner) recordSuspension(ctx context.Context, round int, surface *tools
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.suspension = &Suspension{State: state}
+}
+
+// resumedRun is the run half of a resumed phase's record: the run this resume
+// re-enters from, with the runs the phase collected before an earlier
+// suspension ([execstate.State.CollectedRuns]) summed into it — their prices
+// added, their spend joined ([joinRunSpend]) and their delivered refs listed
+// first. The box and the agent stay the resume's own, since that is where the
+// phase re-enters from.
+func resumedRun(run RunRecord, earlier *execstate.Runs) RunRecord {
+	if earlier == nil {
+		return run
+	}
+	run.CostUSD += earlier.CostUSD
+	run.Spend = joinRunSpend(types.RunSpend{
+		Collected: earlier.Collected, Models: earlier.Models, Whole: earlier.Whole,
+	}, run.Spend)
+	run.DeliveredRefs = joinRefs(earlier.DeliveredRefs, run.DeliveredRefs)
+	return run
+}
+
+// collectedRuns is a record's run half as a suspension carries it
+// ([execstate.State.CollectedRuns]), and nil where it holds nothing to carry.
+func collectedRuns(run RunRecord) *execstate.Runs {
+	if run.CostUSD == 0 && !run.Spend.Collected && len(run.DeliveredRefs) == 0 {
+		return nil
+	}
+	return &execstate.Runs{
+		CostUSD:       run.CostUSD,
+		Collected:     run.Spend.Collected,
+		Models:        slices.Clone(run.Spend.Models),
+		Whole:         run.Spend.Whole,
+		DeliveredRefs: slices.Clone(run.DeliveredRefs),
+	}
+}
+
+// joinRunSpend is two accounts of runs' own model spend as one: each model's
+// part summed under its name, and whole only where both are. A side that
+// collected no run is no account and leaves the other as it is — its Whole
+// included, since a run nobody collected cannot make the other a floor.
+func joinRunSpend(a, b types.RunSpend) types.RunSpend {
+	switch {
+	case !a.Collected:
+		return b
+	case !b.Collected:
+		return a
+	}
+	out := types.RunSpend{Collected: true, Whole: a.Whole && b.Whole, Models: slices.Clone(a.Models)}
+	for _, m := range b.Models {
+		i := slices.IndexFunc(out.Models, func(have types.ModelSpend) bool { return have.Model == m.Model })
+		if i < 0 {
+			out.Models = append(out.Models, m)
+			continue
+		}
+		out.Models[i].InputTokens += m.InputTokens
+		out.Models[i].OutputTokens += m.OutputTokens
+		out.Models[i].CostUSD += m.CostUSD
+	}
+	return out
+}
+
+// joinRefs is a's refs and then b's, each once, so a ref two runs both
+// reported is named once on the record.
+func joinRefs(a, b []string) []string {
+	var out []string
+	for _, ref := range slices.Concat(a, b) {
+		if !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 // decodeArgs turns the wire's JSON argument string back into the map the

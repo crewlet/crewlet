@@ -191,15 +191,18 @@ type Resume struct {
 
 	// Run describes the detached run this phase re-enters from: the one the
 	// resume collected, or the one that stopped to ask the question a
-	// person's answer resumes it with ([RunRecord]).
+	// person's answer resumes it with ([RunRecord]). That run alone: the
+	// runs the phase collected before an earlier suspension ride on State
+	// ([execstate.State.CollectedRuns]), and the phase's record counts both.
 	Run RunRecord
 
 	// CarriedCounted says an earlier attempt at this resume already
 	// published a record that counted the phase's CARRIED SPEND: the tokens
 	// its rounds billed before it suspended ([execstate.State.InputTokens]
 	// and OutputTokens, with their split, [execstate.State.Models]) and what
-	// the run it re-enters from reported about itself — its price
-	// ([RunRecord.CostUSD]) and its own model spend ([RunRecord.Spend]).
+	// the runs it collected reported about themselves — the one it re-enters
+	// from and any an earlier suspension carried — their price
+	// ([RunRecord.CostUSD]) and their own model spend ([RunRecord.Spend]).
 	//
 	// That spend was billed once, and every record counts what it carries,
 	// so it is counted by exactly one: the first record the resumed phase
@@ -227,18 +230,22 @@ type DroppedCalls struct {
 	After int
 }
 
-// RunRecord is what a phase record says about the detached coding run a
-// resumed phase re-entered from: the box it ran in, the agent that ran it, and
-// what the run reported about itself — its price, its own model spend and what
-// it delivered. It is what makes that phase's backend a sandbox on its record
-// (`backend`, `coding_agent`, `sandbox_id`, `cost_usd`, `delivered_refs`), and
-// what brings the run's tokens into the record's own.
+// RunRecord is what a phase record says about the detached coding runs a
+// resumed phase collected: the box it re-entered from, the agent that ran
+// there, and what the runs reported about themselves — their price, their own
+// model spend and what they delivered. It is what makes that phase's backend a
+// sandbox on its record (`backend`, `coding_agent`, `sandbox_id`, `cost_usd`,
+// `delivered_refs`), and what brings the runs' tokens into the record's own.
 //
-// The run is the one the resume collected, or — when a person's answer resumes
-// a parked clarification — the one that stopped to ask the question, whose
-// price and spend were kept when it parked. That run finished, since its agent
-// stops once it asks, so the record its answer resumes is the one its figures
-// reach; the run the answer leads to is a launch of its own.
+// [Resume.Run] holds ONE run: the one the resume collected, or — when a
+// person's answer resumes a parked clarification — the one that stopped to ask
+// the question, whose price and spend were kept when it parked. That run
+// finished, since its agent stops once it asks, and the run the answer leads to
+// is a launch of its own. The record the resumed phase publishes holds that run
+// and every run the phase collected before an earlier suspension, summed
+// ([execstate.State.CollectedRuns]): a phase that launches again suspends
+// without a record, so the run it re-entered from reaches a record only
+// through the resumes after it.
 //
 // Carried rather than re-derived, for the same reason the run's placement is:
 // the resume may be another process on another node, days later, under a
@@ -248,20 +255,22 @@ type RunRecord struct {
 	CodingAgent string
 	SandboxID   string
 
-	// CostUSD is what the run's agent reported the run cost, where it
-	// reports a price at all.
+	// CostUSD is what the runs' agents reported they cost, summed, zero
+	// for a run whose agent reports no price.
 	CostUSD float64
 
-	// Spend is the run's own model spend as its agent reported it — its
-	// tokens by model, and whether they are the whole run's — which the
-	// phase's record takes in with [types.AgentPhaseCompleted.AddRun]. The
-	// agent calls its models from inside the box, so no round of this
+	// Spend is the runs' own model spend as their agents reported it —
+	// their tokens by model, and whether they are every run's whole — which
+	// the phase's record takes in with [types.AgentPhaseCompleted.AddRun].
+	// An agent calls its models from inside the box, so no round of this
 	// process billed them and this is the only account a record can carry.
 	Spend types.RunSpend
 
-	// DeliveredRefs are the branches and pull requests the run produced,
-	// and nil when a person's answer resumed the phase: nothing was
-	// collected then.
+	// DeliveredRefs are the branches and pull requests the runs produced,
+	// as their collected results reported them. A person's answer hands the
+	// resume none, since only a collected result carries any, so on that
+	// resume only the runs collected before an earlier suspension
+	// contribute refs.
 	DeliveredRefs []string
 }
 
@@ -345,9 +354,11 @@ func (r *Runner) noteCountedCarried() {
 // count it: all of it, or — when an earlier attempt's record already counted
 // it — none, leaving the pre-suspend rounds on the record as evidence.
 //
-// NONE MEANS EVERY PART OF IT: the pre-suspend tokens and their split, the
-// run's price and the run's own spend. A part left standing would be counted
-// by the first attempt's record and again by this one's.
+// NONE MEANS EVERY PART OF IT: the pre-suspend tokens and their split, and the
+// runs' price and own spend, the runs an earlier suspension carried included
+// ([resumedRun]). A part left standing would be counted by the first attempt's
+// record and again by this one's. What the runs delivered is evidence rather
+// than spend, and stays.
 func (r *Runner) carried(prior toolloop.Result, run RunRecord) (toolloop.Result, RunRecord) {
 	if r.cfg.Resume != nil && r.cfg.Resume.CarriedCounted {
 		prior.InputTokens, prior.OutputTokens, prior.Models = 0, 0, nil
@@ -455,7 +466,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		// suspension panics. See [closing].
 		closer := r.closing(phaseCtx, ranRecord(phase.Execute, round, system, user, res, surface))
 		defer closer.onPanic()
-		r.recordSuspension(phaseCtx, round, surface, res.Result, history, res.Elapsed)
+		r.recordSuspension(phaseCtx, round, surface, res.Result, RunRecord{}, history, res.Elapsed)
 		// A suspended phase submitted nothing and is not finished. It
 		// returns with the ledger intact; the resumed turn comes back
 		// through Resume and submits then.

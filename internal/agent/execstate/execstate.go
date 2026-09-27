@@ -104,6 +104,33 @@ type State struct {
 	Model  string             `json:"model,omitempty"`
 	Models []types.ModelSpend `json:"models,omitempty"`
 
+	// CollectedRuns is what the detached coding runs this phase collected
+	// before it suspended reported about themselves, summed ([Runs]): nil
+	// where it collected none, which is every phase that suspends on its
+	// first run.
+	//
+	// A RESUMED PHASE CAN SUSPEND AGAIN. It calls run_sandbox a second time —
+	// which is how it continues after a person answers the question a run
+	// stopped to ask, since the run that asked has finished — and a
+	// suspending phase publishes no record. The run it re-entered from then
+	// reaches no record through the resume that collected it, and the next
+	// resume is handed only the run IT collects; so the earlier runs ride
+	// here, and the record the phase finally publishes counts every run it
+	// collected.
+	//
+	// Their spend is CARRIED SPEND, like the tokens above: it rides forward
+	// only while no record has counted it. A suspension written by an attempt
+	// at a resume whose earlier attempt already published a record carries
+	// their delivered refs and none of their spend.
+	//
+	// Additive within v2, and a contract between PEERS that nothing on this
+	// side can enforce. A build that predates the member decodes the state
+	// without it: a phase it resumes publishes a record without these runs,
+	// so their price and spend reach no record at all, and a suspension it
+	// writes carries none. A state written without the member decodes to
+	// nil and counts no earlier run.
+	CollectedRuns *Runs `json:"collected_runs,omitempty"`
+
 	// ToolExecutions is what the pre-suspend rounds actually ran. The
 	// resumed phase's ledger entry is built from these plus its own, which
 	// is what stops a resumed turn re-firing a delivery that already went.
@@ -185,6 +212,33 @@ type State struct {
 	// A false value is what every earlier row decodes to and is exactly
 	// right for them: they are all native suspensions.
 	AgentRun bool `json:"agent_run,omitempty"`
+}
+
+// Runs is what one or more detached coding runs reported about themselves,
+// summed across them: the run half of a phase record — its `cost_usd`, its
+// `delivered_refs` and the run spend its tokens take in
+// ([types.AgentPhaseCompleted.AddRun]) — as a suspended state carries it
+// ([State.CollectedRuns]).
+//
+// JSON tags are wire names, for the reason [State]'s are.
+type Runs struct {
+	// CostUSD is the sum of the prices the runs' agents reported, zero for
+	// a run whose agent reported none.
+	CostUSD float64 `json:"cost_usd,omitempty"`
+
+	// Collected, Models and Whole are the runs' own model spend, member for
+	// member [types.RunSpend], which is not a wire type and so is spelled
+	// out here: Collected says a run's spend is among them at all, Models is
+	// each model's part summed across the runs, and Whole says every run's
+	// agent accounted for every model call it made. A collected spend that
+	// is not whole is a floor, which is also how an absent `whole` reads.
+	Collected bool               `json:"collected,omitempty"`
+	Models    []types.ModelSpend `json:"models,omitempty"`
+	Whole     bool               `json:"whole,omitempty"`
+
+	// DeliveredRefs are the branches and pull requests the runs produced,
+	// in the order they reported them, each once.
+	DeliveredRefs []string `json:"delivered_refs,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.

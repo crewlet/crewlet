@@ -40,7 +40,18 @@ type fakeWriter struct {
 	rejected map[string]string // page id → how
 	asked    []string          // page ids Rejected was asked about
 	err      error
-	existed  bool
+
+	// failTitle fails the create of one title only, as a transient error.
+	failTitle string
+	// landThenFail makes the next create LAND and still answer an error:
+	// a create whose answer never arrived.
+	landThenFail bool
+	// occupied answers every create with a page already holding the title.
+	occupied bool
+	// maxTitle refuses, in CheckDraft, a title longer than this.
+	maxTitle int
+	// rejectErr is what Rejected answers with: an outage, never a verdict.
+	rejectErr error
 }
 
 type draftCall struct{ container, name, body string }
@@ -54,6 +65,16 @@ func (w *fakeWriter) Backend() string {
 
 func (w *fakeWriter) Rejection() string { return "throw it in the fake bin" }
 
+func (w *fakeWriter) CheckDraft(title, _ string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.maxTitle > 0 && len(title) > w.maxTitle {
+		return fmt.Errorf("a title is at most %d bytes, and %q is %d",
+			w.maxTitle, title, len(title))
+	}
+	return nil
+}
+
 func (w *fakeWriter) CreateDraft(_ context.Context, container, name, markdown string) (
 	knowledge.DraftPage, bool, error,
 ) {
@@ -63,22 +84,66 @@ func (w *fakeWriter) CreateDraft(_ context.Context, container, name, markdown st
 	if w.err != nil {
 		return knowledge.DraftPage{}, false, w.err
 	}
-	if w.pages == nil {
-		w.pages = map[string]string{}
+	if w.failTitle != "" && name == w.failTitle {
+		return knowledge.DraftPage{}, false, errors.New("the wiki timed out")
+	}
+	if w.occupied {
+		return knowledge.DraftPage{ID: "somebody-else", Title: name}, false, nil
 	}
 	if id, held := w.pages[name]; held {
 		return knowledge.DraftPage{ID: id, Title: name}, false, nil
 	}
-	id := fmt.Sprintf("page-%d", len(w.pages)+1)
-	w.pages[name] = id
-	return knowledge.DraftPage{ID: id, Title: name}, !w.existed, nil
+	id := w.addLocked(name)
+	if w.landThenFail {
+		w.landThenFail = false
+		return knowledge.DraftPage{}, false, errors.New("the answer never arrived")
+	}
+	return knowledge.DraftPage{ID: id, Title: name}, true, nil
 }
+
+// refusedPage and refusedContainer are a writer's errors that never clear,
+// saying so the way [learning.PromotionWriter.CreateDraft] asks.
+type refusedPage struct{ error }
+
+func (refusedPage) RefusesPage() bool { return true }
+
+type refusedContainer struct{ error }
+
+func (refusedContainer) RefusesContainer() bool { return true }
 
 func (w *fakeWriter) Rejected(_ context.Context, _, pageID string) (string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.asked = append(w.asked, pageID)
+	if w.rejectErr != nil {
+		return "", w.rejectErr
+	}
 	return w.rejected[pageID], nil
+}
+
+// addLocked holds a new page under a title and returns its id.
+func (w *fakeWriter) addLocked(title string) string {
+	if w.pages == nil {
+		w.pages = map[string]string{}
+	}
+	id := fmt.Sprintf("page-%d", len(w.pages)+1)
+	w.pages[title] = id
+	return id
+}
+
+// seed puts a page no record asked for under a title — another unit's draft
+// in a shared space, or a person's page.
+func (w *fakeWriter) seed(title string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.addLocked(title)
+}
+
+// set changes the writer under the lock the pass reads it under.
+func (w *fakeWriter) set(change func(w *fakeWriter)) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	change(w)
 }
 
 // reject marks a page rejected, the way a lead's gesture would.
@@ -475,7 +540,9 @@ func TestAPageMadeButNotRecordedIsRecordedNotMadeAgain(t *testing.T) {
 		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
 	}
 	w := &fakeWriter{}
-	ledger := &flakyUpdates{PromotionLedger: memory.NewFleet(), fail: 1}
+	// THE SECOND UPDATE FAILS: the first says a create is being asked for,
+	// and the second is the one that would record the page.
+	ledger := &flakyUpdates{PromotionLedger: memory.NewFleet(), skip: 1, fail: 1}
 	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}, {Content: renamedDraft}}}
 	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
 		learning.PromoterOptions{MinSiblings: 3})
@@ -501,15 +568,22 @@ func TestAPageMadeButNotRecordedIsRecordedNotMadeAgain(t *testing.T) {
 	}
 }
 
-// flakyUpdates refuses its first `fail` updates as an outage.
+// flakyUpdates lets its first `skip` updates through and then refuses the
+// next `fail` as an outage.
 type flakyUpdates struct {
 	learning.PromotionLedger
 	mu   sync.Mutex
+	skip int
 	fail int
 }
 
 func (f *flakyUpdates) UpdatePromotion(ctx context.Context, rec coord.PromotionRecord) (coord.PromotionRecord, bool, error) {
 	f.mu.Lock()
+	if f.skip > 0 {
+		f.skip--
+		f.mu.Unlock()
+		return f.PromotionLedger.UpdatePromotion(ctx, rec)
+	}
 	if f.fail > 0 {
 		f.fail--
 		f.mu.Unlock()
@@ -827,24 +901,118 @@ func TestAUnitTooSmallToConvergeCostsNothing(t *testing.T) {
 	}
 }
 
-// A PAGE ALREADY HOLDING THE TITLE IS NOT ANNOUNCED. The pass announces only a
-// page it made; one the knowledge base already held under the title is an
-// earlier attempt's or somebody else's.
-func TestAPageAlreadyHoldingTheTitleIsNotAnnounced(t *testing.T) {
+// A PAGE HOLDING THE TITLE ON A RECORD'S FIRST FINISH IS SOMEBODY ELSE'S, and
+// the draft is made under a title of its own rather than recorded as that page.
+//
+// Units may share a space and a published draft keeps its prefix, so the
+// model's title can already be held by a page about something else. Adopting
+// it would record this convergence as drafted on that page — dropping the
+// body the model wrote — and nobody would ever review what this team does.
+func TestAPageAnotherRecordHoldsIsNotAdoptedOnTheFirstFinish(t *testing.T) {
 	t.Parallel()
 	db := newStore(t)
 	for _, h := range []string{"dev", "sre", "qa"} {
 		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
 	}
-	w := &fakeWriter{existed: true}
-	p, _ := promoter(t, db, w, promotionDraft, unitOf("dev", "sre", "qa"),
+	w := &fakeWriter{}
+	held := w.seed(knowledge.AutoDraftTitlePrefix + "cut-a-release")
+	ledger := memory.NewFleet()
+	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
+		learning.PromoterOptions{MinSiblings: 3})
+
+	out := p.Pass(t.Context())
+	if len(out) != 1 {
+		t.Fatalf("payloads = %v, want the draft made under a title of its own", out)
+	}
+	ev := out[0].(types.SkillPromoted)
+	if ev.PageID == held {
+		t.Fatalf("the convergence was recorded as the page %s another record "+
+			"holds", held)
+	}
+	title := knowledge.AutoDraftTitlePrefix + "cut-a-release"
+	if !strings.HasPrefix(ev.PageTitle, title+" (") || !strings.HasSuffix(ev.PageTitle, ")") {
+		t.Errorf("the draft is titled %q, want %q with a suffix of its own", ev.PageTitle, title)
+	}
+	if ev.SkillName != "cut-a-release" {
+		t.Errorf("the event names the skill %q, want the model's name", ev.SkillName)
+	}
+	calls := w.calls()
+	if len(calls) != 2 || !strings.Contains(calls[1].body, "1. run the pipeline") {
+		t.Fatalf("draft calls = %+v, want the held title and then the new one, "+
+			"carrying the model's procedure", calls)
+	}
+	got := records(t, ledger, "Platform")
+	if len(got) != 1 || got[0]["state"] != "drafted" || got[0]["page_id"] != ev.PageID ||
+		got[0]["title"] != ev.PageTitle {
+		t.Errorf("the ledger holds %v, want the new page recorded", got)
+	}
+}
+
+// A CREATE THAT LANDED AND WAS NEVER ANSWERED IS ADOPTED BY THE NEXT FINISH,
+// not made a second time: the record says a create was asked for under its
+// title before the create is asked, so the page found there is its own.
+func TestACreateThatLandedUnansweredIsAdoptedNotDuplicated(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	w := &fakeWriter{landThenFail: true}
+	ledger := memory.NewFleet()
+	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
 		learning.PromoterOptions{MinSiblings: 3})
 
 	if out := p.Pass(t.Context()); len(out) != 0 {
-		t.Fatalf("payloads = %v — a page that already existed was announced", out)
+		t.Fatalf("a create that answered an error announced %v", out)
 	}
-	if len(w.calls()) != 1 {
-		t.Fatalf("draft calls = %d, want 1", len(w.calls()))
+	if out := p.Pass(t.Context()); len(out) != 0 {
+		t.Fatalf("the page the first create made was announced as new: %v", out)
+	}
+	w.mu.Lock()
+	pages := len(w.pages)
+	w.mu.Unlock()
+	if pages != 1 {
+		t.Errorf("%d pages exist, want the one the unanswered create made", pages)
+	}
+	got := records(t, ledger, "Platform")
+	if len(got) != 1 || got[0]["state"] != "drafted" || got[0]["page_id"] != "page-1" {
+		t.Errorf("the ledger holds %v, want the page the first create made", got)
+	}
+	if model.calls != 1 {
+		t.Errorf("model calls = %d, want 1", model.calls)
+	}
+}
+
+// A RE-TITLED DRAFT WHOSE TITLE IS HELD TOO IS RETIRED, so the next pass asks
+// the model for another answer instead of the unit's record offering the same
+// page on every tick.
+func TestADraftWhoseRetitledTitleIsHeldTooIsRetired(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	w := &fakeWriter{occupied: true}
+	ledger := memory.NewFleet()
+	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
+		learning.PromoterOptions{MinSiblings: 3})
+
+	if out := p.Pass(t.Context()); len(out) != 0 {
+		t.Fatalf("payloads = %v, want none: every title is somebody else's", out)
+	}
+	if calls := w.calls(); len(calls) != 2 {
+		t.Fatalf("draft calls = %d, want the model's title and one re-title", len(calls))
+	}
+	if got := records(t, ledger, "Platform"); len(got) != 0 {
+		t.Fatalf("the ledger holds %v, want the record retired", got)
+	}
+	p.Pass(t.Context())
+	if model.calls != 2 {
+		t.Errorf("model calls = %d after the record was retired, want the "+
+			"next pass to ask again", model.calls)
 	}
 }
 
@@ -897,6 +1065,8 @@ type splitWriter struct{ broken, ok *fakeWriter }
 
 func (s splitWriter) Backend() string   { return s.ok.Backend() }
 func (s splitWriter) Rejection() string { return s.ok.Rejection() }
+
+func (s splitWriter) CheckDraft(title, body string) error { return s.ok.CheckDraft(title, body) }
 
 func (s splitWriter) CreateDraft(ctx context.Context, container, name, markdown string) (
 	knowledge.DraftPage, bool, error,
@@ -1102,5 +1272,357 @@ func TestARecordStandingForTwoConvergencesIsAskedAboutOnce(t *testing.T) {
 	if asked := w.askedAbout(); len(asked) != 1 {
 		t.Errorf("the knowledge base was asked about the one draft %d time(s) in one pass",
 			len(asked))
+	}
+}
+
+// nilCompletion answers with no completion and no error, which a provider
+// must not do and a pass must survive.
+type nilCompletion struct{ calls int }
+
+func (*nilCompletion) Model() string { return "nil-test" }
+
+func (p *nilCompletion) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	p.calls++
+	return nil, nil
+}
+
+// ONLY AN EXPLICIT {} IS RECORDED AS A DECLINE.
+//
+// A decline holds for good against the evidence the model saw, so recording
+// one for an answer that decided nothing — no completion, no text, text that
+// does not decode, a draft missing a part — would silence a real convergence
+// on one malformed reply. Those file nothing, and the next pass asks again.
+func TestOnlyAnExplicitEmptyObjectIsRecordedAsADecline(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		answer  *string // nil: no completion at all
+		decline bool
+	}{
+		{"the empty object", ptr("{}"), true},
+		{"the empty object in a fence", ptr("```json\n{}\n```"), true},
+		{"the empty object spaced out", ptr("{ }"), true},
+		{"no completion", nil, false},
+		{"no text", ptr(""), false},
+		{"prose", ptr("They do not share a procedure."), false},
+		{"prose around braces", ptr("Nothing shared here: {}"), false},
+		{"null", ptr("null"), false},
+		{"a draft missing its content", ptr(`{"name":"x","description":"y"}`), false},
+		{"a draft with every part empty", ptr(`{"name":"","description":"","content":""}`), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := newStore(t)
+			for _, h := range []string{"dev", "sre", "qa"} {
+				seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+			}
+			ledger := memory.NewFleet()
+			w := &fakeWriter{}
+			var model llm.Provider
+			var calls func() int
+			if tc.answer == nil {
+				p := &nilCompletion{}
+				model, calls = p, func() int { return p.calls }
+			} else {
+				p := &auxProvider{replies: []llm.Completion{{Content: *tc.answer}}}
+				model, calls = p, func() int { return p.calls }
+			}
+			p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
+				learning.PromoterOptions{MinSiblings: 3})
+			p.Pass(t.Context())
+			p.Pass(t.Context())
+
+			held := records(t, ledger, "Platform")
+			if tc.decline {
+				if len(held) != 1 || held[0]["state"] != "declined" {
+					t.Fatalf("the ledger holds %v, want the decline", held)
+				}
+				if calls() != 1 {
+					t.Errorf("model calls = %d, want 1: a decline is paid for once", calls())
+				}
+			} else {
+				if len(held) != 0 {
+					t.Fatalf("the ledger holds %v for an answer that decided nothing", held)
+				}
+				if calls() != 2 {
+					t.Errorf("model calls = %d, want 2: the next pass asks again", calls())
+				}
+			}
+			if len(w.calls()) != 0 {
+				t.Errorf("a page was drafted from %s", tc.name)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+// A DRAFT ITS KNOWLEDGE BASE WOULD REFUSE IS NOT FILED. The record is filed
+// before the page is made, so a title too long for the knowledge base would be
+// a record offered to it on every tick; the title a collision re-titles it to
+// is checked too, since the record can be made under either.
+func TestADraftTooLongForTheKnowledgeBaseIsNotFiled(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		maxTitle int
+		filed    bool
+	}{
+		// "[Auto-draft] cut-a-release" is 26 bytes, and a re-title adds 11.
+		{"the model's title is too long", 20, false},
+		{"only the re-titled title is too long", 30, false},
+		{"both fit", 37, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := newStore(t)
+			for _, h := range []string{"dev", "sre", "qa"} {
+				seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+			}
+			ledger := memory.NewFleet()
+			w := &fakeWriter{maxTitle: tc.maxTitle}
+			model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+			p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
+				learning.PromoterOptions{MinSiblings: 3})
+			out := p.Pass(t.Context())
+			held := records(t, ledger, "Platform")
+			if !tc.filed {
+				if len(held) != 0 || len(out) != 0 || len(w.calls()) != 0 {
+					t.Fatalf("records = %v, payloads = %v, drafts = %d: a draft the "+
+						"knowledge base refuses was filed", held, out, len(w.calls()))
+				}
+				return
+			}
+			if len(held) != 1 || len(out) != 1 {
+				t.Fatalf("records = %v, payloads = %v, want the draft made", held, out)
+			}
+		})
+	}
+}
+
+// A CONTAINER THE KNOWLEDGE BASE REFUSES IS RECORDED, AND THE DRAFT WAITS FOR
+// THE UNIT TO MOVE rather than being retried against it or paid for again.
+// Once the unit's `space` names another container the draft is made there from
+// its record, with no model call.
+func TestARefusedContainerStandsUntilTheUnitMoves(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	ledger := memory.NewFleet()
+	w := &fakeWriter{err: fmt.Errorf("creating the parent: %w",
+		refusedContainer{errors.New("no space ENG")})}
+	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+	var mu sync.Mutex
+	unit := unitOf("dev", "sre", "qa")
+	p, err := learning.NewPromoter(learning.PromoterOptions{
+		Writer: func() (learning.PromotionWriter, string) { return w, "" },
+		Ledger: ledger, Skills: learning.NewSkills(db), Models: &stubModels{p: model},
+		Units: func() []learning.PromotionUnit {
+			mu.Lock()
+			defer mu.Unlock()
+			return []learning.PromotionUnit{unit}
+		},
+		MinSiblings: 3,
+	})
+	if err != nil {
+		t.Fatalf("NewPromoter: %v", err)
+	}
+
+	p.Pass(t.Context())
+	held := records(t, ledger, "Platform")
+	if len(held) != 1 || held[0]["state"] != "refused" ||
+		held[0]["refused"] != "creating the parent: no space ENG" {
+		t.Fatalf("the ledger holds %v, want the draft refused its container", held)
+	}
+	if out := p.Pass(t.Context()); len(out) != 0 || len(w.calls()) != 1 || model.calls != 1 {
+		t.Fatalf("payloads = %v, drafts = %d, model calls = %d: a refused "+
+			"container was asked again", out, len(w.calls()), model.calls)
+	}
+
+	w.set(func(w *fakeWriter) { w.err = nil })
+	mu.Lock()
+	unit.Container = "OPS"
+	mu.Unlock()
+	out := p.Pass(t.Context())
+	if len(out) != 1 || out[0].(types.SkillPromoted).ContainerKey != "OPS" {
+		t.Fatalf("payloads = %v, want the draft made in the unit's new container", out)
+	}
+	if calls := w.calls(); calls[len(calls)-1].container != "OPS" ||
+		!strings.Contains(calls[len(calls)-1].body, "1. run the pipeline") {
+		t.Errorf("the draft was made as %+v, want the record's page in OPS",
+			calls[len(calls)-1])
+	}
+	if model.calls != 1 {
+		t.Errorf("model calls = %d, want 1: the refused record held the page", model.calls)
+	}
+}
+
+// A PAGE THE KNOWLEDGE BASE WILL NEVER TAKE RETIRES ITS RECORD: offering the
+// same page again can never succeed, so the next pass asks the model for
+// another answer.
+func TestAPageRefusedForGoodRetiresItsRecord(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	ledger := memory.NewFleet()
+	w := &fakeWriter{err: refusedPage{errors.New("that body is invalid")}}
+	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
+		learning.PromoterOptions{MinSiblings: 3})
+	p.Pass(t.Context())
+	if held := records(t, ledger, "Platform"); len(held) != 0 {
+		t.Fatalf("the ledger holds %v, want the refused draft's record retired", held)
+	}
+	p.Pass(t.Context())
+	if model.calls != 2 {
+		t.Errorf("model calls = %d, want 2: the next pass asks for another answer",
+			model.calls)
+	}
+}
+
+// A FINISH THAT FAILS DOES NOT HOLD THE UNIT'S NEXT CONVERGENCE. A drafting
+// record whose page the knowledge base would not make today spends nothing,
+// so a team's other procedure is drafted in the same pass.
+func TestAFailedFinishDoesNotHoldTheUnitsNextConvergence(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa", "ops"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "triage-"+h, "page", "diagnose", "mitigate")
+	}
+	ledger := memory.NewFleet()
+	stuck := knowledge.AutoDraftTitlePrefix + "stuck"
+	drafting := `{"v":1,"state":"drafting","tools":["announce","build","fetch","tag"],` +
+		`"agents":4,"backend":"fake","name":"stuck","container":"ENG","title":` +
+		fmt.Sprintf("%q", stuck) + `,"body":"the stuck page","at":"2026-01-01T00:00:00Z"}`
+	if _, _, err := ledger.CreatePromotion(t.Context(), coord.PromotionRecord{
+		Unit: "Platform", Fingerprint: "stuck", Value: []byte(drafting),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	w := &fakeWriter{failTitle: stuck}
+	triage := `{"name":"triage-an-alert","description":"Work an alert",` +
+		`"content":"1. page\n2. diagnose\n3. mitigate"}`
+	model := &auxProvider{replies: []llm.Completion{{Content: triage}}}
+	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa", "ops"),
+		learning.PromoterOptions{MinSiblings: 3})
+
+	out := p.Pass(t.Context())
+	if len(out) != 1 || out[0].(types.SkillPromoted).SkillName != "triage-an-alert" {
+		t.Fatalf("payloads = %v, want the unit's other convergence drafted", out)
+	}
+	for _, rec := range records(t, ledger, "Platform") {
+		if rec["title"] == stuck && rec["state"] != "drafting" {
+			t.Errorf("the failed record is %v, want it still drafting for the next pass", rec)
+		}
+	}
+}
+
+// A DRAFTING RECORD IS MADE WHERE THE UNIT FILES NOW. No page exists for it
+// yet, so the container it was filed for is only where the unit filed then.
+func TestADraftingRecordIsMadeInTheUnitsCurrentContainer(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	ledger := memory.NewFleet()
+	title := knowledge.AutoDraftTitlePrefix + "cut-a-release"
+	drafting := `{"v":1,"state":"drafting","tools":["announce","build","fetch","tag"],` +
+		`"agents":3,"backend":"fake","name":"cut-a-release","container":"GONE",` +
+		`"title":` + fmt.Sprintf("%q", title) + `,"body":"the page","at":"2026-01-01T00:00:00Z"}`
+	if _, _, err := ledger.CreatePromotion(t.Context(), coord.PromotionRecord{
+		Unit: "Platform", Fingerprint: "fp", Value: []byte(drafting),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	w := &fakeWriter{}
+	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
+		learning.PromoterOptions{MinSiblings: 3})
+	out := p.Pass(t.Context())
+	if len(out) != 1 || out[0].(types.SkillPromoted).ContainerKey != "ENG" {
+		t.Fatalf("payloads = %v, want the page made in the unit's ENG", out)
+	}
+	if calls := w.calls(); len(calls) != 1 || calls[0].container != "ENG" {
+		t.Errorf("draft calls = %+v, want one, in ENG", calls)
+	}
+	if model.calls != 0 {
+		t.Errorf("model calls = %d, want none: the record held the page", model.calls)
+	}
+}
+
+// A REJECTION THAT CANNOT BE READ LEAVES THE DRAFT STANDING. An error is never
+// a rejection: a pass that recorded an outage as one would hold, for good, a
+// decision nobody made.
+func TestARejectionThatCannotBeReadLeavesTheDraftStanding(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	ledger := memory.NewFleet()
+	w := &fakeWriter{}
+	model := &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}
+	p := promoterOver(t, db, w, model, ledger, unitOf("dev", "sre", "qa"),
+		learning.PromoterOptions{MinSiblings: 3})
+	out := p.Pass(t.Context())
+	if len(out) != 1 {
+		t.Fatalf("the first pass announced %d", len(out))
+	}
+	w.set(func(w *fakeWriter) { w.rejectErr = errors.New("the wiki answered 500") })
+	p.Pass(t.Context())
+	if held := records(t, ledger, "Platform"); len(held) != 1 || held[0]["state"] != "drafted" {
+		t.Fatalf("the ledger holds %v after an unreadable answer, want the draft standing", held)
+	}
+	if asked := w.askedAbout(); len(asked) != 1 {
+		t.Fatalf("the knowledge base was asked %d time(s), want once", len(asked))
+	}
+
+	// And the next pass that can read it records what the lead did.
+	w.set(func(w *fakeWriter) { w.rejectErr = nil })
+	w.reject(out[0].(types.SkillPromoted).PageID)
+	p.Pass(t.Context())
+	if held := records(t, ledger, "Platform"); len(held) != 1 || held[0]["state"] != "rejected" {
+		t.Errorf("the ledger holds %v, want the rejection read once it could be", held)
+	}
+}
+
+// THE OPERATOR IS SHOWN EVERY RECORD, including one the pass cannot read:
+// that record stands for its convergence on every pass, and it is the one an
+// operator most needs to find and clear.
+func TestTheLedgerIsReportedWholeToAnOperator(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	rejected := `{"v":1,"state":"rejected","tools":["a","b"],"agents":3,"backend":"native",` +
+		`"name":"n","container":"ENG","title":"[Auto-draft] n","page_id":"p1",` +
+		`"at":"2026-03-01T09:00:00Z","rejection":"it was deleted","reviewed_by":"lead"}`
+	reports := learning.PromotionReports([]coord.PromotionRecord{
+		{Unit: "Platform", Fingerprint: "fp-1", Value: []byte(rejected), Version: 7},
+		{Unit: "Platform", Fingerprint: "fp-2", Value: []byte("not json"), Version: 8},
+		{Unit: "Platform", Fingerprint: "fp-3", Version: 9,
+			Value: []byte(`{"v":2,"state":"escalated","tools":["a"],"agents":3}`)},
+	})
+	if len(reports) != 3 {
+		t.Fatalf("reports = %+v, want one per record", reports)
+	}
+	got := reports[0]
+	if got.State != "rejected" || got.Rejection != "it was deleted" || !got.At.Equal(at) ||
+		got.PageID != "p1" || got.Version != 7 || got.Unreadable != "" {
+		t.Errorf("the rejection is reported as %+v", got)
+	}
+	if reports[1].Unreadable == "" || reports[1].Raw != "not json" {
+		t.Errorf("a record that does not decode is reported as %+v, want it "+
+			"shown whole with why", reports[1])
+	}
+	if reports[2].Unreadable == "" || reports[2].State != "escalated" {
+		t.Errorf("a newer build's record is reported as %+v, want what it says "+
+			"and why this build leaves it alone", reports[2])
 	}
 }

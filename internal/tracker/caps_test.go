@@ -136,11 +136,11 @@ func trimToCap(n *tracker.Notify, field string, max int) {
 
 // AN UNWATCH IS NEVER REFUSED, whatever the set is holding.
 //
-// The cap check ran on BOTH branches of the watch gesture, over a set an
-// unwatch can only shrink. So a task that had grown past MaxWatchers — which
-// the whole-set spelling could do, since nothing bounded it — was one nobody
-// could leave: the only gesture that could have brought it back under the cap
-// was the one being refused, for being over it.
+// The cap is a check on GROWTH, so it runs on the watch branch of the gesture
+// and never on the unwatch, over a set an unwatch can only shrink. Run on
+// both, a task that had somehow grown past MaxWatchers would be one nobody
+// could leave: the only gesture that could bring it back under the cap would
+// be the one refused, for being over it.
 func TestAnUnwatchIsNeverRefusedHoweverManyAreWatching(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -226,24 +226,21 @@ func TestAnAutomaticWatchIsSkippedRatherThanRefusingTheWrite(t *testing.T) {
 	}
 }
 
-// A TASK'S OWN TEXT IS REFUSED AT THE WRITE, WHICH IS WHAT THE CAPS SAID ALL
-// ALONG AND NOTHING DID.
+// A TASK'S OWN TEXT IS REFUSED AT THE WRITE, WHICH IS WHAT THE CAPS SAY.
 //
 // [tracker.MaxTitle], [tracker.MaxBody] and [tracker.MaxCommentBody] are
 // declared under a sentence promising each is "refused at WRITE naming the
-// field, never cut" — and not one of them had a comparison anywhere in the
-// tree. A search found the three constants, one alias and four doc comments.
-// The nearest bound that fired was MaxCommitBytes, about forty times these
-// and phrased about the record rather than the field, so a caller past a cap
-// got either silence or a number they could not act on.
+// field, never cut". Without that comparison the nearest bound that fires is
+// MaxCommitBytes, many times these and phrased about the record rather than
+// the field, so a caller past a cap would get either silence or a number they
+// could not act on.
 //
-// The comment is where the cost showed: the thread page elides at
+// The comment is where the cost shows: the thread page elides at
 // [tracker.CommentBodyShown] BECAUSE a whole body may be large, and the
 // single-comment read exists to return the rest. Both are sized against
-// MaxCommentBody, so a body stored past it was elided in the page and too
-// heavy for the read that would have returned it — reachable through no tool
-// in the engine. The cap is what makes that elision a pointer instead of a
-// loss.
+// MaxCommentBody, so a body stored past it would be elided in the page and too
+// heavy for the read that returns it — reachable through no tool in the
+// engine. The cap is what makes that elision a pointer instead of a loss.
 //
 // PER FIELD, because a check that bounded two of three would pass any case
 // written about the interesting one.
@@ -392,25 +389,24 @@ func TestTheChecklistCapsAreRefusedAtTheWrite(t *testing.T) {
 	})
 }
 
-// EVERY CHECKLIST ASSIGNEE IS NAMED, and the cap that decided otherwise was
-// the wrong one.
+// EVERY CHECKLIST ASSIGNEE IS NAMED, because the assignee set is bounded by
+// the cap on ITEMS and never by the one on LISTS.
 //
-// The assignee set was capped at MaxChecklists — sixteen, the cap on the number
-// of LISTS — while an assignee sits on an ITEM and a task holds
-// MaxChecklistItemsTotal of those. The handles are SORTED before the cap, so
-// past sixteen people the seventeenth by alphabet lost their wake, silently and
-// permanently: a wake is not recoverable by reading the task later, because
-// nothing tells them to look.
+// An assignee sits on an ITEM, and a task holds MaxChecklistItemsTotal of
+// those across at most MaxChecklists lists. The handles are SORTED before the
+// cap, so a set capped at the list count would drop everybody past it by
+// alphabet from the wake, silently and permanently: a wake is not recoverable
+// by reading the task later, because nothing tells them to look.
 //
-// The cap is now derived from the item total, so it cannot bite — there cannot
-// be more distinct assignees than items, which is what
+// The cap is derived from the item total, so it cannot bite — there cannot be
+// more distinct assignees than items, which is what
 // TestTheChecklistCapsAreRefusedAtTheWrite above makes true.
 func TestEveryChecklistAssigneeIsNamed(t *testing.T) {
 	t.Parallel()
 
 	// A task at its ITEM cap, every item held by a different person, named
-	// so the ones past the old bound sort LAST — which is the end the old
-	// cut took them from.
+	// so the ones past MaxChecklists sort LAST — which is the end a cut at
+	// the list count would take them from.
 	items := make([]tracker.ChecklistItem, 0, tracker.MaxChecklistItemsTotal)
 	for i := range tracker.MaxChecklistItemsTotal {
 		items = append(items, tracker.ChecklistItem{

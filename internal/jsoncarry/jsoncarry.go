@@ -75,6 +75,13 @@
 // carries too. So every object on a record shared between builds carries, at
 // every depth — [github.com/crewlet/crewlet/internal/jsoncarry/jsoncarrytest.Uncarried]
 // is the walk that finds one that does not.
+//
+// THE CARRY LIVES ON THE VALUE, so it survives a read-modify-write that
+// changes the value and not one that replaces it: an object built anew from a
+// caller's arguments carries nothing. A write that takes a collection from its
+// caller lays each element onto the stored element it names, keeping what the
+// caller did not state — the carried members among it — and measures
+// "unchanged" on the result rather than on what the caller sent.
 package jsoncarry
 
 import (

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -42,6 +43,51 @@ type GoalTargetRow struct {
 	// a screen can render "7 of 12" rather than a bare percentage.
 	Finished int `json:"finished_tasks,omitempty"`
 	Total    int `json:"total_tasks,omitempty"`
+}
+
+// goalTargetRowFields is [GoalTargetRow] as encoding/json lays it out — the
+// target's members promoted, then the row's — with no method of either.
+type goalTargetRowFields struct {
+	goalTargetFields
+
+	Progress *float64 `json:"progress,omitempty"`
+	Finished int      `json:"finished_tasks,omitempty"`
+	Total    int      `json:"total_tasks,omitempty"`
+}
+
+// goalTargetFields is [GoalTarget] without its methods.
+type goalTargetFields GoalTarget
+
+// MarshalJSON writes the row as the target's members, every member the target
+// carries ([GoalTarget.Extra]), and the row's own.
+//
+// THE ROW'S OWN METHOD, because the target's would otherwise be promoted onto
+// it and write the row as the bare target, its progress gone. A member the
+// target carries under a name the row decodes is the row's, and is written
+// once, as the row's.
+func (r GoalTargetRow) MarshalJSON() ([]byte, error) {
+	return jsoncarry.Marshal(goalTargetRowFields{
+		goalTargetFields: goalTargetFields(r.GoalTarget),
+		Progress:         r.Progress, Finished: r.Finished, Total: r.Total,
+	}, r.Extra)
+}
+
+// UnmarshalJSON reads a row back, keeping every member neither the target nor
+// the row decodes in the target's [GoalTarget.Extra] — for the reason
+// [GoalTargetRow.MarshalJSON] gives.
+func (r *GoalTargetRow) UnmarshalJSON(b []byte) error {
+	fields := goalTargetRowFields{
+		goalTargetFields: goalTargetFields(r.GoalTarget),
+		Progress:         r.Progress, Finished: r.Finished, Total: r.Total,
+	}
+	extra := r.Extra
+	if err := jsoncarry.Unmarshal(b, &fields, &extra); err != nil {
+		return err
+	}
+	r.GoalTarget = GoalTarget(fields.goalTargetFields)
+	r.GoalTarget.Extra = extra
+	r.Progress, r.Finished, r.Total = fields.Progress, fields.Finished, fields.Total
+	return nil
 }
 
 // GoalRow is one goal as a listing renders it.

@@ -21,13 +21,15 @@
 //
 // LOSSLESS MEANS THE BYTES. Every merge here is over
 // map[string]json.RawMessage, never map[string]any: decoding a JSON number
-// into `any` yields a float64, so a 19-digit id or any integer past 2^53 is
-// silently rewritten. That applied to KNOWN payloads too, since the envelope
-// and the typed body were both remapped through `any` on every publish — so
-// the codec quietly corrupted the traffic it existed to carry unchanged.
+// into `any` yields a float64, so a 19-digit id or any integer past 2^53 would
+// be silently rewritten — in a known payload as much as an unknown one, since
+// the envelope and the typed body both go round the merge on every publish.
+// The one bag of `any` an event holds, [Event.Payload], decodes each number as
+// a [encoding/json.Number] for the same reason.
 package events
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -82,10 +84,18 @@ type Event struct {
 	// Payload is the free-form bag. Typed fields belong in Data; this
 	// stays for genuinely unstructured extras.
 	//
-	// ITS VALUES DECODE AS `any`, so a JSON number in it comes back a
-	// float64 and an integer past 2^53 is rewritten on a round trip, which
-	// no other member of an event is. A value that must survive exactly
-	// belongs in Data, or here as a string.
+	// A NUMBER IN IT DECODES AS A [json.Number], at every depth, which
+	// encodes as the digits it was read from — so an integer past 2^53
+	// survives a round trip through the broker, which as a float64 it
+	// would not. A reader of a number asserts json.Number; a string, a
+	// bool, a list or an object decodes as encoding/json decodes it into
+	// `any`.
+	//
+	// A MAP OF `any` RATHER THAN OF RAW JSON because every writer builds it
+	// as a literal and every reader asserts a string out of it, and both
+	// stay as they are: raw values would make each writer encode what it
+	// puts in and each reader decode what it takes out, to fix numbers
+	// the decoder can keep exact itself.
 	Payload map[string]any `json:"payload,omitempty"`
 
 	// Trace context, captured at construction from the active span.
@@ -319,17 +329,33 @@ func (e *Event) Clone() *Event {
 // envelope mirrors Event's JSON-visible envelope fields without the custom
 // marshalling, so MarshalJSON can encode it without recursing.
 type envelope struct {
-	ID              uuid.UUID      `json:"id"`
-	Type            string         `json:"type"`
-	Timestamp       time.Time      `json:"timestamp"`
-	Source          string         `json:"source"`
-	Payload         map[string]any `json:"payload,omitempty"`
-	TraceID         string         `json:"trace_id"`
-	SpanID          string         `json:"span_id"`
-	ParentSpanID    string         `json:"parent_span_id"`
-	DelegationDepth int            `json:"delegation_depth"`
-	ParentTurnID    string         `json:"parent_turn_id"`
-	DelegationChain []string       `json:"delegation_chain,omitempty"`
+	ID              uuid.UUID  `json:"id"`
+	Type            string     `json:"type"`
+	Timestamp       time.Time  `json:"timestamp"`
+	Source          string     `json:"source"`
+	Payload         payloadBag `json:"payload,omitempty"`
+	TraceID         string     `json:"trace_id"`
+	SpanID          string     `json:"span_id"`
+	ParentSpanID    string     `json:"parent_span_id"`
+	DelegationDepth int        `json:"delegation_depth"`
+	ParentTurnID    string     `json:"parent_turn_id"`
+	DelegationChain []string   `json:"delegation_chain,omitempty"`
+}
+
+// payloadBag is [Event.Payload] as the envelope decodes it: every number a
+// [json.Number], for the reason the field gives. It encodes as a plain map.
+type payloadBag map[string]any
+
+// UnmarshalJSON decodes the bag with every number kept as its digits.
+func (b *payloadBag) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var bag map[string]any
+	if err := decoder.Decode(&bag); err != nil {
+		return err
+	}
+	*b = bag
+	return nil
 }
 
 // MarshalJSON emits the envelope and the typed body as ONE flat object.

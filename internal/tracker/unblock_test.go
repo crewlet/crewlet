@@ -14,11 +14,12 @@ import (
 //
 // # The failure this exists to catch
 //
-// The repair used to ask for status changes in the last five minutes. A duty
-// that did not run for six — a lease flap, a singleton moving, a node restart
-// — left every dependent unblocked in that window untold FOR EVER, because
-// nothing ever looked further back. A wall-clock window on a repair is a
-// repair with a hole exactly the size of the outage it exists to survive.
+// A repair that asked for status changes in the last five minutes would,
+// after a duty that did not run for six — a lease flap, a singleton moving, a
+// node restart — leave every dependent unblocked in that window untold FOR
+// EVER, because nothing would look further back. A wall-clock window on a
+// repair is a repair with a hole exactly the size of the outage it exists to
+// survive.
 //
 // So the scan is bounded by the position it last read to, and this case is a
 // scan from ZERO over records written long before it: any clock-bounded query
@@ -145,10 +146,11 @@ func scanUnblocked(t *testing.T, r *roundTrip, since uint64) tracker.UnblockScan
 //
 // [Snapshot.Key] is read as the ADDRESSABLE name by three different things —
 // `tracker_notifications.subject_key`, the wake metadata's `item_key`, and the
-// prompt's "Read **<key>** with get_work_item" block — and the scan used to
-// put the task's uuid in it. The notice is the ONLY wake the blocker side
-// ever gets, so it told the one person who needed it to go and fetch
-// `3f2a…` by name, and left the one row in that column that is not a key.
+// prompt's "Read **<key>** with get_work_item" block — so a scan that put the
+// task's uuid there would reach all three. The notice is the ONLY wake the
+// blocker side ever gets, so it would tell the one person who needed it to go
+// and fetch `3f2a…` by name, and leave the one row in that column that is not
+// a key.
 func TestAnUnblockedNoticeNamesTheKeyRatherThanTheID(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -257,27 +259,27 @@ func TestAnUnassignedDependentIsNotToldAboutItself(t *testing.T) {
 //
 // # The failure this exists to catch
 //
-// The scan selected `kind = 'status'`, which is the word the WRITER chose for
-// a patch that may have moved several things — not what the row records. The
+// A scan selecting `kind = 'status'` selects on the word the WRITER chose for
+// a patch that may have moved several things — not on what the row records. The
 // reachable case is a BULK CANCEL: `StatusCancelled` is in the `done` group,
 // whose own description names this path. So the apply stamps each task
 // finished and clears every dependency edge naming it a blocker — the
 // dependents are workable — while the record itself announces whatever else
 // the patch moved.
 //
-// Two things made it permanent rather than merely late. Such a record is quiet
-// by design, and nothing outside [tracker.Writer.TellUnblocked] ever fills
-// `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
-// hear. And the horizon was computed
-// from the same predicate, so it advanced past the record on the next status
-// row anywhere in the log and never reconsidered it: the file's own promise
-// that "a gap of any length is caught up on the next tick" did not hold for a
-// row the predicate could not name.
+// Two things would make a miss permanent rather than merely late. Such a
+// record is quiet by design, and nothing outside
+// [tracker.Writer.TellUnblocked] ever fills `Snapshot.Unblocked`, so this scan
+// is the ONLY path by which those people hear. And the horizon is computed
+// from the same predicate, so it would advance past the record on the next
+// status row anywhere in the log and never reconsider it: the file's own
+// promise that "a gap of any length is caught up on the next tick" would not
+// hold for a row the predicate could not name.
 //
-// The fix is the one [Applier.stampStatusEntered] is gated by — the row's own
+// So the scan is gated as [Applier.stampStatusEntered] is — the row's own
 // status delta decides, not its kind — and this case is written against a kind
-// that is not `status`
-// so that a scan keyed back on the announced word goes red.
+// that is not `status` so that a scan keyed back on the announced word goes
+// red.
 func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -338,11 +340,10 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 // every tick of the tracker duty. A predicate with no index behind it is a
 // full scan of that table, forever, several times a minute.
 //
-// The index it used to have named `kind`, and the scan stopped selecting on
-// `kind` when it moved to the row's own status delta (see
-// [TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind]). Migration
-// 0008 replaces it with a PARTIAL index over exactly the new predicate, which
-// is the only reason that move is affordable.
+// The scan selects on the row's own status delta rather than on `kind` (see
+// [TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind]), and migration
+// 0008's PARTIAL index is over exactly that predicate, which is the only
+// reason the scan is affordable.
 //
 // A TRIPWIRE ON THE SCHEMA AND THE PLANNER, in `storetest`'s own idiom: it
 // re-states the predicate rather than borrowing the query's string, so a
@@ -387,20 +388,18 @@ func TestTheUnblockedScanIsIndexServed(t *testing.T) {
 	}
 }
 
-// AND THE INDEX THE SCAN NO LONGER USES IS GONE.
+// AND AN INDEX NO QUERY READS IS NOT MAINTAINED.
 //
 // An index is maintained on every applied commit. One with no query behind it
-// is the write cost of a reader that does not exist — and both of these named
-// their reader in a comment, which is what made them look alive:
-// `tracker_history_kind_seq_idx` named this repair, which stopped selecting on
-// `kind`, and `tracker_history_kind_idx` named "every report's window
-// predicate" when no query in the tree filters or orders on `effective_at` at
-// all.
+// is the write cost of a reader that does not exist — and each of these named
+// a reader in a comment, which is what made it look alive:
+// `tracker_history_kind_seq_idx` named this repair, which selects on the
+// status delta rather than on `kind`, and `tracker_history_kind_idx` named
+// "every report's window predicate" when no query in the tree filters or
+// orders on `effective_at` at all.
 //
-// A COMMENT NAMING A READER IS A CLAIM. The same failure outlived these two:
-// `tracker_status_spans_group_idx` named cycle time and lead time, neither of
-// which has ever existed here, and migration 0013 kept a whole table on the
-// strength of it before 0014 checked and dropped it.
+// A COMMENT NAMING A READER IS A CLAIM, and it is checked against the queries
+// rather than believed.
 func TestTheDeadHistoryIndexesAreGone(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -414,8 +413,8 @@ func TestTheDeadHistoryIndexesAreGone(t *testing.T) {
 				"nothing reads it", dead)
 		}
 	}
-	// AND THE ONE THAT REPLACED THEM IS THERE, so this asserts a swap
-	// rather than a deletion.
+	// AND THE SCAN'S OWN INDEX IS THERE, so this asserts the repair still
+	// has one rather than only that the dead ones are gone.
 	if got := r.strings(`SELECT name FROM sqlite_master
 		WHERE type = 'index' AND name = 'tracker_history_status_seq_idx'`); len(got) != 1 {
 		t.Error("the repair's own index is absent, so the scan it serves " +
@@ -499,7 +498,7 @@ func TestEveryDependentPastTheScansLimitIsEventuallyTold(t *testing.T) {
 				tick, len(scan.Pending), limit)
 		}
 		// A TRUNCATED TICK MUST NOT MOVE THE POSITION PAST WHAT IT
-		// COVERED. This is the defect itself: the rows the scan did not
+		// COVERED. This is the rule itself: the rows the scan did not
 		// carry are below the horizon, so advancing over them is the
 		// moment those dependents stop being reachable.
 		if scan.Truncated && scan.Through != since {

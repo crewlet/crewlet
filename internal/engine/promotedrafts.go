@@ -52,6 +52,15 @@ import (
 // because a draft somebody put out of reach is not one they want drafted
 // again.
 //
+// # What never clears
+//
+// [nativeDrafts.CheckDraft] refuses, before the pass records anything, a title
+// or a body this knowledge base refuses by its own caps. Past that, no error a
+// create meets here says it will never clear, so none claims to: a container
+// is any name ([pages.Store.Create] refuses only an empty one, which the pass
+// never sends), and the one invalid value a create can still meet is a parent
+// this node has not applied yet, which a later pass finds applied.
+//
 // # Why the parent is created rather than required, and never skipped
 //
 // The parent is what hides a draft from every agent's search. A draft filed at
@@ -66,7 +75,13 @@ import (
 // in the step that builds the searcher that hides what it writes.
 type nativeDrafts struct {
 	store  *pages.Store
-	reader *pages.Reader
+	reader draftReads
+}
+
+// draftReads is the one read the writer makes: [pages.Reader.Get], at the
+// freshness each caller names.
+type draftReads interface {
+	Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error)
 }
 
 // draftAuthor is who a native draft and its parent are written as: the engine
@@ -97,6 +112,25 @@ func (w *nativeDrafts) Backend() string { return nativeBackend }
 // Rejection is how a lead rejects a draft here.
 func (w *nativeDrafts) Rejection() string {
 	return "add the label `" + rejectedDraftLabel + "` to it"
+}
+
+// CheckDraft reports why the engine's own pages would refuse a draft however
+// often it was asked: [pages.Store.Create]'s caps on a title and a body, which
+// it applies to the title with its surrounding space trimmed and to the body
+// as it is.
+func (w *nativeDrafts) CheckDraft(title, body string) error {
+	trimmed := strings.TrimSpace(title)
+	switch {
+	case trimmed == "":
+		return fmt.Errorf("pages: a draft needs a title")
+	case len(trimmed) > pages.MaxTitle:
+		return fmt.Errorf("pages: the title %q is %d bytes, past the %d-byte cap "+
+			"on a page title", trimmed, len(trimmed), pages.MaxTitle)
+	case len(body) > pages.MaxBody:
+		return fmt.Errorf("pages: the draft's body is %d bytes, past the %d-byte "+
+			"cap on a page", len(body), pages.MaxBody)
+	}
+	return nil
 }
 
 // Rejected reports whether a lead rejected a draft: labelled it, put it in the

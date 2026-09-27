@@ -3,6 +3,7 @@ package coordtest
 import (
 	"bytes"
 	"errors"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -171,6 +172,87 @@ var promotionCases = []fleetCase{{
 		if len(rows) != 1 || rows[0].NodeID != "Platform" {
 			h.t.Errorf("positions = %+v: a promotion record was read as a node's "+
 				"positions, which the trim reads as a node that applied nothing", rows)
+		}
+	},
+}, {
+	// THE OPERATOR'S READ OF THE WHOLE LEDGER. A record filed under a unit
+	// the company has since renamed is still in the ledger and still holds
+	// its convergence, so a read that walked the units the company runs now
+	// would hide exactly the record an operator is looking for — and a read
+	// that took the register's other classes for records would show a
+	// node's positions as a convergence.
+	name: "the whole ledger lists every unit's records in order, and nothing else",
+	fn: func(h *fleetHarness) {
+		for _, rec := range []coord.PromotionRecord{
+			promotion("Site Reliability", "fp-2", "b"),
+			promotion("Platform", "fp-9", "c"),
+			promotion("Site Reliability", "fp-1", "a"),
+			promotion("Platform.Infra", "fp-1", "d"),
+		} {
+			h.createPromotion(rec)
+		}
+		if err := h.f.PutPositions(h.ctx, coord.NodePositions{NodeID: "Platform"}); err != nil {
+			h.t.Fatalf("PutPositions: %v", err)
+		}
+		got, err := h.f.AllPromotions(h.ctx)
+		if err != nil {
+			h.t.Fatalf("AllPromotions: %v", err)
+		}
+		var listed []string
+		for _, rec := range got {
+			if rec.Version == 0 {
+				h.t.Errorf("%s/%s is listed with no version, so it cannot be "+
+					"cleared at the version read", rec.Unit, rec.Fingerprint)
+			}
+			listed = append(listed, rec.Unit+"/"+rec.Fingerprint+"="+string(rec.Value))
+		}
+		want := []string{"Platform/fp-9=c", "Platform.Infra/fp-1=d",
+			"Site Reliability/fp-1=a", "Site Reliability/fp-2=b"}
+		if !slices.Equal(listed, want) {
+			h.t.Errorf("the ledger lists %v, want %v", listed, want)
+		}
+	},
+}, {
+	// A CLEAR IS CONDITIONED ON WHAT ITS CALLER READ. Between an operator's
+	// read and their clear the pass may have recorded a lead's rejection,
+	// and an unconditional delete would erase a decision nobody saw.
+	name: "a record is deleted only at the version read, and can then be filed again",
+	fn: func(h *fleetHarness) {
+		first, _ := h.createPromotion(promotion("Platform", "fp-1", "drafted"))
+		moved := first
+		moved.Value = []byte("rejected")
+		second, ok := h.updatePromotion(moved)
+		if !ok {
+			h.t.Fatal("an update at the version the create returned was refused")
+		}
+		for _, stale := range []uint64{0, first.Version} {
+			deleted, err := h.f.DeletePromotion(h.ctx, "Platform", "fp-1", stale)
+			if err != nil {
+				h.t.Fatalf("DeletePromotion at %d: %v", stale, err)
+			}
+			if deleted {
+				h.t.Errorf("a delete at version %d removed a record now at %d",
+					stale, second.Version)
+			}
+		}
+		if got := h.promotions("Platform"); len(got) != 1 || string(got[0].Value) != "rejected" {
+			h.t.Fatalf("records = %+v, want the rejection untouched", got)
+		}
+		deleted, err := h.f.DeletePromotion(h.ctx, "Platform", "fp-1", second.Version)
+		if err != nil || !deleted {
+			h.t.Fatalf("a delete at the version read = %v, %v", deleted, err)
+		}
+		if got := h.promotions("Platform"); len(got) != 0 {
+			h.t.Fatalf("records = %+v after the delete", got)
+		}
+		if deleted, err := h.f.DeletePromotion(h.ctx, "Platform", "fp-1", second.Version); err != nil || deleted {
+			h.t.Errorf("a second delete of a gone record = %v, %v, want a lost race", deleted, err)
+		}
+		if _, created := h.createPromotion(promotion("Platform", "fp-1", "drafting")); !created {
+			h.t.Error("an address whose record was deleted could not be filed again")
+		}
+		if _, err := h.f.DeletePromotion(h.ctx, "", "fp-1", 1); err == nil {
+			h.t.Error("a delete naming no unit was accepted")
 		}
 	},
 }, {

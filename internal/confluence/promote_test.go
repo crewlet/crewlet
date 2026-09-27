@@ -1,7 +1,12 @@
 package confluence_test
 
 import (
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -215,8 +220,203 @@ func TestTheParentTellsALeadToDeleteADraftToRejectIt(t *testing.T) {
 	if !strings.Contains(parent.Body, "To reject one, delete it") {
 		t.Errorf("the drafts parent does not say how to reject a draft:\n%s", parent.Body)
 	}
+	// AND WHAT DOES NOT REJECT ONE: deleting the parent moves its drafts up
+	// a level, out of the subtree the search leaves out, and every agent
+	// then finds them.
+	if !strings.Contains(parent.Body, "Do not delete this page to reject what is under it") {
+		t.Errorf("the drafts parent does not warn against deleting it:\n%s", parent.Body)
+	}
 	if got := writer.Backend(); got != (&confluence.Searcher{}).Backend() {
 		t.Errorf("the writer calls its knowledge base %q, its searcher %q",
 			got, (&confluence.Searcher{}).Backend())
+	}
+}
+
+// scriptedWiki answers the few calls a promotion writer makes with statuses a
+// test chooses, where the stateful fake answers only success.
+type scriptedWiki struct {
+	*httptest.Server
+
+	mu sync.Mutex
+	// page is the status GET /content/{id} answers.
+	page int
+	// space is the status GET /space/{key} answers.
+	space int
+	// create is the status POST /content answers.
+	create int
+	// heldAfterCreate makes a title lookup find a page once a create has
+	// been refused: somebody else's create landing between the two.
+	heldAfterCreate bool
+	refused         bool
+	// parentHeld makes the space already hold the drafts parent, so the
+	// create a case scripts is the draft's own.
+	parentHeld bool
+}
+
+func newScriptedWiki(t *testing.T) *scriptedWiki {
+	t.Helper()
+	w := &scriptedWiki{page: http.StatusOK, space: http.StatusOK, create: http.StatusOK}
+	w.Server = httptest.NewServer(http.HandlerFunc(w.serve))
+	t.Cleanup(w.Close)
+	return w
+}
+
+func (w *scriptedWiki) serve(rw http.ResponseWriter, req *http.Request) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	path := strings.TrimPrefix(req.URL.Path, confluence.APIPath)
+	rw.Header().Set("Content-Type", "application/json")
+	answer := func(status int, body string) {
+		if status != http.StatusOK {
+			rw.WriteHeader(status)
+			fmt.Fprintf(rw, `{"message":"scripted %d"}`, status)
+			return
+		}
+		fmt.Fprint(rw, body)
+	}
+	switch {
+	case strings.HasPrefix(path, "/space/"):
+		answer(w.space, `{}`)
+	case path == "/content" && req.Method == http.MethodGet:
+		if req.URL.Query().Get("title") == knowledge.AutoDraftedParent && w.parentHeld {
+			fmt.Fprint(rw, `{"results":[{"id":"p-parent","title":"parent","type":"page"}]}`)
+			return
+		}
+		if w.heldAfterCreate && w.refused {
+			fmt.Fprintf(rw, `{"results":[{"id":"p-theirs","title":%q,"type":"page"}]}`,
+				req.URL.Query().Get("title"))
+			return
+		}
+		fmt.Fprint(rw, `{"results":[]}`)
+	case path == "/content" && req.Method == http.MethodPost:
+		if w.create != http.StatusOK {
+			w.refused = true
+		}
+		answer(w.create, `{"id":"p-new","title":"made","type":"page"}`)
+	case strings.HasPrefix(path, "/content/"):
+		answer(w.page, `{"id":"p-1","title":"a draft","type":"page"}`)
+	default:
+		rw.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(rw, `{"message":"no such route"}`)
+	}
+}
+
+func (w *scriptedWiki) writer(t *testing.T) *confluence.PromotionWriter {
+	t.Helper()
+	c, err := confluence.NewClient(confluence.ClientOptions{URL: w.URL, Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return confluence.NewPromotionWriter(c)
+}
+
+// A DRAFT CONFLUENCE COULD NOT BE ASKED ABOUT IS NOT A REJECTION. Only a page
+// that is not served in a space that is served was deleted; a server error, a
+// refused credential or a forbidden read says nothing about what a lead did,
+// and a pass that recorded any of them as a rejection would hold, for good, a
+// decision nobody made.
+func TestADraftConfluenceCouldNotBeAskedAboutIsNotARejection(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{
+		http.StatusInternalServerError, http.StatusUnauthorized, http.StatusForbidden,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			wiki := newScriptedWiki(t)
+			wiki.page = status
+			how, err := wiki.writer(t).Rejected(t.Context(), "ENG", "p-1")
+			if err == nil {
+				t.Fatalf("a draft read that answered %d was concluded about: %q", status, how)
+			}
+			if how != "" {
+				t.Errorf("a draft read that answered %d still said %q", status, how)
+			}
+		})
+	}
+}
+
+// A TITLE CONFLUENCE REFUSES BY LENGTH IS REFUSED BEFORE ANYTHING IS RECORDED,
+// counted so that a title accepted here fits however the server counts it.
+func TestADraftTitleIsCheckedAgainstConfluencesLimit(t *testing.T) {
+	t.Parallel()
+	writer := confluence.NewPromotionWriter(wikiClient(t, newWiki(t, "ENG")))
+	for _, tc := range []struct {
+		name  string
+		title string
+		ok    bool
+	}{
+		{"at the limit", strings.Repeat("a", 255), true},
+		{"one past it", strings.Repeat("a", 256), false},
+		{"accented letters at the limit", strings.Repeat("é", 255), true},
+		// A character outside the basic plane is two UTF-16 units, which is
+		// the count that can never undercount what a server sees.
+		{"astral characters past it", strings.Repeat("😀", 128), false},
+		{"blank", "   ", false},
+	} {
+		err := writer.CheckDraft(tc.title, "body")
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: CheckDraft = %v, want accepted %v", tc.name, err, tc.ok)
+		}
+	}
+}
+
+// A CREATE CONFLUENCE REFUSES SAYS WHETHER IT WILL EVER CLEAR. A space that is
+// not served takes no page however often it is asked, and a page refused as
+// sent in a space that is served is refused again — while a title somebody
+// else took between the look and the create is handed back as found, and an
+// outage is left to the next pass.
+func TestACreateConfluenceRefusesSaysWhetherItWillEverClear(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		create    int
+		space     int
+		parent    bool // the space already holds the drafts parent
+		held      bool
+		container bool
+		page      bool
+		found     bool
+	}{
+		{name: "a space that is not served", create: http.StatusNotFound,
+			space: http.StatusNotFound, container: true},
+		{name: "a draft refused in a served space", create: http.StatusBadRequest,
+			space: http.StatusOK, parent: true, page: true},
+		// The parent is the same page for every draft in the space, so the
+		// space refusing it is the space refusing them all.
+		{name: "the drafts parent refused in a served space", create: http.StatusBadRequest,
+			space: http.StatusOK, container: true},
+		{name: "a title taken between the look and the create",
+			create: http.StatusBadRequest, space: http.StatusOK, parent: true,
+			held: true, found: true},
+		{name: "an outage", create: http.StatusInternalServerError, space: http.StatusOK},
+		{name: "a space that cannot be asked about", create: http.StatusNotFound,
+			space: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wiki := newScriptedWiki(t)
+			wiki.create, wiki.space, wiki.heldAfterCreate = tc.create, tc.space, tc.held
+			wiki.parentHeld = tc.parent
+			page, created, err := wiki.writer(t).CreateDraft(t.Context(), "ENG",
+				knowledge.AutoDraftTitlePrefix+"cut-a-release", "# Steps\n")
+			if tc.found {
+				if err != nil || created || page.ID != "p-theirs" {
+					t.Fatalf("CreateDraft = %+v, %v, %v, want the page that took "+
+						"the title, found", page, created, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("a create answered %d was reported made: %+v", tc.create, page)
+			}
+			var container interface{ RefusesContainer() bool }
+			var refused interface{ RefusesPage() bool }
+			if got := errors.As(err, &container) && container.RefusesContainer(); got != tc.container {
+				t.Errorf("RefusesContainer = %v, want %v: %v", got, tc.container, err)
+			}
+			if got := errors.As(err, &refused) && refused.RefusesPage(); got != tc.page {
+				t.Errorf("RefusesPage = %v, want %v: %v", got, tc.page, err)
+			}
+		})
 	}
 }

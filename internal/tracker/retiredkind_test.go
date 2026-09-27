@@ -83,10 +83,10 @@ func TestARetiredKindIsGatedRatherThanFaultedOn(t *testing.T) {
 
 // AND AN UNKNOWN KIND STILL FAULTS.
 //
-// The other half, and the one that stops the fix above from becoming a licence
-// to swallow anything. A kind NOBODY ever published is a writer publishing a
-// kind it never declared — the applier's original comment is right about that
-// one, and failing is what makes the mistake visible. Retirement is a
+// The other half, and the one that stops the retirement above from becoming a
+// licence to swallow anything. A kind NOBODY ever published is a writer
+// publishing a kind it never declared — the applier's own comment on its
+// fall-through says so, and failing is what makes the mistake visible. Retirement is a
 // statement about the log's own history, not a general tolerance.
 //
 // Without this case the gate could be widened to every unknown kind and the

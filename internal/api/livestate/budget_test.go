@@ -307,18 +307,18 @@ func TestSpendRecordsAreCappedByCount(t *testing.T) {
 	t.Parallel()
 	// The real bound is the window; this only binds for an org emitting
 	// more than the cap in a day. Truncation drops the OLDEST records, so
-	// an org past the cap sees a rollup covering slightly less than a day
-	// rather than a wrong total.
+	// an org past the cap sees a rollup covering less than a day rather
+	// than a wrong total.
 	s := livestate.New()
-	const beyondCap = 8_100
+	beyondCap := livestate.SpendRecordLimit + 100
 	for i := range beyondCap {
 		// All inside the window, so only the count cap can bind.
 		ts := time.Date(2026, 6, 14, 12, 0, 0, i*1000, time.UTC).Format(time.RFC3339Nano)
 		s.Apply(phaseSpend(fmt.Sprintf("p%05d", i), ts, 1))
 	}
 	records, _ := s.SpendRecords()
-	if len(records) > 8_000 {
-		t.Errorf("records = %d, want the cap to bind", len(records))
+	if len(records) != livestate.SpendRecordLimit {
+		t.Errorf("records = %d, want the cap's %d", len(records), livestate.SpendRecordLimit)
 	}
 	if len(records) == 0 {
 		t.Fatal("the cap emptied the window")

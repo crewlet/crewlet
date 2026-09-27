@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -270,6 +271,66 @@ func TestATailAcrossBothSpendTypesKeepsTheNewestOfBoth(t *testing.T) {
 	}
 	if tail, more, _ := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 4); sum(tail) != 15 || more {
 		t.Errorf("tail of exactly the window = %+v (more=%v), want all four and more=false", tail, more)
+	}
+}
+
+// A TAIL THAT STARTS INSIDE ONE INSTANT KEEPS THE RECORDS THE TABLE'S ORDER
+// PUTS NEWEST. Records share an instant routinely, and the table orders them by
+// (time, id) descending: a tail cut between two records of one instant keeps
+// the one with the greater id, whichever spend type each is — and keeps each
+// record once, since the key that finds where the tail starts and the rows read
+// from it are two reads.
+func TestATailCutInsideAnInstantKeepsTheTablesNewest(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	for _, rec := range []struct {
+		id, eventType string
+		at            time.Time
+		tokens        int
+	}{
+		{"e-1", "agent_phase_completed", at, 1},
+		{"e-2", "auxiliary_call_completed", at.Add(time.Second), 2},
+		{"e-3", "agent_phase_completed", at.Add(time.Second), 4},
+		{"e-4", "auxiliary_call_completed", at.Add(2 * time.Second), 8},
+	} {
+		payload, err := json.Marshal(map[string]any{
+			"role": "PM", "phase": "execute", "model": "sonnet",
+			"input_tokens": rec.tokens, "total_tokens": rec.tokens,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: rec.id, Type: rec.eventType, Time: rec.at,
+			Category: "lifecycle", Actor: "PM", Payload: payload,
+		}); err != nil {
+			t.Fatalf("append %s: %v", rec.id, err)
+		}
+	}
+
+	tail, more, err := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 2)
+	if err != nil {
+		t.Fatalf("phase token tail: %v", err)
+	}
+	ids := make([]string, len(tail))
+	for i, r := range tail {
+		ids[i] = r.EventID
+	}
+	if !slices.Equal(ids, []string{"e-4", "e-3"}) || !more {
+		t.Errorf("tail of 2 = %v (more=%v), want e-4 and then e-3 — the greater id of the "+
+			"instant e-2 shares — and more=true", ids, more)
+	}
+	tail, more, err = log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 3)
+	if err != nil {
+		t.Fatalf("phase token tail: %v", err)
+	}
+	ids = ids[:0]
+	for _, r := range tail {
+		ids = append(ids, r.EventID)
+	}
+	if !slices.Equal(ids, []string{"e-4", "e-3", "e-2"}) || !more {
+		t.Errorf("tail of 3 = %v (more=%v), want the whole instant once, newest first, and more=true", ids, more)
 	}
 }
 

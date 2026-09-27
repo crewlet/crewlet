@@ -195,7 +195,7 @@ type Spend struct {
 	// TurnID and WorkKey are IDENTITY rather than cost, and they are here
 	// because this type is the carrier for every promoted column — see
 	// [EventLog.Append], which fills them for any event that names one and
-	// not only for the phase completions [SpendFor] reads. TurnID names one
+	// not only for the spend records [SpendFor] reads. TurnID names one
 	// RUN of a turn; WorkKey names the unit of work it was dispatched for,
 	// which a re-run repeats and a run id does not. See ADR-0017.
 	TurnID    string `json:"turn_id,omitempty"`
@@ -355,11 +355,11 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	}
 	// DERIVED HERE WHEN THE CALLER DID NOT SET IT, rather than trusted to
 	// have been set. A caller that builds a record by hand and sets only
-	// the payload would otherwise write a phase completion whose spend
-	// columns are all zero, and a rollup reading them would report a
-	// company that spent nothing. Silence is the one failure this column
-	// promotion exists to remove, so it must not be reintroduced by the
-	// write path.
+	// the payload would otherwise write a spend record ([spendEventTypes])
+	// whose spend columns are all zero, and a rollup reading them would
+	// report a company that spent nothing. Silence is the one failure this
+	// column promotion exists to remove, so it must not be reintroduced by
+	// the write path.
 	//
 	// [RecordFor] sets it from the one decode it already makes, and the
 	// event writer builds every row it writes through RecordFor, so this
@@ -369,7 +369,7 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	// for any other type.
 	//
 	// The zero value writes the same empty strings and zeroes the column
-	// defaults would, so every non-phase row is unaffected.
+	// defaults would, so every row outside [spendEventTypes] is unaffected.
 	var spend Spend
 	switch {
 	case rec.Spend != nil:
@@ -379,13 +379,14 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 			spend = *derived
 		}
 	}
-	// EVERY event that names a turn gets the column, not just the phase
-	// completions [SpendFor] is scoped to. That function's subject is
-	// SPEND, so it reads one event type and returns nil for the rest — which
-	// is right for the rollup and wrong for identity: reading one turn means
-	// every row it touched, and a delivery, a tool call or an A2A ask carries
-	// a turn id without carrying a token count. Scoped to the column that is
-	// an identifier so a non-phase row cannot acquire a phase's numbers.
+	// EVERY event that names a turn gets the column, not just the spend
+	// records [SpendFor] is scoped to. That function's subject is SPEND, so
+	// it reads the [spendEventTypes] and returns nil for the rest — which is
+	// right for the rollup and wrong for identity: reading one turn means
+	// every row it touched, and a delivery, a tool call or an A2A ask
+	// carries a turn id without carrying a token count. Scoped to the
+	// columns that are identifiers, so a row outside [spendEventTypes]
+	// cannot acquire a spend record's numbers.
 	if spend.TurnID == "" {
 		spend.TurnID = tags["turn_id"]
 	}
@@ -1690,7 +1691,7 @@ const (
 )
 
 // phaseTokenSQL reads ONE spend record type's rows ([spendEventTypes]), bound
-// as its first parameter; [EventLog.phaseTokens] runs it once per type and
+// as its first parameter; [EventLog.spendRecords] runs it once per type and
 // merges them.
 //
 // ONE TYPE PER STATEMENT, because that is what keeps the read on the (type,
@@ -1901,7 +1902,8 @@ const MaxPhasePage = 60
 // THE WHOLE WINDOW, always. A caller that keeps only a bounded tail reads
 // [EventLog.PhaseTokenTail] instead.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
-	return l.phaseTokens(ctx, q, 0)
+	since, until := q.Window(now())
+	return l.spendRecords(ctx, since, until, q.AgentRole, nil)
 }
 
 // PhaseTokenTail returns the NEWEST `limit` spend records inside the window,
@@ -1922,6 +1924,18 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 // leaves out is the older part of the same window, which [EventLog.PhaseTokens]
 // returns whole.
 //
+// TWO PASSES, and the first parses no payload. Each spend type is its own
+// ordered read (see [phaseTokenSQL]), and the newest `limit` of their merge can
+// come from either in any proportion, so each type's read has to reach `limit`
+// deep to be sure of its share — and a full row is the expensive part of that
+// read: its columns, and the payload parsed for the three values no column
+// holds. So the first pass reads only each type's KEYS, `limit`+1 deep, off the
+// (type, time, id) index, which is what finds where the tail starts and whether
+// the window held more; the second reads whole rows from that key on, and so
+// only the rows the tail keeps. A single pass `limit` deep in each type parses
+// up to twice the rows it keeps, and the seed that reads this has a time
+// budget.
+//
 // A limit below one is REFUSED rather than read as "no bound": the whole
 // window is the other method, and a tail read that silently became it is the
 // memory spike this read exists to avoid.
@@ -1930,30 +1944,116 @@ func (l *EventLog) PhaseTokenTail(ctx context.Context, q PhaseTokenQuery, limit 
 		return nil, false, fmt.Errorf("store: a phase-token tail needs a limit of at least 1, got %d "+
 			"— the whole window is PhaseTokens", limit)
 	}
-	out, err := l.phaseTokens(ctx, q, limit+1)
+	since, until := q.Window(now())
+	start, more, err := l.spendTailStart(ctx, since, until, q.AgentRole, limit)
 	if err != nil {
 		return nil, false, err
 	}
-	out, more := probed(out, limit)
-	return out, more, nil
+	if start == nil {
+		return []tokens.Record{}, false, nil
+	}
+	out, err := l.spendRecords(ctx, since, until, q.AgentRole, start)
+	if err != nil {
+		return nil, false, err
+	}
+	// PROBED AGAIN, because the two passes are two reads: a record appended
+	// inside the window between them is newer than the start and is read
+	// by the second, and the tail is still the newest `limit`.
+	out, cut := probed(out, limit)
+	return out, more || cut, nil
 }
 
-// phaseTokens is what both spend reads run: each spend type `depth` rows deep,
-// or the whole window at zero, merged newest first.
+// spendKey is a spend record's place in the table's own order: the primary
+// key, (event_time, event_id).
+type spendKey struct {
+	at int64
+	id string
+}
+
+// newer orders two keys newest first, as the table's (event_time DESC,
+// event_id DESC) index does.
+func (k spendKey) newer(other spendKey) int {
+	if c := cmp.Compare(other.at, k.at); c != 0 {
+		return c
+	}
+	return cmp.Compare(other.id, k.id)
+}
+
+// spendKeySQL reads one spend type's keys inside the window, newest first:
+// [phaseTokenSQL]'s rows without their columns or their payload, which the
+// (event_type, event_time, event_id) index answers without reaching the row
+// unless a seat narrows the read.
+const spendKeySQL = `
+SELECT event_time, event_id
+FROM crewlet_events
+WHERE event_type = ? AND event_time >= ? AND event_time < ?`
+
+// spendTailStart is where the newest `limit` spend records of the window
+// start — the oldest key among them — and whether the window holds more than
+// `limit`. Nil where it holds none.
+//
+// Each type's keys are read `limit`+1 deep, which is enough: the newest
+// `limit`+1 of the merge are among the newest `limit`+1 of each type.
+func (l *EventLog) spendTailStart(ctx context.Context, since, until time.Time, role string,
+	limit int,
+) (*spendKey, bool, error) {
+	var keys []spendKey
+	for _, eventType := range spendEventTypes {
+		query := spendKeySQL
+		args := []any{eventType, EncodeTime(since), EncodeTime(until)}
+		if role != "" {
+			query += " AND agent_role = ?"
+			args = append(args, role)
+		}
+		query += " ORDER BY event_time DESC, event_id DESC LIMIT ?"
+		args = append(args, limit+1)
+		read, err := l.spendKeys(ctx, eventType, query, args)
+		if err != nil {
+			return nil, false, err
+		}
+		keys = append(keys, read...)
+	}
+	if len(keys) == 0 {
+		return nil, false, nil
+	}
+	slices.SortFunc(keys, spendKey.newer)
+	keys, more := probed(keys, limit)
+	start := keys[len(keys)-1]
+	return &start, more, nil
+}
+
+// spendKeys runs one type's key read.
+func (l *EventLog) spendKeys(ctx context.Context, eventType, query string, args []any) ([]spendKey, error) {
+	rows, err := l.db.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: phase token keys (%s): %w", eventType, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []spendKey
+	for rows.Next() {
+		var key spendKey
+		if err := rows.Scan(&key.at, &key.id); err != nil {
+			return nil, fmt.Errorf("store: phase token keys (%s): scan: %w", eventType, err)
+		}
+		out = append(out, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: phase token keys (%s): %w", eventType, err)
+	}
+	return out, nil
+}
+
+// spendRecords is what both spend reads run: every spend type's rows inside
+// the window — from `from` onwards where it is set — merged newest first.
 //
 // ONE STATEMENT PER SPEND TYPE, merged here — see [phaseTokenSQL] for why the
-// types are not one statement. So a read `depth` deep answers up to `depth`
-// rows of EACH type, and that is enough for the one caller that sets it
-// ([EventLog.PhaseTokenTail]), which keeps the newest of the merge ([probed]):
-// the newest `depth` of the merge are among the newest `depth` of each type,
-// so what it keeps is exactly what one ordered read of both would have
-// returned.
-func (l *EventLog) phaseTokens(ctx context.Context, q PhaseTokenQuery, depth int) ([]tokens.Record, error) {
-	since, until := q.Window(now())
-
+// types are not one statement.
+func (l *EventLog) spendRecords(ctx context.Context, since, until time.Time, role string,
+	from *spendKey,
+) ([]tokens.Record, error) {
 	var merged []spendRow
 	for _, eventType := range spendEventTypes {
-		rows, err := l.spendRows(ctx, eventType, since, until, q.AgentRole, depth)
+		rows, err := l.spendRows(ctx, eventType, since, until, role, from)
 		if err != nil {
 			return nil, err
 		}
@@ -1963,10 +2063,7 @@ func (l *EventLog) phaseTokens(ctx context.Context, q PhaseTokenQuery, depth int
 	// order a tail keeps the head of: (time, id) descending, the table's own
 	// key, so the merge orders exactly as one statement's ORDER BY would.
 	slices.SortFunc(merged, func(a, b spendRow) int {
-		if c := cmp.Compare(b.at, a.at); c != 0 {
-			return c
-		}
-		return cmp.Compare(b.rec.EventID, a.rec.EventID)
+		return spendKey{a.at, a.rec.EventID}.newer(spendKey{b.at, b.rec.EventID})
 	})
 	out := make([]tokens.Record, len(merged))
 	for i, row := range merged {
@@ -1981,10 +2078,10 @@ type spendRow struct {
 	rec tokens.Record
 }
 
-// spendRows reads one spend type's records inside [since, until), newest first,
-// `depth` deep or the whole window at zero.
+// spendRows reads one spend type's records inside [since, until), newest first
+// — the whole window, or from `from` onwards where it is set.
 func (l *EventLog) spendRows(ctx context.Context, eventType string, since, until time.Time,
-	role string, depth int,
+	role string, from *spendKey,
 ) ([]spendRow, error) {
 	// BOTH EDGES, ALWAYS, and the top one EXCLUSIVE — matching the
 	// half-open window the bucketing folds over, so a record on the
@@ -1994,16 +2091,24 @@ func (l *EventLog) spendRows(ctx context.Context, eventType string, since, until
 	// claims: a phase stamped in the future by a skewed clock inside a
 	// window headed "counted through now" is a number with no window.
 	query := phaseTokenSQL + " AND event_time < ?"
-	args := []any{eventType, EncodeTime(since), EncodeTime(until)}
+	lower := EncodeTime(since)
+	var fromArgs []any
+	if from != nil {
+		// THE START IS THE RANGE'S LOWER EDGE, not only a filter beside
+		// it, so the index range the read walks begins there; the pair
+		// then breaks the tie among the records of the start's own
+		// instant. A start is inside the window, so it is never below
+		// `since`.
+		lower = from.at
+		query += " AND (event_time, event_id) >= (?, ?)"
+		fromArgs = []any{from.at, from.id}
+	}
+	args := append([]any{eventType, lower, EncodeTime(until)}, fromArgs...)
 	if role != "" {
 		query += " AND agent_role = ?"
 		args = append(args, role)
 	}
 	query += " ORDER BY event_time DESC, event_id DESC"
-	if depth > 0 {
-		query += " LIMIT ?"
-		args = append(args, depth)
-	}
 
 	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {

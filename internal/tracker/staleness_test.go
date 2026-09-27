@@ -20,12 +20,10 @@ import (
 // `read_level`, same position. The only way to observe the difference is to
 // put the node BEHIND the caller's bound and require the refusal.
 //
-// That is the defect this file exists for rather than a hypothetical: the
-// board's `max_lag_seconds` was checked against the level and then dropped, so
-// a tile polling every twenty seconds and declaring a twenty-second bound was
-// served an answer of any age and rendered it live. `max_lag_seq` was the same
-// shape, fixed for the board and left standing for nine other questions that
-// never read the key at all.
+// A reader that checked the bound against the level and then dropped it would
+// serve a tile polling every twenty seconds and declaring a twenty-second
+// bound an answer of any age, rendered live — and each reader threads the
+// bound on a line of its own, so each is asserted here.
 func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -49,7 +47,7 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 		what string
 		// seconds and records run the same question twice, once per
 		// unit, because a reader that threads one field and forgets the
-		// other is the exact shape this package already shipped.
+		// other passes every case that asks in the one it threads.
 		seconds func() error
 		records func() error
 	}{

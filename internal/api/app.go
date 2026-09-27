@@ -57,6 +57,10 @@ type App struct {
 	// to it.
 	budgets budgetResetter
 
+	// promotions is the fleet's skill-promotion ledger, for an operator to
+	// read and to clear a record of. See promotions.go.
+	promotions promotionLedger
+
 	// backup takes a copy of this node's durable state.
 	backup backupTaker
 
@@ -106,8 +110,8 @@ type routeMounter interface {
 //
 // Runtime, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
 // Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets,
-// Retention, Capacity and Backup are REQUIRED, and [New] refuses a missing one
-// by name.
+// Promotions, Retention, Capacity and Backup are REQUIRED, and [New] refuses a
+// missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -208,6 +212,10 @@ type Options struct {
 	// method that clears one would put it a typo away from every screen
 	// that renders spend.
 	Budgets budgetResetter
+
+	// Promotions is the fleet's skill-promotion ledger: every record read,
+	// and one deleted, by an operator.
+	Promotions promotionLedger
 
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
@@ -321,6 +329,7 @@ func New(opts Options) (*App, error) {
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.budgets = opts.Budgets
+	a.promotions = opts.Promotions
 	a.backup = opts.Backup
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
 	a.capacity = opts.Capacity
@@ -336,6 +345,9 @@ func New(opts Options) (*App, error) {
 	// anonymous-read posture never opens it: clearing a company's spend
 	// ceiling is not a read, whatever a laptop deployment allows.
 	mux.Handle("POST /budgets/reset", http.HandlerFunc(a.serveBudgetReset))
+	// The skill-promotion ledger: a read, and the one gesture that undoes a
+	// record the pass got wrong, which is a POST for the same reason.
+	a.mountPromotions(mux)
 	// Also a POST, and for the same reason: copying every credential and
 	// every seat's memory to a path the caller names is not a read,
 	// whatever the anonymous-read posture allows.
@@ -431,6 +443,7 @@ func (o Options) missing() error {
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
 		{"Budgets", o.Budgets == nil},
+		{"Promotions", o.Promotions == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"Backup", o.Backup == nil},

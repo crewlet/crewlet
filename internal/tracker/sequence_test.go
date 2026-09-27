@@ -214,7 +214,7 @@ func TestARerunPromotionMarksTheParentItDidNotReach(t *testing.T) {
 
 // A BULK EDIT IS NOT ATOMIC AND SAYS SO PER TASK.
 //
-// It never was atomic: the caller re-runs the failures, and a result that
+// It is not atomic: the caller re-runs the failures, and a result that
 // reported one outcome for the batch would make a caller re-run tasks that
 // changed.
 func TestABulkEditReportsEveryTaskSeparately(t *testing.T) {

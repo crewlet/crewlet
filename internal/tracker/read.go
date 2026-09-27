@@ -297,10 +297,10 @@ const (
 // mark for `session`, a declared bound for `stale` — and only then one read
 // transaction whose first statement is the coverage probe again.
 //
-// This reader USED TO OPEN ITS OWN TRANSACTION and set `answer.Level` from the
-// query, which made the level a label rather than a guarantee: a seat tool
-// asking for `session` got whatever this node happened to hold, and
-// `max_lag_seconds` bounded nothing at all.
+// A READER THAT OPENED ITS OWN TRANSACTION and set `answer.Level` from the
+// query would make the level a label rather than a guarantee: a seat tool
+// asking for `session` would get whatever this node happened to hold, and
+// `max_lag_seconds` would bound nothing at all.
 type Reader struct {
 	db  *store.DB
 	log *statelog.Reader
@@ -310,8 +310,7 @@ type Reader struct {
 //
 // The framework reader is REQUIRED rather than optional. A nil one would mean
 // a build where every level silently degrades to whatever the local rows say,
-// which is the state this type is being moved out of — and a degradation that
-// is invisible in the answer is worse than a refusal.
+// and a degradation that is invisible in the answer is worse than a refusal.
 func NewReader(db *store.DB, log *statelog.Reader) (*Reader, error) {
 	if db == nil {
 		return nil, fmt.Errorf("tracker: a reader needs a store")
@@ -469,7 +468,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 }
 
 // incompleteFrom renders the framework's coverage gap in this domain's own
-// shape, which is what the answer's JSON has always carried.
+// shape, which is the one every tracker answer's JSON carries.
 func incompleteFrom(in *statelog.Incomplete) *Incomplete {
 	if in == nil {
 		return nil
@@ -890,10 +889,10 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// AND THE ROW'S OWN TOMBSTONE IS THE QUERY'S OWN, not a constant.
 		// A removed subtask must not ride along on a live root, which is
 		// what this clause is for — but spelled `IS NULL` unconditionally
-		// it also excluded every row from the TRASH, whose whole
-		// predicate is the opposite one. `removed=true` in the default
-		// subtask mode therefore answered nothing at all, which is the
-		// one query that has to work for a removal to be reversible.
+		// it would also exclude every row from the TRASH, whose whole
+		// predicate is the opposite one, and `removed=true` in the default
+		// subtask mode would answer nothing at all: the one query that has
+		// to work for a removal to be reversible.
 		tomb := "t.removed_at IS NULL"
 		if q.Removed != nil && *q.Removed {
 			tomb = "t.removed_at IS NOT NULL"
@@ -1368,21 +1367,20 @@ func sortJoins(terms []sortTerm) (string, []any) {
 //
 // AN ABSENT VALUE SORTS LAST, IN BOTH DIRECTIONS. Descending is SQLite's own
 // default — NULL compares smaller than every value, so it lands at the end —
-// and ascending is not, which is why `sort=due` answered with every undated
-// task ahead of the one due tomorrow: on the list, on a board column and in
-// every tool that reads this grammar.
+// and ascending is not: left to it, `sort=due` would answer with every
+// undated task ahead of the one due tomorrow, on the list, on a board column
+// and in every tool that reads this grammar.
 //
 // "Soonest first" and "latest first" are both questions about values, and a
-// row that has none is not the answer to either. Every tracker a person has
-// used puts the undated at the end, which is why nobody reports this as a bug
-// and everybody scrolls past the first page.
+// row that has none is not the answer to either — and a first page of them
+// is one a reader scrolls past without learning it was the sort's doing.
 //
 // SO THE CLAUSE IS WRITTEN WHERE IT CHANGES THE ANSWER AND NOWHERE ELSE, which
 // is a planner rule rather than a style one: a NULL ordering that is not the
 // one an index stores cannot be satisfied FROM that index, so a redundant
-// clause turns a seek into a scan of the whole scope through a temp b-tree.
-// Written on every term, it cost the workspace's default listing its index.
-// It is still never a list of which columns are nullable — a term says only
+// clause turns a seek into a scan of the whole scope through a temp b-tree —
+// written on every term, it would cost the workspace's default listing its
+// index. It is never a list of which columns are nullable — a term says only
 // that its column CANNOT be null, beside the column itself, and the default is
 // to assume it can. A custom-field sort is why that direction is the safe one:
 // its LEFT JOIN makes every field's value nullable for a task that does not

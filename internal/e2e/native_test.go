@@ -124,12 +124,6 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 	if detail.Task.Assignee != "ceo" {
 		t.Errorf("the applied assignee is %q", detail.Task.Assignee)
 	}
-	// AND THE ANSWER SAYS HOW COMPLETE IT IS. A detail read that could not
-	// distinguish a caught-up node from a lagging one would be the one
-	// screen in the product where the difference is invisible.
-	if !detail.Complete {
-		t.Errorf("a read after its own write reports incomplete: %+v", detail.Incomplete)
-	}
 
 	// AND THE BOARD FINDS IT, which is a different query from the detail
 	// read: a board filters, and a filter that reached no rows would draw

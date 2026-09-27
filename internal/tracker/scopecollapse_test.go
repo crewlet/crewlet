@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -99,15 +100,12 @@ func TestATaskScopeCollapsesOnlyWhenItMust(t *testing.T) {
 				}
 				return
 			}
-			if len(got.Terms) != len(tc.want) {
+			// EVERY MEMBER, the carried ones included: a writer forms
+			// its terms from nothing, so a term holding anything the
+			// wanted one does not is a term this build made up.
+			if !reflect.DeepEqual(got.Terms, tc.want) {
 				t.Fatalf("%d dependents produced %+v, want %+v",
 					tc.dependents, got.Terms, tc.want)
-			}
-			for i, term := range got.Terms {
-				if term != tc.want[i] {
-					t.Fatalf("%d dependents produced %+v, want %+v",
-						tc.dependents, got.Terms, tc.want)
-				}
 			}
 		})
 	}

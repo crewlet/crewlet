@@ -130,14 +130,18 @@ const (
 	// ClaimFenceMargin is how much of its lease a walk must still be able
 	// to vouch for to make its next append ([held.holding]).
 	//
-	// ONE HEARTBEAT, the unit this claim is already measured in. A walk
-	// whose last confirmed renewal is older than [ClaimTTL] less this has
-	// missed three renewals in a row, and it stops there — so the append
-	// it made last had a whole heartbeat to reach the broker before the
-	// lease could lapse under it. Narrower, a walk riding out a
-	// coordination blip appends closer to the lapse and a slow append
-	// lands after it; wider, a walk stops on fewer missed renewals and
-	// leaves more merges for the duty to finish.
+	// ONE HEARTBEAT, the unit this claim is already measured in. THE FENCE
+	// IS A TIME, not a count of renewals: a walk that has had no renewal
+	// confirmed for [ClaimTTL] less this — forty-five seconds, measured
+	// from when the last request the store answered "held" was sent —
+	// stops there, whether the renewals since went unanswered or one of
+	// them is still waiting on the store; a renewal the store answers
+	// "not held" stops it at once ([held.holding]). So the append it made
+	// last had a whole heartbeat to reach the broker before the lease
+	// could lapse under it. Narrower, a walk riding out a coordination
+	// blip appends closer to the lapse and a slow append lands after it;
+	// wider, a walk stops sooner into a blip and leaves more merges for
+	// the duty to finish.
 	ClaimFenceMargin = ClaimHeartbeat
 
 	// ClaimStale is half the TTL past its last heartbeat, which is the
@@ -572,11 +576,11 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 
 // declaredType refuses a task naming a type the company has not declared.
 //
-// THE TOOL HAS ALWAYS SAID SO — `create_work_item` asks for "a task type from
-// your workspace's own catalogue" — and nothing checked it, so any string a
-// model invented became a type: `Bug`, `bugfix` and `BUG` filed three
-// different types beside `bug`, and every board grouped and filtered on them
-// as if they were real.
+// THE TOOL ASKS FOR ONE — `create_work_item` wants "a task type from your
+// workspace's own catalogue" — and this is what holds a model to it. Unchecked,
+// any string it invented would become a type: `Bug`, `bugfix` and `BUG` would
+// file three different types beside `bug`, and every board would group and
+// filter on them as if they were real.
 //
 // AN ARCHIVED TYPE IS REFUSED FOR NEW WORK and left alone on old, which is
 // what archiving a type is FOR: the tasks already filed under it still render
@@ -1804,7 +1808,7 @@ var ErrBulkInFlight = errors.New("tracker: a bulk edit is already applying")
 //	subject, each at its own expectation, sharing one batch id.
 //
 // CRASH RESIDUE: a partial batch — some tasks committed, some not. REPAIRER:
-// NOBODY, AND IT NEVER WAS ATOMIC. The result reports applied and failed per
+// NOBODY, BECAUSE IT IS NOT ATOMIC. The result reports applied and failed per
 // task and the caller re-runs; the failures carry the current version in them.
 //
 // # Why it is admitted through a lease, and why that lease FAILS OPEN

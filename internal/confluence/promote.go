@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 )
@@ -27,13 +28,34 @@ import (
 // # A lead rejects a draft by deleting it
 //
 // Deleting is what Confluence lets a person do to a page: it moves the page to
-// the space's trash — with every page under it, so deleting the drafts parent
-// rejects every draft it holds — and a lead who changes their mind restores it
-// from there. The pass asks for the page by id, which Confluence serves at the
-// status asked for, `current` unless told otherwise, so a page in the trash is
-// not served and neither is one purged from it. A page not served in a space
-// that is served has been deleted; a space that is not served proves nothing
-// about the page in it, so that is an error rather than a rejection.
+// the space's trash, and a lead who changes their mind restores it from there.
+// The pass asks for the page by id, which Confluence serves at the status
+// asked for, `current` unless told otherwise, so a page in the trash is not
+// served and neither is one purged from it. A page not served in a space that
+// is served has been deleted; a space that is not served proves nothing about
+// the page in it, so that is an error rather than a rejection.
+//
+// DELETING THE DRAFTS PARENT REJECTS NOTHING. Confluence Cloud moves the
+// children of a deleted page up to the nearest parent, and Data Center does
+// the same unless "Also delete child pages" is chosen — which still moves up
+// any child the deleting user cannot see. That takes every draft moved out of
+// the subtree the knowledge search leaves out: each is then returned to every
+// agent unreviewed, and the pass, finding each still served, reads it as
+// published. So the parent's own page tells a lead not to, and to delete each
+// draft instead.
+//
+// # What never clears
+//
+// [PromotionWriter.CheckDraft] refuses a title Confluence refuses by length
+// before the pass records anything. After that, a create Confluence answers
+// 400 or 404 to is asked about the SPACE: a space that is not served takes no
+// page however often it is asked (RefusesContainer), and a 400 in a space
+// that is served is a draft refused as sent (RefusesPage), or, for the drafts
+// parent, the space refusing every draft (RefusesContainer) — unless a page
+// now holds the title, which is somebody else's create landing between this
+// writer's look and its own, handed back as found. Everything else is an
+// outage, a permission somebody can grant, or a space that cannot be asked
+// about, and the pass tries it again.
 //
 // # Why the parent is created rather than required
 //
@@ -88,6 +110,98 @@ func (w *PromotionWriter) Rejected(ctx context.Context, space, pageID string) (s
 	return "it was deleted", nil
 }
 
+// maxTitleUnits is the longest page title Confluence takes: 255 characters,
+// the limit its own refusal names ("Title cannot be longer than 255
+// characters"). Counted here in UTF-16 code units, which are never fewer than
+// the characters a server could count, so a title this accepts fits however
+// the server counts it.
+const maxTitleUnits = 255
+
+// CheckDraft reports why Confluence would refuse a draft's title however
+// often it was asked. The body is not checked: this writer knows no limit on
+// one that a draft could reach.
+func (w *PromotionWriter) CheckDraft(title, _ string) error {
+	trimmed := strings.TrimSpace(title)
+	if trimmed == "" {
+		return fmt.Errorf("confluence: a draft needs a title")
+	}
+	if units := len(utf16.Encode([]rune(trimmed))); units > maxTitleUnits {
+		return fmt.Errorf("confluence: the title %q is %d characters, past the "+
+			"%d a page title may have", trimmed, units, maxTitleUnits)
+	}
+	return nil
+}
+
+// refusedContainer is a create refused in a space Confluence does not serve
+// to this credential: it does not exist, or the token cannot see it.
+type refusedContainer struct {
+	space string
+	err   error
+}
+
+func (e *refusedContainer) Error() string {
+	return fmt.Sprintf("confluence: the space %s is not served to the org "+
+		"token — it does not exist, or the token cannot see it: %v", e.space, e.err)
+}
+
+func (e *refusedContainer) Unwrap() error { return e.err }
+
+// RefusesContainer says the space will take no page until it is served.
+func (*refusedContainer) RefusesContainer() bool { return true }
+
+// refusedPage is a create Confluence answered 400 to in a space it serves:
+// the page itself, as sent, is what it refused.
+type refusedPage struct{ err error }
+
+func (e *refusedPage) Error() string { return e.err.Error() }
+
+func (e *refusedPage) Unwrap() error { return e.err }
+
+// RefusesPage says the same page will be refused again.
+func (*refusedPage) RefusesPage() bool { return true }
+
+// refusal classifies a create Confluence refused in a space. See "What never
+// clears" above.
+//
+// perDraft says whether the refused page was the draft itself. The drafts
+// parent's title and body are this writer's own constants, the same for every
+// draft in the space, so a parent refused as sent in a served space is the
+// SPACE refusing every draft rather than this draft being wrong: retiring the
+// record would pay the model for an answer refused in the same place.
+func (w *PromotionWriter) refusal(ctx context.Context, space string, err error, perDraft bool) error {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) ||
+		(apiErr.Status != http.StatusBadRequest && apiErr.Status != http.StatusNotFound) {
+		return err
+	}
+	served, spaceErr := w.client.SpaceExists(ctx, space)
+	switch {
+	case spaceErr != nil:
+		return err
+	case !served:
+		return &refusedContainer{space: space, err: err}
+	case apiErr.Status == http.StatusBadRequest && perDraft:
+		return &refusedPage{err: err}
+	case apiErr.Status == http.StatusBadRequest:
+		return &refusedContainer{space: space, err: err}
+	}
+	return err
+}
+
+// heldAfterRefusal is the page holding a title after Confluence answered 400
+// to a create of it: somebody else's create landing between this writer's
+// look and its own, which is a title taken rather than a page refused.
+func (w *PromotionWriter) heldAfterRefusal(ctx context.Context, space, title string,
+	err error) (Page, bool) {
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
+		return Page{}, false
+	}
+	held, found, findErr := w.client.PageByTitle(ctx, space, title)
+	return held, findErr == nil && found
+}
+
 // NewPromotionWriter builds one over an org-token client.
 func NewPromotionWriter(c *Client) *PromotionWriter {
 	if c == nil {
@@ -132,8 +246,14 @@ func (w *PromotionWriter) CreateDraft(ctx context.Context, space, name, markdown
 	}
 	page, err := w.client.CreatePage(ctx, space, name, storage, parent)
 	if err != nil {
+		// A TITLE TAKEN BETWEEN THE LOOK AND THE CREATE is handed back as
+		// found, which is the pass's to judge, rather than read as a page
+		// refused for good.
+		if held, found := w.heldAfterRefusal(ctx, space, name, err); found {
+			return knowledge.DraftPage{ID: held.ID, Title: held.Title}, false, nil
+		}
 		return knowledge.DraftPage{}, false, fmt.Errorf(
-			"confluence: creating %q in %s: %w", name, space, err)
+			"confluence: creating %q in %s: %w", name, space, w.refusal(ctx, space, err, true))
 	}
 	return knowledge.DraftPage{ID: page.ID, Title: page.Title}, true, nil
 }
@@ -151,11 +271,14 @@ func (w *PromotionWriter) parent(ctx context.Context, space string) (string, err
 	created, err := w.client.CreatePage(ctx, space, knowledge.AutoDraftedParent,
 		autoDraftedParentBody, "")
 	if err != nil {
+		if held, found := w.heldAfterRefusal(ctx, space, knowledge.AutoDraftedParent, err); found {
+			return held.ID, nil
+		}
 		// REFUSED, not filed at the root. A draft outside this subtree is
 		// one every agent's knowledge search can reach, unreviewed.
 		return "", fmt.Errorf("confluence: creating %q in %s, which is what "+
 			"keeps a draft hidden until a lead publishes it: %w",
-			knowledge.AutoDraftedParent, space, err)
+			knowledge.AutoDraftedParent, space, w.refusal(ctx, space, err, false))
 	}
 	return created.ID, nil
 }
@@ -168,4 +291,9 @@ const autoDraftedParentBody = `<p>Pages under this one were drafted ` +
 	`<p>To adopt one, move it out of this parent. To reject one, delete it: the ` +
 	`promotion pass records the rejection for the whole company. Either way, ` +
 	`and if you leave it here, the pass does not draft that procedure for this ` +
-	`team in this knowledge base again.</p>`
+	`team in this knowledge base again.</p>` +
+	`<p><strong>Do not delete this page to reject what is under it.</strong> ` +
+	`Unless they are deleted with it, Confluence moves the pages under a ` +
+	`deleted page up a level, which takes each draft out of this subtree: ` +
+	`every agent then finds it, unreviewed, and it is not recorded as ` +
+	`rejected. Delete each draft instead.</p>`

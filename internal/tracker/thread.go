@@ -111,11 +111,14 @@ func (e *ErrAmbiguousAnswer) count() string {
 
 // Thread resolves a comment's conversation.
 //
-// BEST EFFORT ON THE PARTICIPANTS and STRICT ON THE ANSWER, which are two
-// different kinds of fact: a participant list that came up short means one
-// person is woken as a watcher instead of under `thread`, while an `answers`
-// resolved to the wrong comment closes somebody else's question. So a read
-// failure empties the first and refuses the second.
+// A FAILED READ FAILS THE WHOLE RESOLUTION — a refusal or a store error, for
+// the participants and the answer alike — and the caller decides what that
+// costs. The two are different kinds of fact: a participant list that came up
+// short means one person is woken as a watcher instead of under `thread`,
+// while an `answers` resolved to the wrong comment closes somebody else's
+// question. So `comment_on_work_item` refuses a comment that names a thread,
+// an ask or an answer when this fails, and treats a bare remark's inferred
+// answer as best effort.
 func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 	fresh statelog.Freshness) (ResolvedThread, error) {
 
@@ -126,41 +129,57 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 		ThreadParties: ThreadParties{Asked: q.Ask},
 		Answers:       q.Answers,
 	}
-	// THE TASK'S OWN TERM, like every other point read here: a record
-	// this node cannot decode covering this task means the comment rows
-	// it is about to read may already be wrong, and routing a wake from
-	// them would wake the wrong people.
-	_, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{Paths: []string{ScopeTerm{
-		Kind: TermObject, ID: q.Task,
-	}.Path()}}.Normalised(), false), func(tx *sql.Tx) error {
-		if q.ReplyTo != "" {
-			participants, err := threadParticipants(ctx, tx, q.Task, q.ReplyTo)
-			if err != nil {
-				return err
-			}
-			out.Participants = participants
-		}
-		if out.Answers == "" && q.Author != "" {
-			inferred, err := inferAnswer(ctx, tx, q.Task, q.Author)
-			if err != nil {
-				return err
-			}
-			out.Answers = inferred
-		}
-		if out.Answers == "" {
-			return nil
-		}
-		author, err := askAuthor(ctx, tx, q.Task, out.Answers, q.Author)
-		if err != nil {
-			return err
-		}
-		out.AnsweredAuthor = author
-		return nil
-	})
+	// A POINT READ ABOUT ONE TASK, scoped and probed as [Reader.Task] is:
+	// a record this node cannot decode covering this task means the
+	// comment rows it is about to read may already be wrong, and routing a
+	// wake from them would wake the wrong people and close the wrong ask.
+	// So the framework is handed the task under its own project
+	// ([Reader.pointTerm]) and the transaction probes it again
+	// ([refuseUnaccounted]) — a term naming the task alone resolves to the
+	// workspace's path, which meets no record filed under its project.
+	term, err := r.pointTerm(ctx, q.Task)
 	if err != nil {
 		return ResolvedThread{}, err
 	}
+	if _, err = r.log.Read(ctx, fresh.Query(statelog.ScopeSet{
+		Paths: []string{term.Path()},
+	}.Normalised(), false), func(tx *sql.Tx) error {
+		return readThread(ctx, tx, fresh.Level, q, &out)
+	}); err != nil {
+		return ResolvedThread{}, err
+	}
 	return out, nil
+}
+
+// readThread is one thread read's answer, from the rows tx reads.
+func readThread(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
+	q ThreadQuery, out *ResolvedThread) error {
+
+	// AN ABSENT TASK IS NOT REFUSED FOR BEING ABSENT: the rows below then
+	// hold no thread, so this answers with none, and the task read that
+	// comes before a comment is what tells its author there is no such
+	// task. It is refused only when a retained record could be its create,
+	// because then even "no thread" is a claim this node cannot make.
+	_, err := refuseUnaccounted(ctx, tx, level, q.Task)
+	if err != nil && !errors.Is(err, ErrNoTask) {
+		return err
+	}
+	if q.ReplyTo != "" {
+		if out.Participants, err = threadParticipants(ctx, tx, q.Task,
+			q.ReplyTo); err != nil {
+			return err
+		}
+	}
+	if out.Answers == "" && q.Author != "" {
+		if out.Answers, err = inferAnswer(ctx, tx, q.Task, q.Author); err != nil {
+			return err
+		}
+	}
+	if out.Answers == "" {
+		return nil
+	}
+	out.AnsweredAuthor, err = askAuthor(ctx, tx, q.Task, out.Answers, q.Author)
+	return err
 }
 
 // threadParticipants is everyone already in ONE thread.

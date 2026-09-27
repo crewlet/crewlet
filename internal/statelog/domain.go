@@ -3,8 +3,11 @@ package statelog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
 // Domain is one replicated state machine: one ordered stream, one
@@ -367,6 +370,28 @@ func (s Subject) String() string {
 type ScopeSet struct {
 	// Paths are the qualified paths this operation touches.
 	Paths []string
+
+	// Extra carries the members a newer build wrote on a scope that is on
+	// the wire this one has no field for — a domain whose record holds the
+	// framework's own scope ([ScopeSet.MarshalJSON]) — so a record decoded
+	// and encoded again by this build keeps them. The framework never reads
+	// it: a scope is its paths.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// MarshalJSON writes [ScopeSet.Extra] back beside the members this build
+// knows, through [github.com/crewlet/crewlet/internal/jsoncarry], whose
+// package doc is the contract.
+func (s ScopeSet) MarshalJSON() ([]byte, error) {
+	type fields ScopeSet
+	return jsoncarry.Marshal(fields(s), s.Extra)
+}
+
+// UnmarshalJSON keeps every member of the scope this build does not know in
+// [ScopeSet.Extra].
+func (s *ScopeSet) UnmarshalJSON(b []byte) error {
+	type fields ScopeSet
+	return jsoncarry.Unmarshal(b, (*fields)(s), &s.Extra)
 }
 
 // Empty reports a scope that names nothing — which is never a legal record

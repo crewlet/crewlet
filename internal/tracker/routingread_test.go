@@ -37,10 +37,10 @@ func recordOf(t *testing.T, r *roundTrip, handle string) string {
 	return inbox.Notices[0].RecordID
 }
 
-// THE OTHER AXIS OF THE SAME ROWS. `tracker_notifications` has always been
-// readable by recipient and never by record, so "did my comment reach the
-// person I meant" had exactly one answer in the whole product — the history
-// row's `notified` boolean, which says that somebody, somewhere, was told.
+// THE OTHER AXIS OF THE SAME ROWS. `tracker_notifications` read by recipient
+// answers "what was I told"; read by RECORD it answers "did my comment reach
+// the person I meant", which the history row's `notified` boolean cannot — it
+// says only that somebody, somewhere, was told.
 func TestOneChangeSaysWhoItWokeAndWhy(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

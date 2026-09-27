@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -131,13 +132,20 @@ func wakesAnybody(kind ObjectKind) bool {
 // including the fields this build carries but does not understand. A parser on
 // a newer node reading a record an older node relayed sees everything the
 // writer wrote.
+//
+// EVERY NUMBER A [json.Number], which encodes as the digits it was read from:
+// decoded into `any` a number is a float64, and an integer past 2^53 — a
+// composed version, or whatever a newer build wrote — would leave this node
+// as a different integer than the writer's.
 func recordBody(record MutationRecord) (map[string]any, error) {
 	data, err := record.Encode()
 	if err != nil {
 		return nil, err
 	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	var body map[string]any
-	if err := json.Unmarshal(data, &body); err != nil {
+	if err := decoder.Decode(&body); err != nil {
 		return nil, fmt.Errorf("tracker: render the record body: %w", err)
 	}
 	return body, nil

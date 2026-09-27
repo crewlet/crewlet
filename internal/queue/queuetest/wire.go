@@ -72,18 +72,21 @@ func (s *suite) runWire(t *testing.T) {
 	t.Run("a_free_form_payload_value_survives_whatever_type_it_lands_as", func(t *testing.T) {
 		t.Parallel()
 		// Event.Payload is the UNTYPED bag beside the registered body, and
-		// it is where a wire boundary shows first. Measured on this repo's
-		// twin: int -> float64, []string -> []any, string -> string. So a
-		// caller writing Payload["replicas"].(int) reads correctly on the
-		// publishing node and panics on every consumer.
+		// it is where a wire boundary shows first: a value crosses it as
+		// JSON, so an int lands as a json.Number, a []string as a []any
+		// and a string as a string. So a caller writing
+		// Payload["replicas"].(int) reads correctly on the publishing node
+		// and panics on every consumer.
 		//
 		// This asserts the VALUE survives, never the Go type it lands as.
 		// The contract leaves the encoding to the backend, so requiring
-		// float64 would forbid what it permits. Comparison is the
-		// canonical JSON of the map, under which int 3 and float64 3 are
-		// the same value and []string{"a"} and []any{"a"} are the same
+		// one number type would forbid what it permits. Comparison is the
+		// canonical JSON of the map, under which int 3 and json.Number "3"
+		// are the same value and []string{"a"} and []any{"a"} are the same
 		// list — which is exactly the equivalence a caller is entitled to
-		// rely on, and nothing more.
+		// rely on, and nothing more. An integer past 2^53 is among the
+		// values, because that is the one a number decoded as a float64
+		// comes back as a different number for.
 		//
 		// It exists because every other payload in this suite is a string,
 		// which survives any codec unchanged. A suite whose fixtures are
@@ -104,7 +107,7 @@ func (s *suite) runWire(t *testing.T) {
 			"roles":    []string{"lead", "reviewer"},
 			"ratio":    0.5,
 			"enabled":  true,
-			"nested":   map[string]any{"depth": 2},
+			"nested":   map[string]any{"depth": 2, "id": int64(9007199254740993)},
 			"conv":     "c1",
 		}
 		want := canonicalJSON(t, sent.Payload)

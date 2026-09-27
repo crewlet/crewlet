@@ -10,7 +10,7 @@ import (
 )
 
 // THE TWO SURFACES AGREE, which is the test internal/tracker/recipients.go's
-// own head comment has claimed exists since the split was written.
+// own head comment names.
 //
 // [tracker.Candidates] is called TWICE for every record: once by the applier,
 // writing the `tracker_notifications` rows that are the complete account of
@@ -20,12 +20,11 @@ import (
 // other needs the company's current roster — but it is only WORTH anything if
 // the two are given the same inputs.
 //
-// They were not. The applier derived `batched` from the record's own batch id
-// and the parser read a struct field on itself that NOTHING EVER ASSIGNED, so
-// the two agreed by the accident that no writer sets a batch id yet. The first
-// bulk verb to land would have made one surface record thirty asks and the
-// other thirty facts to absorb, for the same thirty records, with nothing
-// anywhere comparing them.
+// So both take `batched` from one derivation over the record's own batch id.
+// A parser reading a field on itself that nothing assigns would agree with
+// the applier only while no writer sets a batch id, and a bulk verb would then
+// make one surface record thirty asks and the other thirty facts to absorb,
+// for the same thirty records, with nothing anywhere comparing them.
 func TestBothSurfacesDeriveBatchednessAlike(t *testing.T) {
 	t.Parallel()
 	batch := "bulk-1"

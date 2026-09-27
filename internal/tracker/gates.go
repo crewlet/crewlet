@@ -12,9 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE TWO GATES, and they are in one file because they are ONE CATEGORY: a
-// gate is a rule under which a record the broker ACCEPTED produces rows on no
-// node. There are exactly two, and a third must not be added casually.
+// THE GATES THAT NAME AN OBJECT OR A WRITER, and they are in one file because
+// they are ONE CATEGORY: a gate is a rule under which a record the broker
+// ACCEPTED produces rows on no node. A new one must not be added casually.
 //
 //  1. THE DELETION GATE. A commit about a task a purge destroyed applies
 //     nowhere, for ever, whatever its position — otherwise a redelivery months
@@ -23,6 +23,12 @@ import (
 //     position above the eviction's own, is dropped everywhere. It depends on
 //     nothing but the log's order, which is what makes it the fence that holds
 //     when coordination cannot be reached at all.
+//
+// [Applier.Gated] asks a third, the RETIREMENT gate, from the envelope alone:
+// a record of a kind this build no longer applies is read past ([RetiredKinds]).
+// It is about a kind rather than about any record's subject or writer, so
+// nothing here fences a write on it — this build never publishes a retired
+// kind.
 //
 // # Two things that look like gates and are not
 //
@@ -38,8 +44,15 @@ import (
 // truthfully reported `applied` at the time. Resolving through P does not
 // close that and must not try: it is a LATER DESTRUCTION of a record that
 // genuinely applied, not a false answer at the moment the answer was given.
-// The purge report is where a person sees it, and the reject counter on the
-// marker is how many records the gate has dropped since.
+//
+// A person sees it in two places. The purge's own history row, which the
+// activity feed shows, says who destroyed the task, when and why. And every
+// record a gate drops afterwards is logged as `statelog_record_gated` —
+// naming the gate, the position, the kind and the node that wrote it —
+// counted on `crewlet.statelog.records_gated`, and raises the
+// `records_gated` alarm. That is the framework's signal for every gate alike,
+// so the marker keeps no tally of its own: a count on the row would be a
+// second answer to the question the alarm already answers, with no reader.
 //
 // The order-independence is what makes a late reprocess sound at all:
 // retention-and-reprocess rests on a gate that gives the same answer whatever

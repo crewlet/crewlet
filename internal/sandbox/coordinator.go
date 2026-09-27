@@ -692,8 +692,10 @@ func (c *Coordinator) OnAnswerReady(ctx context.Context, ev types.SandboxAnswerR
 }
 
 // runOutcome is what a finished run reported about itself, for the resumed
-// phase's own record. Zero where no run finished — a person answering a parked
-// clarification resumes the turn without collecting anything.
+// phase's own record: the job the resume collected, or — when a person's
+// answer resumes a parked clarification — the run that stopped to ask, whose
+// price and spend were kept when it parked ([askedOutcome]). DeliveredRefs are
+// only ever a collected result's, and nil on a person's answer.
 type runOutcome struct {
 	CostUSD       float64
 	DeliveredRefs []string

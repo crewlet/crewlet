@@ -17,7 +17,7 @@ import (
 // parser's.
 //
 // `view=<id>` and `preset=<name>` each stand for a set of parameters, and the
-// grammar's own doc has always said how they compose: "loaded FIRST and
+// grammar's own doc says how they compose: "loaded FIRST and
 // explicit keys override them, so a saved view is a set of defaults rather
 // than a lock". A person who opens a saved board and then picks a different
 // assignee gets the view with that one key changed — never the view, and never

@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -262,7 +263,10 @@ func TestDuplicateOfAddsOneEdgeAndRemovesNothing(t *testing.T) {
 	}
 	intent := trk.patched[0].Relate
 	want := []tracker.Relation{{Kind: tracker.RelationDuplicates, Other: "id-3"}}
-	if !slices.Equal(intent.Add, want) || len(intent.Remove) != 0 {
+	// EVERY MEMBER, the carried ones included: the tool forms the edge from
+	// its arguments alone, so an edge holding anything more is one it made
+	// up.
+	if !reflect.DeepEqual(intent.Add, want) || len(intent.Remove) != 0 {
 		t.Errorf("the gesture adds %+v and removes %+v, want the new edge alone "+
 			"and no removal", intent.Add, intent.Remove)
 	}

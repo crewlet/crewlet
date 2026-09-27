@@ -11,9 +11,9 @@ import (
 
 // A VIEW IS A SET OF DEFAULTS, never a lock.
 //
-// The grammar's own doc has always said so — "loaded FIRST and explicit keys
-// override them" — and nothing loaded one: `view=` was parsed and never read,
-// so opening a saved board answered the UNFILTERED list.
+// The grammar's own doc says so — "loaded FIRST and explicit keys override
+// them" — and a `view=` that was parsed and never loaded would answer a saved
+// board with the UNFILTERED list.
 func TestASavedViewIsDefaultsTheCallerCanOverride(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

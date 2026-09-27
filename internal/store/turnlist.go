@@ -25,10 +25,11 @@ import (
 //
 // # It is an aggregate over columns, not over payloads
 //
-// Migration 0015 promoted a phase's numbers out of its payload — the model,
-// the phase, the iteration and the three token counts are columns now — and
-// 0018 indexed `turn_id`. So one row per turn is a GROUP BY over narrow
-// values, not a fold over documents.
+// Migration 0015 promoted a spend record's numbers out of its payload — the
+// model, the phase, the iteration and the three token counts are columns,
+// written for every spend record ([spendEventTypes]), a phase's and an
+// auxiliary call's alike — and 0018 indexed `turn_id`. So one row per turn is
+// a GROUP BY over narrow values, not a fold over documents.
 //
 // The exception is the three facts that only the COMPLETION event knows: how
 // long the turn took, what it concluded, and what it set out to do. Those are
@@ -99,13 +100,24 @@ type Turn struct {
 	// what is going wrong wants both.
 	Failed bool `json:"failed"`
 
+	// InputTokens, OutputTokens and TotalTokens are the turn's spend
+	// records summed: its phase records — a coding run's own spend among
+	// them, on the record of the phase that collected it — and the
+	// auxiliary calls made for it, which name the turn. That is the set
+	// the spend rollup's per-turn row sums (internal/tokens), so the two
+	// agree on what a turn cost.
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 
-	// Models is every distinct model the turn used, comma-joined by the
-	// read because a turn routinely uses two — a cheap one for the
-	// extension judge, the seat's own for the work.
+	// Models is every distinct model those spend records name, comma-joined
+	// by the read because a turn routinely has several — a cheap one for
+	// the extension judge, the seat's own for the work, the auxiliary
+	// model for the calls made for it. A record names ONE model, the one
+	// its first completion reported: a model that only a record's per-model
+	// split holds — a fallback that took over mid-phase, a coding run's —
+	// is not in this list, and the spend rollup's by-model rows are where
+	// it is counted.
 	Models string `json:"models,omitempty"`
 
 	// Summary is what the turn set out to do, in the agent's own words.
@@ -230,8 +242,9 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error)
 	}
 	if q.Model != "" {
 		// ON THE TURN, not on the row: a turn is selected when ANY of
-		// its phases used the model, which is what a reader means by
-		// "turns on the cheap model".
+		// its spend records names the model — a phase's or an auxiliary
+		// call's, the column [Turn.Models] lists — which is what a reader
+		// means by "turns on the cheap model".
 		where = append(where,
 			"turn_id IN (SELECT turn_id FROM crewlet_events "+
 				"WHERE model = ? AND event_time >= ? AND turn_id != '')")
@@ -260,7 +273,8 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error)
 	args = append(args, limit+1)
 
 	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
-	// and only a phase record carries one. Every turn's group also holds
+	// and only a spend record — a phase's or an auxiliary call's — carries
+	// one. Every turn's group also holds
 	// its `turn_completed` row, so GROUP_CONCAT — which skips NULLs but
 	// not empty strings — joined one model as ",claude-opus-5" and handed
 	// every consumer splitting on the comma a nameless band in its legend

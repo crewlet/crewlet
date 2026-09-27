@@ -130,13 +130,9 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 		if author.Valid && author.String == rec.OpID {
 			return "", false, nil
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE tracker_deletions
-			SET rejects = rejects + 1, last_reject_at = ?
-			WHERE task_id = ?`, store.EncodeTime(rec.StoredAt), rec.Subject.ID); err != nil {
-			return "", false, fmt.Errorf("tracker: count a gate hit on the "+
-				"purged task %s: %w", rec.Subject.ID, err)
-		}
+		// A READ AND NOTHING ELSE, as every gate here is: a gated record
+		// produces no rows, the marker included. What a person sees of the
+		// drop is the framework's own — see the gates' file head.
 		return statelog.ReasonDeleted, true, nil
 	}
 	return "", false, nil

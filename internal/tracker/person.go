@@ -103,12 +103,17 @@ func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 		return WriteResult{}, err
 	}
 	return w.writePerson(ctx, opID, handle, func(post *Person, at time.Time) error {
+		// EACH ENTRY LAID ONTO THE STORED ONE FOR ITS RECORD, whichever
+		// list either sits in — a read entry is often an unread one
+		// moved — so what a newer build wrote on it is kept
+		// ([carriedEntries]).
+		stored := entriesByRecord(post.Read, post.Unread, post.Snoozed)
 		// PRUNED AT OR BELOW THE SEEN-THROUGH POSITION, which is what
 		// keeps this object small without a cap that discards: an entry
 		// the person has read past is one no surface will ever render.
-		post.Read = prunedEntries(read, seenThrough)
-		post.Unread = prunedEntries(unread, seenThrough)
-		post.Snoozed = prunedSnoozes(snoozed, at)
+		post.Read = carriedEntries(prunedEntries(read, seenThrough), stored)
+		post.Unread = carriedEntries(prunedEntries(unread, seenThrough), stored)
+		post.Snoozed = carriedEntries(prunedSnoozes(snoozed, at), stored)
 		post.PrimaryReasons = reasons
 		post.SeenThrough = seenThrough
 		post.Generation = seenThrough.Stream
@@ -145,7 +150,7 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	}
 	return w.writePerson(ctx, opID, handle, func(post *Person, _ time.Time) error {
 		post.PinnedViews = pinnedViews
-		post.Favorites = favorites
+		post.Favorites = carriedFavorites(favorites, post.Favorites)
 		return nil
 	})
 }
@@ -364,6 +369,59 @@ func prunedSnoozes(entries []InboxEntry, now time.Time) []InboxEntry {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// entriesByRecord indexes a person's stored inbox entries by the record each
+// is about.
+func entriesByRecord(lists ...[]InboxEntry) map[string]InboxEntry {
+	out := map[string]InboxEntry{}
+	for _, list := range lists {
+		for _, entry := range list {
+			out[entry.RecordID] = entry
+		}
+	}
+	return out
+}
+
+// carriedEntries is a caller's list with each entry laid onto the stored entry
+// for the same record: the list and every member the caller states are its
+// own, and what a newer build wrote on the entry, which this build carries
+// ([InboxEntry.Extra]) and no caller built from this build's types can state,
+// is kept. Without it every inbox write would erase that member from each
+// entry it restated, on this node's row and not on a peer's that knows it.
+//
+// A NEW LIST, so a decide that runs again finds the caller's as it left it.
+func carriedEntries(entries []InboxEntry, stored map[string]InboxEntry) []InboxEntry {
+	if entries == nil {
+		return nil
+	}
+	out := slices.Clone(entries)
+	for i, entry := range out {
+		if was, held := stored[entry.RecordID]; held {
+			out[i].Extra = carriedOnto(was.Extra, entry.Extra)
+		}
+	}
+	return out
+}
+
+// carriedFavorites is a caller's favourites laid onto the stored ones, each
+// named by what it stars, on [carriedEntries]' rule.
+func carriedFavorites(favorites, stored []Favorite) []Favorite {
+	if favorites == nil {
+		return nil
+	}
+	type star struct{ kind, id string }
+	held := make(map[star]Favorite, len(stored))
+	for _, f := range stored {
+		held[star{f.Kind, f.ID}] = f
+	}
+	out := slices.Clone(favorites)
+	for i, f := range out {
+		if was, named := held[star{f.Kind, f.ID}]; named {
+			out[i].Extra = carriedOnto(was.Extra, f.Extra)
+		}
 	}
 	return out
 }

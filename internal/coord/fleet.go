@@ -14,35 +14,33 @@ import (
 
 // The FLEET-SHARED state, beyond ownership.
 //
-// A lease answers "who runs this seat". These eight answer the other questions
-// a fleet has to agree on, and they are here — beside [Backend], certified by
-// the same suite — for one reason: THEY WERE ON THE NODE'S OWN DATABASE, and
-// internal/store is documented "one file, one process". Every one of them was
-// therefore per-node while its own comments described a fleet:
+// A lease answers "who runs this seat". The contracts below answer the other
+// questions a fleet has to agree on, and they are here — beside [Backend],
+// certified by the same suite — because internal/store is "one file, one
+// process": a node's own database is a record only that node can see, and
+// each of these is read by a node other than the one that wrote it.
 //
-//   - The notification valve called itself "the shared fixed-window counter",
-//     so a company on four nodes ran four valves and a seat could emit four
-//     times its configured rate.
-//   - The webhook dedupe registry claimed first-claim-wins across a company.
-//     A third-party app retrying a delivery to a different ingress node
-//     found no claim, and the same push woke the same seat twice.
-//   - The turn-completion ledger is what stops a redelivered trigger being
-//     worked again. A redelivery that landed on a peer had no ledger to
-//     consult.
-//   - The config plane's apply status said it was "read back by every peer on
-//     every reconcile tick AND rendered in the fleet view". Each node was
-//     reading its own row and drawing a fleet of one.
-//   - The agent-to-agent channel is an AUTHORIZATION record, read by the node
-//     that owns the answering seat — which is precisely the node that did not
-//     write it. A cross-node ask therefore woke its target and then dropped
-//     the reply, so A2A worked only when both seats happened to land together.
-//   - The scheduled-fire claim is what makes a cron dispatch at-most-once. The
-//     scheduler is a singleton DUTY, so it moves; the new holder read an empty
-//     ledger and its catchup pass re-fired what the old one had claimed.
+//   - The notification valve is a per-seat rate across the company, so a
+//     valve per node would let a seat emit its configured rate once per node.
+//   - The webhook dedupe claim is first-claim-wins across the company, because
+//     a third-party app retrying a delivery reaches whichever ingress node its
+//     load balancer picks.
+//   - The turn-completion ledger stops a redelivered trigger being worked
+//     again, and a redelivery can land on any node.
+//   - The config plane's apply status is read back by every peer and rendered
+//     in the fleet view.
+//   - The agent-to-agent channel is an AUTHORIZATION record read by the node
+//     that owns the answering seat, which need not be the node that opened
+//     it.
+//   - The scheduled-fire claim makes a cron dispatch at-most-once while the
+//     scheduler, a singleton duty, moves between nodes.
 //   - A detached coding run outlives its turn, its process and sometimes its
-//     node, and is recovered by whichever node owns the seat NEXT. That node
-//     read its own database, found nothing, and left a billed sandbox running
-//     with a suspended conversation nothing could re-enter.
+//     node, and is recovered by whichever node owns the seat next.
+//   - The skill-promotion ledger is read by whichever node holds the
+//     promotion duty next, and a record it cannot see is a convergence it
+//     drafts again — one a lead may have rejected.
+//
+// That list is the reasoning, not the inventory: [Fleet] is the inventory.
 //
 // None of these is a lease: nothing here is owned, held or fenced. They are
 // counters, claims and records, and the coordination store is simply where a

@@ -540,8 +540,8 @@ func normaliseTags(project string, raw []string) ([]string, error) {
 // effect. A seat that MEANT to declare `regression` and a seat that typo'd
 // `regresion` both send one unknown slug, and a write that declared whichever
 // arrived would fill a board's filter strip with every misspelling anybody ever
-// typed — which is exactly what happened to the task TYPE catalogue before
-// [declaredType] existed, leaving `Bug`, `bugfix` and `BUG` beside `bug`.
+// typed — the failure [declaredType] refuses for the task TYPE catalogue, where
+// it would leave `Bug`, `bugfix` and `BUG` beside `bug`.
 //
 // So an unknown tag is refused, and the refusal names both ways out: declare it
 // deliberately, or say so at the write. Adding one is open to every seat — this
