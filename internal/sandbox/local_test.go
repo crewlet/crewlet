@@ -1181,6 +1181,7 @@ func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
 		"CREWLET_SECRET_KEY_2026_01": "keyring-material-not-for-the-runtime",
 		"CREWLET_OPS_TOKEN":          "tier-a-token-not-for-the-runtime",
 		"OIDC_CLIENT_SECRET":         "client-secret-not-for-the-runtime",
+		"OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer%20otlp-not-for-the-runtime",
 		"ANTHROPIC_API_KEY":          "sk-ant-not-for-the-runtime",
 	} {
 		t.Setenv(name, value)
@@ -1209,7 +1210,8 @@ func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
 	got := string(raw)
 	for _, secret := range []string{
 		"keyring-material-not-for-the-runtime", "tier-a-token-not-for-the-runtime",
-		"client-secret-not-for-the-runtime", "sk-ant-not-for-the-runtime",
+		"client-secret-not-for-the-runtime", "otlp-not-for-the-runtime",
+		"sk-ant-not-for-the-runtime",
 	} {
 		if strings.Contains(got, secret) {
 			t.Errorf("the container runtime was handed the engine's %q:\n%s", secret, got)

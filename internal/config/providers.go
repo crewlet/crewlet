@@ -15,8 +15,8 @@ import (
 //
 // The Tier A infrastructure — store, stream, coordination — is deliberately
 // not here: it cannot be changed without a restart, and mixing the two
-// tiers in one block is how an operator comes to believe a DSN is
-// live-editable.
+// tiers in one block is how an operator comes to believe the broker's
+// address is live-editable.
 type Providers struct {
 	// LLM is the named provider chain seats select from by key. A seat
 	// naming a key that is not here has no model at all, so the keys are

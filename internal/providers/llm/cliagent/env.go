@@ -43,8 +43,8 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 	// THE HOST ALLOWLIST IS [hostbox]'s, the one every child the engine
 	// starts is handed, and not a copy kept here. An allowlist rather than
 	// os.Environ() because the engine's environment holds its keyring, its
-	// Tier A tokens, the org's chat token, its database DSN and every provider
-	// key: a child that inherited it would hand each of those to a vendor's
+	// Tier A tokens, the org's chat token, its collector credential and every
+	// provider key: a child that inherited it would hand each of those to a vendor's
 	// CLI, and would silently bill a metered ANTHROPIC_API_KEY that happened
 	// to be exported while the operator believed they were on a flat-rate
 	// plan. This package kept its own list once, and it had drifted from the
@@ -132,7 +132,7 @@ func applyAuth(env map[string]string, p Profile, auth Auth) {
 // IT EXISTS BECAUSE A MISSING ENV IS NOT AN EMPTY ONE. [run] assigns whatever
 // it is given to exec.Cmd.Env, and a nil there does not mean "no environment":
 // os/exec then hands the child the ENGINE's own, which is the company's chat
-// token, its database DSN and every provider key — precisely what the
+// token, its collector credential and every provider key — precisely what the
 // allowlist in [buildEnv] exists to keep out of a vendor's CLI. The probe was
 // the one call in this package that skipped it, so `--version` ran with more
 // access than any real completion ever gets.

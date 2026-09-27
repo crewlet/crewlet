@@ -494,8 +494,8 @@ func TestStreamingHonoursTheEventFilter(t *testing.T) {
 // THE VERSION PROBE IS A CHILD LIKE ANY OTHER.
 //
 // Passing no environment to os/exec does not run a child with none — it runs
-// it with the ENGINE's, which is the company's chat token, its database DSN
-// and every provider key. The probe was the one invocation in this package
+// it with the ENGINE's, which is the company's chat token, its collector
+// credential and every provider key. The probe was the one invocation in this package
 // that skipped [buildEnv], so `--version` ran with more access than any real
 // completion ever gets.
 func TestTheVersionProbeGetsTheAllowlistedEnvironment(t *testing.T) {

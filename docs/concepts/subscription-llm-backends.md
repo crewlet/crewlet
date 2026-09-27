@@ -94,7 +94,8 @@ handed, a [stdio MCP server](../guides/tools-and-mcp.md#what-a-stdio-servers-env
 and a local sandbox's coding agent included, so the three cannot disagree about
 what a child may see. Inheriting the engine's environment would hand every seat
 the keyring every session cookie is signed under, the Tier A token values, the
-org's `SLACK_BOT_TOKEN` and the database DSN. It would also, for a subscription
+org's `SLACK_BOT_TOKEN` and the collector credential in
+`OTEL_EXPORTER_OTLP_HEADERS`. It would also, for a subscription
 backend, silently bill a metered `ANTHROPIC_API_KEY` that happened to be
 exported.
 

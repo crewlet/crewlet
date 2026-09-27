@@ -392,11 +392,11 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 }
 
 // The environment is an ALLOWLIST. A child that inherited os.Environ() would
-// hand every seat the org's chat token and its database DSN, and would
-// silently bill a metered key that happened to be exported.
+// hand every seat the org's chat token and the engine's collector credential,
+// and would silently bill a metered key that happened to be exported.
 func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-not-for-the-child")
-	t.Setenv("CREWLET_STORE_DSN", "file:/var/lib/crewlet/state.db")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20otlp-ingest-not-for-the-child")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-billed")
 	t.Setenv("CREWLET_SECRET_KEY_2026_01", "keyring-material-not-for-the-child")
 
@@ -406,7 +406,7 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 		t.Fatalf("Complete: %v", err)
 	}
 	for _, leaked := range []string{
-		"SLACK_BOT_TOKEN", "CREWLET_STORE_DSN", "ANTHROPIC_API_KEY", "CREWLET_SECRET_KEY_2026_01",
+		"SLACK_BOT_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS", "ANTHROPIC_API_KEY", "CREWLET_SECRET_KEY_2026_01",
 	} {
 		if strings.Contains(comp.Content, leaked+"=") {
 			t.Errorf("%s reached the child:\n%s", leaked, comp.Content)

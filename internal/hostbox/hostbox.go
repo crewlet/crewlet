@@ -45,7 +45,9 @@ const FileMode os.FileMode = 0o600
 // An ALLOWLIST, not a denylist, and that polarity is the whole point: the
 // engine's own environment holds the keyring every session cookie and every
 // sealed revision is signed under, the Tier A token values, the identity
-// provider's client secret, the database DSN and possibly a metered API key,
+// provider's client secret, any credential in an external stream URL, the
+// collector credential in OTEL_EXPORTER_OTLP_HEADERS and possibly a metered
+// API key,
 // none of which a child has any business reading. A denylist would leak every
 // variable nobody thought to name — and the engine's Tier A `${VAR}`
 // references mean an operator names those variables, not this package.

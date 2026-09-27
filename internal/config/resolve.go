@@ -241,8 +241,8 @@ func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []
 // Document expands every string in a parsed YAML document IN PLACE and
 // reports what went unresolved, with the path of each site.
 //
-// This is the Tier A load path: the DSN, the broker URL and the API tokens
-// are needed the instant the process starts, so Tier A is resolved once
+// This is the Tier A load path: the keyring, the broker URL and the API
+// tokens are needed the instant the process starts, so Tier A is resolved once
 // before it is decoded. Tier B is deliberately NOT run through this — its
 // references are stored verbatim and resolved at the moment a provider or
 // transport is built, which is what keeps an exported revision free of

@@ -132,8 +132,9 @@ func (b *directBox) Home() string { return b.layout.root }
 // env.
 //
 // Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
-// environment holds the org's chat token, its database DSN and possibly a
-// metered API key, none of which the coding agent has any business reading.
+// environment holds the org's chat token, its collector credential
+// (OTEL_EXPORTER_OTLP_HEADERS) and possibly a metered API key, none of which
+// the coding agent has any business reading.
 // The run env is what config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()

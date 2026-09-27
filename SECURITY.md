@@ -109,10 +109,13 @@ A few things worth knowing when deploying Crewlet:
 - **A child process is handed an allowlisted environment, never the
   engine's.** The engine's environment is where Tier A's `${VAR}` references
   resolve from — the keyring, every `api.auth.tokens` value, the identity
-  provider's client secret, the database DSN — so no process the engine starts
-  inherits it: a stdio MCP server, a coding CLI, a local sandbox's coding agent
-  and the container runtime's own CLI each get `PATH`, locale, TLS trust and
-  proxy settings, the host user's home and temporary directories where they run
+  provider's client secret, any credential in an external `stream.url` — and
+  where the engine reads its collector credential (`OTEL_EXPORTER_OTLP_HEADERS`),
+  often beside an operator's own provisioning tokens (`GITLAB_ADMIN_TOKEN`,
+  `MATTERMOST_ADMIN_TOKEN`); so no process the engine starts inherits it: a
+  stdio MCP server, a coding CLI, a local sandbox's coding agent and the
+  container runtime's own CLI each get `PATH`, locale, TLS trust and proxy
+  settings, the host user's home and temporary directories where they run
   in no box of their own, and what their configuration declares. That keeps the
   engine from *handing* its secrets to code that never asked for them. It is
   not isolation: a child runs as the engine's user and can read what that user

@@ -314,12 +314,14 @@ func TestAStdioChildSeesNoneOfTheEnginesSecrets(t *testing.T) {
 	// about a map.
 	engineSecrets := map[string]string{
 		// The shapes Tier A resolves its `${VAR}` references from: keyring
-		// material, a Tier A token's value, the provider's client secret,
-		// the store's DSN — and a vendor key exported on the host.
+		// material, a Tier A token's value, the provider's client secret —
+		// the collector credential the engine reads directly, an operator's
+		// provisioning token and a vendor key exported on the host.
 		"CREWLET_SECRET_KEY_2026_01": "keyring-material-not-for-a-tool-server",
 		"CREWLET_OPS_TOKEN":          "tier-a-token-not-for-a-tool-server",
 		"OIDC_CLIENT_SECRET":         "client-secret-not-for-a-tool-server",
-		"CREWLET_DATABASE_DSN":       "dsn-not-for-a-tool-server",
+		"OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer%20otlp-not-for-a-tool-server",
+		"GITLAB_ADMIN_TOKEN":         "glpat-admin-not-for-a-tool-server",
 		"ANTHROPIC_API_KEY":          "sk-ant-not-for-a-tool-server",
 	}
 	for k, v := range engineSecrets {
