@@ -43,7 +43,7 @@ import { WORKSPACES } from "./nav.ts";
 
 /** Where a row is live. See the file's doc. */
 export type KeyScope =
-  "frame" | "list" | "object" | "peek" | "canvas" | "builder" | "search" | "layer";
+  "frame" | "list" | "object" | "peek" | "canvas" | "builder" | "compose" | "search" | "layer";
 
 /** The scopes in the order the legend draws them, with what each heading says. */
 export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
@@ -53,6 +53,7 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "object", title: "On a page with tabs" },
   { scope: "canvas", title: "On a chart" },
   { scope: "builder", title: "In the org builder" },
+  { scope: "compose", title: "Writing a reply" },
   { scope: "search", title: "In search" },
   { scope: "layer", title: "In a dialog, a menu or the navigation drawer" },
 ];
@@ -227,6 +228,22 @@ const PAGE: KeyRow[] = [
 ];
 
 /**
+ * THE COMPOSER'S KEY, read by the Inbox's reply field from inside itself
+ * through [matchesRow]: Enter alone is a new line in a reply, so sending takes
+ * the command key, as it does in every chat surface a reader already uses.
+ */
+const COMPOSE: KeyRow[] = [
+  {
+    id: "compose.send",
+    scope: "compose",
+    presses: [{ key: "enter", mod: true }],
+    does: "Send the reply",
+    by: "dashboard",
+    whileTyping: true,
+  },
+];
+
+/**
  * THE PALETTE'S OWN KEYS, read by it from its field through [matchesRow]. They
  * are live while it is the top layer and never beside a page key, so they
  * share a namespace with the layer's Escape and with nothing else.
@@ -286,7 +303,7 @@ const LAYER: KeyRow[] = [
 ];
 
 /** The table. */
-export const KEYMAP: readonly KeyRow[] = [...FRAME, ...PAGE, ...SEARCH, ...LAYER];
+export const KEYMAP: readonly KeyRow[] = [...FRAME, ...PAGE, ...COMPOSE, ...SEARCH, ...LAYER];
 
 /**
  * Whether a row is live only while a layer holds the keyboard — its own

@@ -12,7 +12,16 @@
 
 import { describe, expect, test } from "vitest";
 import type { BudgetWindow, OrgBudget } from "~/protocol/index.ts";
-import { attentionQueue, SUBJECTS, WATCHED, type AttentionInput } from "./attention.ts";
+import {
+  attentionQueue,
+  conditionsToDecide,
+  SUBJECTS,
+  WHERE_OF,
+  watchedIn,
+  type AttentionInput,
+  type Subject,
+  type Where,
+} from "./attention.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
@@ -333,16 +342,108 @@ describe("what it surfaces", () => {
               event_id: "e1",
             },
           },
+          {
+            id: "b",
+            role: "Dev B",
+            handle: "dev-b",
+            live_call: {
+              turn_id: "t2",
+              phase: "execute",
+              iteration: 1,
+              model: "",
+              trigger: null,
+              prompt: "",
+              prompt_messages: null,
+              response: "",
+              input_tokens: 0,
+              output_tokens: 0,
+              total_tokens: 0,
+              tool_executions: null,
+              round_num: 3,
+              rounds_used: 3,
+              in_progress: true,
+              updated_at: new Date(now - 900_000).toISOString(),
+            },
+          },
         ],
       }),
     );
     expect(new Set(items.map((i) => i.subject))).toEqual(new Set(Object.keys(SUBJECTS)));
   });
 
-  // AND THE CLAUSE CARRIES ALL OF THEM. The band drops one string in, so a join
-  // that lost its last item would read as a complete sentence.
-  test("the clause the screen drops in carries every subject", () => {
-    for (const phrase of Object.values(SUBJECTS)) expect(WATCHED).toContain(phrase);
+  // AND EACH PLACE'S CLAUSE CARRIES ITS OWN SUBJECTS AND NO OTHER. A quiet
+  // Inbox drops one string in, so a join that lost its last item would read
+  // as a complete sentence — and one that carried Live's subjects would claim
+  // the Inbox checked what it does not list.
+  test("each place's clause carries exactly the subjects shown there", () => {
+    for (const where of ["seat", "engine", "live"] as Where[]) {
+      const clause = watchedIn(where);
+      for (const [subject, phrase] of Object.entries(SUBJECTS) as [Subject, string][]) {
+        if (WHERE_OF[subject] === where) expect(clause, subject).toContain(phrase);
+        else expect(clause, subject).not.toContain(phrase);
+      }
+    }
+  });
+});
+
+// ONE HOME PER SUBJECT. A condition drawn in two places is two places to keep
+// agreeing about it, and one drawn in none is a condition nobody sees: the
+// stalled round that used to be a "seat" row went to the Inbox, which is not
+// where a round that has stopped moving is decided.
+describe("where a condition is shown", () => {
+  test("every subject has exactly one home, and every home holds one", () => {
+    const homes = new Set<Where>(["seat", "engine", "live"]);
+    for (const subject of Object.keys(SUBJECTS) as Subject[]) {
+      expect(homes.has(WHERE_OF[subject]), subject).toBe(true);
+    }
+    expect(new Set(Object.values(WHERE_OF))).toEqual(homes);
+    expect(Object.keys(WHERE_OF).sort()).toEqual(Object.keys(SUBJECTS).sort());
+  });
+
+  test("a stalled round is Live's, and a person decides only the seat's", () => {
+    const items = attentionQueue(
+      input({
+        engine: { status: "ok", configured: false },
+        agents: [
+          {
+            id: "b",
+            role: "Dev B",
+            handle: "dev-b",
+            live_call: {
+              turn_id: "t2",
+              phase: "execute",
+              iteration: 1,
+              model: "",
+              trigger: null,
+              prompt: "",
+              prompt_messages: null,
+              response: "",
+              input_tokens: 0,
+              output_tokens: 0,
+              total_tokens: 0,
+              tool_executions: null,
+              round_num: 3,
+              rounds_used: 3,
+              in_progress: true,
+              updated_at: new Date(now - 900_000).toISOString(),
+            },
+          },
+          {
+            id: "c",
+            role: "Dev C",
+            handle: "dev-c",
+            activity: "stopped",
+            stopped_reason: "paused",
+          },
+        ],
+      }),
+    );
+    const stalled = items.find((i) => i.id.startsWith("stale-"));
+    expect(stalled?.subject).toBe("round");
+    expect(WHERE_OF[stalled!.subject]).toBe("live");
+    // THE INBOX'S ROWS: the stopped seat, and neither the engine's own
+    // condition nor the round.
+    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["stopped-Dev C"]);
   });
 });
 

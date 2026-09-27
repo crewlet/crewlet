@@ -81,8 +81,11 @@ everyone else as work handed over.
 
 **The queue is `#/inbox`**, one click from the landing screen (Home). Opening it
 with an API token resolves that token's id against every seat's
-`crewlet_operator_id` and shows the person it names: their notices, the one
-reason of eighteen that routed each one, and what is waiting on a decision. A
+`crewlet_operator_id` and shows the person it names: first what is waiting on
+their decision — the questions agents put to them, the coding runs parked on a
+question to them, a seat stopped on its budget — then their notices by the
+company's day, each with the one reason of eighteen that routed it. The row
+they open fills the pane beside the list, with the answer to it right there. A
 token bound to no seat is not an error — it is an operator outside the org
 chart — and the screen says so rather than showing somebody else's queue or an
 empty one, naming the line of company configuration that would give it a
@@ -98,8 +101,10 @@ nobody. A token bound to no seat has no inbox to mark and is refused there;
 what the screen shows is what the engine recorded.
 
 **Answering an agent's decision.** When an agent asks you to choose, the
-question arrives with its options, the one it recommends and why. Your answer
-names an option, and the card tells you what happens next: *"&lt;asker&gt; is
+question arrives with its options, the one it recommends and why, and the
+evidence it cites. Each option is a card; pressing one sends it as your
+answer, and "Reply with instructions" answers in your own words instead. The
+pane tells you what happens next: *"&lt;asker&gt; is
 woken with your answer and posts it to #&lt;channel&gt;"* when the agent
 promised to report the outcome in a channel, or *"&lt;asker&gt; continues from
 your answer"* when it did not. The first is enforced, not hoped for: the

@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { AssignButton, MarkReadButton, PinButton, RestoreButton } from "./writes.tsx";
+import { AssignButton, PinButton, RestoreButton } from "./writes.tsx";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { pick } from "~/testing.tsx";
@@ -136,13 +136,4 @@ test("pinning adds the one view and unpinning removes it, never replacing the st
   fireEvent.click(screen.getByRole("button", { name: "Unpin" }));
   await waitFor(() => expect(sent).toHaveLength(2));
   expect(sent[1]!.body.args).toEqual({ views: { remove: ["v-1"] } });
-});
-
-// ONE RECORD, AND NOTHING ELSE: the gesture that replaced the call which
-// wiped every mark and the read position with it.
-test("marking read names the one record", async () => {
-  mount(<MarkReadButton recordId="r-17" />);
-  fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
-  await waitFor(() => expect(sent).toHaveLength(1));
-  expect(sent[0]!.body.args).toEqual({ read: ["r-17"] });
 });

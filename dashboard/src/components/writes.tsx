@@ -26,7 +26,6 @@ import {
 } from "@crewlethq/ui";
 import {
   UndoGlyph,
-  CheckGlyph,
   PinGlyph,
   CornerDownLeftGlyph,
   MessageSquareGlyph,
@@ -246,28 +245,6 @@ export function PinButton({ view, name, pinned }: { view: string; name: string; 
       }
     >
       {pinned ? "Unpin" : "Pin"}
-    </WriteButton>
-  );
-}
-
-/**
- * Mark one notice read — done — and nothing else: the engine marks that
- * record alone and leaves every other mark and the read position as they are.
- *
- * A caller that reuses one slot for different notices keys this on the
- * record, so a refusal drawn for one notice is never shown under the next.
- */
-export function MarkReadButton({ recordId }: { recordId: string }) {
-  const write = useAct("mark_inbox");
-  return (
-    <WriteButton
-      write={write}
-      size="small"
-      variant="secondary"
-      leadingIcon={<CheckGlyph />}
-      onPress={() => void write.run({ read: [recordId] }, { done: "Marked read" })}
-    >
-      Mark read
     </WriteButton>
   );
 }

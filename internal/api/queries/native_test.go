@@ -380,6 +380,52 @@ func TestTheItemQueryAsksWithTheChart(t *testing.T) {
 	}
 }
 
+// THE THREAD QUESTION ASKS FOR THE THREAD ALONE, AT THE CALLER'S CURSOR.
+//
+// `work_item` returns the newest page and a cursor that nothing read, so every
+// comment older than the twentieth was unreachable. This is the read that
+// follows the cursor — and it asks for the comments and nothing else, because
+// the pane that walks a thread draws none of the history, links or fields a
+// detail assembles. The page size is the caller's, held to the tracker's own
+// ceiling.
+func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
+	w := &stubWork{detail: tracker.TaskDetail{
+		Task:           tracker.Task{ID: "t-1", Key: "ENG-1"},
+		Comments:       []tracker.Comment{{ID: "c-21", Body: "older"}},
+		CommentsCursor: "1700000000:c-20",
+	}}
+	got, err := askNative(t, queries.Sources{Work: w}, "work_comments",
+		map[string]any{"item": "ENG-1", "cursor": "1800000000:c-41", "limit": 500})
+	if err != nil {
+		t.Fatalf("work_comments: %v", err)
+	}
+	want := tracker.DetailWants{
+		Comments: true, CommentCursor: "1800000000:c-41", CommentLimit: tracker.MaxCommentPage,
+	}
+	if w.taskWants != want {
+		t.Errorf("work_comments asked the reader for %+v, want %+v", w.taskWants, want)
+	}
+	answer := got.(map[string]any)
+	if answer["next_cursor"] != "1700000000:c-20" || answer["key"] != "ENG-1" {
+		t.Errorf("the answer lost the next cursor or the key: %v", answer)
+	}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_comments",
+		map[string]any{}); err == nil {
+		t.Error("a thread asked of no item was answered")
+	}
+	// AN EMPTY THREAD IS A LIST: an absent key reads like an older node.
+	w.detail = tracker.TaskDetail{Task: tracker.Task{ID: "t-2", Key: "ENG-2"}}
+	got, _ = askNative(t, queries.Sources{Work: w}, "work_comments",
+		map[string]any{"item": "ENG-2"})
+	if list, ok := got.(map[string]any)["comments"].([]tracker.Comment); !ok || list == nil {
+		t.Errorf("an empty thread answered %v rather than an empty list", got)
+	}
+	if w.taskWants.CommentLimit != tracker.DetailComments {
+		t.Errorf("a caller naming no page got %d, want the detail's own %d",
+			w.taskWants.CommentLimit, tracker.DetailComments)
+	}
+}
+
 // EVERY FILTER REACHES THE READER. A filter honoured on one transport and
 // dropped on the other is the exact divergence this package exists to
 // prevent, and a board silently ignoring `assignee` looks like a board with
@@ -957,6 +1003,8 @@ var sessionQuestions = []sessionQuestion{
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.query.Level }, nil},
 	{"work_item", "tracker", map[string]any{"id": "ENG-1"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
+	{"work_comments", "tracker", map[string]any{"item": "ENG-1"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
 	{"work_views", "tracker", map[string]any{"container": "workspace"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }, nil},
 	{"work_catalogue", "tracker", map[string]any{},
@@ -1218,6 +1266,8 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 	}{
 		{"work_items", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.query.MinPosition }},
 		{"work_item", map[string]any{"id": "ENG-1"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+		{"work_comments", map[string]any{"item": "ENG-1"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
 		{"work_views", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.views.MinPosition }},

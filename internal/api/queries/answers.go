@@ -449,6 +449,10 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil {
 		r.Register("work_items", s.workItems)
 		r.Register("work_item", s.workItem)
+		// A TASK'S THREAD, PAGED — the one collection on a detail with
+		// no bound of its own, so the detail returns its newest page and
+		// this walks the rest. See [Sources.workComments].
+		r.Register("work_comments", s.workComments)
 		// A SEPARATE QUESTION from `work_items`, for the reason
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.

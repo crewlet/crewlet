@@ -534,7 +534,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 		ids = append(ids, a.task)
 		comments = append(comments, a.comment)
 	}
-	seats, err := askSeats(ctx, tx, comments)
+	seats, err := commentSeats(ctx, tx, comments)
 	if err != nil {
 		return nil, ClaimTotal{}, err
 	}
@@ -579,9 +579,11 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 	return out, claim, nil
 }
 
-// askSeats is the seat behind each ask a bound operator token wrote, off the
-// history rows that recorded them (`tracker_history_comment_idx`).
-func askSeats(ctx context.Context, tx *sql.Tx, comments []any) (map[string]string, error) {
+// commentSeats is the seat behind each comment a bound operator token wrote —
+// an ask, an answer, a reply — off the history rows that recorded them
+// (`tracker_history_comment_idx`). A comment an agent or a person's own seat
+// wrote has no entry: its author already is the seat.
+func commentSeats(ctx context.Context, tx *sql.Tx, comments []any) (map[string]string, error) {
 	out := map[string]string{}
 	if len(comments) == 0 {
 		return out, nil

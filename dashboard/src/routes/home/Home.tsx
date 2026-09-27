@@ -42,7 +42,9 @@ import { toWall } from "~/lib/format.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { Kpis } from "./Kpis.tsx";
-import { Decisions, seatConditionsOf } from "./Decisions.tsx";
+import { Decisions } from "./Decisions.tsx";
+import { seatConditionsOf, seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
 import { LiveNow } from "./LiveNow.tsx";
 import { CompletedChart } from "./CompletedChart.tsx";
 import { TokensByTeam } from "./TokensByTeam.tsx";
@@ -54,7 +56,6 @@ import {
   crewOf,
   flowPoints,
   rangeOf,
-  seatDecisionsFor,
   statusSentence,
   waitingOf,
 } from "./model.ts";
@@ -102,24 +103,23 @@ export function Home() {
   // runs, and the stopped seats they can act on. Unknown — nobody bound, or
   // not answered yet — is null, never zero.
   const waiting = viewer.handle ? waitingOf(decisions.data, seats.mine) : null;
-  // THE OTHER CONDITIONS: what the engine raised that is nobody's decision
-  // here — a seat stopped for another reason, a stalled round, a budget near
-  // its ceiling. The engine's own rows and the runs are said elsewhere (the
-  // sentence's precedence and the decisions), and a budget-stopped seat is
-  // one of the decisions.
-  const raised = attention.filter(
-    (a) => a.subject === "seat" || (a.subject === "budget" && !a.id.startsWith("seat-budget-")),
-  );
+  // THE OTHER CONDITIONS: what the engine raised that a person decides and
+  // that is not one of this reader's own decisions — a seat stopped for
+  // another reason, a budget near its ceiling. Exactly the Inbox's condition
+  // rows (`conditionsToDecide`): the engine's own rows are the sentence's
+  // precedence and the health card's, a stalled round and the parked runs are
+  // Live's, and a budget-stopped seat is one of the decisions.
+  const raised = conditionsToDecide(attention);
   // A stopped seat counts here exactly when it is not counted as one of the
   // reader's decisions: every one while nothing waits is known, else the ones
   // they cannot act on.
   const conditions =
     raised.length + (waiting ? seats.others.length : seats.mine.length + seats.others.length);
-  // WHERE THEY ARE LISTED: the Inbox's "Needs a decision" band, opened on the
+  // WHERE THEY ARE LISTED: the Inbox's "Needs a decision" group, opened on the
   // one condition when there is exactly one.
   const conditionsHref =
     conditions === 1 && raised.length === 1
-      ? href(["inbox"], { row: raised[0]!.id })
+      ? href(["inbox"], { row: conditionKey(raised[0]!.id) })
       : href(["inbox"]);
 
   const sentence = statusSentence({

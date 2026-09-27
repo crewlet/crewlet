@@ -1631,6 +1631,17 @@ read" from a tab opened an hour earlier erased every mark made since. It also
 reads where each notice sits from the notice's own record rather than asking
 you, which is why a mark names nothing but the notice.
 
+**In the dashboard's Inbox these are the row's own controls.** *Done* marks
+the notices the open row stands for read — an ask's, when the row is a
+decision — and nothing else. *Snooze* offers an hour, tomorrow at 09:00 and next
+Monday at 09:00 on the company's clock, or a moment you pick, and only the ones
+inside the engine's bound: the person answer serves `max_snooze_ahead`, so a
+preset the write would refuse is never shown. *Mark all read* is `read_through`
+at the newest notice the screen LOADED, so a notice that arrived after you
+looked is still unread. A row that is not a notice — a parked coding run, a
+stopped seat, a condition — has nothing to mark; it leaves the list when it is
+answered or cleared, and its Done says so rather than disappearing.
+
 **Your read position is the rule, and the lists are the exceptions.** Everything
 at or below it reads as read and everything above it as unread, so your record
 only keeps what differs: notices *above* it you marked read out of order, and

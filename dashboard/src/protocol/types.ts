@@ -2442,6 +2442,25 @@ export interface WorkComment {
   updated_at?: string;
 }
 
+/** One page of a task's thread, walking back from the newest (`work_comments`).
+ *  The page is in the order it was written; `next_cursor` reads the page
+ *  before it and is absent when this reaches the first comment. */
+export interface WorkCommentsAnswer {
+  item: string;
+  key: string;
+  title: string;
+  comments: WorkComment[];
+  next_cursor?: string;
+  /** The PERSON behind each comment an operator token wrote, by comment id:
+   *  `author` is the credential, which is the audit trail and not a name. */
+  comment_seats?: Record<string, string>;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  complete?: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkChange {
   id: string;
   kind: string;
@@ -2676,6 +2695,8 @@ export interface WorkItemDetail {
   units?: WorkItemUnits;
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
+  /** The person behind each comment an operator token wrote, by comment id. */
+  comment_seats?: Record<string, string>;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the
@@ -3953,6 +3974,7 @@ export interface QueryMap {
   retention: RetentionReport;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
+  work_comments: WorkCommentsAnswer;
   work_views: WorkViewsAnswer;
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;

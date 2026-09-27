@@ -79,6 +79,9 @@ import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { Mark } from "~/ui/glyph.tsx";
+import { useAttention } from "~/lib/useAttention.ts";
+import { WHERE_OF, watchedIn } from "~/lib/attention.ts";
 
 /**
  * WHICH WINDOWS THE STRIP HAS.
@@ -163,6 +166,9 @@ export function LiveNow() {
   const parked = inFlight.filter((r) => awaitingPerson(r.status)).length;
 
   const { open: openPeek } = usePeekControls();
+  // THE CONDITIONS WHOSE HOME IS THIS SCREEN — see the card below.
+  const attention = useAttention();
+  const watching = attention.filter((a) => WHERE_OF[a.subject] === "live");
 
   // The activity strip is keyed by the BUCKET, never by index: keying the cells
   // `p0..p59` over a window recomputed from the clock shifts every cell's
@@ -250,8 +256,9 @@ export function LiveNow() {
       </PageActions>
       <PageNote>
         What the company is doing at this moment — which seats are working, what is running in a
-        box, and what it is costing. WHAT NEEDS A PERSON is not here: it is the Inbox, because a
-        condition waiting on somebody is a claim on them rather than a statistic about the company.
+        box, what is being watched, and what it is costing. WHAT NEEDS A PERSON is not here: it is
+        the Inbox, because a condition waiting on somebody is a claim on them rather than a
+        statistic about the company.
       </PageNote>
 
       {/* 2. What the company is doing. */}
@@ -399,6 +406,45 @@ export function LiveNow() {
           </div>
         </Card>
       </div>
+
+      {/* WHAT IS BEING WATCHED: the conditions whose home is here
+          (`lib/attention.ts`, `where: live`) — a round that has stopped
+          moving, and every coding run parked on a question. They are watched
+          rather than decided, and a run waiting on a PERSON already reaches
+          them in their own Inbox, so this is the company-wide view of both.
+          Always drawn, for the reason every section here is. */}
+      <Card padding="none">
+        <Card.Header icon={<ClockGlyph size="sm" />} count={watching.length}>
+          <Card.Title>Being watched</Card.Title>
+        </Card.Header>
+        {watching.length > 0 ? (
+          <ul className="live-watch">
+            {watching.map((item) => (
+              <li key={item.id} className="live-watch-row">
+                <span className="attention-icon" data-severity={item.severity}>
+                  <Mark name={item.icon} size="sm" />
+                </span>
+                <span className="col live-watch-body">
+                  <strong className="t-cell">{item.title}</strong>
+                  <span className="t-caption">{item.detail}</span>
+                </span>
+                {item.path && (
+                  <a className="t-link" href={href(item.path, item.query)}>
+                    Open
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <EmptyState
+            size="compact"
+            icon={<ClockGlyph size={32} />}
+            title="Nothing is being watched"
+            description={`Checked and clear: ${watchedIn("live")}.`}
+          />
+        )}
+      </Card>
 
       {/* WHAT IS IN A BOX, as rows rather than as one integer.
           The tile above has always counted these and the screen's own note

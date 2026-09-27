@@ -45,7 +45,7 @@ export type Severity = "critical" | "caution" | "info";
  * union, so a new subject is a type error until it has the phrase a reader
  * sees. Neither half is a convention anybody has to remember.
  */
-export type Subject = "engine" | "budget" | "run" | "seat";
+export type Subject = "engine" | "budget" | "run" | "seat" | "round";
 
 /** Each subject as the reader's own words, in the order the clause lists them. */
 export const SUBJECTS: Record<Subject, string> = {
@@ -53,7 +53,63 @@ export const SUBJECTS: Record<Subject, string> = {
   budget: "the company's and every seat's token budget",
   run: "every coding run waiting on an answer",
   seat: "every seat's own state",
+  round: "every round still in flight",
 };
+
+/**
+ * WHERE A CONDITION IS SHOWN — one home per subject, so no condition is drawn
+ * twice and none is drawn nowhere.
+ *
+ *  - `seat`: the Inbox's "Needs a decision" group and Home's count of
+ *    conditions that need a look. A person decides these — raise a ceiling,
+ *    resume a paused seat, look at one that failed.
+ *  - `engine`: the sidebar's health card and Home's status sentence, which
+ *    are what a reader sees on every screen; an engine condition is a fact
+ *    about the product they are looking at, not an item in anybody's queue.
+ *  - `live`: Live › Now running, beside the rounds and runs it is about. A
+ *    round that has not moved is watched, not decided, and a coding run
+ *    parked on a question already reaches the person it asks through their
+ *    own decisions (`decisions`), so the company-wide list of them is live.
+ *
+ * TOTAL OVER [Subject], so a new subject is a type error until it has a home.
+ */
+export type Where = "seat" | "engine" | "live";
+
+export const WHERE_OF: Record<Subject, Where> = {
+  engine: "engine",
+  budget: "seat",
+  run: "live",
+  seat: "seat",
+  round: "live",
+};
+
+/** The subjects shown in one place, as the clause its quiet state says. */
+export function watchedIn(where: Where): string {
+  return joinClauses(
+    (Object.keys(SUBJECTS) as Subject[])
+      .filter((subject) => WHERE_OF[subject] === where)
+      .map((subject) => SUBJECTS[subject]),
+  );
+}
+
+/**
+ * The conditions a PERSON decides — the Inbox's "Needs a decision" rows beside
+ * the asks and runs, and what Home counts as needing a look.
+ *
+ * A SEAT REFUSING ON ITS OWN BUDGET IS LEFT OUT, because the seat the engine
+ * stopped for it is already a decision row of its own
+ * (`components/DecisionRow.tsx`'s `seatConditionsOf`) that names the window
+ * and offers the two ways out; listing the refusal as well would be the one
+ * stop twice.
+ */
+export function conditionsToDecide(queue: readonly Attention[]): Attention[] {
+  return queue.filter((a) => WHERE_OF[a.subject] === "seat" && !a.id.startsWith("seat-budget-"));
+}
+
+/** A condition's row in the Inbox, as `row=` names it. */
+export function conditionKey(id: string): string {
+  return `condition:${id}`;
+}
 
 function joinClauses(parts: readonly string[]): string {
   if (parts.length < 3) return parts.join(" and ");
@@ -63,21 +119,19 @@ function joinClauses(parts: readonly string[]): string {
   return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
 }
 
-/**
- * The subjects as one English clause — the sentence the inbox drops in.
- *
- * JOINED HERE, beside the words it joins. `Intl.ListFormat` is the obvious
+/*
+ * THE CLAUSES ARE JOINED HERE, beside the words they join. `Intl.ListFormat` is the obvious
  * alternative and is wrong for this string: it joins in the BROWSER's locale,
  * so a reader on a Japanese one would get "、" between clauses that are
  * themselves hardcoded English, and the assertion that the band names every
  * subject would pass or fail on the machine's locale.
  */
-export const WATCHED: string = joinClauses(Object.values(SUBJECTS));
 
 export interface Attention {
   id: string;
   severity: Severity;
-  /** What this is about. [SUBJECTS] is what the quiet band draws from it. */
+  /** What this is about. [SUBJECTS] is what the quiet band draws from it,
+   *  and [WHERE_OF] where the row is shown. */
   subject: Subject;
   icon: GlyphName;
   /** What happened, in the fewest words that are still true. */
@@ -279,6 +333,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         title: `${agent.role} is stopped`,
         detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
         path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        // WHEN A PERSON PAUSED IT, where one did: the instant the condition
+        // began, which is what orders it among the rest and what its row's
+        // age says.
+        ...(agent.paused?.at ? { at: agent.paused.at } : {}),
         who: String(agent.handle ?? agent.role),
       });
       continue;
@@ -291,7 +349,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         out.push({
           id: `stale-${agent.role}-${call.turn_id}`,
           severity: how === "stalled" ? "critical" : "caution",
-          subject: "seat",
+          subject: "round",
           icon: "clock",
           title:
             how === "stalled"

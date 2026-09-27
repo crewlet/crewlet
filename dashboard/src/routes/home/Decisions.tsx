@@ -23,10 +23,9 @@ import {
   subjectKey,
   type SeatCondition,
 } from "~/components/DecisionRow.tsx";
-import { waitedOn } from "~/lib/budget.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import type { AgentRow, DecisionsAnswer } from "~/protocol/index.ts";
+import type { DecisionsAnswer } from "~/protocol/index.ts";
 
 /** What a reader signed in as nobody is told: a decision is a person's, so
  *  there is nothing to list until the browser is somebody. */
@@ -38,21 +37,6 @@ export const NOBODY_SENTENCE = {
 
 /** How many decisions the landing screen shows before "Open inbox". */
 export const HOME_DECISIONS = 3;
-
-/**
- * The seats the engine stopped for a spent budget, each with the window that
- * is spent — the seat's own where it names one, else the company's the gate
- * refused on — and when the gate last turned a charge away.
- */
-export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
-  const out: SeatCondition[] = [];
-  for (const row of agents) {
-    if (row.activity !== "stopped" || row.stopped_reason !== "budget") continue;
-    const window = waitedOn(row.budget?.windows, "refusing");
-    out.push({ row, window, at: window?.refused_at });
-  }
-  return out;
-}
 
 export function Decisions({
   viewer,

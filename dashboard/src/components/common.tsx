@@ -24,7 +24,6 @@ import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/
 // value, and uilet's glyphs are components. The name -> drawing lookup stays
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
 // at once - the same call `app/frame/cells.tsx` makes for the same reason.
-import { Mark } from "~/ui/glyph.tsx";
 import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
@@ -45,7 +44,6 @@ import {
 } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import type { Attention } from "~/lib/attention.ts";
 
 /**
  * How tall a block of machine text grows before it scrolls itself, in px.
@@ -203,51 +201,6 @@ export function SeatCard({
         </div>
       )}
       {seat.unit && <div className="t-caption truncate">{seat.unit.name}</div>}
-    </a>
-  );
-}
-
-/**
- * One obligation.
- *
- * Every row says WHAT happened and WHAT IT COSTS to leave it — the second half
- * is the part a list of conditions usually omits, and it is the half that lets
- * a reader decide whether to act now.
- */
-export function AttentionRow({ item }: { item: Attention }) {
-  const now = useNow();
-  const inner = (
-    <>
-      <span className="attention-icon">
-        <Mark name={item.icon} size="sm" />
-      </span>
-      <span className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
-        <span className="t-body" style={{ fontWeight: "var(--font-weight-medium)" }}>
-          {item.title}
-        </span>
-        <span className="t-caption">{item.detail}</span>
-      </span>
-      {item.at && (
-        <time className="t-caption nowrap" dateTime={item.at} title={fmtDateTime(item.at)}>
-          {relTime(item.at, now)}
-        </time>
-      )}
-    </>
-  );
-  if (!item.path) {
-    return (
-      <div className="attention-row" data-severity={item.severity}>
-        {inner}
-      </div>
-    );
-  }
-  return (
-    <a
-      className="attention-row clickable"
-      data-severity={item.severity}
-      href={href(item.path, item.query)}
-    >
-      {inner}
     </a>
   );
 }

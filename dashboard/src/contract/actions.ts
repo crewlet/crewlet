@@ -55,7 +55,19 @@ export const ACTIONS = {
     scope: "person",
   },
   update_work_item: {
-    args: ["item", "assignee", "reason", "status", "priority", "if_match"],
+    // `linked` AND `linked_pages` ARE THE INBOX COMPOSER'S "Link a task" and
+    // "Attach a page": each is a delta (`{add: [...]}`) on the item the
+    // conversation is about, never the whole relation set.
+    args: [
+      "item",
+      "assignee",
+      "reason",
+      "status",
+      "priority",
+      "if_match",
+      "linked",
+      "linked_pages",
+    ],
     domain: "tracker",
     refreshes: ["work_search"],
     scope: "person",
@@ -76,7 +88,10 @@ export const ACTIONS = {
     // A DECISION ANSWERED IN PLACE: the option button sends the choice as an
     // answer to the ask it belongs to, which closes the ask and wakes the
     // asker with what was chosen.
-    args: ["item", "answers", "choice", "body"],
+    //
+    // AND A REPLY IN THE ASK'S OWN THREAD (`reply_to`), which answers
+    // nothing: a person asking the asker a question back leaves the ask open.
+    args: ["item", "answers", "choice", "body", "reply_to"],
     domain: "tracker",
     refreshes: [],
     scope: "person",
@@ -88,6 +103,16 @@ export const ACTIONS = {
     args: ["turn_id", "answer"],
     domain: null,
     refreshes: ["sandbox_runs", "decisions"],
+    scope: "person",
+  },
+  write_page: {
+    // "SAVE AS A PAGE" in the Inbox's composer: what the person wrote becomes
+    // a new page in the knowledge base, which is then attached to the item
+    // (`update_work_item{linked_pages}`) — the long form a comment's size
+    // limit sends a writer to.
+    args: ["title", "body", "container"],
+    domain: "pages",
+    refreshes: ["knowledge"],
     scope: "person",
   },
   mark_inbox: {

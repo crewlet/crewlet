@@ -29,7 +29,7 @@ import { AnswerAskButtons, AnswerRunButton, AssignButton, ReplyAskButton } from 
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
-import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
+import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
 import type {
   AgentRow,
@@ -54,13 +54,15 @@ export type DecisionSubject =
   | { kind: "seat"; at?: string; seat: SeatCondition };
 
 /**
- * The Inbox's view of what waits on the reader — `#/inbox?reason=decisions`.
+ * The Inbox's Decisions chip — `#/inbox?reason=decisions`, where Home's
+ * "Review" and "Open inbox" land.
  *
- * NOT ONE OF THE EIGHTEEN NOTICE REASONS, and the Inbox treats it as a view
- * rather than a chip over its notices: a decision is an open ask, a parked run
- * or a stopped seat, which the `decisions` read and the engine's conditions
- * answer, and filtering the notice page on a reason no notice carries drew an
- * empty list under a Home figure that had just said one was waiting.
+ * NOT ONE OF THE EIGHTEEN NOTICE REASONS: a decision is an open ask, a parked
+ * run, a stopped seat or a condition a person decides, which the `decisions`
+ * read and the engine's conditions answer, so the chip narrows the list to
+ * those rows rather than filtering notices on a reason none carries — which
+ * once drew an empty list under a Home figure that had just said one was
+ * waiting.
  */
 export const DECISIONS_VIEW = "decisions";
 
@@ -70,8 +72,56 @@ export function decisionsHref(): string {
 }
 
 /**
+ * The seats the engine stopped for a spent budget, each with the window that
+ * is spent — the seat's own where it names one, else the company's the gate
+ * refused on — and when the gate last turned a charge away.
+ */
+export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
+  const out: SeatCondition[] = [];
+  for (const row of agents) {
+    if (row.activity !== "stopped" || row.stopped_reason !== "budget") continue;
+    const window = waitedOn(row.budget?.windows, "refusing");
+    out.push({ row, window, at: window?.refused_at });
+  }
+  return out;
+}
+
+/**
+ * Which budget-stopped seats are THIS reader's decision, and which are only a
+ * condition they can see.
+ *
+ * A STOPPED SEAT HAS TWO WAYS OUT, and a seat is waiting on a reader exactly
+ * when they can take one of them:
+ *
+ *  - RAISE THE CEILING — a change to the company document, which `/config`
+ *    takes from any presented token (`api.auth.tokens` gates writes and all of
+ *    `/config`, with no narrower grant), so `viewer.operator`;
+ *  - HAND THE ITEM ON — `update_work_item` as the reader, which needs the
+ *    engine to serve that write for them (`viewer.acts`) AND an item the seat
+ *    was on: a seat stopped between turns has nothing to hand on.
+ *
+ * Everything else a reader sees is somebody else's decision, so it is counted
+ * with the conditions that "need a look", never as one waiting on them: a
+ * sentence telling a person a decision waits that they cannot make is the one
+ * thing this screen must not say.
+ */
+export function seatDecisionsFor<T extends { row: AgentRow }>(
+  conditions: readonly T[],
+  viewer: { operator: boolean; acts: readonly string[] },
+): { mine: T[]; others: T[] } {
+  const mine: T[] = [];
+  const others: T[] = [];
+  for (const c of conditions) {
+    const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
+    const reassign = item !== null && viewer.acts.includes("update_work_item");
+    (viewer.operator || reassign ? mine : others).push(c);
+  }
+  return { mine, others };
+}
+
+/**
  * The engine's decisions and the stopped seats the reader can act on as one
- * list, newest first — the order Home's card and the Inbox's band both draw.
+ * list, newest first — the order Home's card and the Inbox's "Needs a decision" both draw.
  */
 export function decisionSubjects(
   answer: DecisionsAnswer | null,
@@ -273,7 +323,7 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
  * box past its pause window is reclaimed and the run restarts from the
  * question. Nothing where the run is held on no timer.
  */
-function holdLine(run: SandboxRun, now: number): string | undefined {
+export function holdLine(run: SandboxRun, now: number): string | undefined {
   if (run.status === "reseed")
     return "Its box was reclaimed: answering restarts the work from the question";
   const ttl = run.pause_ttl_seconds;
@@ -320,7 +370,7 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
  * Hand the item a stopped seat was on to somebody else — conditional on the
  * version this reader saw, like every assignment (`AssignButton`).
  */
-function ReassignItem({ item }: { item: string }) {
+export function ReassignItem({ item }: { item: string }) {
   const read = useQuery("work_item", { id: item });
   const task = read.data?.task;
   if (!task) return null;

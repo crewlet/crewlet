@@ -629,11 +629,24 @@ var keywordsBeforeExpression = map[string]bool{
 // or a whole element. After anything else — an operator, an opening bracket, a
 // comma, `=>`, a keyword like `return` — it may. A keyword used as a property
 // name (`x.delete`) is a value, which is why the token before it is checked.
+//
+// AND A NON-NULL ASSERTION IS A VALUE. TypeScript's postfix `!` right after a
+// value (`limit! / 86_400`, `rows[0]!`, `f()!`) leaves a value, so the `/` after
+// it divides; read as the prefix `!` it opened a regular expression that ran to
+// the end of the file. The two are told apart the way the language tells them
+// apart: a postfix `!` touches the value before it, and a prefix one follows
+// an operator, a bracket or a keyword.
 func (l *lexer) expressionStarts() bool {
 	if len(l.toks) == 0 {
 		return true
 	}
 	last := l.toks[len(l.toks)-1]
+	if last.is("!") && len(l.toks) >= 2 {
+		before := l.toks[len(l.toks)-2]
+		if before.end == last.start && endsAValue(before, l.toks[:len(l.toks)-2]) {
+			return false
+		}
+	}
 	switch last.kind {
 	case kNumber, kString, kRegex, kJSX:
 		return false
@@ -646,6 +659,22 @@ func (l *lexer) expressionStarts() bool {
 		return len(l.toks) < 2 || !l.toks[len(l.toks)-2].is(".", "?.")
 	}
 	return !last.is(")", "]", "}")
+}
+
+// endsAValue reports whether a token closes a value — what a postfix `!` may
+// follow. `earlier` is every token before it, for the keyword-as-property case
+// [lexer.expressionStarts] reads the same way.
+func endsAValue(t token, earlier []token) bool {
+	switch t.kind {
+	case kIdent:
+		if !keywordsBeforeExpression[t.text()] {
+			return true
+		}
+		return len(earlier) > 0 && earlier[len(earlier)-1].is(".", "?.")
+	case kPunct:
+		return t.is(")", "]")
+	}
+	return false
 }
 
 // opensElement reports whether the `<` at l.pos opens a JSX element rather

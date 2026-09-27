@@ -312,6 +312,75 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	return detail, nil
 }
 
+// workComments answers one page of a task's thread, walking back from the
+// newest.
+//
+// ITS OWN QUESTION BESIDE `work_item`, which returns the newest
+// [tracker.DetailComments] and a cursor — and nothing read that cursor: the
+// detail ignores it, so every comment older than the twentieth was
+// unreachable from every screen. A thread is also asked for far more often
+// than the rest of the detail (the Inbox's pane draws the conversation around
+// one notice and never the task's history, fields or links), so it is the
+// thread alone rather than the detail with a cursor bolted on.
+//
+// THE SAME READER AND THE SAME TRANSACTION as the detail, so a page and the
+// coverage it reports describe one instant, and a cursor from `work_item`'s
+// own `comments_cursor` continues exactly where that page stopped. `limit`
+// is held to [tracker.MaxCommentPage].
+func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
+	ref := strings.TrimSpace(p.String("item"))
+	if ref == "" {
+		return nil, badParams("item", "", nil)
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
+		Comments:      true,
+		CommentCursor: strings.TrimSpace(p.String("cursor")),
+		CommentLimit:  Clamp(p.Int("limit", 0), tracker.DetailComments, tracker.MaxCommentPage),
+	}, fresh)
+	switch {
+	case errors.Is(err, tracker.ErrNoTask):
+		return nil, ErrNotFound
+	case err != nil:
+		return nil, err
+	}
+	comments := detail.Comments
+	if comments == nil {
+		// AN EMPTY THREAD IS A LIST, never an absent key: a screen
+		// drawing "no comments yet" from a missing field cannot tell it
+		// from an older node that does not answer the question.
+		comments = []tracker.Comment{}
+	}
+	out := map[string]any{
+		"item": detail.Task.ID,
+		"key":  detail.Task.Key,
+		// THE TITLE, because the pane that walks a thread names what it
+		// is about, and a second read of the whole detail for one string
+		// would be the round trip this question exists to avoid.
+		"title":           detail.Task.Title,
+		"comments":        comments,
+		"read_level":      detail.Level,
+		"log_seq":         detail.LogSeq,
+		"applied_through": detail.AppliedThrough,
+		"complete":        detail.Complete,
+	}
+	if detail.CommentsCursor != "" {
+		out["next_cursor"] = detail.CommentsCursor
+	}
+	if len(detail.CommentSeats) > 0 {
+		// WHO A TOKEN'S COMMENT IS FROM, as a person — see
+		// [tracker.TaskDetail.CommentSeats].
+		out["comment_seats"] = detail.CommentSeats
+	}
+	if detail.Incomplete != nil {
+		out["incomplete"] = detail.Incomplete
+	}
+	return out, nil
+}
+
 // workViews answers one container's view strip.
 //
 // # Why `viewer` is a parameter, and why naming somebody else needs a

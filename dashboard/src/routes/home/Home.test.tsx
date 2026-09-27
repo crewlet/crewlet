@@ -536,15 +536,18 @@ describe("the decisions", () => {
     location.hash = review;
     mount({ answers: { decisions: waiting }, page: <Inbox /> });
     await settle();
+    // THE DECISIONS CHIP, PRESSED, over the one decision — opened in the
+    // pane with its options to answer — and no notice group beside it.
+    expect(screen.getByRole("radio", { name: /Decisions/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
     expect(
-      screen.getByText("CTO asks: Hold the 2.4 release until the scheduler migration lands?"),
+      screen.getByRole("heading", {
+        name: "Hold the 2.4 release until the scheduler migration lands?",
+      }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Hold release" })).toBeTruthy();
-    expect(screen.queryByText("Nothing on this page carries that reason")).toBeNull();
-    // The notices are set aside, with the way back to them — never a chip
-    // filtering them on a reason none carries.
-    expect(screen.queryByText("Notices")).toBeNull();
-    expect(screen.getByRole("link", { name: "Show notices" }).getAttribute("href")).toBe("#/inbox");
+    expect(screen.getByRole("button", { name: /Hold release/ })).toBeTruthy();
+    expect(screen.queryByText("Today")).toBeNull();
   });
 });
 

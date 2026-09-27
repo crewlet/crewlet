@@ -88,6 +88,13 @@ type DetailWants struct {
 	// CommentCursor pages the thread. Empty starts at the newest.
 	CommentCursor string
 
+	// CommentLimit is how many comments one page holds. Zero takes
+	// [DetailComments], the detail's own page; anything above
+	// [MaxCommentPage] is held to it. A caller that walks a thread
+	// rather than catching up on one — the work_comments question —
+	// asks for more per page so a long thread is fewer round trips.
+	CommentLimit int
+
 	// Units resolves the task's two unit references against the chart —
 	// see [Units] and [TaskDetail.Units]. Nil renders both raw and
 	// unresolved, which is honest for a surface holding no chart and a
@@ -159,6 +166,15 @@ type TaskDetail struct {
 	// a total would need a second scan over a table that grows for the
 	// life of the task, to tell them something the cursor already says.
 	CommentsCursor string `json:"comments_cursor,omitempty"`
+
+	// CommentSeats names, per comment id, the PERSON behind a comment an
+	// operator token wrote — the seat the token was bound to, off the
+	// history row that recorded the comment. A comment's `author` is the
+	// credential that wrote it, which is the audit trail and a secret's
+	// name rather than a person's; a thread drawn from it showed "maya"
+	// where the chart says Maya Ops. Absent for a comment whose author is
+	// already a seat. Only with the comments it labels.
+	CommentSeats map[string]string `json:"comment_seats,omitempty"`
 
 	// Fields are the task's custom-field values with the declaration that
 	// explains each one, and with the values nothing explains reported as
@@ -348,9 +364,20 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			}
 		case want.Comments:
 			out.Comments, out.CommentsCursor, err = readComments(ctx, tx, id,
-				want.CommentCursor)
+				want.CommentCursor, commentPage(want.CommentLimit))
 			if err != nil {
 				return err
+			}
+		}
+		// IN THE SAME TRANSACTION as the comments it labels, so a name
+		// cannot come from a later instant than the thread it is on.
+		if operator := operatorComments(out.Comments); len(operator) > 0 {
+			seats, seatsErr := commentSeats(ctx, tx, operator)
+			if seatsErr != nil {
+				return seatsErr
+			}
+			if len(seats) > 0 {
+				out.CommentSeats = seats
 			}
 		}
 		if want.History {
@@ -540,6 +567,28 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 // answer fits [ToolAnswerBytes] at all.
 const DetailComments = 20
 
+// MaxCommentPage is the most comments one page may hold.
+//
+// FIFTY, the ceiling every other paged read in this tracker holds a caller to
+// ([MaxInboxRows], [MaxFeedPage], [MaxSearchLimit]): each body on a page is
+// excerpted to [CommentBodyShown], so fifty of them stay near a hundred KiB —
+// inside what one answer carries — where a caller walking a long thread wants
+// as few round trips as that allows.
+const MaxCommentPage = 50
+
+// commentPage is the page size a detail read asked for, defaulted and held
+// to [MaxCommentPage].
+func commentPage(asked int) int {
+	switch {
+	case asked <= 0:
+		return DetailComments
+	case asked > MaxCommentPage:
+		return MaxCommentPage
+	default:
+		return asked
+	}
+}
+
 // CommentBodyShown is how much of each body a THREAD PAGE carries.
 //
 // 2 KiB, against [MaxCommentBody]'s 32 KiB — which is the whole point: twenty
@@ -567,7 +616,7 @@ const CommentBodyShown = 2 << 10
 // A REMOVED COMMENT KEEPS ITS ROW with a blank body, which is what lets a
 // reply still resolve against something — so it is returned rather than
 // filtered, and its `removed` flag is what a renderer reads.
-func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
+func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit int) (
 	[]Comment, string, error) {
 
 	// ONE MORE THAN THE PAGE, which is how the cursor knows whether there
@@ -578,7 +627,7 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 		WHERE task_id = ? AND (? = '' OR (created_at, id) < (?, ?))
 		ORDER BY created_at DESC, id DESC
 		LIMIT ?`, taskID, cursor, cursorAt(cursor), cursorID(cursor),
-		DetailComments+1)
+		limit+1)
 	if err != nil {
 		return nil, "", fmt.Errorf("tracker: read the thread on %s: %w", taskID, err)
 	}
@@ -586,6 +635,10 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 	var (
 		out  []Comment
 		next string
+		// The LAST ROW THIS PAGE RETURNS — the oldest on it — which is
+		// what the next page continues strictly below.
+		lastAt int64
+		lastID string
 	)
 	for rows.Next() {
 		var body []byte
@@ -594,11 +647,14 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 		if err := rows.Scan(&body, &at, &id); err != nil {
 			return nil, "", err
 		}
-		if len(out) == DetailComments {
-			// THE EXTRA ROW IS THE CURSOR, not a result: it is the
-			// first comment of the NEXT page, and naming it is
-			// cheaper than counting what is left.
-			next = formatCommentCursor(at, id)
+		if len(out) == limit {
+			// THE EXTRA ROW SAYS THERE IS A NEXT PAGE, and the cursor
+			// is the last row RETURNED, not this one. The query reads
+			// strictly below its cursor, so a cursor naming the extra
+			// row skipped it: every page boundary lost one comment —
+			// the one a reader walking back through the thread would
+			// have met next — and no read anywhere returned it.
+			next = formatCommentCursor(lastAt, lastID)
 			break
 		}
 		var comment Comment
@@ -611,12 +667,25 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 		// elision is what makes twenty of them fit an answer at all.
 		comment.Body = elideCommentBody(comment.Body)
 		out = append(out, comment)
+		lastAt, lastID = at, id
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
 	slices.Reverse(out)
 	return out, next, nil
+}
+
+// operatorComments is the ids of the comments an operator token wrote — the
+// only ones whose author is a credential rather than a seat.
+func operatorComments(comments []Comment) []any {
+	var out []any
+	for _, c := range comments {
+		if c.AuthorKind == AuthorOperator {
+			out = append(out, c.ID)
+		}
+	}
+	return out
 }
 
 // elideCommentBody is what a thread carries of one comment.

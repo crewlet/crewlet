@@ -796,7 +796,7 @@ describe("the frame's layout", () => {
   // four panels drew their content four pixels inside their own titles while
   // the panels between them did not, and the screen read as though two people
   // had built it. It is one token now, which is the only shape under which
-  // seven classes in two files can be said to agree.
+  // six classes in two files can be said to agree.
   test("every row in the product takes the one inset", () => {
     const ROWS = [
       [".list-row", "components.css"],
@@ -804,7 +804,6 @@ describe("the frame's layout", () => {
       [".feed-row", "screens.css"],
       [".work-row", "screens.css"],
       [".wl-row", "screens.css"],
-      [".attention-row", "screens.css"],
       [".thread-entry", "screens.css"],
     ] as const;
     for (const [row, file] of ROWS) {

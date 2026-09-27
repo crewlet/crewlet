@@ -139,6 +139,25 @@ const CATEGORIES = ["task", "system"] as const;
 	}
 }
 
+// A NON-NULL ASSERTION BEFORE A DIVISION IS NOT A REGULAR EXPRESSION.
+//
+// `ahead! / 86_400` is TypeScript's postfix `!` on a value, then a division;
+// read as the prefix `!` it opened a regular expression that never closed, and
+// every gate in the engine refused the whole tree over one line of the Inbox.
+// A prefix `!` before a regular expression still opens one.
+func TestANonNullAssertionBeforeADivisionIsNotARegex(t *testing.T) {
+	t.Parallel()
+	source := `const days = (ahead?: number) => Math.round(ahead! / 86_400);
+const first = (rows: number[]) => rows[0]! / 2 + f()! / 3;
+const quoted = (s: string) => !/^"/.test(s);
+const CATEGORIES = ["task", "system"] as const;
+`
+	got := literalStrings(t, "routes/inbox/SnoozeMenu.tsx", source)
+	if !slices.Equal(got, []string{"task", "system"}) {
+		t.Errorf("strings = %q, want the one declaration after the divisions", got)
+	}
+}
+
 // TWO DECLARATIONS IN ONE FILE ARE TWO.
 //
 // The walk once matched once per FILE and appended one entry for each, so it

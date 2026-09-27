@@ -179,39 +179,6 @@ function weekday(at: string, zone: string | undefined): string {
   }
 }
 
-/**
- * Which budget-stopped seats are THIS reader's decision, and which are only a
- * condition they can see.
- *
- * A STOPPED SEAT HAS TWO WAYS OUT, and a seat is waiting on a reader exactly
- * when they can take one of them:
- *
- *  - RAISE THE CEILING — a change to the company document, which `/config`
- *    takes from any presented token (`api.auth.tokens` gates writes and all of
- *    `/config`, with no narrower grant), so `viewer.operator`;
- *  - HAND THE ITEM ON — `update_work_item` as the reader, which needs the
- *    engine to serve that write for them (`viewer.acts`) AND an item the seat
- *    was on: a seat stopped between turns has nothing to hand on.
- *
- * Everything else a reader sees is somebody else's decision, so it is counted
- * with the conditions that "need a look", never as one waiting on them: a
- * sentence telling a person a decision waits that they cannot make is the one
- * thing this screen must not say.
- */
-export function seatDecisionsFor<T extends { row: AgentRow }>(
-  conditions: readonly T[],
-  viewer: { operator: boolean; acts: readonly string[] },
-): { mine: T[]; others: T[] } {
-  const mine: T[] = [];
-  const others: T[] = [];
-  for (const c of conditions) {
-    const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
-    const reassign = item !== null && viewer.acts.includes("update_work_item");
-    (viewer.operator || reassign ? mine : others).push(c);
-  }
-  return { mine, others };
-}
-
 /** What waits on the reader: the engine's count, whether it is a floor, and
  *  when the longest one began. Null while it is not known — anonymous,
  *  unbound, or not answered yet — which is never drawn as zero. */

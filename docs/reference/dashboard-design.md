@@ -607,7 +607,7 @@ a screen, and every workspace and section the code declares is below.
 | Route | Page | Params |
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
-| `#/inbox` | **Inbox** — what the engine needs decided, and what reached you and why | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
+| `#/inbox` | **Inbox** — what waits on your decision, and what reached you and why | `scope=unread\|all\|snoozed` · `reason=decisions\|reviews\|mentions\|assigned` (the chip) · `row=` (which row the pane is on) |
 | `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it | `order=due\|priorities` · `handle=` (an operator reading somebody else's day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/work` | **Work › Tasks** — every task, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
@@ -1332,6 +1332,7 @@ for the keys is the reader who does not know `?` yet.
 | On a page with tabs | `1`–`9` go to that tab |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
+| Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
 | In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
@@ -1542,90 +1543,116 @@ their share of the window first.
 
 ### The Inbox is where you act
 
-The Inbox is the place a person acts on what reached them: the queue itself,
-with no company summary above it — Home carries that, one click away.
+The Inbox is built around what waits on the person — the questions put to
+them, the runs parked on them, the seats they can unblock — and then what
+reached them and why. It is two columns, each its own scroller: the list, and
+the open row in full with the answer to it.
 
-**Three bands, stacked on one screen, never three tabs.** **Waiting on your
-decision** is what only this person can settle — the asks put to them and the
-coding runs parked on a question to them (`decisions`, the read Home's figure
-counts), each answered on its row exactly as on Home. **Needs a decision** is
-what the engine derived, over the four subjects `lib/attention.ts` declares: the
-engine and this node's link to it, the token budgets, the coding runs waiting on
-an answer, and the seats themselves. **Notices** is the person's own inbox:
-what reached them, and why. `?reason=decisions` — where Home's **Review** and
-**Open inbox** land — is a VIEW rather than a reason chip: it sets the notices
-aside (with **Show notices** back to them) and leaves the two decision bands.
-It is not one of the eighteen notice reasons, so it never filters the notice
-page; as a filter it drew "decisions 0" under a Home figure that had just said
-a decision was waiting. They are never interleaved, because one fused list
-ordered by time would eventually rank a backup-age alarm above the CEO seat
-asking whether to hold a release. And they are never a toggle: a tab hides the
-engine's state behind a control the reader has to press, which is exactly what
-the place a founder comes to act cannot afford — what is waiting on them has to
-be on screen the moment they arrive. A band with nothing in it still draws its own heading
-and says why it is quiet, because a band that disappears takes its name with it
-and a reader cannot then tell "nothing is waiting on you" from "this product
-does not have that". A band's head counts the rows it drew, and a page with
-more behind it is counted as a floor ("50+"), the way the sidebar badge that
-led there draws it.
+**One list, in a fixed order.** "Needs a decision" leads: the asks put to this
+person and the coding runs parked on a question to them (`decisions`, the read
+Home's figure counts), the seats the engine stopped on a spent token budget,
+and the conditions a person decides (`lib/attention.ts`, the subjects whose
+home is `seat`). Then the notices, grouped **Today**, **Yesterday** and
+**Earlier** at the COMPANY's midnight — the day the engine counts its budgets
+and day charts in, so a notice filed at 23:00 company time is not "Today" on
+one screen and "Yesterday" on the next. Decisions are never interleaved with
+notices by time, which would eventually rank "a task you watch moved" above
+the CEO asking whether to hold a release. An ask is ONE row: the notice that
+told the person they were asked rides on the decision it is about rather than
+being listed again under Today, and Done and Snooze on the decision mark it.
 
-The sentence it draws is DERIVED FROM THE ANSWER, never from the row count. Zero
-rows is six different facts — nothing has answered yet, the answer was a
-refusal, a reason chip took them all, the page holds none and there are more
-pages, the reader is caught up, and nothing has ever reached them — and the band
-branched on the facet alone, so a person who had never received a single notice
-was told that everything had been marked read and sent to a facet that was just
-as empty. `work_inbox` carries the evidence that separates the last two:
-`seen_through` is the person's own read watermark, written only by `mark_inbox`,
-and absent until they have marked something, so the copy claims the watermark
-and not more than it. A band also draws its own filters whether or not anything
-survives them — a reason chip matching nothing is exactly when it is the only
-way back — and its count is an em dash before the first answer, for the same
-reason Home's figures are.
+**Every row has the same three lines.** Who — the seat behind it, drawn with
+its avatar and state ring; a token's change is drawn as the person
+(`actor_seat`), never as the token id, and one bound to nobody as "An
+operator" — what (the question, the stop, the excerpt), and why (a pill). A
+notice's pill is its wake reason in the engine's eighteen words
+(`contract/reasons.ts`); the rows that are not notices take theirs from
+`CONDITION_PILLS` beside the Inbox, kept out of that table because they are
+not reasons. Unread is heavier and carries the accent dot; read is quieter,
+never hidden.
 
-**Unread, all and snoozed is a scope, not a facet.** Each is a different
-question put to `work_inbox` — `unread` and `snoozed` (`exclude`, or `only`
-under Snoozed) are its parameters — so the other two are pages this one does not
-hold and no count over the loaded rows could describe them. The engine narrows
-the scan rather than the page, so an empty page is an empty scope: there is no
-"none on this page, but there are more" state to draw. It is a three-option `Segmented` with exactly one
-always chosen, and an unknown `state=` resolves to `unread` rather than leaving
-the control blank and the query wide.
+**Unread, All and Snoozed is a scope, not a facet.** Each is a different
+question put to `work_inbox` (`unread`, and `snoozed=exclude|only`), so the
+engine narrows the scan rather than the page and an empty page is an empty
+scope. Snoozed lists only what was put off, each row saying "Snoozed until …",
+and no decisions: a decision leaves when it is answered, not when it is put
+off. An unknown `scope=` resolves to `unread`.
 
-**Two panes, and the right one is there before it is needed.** Reading one row
-IS the activity here, so the detail sits beside the list rather than behind a
-navigation, and the column is present from the first paint: a pane that appears
-on the first click reflows the list under the pointer, so the row a reader
-clicked is no longer the row they are looking at. Under 860px it is one pane,
-list then detail — a human teammate answering an ask from their phone is this
-product's second named reader, and this is the one screen drawn for them.
+**The chips are four questions of the list** — Decisions (every row that is
+not a notice), Reviews (the asks put to the person as `approver`), Mentions
+and Assigned — and they narrow the rows LOADED, so their counts are the page's
+and the row says "counts on this page". `reason=decisions` is where Home's
+**Review** and **Open inbox** land. Every notice still names its own reason on
+its row.
 
-**The reason facets narrow client-side, which is what makes their counts
-honest.** Sent to the engine, the filter narrowed the ANSWER — so the page the
-counts were derived from became the page one facet had selected, every other
-count went to nothing, and the whole rail unmounted under the pointer. Over the
-loaded page the chips and the rows are the same set by construction, which is
-what `over="loaded"` on the rail already promised. They are ordered by NAME and
-never by count, because a count-ordered row reorders itself on a poll and the
-chip a reader is reaching for moves between the decision to press it and the
-press.
+**The pane is the decision, answered in place.** The question is the heading;
+under it who asked, when, and the role the person is asked in ("You are the
+approver on LEAD-12"), with "reports to you" derived from the chart. The card
+holds the context, what the asker recommends and why, and the evidence it
+cites — a task with its status as the board draws it, a page, a turn trace, a
+coding run or a link. Under "Your decision" each option is a card that SENDS
+that choice as the answer (`comment_on_work_item{item, answers, choice}`), the
+recommended one filled, all through ONE write so a second choice cannot be
+sent while the first is in flight. **Reply with instructions** turns the
+composer into the answer in words. Where the ask promised a channel
+(`decision.inform`) the line under the options says "<asker> is woken with
+your answer and posts it to #channel", and the composer says "Also posts to
+Slack #channel" beside Send — the engine holds the asker to it
+(`ExternalNotification.owes`); an ask that promised nothing draws neither.
 
-`work_inbox` still reports the `primary_reasons` that were APPLIED — defaulted
-from the person's own record — and the sidebar's badge counts those, so a company
-that has re-decided what counts as primary gets its own badge without the
-client knowing anything about it.
+A parked coding run's pane quotes its question, says how long its box is still
+held, and answers by its turn (`answer_run`). A stopped seat's names the
+window that is spent and offers the two ways out — raise the ceiling, or hand
+the item on. A condition's says what it costs to leave and where the answer
+is. A notice's says who, when and why ("You see this because you follow this
+task").
 
-**The wake reason opens every row.** The applier records, per change and per
-recipient, the ONE reason of eighteen under which that person heard about it.
-Nothing drew it before, and it is the fact no commercial tracker keeps: Linear,
-Jira and ClickUp can all tell you that you were notified, and none can tell you
-why. The client carries no copy of the split — that is a property of the person,
-and the answer states which one it applied.
+**The thread is read, not replayed.** Under an ask it is the replies in the
+ask's own thread; under a notice about a comment, that comment and its
+replies; under any other notice, the task's latest conversation. It is read a
+page at a time from `work_comments`, the newest page polled, and "Earlier
+comments" reads the page before — the detail's twenty are no longer where a
+long conversation ends. A token's comment is drawn as the person it was bound
+to (`comment_seats`).
 
-**Three viewer states, three sentences.** A reader with no credential, a reader
-whose credential no seat claims, and a bound reader. Only the first is anybody's
-fault; an unbound token is an ordinary state whose remedy is a line of company
-configuration, so the screen names the id to bind rather than reporting a fault.
+**The composer writes as you.** A reply is `comment_on_work_item{item, body,
+reply_to}` and answers nothing; an answer closes the ask. `@` opens a picker
+over the org that writes `@handle` into the text — the engine resolves
+mentions from the body, so the picker never sends a list that could disagree
+with it. `#` links another task (`update_work_item{linked}`); the paperclip
+attaches a page — an existing one, or what was written saved as a new page
+(`write_page`) and then attached (`linked_pages`). `Mod+Enter` sends.
+
+**Every mark is a gesture on exactly what it names.** Done marks the open
+row's notices read; Snooze puts them off to one of three presets — in an hour,
+tomorrow at 09:00 and next Monday at 09:00 on the company's clock — or a moment
+the reader picks, and ONLY the presets inside the engine's
+`max_snooze_ahead` (from `work_person`) are offered, since the write refuses
+the rest. **Mark all read** is `read_through` at the newest notice LOADED: a
+notice that arrived after the page was drawn is one the person has not seen.
+None of them sends the inbox back whole, which is what the write they replaced
+did — a Done in one tab erased a snooze made in another. A row that is not a
+notice draws Snooze and Done disabled with that sentence rather than hiding
+them.
+
+**What the list says when it is empty is derived from the answer**, never from
+the row count: nothing answered yet and a refusal draw no sentence; a chip
+that took every row says so; Snoozed says what a snooze is; and Unread tells
+"you are caught up" (the person's own `seen_through` watermark exists) from
+"nothing has reached you yet".
+
+**Two panes above a phone, one below it.** Both columns are present from the
+first paint and the first row is open until the reader picks one, so the pane
+is never an empty box beside a list with something in it; stepping down the
+list — or `j` and `k` — replaces history, so four rows read through one pane
+are one place the reader has been. Under 640px the list is the screen and a
+row opens in its place, with Back.
+
+**Three viewer states, three sentences.** A reader with no credential, a
+reader whose credential no seat claims, and a bound reader. The conditions a
+person decides are listed for all three; a person's notices and decisions need
+a credential bound to their seat, and every write control is drawn for all
+three, disabled with the reason.
 
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
@@ -1660,10 +1687,9 @@ reload only while something holds, because some browsers keep a page with a
 
 ### The attention queue
 
-`dashboard/src/lib/attention.ts` is one list because it is one question, and it
-is the question an operator opens the page with. It renders in the Inbox, above
-the notices. Every one of these conditions was already known to the dashboard
-and each lived in a different screen:
+`dashboard/src/lib/attention.ts` is one derivation because it is one question,
+and every one of these conditions was already known to the dashboard and each
+lived in a different screen:
 
 | Condition | Where it used to live |
 |---|---|
@@ -1677,15 +1703,26 @@ Ordered by what it costs to ignore, then newest first inside a severity. Every
 row says what happened AND what it costs to leave it, and carries a link to
 where the answer is.
 
-On Home the queue is COUNTED, not drawn: the conditions that are nobody's
-decision — a seat stopped for a reason other than its budget, a stalled round,
-a company budget near or at its ceiling — are the status sentence's "N
-conditions need a look", and the engine's own conditions take the sentence
-over. What the reader can settle is the decisions card beside it.
+**Each condition has ONE home**, by its subject (`WHERE_OF`), so none is drawn
+twice and none nowhere:
 
-**What the band says when it is EMPTY is derived, not written.** Every condition
-names one of four subjects, `SUBJECTS` maps each to the phrase a reader sees,
-and the quiet band draws all four. That sentence used to be prose on the screen
+| Home | Subjects | Why there |
+|---|---|---|
+| `seat` — the Inbox's "Needs a decision", and Home's "N conditions need a look" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
+| `engine` — the sidebar's health card and Home's status sentence | the engine and this node's link to it | a fact about the product the reader is looking at, on every screen, not an item in anybody's queue |
+| `live` — Live › Now running, "Being watched" | a round that has stopped moving, every coding run parked on a question | watched rather than decided; a run waiting on a PERSON already reaches them through their own decisions |
+
+On Home the queue is COUNTED, not drawn: the `seat` conditions that are not
+the reader's own decisions — a seat stopped for a reason other than its
+budget, a company budget near or at its ceiling — are the status sentence's
+"N conditions need a look", linked to the Inbox, and the engine's own
+conditions take the sentence over. What the reader can settle is the
+decisions card beside it.
+
+**What a quiet list says is derived, not written.** Every condition names one
+of five subjects, `SUBJECTS` maps each to the phrase a reader sees, and a place
+that lists none draws the phrases of exactly the subjects whose home it is
+(`watchedIn`). That sentence used to be prose on the screen
 — "No seat is stopped, no run is parked on a question, and no budget is
 refusing" — three of the twelve conditions, read as the whole list, so an
 operator whose engine had no active configuration or whose node was shedding its
@@ -3670,7 +3707,12 @@ a tool arrives in it with the control that sends it. The controls
 | Assign / Reassign (with a reason) | A task's page | `update_work_item` (`if_match` on the version you are looking at) |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
 | Pin / Unpin | A saved view's page | `set_pins` |
-| Mark read | A notice in the Inbox | `mark_inbox` (that one record; every other mark and your read position stay) |
+| Done · Snooze · Mark unread | The open row in the Inbox | `mark_inbox` (exactly the notices that row holds; every other mark and your read position stay) |
+| Mark all read | The Inbox's page bar | `mark_inbox{read_through}` at the newest notice LOADED — never past it |
+| An option card | A decision in the Inbox's pane | `comment_on_work_item{item, answers, choice}` |
+| Send / Send answer | The Inbox's composer | `comment_on_work_item{item, body, reply_to}` for a reply, `{item, body, answers}` for an answer |
+| Link a task · Attach a page | The Inbox's composer | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
+| Answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
 
 A change to the **company document** — a seat, a budget ceiling, an MCP
 server, a model — is not an act: it is a new configuration revision, and every

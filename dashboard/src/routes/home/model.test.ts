@@ -29,9 +29,9 @@ import {
   inProgressParts,
   joinParts,
   troubleParts,
-  seatDecisionsFor,
   waitingOf,
 } from "./model.ts";
+import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
 
 const base = {
   company: "Nimbus",

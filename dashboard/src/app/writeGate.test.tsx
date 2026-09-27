@@ -53,6 +53,24 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "with the reason it cannot act as its hint",
     suite: "app/palette/Palette.test.tsx",
   },
+  "routes/inbox/Inbox.tsx": {
+    why: "the Inbox's Mark all read, which reads through the newest notice loaded",
+    suite: "routes/inbox/Inbox.test.tsx",
+  },
+  "routes/inbox/SnoozeMenu.tsx": {
+    why:
+      "the open row's Snooze, Done and Mark unread — a kit Menu where the reader can act, " +
+      "and the same control disabled with its reason where they cannot",
+    suite: "routes/inbox/Inbox.test.tsx",
+  },
+  "routes/inbox/DecisionPane.tsx": {
+    why: "a decision's option cards and a parked run's answer, made in the pane",
+    suite: "routes/inbox/Inbox.test.tsx",
+  },
+  "routes/inbox/Composer.tsx": {
+    why: "the pane's reply or answer, and the task link and page it can attach",
+    suite: "routes/inbox/Inbox.test.tsx",
+  },
   "app/palette/answer.ts": {
     why:
       "the palette's answer from the company's knowledge, asked only for a reader " +
@@ -66,7 +84,6 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
   AssignButton: { props: { item: "ENG-1", version: 3, assignee: "" }, name: /^Assign$/ },
   RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/ },
   PinButton: { props: { view: "v1", name: "Triage", pinned: false }, name: /^Pin$/ },
-  MarkReadButton: { props: { recordId: "r-1" }, name: /^Mark read$/ },
   AnswerAskButtons: {
     props: {
       item: "LEAD-12",
@@ -91,7 +108,6 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   AssignButton: "update_work_item",
   RestoreButton: "restore_work_item",
   PinButton: "set_pins",
-  MarkReadButton: "mark_inbox",
   AnswerAskButtons: "comment_on_work_item",
   AnswerRunButton: "answer_run",
   ReplyAskButton: "comment_on_work_item",
