@@ -556,16 +556,14 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 			// A LEAD MAY BE ADMITTED ON THE RECORD, so a node that cannot
 			// read the directory cannot say — and the admin grant may be
 			// told that too. Neither hears the directory's own words.
-			for who, caller := range map[string]context.Context{
-				"a lead": lead, "the admin grant": admin,
-			} {
+			undecidable := func(who string, caller context.Context) {
 				got := verb.call(caller, personDeps(&personSpy{}, blind()), "j.bound")
 				if verb.ownerOnly && who == "a lead" {
 					// NO LEAD PATH: refused before the lookup, as above.
 					if !errors.Is(got.Cause, builtin.ErrRefused) {
 						t.Errorf("%s on an owner-only verb failed with %v", who, got.Cause)
 					}
-					continue
+					return
 				}
 				if !errors.Is(got.Cause, builtin.ErrUndecidable) {
 					t.Errorf("%s, on a directory that cannot say, failed with %v: %s",
@@ -576,6 +574,8 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 					t.Errorf("%s was told the directory's own words: %s", who, got.Output)
 				}
 			}
+			undecidable("a lead", lead)
+			undecidable("the admin grant", admin)
 		})
 	}
 }

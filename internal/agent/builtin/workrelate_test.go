@@ -125,7 +125,7 @@ func TestARerouteIsRefusedToASeatThatDoesNotLead(t *testing.T) {
 	// A COLLEAGUE AND NOT [everyGrant], which carries fleet:operate —
 	// every relation class checks the admin grant before it asks the
 	// chart, so the case would assert nothing.
-	got := callWorkAs(t, reg, colleagueCaller(), builtin.UpdateWorkItemTool,
+	got := callWorkAs(colleagueCaller(), t, reg, builtin.UpdateWorkItemTool,
 		map[string]any{"item": "ENG-1", "routing_unit": "backend"})
 	if !got.Failed {
 		t.Fatal("an ungated seat pointed somebody else's work at another team")

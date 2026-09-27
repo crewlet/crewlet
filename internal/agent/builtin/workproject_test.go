@@ -64,7 +64,7 @@ func TestWriteProjectCarriesTheLeadAnswer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			trk := newFakeTracker()
 			reg := projectRegistry(t, trk, tc.chart)
-			got := callWorkAs(t, reg, colleagueCaller(), tracker.WriteProjectTool,
+			got := callWorkAs(colleagueCaller(), t, reg, tracker.WriteProjectTool,
 				map[string]any{
 					"project":     "ENG",
 					"tags_rename": map[string]any{"api": "Public API"},
@@ -98,7 +98,7 @@ func TestWriteProjectResolvesTheLeadOnce(t *testing.T) {
 	trk := newFakeTracker()
 	asked := 0
 	reg := projectRegistry(t, trk, countingChart{asked: &asked})
-	got := callWorkAs(t, reg, colleagueCaller(), tracker.WriteProjectTool,
+	got := callWorkAs(colleagueCaller(), t, reg, tracker.WriteProjectTool,
 		map[string]any{
 			"project":          "ENG",
 			"tags_add":         []any{map[string]any{"slug": "regression"}},
@@ -145,7 +145,7 @@ func TestWriteProjectTellsAbsentFromEmpty(t *testing.T) {
 	// THE ARCHIVE FACET IS A PERSON'S, which is what the human-only bar
 	// on [authz.ActionProjectArchive] says — see
 	// [TestAnAgentNeverArchivesAProject].
-	callWorkAs(t, reg, personHolding(iam.AllGrants...),
+	callWorkAs(personHolding(iam.AllGrants...), t, reg,
 		tracker.WriteProjectTool, map[string]any{
 			"project": "ENG", "archived": true,
 		})
@@ -483,7 +483,7 @@ func TestWriteProjectRefusesWhenTheChartCannotAnswer(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, chartUnknown)
-	got := callWorkAs(t, reg, colleagueCaller(), tracker.WriteProjectTool,
+	got := callWorkAs(colleagueCaller(), t, reg, tracker.WriteProjectTool,
 		map[string]any{
 			"project":     "ENG",
 			"tags_rename": map[string]any{"api": "Public API"},

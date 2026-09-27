@@ -614,7 +614,7 @@ func TestARenameThroughSaveIsDecidedAsARename(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	renaming := callWorkAs(t, reg, colleagueCaller(), builtin.SavePageTool,
+	renaming := callWorkAs(colleagueCaller(), t, reg, builtin.SavePageTool,
 		map[string]any{"page": "p1", "base_version": 4, "body": "new",
 			"title": "Deploy Runbook v2"})
 	if !renaming.Failed || !errors.Is(renaming.Cause, builtin.ErrRefused) {
@@ -626,7 +626,7 @@ func TestARenameThroughSaveIsDecidedAsARename(t *testing.T) {
 			len(kb.saved), len(kb.renames))
 	}
 	// THE CONTROL: the same colleague, the same edit, no title.
-	if plain := callWorkAs(t, reg, colleagueCaller(), builtin.SavePageTool,
+	if plain := callWorkAs(colleagueCaller(), t, reg, builtin.SavePageTool,
 		map[string]any{"page": "p1", "base_version": 4, "body": "new"}); plain.Failed {
 		t.Fatalf("the control was refused too, so the case asserts nothing: %s",
 			plain.Output)

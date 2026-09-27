@@ -424,7 +424,7 @@ func workTurn(t *testing.T) *turnctx.Turn {
 
 func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]any) tools.Result {
 	t.Helper()
-	return callWorkAs(t, reg, everyGrant(), name, args)
+	return callWorkAs(everyGrant(), t, reg, name, args)
 }
 
 // callWorkAs is [callWork] for a case that is about WHO is calling.
@@ -433,7 +433,7 @@ func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]an
 // fleet:operate — the grant every relation class checks BEFORE the chart, so
 // a fixture holding it is allowed by a chart that refuses everything and the
 // case asserts nothing.
-func callWorkAs(t *testing.T, reg *tools.Registry, ctx context.Context,
+func callWorkAs(ctx context.Context, t *testing.T, reg *tools.Registry,
 	name string, args map[string]any) tools.Result {
 
 	t.Helper()
