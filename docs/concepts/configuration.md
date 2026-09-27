@@ -163,11 +163,19 @@ The engine boots in this order:
    pointing at why. The same ordering has a corollary — a boot that fails on
    the Tier A document itself never reaches this step, so stderr is the only
    record of it, `logging.stderr` notwithstanding
-4. Open the store file and start or dial the stream
-5. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-6. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
-7. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
-8. `SELECT payload FROM company_config WHERE is_active <> 0`
+4. Hold the Tier A this process is about to run to Tier A's rules once more —
+   the file with every `-roles`, `-api-host` and `-api-port` flag applied — and
+   then to the rules that need both tiers. The engine does this itself, before
+   it opens anything, because it is the one thing that runs Tier A: the file
+   was validated as it loaded, but a flag, or a bootstrap a tool built in code,
+   reaches the engine having passed no rule, and a node that opened its store
+   first would have migrated a database for a config it was always going to
+   refuse
+5. Open the store file and start or dial the stream
+6. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
+7. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
+8. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
+9. `SELECT payload FROM company_config WHERE is_active <> 0`
    - **Row present**: apply the payload, which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
 

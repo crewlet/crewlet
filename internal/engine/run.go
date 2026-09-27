@@ -581,6 +581,27 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if opts.Bootstrap == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
+	// TIER A'S OWN RULES, HELD HERE AND NOT ONLY AT THE LOADER. The loader
+	// validates what it parses, which covers a file and nothing else: a
+	// bootstrap built in code, or a loaded one edited afterwards (`crewlet
+	// run`'s flag overrides), reaches this function having passed no rule
+	// at all, and every rule it breaks fails later as something that looks
+	// like a different problem. The e2e fleet harness is the measured case:
+	// it ran its members on `coordination.type: local` over a clustered
+	// stream — a shape [config.Bootstrap.Validate] refuses by name — so each
+	// member claimed every seat and every duty for itself and saw no peer's
+	// presence, and nothing said so until the object store's membership, a
+	// lease, counted every peer absent on every tick. The engine is the one
+	// consumer that RUNS Tier A, so it is the one place that cannot assume
+	// its input was checked.
+	//
+	// It NORMALIZES in place, which is the point rather than a side effect:
+	// what the rules check is what this engine then runs. A bootstrap that is
+	// already normal is written nowhere, so a caller holding the same pointer
+	// sees no write.
+	if err := opts.Bootstrap.Validate(); err != nil {
+		return nil, fmt.Errorf("engine: the bootstrap config (Tier A) is invalid: %w", err)
+	}
 	// THE CROSS-TIER RULES, before anything is opened. Each tier validated
 	// alone on its way in; what neither could see is the other, and the one
 	// rule that needs both (a native tracker or knowledge base whose log

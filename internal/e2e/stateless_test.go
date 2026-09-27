@@ -57,9 +57,6 @@ func startStatelessPair(t *testing.T) statelessPair {
 	dataBoot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	dataBoot.Stream.Leaf.Host, dataBoot.Stream.Leaf.Port = "127.0.0.1", port
 	dataBoot.Coordination.Type = config.CoordinationEmbeddedKV
-	if err := dataBoot.Validate(); err != nil {
-		t.Fatalf("the data node's bootstrap: %v", err)
-	}
 	data := bootNode(t, &dataBoot, cfg, model)
 	data.app, data.server = serveAPI(t, data.engine, &dataBoot, nil)
 
@@ -71,14 +68,14 @@ func startStatelessPair(t *testing.T) statelessPair {
 	agentBoot.Store.Scratch = true
 	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
 	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
-	if err := agentBoot.Validate(); err != nil {
-		t.Fatalf("the stateless node's bootstrap: %v", err)
-	}
 	agent := bootNode(t, &agentBoot, cfg, model)
 	return statelessPair{data: data, agent: agent, agentStore: agentDir}
 }
 
 // bootNode builds and starts one engine.
+//
+// Neither bootstrap is validated here: engine.New holds every bootstrap it is
+// given to Tier A, and a refusal names the node it was building.
 func bootNode(t *testing.T, boot *config.Bootstrap, cfg *config.Company, model *scriptedModel) *node {
 	t.Helper()
 	e, err := engine.New(t.Context(), engine.Options{
