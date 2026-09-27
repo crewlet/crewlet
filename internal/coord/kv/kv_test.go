@@ -456,23 +456,25 @@ func payloadFleet(t *testing.T) *FleetStore {
 	return store
 }
 
-// THE BODY RIDES THE POINTER AS THE JSON IT IS.
+// THE BODY RIDES THE POINTER AS THE JSON IT IS — and is mirrored beside it.
 //
 // It was bytes on a key of its own, which encoding/json spells as a base64
 // string — over an envelope whose ciphertext is base64 already, so every body
 // crossed the wire encoded twice and a third larger than it was. The contract
 // suite cannot see the record, only what Payload hands back, so the WIRE SHAPE
 // is asserted here: the pointer's own record carries the body as an object,
-// and nothing is written to the key the body used to live under.
+// and the key an earlier build reads it from carries the same body, naming the
+// pointer's revision and the epoch it copies.
 //
 // Mutation: carry the payload as []byte in activationRecord and the field is a
-// string; write it beside the pointer again and the legacy key exists.
+// string; stop mirroring and the legacy key is absent.
 func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
 	t.Parallel()
 	store := payloadFleet(t)
 	body := `{"__encrypted__":"enc:v1:k1:q8+/Zm9vYmFy=="}`
-	if _, err := store.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "rev-1", Payload: []byte(body), At: time.Now()}); err != nil {
+	activation, err := store.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte(body), At: time.Now()})
+	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	entry, err := store.config.Get(t.Context(), activationKey)
@@ -486,9 +488,253 @@ func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
 	if got := string(fields["payload"]); got != body {
 		t.Errorf("the pointer's payload field is %s, want the object %s", got, body)
 	}
-	if _, err := store.config.Get(t.Context(), legacyPayloadKey); !errors.Is(err, jetstream.ErrKeyNotFound) {
-		t.Errorf("a body was written beside the pointer as well (err=%v)", err)
+	mirror, err := store.config.Get(t.Context(), legacyPayloadKey)
+	if err != nil {
+		t.Fatalf("no body was mirrored beside the pointer: %v", err)
 	}
+	var record legacyPayloadRecord
+	if err := json.Unmarshal(mirror.Value(), &record); err != nil {
+		t.Fatalf("decode the mirror: %v", err)
+	}
+	if record.RevisionID != "rev-1" || string(record.Payload) != body ||
+		int64(record.Epoch) != activation.Epoch {
+		t.Errorf("mirror = {%s %s epoch %d}, want {rev-1 %s epoch %d}",
+			record.RevisionID, record.Payload, record.Epoch, body, activation.Epoch)
+	}
+}
+
+// earlierBuildRead converges the way a build from before the body moved into
+// the pointer does, and it is the whole of that build's read: the pointer in
+// ITS shape, which has no payload field, and then the body beside it, taken
+// only when it names the revision the pointer does. What it returns is what
+// such a node would apply, and ok is false where it would record "no such
+// revision".
+func earlierBuildRead(t *testing.T, store *FleetStore) (revision string, body []byte, ok bool) {
+	t.Helper()
+	ctx := t.Context()
+	entry, err := store.config.Get(ctx, activationKey)
+	if err != nil {
+		t.Fatalf("read the pointer: %v", err)
+	}
+	var pointer struct {
+		RevisionID string `json:"revision_id"`
+	}
+	if err := json.Unmarshal(entry.Value(), &pointer); err != nil {
+		t.Fatalf("decode the pointer in the earlier shape: %v", err)
+	}
+	beside, err := store.config.Get(ctx, legacyPayloadKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return pointer.RevisionID, nil, false
+	}
+	if err != nil {
+		t.Fatalf("read the body beside the pointer: %v", err)
+	}
+	var record struct {
+		RevisionID string `json:"revision_id"`
+		Payload    []byte `json:"payload"`
+	}
+	if err := json.Unmarshal(beside.Value(), &record); err != nil {
+		t.Fatalf("decode the body in the earlier shape: %v", err)
+	}
+	return pointer.RevisionID, record.Payload, record.RevisionID == pointer.RevisionID
+}
+
+// A PEER ON AN EARLIER BUILD CONVERGES ON EVERY ACTIVATION THIS BUILD MAKES.
+//
+// A rolling upgrade puts both builds on one bucket, and the fleet activates
+// during a rollout with nobody editing — the integration loop re-activates the
+// revision when it seals a credential, and a node booting ahead of the pointer
+// publishes its own. The earlier build reads the body only from the key
+// beside the pointer, so a build that stopped writing it left every such peer
+// failing the apply, shedding its work, and three attempts later unready.
+//
+// The lost compare-and-set is the case the mirror's ORDER is for: the earlier
+// build wrote the body before its flip, so a write whose flip was refused had
+// already replaced the body the fleet's pointer named.
+//
+// Mutation: drop the mirror and the first read finds nothing; write it before
+// the flip and the refused write leaves its own body there.
+func TestAPeerOnAnEarlierBuildReadsEveryActivation(t *testing.T) {
+	t.Parallel()
+	store := payloadFleet(t)
+	ctx := t.Context()
+	activate := func(req coord.ActivationRequest) error {
+		t.Helper()
+		req.At = time.Now()
+		_, err := store.Activate(ctx, req)
+		return err
+	}
+	expect := func(revision, body string) {
+		t.Helper()
+		got, payload, ok := earlierBuildRead(t, store)
+		if !ok || got != revision || string(payload) != body {
+			t.Fatalf("an earlier build reads %s = %s (ok=%v), want %s = %s",
+				got, payload, ok, revision, body)
+		}
+	}
+
+	if err := activate(coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte(`{"v":1}`)}); err != nil {
+		t.Fatalf("Activate rev-1: %v", err)
+	}
+	expect("rev-1", `{"v":1}`)
+
+	if err := activate(coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte(`{"v":2}`), Expect: "rev-1"}); err != nil {
+		t.Fatalf("Activate rev-2: %v", err)
+	}
+	expect("rev-2", `{"v":2}`)
+
+	// THE REFUSED WRITE: built on rev-1, which is no longer current.
+	if err := activate(coord.ActivationRequest{
+		RevisionID: "rev-lost", Payload: []byte(`{"v":"lost"}`), Expect: "rev-1",
+	}); !errors.Is(err, coord.ErrActivationRaced) {
+		t.Fatalf("a write built on a superseded revision = %v, want the race", err)
+	}
+	expect("rev-2", `{"v":2}`)
+
+	// And the credential-rotation gesture, an unchanged revision again.
+	if err := activate(coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte(`{"v":2}`)}); err != nil {
+		t.Fatalf("re-activate rev-2: %v", err)
+	}
+	expect("rev-2", `{"v":2}`)
+}
+
+// RACING ACTIVATIONS LEAVE THE MIRROR NAMING THE POINTER.
+//
+// Two nodes booting together each publish what they hold, so activations race
+// in ordinary operation. A mirror that was a plain write after each flip would
+// end on whichever write landed last, which need not be the flip that did —
+// and every peer on the earlier build would read "no such revision" for the
+// epoch the fleet is on until somebody activated again.
+func TestRacingActivationsLeaveTheMirrorNamingThePointer(t *testing.T) {
+	t.Parallel()
+	for round := range 4 {
+		store := payloadFleet(t)
+		start := make(chan struct{})
+		errs := make(chan error, 8)
+		for i := range 8 {
+			go func() {
+				<-start
+				_, err := store.Activate(t.Context(), coord.ActivationRequest{
+					RevisionID: fmt.Sprintf("rev-%d", i),
+					Payload:    []byte(fmt.Sprintf(`{"v":%d}`, i)), At: time.Now(),
+				})
+				errs <- err
+			}()
+		}
+		close(start)
+		for range 8 {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: Activate: %v", round, err)
+			}
+		}
+		target, found, err := store.Target(t.Context())
+		if err != nil || !found {
+			t.Fatalf("round %d: Target = found %v, err %v", round, found, err)
+		}
+		revision, body, ok := earlierBuildRead(t, store)
+		want := fmt.Sprintf(`{"v":%s}`, strings.TrimPrefix(target.RevisionID, "rev-"))
+		if !ok || revision != target.RevisionID || string(body) != want {
+			t.Fatalf("round %d: after racing activations an earlier build reads "+
+				"%s = %s (ok=%v), and the fleet is on %s", round, revision, body, ok,
+				target.RevisionID)
+		}
+	}
+}
+
+// A MIRROR NEVER STEPS BACK, AND NEVER UNNAMES A LATER POINTER'S BODY.
+//
+// Two fences, each deterministic here because the case writes the state a
+// race would leave. A writer slow to mirror finds a mirror a LATER epoch
+// already wrote, and must leave it: the body it holds is not the one the
+// fleet is on. And a writer of this build finds the pointer moved on by an
+// EARLIER build, whose pointer carries no body and whose body sits in the
+// mirror's key: replacing it leaves a pointer no node of either build can
+// read.
+//
+// Mutation: drop the epoch comparison and the first half replaces the later
+// mirror; drop the pointer comparison and the second half replaces the
+// earlier build's body.
+func TestAMirrorNeverStepsBack(t *testing.T) {
+	t.Parallel()
+	// EACH SUBTEST'S OWN t AND CONTEXT: a helper failing through the
+	// parent's t from a subtest's goroutine is a FailNow on the wrong test.
+	put := func(t *testing.T, store *FleetStore, key string, v any) {
+		t.Helper()
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.config.Put(t.Context(), key, raw); err != nil {
+			t.Fatalf("plant %s: %v", key, err)
+		}
+	}
+	held := func(t *testing.T, store *FleetStore) legacyPayloadRecord {
+		t.Helper()
+		entry, err := store.config.Get(t.Context(), legacyPayloadKey)
+		if err != nil {
+			t.Fatalf("read the mirror: %v", err)
+		}
+		var record legacyPayloadRecord
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			t.Fatalf("decode the mirror: %v", err)
+		}
+		return record
+	}
+
+	t.Run("a later epoch's mirror", func(t *testing.T) {
+		ctx := t.Context()
+		store := payloadFleet(t)
+		first, err := store.Activate(ctx, coord.ActivationRequest{
+			RevisionID: "rev-a", Payload: []byte(`{"v":"a"}`), At: time.Now()})
+		if err != nil {
+			t.Fatalf("Activate: %v", err)
+		}
+		// What a later writer's mirror leaves, planted: its flip is one
+		// this read cannot see yet.
+		later := uint64(first.Epoch) + 1000
+		put(t, store, legacyPayloadKey, legacyPayloadRecord{
+			RevisionID: "rev-later", Payload: []byte(`{"v":"later"}`), Epoch: later})
+		if err := store.mirrorLegacyPayload(ctx, uint64(first.Epoch), "rev-a",
+			[]byte(`{"v":"a"}`)); err != nil {
+			t.Fatalf("mirror: %v", err)
+		}
+		if got := held(t, store); got.RevisionID != "rev-later" || got.Epoch != later {
+			t.Errorf("a slow writer replaced a later mirror with %s at epoch %d",
+				got.RevisionID, got.Epoch)
+		}
+	})
+
+	t.Run("an earlier build's later pointer", func(t *testing.T) {
+		ctx := t.Context()
+		store := payloadFleet(t)
+		mine, err := store.Activate(ctx, coord.ActivationRequest{
+			RevisionID: "rev-new", Payload: []byte(`{"v":"new"}`), At: time.Now()})
+		if err != nil {
+			t.Fatalf("Activate: %v", err)
+		}
+		// The earlier build activates after it, as it always did: the
+		// body beside the pointer first, with no epoch, then a pointer
+		// with no body of its own.
+		put(t, store, legacyPayloadKey, map[string]any{
+			"revision_id": "rev-old", "payload": []byte(`{"v":"old"}`)})
+		put(t, store, activationKey, map[string]any{
+			"revision_id": "rev-old", "at": time.Now().UTC()})
+		if err := store.mirrorLegacyPayload(ctx, uint64(mine.Epoch), "rev-new",
+			[]byte(`{"v":"new"}`)); err != nil {
+			t.Fatalf("mirror: %v", err)
+		}
+		if got := held(t, store); got.RevisionID != "rev-old" {
+			t.Errorf("a slow writer replaced the body an earlier build's pointer "+
+				"names with %s", got.RevisionID)
+		}
+		if body, found, err := store.Payload(ctx, "rev-old"); err != nil || !found ||
+			string(body) != `{"v":"old"}` {
+			t.Errorf("the earlier build's revision reads %s found=%v err=%v", body, found, err)
+		}
+	})
 }
 
 // A POINTER AN OLDER BUILD WROTE STILL NAMES A BODY THIS ONE CAN READ.
@@ -546,13 +792,20 @@ func TestAnOlderPointersBodyIsReadFromBesideIt(t *testing.T) {
 	}
 
 	// And the next activation replaces the older shape outright: its body
-	// is the pointer's own, whatever is still under the legacy key.
+	// is the pointer's own, and the key beside it now mirrors that body
+	// rather than keeping the superseded one — the bucket has no
+	// retention, so a body left there would be kept for ever.
 	if _, err := store.Activate(ctx, coord.ActivationRequest{
 		RevisionID: "rev-new", Payload: []byte(`{"v":3}`), At: time.Now()}); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	if got, found, err := store.Payload(ctx, "rev-new"); err != nil || !found || string(got) != `{"v":3}` {
 		t.Errorf("rev-new = %s found=%v err=%v", got, found, err)
+	}
+	if revision, body, ok := earlierBuildRead(t, store); !ok || revision != "rev-new" ||
+		string(body) != `{"v":3}` {
+		t.Errorf("the key beside the pointer holds %s = %s (ok=%v), want rev-new's body",
+			revision, body, ok)
 	}
 }
 

@@ -352,15 +352,20 @@ Two consequences worth stating plainly:
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
 
-**Edit the company once the rollout has finished**, too. A revision reaches
+**An activation during a rollout reaches both builds.** A revision reaches
 every node through the activation pointer, which carries the sealed document
-inside its own record. A build from before that change reads the document from
-a key beside the pointer, so it cannot read one a newer node activated. It
-records the apply as an error, and once an upgraded peer has applied the epoch
-it sheds its work to that peer and, three attempts later, fails `/ready` until
-it is upgraded (visible on the fleet screen). Restarting nodes onto the new
-build activates nothing by itself, so a rollout that leaves the company alone
-never meets this. See
+inside its own record. A build from before that change reads the document only
+from a key beside the pointer, so every activation writes it there too, just
+after the pointer. The fleet activates during a rollout even when nobody edits
+the company: the integration loop re-activates the revision when it seals a
+credential, and a node whose revision is newer than the pointer publishes it
+at boot. A node on the earlier build that polls between the two writes records
+one failed attempt and applies the revision on its next poll. The one race the
+mirror cannot close is the earlier build's own: one of its nodes activating in
+the same instant as an upgraded node can leave the older nodes unable to reach
+that epoch (they shed their work to an upgraded peer and, three attempts
+later, fail `/ready`, visible on the fleet screen). Two nodes of the earlier
+build racing always had that outcome, and the next activation ends it. See
 [Control Plane § The design](../concepts/control-plane.md#the-design).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
