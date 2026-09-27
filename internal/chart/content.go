@@ -334,7 +334,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			// company's secret store, and a party refused the record
 			// must not have written there on the way to the refusal.
 			need := contentRequirement(changed)
-			if err := w.mayAuthor(object, need); err != nil {
+			if err = w.mayAuthor(object, need); err != nil {
 				return statelog.Decision{}, err
 			}
 			payload := SeatPayload{
@@ -526,11 +526,7 @@ func nextRuntime(object ObjectRef, prior, stated json.RawMessage, clear bool) (
 			"would run with no model chain and no credentials. Leave it out "+
 			"to keep the one it has: %w", object, err, ErrRefused)
 	}
-	// A ROW WHOSE RUNTIME DOES NOT DECODE IS ONE THIS WRITE CHANGES: a
-	// comparison that cannot say is answered the way that asks for the
-	// grant, never the way that skips it.
-	held, err := canonicalObject(prior)
-	if err != nil || held != restated {
+	if !holdsObject(prior, restated) {
 		return stated, true, nil
 	}
 	// THE SAME HALF, RESTATED, IS THE ROW'S OWN: the record carries the
@@ -570,6 +566,16 @@ func emailChanges(stated, stored string) bool {
 // what they read in, and its spelling's case, change nothing.
 func managesChanges(stated, stored []string) bool {
 	return !slices.Equal(sortedKeys(stated), sortedKeys(stored))
+}
+
+// holdsObject reports whether a stored runtime half is the one canonical names.
+//
+// A ROW WHOSE RUNTIME DOES NOT DECODE HOLDS NOTHING A WRITE COULD RESTATE, so
+// the write changes it: a comparison that cannot say is answered the way that
+// asks for the grant, never the way that skips it.
+func holdsObject(stored json.RawMessage, canonical string) bool {
+	held, err := canonicalObject(stored)
+	return err == nil && held == canonical
 }
 
 // canonicalObject is one runtime half as a comparable string: a JSON object

@@ -465,8 +465,7 @@ func (w *Writer) record(subject Subject, op OpKind, opID string, at time.Time,
 	// THE DOMAIN'S OWN HALF OF THE AUTHORITY QUESTION, asked here because
 	// this is the one funnel every decide in this package reaches. See
 	// grant.go for what it decides and what it deliberately does not.
-	if err := w.mayAuthor(ObjectRef{Kind: subject.Kind, ID: subject.ID},
-		need); err != nil {
+	if err := w.mayAuthor(ObjectRef(subject), need); err != nil {
 		return statelog.Decision{}, err
 	}
 	body, err := marshal(payload)
