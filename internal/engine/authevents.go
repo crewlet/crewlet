@@ -16,8 +16,8 @@ import (
 // ONE TRAIL PER PROCESS, built here rather than by each surface, because the
 // dedupe it keeps is the node's: a Tier A token's first use in an hour is one
 // row whether the request reached the guard through REST or the socket, and a
-// replayed cookie ends its sessions once however many surfaces saw it. Two
-// trails would be two opinions about "once".
+// session noticed past its deadline is announced once however many surfaces
+// saw its cookie. Two trails would be two opinions about "once".
 //
 // BEFORE THE NATIVE ESTATE, because both the identity writer and the state log's
 // appliers announce through it, and AFTER New's failure guard is armed, so a
