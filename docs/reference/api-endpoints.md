@@ -505,11 +505,15 @@ policies, and a browser enforces both.
 
 **Some answers also carry `Cache-Control: no-store`.** Every response under
 `/config`, whose body is the whole company document; a `/secrets` reveal's
-value; and **every response under `/auth`**, a refusal and a redirect included,
-whose
-answers are a second-factor seed and the `otpauth://` URI carrying it, recovery
-codes shown exactly once, who the caller is, the address an invitation was sent
-to, and every sign-in's `Set-Cookie`. Without it a browser's disk cache — or a
+value; and **every response under `/auth`**, a refusal and a redirect included —
+the request guard's own (`401 invalid_token`, `403
+second_factor_enrolment_required`, `503 identity_unavailable`), the origin
+check's `403`, the router's `404` and `405`, and every route's — whose answers
+are a second-factor seed and the `otpauth://` URI carrying it, recovery codes
+shown exactly once, who the caller is, the address an invitation was sent to,
+and every sign-in's `Set-Cookie`. The guard sets it for the whole prefix before
+anything beneath it writes, so a route added there is covered the moment it is
+mounted. Without it a browser's disk cache — or a
 shared proxy, for everybody behind it — keeps those after the tab, the session
 and the step-up that was needed to read them. `no-store` rather than `private`,
 which still lets the browser keep it, or `no-cache`, which only revalidates

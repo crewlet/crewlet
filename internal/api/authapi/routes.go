@@ -44,11 +44,12 @@ const Prefix = "/auth/"
 // [auth.Mux] RATHER THAN *http.ServeMux, and it is the package that owns the
 // exemption list that defines it — see there for why a mux this surface can
 // name is what makes the gate below possible at all.
+//
+// NOTHING HERE MAY BE STORED, and no route marks itself so: the guard marks
+// every answer under /auth `no-store` before anything beneath it writes —
+// its own refusals and the origin check's included — which a wrapper around
+// these routes could not reach. See [auth.Guard.Middleware].
 func (s *Service) Routes(mux auth.Mux) {
-	// EVERY ROUTE BEHIND ONE WRAPPER, so no answer this surface writes can
-	// be kept — see [noStore].
-	mux = noStore{mux}
-
 	// Unguarded.
 	mux.HandleFunc("GET "+auth.PathAuthConfig, s.Config)
 	mux.HandleFunc("POST "+auth.PathAuthLogin, s.Login)
@@ -86,37 +87,6 @@ func (s *Service) Routes(mux auth.Mux) {
 	// end the one they left open somewhere else without ending the one
 	// they are using to do it.
 	mux.HandleFunc("POST /auth/logout/{lineage}", s.LogoutOne)
-}
-
-// noStore is a mux whose every registered handler answers
-// `Cache-Control: no-store`.
-//
-// # Why every answer here, and why at registration
-//
-// What this surface answers is the one class of body no cache may hold: a
-// second-factor seed and the `otpauth://` URI that carries it, ten recovery
-// codes shown exactly once, who somebody is and what they may do, the address
-// an invitation was sent to, and every `Set-Cookie` a sign-in writes. A
-// response with no Cache-Control is one a browser keeps in its disk cache and a
-// shared proxy may keep for everybody behind it — where it outlives the tab,
-// the session and the step-up that was needed to read it, and where "shown
-// once" stops being true. Refusals are included: they say who the caller is
-// and what window their proof falls outside of.
-//
-// AT REGISTRATION, by wrapping the mux every route is mounted on, rather than
-// at each writer: a header each handler had to remember is one the next route
-// forgets, and a route added under /auth is covered the moment it is mounted.
-// `no-store` rather than `private` or `no-cache`, for configapi's reason:
-// private still lets the browser's own cache keep it, and no-cache only forces
-// a revalidation of what was stored.
-type noStore struct{ auth.Mux }
-
-// HandleFunc mounts handler behind the header.
-func (m noStore) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	m.Mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		handler(w, r)
-	})
 }
 
 // tokenLifetime is how long a session exchanged from a Tier A token lasts.

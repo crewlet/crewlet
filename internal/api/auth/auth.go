@@ -493,6 +493,39 @@ func AttributionOf(ctx context.Context) iam.Actor {
 	return iam.ActorFor(principal)
 }
 
+// markNoStore marks every answer to a request under [PathAuthPrefix]
+// `Cache-Control: no-store`.
+//
+// # Why every answer there
+//
+// What that surface answers is the one class of body no cache may hold: a
+// second-factor seed and the `otpauth://` URI that carries it, ten recovery
+// codes shown exactly once, who somebody is and what they may do, the address
+// an invitation was sent to, and every `Set-Cookie` a sign-in writes. A
+// response with no Cache-Control is one a browser keeps in its disk cache and
+// a shared proxy may keep for everybody behind it — where it outlives the tab,
+// the session and the step-up that was needed to read it, and where "shown
+// once" stops being true. Refusals are included: they say who the caller is,
+// what their session may reach and which window their proof falls outside of.
+//
+// # Why here, and not beside the routes
+//
+// It was a wrapper around the surface's own mux, which covered what the
+// routes wrote and nothing written before them: this guard's own refusals —
+// `401 invalid_token`, `403 second_factor_enrolment_required` (on an answer
+// that re-issues the session's cookie), `503 identity_unavailable` — the origin
+// check's `403`, and the mux's own `404` and `405` all went out cacheable. This
+// is the one frame every request under /auth passes through, guarded or not,
+// before anything beneath it can write; so it is set here, by path, and a
+// route added under /auth is covered the moment it is mounted. `no-store`
+// rather than `private` or `no-cache`: private still lets the browser's own
+// cache keep it, and no-cache only forces a revalidation of what was stored.
+func markNoStore(w http.ResponseWriter, path string) {
+	if strings.HasPrefix(path, PathAuthPrefix) {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+}
+
 // Middleware wraps a handler with the guard.
 //
 // A WebSocket upgrade is an HTTP request and passes through here like any
@@ -502,9 +535,14 @@ func AttributionOf(ctx context.Context) iam.Actor {
 // all. The middleware answered 401 first, and the dashboard could not
 // connect with a valid token, on the one posture whose point is that the
 // token is required.
+//
+// EVERY ANSWER UNDER /auth LEAVES HERE `no-store` — see [markNoStore] — set
+// before anything is resolved, so the refusals this writes, the origin check's
+// beneath it and every route's own all carry it.
 func (g *Guard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		markNoStore(w, path)
 
 		// ATTRIBUTION AND AUTHORIZATION ARE DIFFERENT QUESTIONS, and
 		// the credential is resolved for both. A route that does not
