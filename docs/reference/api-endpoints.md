@@ -4508,7 +4508,7 @@ A refusal on every `/webhooks/*` route is the engine's one [refusal envelope](#e
 | `503` | `no_active_revision` | This node has no active company revision, so it has no secrets and nothing to route by. Answered **before** the signature check, because verifying first would answer every delivery with the no-secret `503` and its five-minute wait | `15` — the reconcile poll that brings a node a missed activation |
 | `503` | `no_webhook_secret` | The route has no secret configured to verify against | `300` — a person editing the configuration |
 | `503` | `unusable_webhook_secret` | The configured secret cannot do the check it is for: a shared token shorter than 26 characters on a route whose provider signs nothing, or a GitLab `signing_secret` that is not a `whsec_` key | `300` |
-| `503` | `unavailable` | The delivery verified and the broker would not take it; its claim is released so the retry is not refused as a duplicate | `15` |
+| `503` | `unavailable` | The delivery verified and the broker would not take it; its claim is released so the retry is not refused as a duplicate | `4` — the broker's own minimum election timeout, the hint every surface gives for a broker it cannot reach: a refused publish waits on a reconnection or an election, and nothing changes sooner |
 | `413` | `body_too_large` | Over 25 MiB, or a verified delivery too large to publish — refused for good, so the provider stops retrying it | none |
 | `400` | `unreadable_body`, `invalid_body` | The body did not arrive whole, or is not one JSON object | none |
 

@@ -40,6 +40,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -47,26 +48,42 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("api.webhooks")
 
-// The two Retry-After values, and the difference between them is the point.
+// The three Retry-After values, each the cadence of the thing the sender is
+// actually waiting on — which is why there are three and not one.
 const (
 	// NoRevisionRetryAfter is what a node with no active company revision
-	// asks for. Matched to the control plane's reconcile cadence: a node
-	// that missed an activation picks the revision up on its next poll, so
+	// asks for: the control plane's reconcile poll, because a node that
+	// missed an activation picks the revision up on its next one, so
 	// telling a sender to come back sooner just burns deliveries against a
 	// node that cannot have converged yet.
-	NoRevisionRetryAfter = 15 * time.Second
+	//
+	// THE POLL ITSELF, not a copy of its value: it was a literal fifteen
+	// seconds here, which a retune of the poll would have left telling
+	// every sender the old cadence.
+	NoRevisionRetryAfter = configplane.ReconcileInterval
 
 	// NoSecretRetryAfter is what a route with no secret asks for.
 	// Deliberately much longer: the unconfigured case resolves itself on
 	// the next poll, this one waits on a human editing config, and a
-	// sender hammering every 15 s in the meantime buys nothing.
+	// sender hammering every poll in the meantime buys nothing.
 	NoSecretRetryAfter = 5 * time.Minute
+
+	// BrokerRetryAfter is what a VERIFIED delivery the broker would not
+	// take asks for: the broker's own minimum election timeout, the hint
+	// every state-log surface gives for a broker it cannot reach
+	// ([statelog.ElectionRetryHint]). A publish the broker refused is
+	// waiting on the client's reconnection or on an election, and a hint
+	// shorter than the election sends the retry back before anything can
+	// have changed. It borrowed [NoRevisionRetryAfter] before, whose reason
+	// is a config poll that has nothing to do with a broker.
+	BrokerRetryAfter = statelog.ElectionRetryHint
 )
 
 // verified is proof that a delivery authenticated.
@@ -448,7 +465,7 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 			"error", err, "detail", "the delivery was verified and could not be "+
 				"queued; releasing its claim so the provider's retry is not refused")
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-			httpjson.RetrySeconds(NoRevisionRetryAfter), httpjson.Detail{
+			httpjson.RetrySeconds(BrokerRetryAfter), httpjson.Detail{
 				"detail": "the delivery was verified and could not be queued",
 			})
 		return

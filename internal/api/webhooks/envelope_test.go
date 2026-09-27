@@ -56,11 +56,13 @@ func TestEveryWebhookRefusalIsTheEnginesEnvelope(t *testing.T) {
 			arrange: func(e *edge) { e.secrets.Datadog = "letmein" },
 			status:  http.StatusServiceUnavailable, code: httpjson.CodeUnusableWebhookSecret,
 			retryAfter: "300"},
+		// The broker's election timeout, not the config poll's fifteen
+		// seconds: nothing about a broker outage clears on a reconcile.
 		{name: "a verified delivery the broker would not take", path: "/webhooks/github",
 			headers: githubDelivery(issueBody, "gh-secret"),
 			arrange: func(e *edge) { e.published.fail(errors.New("nats: connection closed")) },
 			status:  http.StatusServiceUnavailable, code: httpjson.CodeUnavailable,
-			retryAfter: "15"},
+			retryAfter: "4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
