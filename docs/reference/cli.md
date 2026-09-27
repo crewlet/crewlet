@@ -439,7 +439,7 @@ The org chart used to live inside the company document, so a human seat's person
 ## `crewlet chart`
 
 ```
-crewlet chart show|check|history|export [<config.yaml>] [-url URL] [-token STR] [-out PATH]
+crewlet chart show|check|history|export [<config.yaml>] [-url URL] [-out PATH]
 ```
 
 The company's [org chart](../concepts/chart-domain.md), from the command line.
@@ -450,7 +450,9 @@ it by an applier the engine runs, and the store file is exclusive to whichever
 process holds it — so an offline read would be a second applier, and an
 offline write would be a record nothing published. `crewlet config` opens the
 store directly because a revision *is* a row; this cannot, and that difference
-is the whole shape of the command.
+is the whole shape of the command. It reaches that node with the credential
+in `CREWLET_API_TOKEN` and [nothing else](#crewlet-budgets): there is no token
+flag, and `-token` is refused as an unknown one.
 
 **The editing gestures are deliberately not here.** Hiring, moving and
 renaming are the dashboard's and the [API](api-endpoints.md#chart--the-org-chart-auth-gated)'s,
@@ -872,7 +874,7 @@ reset names only its own scope.
 ## `crewlet backup`
 
 ```
-crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-token TOKEN] [-wait DURATION]
+crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-wait DURATION]
 ```
 
 Copies a running node's two durable estates — its store file and every
@@ -914,7 +916,7 @@ what the copy is a copy *of*, and how a restore uses it.
 
 ```
 crewlet work purge <item> -reason TEXT -confirm <item-key>
-    [-op-id ID] [<config.yaml>] [-url URL] [-token TOKEN]
+    [-op-id ID] [<config.yaml>] [-url URL]
 ```
 
 The gestures on work items that belong on a **shell**. Everything else a
@@ -971,7 +973,7 @@ duration to state, and `crewlet retention status` names which nodes those are.
 
 ```
 crewlet retention status|snapshots|ack|evict|readmit|set-capacity|maintenance|reanchor|verify
-    [<config.yaml>] [-url URL] [-token TOKEN]
+    [<config.yaml>] [-url URL]
 ```
 
 What the state log is holding, why it is not shrinking, and the gestures that
