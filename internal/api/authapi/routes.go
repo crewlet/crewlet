@@ -85,6 +85,14 @@ func (s *Service) Routes(mux auth.Mux) {
 	mux.HandleFunc("POST "+auth.PathAuthTOTP, s.EnrolTOTP)
 	mux.HandleFunc("POST /auth/totp/recovery", s.RegenerateRecovery)
 	mux.HandleFunc("POST "+auth.PathAuthLogout, s.Logout)
+	if s.provider != nil {
+		// SIGNING OUT OF THE PROVIDER TOO, where there is one — and
+		// ABSENT where there is not, for the provider routes' reason.
+		// Registered before `/auth/logout/{lineage}`, which it would
+		// otherwise read as a lineage named `oidc`; the mux prefers the
+		// literal segment whatever the order, and this says so.
+		mux.HandleFunc("POST "+auth.PathAuthLogoutProvider, s.LogoutProvider)
+	}
 	mux.HandleFunc("POST /auth/logout/all", s.LogoutEverywhere)
 	// THE THIRD LOGOUT: one NAMED session, which is what a person uses to
 	// end the one they left open somewhere else without ending the one

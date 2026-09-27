@@ -192,6 +192,12 @@ const (
 	PathAuthLogout = "/auth/logout"
 )
 
+// PathAuthLogoutProvider ends this session AND the person's session at the
+// identity provider. GUARDED, like the plain sign-out, and mounted only where a
+// provider is; named here beside the others so the guard and the registration
+// share one spelling.
+const PathAuthLogoutProvider = "/auth/logout/oidc"
+
 // WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
 // reads. Named here, beside the exemption, for the reason [SocketPath] is: the
 // API's drain gate refuses the first and serves the second, and a prefix it

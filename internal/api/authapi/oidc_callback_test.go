@@ -65,6 +65,10 @@ type provider struct {
 	// exchanges counts every request the token endpoint was sent.
 	exchanges atomic.Int64
 
+	// noEndSession makes the discovery document publish no
+	// end_session_endpoint, as some providers' do not.
+	noEndSession bool
+
 	// groups is the groups claim every ID token carries, or none.
 	groups []string
 
@@ -84,14 +88,19 @@ func newProvider(t *testing.T) *provider {
 	p := &provider{key: key, nonces: map[string]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc(oidc.MetadataPath, func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		doc := map[string]any{
 			"issuer":                                p.URL,
 			"authorization_endpoint":                p.URL + "/authorize",
 			"token_endpoint":                        p.URL + "/token",
 			"jwks_uri":                              p.URL + "/jwks",
+			"end_session_endpoint":                  p.URL + "/logout?tenant=acme",
 			"code_challenge_methods_supported":      []string{"S256"},
 			"id_token_signing_alg_values_supported": []string{"RS256"},
-		})
+		}
+		if p.noEndSession {
+			delete(doc, "end_session_endpoint")
+		}
+		_ = json.NewEncoder(w).Encode(doc)
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{

@@ -51,6 +51,9 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	// that has one.
 	optional := []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
 		auth.AuthInvitePrefix + "{id}/provider"}
+	// AND ONE CONDITIONAL ROUTE IS GUARDED: signing out of the provider
+	// too, which only somebody signed in can ask for.
+	optionalGuarded := []string{auth.PathAuthLogoutProvider}
 	// EVERYTHING ELSE NEEDS A SESSION, and the list is spelled out rather
 	// than derived as "the rest": a route that went missing from the
 	// registration would otherwise pass silently, and one added would be
@@ -78,7 +81,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 					"it: a sign-in route behind a credential is a deployment "+
 					"nobody can enter", pattern)
 			}
-		case slices.Contains(guarded, path):
+		case slices.Contains(guarded, path), slices.Contains(optionalGuarded, path):
 			if auth.Unguarded(strings.Replace(path, "{lineage}", "abc", 1)) {
 				t.Errorf("%s is declared guarded here and the guard exempts "+
 					"it: this surface ends sessions and enrols second "+
@@ -248,6 +251,23 @@ func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
 				"following a redirect, which carries nothing this engine "+
 				"issued — so requiring a credential makes it unreachable", want)
 		}
+	}
+	// SIGNING OUT OF THE PROVIDER is mounted beside them and GUARDED: it
+	// ends a session, which only its holder may ask for.
+	if !slices.Contains(mux.patterns, "POST "+auth.PathAuthLogoutProvider) {
+		t.Errorf("%s is not mounted on a deployment that has a provider",
+			auth.PathAuthLogoutProvider)
+	}
+	if auth.Unguarded(auth.PathAuthLogoutProvider) {
+		t.Errorf("%s is exempt from the guard, so anybody could end a session",
+			auth.PathAuthLogoutProvider)
+	}
+	// AND IT IS ABSENT WHERE THERE IS NONE, as the round trip is.
+	plain := &recordingMux{}
+	surface(t).Routes(plain)
+	if slices.Contains(plain.patterns, "POST "+auth.PathAuthLogoutProvider) {
+		t.Errorf("%s is mounted on a deployment with no provider",
+			auth.PathAuthLogoutProvider)
 	}
 }
 

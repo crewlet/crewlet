@@ -1473,6 +1473,21 @@ lapses with the session that presented it; a node that has not yet applied a
 brand-new session's row serves its reads on the declared set alone, which only
 ever narrows. `GET /auth/session` shows the effective set.
 
+### Signing out of the provider too
+
+A sign-out here ends this engine's session and leaves the provider's, so on a
+machine somebody else uses next, "sign in with the provider" answers straight
+from the old session without anybody typing anything. `POST /auth/logout/oidc`
+is the sign-out for that machine: it ends the session here exactly as the plain
+sign-out does, then sends the browser to the provider's `end_session_endpoint`
+naming this client and asking to come back to the dashboard. Register
+`<api.external_url>/dashboard` as a post-logout redirect URI at the provider,
+or it leaves the person on its own page. No `id_token_hint` is sent, because the
+engine keeps no ID token once a sign-in completes — a provider that insists on
+one asks the person to confirm, and the session here is over either way. A
+provider that publishes no end-session endpoint, or cannot be reached, gets a
+plain sign-out that says so: `provider_session: not_ended`.
+
 ### The deactivation probe
 
 A provider that suspends or deletes an account tells nobody. Every other
