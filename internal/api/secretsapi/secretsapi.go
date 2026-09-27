@@ -184,7 +184,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		out = append(out, render(row))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpjson.Write(w, http.StatusOK, map[string]any{
 		"secrets": out, "engine_keys": engine,
 	})
 }
@@ -233,7 +233,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		case !found:
 			httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		default:
-			writeJSON(w, http.StatusOK, render(row))
+			httpjson.Write(w, http.StatusOK, render(row))
 		}
 		return
 	}
@@ -267,7 +267,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	// shared proxy's cache, which is a credential leak with no log line
 	// anywhere and no way to find it afterwards.
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "value": value})
+	httpjson.Write(w, http.StatusOK, map[string]any{"name": name, "value": value})
 }
 
 // put serves PUT /secrets/{name} — store or rotate one value.
@@ -332,7 +332,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		"source", source)
 	// THE AUTHOR THE ROW RECORDS, in the answer: a client offering its own
 	// name has no say in it, so the only honest confirmation is the node's.
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpjson.Write(w, http.StatusOK, map[string]any{
 		"name": name, "bytes": len(body), "key_id": s.keyID,
 		"updated_by": by.Name, "updated_by_kind": string(by.Kind),
 		"operator_id": by.OperatorID,
@@ -366,7 +366,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	by := iam.ActorFor(caller)
 	log.InfoContext(r.Context(), "secret_removed", "name", name,
 		"removed", removed, "by", by.Name, "operator", by.OperatorID)
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
+	httpjson.Write(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
 }
 
 // rekey serves POST /secrets/rekey — re-seal every stale row.
@@ -430,7 +430,7 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 		"by", by.Name, "operator", by.OperatorID)
 	// THE ENGINE'S KEYS AS A COUNT beside the operator's names: the operator
 	// retiring the old key needs to know they moved, and nothing more.
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpjson.Write(w, http.StatusOK, map[string]any{
 		"key_id": s.keyID, "moved": nonNil(rekeyed.Moved),
 		"engine_keys_moved": rekeyed.EngineKeys,
 	})
@@ -488,9 +488,4 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 	}
 	log.Error("secret_request_failed", "what", what, "error", err)
 	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-}
-
-// writeJSON is [httpjson.Write] under this package's own name.
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	httpjson.Write(w, status, body)
 }
