@@ -754,7 +754,20 @@ The parameters ride in the stored verifier, which is what makes a cost raise
 possible at all: the plaintext is not stored, so the only instant a stronger
 digest can be computed is the one where somebody presents their password. A
 verifier written under an older cost verifies under *its own* parameters and is
-reported stale, and the record that records the successful sign-in rewrites it.
+reported stale, and a sign-in or a step-up that has just succeeded on it
+rewrites it at the current cost — the same credential, its id kept, one write to
+the person's own credentials decided in the write's snapshot, so a password
+changed in the meantime keeps its change.
+
+It is **best effort and never at the sign-in's expense**: the person is waiting
+for a session, not a stronger digest, so the rewrite has only the time left
+before the refusal pad's deadline (a successful sign-in never takes longer than
+a failed one would), waits for a free derivation slot no longer than that, and
+anything short of a confirmed write is logged (`api_password_rehash_skipped`,
+`api_password_rehash_unrecorded`) and changes nothing about the answer. The old
+verifier still verifies, so the next sign-in asks again — and every attempt to
+retire one verifier is one operation, its id derived from the person and the
+verifier it replaces.
 
 ### A code is spent when it is used
 

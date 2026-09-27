@@ -1,6 +1,7 @@
 package credential
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -175,18 +176,64 @@ func (h *Hasher) Verify(verifier, password string) (ok bool, rehash bool) {
 	return true, params != h.params
 }
 
+// Rehash produces a verifier for a password at this hasher's cost, as [Hash]
+// does, and gives up if ctx ends before the concurrency cap admits it.
+//
+// # It exists for the ONE hash nobody is waiting on
+//
+// Raising the cost is carried out by the sign-in that presents the password
+// ([Hasher.Verify]'s rehash flag), and that sign-in's person is waiting for a
+// session, not for a stronger digest: the rewrite is an opportunity, and one
+// that queued behind the cap — which is full exactly when the endpoint is
+// under the load the cap exists for — would make an attack on somebody else a
+// slow sign-in for everybody whose verifier is stale. So it waits for a slot
+// only as long as its caller can spare, and a miss is harmless: the verifier
+// stays verifiable at its own cost, and the next sign-in asks again.
+//
+// A SLOT ONCE TAKEN RUNS TO THE END. argon2 is not interruptible, and
+// abandoning the result of a derivation already paid for would spend the cost
+// and keep nothing.
+func (h *Hasher) Rehash(ctx context.Context, password string) (string, error) {
+	salt := make([]byte, SaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("credential: read a salt: %w", err)
+	}
+	digest, err := h.deriveWithin(ctx, password, salt, h.params)
+	if err != nil {
+		return "", err
+	}
+	return h.encode(salt, digest), nil
+}
+
 // derive runs the cost at params, under the concurrency cap: this hasher's own
 // for a new verifier, the stored verifier's for a verification — ONE path, so
 // no derivation this package runs can skip the cap.
 func (h *Hasher) derive(password string, salt []byte, params Params) []byte {
+	// A CONTEXT THAT NEVER ENDS, so the wait is the cap's alone: a sign-in
+	// VERIFYING is the caller the cap queues rather than refuses.
+	digest, _ := h.deriveWithin(context.Background(), password, salt, params)
+	return digest
+}
+
+// deriveWithin is [Hasher.derive] for a caller that may stop waiting for the
+// cap: it answers ctx's error if ctx ends first, and never runs the cost
+// outside the cap.
+func (h *Hasher) deriveWithin(ctx context.Context, password string, salt []byte,
+	params Params) ([]byte, error) {
+
 	// THE CAP IS TAKEN AROUND THE DERIVATION AND NOTHING ELSE. Holding it
 	// across a store read as well would make one slow database turn the
 	// password cost into a queue, which is the shape that takes a node
 	// down under exactly the load the cap exists for.
-	h.admit <- struct{}{}
+	select {
+	case h.admit <- struct{}{}:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("credential: no derivation slot was free "+
+			"before the caller's deadline: %w", ctx.Err())
+	}
 	defer func() { <-h.admit }()
 	return argon2.IDKey([]byte(password), salt, params.Time, params.Memory,
-		params.Threads, params.KeyLen)
+		params.Threads, params.KeyLen), nil
 }
 
 // encode writes the PHC string this engine stores.

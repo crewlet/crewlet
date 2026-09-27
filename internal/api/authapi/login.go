@@ -2,6 +2,8 @@ package authapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -166,7 +168,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		s.refuseSignIn(w, r, arrived, attempt, "no password credential")
 		return
 	}
-	ok, _ := s.hasher.Verify(verifier.Verifier, in.Password)
+	ok, stale := s.hasher.Verify(verifier.Verifier, in.Password)
 	if !ok {
 		s.refuseSignIn(w, r, arrived, attempt, "password mismatch")
 		return
@@ -190,11 +192,89 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// THE SIGN-IN HAS SUCCEEDED, so this is the one instant a verifier
+	// written under an older cost can be rewritten: the plaintext is in hand.
+	if stale {
+		s.rehashPassword(r, arrived, held.ID, verifier, in.Password)
+	}
 
 	s.throttle.Flush(r.Context(), source)
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
 	})
+}
+
+// rehashPassword rewrites a password verifier written under an older cost at
+// this hasher's current one, for a sign-in that has just proved the password.
+//
+// # The only instant a cost raise can be carried out
+//
+// The plaintext is not stored, so a stronger digest can be computed only when
+// somebody presents their password — which is why the parameters ride in the
+// stored verifier and [credential.Hasher.Verify] reports one that is stale. It
+// reported it to nobody: every sign-in discarded the flag, so raising the cost
+// changed new passwords and left every existing verifier at the old one for
+// the life of the deployment.
+//
+// # Best effort, and never at the sign-in's expense
+//
+// The person is waiting for a session, not for a stronger digest. So the
+// rewrite has the time left before the refusal pad's deadline and no more — a
+// sign-in that succeeds never takes longer than one that fails would — and
+// anything short of success is LOGGED and changes nothing about the answer: a
+// hash that found no free slot, a write refused or unconfirmed. The old
+// verifier still verifies at its own cost, so the next sign-in simply asks
+// again.
+//
+// # Idempotent, and never over somebody else's change
+//
+// The operation id is derived from the person and the verifier being REPLACED,
+// so every attempt to retire one verifier is one operation, whichever node
+// makes it. And the swap is decided inside the write's own snapshot: only the
+// credential that was verified, still holding the verifier that was verified,
+// is rewritten — a password changed in between keeps its change — and it keeps
+// its id, because a re-hash is the same credential at a different cost.
+func (s *Service) rehashPassword(r *http.Request, arrived time.Time, person string,
+	stale iamdomain.Credential, password string) {
+
+	budget := s.throttle.Deadline() - s.now().Sub(arrived)
+	if budget <= 0 {
+		log.DebugContext(r.Context(), "api_password_rehash_skipped",
+			"person", person, "reason", "the sign-in has used its time")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
+	defer cancel()
+	fresh, err := s.hasher.Rehash(ctx, password)
+	if err != nil {
+		log.InfoContext(r.Context(), "api_password_rehash_skipped",
+			"person", person, "error", err)
+		return
+	}
+	digest := sha256.Sum256([]byte(stale.Verifier))
+	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
+		PersonID: person,
+		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+			out := slices.Clone(held)
+			for i, c := range out {
+				if c.ID == stale.ID && c.Method == iamdomain.MethodPassword &&
+					c.Verifier == stale.Verifier {
+					out[i].Verifier = fresh
+				}
+			}
+			return out
+		},
+		OpID:   "rehash:" + person + ":" + hex.EncodeToString(digest[:8]),
+		Reason: "re-hashed the password at the current cost",
+	})
+	if err != nil || !landed(result) {
+		log.WarnContext(r.Context(), "api_password_rehash_unrecorded",
+			"person", person, "error", errText(err), "op_id", result.OpID,
+			"outcome", string(result.Outcome))
+		return
+	}
+	log.InfoContext(r.Context(), "api_password_rehashed", "person", person,
+		"position", result.Position.String())
 }
 
 // resolve finds the person a sign-in names, by login or by address.

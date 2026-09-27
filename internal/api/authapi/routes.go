@@ -330,7 +330,8 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		s.refuseSignIn(w, r, arrived, attempt, "step-up: no password credential")
 		return
 	}
-	if ok, _ := s.hasher.Verify(verifier.Verifier, in.Password); !ok {
+	ok, stale := s.hasher.Verify(verifier.Verifier, in.Password)
+	if !ok {
 		s.refuseSignIn(w, r, arrived, attempt, "step-up: password mismatch")
 		return
 	}
@@ -342,6 +343,12 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 			in.Code); !proved {
 			return
 		}
+	}
+	// A STEP-UP PRESENTS THE PASSWORD TOO, and a person who only ever
+	// confirms on a long-lived session would otherwise keep the old cost
+	// for as long as that session lasts.
+	if stale {
+		s.rehashPassword(r, arrived, held.ID, verifier, in.Password)
 	}
 
 	replaced, ok := s.replacedSession(w, r, held)

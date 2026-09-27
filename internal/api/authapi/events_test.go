@@ -106,6 +106,10 @@ type estate struct {
 	// unresolved names the writes whose outcome nothing can establish:
 	// each answers `unknown` under its own op id instead of landing.
 	unresolved map[string]bool
+
+	// credentialOps are the operation ids every SetCredentials was asked
+	// under, in order.
+	credentialOps []string
 }
 
 // outcome is what one of this estate's writes answers: applied at a position,
@@ -174,6 +178,7 @@ func (e *estate) SetCredentials(_ context.Context, in iamdomain.CredentialSet) (
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.credentialOps = append(e.credentialOps, in.OpID)
 	held := slices.Clone(e.person.Credentials)
 	if e.before != nil {
 		held = e.before(held)
