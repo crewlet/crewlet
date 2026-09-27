@@ -315,14 +315,14 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext
 			"there is nothing for the gate to drop", at.position)
 	}
 	if gate.Readmit {
-		res, err := tx.ExecContext(ctx, `
+		res, readmitErr := tx.ExecContext(ctx, `
 			UPDATE chart_evictions
 			SET readmitted_position = ?, version = ?
 			WHERE node_id = ? AND version < ?`,
 			at.packed, at.packed, gate.NodeID, at.packed)
-		if err != nil {
+		if readmitErr != nil {
 			return 0, fmt.Errorf("chart: readmit node %s at %s: %w",
-				gate.NodeID, at.position, err)
+				gate.NodeID, at.position, readmitErr)
 		}
 		n, _ := res.RowsAffected()
 		return int(n), nil

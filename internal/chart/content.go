@@ -148,10 +148,10 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 				return statelog.Decision{}, err
 			}
 			if found {
-				if err := w.mayReplace(prior.Runtime); err != nil {
+				if err = w.mayReplace(prior.Runtime); err != nil {
 					return statelog.Decision{}, err
 				}
-			} else if err := refuseIdentity(ctx, tx, object); err != nil {
+			} else if err = refuseIdentity(ctx, tx, object); err != nil {
 				return statelog.Decision{}, err
 			}
 			payload := UnitPayload{
@@ -224,10 +224,10 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			// a content write is full post-state, so one that omits
 			// the opaque half CLEARS it. See [Writer.mayReplace].
 			if found {
-				if err := w.mayReplace(prior.Runtime); err != nil {
+				if err = w.mayReplace(prior.Runtime); err != nil {
 					return statelog.Decision{}, err
 				}
-			} else if err := refuseIdentity(ctx, tx, object); err != nil {
+			} else if err = refuseIdentity(ctx, tx, object); err != nil {
 				return statelog.Decision{}, err
 			}
 			if found && prior.UnitKey != unit {

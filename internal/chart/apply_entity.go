@@ -71,8 +71,8 @@ func (a *Applier) applyUnit(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		// held to the rule every creation is: never onto another object's
 		// identity. Declined rather than raised, for [Applier.rekeyUnit]'s
 		// reason; [Writer.WriteUnit] is where an operator is told.
-		if _, taken, err := identityHolder(ctx, tx, KindUnit, key); err != nil || taken {
-			return 0, err
+		if _, taken, holderErr := identityHolder(ctx, tx, KindUnit, key); holderErr != nil || taken {
+			return 0, holderErr
 		}
 		unit = Unit{V: DocumentVersion, Key: key, CreatedAt: at.brokerAt}
 	}
@@ -130,8 +130,8 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	}
 	if !found {
 		// Held to every creation's rule, for [Applier.applyUnit]'s reason.
-		if _, taken, err := identityHolder(ctx, tx, KindSeat, handle); err != nil || taken {
-			return 0, err
+		if _, taken, holderErr := identityHolder(ctx, tx, KindSeat, handle); holderErr != nil || taken {
+			return 0, holderErr
 		}
 		seat = Seat{V: DocumentVersion, Handle: handle, CreatedAt: at.brokerAt}
 	}
@@ -251,8 +251,8 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 	// Every node reaches the same verdict from the same rows, which is what
 	// keeps the copies identical — the same reason [Applier.rekeyUnit]'s
 	// absent-object case above returns nothing rather than raising.
-	if taken, err := rekeyTaken(ctx, tx, KindUnit, key, former); err != nil || taken {
-		return 0, err
+	if taken, takenErr := rekeyTaken(ctx, tx, KindUnit, key, former); takenErr != nil || taken {
+		return 0, takenErr
 	}
 	// THE ORIGIN IS FROZEN BY THE FIRST REKEY AND NEVER AGAIN, which is the
 	// one moment the create address is still known: a unit that has been
@@ -357,8 +357,8 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	// reason [Applier.rekeyUnit] gives at the same point: `handle` is this
 	// table's PRIMARY KEY, and an apply that raises is a record every node
 	// fails on identically and for ever.
-	if taken, err := rekeyTaken(ctx, tx, KindSeat, handle, former); err != nil || taken {
-		return 0, err
+	if taken, takenErr := rekeyTaken(ctx, tx, KindSeat, handle, former); takenErr != nil || taken {
+		return 0, takenErr
 	}
 	// FROZEN BY THE FIRST REKEY, for the reason [Applier.rekeyUnit] gives —
 	// and here it is what keeps the seat's mailbox, lease, diary and

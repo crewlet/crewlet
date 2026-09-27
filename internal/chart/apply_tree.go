@@ -196,16 +196,16 @@ func (a *Applier) writeStructure(ctx context.Context, tx *sql.Tx, at applyContex
 		return 0, err
 	}
 	if exists {
-		res, err := tx.ExecContext(ctx, `
+		res, updateErr := tx.ExecContext(ctx, `
 			UPDATE chart_units
 			SET parent_key = ?, lead = ?, updated_at = ?,
 			    scoped_through = ?, document = ?
 			WHERE key = ? AND scoped_through < ?`,
 			unit.ParentKey, unit.Lead, store.EncodeTime(unit.UpdatedAt),
 			at.packed, document, unit.Key, at.packed)
-		if err != nil {
+		if updateErr != nil {
 			return 0, fmt.Errorf("chart: place unit %s at %s: %w",
-				unit.Key, at.position, err)
+				unit.Key, at.position, updateErr)
 		}
 		n, _ := res.RowsAffected()
 		return int(n), nil
@@ -243,15 +243,15 @@ func (a *Applier) writeSeatStructure(ctx context.Context, tx *sql.Tx,
 		return 0, err
 	}
 	if exists {
-		res, err := tx.ExecContext(ctx, `
+		res, updateErr := tx.ExecContext(ctx, `
 			UPDATE chart_seats
 			SET unit_key = ?, updated_at = ?, scoped_through = ?, document = ?
 			WHERE handle = ? AND scoped_through < ?`,
 			seat.UnitKey, store.EncodeTime(seat.UpdatedAt), at.packed,
 			document, seat.Handle, at.packed)
-		if err != nil {
+		if updateErr != nil {
 			return 0, fmt.Errorf("chart: place seat %s at %s: %w",
-				seat.Handle, at.position, err)
+				seat.Handle, at.position, updateErr)
 		}
 		n, _ := res.RowsAffected()
 		return int(n), nil
