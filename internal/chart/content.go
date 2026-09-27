@@ -53,14 +53,16 @@ import (
 // and, since a seat's kind is structure too, one with no kind at all.
 //
 // So a content write on an address this node's rows do not hold is REFUSED,
-// after one wait: the create may be on the log and not applied here yet —
-// answered `pending` to the caller who now writes its content, which is the
-// ordinary shape of a hire and of an import. [Writer.publishContent] waits for
-// this node to apply everything the structure has been written by, and asks
-// once more. The apply holds the same line from its side: from record version
-// 2 a content record that meets no row is declined rather than creating one
-// ([Applier.declineContent]), since its decide found the row and only a record
-// the log ordered between can have taken it.
+// after one wait: the create — or the rename onto the address — may be on the
+// log and not applied here yet, answered `pending` to the caller who now
+// writes its content, which is the ordinary shape of a hire and of an import.
+// [Writer.publishContent] waits for this node to apply everything the
+// structure has been written by, and asks once more. Only a REMOVED address is
+// refused without the wait, since it is the one answer no later record can
+// change ([notPlaced]). The apply holds the same line from its side: from
+// record version 2 a content record that meets no row is declined rather than
+// creating one ([Applier.declineContent]), since its decide found the row and
+// only a record the log ordered between can have taken it.
 
 // UnitContent is one unit's own content, as a caller states it.
 //
@@ -289,14 +291,58 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 	return WriteResult{Result: result, Objects: []ObjectRef{object}}, err
 }
 
-// errNotPlaced is a content write whose object this node's rows do not hold,
-// and that nothing yet says will never arrive. [Writer.publishContent] turns it
-// into one wait and one more attempt, and then into a refusal.
-var errNotPlaced = errors.New("chart: the object is not in this node's rows")
+// notPlacedError is a content write whose object this node's rows do not hold
+// at the address it names, where nothing yet says no object ever will.
+// [Writer.publishContent] turns it into one wait and one more attempt, and the
+// second miss into the refusal [notPlacedError.refusal] words.
+type notPlacedError struct {
+	// holder is the object that answers to the address as a RETIRED one of
+	// its own — its identity or an alias — named by the address it holds
+	// now, and empty where nothing answers to it at all.
+	holder string
+}
+
+func (e *notPlacedError) Error() string {
+	if e.holder != "" {
+		return fmt.Sprintf("chart: the address is a retired one of %q, and "+
+			"this node's rows hold no object on it", e.holder)
+	}
+	return "chart: the object is not in this node's rows"
+}
+
+// refusal is why a content write on object was refused once the wait changed
+// nothing: the object it reached before a rename, or that it does not exist.
+func (e *notPlacedError) refusal(object ObjectRef) error {
+	if e.holder != "" {
+		return fmt.Errorf("chart: %s was renamed and answers to %q now — a "+
+			"content write is made to the address an object holds, because that "+
+			"is the subject it contends on: write %s %s instead: %w",
+			object, e.holder, object.Kind, e.holder, ErrRefused)
+	}
+	return fmt.Errorf("chart: %s is not in the chart, and a content write "+
+		"never creates an object — a creation is structure, refused over a "+
+		"taken, reserved or removed address against every other structural "+
+		"change. Create it with a structural batch (`create_%s`, POST "+
+		"/chart/batch) first: %w", object, object.Kind, ErrRefused)
+}
 
 // notPlaced is why a content write's decide found no row: a refusal where the
-// rows already say why — the address was removed, or the object answers to
-// another one now — and [errNotPlaced] where a create may still be arriving.
+// rows already say no object will ever be on the address again, and a
+// [notPlacedError] everywhere else, carrying what the rows hold there.
+//
+// # Only a removal is final
+//
+// A REMOVED address is refused before any wait, because nothing can undo it:
+// every path that gives an address refuses a tombstoned one first
+// ([refuseHeld]), so no record on the log can put an object there. A RETIRED
+// one is not like that. A creation may take somebody's retired alias — a new
+// hire on a leaver's old handle — and an object may be renamed back onto any
+// address it used to answer to, its identity included. Both are structure, so
+// either may be on the log and not applied here when its content write
+// arrives, which is the same ordinary shape of a hire the wait exists for.
+// Refused on the first miss, the write was told to go and write a DIFFERENT,
+// live object — the one the address used to reach. So it waits like an absent
+// address does, and where the object went is said only on the second miss.
 //
 // READ IN THE DECIDE'S OWN SNAPSHOT, like everything a decide acts on.
 func notPlaced(ctx context.Context, tx *sql.Tx, object ObjectRef) error {
@@ -319,12 +365,9 @@ func notPlaced(ctx context.Context, tx *sql.Tx, object ObjectRef) error {
 		return err
 	}
 	if how == heldAsAlias || how == heldAsIdentity {
-		return fmt.Errorf("chart: %s was renamed and answers to %q now — a "+
-			"content write is made to the address an object holds, because that "+
-			"is the subject it contends on: write %s %s instead: %w",
-			object, holder, object.Kind, holder, ErrRefused)
+		return &notPlacedError{holder: holder}
 	}
-	return errNotPlaced
+	return &notPlacedError{}
 }
 
 // publishContent publishes one content write, and when its object is not in
@@ -336,10 +379,12 @@ func notPlaced(ctx context.Context, tx *sql.Tx, object ObjectRef) error {
 // created it — a hire, an import — and that batch may have been answered
 // `pending`: durable, and not yet applied on this node. A content write decided
 // then finds no row, and refusing it would refuse every hire whose two halves
-// landed a moment apart. What makes an object exist is a structural record, so
-// this node waits until it has applied everything the structure's subject had
-// been written by when the refusal was reached ([statelog.Publisher.SubjectEnd])
-// and decides again. A second miss is a real one, and refused.
+// landed a moment apart. What puts an object on an address is a structural
+// record — a create, or a rename onto it — so this node waits until it has
+// applied everything the structure's subject had been written by when the
+// miss was reached ([statelog.Publisher.SubjectEnd]) and decides again. A
+// second miss is a real one, and refused, saying what the rows then hold on
+// the address.
 //
 // THE WAIT IS THE WRITER'S SESSION MARK, raised for this call alone, so the
 // framework's own resolve budget bounds it and a node that cannot catch up
@@ -348,13 +393,15 @@ func (w *Writer) publishContent(ctx context.Context, object ObjectRef,
 	req statelog.Request) (statelog.Result, error) {
 
 	result, err := w.publish(ctx, req)
-	if !errors.Is(err, errNotPlaced) {
+	var miss *notPlacedError
+	if !errors.As(err, &miss) {
 		return result, err
 	}
 	end, found, endErr := w.publisher.SubjectEnd(ctx, wire(TreeSubject()))
 	if endErr != nil {
 		return result, fmt.Errorf("chart: %s is not in this node's rows, and the "+
-			"log could not be asked whether a create of it is still arriving: "+
+			"log could not be asked whether a create of it, or a rename onto "+
+			"it, is still arriving: "+
 			"%w: %w", object, statelog.ErrUnavailable, endErr)
 	}
 	// A MARK ALREADY AT OR PAST THE STRUCTURE'S END waited for it the first
@@ -364,13 +411,11 @@ func (w *Writer) publishContent(ctx context.Context, object ObjectRef,
 	if found && (w.after.IsZero() || w.after.Packed() < end.Packed()) {
 		result, err = w.After(end).publish(ctx, req)
 	}
-	if errors.Is(err, errNotPlaced) {
-		return result, fmt.Errorf("chart: %s is not in the chart, and a content "+
-			"write never creates an object — a creation is structure, refused "+
-			"over a taken, reserved or removed address against every other "+
-			"structural change. Create it with a structural batch "+
-			"(`create_%s`, POST /chart/batch) first: %w",
-			object, object.Kind, ErrRefused)
+	// THE LATEST MISS SPEAKS: the wait may have applied a rename that moved
+	// what answers to the address, and it is the rows as they stand now that
+	// the caller acts on.
+	if errors.As(err, &miss) {
+		return result, miss.refusal(object)
 	}
 	return result, err
 }

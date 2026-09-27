@@ -262,7 +262,13 @@ why the object is not there, naming its removal and the reason given, or the
 address it was renamed to. It **waits first**: the batch that created the
 object may have been answered `202` and not be applied on this node yet, which
 is the ordinary shape of a hire, so the write waits for this node to apply
-everything the structure had been written by and decides once more.
+everything the structure had been written by and decides once more. Only a
+**removed** address is refused without that wait, because nothing can ever put
+an object on it again. A **renamed-away** address waits like an absent one: a
+creation may take a retired alias — a new hire on a leaver's old handle — and
+an object may be renamed back onto any address it used to answer to, so the
+batch that fills it may be the one this node has not applied yet. Where the
+object went is said only once the wait has changed nothing.
 
 **A seat's kind is structure.** Whether a person or an agent holds a seat
 decides whether anything runs there — whether a node claims it and gives it a

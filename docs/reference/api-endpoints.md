@@ -572,8 +572,12 @@ where an object is created — or, where the chart knows why it is not there, th
 removal that took it (with who made it and the reason given) or the address it
 was renamed to. The write first waits for this node to apply everything the
 structure had been written by, so a `PATCH` straight after the `202` of the
-batch that created its object lands rather than being refused; a node that
-cannot catch up in time answers `503` as it does for any write it is behind on.
+batch that created its object lands rather than being refused — a batch that
+creates a new object on another one's retired address, or renames an object
+back onto an address it used to hold, included — and a node that cannot catch
+up in time answers `503` as it does for any write it is behind on. Only a
+removed object's address is refused without that wait, since nothing can ever
+be placed on it again.
 
 The same rules are enforced a second time **inside the domain**, against the
 grants the authoring party holds — so a surface that skipped its own check
