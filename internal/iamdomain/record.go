@@ -81,9 +81,12 @@ const OperatorRecordVersion = 3
 // Two records state one:
 //
 //   - a SESSION START that may only enrol a second factor
-//     ([Session.EnrolmentOnly]): an older node would serve it as a whole
-//     session, so a password alone would reach every surface there on a
-//     deployment that requires a second factor.
+//     ([Session.EnrolmentOnly]): an older node would apply it as a whole
+//     session, and its rows — its session listing, and anything that reads
+//     the row — would say the session may do everything. The bearer carries
+//     the restriction too, in a form an older build refuses outright
+//     ([session.Bearer.EnrolmentOnly]); the version is what keeps that
+//     build's ROWS from saying the opposite.
 //   - an INVITATION that is redeemable only with its link's secret and that
 //     binds a seat when it is redeemed ([Invitation.Verifier],
 //     [Invitation.Seat]): an older node would redeem it on its id alone, which

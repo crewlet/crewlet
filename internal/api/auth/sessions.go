@@ -563,7 +563,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// is a chart edit.
 		refusal, reissue = seatRefusal(binding), false
 	}
-	if v.Session.EnrolmentOnly {
+	if v.EnrolmentOnly() {
 		// A SESSION THAT MAY ONLY ENROL A SECOND FACTOR, refused as
 		// that whatever its seat: the seat refusal leaves the whole of
 		// /auth/ and this one only four routes of it, so the narrower
@@ -572,6 +572,14 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// re-issued as any live session's is — its holder is working
 		// through the enrolment — and signing in again would only reach
 		// the same restricted session.
+		//
+		// READ OFF THE BEARER AS WELL AS THE ROW, because a read on a
+		// node that has not applied the session's start is served on
+		// the bearer alone ([session.RowBehind]) with no row to read —
+		// and every sign-in answers before any node applies it. Asked of
+		// the row alone, a password reached every read on every node
+		// for the apply latency after every sign-in, the socket's
+		// snapshot among them.
 		refusal, reissue = enrolmentRefusal(), true
 	}
 	if reissue {

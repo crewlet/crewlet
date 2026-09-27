@@ -847,16 +847,28 @@ enrol one**:
   the response. The code that proved the seed is the second factor the new
   session was proved with. Recovery codes come after, from the whole session.
 
-The restriction is **the session's own fact**, recorded on its start record by
-the sign-in that opened it, rather than re-derived on each request from the
-person's credentials and the node's configuration: what restricts it is what
-its sign-in proved, and a per-node derivation would restrict one browser on one
-node and free it on the next. A restricted session's start record is written
-at the identity log's condition version, so a node running an older build
-defers it — answering `503` for that session — rather than serving it whole.
-`GET /iam/people/{id}/sessions` marks it `"enrolment_only": true`, so an
-administrator can tell a person part-way through their first sign-in from one
-who is working.
+The restriction is **the session's own fact**, decided by the sign-in that
+opened it rather than re-derived on each request from the person's credentials
+and the node's configuration: what restricts it is what its sign-in proved, and
+a per-node derivation would restrict one browser on one node and free it on the
+next. It is written in **two places, and both are read**:
+
+- **the cookie itself.** The bearer carries a signed scope, `enrol` (see [The
+  session cookie](#the-session-cookie)), so every node reads the restriction
+  whether or not it has applied the session's start. It has to: a sign-in
+  answers before any node applies the session it opened, and a node that has
+  not yet applied it serves reads on the cookie alone — so a restriction only
+  the row carried was one every node ignored for the first moments after every
+  password sign-in.
+- **the session's start record**, which `GET /iam/people/{id}/sessions` reads
+  to mark it `"enrolment_only": true`, so an administrator can tell a person
+  part-way through their first sign-in from one who is working. It is written
+  at the identity log's condition version, so a node running an older build
+  defers it rather than recording the session as whole.
+
+A node running an older build refuses the scoped cookie outright, as a cookie
+not of its format — during a rolling upgrade somebody part-way through enrolling
+may be asked to sign in again there, and is never served whole.
 
 A sign-in through an **identity provider** is never restricted: its second
 factor is the provider's and invisible here. A Tier A token's exchanged
@@ -1240,7 +1252,7 @@ database read for every forged cookie an attacker sends, and has nothing to say
 at all until the row it names has been applied on the node the request reached.
 
 ```
-__Host-crewlet_session=v2.<key tag>.<generation>.<lineage>~<rotation>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>.<mac>
+__Host-crewlet_session=v2.<key tag>.<generation>.<lineage>~<rotation>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
                         Path=/; HttpOnly; Secure; SameSite=Lax
 ```
 
@@ -1287,10 +1299,11 @@ to know it:
 | start position | What turns "no row" into the two answers it actually is |
 | absolute expiry | Never moved by a re-issue |
 | idle expiry | Moved by every re-issue, with no store write at all |
+| scope | **Present only on a session that may do less than everything**: `enrol`, one that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else). Signed with the rest and carried through every re-issue, so a node that has not applied the session's row still knows what it may reach. Absent on a whole session, which is why an ordinary cookie is the same nine fields every build reads, and a scoped one — or a scope a build cannot name — is refused by any build that does not know it rather than served whole |
 
 Nothing in it is secret and nothing in it grants anything alone: a bearer in a
-proxy log discloses a lineage, a person id and two deadlines, and is worthless
-without the mac. It deliberately carries nothing *about* the person — no login,
+proxy log discloses a lineage, a person id, two deadlines and whether the
+session may only enrol a second factor, and is worthless without the mac. It deliberately carries nothing *about* the person — no login,
 no address, no grants — because a cookie is the value most likely to end up
 somewhere nobody meant it to.
 
@@ -1335,7 +1348,7 @@ because each is a row in a domain that **lags independently**.
 | Row ended, the person's epoch ahead of the bearer's, the person suspended, or the generation moved | 401 `session_revoked` | 401 | 401 |
 | Rotation index ahead of the window past the overlap | 401, and the epoch bump is published | 401 | 401 |
 | Row absent, and this node's iam position covers the bearer's start position | 401 `session_revoked` | 401 | 401 |
-| Row absent, this node below the bearer's start position, applier lag under 60 s | serve: the signature and the epoch are the proof | wait up to 5 s for this node to apply the bearer's start position, then decide on the rows; 503 `identity_unavailable` if it has not | the same wait, then the same answer |
+| Row absent, this node below the bearer's start position, applier lag under 60 s | serve: the signature and the epoch are the proof, and the cookie's own scope what it may reach | wait up to 5 s for this node to apply the bearer's start position, then decide on the rows; 503 `identity_unavailable` if it has not | the same wait, then the same answer |
 | The iam applier stalled past 60 s, the person's bucket deferred, or the replicated store answers `ErrNoEstate` | 503 | 503 | 503 |
 | Not a bearer of this format at all | 401 | 401 | 401 |
 

@@ -49,6 +49,12 @@ func (e *estate) Resolve(_ context.Context, lineage, person string) (
 		identity.Person = session.PersonRow{Found: true, Epoch: e.counters.Epoch,
 			Stage: e.person.Stage, Login: e.person.Login, Grants: e.person.Grants}
 	}
+	if e.unapplied {
+		// BELOW EVERY START this estate handed out, and holding none of
+		// their rows — the node a sign-in answered before it applied.
+		identity.Applied = 0
+		return identity, nil
+	}
 	for _, start := range e.starts {
 		if start.Lineage != lineage {
 			continue
@@ -319,6 +325,70 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 			if got := starts[0].EnrolmentOnly; got != tc.restricted {
 				t.Errorf("the session opened enrolment-only %v, want %v", got,
 					tc.restricted)
+			}
+		})
+	}
+}
+
+// A RESTRICTED SESSION IS RESTRICTED BEFORE ANY NODE HAS APPLIED IT.
+//
+// Every sign-in answers before any node applies the session it opened
+// (`NoWait`), and a node below the bearer's start position serves reads on the
+// bearer alone. The restriction lived only on the session's row, so on that
+// node — the one that answered the sign-in included — the first requests after
+// a password sign-in were served whole, and `GET /auth/session` said
+// `signed_in`. The sign-in mints the restriction into the bearer now, and both
+// the guard and the session route read it there.
+//
+// The CONTROL is the same sign-in under `totp: optional`, whose session is
+// whole on the same node. Mutation: mint the bearer without the mark and the
+// restricted row reaches /iam and reports itself signed in.
+func TestARestrictedSessionIsRestrictedBeforeAnyNodeHasAppliedIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		factor     iam.SecondFactor
+		restricted bool
+	}{
+		{"required", iam.SecondFactorRequired, true},
+		{"optional (the control)", iam.SecondFactorOptional, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newSignInRigWith(t, func(o *authapi.Options) {
+				requiring(o, tc.factor)
+				o.Sessions = o.Writer.(*estate)
+			})
+			passwordOnly(r.estate)
+			r.estate.unapplied = true
+			h := guarded(t, r)
+
+			login, _ := json.Marshal(map[string]string{
+				"login": "jane.doe", "password": password,
+			})
+			signedIn, cookie := send(t, h, http.MethodPost, auth.PathAuthLogin,
+				string(login), "")
+			if signedIn.Code != http.StatusOK || cookie == "" {
+				t.Fatalf("the sign-in answered %d (%s)", signedIn.Code, signedIn.Body)
+			}
+			want := "signed_in"
+			if tc.restricted {
+				want = string(httpjson.CodeSecondFactorEnrolmentRequired)
+			}
+			reached, _ := send(t, h, http.MethodGet, auth.PathAuthSession, "", cookie)
+			if reached.Code != http.StatusOK || statusOf(reached) != want {
+				t.Errorf("GET /auth/session on a node that has not applied the "+
+					"session answered %d status %v, want 200 %s", reached.Code,
+					statusOf(reached), want)
+			}
+			rec, _ := send(t, h, http.MethodGet, "/iam/people", "", cookie)
+			if tc.restricted && rec.Code != http.StatusForbidden {
+				t.Errorf("a restricted session reached GET /iam/people on a node "+
+					"that has not applied it (%d)", rec.Code)
+			}
+			if !tc.restricted && rec.Code != http.StatusOK {
+				t.Errorf("a whole session was refused GET /iam/people (%d: %s)",
+					rec.Code, rec.Body)
 			}
 		})
 	}

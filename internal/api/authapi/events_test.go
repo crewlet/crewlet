@@ -110,6 +110,11 @@ type estate struct {
 	// credentialOps are the operation ids every SetCredentials was asked
 	// under, in order.
 	credentialOps []string
+
+	// unapplied is a node that has applied none of the sessions this
+	// estate opened: its position is below every bearer's start, and it
+	// holds no session row — see [estate.Resolve].
+	unapplied bool
 }
 
 // outcome is what one of this estate's writes answers: applied at a position,

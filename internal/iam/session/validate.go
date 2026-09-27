@@ -95,8 +95,10 @@ type LineageRow struct {
 	// EnrolmentOnly marks a session its sign-in opened on a password alone
 	// where the deployment requires a second factor the person does not
 	// hold: it may enrol one and do nothing else. The session's fact, like
-	// ProvedAt — decided once, by what the sign-in proved — and what the
-	// request guard refuses every other route on.
+	// ProvedAt — decided once, by what the sign-in proved — and carried in
+	// the BEARER too ([Bearer.EnrolmentOnly]), because this row is absent on
+	// exactly the node that serves a session it has not applied yet. Read
+	// the two together through [Validation.EnrolmentOnly], never this alone.
 	EnrolmentOnly bool
 }
 
@@ -156,8 +158,9 @@ const (
 
 	// RowBehind is no row, on a node whose applied position is BELOW the
 	// bearer's start position, within the stall grace. It serves reads —
-	// the signature and the epoch are proof the sign-in happened — and
-	// refuses writes with 503.
+	// the signature and the epoch are proof the sign-in happened, and the
+	// bearer's own scope says what the session may reach — and refuses
+	// writes with 503.
 	//
 	// A WRITE REACHES THAT 503 ONLY AFTER A WAIT, and the wait is the
 	// request guard's rather than this table's (internal/api/auth's
@@ -323,7 +326,10 @@ type Validation struct {
 	// Session is the session's own row as this node has it — when it was
 	// proved — and the zero row on [RowBehind], whose whole meaning is that
 	// this node has not applied it: a node that is behind serves reads on
-	// the signature and the epoch, and claims no proof it cannot see.
+	// the signature and the epoch, and claims no proof it cannot see. What
+	// the bearer says about the session is on [Validation.Bearer], and a
+	// fact both carry is read through a method that asks both —
+	// [Validation.EnrolmentOnly].
 	Session LineageRow
 
 	// Detail says which fact decided, for a log line. It is NEVER sent to
@@ -337,6 +343,21 @@ type Validation struct {
 	// [RowEnded] a deadline decided and empty everywhere else — including
 	// the ends a RECORD decided, which already said so when it landed.
 	Deadline Deadline
+}
+
+// EnrolmentOnly reports whether the session this bearer names may do nothing
+// but enrol a second factor.
+//
+// THE UNION OF ITS TWO COPIES, and never either alone. The BEARER's is signed
+// and every node holds it, which is what makes the restriction hold on a node
+// serving reads it has no row for ([RowBehind], whose [Validation.Session] is
+// the zero row); the ROW's is what `GET /iam/people/{id}/sessions` lists. Both
+// are written from the one decision the sign-in made, and a session either of
+// them calls restricted is restricted: a reading of the row alone served
+// every restricted session whole for the apply latency after its sign-in, on
+// every node including the one that answered it.
+func (v Validation) EnrolmentOnly() bool {
+	return v.Bearer.EnrolmentOnly || v.Session.EnrolmentOnly
 }
 
 // Answer is what this validation permits for one kind of request.

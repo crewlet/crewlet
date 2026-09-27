@@ -222,7 +222,7 @@ func (s *Service) enrolmentSession(r *http.Request, person string) (
 		return session.Validation{}, false
 	}
 	v := s.presentedSession(r)
-	return v, v.Row == session.RowValid && v.Session.EnrolmentOnly &&
+	return v, v.Row == session.RowValid && v.EnrolmentOnly() &&
 		v.Bearer.Person == person
 }
 

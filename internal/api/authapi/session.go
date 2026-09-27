@@ -190,7 +190,10 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") == "" {
 		presented := s.presentedSession(r)
 		expires = presented.Bearer.AbsoluteExpiresAt
-		if presented.Session.EnrolmentOnly {
+		// THE BEARER'S MARK AND THE ROW'S TOGETHER, as the guard reads
+		// it: on a node that has not applied the session's start there
+		// is no row, and the session is still the restricted one.
+		if presented.EnrolmentOnly() {
 			status = statusEnrolmentRequired
 		}
 	}

@@ -300,6 +300,13 @@ type Session struct {
 	// the record's VERSION ([ConditionRecordVersion]), not this field: a
 	// build that cannot decode it defers the record rather than dropping
 	// the field and serving the session whole.
+	//
+	// NOT THE ONLY COPY. The bearer the sign-in mints carries the same
+	// decision, signed ([session.Bearer.EnrolmentOnly]), because this row
+	// is exactly what a node serving a session it has not applied yet does
+	// not have — and a sign-in answers before any node applies it. The row
+	// is what the directory's session listing reads; the request path reads
+	// both.
 	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
 
 	// EndedReason is why a session stopped, on the CLOSE record: signed

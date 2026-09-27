@@ -847,6 +847,11 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
 		AbsoluteExpiresAt: expires,
+		// AND THE BEARER CARRIES THE RESTRICTION TOO, signed: the record
+		// above did not wait, so no node has the row yet — this one
+		// included — and a node serves reads on the bearer alone until it
+		// does. See [session.Bearer.EnrolmentOnly].
+		EnrolmentOnly: restricted,
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_mint_failed", "error", err)

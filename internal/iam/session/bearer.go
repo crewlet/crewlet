@@ -15,12 +15,13 @@ import (
 
 // THE BEARER'S WIRE FORMAT, and what each field is doing there.
 //
-//	v2.<key tag>.<generation>.<lineage>~<rotation>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>.<mac>
+//	v2.<key tag>.<generation>.<lineage>~<rotation>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
 //
 // NINE FIELDS, dot-separated, with the session's own triple joined by `~` so
 // that the three values a node needs before it reads anything travel as one
-// token. Every one of them is here because a node has to answer with it and
-// has no other way to know it:
+// token — and a TENTH, the scope, on a session that may do less than
+// everything. Every one of them is here because a node has to answer with it
+// and has no other way to know it:
 //
 //   - the KEY TAG, so a verifier knows which keyring entry to look up rather
 //     than trying each one — which is what makes adding a key zero-downtime;
@@ -39,11 +40,36 @@ import (
 //   - the START POSITION, which is what turns "no row" into the two answers it
 //     actually is — a session that ended, or one this node has not seen;
 //   - the ABSOLUTE expiry, which no re-issue ever moves;
-//   - the IDLE expiry, which every re-issue does, with no store write at all.
+//   - the IDLE expiry, which every re-issue does, with no store write at all;
+//   - the SCOPE, present only on a session that may do less than everything:
+//     `enrol`, one its sign-in opened on a password alone where a second
+//     factor is required ([Bearer.EnrolmentOnly]).
+//
+// # Why the scope is in the bearer, and why it is optional
+//
+// IT IS THE SIGN-IN'S OWN FACT, decided once when the session opened, and the
+// bearer is the one copy of the session every node holds. The session's row
+// carries it too, but a node that has not applied the row yet serves reads on
+// the signature and the epoch alone ([RowBehind]) — and every sign-in answers
+// before any node applies its row. A restriction only the row carried was one
+// every node ignored for the apply latency after every password sign-in, the
+// one that answered it included: a password alone read the whole company, the
+// socket's snapshot among it, on a deployment that requires a second factor.
+//
+// ABSENT WHEN THE SESSION IS WHOLE, and that is the rolling-upgrade decision
+// rather than tidiness. A whole session's bearer is byte for byte the nine
+// fields every build reads, so a fleet part-way through an upgrade keeps every
+// ordinary session on every node. A scoped one is ten, which a build that
+// knows no scope refuses as MALFORMED — the direction that fails safe, because
+// such a build would otherwise serve it whole. What that costs is a person
+// part-way through enrolling asked to sign in again on that node, for a
+// session that could do nothing but enrol. And a scope this build cannot NAME
+// is refused the same way, for the same reason: a newer build narrowing a
+// session in a way this one would serve whole.
 //
 // NOTHING HERE IS SECRET and nothing here grants anything on its own: a bearer
-// in a proxy log discloses a lineage, a person id and two deadlines, and is
-// worthless without the mac. What it deliberately does NOT carry is anything
+// in a proxy log discloses a lineage, a person id, two deadlines and whether
+// the session may only enrol, and is worthless without the mac. What it deliberately does NOT carry is anything
 // about the person — no login, no address, no grants — because a cookie is the
 // value most likely to end up somewhere nobody meant it to.
 
@@ -76,7 +102,18 @@ type Bearer struct {
 	// moved by every one.
 	AbsoluteExpiresAt time.Time
 	IdleExpiresAt     time.Time
+
+	// EnrolmentOnly marks a session that may do nothing but enrol a second
+	// factor: the bearer's SCOPE, signed with everything else and carried
+	// through every re-issue, so every node reads it whether or not it has
+	// applied the session's row. See the format's doc above, and
+	// [Validation.EnrolmentOnly] for the one reading of it.
+	EnrolmentOnly bool
 }
+
+// scopeEnrolment is the scope a bearer of a session that may only enrol a
+// second factor carries — see [Bearer.EnrolmentOnly].
+const scopeEnrolment = "enrol"
 
 // ErrMalformed reports a cookie that is not a bearer of this format at all.
 //
@@ -108,6 +145,13 @@ type Mint struct {
 
 	// AbsoluteExpiresAt is the deadline no re-issue moves.
 	AbsoluteExpiresAt time.Time
+
+	// EnrolmentOnly scopes the bearer to enrolling a second factor, for a
+	// session its sign-in opened on a password alone where one is
+	// required. THE SAME DECISION the session's start record carries, made
+	// once by the sign-in — see [Bearer.EnrolmentOnly] for why the bearer
+	// carries it too.
+	EnrolmentOnly bool
 }
 
 // Mint issues a bearer for a session that has just started.
@@ -135,6 +179,7 @@ func (s *Signer) Mint(m Mint) (string, error) {
 		Epoch:             m.Epoch,
 		StartPosition:     m.StartPosition,
 		AbsoluteExpiresAt: m.AbsoluteExpiresAt,
+		EnrolmentOnly:     m.EnrolmentOnly,
 	}, s.rotationAt(m.Lineage, now), now)
 }
 
@@ -159,9 +204,10 @@ func (s *Signer) issue(b Bearer, rotation uint64, now time.Time) (string, error)
 }
 
 // payload is everything the signature covers, which is the whole bearer bar
-// the signature itself.
+// the signature itself — the scope included, so a bearer cannot be widened by
+// cutting it off.
 func (b Bearer) payload() string {
-	return strings.Join([]string{
+	parts := []string{
 		Version,
 		b.KeyTag,
 		strconv.FormatUint(b.Generation, 10),
@@ -171,10 +217,15 @@ func (b Bearer) payload() string {
 		strconv.FormatUint(b.StartPosition, 10),
 		strconv.FormatInt(b.AbsoluteExpiresAt.Unix(), 10),
 		strconv.FormatInt(b.IdleExpiresAt.Unix(), 10),
-	}, ".")
+	}
+	if b.EnrolmentOnly {
+		parts = append(parts, scopeEnrolment)
+	}
+	return strings.Join(parts, ".")
 }
 
-// fields is how many dot-separated parts a bearer has, signature included.
+// fields is how many dot-separated parts a WHOLE session's bearer has,
+// signature included; a scoped one has one more — see the format's doc.
 const fields = 9
 
 // parse reads a cookie's structure and verifies its signature.
@@ -191,7 +242,7 @@ const fields = 9
 // the drop do nothing at all.
 func (s *Signer) parse(cookie string) (Bearer, error) {
 	parts := strings.Split(cookie, ".")
-	if len(parts) != fields || parts[0] != Version {
+	if (len(parts) != fields && len(parts) != fields+1) || parts[0] != Version {
 		return Bearer{}, fmt.Errorf("%w: %d fields at version %q",
 			ErrMalformed, len(parts), firstField(parts))
 	}
@@ -200,17 +251,28 @@ func (s *Signer) parse(cookie string) (Bearer, error) {
 		return Bearer{}, fmt.Errorf("%w: signed under a key this node does "+
 			"not hold", ErrMalformed)
 	}
-	payload := strings.Join(parts[:fields-1], ".")
+	mac := parts[len(parts)-1]
+	payload := strings.Join(parts[:len(parts)-1], ".")
 	// CONSTANT TIME. A byte-by-byte compare leaks the signature one byte
 	// at a time to anyone who can time the endpoint, and a sign-in
 	// endpoint is deliberately reachable with no other credential.
-	if !hmac.Equal([]byte(parts[fields-1]), []byte(sign(key, payload))) {
+	if !hmac.Equal([]byte(mac), []byte(sign(key, payload))) {
 		return Bearer{}, fmt.Errorf("%w: the signature does not verify",
 			ErrMalformed)
 	}
 
 	var b Bearer
 	b.KeyTag = parts[1]
+	if len(parts) == fields+1 {
+		// A SCOPE THIS BUILD CANNOT NAME IS REFUSED, never served whole:
+		// it is a newer build saying this session may do less, and
+		// reading it as nothing would be reading it as everything.
+		if parts[fields-1] != scopeEnrolment {
+			return Bearer{}, fmt.Errorf("%w: scope %q is not one this build "+
+				"knows", ErrMalformed, parts[fields-1])
+		}
+		b.EnrolmentOnly = true
+	}
 	triple := strings.Split(parts[3], "~")
 	if len(triple) != 3 {
 		return Bearer{}, fmt.Errorf("%w: the session triple has %d parts",
