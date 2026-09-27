@@ -32,8 +32,11 @@ func TestAContentRecordWithAPrivilegedFieldIsRefusedBelowItsGrant(t *testing.T) 
 	// somebody who runs a team and does not hold the deployment.
 	lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
 
-	// The public half lands, because a public edit is a RELATION and this
-	// package deliberately decides none of it.
+	// A PROSE edit lands: who may edit an object's name and goal is the lead
+	// relation's to decide, at the door, and this package deliberately does
+	// not. A write that CHANGED an authority-bearing relation — `manages`,
+	// `project`, `space`, `email` — would be refused here below the company's
+	// grant, as the runtime half is next.
 	if _, err := lead.WriteSeat(t.Context(), "op-public", chart.SeatContent{
 		Handle: "sarah-chen", Name: "Sarah Chen",
 		Goal: "ship the thing",
