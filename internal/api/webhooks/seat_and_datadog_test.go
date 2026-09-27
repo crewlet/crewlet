@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
@@ -323,9 +324,9 @@ func TestDatadog_RefusesAShortSharedToken(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body["reason"] != "weak_webhook_secret" {
-		t.Errorf("reason = %q, which does not tell a weak token from a missing one",
-			body["reason"])
+	if body["error"] != string(httpjson.CodeWeakWebhookSecret) {
+		t.Errorf("error = %q, which does not tell a weak token from a missing one",
+			body["error"])
 	}
 	// AND NOTHING WAS PUBLISHED. A 503 that still woke a seat would be
 	// the failure with extra steps.

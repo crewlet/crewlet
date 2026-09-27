@@ -18,7 +18,12 @@ import (
 // dozen codes of its own with no sentence behind any of them (two of them
 // second spellings of codes the vocabulary already held), and a dozen 503s
 // across these surfaces went out through the ordinary refusal writer with no
-// Retry-After, so a client was told "come back" and not when.
+// Retry-After, so a client was told "come back" and not when. The webhook edge
+// had an envelope of its own — `{"error": "invalid signature"}`, a code with a
+// space in it, and `{"status": "unavailable", "reason": …}` — so it is walked
+// too: a vendor reads only the status and the Retry-After, and the operator
+// reading the body in a delivery log reads the same vocabulary as everywhere
+// else.
 //
 // Each of those shapes is visible in the SOURCE and nowhere else — a route
 // that builds its own body answers correctly on every case somebody thought
@@ -33,7 +38,7 @@ import (
 //     header and the envelope together.
 func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 	t.Parallel()
-	surfaces := []string{"configapi", "secretsapi", "chartapi", "setupapi", "workapi"}
+	surfaces := []string{"configapi", "secretsapi", "chartapi", "setupapi", "workapi", "webhooks"}
 	walked := 0
 	for _, dir := range surfaces {
 		entries, err := os.ReadDir(dir)

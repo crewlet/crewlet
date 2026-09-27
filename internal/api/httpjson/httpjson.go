@@ -562,6 +562,37 @@ const (
 	// than 503, because the remedy is finishing the upgrade and not waiting.
 	// The detail names the node still on the older protocol.
 	CodeFleetMixedVersion Code = "fleet_mixed_version"
+
+	// THE WEBHOOK EDGE. A delivery's sender is a vendor that reads the
+	// status and the Retry-After and nothing else, so what these buy is the
+	// OPERATOR: a delivery log at the vendor, a proxy's access log and the
+	// engine's own all show the body, and the edge answered `{"error":
+	// "invalid signature"}` — a code with a space in it that no client could
+	// find in any vocabulary — and `{"status": "unavailable", "reason": …}`,
+	// an envelope of its own. A node with no active company revision is
+	// [CodeNoActiveRevision], and a verified delivery the broker would not
+	// take is [CodeUnavailable]: the same facts other surfaces answer with.
+
+	// CodeInvalidSignature is a delivery whose credential did not verify: an
+	// HMAC signature, a shared token, or a Forge invocation token. 401. The
+	// log says which check failed; the body never does, because that is what
+	// somebody probing the route would read.
+	CodeInvalidSignature Code = "invalid_signature"
+	// CodeUnknownHandle is a delivery to a per-seat route naming a seat that
+	// has no app configured here, while other seats have one. 401 rather
+	// than 503: this node can verify deliveries on the route, and this one
+	// is addressed to nothing it can verify against.
+	CodeUnknownHandle Code = "unknown_handle"
+	// CodeNoWebhookSecret is a route with no secret to verify a delivery
+	// against. 503 with a Retry-After sized to a person editing the
+	// configuration, so the sender holds the delivery rather than dropping
+	// it.
+	CodeNoWebhookSecret Code = "no_webhook_secret"
+	// CodeWeakWebhookSecret is a route whose provider signs nothing, whose
+	// shared token is therefore the whole check, and whose token is too
+	// short to be it. The same 503 as an absent secret, because the truth is
+	// the same, under its own code because the fix is not.
+	CodeWeakWebhookSecret Code = "weak_webhook_secret"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -703,6 +734,19 @@ var codes = map[Code]string{
 	CodeFleetMixedVersion: "An upgrade is still rolling through the fleet, and " +
 		"an import is applied by every node, the older ones included. Finish " +
 		"the upgrade and import again.",
+
+	CodeInvalidSignature: "This delivery's signature or token did not match " +
+		"what this route checks, so it was not accepted. Make the secret at the " +
+		"sender match the one this deployment holds for the integration.",
+	CodeUnknownHandle: "This delivery is addressed to a seat that has no app " +
+		"configured on this route, so there is nothing to check it against and " +
+		"it was not accepted.",
+	CodeNoWebhookSecret: "This route has no secret configured to check a " +
+		"delivery against, so it accepts none until one is set. The sender is " +
+		"asked to retry, so nothing is lost in the meantime.",
+	CodeWeakWebhookSecret: "This route's provider signs nothing, so its shared " +
+		"token is the whole check, and the configured token is too short to be " +
+		"it. Set a longer one; the sender is asked to retry meanwhile.",
 
 	CodeUnknownKind: "This build does not know that integration.",
 	CodeSeatRequired: "Name the seat this is for. The detail says why one is " +

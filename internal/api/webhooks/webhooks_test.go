@@ -371,8 +371,8 @@ func TestARouteWithNoSecretHoldsTheDelivery(t *testing.T) {
 			if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			if body["reason"] != "no_webhook_secret" {
-				t.Errorf("reason = %q, which does not say what is missing", body["reason"])
+			if body["error"] != string(httpjson.CodeNoWebhookSecret) {
+				t.Errorf("error = %q, which does not say what is missing", body["error"])
 			}
 		})
 	}

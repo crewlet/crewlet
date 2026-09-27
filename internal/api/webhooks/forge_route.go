@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
 // forgeEvent names the integration a relayed Cloud event belongs to and the
@@ -74,7 +76,7 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 	}
 	token, found := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
 	if !found || token == "" {
-		unauthorized(w, "unauthorized")
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 		return
 	}
 	if err := r.forge.verify(req.Context(), token, appID); err != nil {
@@ -82,7 +84,7 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		// an expired token from one addressed at another app, which is
 		// what an operator needs and what an attacker would use to probe.
 		log.Warn("forge_fit_invalid", "error", err)
-		unauthorized(w, "unauthorized")
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 		return
 	}
 	v := verified{source: "forge"}
@@ -91,7 +93,7 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 	// answers its own comment, forever.
 	if selfGenerated, _ := body["selfGenerated"].(bool); selfGenerated {
 		log.Debug("forge_self_generated_skipped", "event", event)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "reason": "selfGenerated"})
+		accepted(w, map[string]string{"status": "ignored", "reason": "selfGenerated"})
 		return
 	}
 
@@ -102,7 +104,7 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		// with a 200 is right: a 4xx would make Atlassian retry an event
 		// nothing here will ever handle.
 		log.Warn("forge_unknown_event", "event", event)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "event": event})
+		accepted(w, map[string]string{"status": "ignored", "event": event})
 		return
 	}
 

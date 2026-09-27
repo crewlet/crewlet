@@ -3,6 +3,8 @@ package webhooks
 import (
 	"net/http"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
 // The six endpoints. Each one is the same five steps in the same order —
@@ -326,7 +328,7 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 	// challenge: it persists nothing, publishes nothing, wakes nobody, and
 	// tells an unauthenticated caller only what they already sent.
 	if str(body, "type") == "url_verification" {
-		writeJSON(w, http.StatusOK, map[string]string{"challenge": str(body, "challenge")})
+		accepted(w, map[string]string{"challenge": str(body, "challenge")})
 		return
 	}
 
@@ -346,7 +348,7 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 		// addressed to a seat that has no Slack app rather than a node
 		// with nothing to check against.
 		log.Warn("slack_webhook_unknown_handle", "handle", handle)
-		unauthorized(w, "unknown handle")
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeUnknownHandle)
 		return
 	}
 	timestamp := req.Header.Get("X-Slack-Request-Timestamp")

@@ -28,7 +28,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -292,7 +291,13 @@ func (r *Receiver) serving(w http.ResponseWriter, source, event string) bool {
 	log.Warn("webhook_rejected_unconfigured", "source", source, "event", event,
 		"detail", "no company revision is active on this node, so the delivery "+
 			"cannot be routed; answering 503 so the sender retries rather than discards it")
-	unavailable(w, "unconfigured", NoRevisionRetryAfter)
+	httpjson.UnavailableWith(w, httpjson.CodeNoActiveRevision,
+		httpjson.RetrySeconds(NoRevisionRetryAfter), httpjson.Detail{
+			"detail": "a node that missed an activation takes the active revision " +
+				"on its next reconcile poll, and the sender's retry lands once it " +
+				"has; a deployment that never imported one needs " +
+				"`crewlet config import`",
+		})
 	return false
 }
 
@@ -321,7 +326,7 @@ func (r *Receiver) authenticate(w http.ResponseWriter, source, secret, signature
 	}
 	if signature == "" || !check.verify(body, secret, signature) {
 		log.Warn("webhook_signature_invalid", "source", source)
-		unauthorized(w, "invalid signature")
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 		return verified{}, false
 	}
 	return verified{source: source}, true
@@ -382,7 +387,7 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 	ctx := req.Context()
 	if !r.claim(ctx, d) {
 		log.Debug("webhook_delivery_duplicate", "source", d.source, "key", d.key)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
+		accepted(w, map[string]string{"status": "duplicate"})
 		return
 	}
 
@@ -442,14 +447,17 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 		log.Error("webhook_publish_failed", "source", d.source, "route", v.source,
 			"error", err, "detail", "the delivery was verified and could not be "+
 				"queued; releasing its claim so the provider's retry is not refused")
-		unavailable(w, "queue_unavailable", NoRevisionRetryAfter)
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			httpjson.RetrySeconds(NoRevisionRetryAfter), httpjson.Detail{
+				"detail": "the delivery was verified and could not be queued",
+			})
 		return
 	}
 
 	log.Info("webhook_received", "source", d.source, "route", v.source,
 		"event", d.label, "handle", d.handle)
 	r.record(ctx, d, trace)
-	writeJSON(w, http.StatusOK, answer)
+	accepted(w, answer)
 }
 
 // claim reports whether this caller may handle the delivery.
@@ -666,22 +674,16 @@ func headerOr(req *http.Request, name, fallback string) string {
 // statusOK is the answer five of the six routes give.
 var statusOK = map[string]string{"status": "ok"}
 
-// writeJSON is [httpjson.Write] under this package's own name.
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	httpjson.Write(w, status, body)
+// accepted answers 200 with body: a delivery taken, deduplicated or knowingly
+// ignored, or Slack's handshake echoed. It is the only answer this package
+// writes by hand, and it takes no status because a refusal is never written
+// through it — every one goes through [httpjson.Fail] or
+// [httpjson.Unavailable], so it is the engine's one envelope and a 503 always
+// says when to come back.
+func accepted(w http.ResponseWriter, body any) {
+	httpjson.Write(w, http.StatusOK, body)
 }
 
-func unavailable(w http.ResponseWriter, reason string, retryAfter time.Duration) {
-	w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-	writeJSON(w, http.StatusServiceUnavailable,
-		map[string]string{"status": "unavailable", "reason": reason})
-}
-
-func unauthorized(w http.ResponseWriter, reason string) {
-	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": reason})
-}
-
-// noSecret is the answer when a route has no secret to verify against.
 // weakSecret refuses a route whose shared token cannot be the authentication.
 func weakSecret(w http.ResponseWriter, source string, why error) {
 	log.Error("webhook_secret_too_weak", "source", source, "error", why,
@@ -695,15 +697,18 @@ func weakSecret(w http.ResponseWriter, source string, why error) {
 	// a caller correlating logs or a person reading the body should not have
 	// to guess which of them they hit. Sharing the string also made the
 	// distinction this function exists for invisible on the wire.
-	unavailable(w, "weak_webhook_secret", NoSecretRetryAfter)
+	httpjson.Unavailable(w, httpjson.CodeWeakWebhookSecret,
+		httpjson.RetrySeconds(NoSecretRetryAfter))
 }
 
+// noSecret is the answer when a route has no secret to verify against.
 func noSecret(w http.ResponseWriter, source string) {
 	log.Error("webhook_no_secret_configured", "source", source,
 		"detail", "this route verifies a provider credential and has none to check "+
 			"against, so it cannot accept deliveries; answering 503 so the sender "+
 			"retries rather than discards them. Set the integration's secret to clear it")
-	unavailable(w, "no_webhook_secret", NoSecretRetryAfter)
+	httpjson.Unavailable(w, httpjson.CodeNoWebhookSecret,
+		httpjson.RetrySeconds(NoSecretRetryAfter))
 }
 
 // bodyKey is the delivery identity of a third-party app that sends none.
