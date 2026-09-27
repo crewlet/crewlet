@@ -145,7 +145,7 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS EVERY AGELESS KEY CLASS, and every one needs the same
+// THE REGISTER HOLDS THESE AGELESS KEY CLASSES, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its

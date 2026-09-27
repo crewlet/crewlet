@@ -29,7 +29,7 @@ import (
 // that shape exhausts its alphabet, which caps a project at a fixed number of
 // head placements for the life of the project. The integer part borrows and
 // carries instead, so a head placement grows the key by about one character
-// per sixty-two insertions and never runs out.
+// per sixty-two insertions rather than drawing on a fixed supply.
 //
 // # Two minting rules, and both are about the fractional part
 //

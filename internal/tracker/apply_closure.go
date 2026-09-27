@@ -17,11 +17,23 @@ import (
 //
 // A depth-limited walk would loop until the limit and then produce a closure
 // that is silently wrong. A visited set TERMINATES and reports what it found —
-// so the applier applies the record completely, raises the flag, and the repair
-// duty writes a real record to fix it. That is the rule the whole applier is
-// written to: a structural impossibility raises an attention flag rather than
-// stalling the log, because a stalled log is every node stopping over one
-// task's shape.
+// so the applier applies the record completely and raises the flag, which puts
+// the task in the attention queue (`flag=cycle`) for somebody to break. That
+// is the rule the whole applier is written to: a structural impossibility
+// raises an attention flag rather than stalling the log, because a stalled log
+// is every node stopping over one task's shape.
+//
+// # And the project a subtree lives in is derived here too
+//
+// A subtree lives in its root's project — a cross-project move carries every
+// descendant with it — but the move is one append per task, so a walk that
+// stops part-way, or a subtask filed under the subtree while it runs, leaves a
+// task in a project its root is not in. From [ProjectFlagRecordVersion] the
+// closure pass derives that as `inconsistent_project`, because this is the one
+// place that walks a task's ancestry and its whole subtree together: a root
+// that changes project re-derives every task under it, and a descendant that
+// arrives re-derives itself. The tracker duty moves what the flag marks
+// ([duty.finishSplits]).
 
 // maintainClosure rebuilds the ancestry rows for a task and everything under
 // it.
@@ -46,14 +58,19 @@ import (
 // actually holds, so its cost is the subtree's real size and its output is
 // correct at any size; the caps that bound what a single gesture carries stay
 // where they are, on the move and the removal.
-func (a *Applier) maintainClosure(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
+//
+// derive is whether the record being applied derives `inconsistent_project`
+// ([ProjectFlagRecordVersion]); every record rebuilds the ancestry.
+func (a *Applier) maintainClosure(ctx context.Context, tx *sql.Tx, task Task,
+	derive bool) (int, error) {
+
 	subtree, err := descendantsOf(ctx, tx, task.ID)
 	if err != nil {
 		return 0, err
 	}
 	// The task itself first, so its own ancestry is right before anything
 	// below it is derived from it.
-	written, err := a.rebuildAncestry(ctx, tx, task.ID, task.Parent)
+	written, err := a.rebuildAncestry(ctx, tx, task.ID, task.Parent, derive)
 	if err != nil {
 		return 0, err
 	}
@@ -62,7 +79,7 @@ func (a *Applier) maintainClosure(ctx context.Context, tx *sql.Tx, task Task) (i
 		if err != nil {
 			return 0, err
 		}
-		n, err := a.rebuildAncestry(ctx, tx, id, parent)
+		n, err := a.rebuildAncestry(ctx, tx, id, parent, derive)
 		if err != nil {
 			return 0, err
 		}
@@ -71,9 +88,10 @@ func (a *Applier) maintainClosure(ctx context.Context, tx *sql.Tx, task Task) (i
 	return written, nil
 }
 
-// rebuildAncestry writes one task's closure rows and its derived columns.
+// rebuildAncestry writes one task's closure rows and its derived columns —
+// `inconsistent_project` among them when derive is set.
 func (a *Applier) rebuildAncestry(ctx context.Context, tx *sql.Tx, id string,
-	parent *string) (int, error) {
+	parent *string, derive bool) (int, error) {
 
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM tracker_task_closure WHERE descendant_id = ?`, id); err != nil {
@@ -116,10 +134,30 @@ func (a *Applier) rebuildAncestry(ctx context.Context, tx *sql.Tx, id string,
 		at = next
 	}
 
+	if !derive {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?
+			WHERE id = ?`,
+			root, depth, boolInt(cycle), boolInt(depth > MaxDepth), id); err != nil {
+			return 0, fmt.Errorf("tracker: stamp the ancestry of %s: %w", id, err)
+		}
+		return written + 1, nil
+	}
+	// THE ROOT'S PROJECT, READ IN THIS STATEMENT, so the comparison is
+	// against the row as this position leaves it — the root's own record may
+	// be the one being applied. A root compares with nothing, a task in a
+	// cycle has no root to compare with, and a root this node does not hold
+	// ([parentOf]'s gated-away parent) leaves nothing to compare: each is
+	// clear.
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?
+		UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?,
+			inconsistent_project = COALESCE((
+				SELECT r.project_key <> tracker_tasks.project_key
+				FROM tracker_tasks r
+				WHERE r.id = ? AND r.id <> tracker_tasks.id AND ? = 0), 0)
 		WHERE id = ?`,
-		root, depth, boolInt(cycle), boolInt(depth > MaxDepth), id); err != nil {
+		root, depth, boolInt(cycle), boolInt(depth > MaxDepth), root,
+		boolInt(cycle), id); err != nil {
 		return 0, fmt.Errorf("tracker: stamp the ancestry of %s: %w", id, err)
 	}
 	return written + 1, nil

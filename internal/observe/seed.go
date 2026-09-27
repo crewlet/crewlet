@@ -34,19 +34,20 @@ type Seeded interface {
 //     a feed row carries none;
 //   - the spend: the newest [livestate.SpendRecordLimit] spend records inside
 //     [livestate.LiveSpendWindow] — phase records and auxiliary-call records
-//     together, newest first across both — read from the promoted token
-//     columns plus the three payload members no column holds (the price, the
-//     per-model split and `run_spend_unreported`), rather than from whole
-//     payloads. The count is the projection's record cap, applied
-//     at the READ: a busy day past it was otherwise read in full inside the
-//     seed's time budget, only to be cut to the cap on arrival, and a read
-//     that ran out of budget seeded no spend at all. The store reads one
-//     record past the cap and says whether the window held more
+//     together, newest first across both — read from their promoted columns
+//     rather than from payloads. The count is the projection's record cap,
+//     applied at the READ, because a record past it is dropped on arrival and
+//     reading it would spend the seed's time budget on nothing. The store
+//     reads one record past the cap and says whether the window held more
 //     ([store.EventLog.PhaseTokenTail]); that answer travels to the
 //     projection as [livestate.History.SpendTruncated], which is what heads
 //     the rollup with the span the kept records cover rather than with the
-//     whole window. The older records are still in the store: the `tokens`
-//     answer asked for an explicit `since` reads the window from it whole.
+//     whole window. A read the budget stops keeps what it read: the store
+//     answers the newest records it took, says the window held more, and
+//     returns the error, and this seeds those records and reports the error —
+//     so a slow store costs the older part of the window rather than all of
+//     it. The older records are still in the store: the `tokens` answer asked
+//     for an explicit `since` reads the window from it whole.
 //
 // THE SPEND WINDOW IS ASKED FOR AS AN INSTANT, never as a day count. The two
 // are the same window only while [livestate.LiveSpendWindow] is a whole number
@@ -61,8 +62,9 @@ type Seeded interface {
 //
 // BEST EFFORT per half: a feed that cannot be read does not cost the spend,
 // and either failure is returned for the caller to report, because what it
-// costs is visible nowhere else. The screens still render; they start at
-// this process's boot.
+// costs is visible nowhere else. The screens still render: a half that read
+// nothing starts at this process's boot, and a spend read cut short starts at
+// the oldest record it read.
 //
 // INDEPENDENT IN TIME TOO, which one shared deadline could not give. The
 // caller bounds this whole call so a store that will not answer cannot hold

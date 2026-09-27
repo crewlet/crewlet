@@ -46,9 +46,10 @@ func suspended() execstate.State {
 			{"round": 2, "reasoning": "the primary gave up", "content": "Starting a cod"},
 		},
 		// A run the phase collected before an earlier suspension, whose
-		// agent accounted for part of it.
+		// agent accounted for all of it: WHOLE, so the row carries the
+		// member rather than leaving it out as a floor's false does.
 		CollectedRuns: &execstate.Runs{
-			CostUSD: 0.9, Collected: true,
+			CostUSD: 0.9, Collected: true, Whole: true,
 			Models: []types.ModelSpend{
 				{Model: "claude-sonnet", InputTokens: 600, OutputTokens: 60, CostUSD: 0.9},
 			},
@@ -139,7 +140,7 @@ func TestTheCollectedRunsTravelUnderTheirWireNames(t *testing.T) {
 	if !ok {
 		t.Fatalf("the row carries no collected_runs object: %v", blob["collected_runs"])
 	}
-	for _, key := range []string{"cost_usd", "collected", "models", "delivered_refs"} {
+	for _, key := range []string{"cost_usd", "collected", "models", "whole", "delivered_refs"} {
 		if _, ok := runs[key]; !ok {
 			t.Errorf("collected_runs carries no %q: %v", key, runs)
 		}

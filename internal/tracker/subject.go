@@ -137,7 +137,8 @@ var ObjectKinds = []ObjectKind{
 // and it arbitrates nothing. What it buys is [RetiredKinds] below.
 const KindSprint ObjectKind = "sprint"
 
-// RetiredKinds are the kinds this build once published and no longer applies.
+// RetiredKinds are the kinds a log may hold from an earlier build that this
+// build does not apply.
 //
 // THE TWO DIRECTIONS OF A ROLLING UPGRADE ARE NOT SYMMETRICAL, and this list
 // is the half nothing else handles. A NEWER peer's record carries a record

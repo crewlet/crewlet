@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -179,16 +178,13 @@ func TestATurnSumsItsTokensAndNamesEveryModel(t *testing.T) {
 	// cheap one for the extension judge and the seat's own for the work —
 	// and naming one makes a cost reader attribute the whole turn to it.
 	//
-	// THE WHOLE LIST, not `Contains` over it: `model` is NOT NULL with an
-	// empty default and only a spend record carries one, so the turn's own
-	// `turn_completed` row folded into the join as a nameless element and
-	// every `Contains` assertion passed straight over it.
+	// THE WHOLE LIST, sorted, not `Contains` over it: `model` is NOT NULL
+	// with an empty default and the turn's own `turn_completed` row carries
+	// none, so a list that took a name from every row would hold a nameless
+	// element a `Contains` assertion passes straight over.
 	want := []string{"claude-haiku-4-5", "claude-opus-5"}
-	named := splitModels(one.Models)
-	slices.Sort(named)
-	if !slices.Equal(named, want) {
-		t.Errorf("models = %q, which splits to %q, want exactly %q",
-			one.Models, named, want)
+	if !slices.Equal(one.Models, want) {
+		t.Errorf("models = %q, want exactly %q", one.Models, want)
 	}
 }
 
@@ -227,9 +223,7 @@ func TestATurnRowCountsTheAuxiliaryCallsMadeForIt(t *testing.T) {
 	if one.Phases != 1 {
 		t.Errorf("phases = %d, want the one phase record: an auxiliary call is not a phase", one.Phases)
 	}
-	named := splitModels(one.Models)
-	slices.Sort(named)
-	if !slices.Equal(named, []string{"haiku", "sonnet"}) {
+	if !slices.Equal(one.Models, []string{"haiku", "sonnet"}) {
 		t.Errorf("models = %q, want the phase's and the auxiliary call's", one.Models)
 	}
 
@@ -419,17 +413,6 @@ func walkTurns(t *testing.T, log *store.EventLog, limit int) []string {
 	return nil
 }
 
-func splitModels(s string) []string {
-	if s == "" {
-		return nil
-	}
-	out := []string{}
-	for _, part := range strings.Split(s, ",") {
-		out = append(out, strings.TrimSpace(part))
-	}
-	return out
-}
-
 // AN EMPTY IDENTIFIER IS NOT A FILTER, and binding one was how a seat read
 // answered every non-agent event in the window.
 //
@@ -594,5 +577,155 @@ func seedRun(t *testing.T, log *store.EventLog, runID, workKey string, at time.T
 		Payload: payload,
 	}); err != nil {
 		t.Fatalf("append the completion: %v", err)
+	}
+}
+
+// A TURN'S MODELS ARE EVERY NAME ITS SPEND RECORDS CARRY, the ones only a
+// per-model split holds among them: the fallback that took over mid-phase and
+// the models a collected coding run reported. `model=` finds a turn by any of
+// them. A turn read only through each record's own `model` lists the model a
+// phase began on, and a reader asking which turns ran on the fallback is told
+// none did. A split entry reported under no name adds nothing: the rollup's
+// `unknown` and `unmeasured` rows are spend without a model's name, and there
+// is no turn "on" either.
+func TestATurnsModelsIncludeWhatOnlyASplitNames(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	// A phase a fallback chain moved from sonnet to haiku.
+	storeEvent(t, log, stamped(events.New(types.AgentPhaseCompleted{
+		RoleName: "Dev", TurnID: "run-1", Phase: types.PhaseExecute, Model: "sonnet",
+		InputTokens: 150, OutputTokens: 15, TotalTokens: 165,
+		Models: []types.ModelSpend{
+			{Model: "sonnet", InputTokens: 100, OutputTokens: 10},
+			{Model: "haiku", InputTokens: 50, OutputTokens: 5},
+		},
+	}, events.TraceContext{}), base))
+	// A phase that collected a coding run: one model its agent named, and
+	// spend it reported under no name.
+	coding := types.AgentPhaseCompleted{
+		RoleName: "Dev", TurnID: "run-1", Phase: types.PhaseExecute, Model: "sonnet",
+		InputTokens: 10, TotalTokens: 10,
+		Models: []types.ModelSpend{{Model: "sonnet", InputTokens: 10}},
+	}
+	coding.AddRun(types.RunSpend{Collected: true, Models: []types.ModelSpend{
+		{Model: "claude-opus", InputTokens: 30, OutputTokens: 5},
+		{InputTokens: 7, OutputTokens: 1},
+	}})
+	storeEvent(t, log, stamped(events.New(coding, events.TraceContext{}), base.Add(time.Minute)))
+	storeEvent(t, log, stamped(events.New(types.AuxiliaryCallCompleted{
+		RoleName: "Dev", TurnID: "run-1", Phase: types.PhaseAuxiliary, Worker: "prefetch",
+		Model: "mini", InputTokens: 3, TotalTokens: 3,
+	}, events.TraceContext{}), base.Add(2*time.Minute)))
+	// Another turn, on one model and no split.
+	storeEvent(t, log, stamped(events.New(types.AgentPhaseCompleted{
+		RoleName: "Dev", TurnID: "run-2", Phase: types.PhaseExecute, Model: "gpt",
+		InputTokens: 1, TotalTokens: 1,
+	}, events.TraceContext{}), base.Add(3*time.Minute)))
+
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	models := map[string][]string{}
+	for _, turn := range got {
+		models[turn.TurnID] = turn.Models
+	}
+	if want := []string{"claude-opus", "haiku", "mini", "sonnet"}; !slices.Equal(models["run-1"], want) {
+		t.Errorf("run-1's models = %q, want %q: the fallback's and the run's with the rest", models["run-1"], want)
+	}
+	if want := []string{"gpt"}; !slices.Equal(models["run-2"], want) {
+		t.Errorf("run-2's models = %q, want %q", models["run-2"], want)
+	}
+
+	for model, want := range map[string][]string{
+		"haiku":       {"run-1"},
+		"claude-opus": {"run-1"},
+		"sonnet":      {"run-1"},
+		"gpt":         {"run-2"},
+		"unknown":     {},
+		"unmeasured":  {},
+	} {
+		turns, _, err := log.Turns(t.Context(), store.TurnQuery{Model: model})
+		if err != nil {
+			t.Fatalf("Turns(model=%s): %v", model, err)
+		}
+		ids := []string{}
+		for _, turn := range turns {
+			ids = append(ids, turn.TurnID)
+		}
+		if !slices.Equal(ids, want) {
+			t.Errorf("turns on %s = %v, want %v", model, ids, want)
+		}
+	}
+}
+
+// A ROW'S MODELS DESCRIBE THE ROWS ITS FIGURES WERE SUMMED FROM. A narrowing
+// that keeps some of a turn's rows out of its figures keeps them out of its
+// models too, so a seat's page never names a model beside tokens that were not
+// spent on it.
+func TestATurnsModelsComeFromTheRowsItsFiguresDo(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	for i, row := range []struct{ role, model string }{{"PM", "opus"}, {"Dev", "haiku"}} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: fmt.Sprintf("t-1-p%d", i), Type: "agent_phase_completed",
+			Time: base.Add(time.Duration(i) * time.Second), Category: "lifecycle", Actor: row.role,
+			Tags: map[string]string{"turn_id": "t-1", "agent_role": row.role},
+			Spend: &store.Spend{Model: row.model, TotalTokens: 10 * (i + 1),
+				Models: []tokens.ModelSpend{{Model: row.model + "-split", InputTokens: 1}}},
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "PM"})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(got) != 1 || got[0].TotalTokens != 10 ||
+		!slices.Equal(got[0].Models, []string{"opus", "opus-split"}) {
+		t.Errorf("PM's turns = %+v, want t-1 at PM's 10 tokens naming PM's models alone", got)
+	}
+}
+
+// A SPLIT ENTRY THAT IS NOT AN OBJECT NAMES NOTHING AND BREAKS NOTHING. The
+// writer only ever stores objects, but the column also holds what a backfill
+// copied out of a payload (schema/0032), and the filter reads every spend
+// record of the window in one statement, the list every record of the turns
+// it shows: an entry the expansion could not read would fail the whole answer
+// rather than one row of it.
+func TestASplitEntryThatIsNotAnObjectNamesNothing(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	log := db.Events()
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "odd-p0", Type: "agent_phase_completed", Time: time.Now().UTC().Add(-time.Minute),
+		Category: "lifecycle", Actor: "PM",
+		Tags:  map[string]string{"turn_id": "odd", "agent_role": "PM"},
+		Spend: &store.Spend{Model: "sonnet", TotalTokens: 1},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if _, err := db.SQL().ExecContext(t.Context(),
+		`UPDATE crewlet_events SET models = ? WHERE event_id = 'odd-p0'`,
+		`[1, "haiku", null, {"model": 5}, {"model": ""}, {"model": "opus"}]`); err != nil {
+		t.Fatalf("plant the split: %v", err)
+	}
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(got) != 1 || !slices.Equal(got[0].Models, []string{"opus", "sonnet"}) {
+		t.Errorf("turns = %+v, want the one turn naming its own model and the one named entry", got)
+	}
+	for model, want := range map[string]int{"opus": 1, "haiku": 0, "5": 0} {
+		turns, _, err := log.Turns(t.Context(), store.TurnQuery{Model: model})
+		if err != nil {
+			t.Fatalf("Turns(model=%s): %v", model, err)
+		}
+		if len(turns) != want {
+			t.Errorf("turns on %s = %d, want %d", model, len(turns), want)
+		}
 	}
 }

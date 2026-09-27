@@ -65,6 +65,21 @@ const (
 	// boot reconcile is still running has to be able to say "ask me in a
 	// moment" rather than "there is nothing".
 	CodeUnavailable = "unavailable"
+
+	// CodeDeferred is a question this node understood and will not answer
+	// from its own copy, because it retains a change covering what was
+	// asked that it cannot apply — one a newer build of the engine wrote,
+	// or one held back behind such a change. About a record it does not
+	// hold, it is a retained change that may be the one creating it.
+	//
+	// DISTINCT FROM unavailable because waiting on THIS node does not
+	// clear it: the change stays unapplied here until the node runs a
+	// build that can read it, so a client told to come back asks the same
+	// node the same question on a loop. And distinct from query_failed
+	// because nothing on the node is broken — a node running such a build
+	// answers the question, and a person has to be told the record cannot
+	// be shown here rather than that the engine failed.
+	CodeDeferred = "deferred"
 )
 
 // The failures a query surface reports precisely; everything else is a
@@ -75,6 +90,7 @@ var (
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node yet")
+	ErrDeferred     = errors.New("stream: held back by a change this node cannot apply")
 )
 
 // Query answers one client question.
@@ -391,6 +407,16 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		client.send(queryError(req, CodeBadParams))
 	case errors.Is(err, ErrUnavailable):
 		client.send(queryError(req, CodeUnavailable))
+	case errors.Is(err, ErrDeferred):
+		// INFO, NOT WARN: this node is not failing — it is running a build
+		// older than a change on the log, which is an ordinary moment in a
+		// rolling upgrade. Not DEBUG either, because the line carries the
+		// refusal, which names the retained change — where it sits on the
+		// log and, for one this build cannot decode, the version it was
+		// written at — and that is what tells an operator which build has
+		// to finish rolling out before this node answers again.
+		log.InfoContext(ctx, "stream_query_deferred", "what", req.What, "error", err)
+		client.send(queryError(req, CodeDeferred))
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and the socket

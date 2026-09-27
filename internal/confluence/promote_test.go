@@ -376,15 +376,22 @@ func TestACreateConfluenceRefusesSaysWhetherItWillEverClear(t *testing.T) {
 		container bool
 		page      bool
 		found     bool
+		// says and never are what the refusal's sentence must and must not
+		// say: it is recorded as the record's refusal and read by an
+		// operator, who acts on the cause it names.
+		says, never string
 	}{
 		{name: "a space that is not served", create: http.StatusNotFound,
-			space: http.StatusNotFound, container: true},
+			space: http.StatusNotFound, container: true, says: "is not served"},
 		{name: "a draft refused in a served space", create: http.StatusBadRequest,
-			space: http.StatusOK, parent: true, page: true},
+			space: http.StatusOK, parent: true, page: true, never: "not served"},
 		// The parent is the same page for every draft in the space, so the
-		// space refusing it is the space refusing them all.
+		// space refusing it is the space refusing them all — and the space
+		// IS served, so a sentence saying otherwise sends an operator to
+		// check a token that works.
 		{name: "the drafts parent refused in a served space", create: http.StatusBadRequest,
-			space: http.StatusOK, container: true},
+			space: http.StatusOK, container: true,
+			says: "is served and refused the drafts parent", never: "not served"},
 		{name: "a title taken between the look and the create",
 			create: http.StatusBadRequest, space: http.StatusOK, parent: true,
 			held: true, found: true},
@@ -416,6 +423,13 @@ func TestACreateConfluenceRefusesSaysWhetherItWillEverClear(t *testing.T) {
 			}
 			if got := errors.As(err, &refused) && refused.RefusesPage(); got != tc.page {
 				t.Errorf("RefusesPage = %v, want %v: %v", got, tc.page, err)
+			}
+			if tc.says != "" && !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("the refusal does not say %q: %v", tc.says, err)
+			}
+			if tc.never != "" && strings.Contains(err.Error(), tc.never) {
+				t.Errorf("the refusal says %q, which is not the cause: %v",
+					tc.never, err)
 			}
 		})
 	}

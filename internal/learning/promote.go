@@ -1008,8 +1008,7 @@ type promotionEntry struct {
 	// Tried is set, on a drafting record, once a create has been asked for
 	// under Title in Container, and it is WRITTEN BEFORE the create is asked
 	// for: a page found under the title is this record's only when it is set
-	// (see [Promoter.finish]). A build that predates the field carries it
-	// back unread and adopts whatever page holds the title.
+	// (see [Promoter.finish]).
 	Tried bool `json:"tried,omitempty"`
 
 	// At is when the record entered its state.

@@ -153,10 +153,11 @@ func (r *Runner) Resume(ctx context.Context, round int, history []ledger.Iterati
 
 	if res.Suspended {
 		// Published only if recording the suspension panics; see
-		// [closing]. No prompts, as on the record below. Nothing counted
-		// the carried spend: the pre-suspend rounds' is in res and the
-		// runs' is in run, and the suspension carries both to the resume
-		// that counts them.
+		// [closing]. No prompts, as on the record below. Short of that, no
+		// record of this attempt counts what it carries — the pre-suspend
+		// rounds' spend in res and the runs' in run, each as
+		// [Runner.carried] left it — so the suspension carries both to the
+		// resume that counts them.
 		base := ranRecord(phase.Execute, round, "", "", res, surface)
 		base.Run = run
 		closer := r.closing(phaseCtx, base)

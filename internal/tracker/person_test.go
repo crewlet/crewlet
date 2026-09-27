@@ -49,8 +49,8 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 			if err == nil {
 				t.Fatalf("bob wrote ana's %s", name)
 			}
-			if !errors.Is(err, statelog.ErrConflict) {
-				t.Fatalf("the refusal is %v, want an ErrConflict a caller can "+
+			if !errors.Is(err, tracker.ErrNotYours) {
+				t.Fatalf("the refusal is %v, want ErrNotYours a caller can "+
 					"branch on", err)
 			}
 		})

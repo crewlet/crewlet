@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -62,16 +63,16 @@ type PersonAuthority struct {
 	// # Why this is a second authority rather than a special case of Lead
 	//
 	// Because it is a different question, and the chart cannot answer it.
-	// An operator's actor is an API TOKEN's name — it is not a handle in
-	// the chart, so no ancestor walk can ever match it, and `Lead` is
-	// false for every operator by construction.
+	// An operator's actor is `operator:` and an API token's name
+	// ([OperatorActor]) — it is not a handle in the chart, so no ancestor
+	// walk can ever match it, and `Lead` is false for every operator by
+	// construction.
 	//
 	// Without it the surface this verb is served on could not use it.
 	// `set_priorities` is registered on the operator MCP, and an operator
-	// can never satisfy `own || Lead`, so a founder re-ordering an agent's
-	// queue there would get "<token> is not <handle> and does not lead
-	// them" every time — and omitting the handle would write a PERSON
-	// RECORD FOR THE TOKEN.
+	// can never satisfy `own || Lead` — it holds no seat, so no list is
+	// its own ([actsAs]) — so a founder re-ordering an agent's queue there
+	// would be refused every time.
 	//
 	// The rule is the design's own: a person's priorities
 	// are written by the owner, by lead-or-above, by a human, or by an
@@ -279,20 +280,39 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 	}, nil
 }
 
-// ownRecord refuses a write on somebody else's half of a person record.
+// ErrNotYours refuses a write on the half of a person record that only its
+// person may write — the inbox and the pins ([ownRecord]).
+//
+// ITS OWN SENTINEL rather than [statelog.ErrConflict], because the two ask a
+// caller for opposite things: a conflict is a race another writer won, and the
+// answer is to read again and decide; this is an authority the writer does not
+// hold, which no re-read gives it.
+var ErrNotYours = errors.New("tracker: only the person whose record it is " +
+	"writes this part of it")
+
+// ownRecord refuses a write on somebody else's half of a person record, and a
+// write by a writer that holds no seat on anybody's.
 func ownRecord(actor string, kind AuthorKind, handle, what string) error {
 	switch {
 	case actsAs(actor, kind, handle):
 		return nil
+	case kind == AuthorOperator && actor == handle:
+		// AN OPERATOR ON ITS OWN NAME, which is what a tool writing the
+		// caller's own inbox or pins asks for on the operator's surface:
+		// the answer is that it has none, not that somebody else's may not
+		// be written. Its name is `operator:` and a token's, which no
+		// person has — where an engine writer's name can spell a seat's
+		// handle, and the record it names is then that seat's.
+		return fmt.Errorf("tracker: %s writes as an operator, which holds no "+
+			"seat and so has no %s of its own: %w", actor, what, ErrNotYours)
 	case kind != AuthorAgent && kind != AuthorHuman:
-		return fmt.Errorf("tracker: %s writes as %s and holds no seat, so it "+
-			"cannot write %s's %s — it is written only on behalf of the person "+
-			"whose it is: %w", actor, kind, handle, what, statelog.ErrConflict)
+		return fmt.Errorf("tracker: %s writes as %s, which holds no seat, so it "+
+			"cannot write %s's %s — that is written only on behalf of the "+
+			"person whose it is: %w", actor, kind, handle, what, ErrNotYours)
 	}
 	return fmt.Errorf("tracker: %s cannot write %s's %s — it is written on "+
 		"behalf of the person whose it is, and somebody else's hand in it is "+
-		"the one thing it must never allow: %w",
-		actor, handle, what, statelog.ErrConflict)
+		"the one thing it must never allow: %w", actor, handle, what, ErrNotYours)
 }
 
 // actsAs reports whether a writer acting as actor, of kind, is the person
@@ -300,8 +320,10 @@ func ownRecord(actor string, kind AuthorKind, handle, what string) error {
 //
 // ONLY A SEAT'S OWN WRITER CAN BE, which is why the KIND is asked before the
 // name: an operator or the engine holds no seat, so whatever its name spells
-// it is nobody's person. Asked of the name alone, a token or a node named like
-// a seat would own that seat's inbox and pins.
+// it is nobody's person. Asked of the name alone, an engine writer whose name
+// spells a seat's handle would own that seat's inbox and pins, and an operator
+// would own a record filed under its own `operator:` name, which no person
+// has.
 func actsAs(actor string, kind AuthorKind, handle string) bool {
 	return (kind == AuthorAgent || kind == AuthorHuman) && actor == handle
 }

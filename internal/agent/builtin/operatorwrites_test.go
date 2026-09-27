@@ -50,12 +50,13 @@ import (
 
 // operatorActor is a write with no turn: a token acting for the company.
 //
-// It is what `opsmcp.WorkActor` builds — the operator's own name as the
-// handle, the kind saying it is not a seat, and NO TURN ID, which is the whole
-// point of the case.
+// It is what `opsmcp.WorkActor` builds — `operator:` and the token's name as
+// the handle, the kind saying it is not a seat, the token as the credential,
+// and NO TURN ID, which is the whole point of the case.
 func operatorActor(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 	return builtin.Actor{
-		Handle: "founder", Kind: tracker.AuthorOperator, OperatorID: "founder",
+		Handle: tracker.OperatorActor("founder"), Kind: tracker.AuthorOperator,
+		OperatorID: "founder",
 	}, nil
 }
 

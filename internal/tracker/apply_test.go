@@ -98,9 +98,8 @@ func (h *applyHarness) applyAt(rec tracker.MutationRecord, brokerAt time.Time,
 		// THE REAL PROBED LIMIT, not a left-out zero. MaxVariables is
 		// what every collection's insert chunks to, and a harness that
 		// passed nothing would exercise only the one-row-per-statement
-		// degradation — which is the shape the applier was CONVERTED
-		// AWAY FROM, so the suite would certify the path production
-		// does not take.
+		// degradation — a path production does not take, so the suite
+		// would certify the wrong one.
 		n, err := h.applier.Apply(h.t.Context(), tx, record, statelog.ApplyOptions{
 			Now: brokerAt, StoredAt: brokerAt,
 			MaxVariables: h.maxVariables,
@@ -502,11 +501,12 @@ func TestARankOrderIsAppliedAsTheVersionItWasWrittenAtSays(t *testing.T) {
 // EACH RECORD IS WRITTEN AT THE VERSION ITS APPLY MEANS, AND NO HIGHER.
 //
 // The version is what tells a node which apply a record was written for, so the
-// writer has to stamp it — a rank order, a purge and a patch carrying a merge
-// target each at their own, and every other record at the first: a record of
-// any other kind stamped above what an older build reads would be retained by
-// every such node for no change in what it does, together with every later
-// record its scope covers.
+// writer has to stamp it — a rank order and a patch carrying a merge target
+// each at their own; a purge, a create under a parent and a patch carrying a
+// project or a parent at the one whose apply derives the project flag; and
+// every other record at the first: a record of any other kind stamped above
+// what an older build reads would be retained by every such node for no change
+// in what it does, together with every later record its scope covers.
 func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -515,6 +515,13 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 	filedTask(t, r, "t-2")
 	filedTask(t, r, "t-3")
 	filedTask(t, r, "t-4")
+	parent := "t-4"
+	kid := newTask("t-5")
+	kid.Parent, kid.Depth = &parent, 1
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+		t.Fatalf("CreateTask under a parent: %v", err)
+	}
+	r.drain()
 	if _, err := r.writer.MoveTask(t.Context(), "op-drop", "ENG", "t-2", "",
 		"t-1"); err != nil {
 		t.Fatalf("MoveTask: %v", err)
@@ -526,30 +533,38 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 	}
 	r.drain()
 	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "t-4", "t-1",
-		false, nil); err != nil {
+		true, nil); err != nil {
 		t.Fatalf("MergeDuplicates: %v", err)
 	}
 	r.drain()
 
-	// EVERY RECORD ON THE LOG, each against the version its apply means:
-	// a rank order, a purge and a merge target at their own, everything
-	// else at the first.
+	// EVERY RECORD ON THE LOG, each against the version its apply means.
 	want := func(env tracker.RecordEnvelope, payload []byte) int {
 		switch {
 		case env.Subject.Kind == tracker.KindRankOrder:
 			return tracker.RankOrderRecordVersion
 		case env.Op == tracker.OpPurge:
-			return tracker.PurgeRecordVersion
+			return tracker.ProjectFlagRecordVersion
 		}
 		record, err := tracker.Decode(payload)
 		if err != nil {
 			t.Fatalf("decode the %s record on %s: %v", env.Op, env.Subject, err)
 		}
-		var patch map[string]json.RawMessage
-		if env.Op == tracker.OpPatch && json.Unmarshal(record.Mutation, &patch) == nil {
-			if _, carries := patch["merge_into"]; carries {
-				return tracker.MergeRecordVersion
-			}
+		var body map[string]json.RawMessage
+		if json.Unmarshal(record.Mutation, &body) != nil ||
+			env.Subject.Kind != tracker.KindTask {
+			return tracker.RecordVersion
+		}
+		_, parented := body["parent"]
+		_, homed := body["project"]
+		_, merging := body["merge_into"]
+		switch {
+		case env.Op == tracker.OpCreate && parented:
+			return tracker.ProjectFlagRecordVersion
+		case env.Op == tracker.OpPatch && (parented || homed):
+			return tracker.ProjectFlagRecordVersion
+		case env.Op == tracker.OpPatch && merging:
+			return tracker.MergeRecordVersion
 		}
 		return tracker.RecordVersion
 	}
@@ -579,15 +594,15 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 				V int `json:"v"`
 			}
 			if err := json.Unmarshal(record.Mutation, &body); err != nil ||
-				body.V != tracker.PurgeRecordVersion {
+				body.V != tracker.ProjectFlagRecordVersion {
 				t.Errorf("the purge's payload states version %d (%v), want %d",
-					body.V, err, tracker.PurgeRecordVersion)
+					body.V, err, tracker.ProjectFlagRecordVersion)
 			}
 		}
 	}
 	for _, version := range []int{tracker.RecordVersion,
-		tracker.RankOrderRecordVersion, tracker.PurgeRecordVersion,
-		tracker.MergeRecordVersion} {
+		tracker.RankOrderRecordVersion, tracker.MergeRecordVersion,
+		tracker.ProjectFlagRecordVersion} {
 		if !seen[version] {
 			t.Fatalf("no record on the log was written at version %d, so this "+
 				"case is not the shape it names", version)
@@ -612,7 +627,7 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 	}
 	got := (tracker.Domain{}).RecordVersion()
 	for _, version := range []int{tracker.RankOrderRecordVersion,
-		tracker.PurgeRecordVersion, tracker.MergeRecordVersion} {
+		tracker.MergeRecordVersion, tracker.ProjectFlagRecordVersion} {
 		if got < version {
 			t.Errorf("the domain declares it reads version %d, below the %d it "+
 				"writes", got, version)
@@ -621,9 +636,9 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 }
 
 // appendRecord puts one record on the log exactly as given, which is how a
-// case puts there a record this build's own writer no longer writes — a purge
-// at the first record version, as every purge was written before
-// [tracker.PurgeRecordVersion].
+// case puts there a record this build's own writer does not write — a purge at
+// the first record version, which is what a build that predates
+// [tracker.PurgeRecordVersion] writes.
 func (r *roundTrip) appendRecord(rec tracker.MutationRecord) {
 	r.t.Helper()
 	body, err := rec.Encode()

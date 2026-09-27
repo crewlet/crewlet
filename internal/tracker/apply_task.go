@@ -703,7 +703,11 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return 0, err
 	}
-	closure, err := a.maintainClosure(ctx, tx, task)
+	// THE FLAG IS THE RECORD'S VERSION'S, like every rule an apply keys on
+	// one — see [ProjectFlagRecordVersion] for what a record below it
+	// leaves.
+	closure, err := a.maintainClosure(ctx, tx, task,
+		c.record.V >= ProjectFlagRecordVersion)
 	if err != nil {
 		return 0, err
 	}
@@ -1501,7 +1505,8 @@ func (a *Applier) reparent(ctx context.Context, tx *sql.Tx, children []string,
 			return 0, fmt.Errorf("tracker: re-parent %s: %w", child, err)
 		}
 		written++
-		n, err := a.maintainClosure(ctx, tx, Task{ID: child, Parent: parent})
+		n, err := a.maintainClosure(ctx, tx, Task{ID: child, Parent: parent},
+			c.record.V >= ProjectFlagRecordVersion)
 		if err != nil {
 			return 0, err
 		}

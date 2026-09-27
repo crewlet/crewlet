@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -223,10 +224,10 @@ func TestABadParameterIsRefusedRatherThanGuessedAt(t *testing.T) {
 			"fault of this node for a request the caller has to change", got)
 	}
 
-	// AND THE SOCKET SAYS THE SAME THING. It said `query_failed` — the
-	// code a client retries — so a screen polling a question it was
-	// malforming retried for ever, while this node logged a warning per
-	// tick about a request that was never its fault.
+	// AND THE SOCKET SAYS THE SAME THING. Answered `query_failed` — the
+	// code a client retries — a screen polling a question it malforms
+	// would retry for ever, while this node logged a warning per tick
+	// about a request that was never its fault.
 	socket := overSocket(t, a, "events", map[string]any{"before_id": "ev1"})
 	if socket["kind"] != "error" || socket["error"] != "bad_params" {
 		t.Errorf("socket answer = %v, want bad_params", socket)
@@ -257,7 +258,7 @@ func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 }
 
 // A COORDINATION BLIP IS "ASK AGAIN" ON BOTH TRANSPORTS: a 503 with a
-// Retry-After over REST and `unavailable` on the socket. It was a 500 and
+// Retry-After over REST and `unavailable` on the socket — never a 500 and
 // `query_failed`, the pair a client gives up on.
 func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.T) {
 	t.Parallel()
@@ -279,6 +280,56 @@ func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.
 	}
 	if socket := overSocket(t, a, "blip", nil); socket["error"] != "unavailable" {
 		t.Errorf("socket answer = %v, want unavailable", socket)
+	}
+}
+
+// A READ HELD BACK BY A CHANGE THIS NODE CANNOT APPLY IS `deferred` ON BOTH
+// TRANSPORTS: a 503 with NO Retry-After over REST, and `deferred` on the
+// socket.
+//
+// The refusal comes from the state log exactly as the tracker's point read
+// returns it, so the registry's own classification is what is exercised, and
+// each transport is asked through its real handler. Neither half is the
+// `unavailable` pair — a hint that sends a client back to the same node for a
+// change that node will not apply until it runs a newer build — nor the
+// `query_failed` pair, which a person reads as a broken engine and a node logs
+// as a warning on every poll.
+//
+// Mutation: drop the ErrDeferred arm from writeQueryError and REST answers 500
+// `query_failed`; drop it from App.answer and the socket answers
+// `query_failed`; give the REST arm a Retry-After and the header check fails.
+func TestADeferredReadIsDeferredOnBothTransports(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+	a.Queries().Register("covered", func(context.Context, queries.Params) (any, error) {
+		return nil, &statelog.Refused{
+			Code: statelog.RefuseDeferred, Level: statelog.ReadStale,
+			Detail: "this node retains 1 record(s) covering task t-1 that it " +
+				"has not applied — the lowest at tracker@1:40, written at version 9",
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/query/covered", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("REST status = %d, want 503 — the failure is this node's, and "+
+			"a node running a build that reads the change answers", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Errorf("REST carried Retry-After %q — a hint tells the client to come "+
+			"back to this node, which will not apply the change however long "+
+			"it waits", got)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode the REST body: %v", err)
+	}
+	if body["error"] != "deferred" {
+		t.Errorf("REST error = %v, want deferred", body["error"])
+	}
+	if socket := overSocket(t, a, "covered", nil); socket["kind"] != "error" ||
+		socket["error"] != "deferred" {
+		t.Errorf("socket answer = %v, want the deferred code", socket)
 	}
 }
 

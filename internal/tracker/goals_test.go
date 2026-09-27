@@ -180,10 +180,9 @@ func TestAGoalsProgressIsItsTargets(t *testing.T) {
 			after.Progress)
 	}
 
-	// AND CANCELLING THE REST DOES NOT FINISH THE GOAL. This is the shape
-	// the count was wrong in: `cancelled` is a FINISHED group, so a target
-	// counting finished groups reported a team that gave up as having met
-	// its goal.
+	// AND CANCELLING THE REST DOES NOT FINISH THE GOAL. `cancelled` is a
+	// FINISHED group, so a target counting finished groups would report a
+	// team that gave up as having met its goal.
 	cancelled := tracker.StatusCancelled
 	if _, err := r.writer.UpdateTask(t.Context(), "op-abandon", "gt-3", "ENG", 0,
 		tracker.TaskPatch{Status: &cancelled}, tracker.ChangeStatus, nil); err != nil {

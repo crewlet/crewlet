@@ -25,14 +25,13 @@ var clientOnlyCodes = []string{"timeout", "closed"}
 
 // THE ENGINE AND THE DASHBOARD SPEAK ONE QUERY ERROR VOCABULARY.
 //
-// They did not. The dashboard handled `no_event_store`, which no engine ever
-// sent, and the reference documented two more codes nothing produced, so a
-// screen carried a branch that could never run and an operator read about
-// answers that could never arrive. The dashboard's `QueryErrorCode` union is
-// what its screens branch on (they compare the error narrowed to it, so a code
-// outside it is a type error), and this pins that union to the codes this
-// package sends, read from its own source so a new code is covered without
-// being listed here.
+// A code only the dashboard knows is a branch that can never run, and a code
+// only the engine sends is a refusal no screen has a sentence for — so a
+// person is not told what the engine said was wrong. The dashboard's
+// `QueryErrorCode` union is what its screens
+// branch on (they compare the error narrowed to it, so a code outside it is a
+// type error), and this pins that union to the codes this package sends, read
+// from its own source so a new code is covered without being listed here.
 func TestTheDashboardKnowsExactlyTheQueryErrorCodesTheEngineSends(t *testing.T) {
 	t.Parallel()
 	want := append(engineCodes(t), clientOnlyCodes...)
@@ -43,7 +42,7 @@ func TestTheDashboardKnowsExactlyTheQueryErrorCodesTheEngineSends(t *testing.T) 
 		t.Errorf("the dashboard's QueryErrorCode union is %v; the engine sends %v and "+
 			"the socket adds %v, so the two vocabularies have drifted. A code only "+
 			"the dashboard knows is a branch that never runs; a code only the engine "+
-			"sends is a failure every screen renders as unknown",
+			"sends is a refusal no screen has a sentence for",
 			got, engineCodes(t), clientOnlyCodes)
 	}
 }

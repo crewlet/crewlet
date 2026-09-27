@@ -14,11 +14,11 @@ import (
 //
 // `tracker_history.kind` is what the activity feed's `kinds=` filter selects
 // on — so it is read off the record's own stated kind, never off the
-// NOTIFICATION a quiet record does not carry. Guessed from the OPERATION instead, it would break the
-// principle the file that writes the row opens with: the feed is "a complete
-// account of what happened rather than an account of what was announced, and
-// `notified` is how a reader tells "nothing was announced" from "nothing
-// happened"".
+// NOTIFICATION a quiet record does not carry. Guessed from the OPERATION
+// instead, it would break the principle the file that writes the row opens
+// with: the feed is "a complete account of what happened rather than an
+// account of what was announced, and `notified` is how a reader tells "nothing
+// was announced" from "nothing happened"".
 //
 // A CATALOGUE EDIT AND A VIEW SAVE ARE THE SHARPEST INSTANCES, because they
 // are quiet BY DESIGN and on every path: a wake per catalogue edit would page
@@ -189,7 +189,7 @@ func TestAPurgeTellsTheProjectLead(t *testing.T) {
 	filedTask(t, r, "t-1")
 
 	r.writer.Leads = fixedLeads{project: "eng-lead"}
-	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	operator := asOperator(r, "ops-1")
 	if _, err := operator.PurgeTask(t.Context(), "op-purge", "t-1", "ENG",
 		"asked for by legal"); err != nil {
 		t.Fatalf("purge: %v", err)
@@ -225,7 +225,7 @@ func TestAPurgeExcerptKeepsNoCopyOfWhatItDestroyed(t *testing.T) {
 	r.drain()
 
 	r.writer.Leads = fixedLeads{project: "eng-lead"}
-	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	operator := asOperator(r, "ops-1")
 	if _, err := operator.PurgeTask(t.Context(), "op-purge", "t-1", "ENG",
 		"asked for by legal"); err != nil {
 		t.Fatalf("purge: %v", err)
@@ -251,7 +251,7 @@ func TestAPurgeExcerptKeepsNoCopyOfWhatItDestroyed(t *testing.T) {
 //
 // A history row is the record that a change happened — who, when, what kind —
 // and a purge must leave that, or it erases that the work ever existed. But the
-// rows also carried what the task SAID: a create's excerpt is its description,
+// rows also carry what the task SAID: a create's excerpt is its description,
 // a comment's is its body, a title change's deltas name both titles, and every
 // row keeps the whole record it was written from. A purge that left any of
 // them would leave the feed showing the content the purge was asked to
@@ -435,7 +435,7 @@ func TestARedeliveredPurgeLeavesItsOwnLinesWhole(t *testing.T) {
 	r.drain()
 
 	r.writer.Leads = fixedLeads{project: "eng-lead"}
-	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	operator := asOperator(r, "ops-1")
 	if _, err := operator.PurgeTask(t.Context(), "op-purge", "t-1", "ENG",
 		"asked for by legal"); err != nil {
 		t.Fatalf("purge: %v", err)
@@ -596,38 +596,18 @@ func historyNotified(t *testing.T, r *roundTrip, kind, id string) bool {
 // gets an opener, a key and a **By:** with nothing between them saying what
 // the person did — which is the one thing the wake exists to carry.
 //
-// It covered twenty of the twenty-eight kinds and nothing connected the two
-// lists, so the gap was invisible from both ends. Of the eight missing, seven
-// never reach it — `Prompt.Build` dispatches on [MetaObject] first, so a goal
-// and a person's queue render through [buildObjectPrompt], and the project,
-// policy, view and catalogue kinds are not routable at all.
-// The twelfth was `purged`: task-subject, routable, and rendering no line for
-// the one operation in this engine that cannot be undone.
+// A kind whose wake is not a task's never reaches that switch — `Prompt.Build`
+// dispatches on [MetaObject] first, so a goal and a person's queue render
+// through [buildObjectPrompt] — so the walk is over every kind that reports
+// itself a task commit ([tracker.ChangeKind.TaskCommit]): the classification
+// every task wake is routed by, which makes a task kind added later covered by
+// this case without anybody remembering to add it here.
 //
-// THE WALK IS OVER [tracker.ChangeKinds] rather than a list here, so a kind
-// added later is covered without anybody remembering to — which is the half
-// that was missing rather than the case itself.
+// Mutation: drop a task kind's arm from changeLead and this fails naming it.
 func TestEveryRoutableChangeKindRendersWhatHappened(t *testing.T) {
 	t.Parallel()
-	// The kinds whose wake is a TASK wake, which are the ones that reach
-	// changeLead. Everything else renders through the object prompt or is
-	// not routed at all; both are asserted below so this list cannot
-	// quietly shrink.
-	throughTheTaskPrompt := map[tracker.ChangeKind]bool{
-		tracker.ChangeCreated: true, tracker.ChangeFields: true,
-		tracker.ChangeStatus: true, tracker.ChangeAssignee: true,
-		tracker.ChangeCollaborators: true, tracker.ChangeWatchers: true,
-		tracker.ChangeTags: true, tracker.ChangeRelations: true,
-		tracker.ChangeRouted: true, tracker.ChangeMoved: true,
-		tracker.ChangeReparented: true,
-		tracker.ChangeChecklist:  true, tracker.ChangeArchived: true,
-		tracker.ChangeComment: true, tracker.ChangeCommentEdited: true,
-		tracker.ChangeCommentResolved: true, tracker.ChangeCommentRemoved: true,
-		tracker.ChangeRemoved: true, tracker.ChangeRestored: true,
-		tracker.ChangePurged: true,
-	}
 	for _, kind := range tracker.ChangeKinds {
-		if !throughTheTaskPrompt[kind] {
+		if !kind.TaskCommit() {
 			continue
 		}
 		got := tracker.Prompt{}.Build(notify.Inbound{

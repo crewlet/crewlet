@@ -1277,8 +1277,8 @@ type ViewType string
 // arrangement no other type expresses: a list orders by a column, a board
 // groups by one, a calendar puts a task on the day it is due and a table lays
 // its fields out in columns — none of them can show that a task spans three
-// weeks, or that it cannot start until another finishes. It is what [TaskRow.Start], [TaskRow.Due] and
-// [TaskRow.WaitingOn] are on the row for.
+// weeks, or that it cannot start until another finishes. It is what
+// [TaskRow.Start], [TaskRow.Due] and [TaskRow.WaitingOn] are on the row for.
 //
 // [ViewTable] is the one read by COLUMN rather than by row. A list draws each
 // task as a block a person reads one at a time — title, badges, dates, the

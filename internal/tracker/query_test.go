@@ -145,20 +145,16 @@ func TestCustomFieldsAreCollectedInAStableOrder(t *testing.T) {
 	}
 }
 
-// A MODE WITHOUT TEXT IS REFUSED NAMING THE MISSING KEY.
-//
-// Ignoring it answers an unfiltered list, which reads as a search that matched
-// everything — the one wrong answer a caller cannot tell from a right one.
-// THERE IS NO SEARCH MODE ON THIS GRAMMAR, and `mode` is refused as the
-// unknown key it now is.
+// THERE IS NO SEARCH MODE ON THIS GRAMMAR, and `mode` is refused as a key the
+// grammar does not read — never ignored, because an ignored key answers an
+// unfiltered list, which reads as a search that matched everything.
 //
 // `q` here is a substring of a key or a title — the item somebody half
-// remembers. Ranked search over the company's prose is `search_knowledge`'s,
-// behind the knowledge seam, which is where the analyzer, the inverted list
-// and the vectors are; `kb_docs` and `kb_postings` index PAGES and nothing has
-// ever put a task in them. Three modes over one behaviour is a knob whose
-// values cannot differ, and a caller that asked for `semantic` and got a
-// substring match was answered by a name rather than by a search.
+// remembers. RANKED search over the company's work is `search_work_items` and
+// `work_search`, over the lexical index and the vectors; this grammar has no
+// ranker. So a mode here would be a knob whose values cannot differ, and a
+// caller that asked for `semantic` and got a substring match would be answered
+// by a name rather than by a search.
 func TestThereIsNoSearchModeOnTheTaskGrammar(t *testing.T) {
 	t.Parallel()
 	_, err := parse(t, map[string]any{"q": "auth", "mode": "semantic"})

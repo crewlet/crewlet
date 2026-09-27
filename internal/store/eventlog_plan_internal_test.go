@@ -138,3 +138,42 @@ func planOf(t *testing.T, db *DB, query string, args ...any) string {
 	}
 	return strings.Join(steps, " | ")
 }
+
+// THE TAIL'S STATEMENTS ARE BOUNDED ON BOTH EDGES OF THE INDEX RANGE. Each
+// statement of [EventLog.PhaseTokenTail] reads past the one before it, and the
+// edge between them is a pair — the last record's instant and id — that the
+// planner does not bound a range on by itself: planned as a filter, each
+// statement would walk down from its type's newest record through every record
+// the ones before it read, and a tail of many statements would read its window
+// once per statement.
+func TestTheTailsStatementsAreBoundedOnBothEdges(t *testing.T) {
+	t.Parallel()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "plans.db"), Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	seedPlans(t, db, 2000)
+	since, until := now().Add(-24*time.Hour), now()
+	after := &spendKey{at: EncodeTime(now().Add(-time.Hour)), id: "x"}
+	for _, tc := range []struct {
+		name  string
+		after *spendKey
+	}{
+		{"the first statement", nil},
+		{"a statement past another", after},
+	} {
+		query, args := spendStatement(phaseCompleted, since, until, "", tc.after, spendChunk)
+		plan := planOf(t, db, query, args...)
+		if !strings.Contains(plan, "USING INDEX crewlet_events_type_time_idx (event_type=? AND event_time>") ||
+			!strings.Contains(plan, "AND event_time<=?)") {
+			t.Errorf("%s plans as %q; want a search of the type's index bounded on both edges of its instants",
+				tc.name, plan)
+		}
+		for _, walk := range []string{"SCAN", "SORTER"} {
+			if strings.Contains(plan, walk) {
+				t.Errorf("%s plans as %q, which walks or sorts rows (%s)", tc.name, plan, walk)
+			}
+		}
+	}
+}

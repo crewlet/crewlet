@@ -21,6 +21,14 @@ dashboard, tools a seat calls, and an
 [MCP surface](../reference/api-endpoints.md#operatormcp--your-own-assistant)
 your own AI assistant can reach.
 
+**Every change names who made it.** A seat's change is filed under its handle;
+one your assistant makes through the MCP surface under `operator:` and the name
+of the API token it presented — `operator:founder` — never under the bare name,
+which a seat could hold; and one the engine makes on its own under the node
+that made it. The knowledge base names an operator the same way, so one token
+is one name on both — see
+[who a write is attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
+
 **This is not a mirror.** The log here *is* the source of truth, so the
 staleness argument below does not apply to it: there is no other copy to
 disagree with, no webhook to miss, and no reconciliation poller because
@@ -131,6 +139,17 @@ a cache cannot:
   their link is dead. The node keeps every seat it already holds — catching up
   is not a reason to drop work in hand — and the fleet view reports how many
   of its copies are ready.
+
+**A shape no single write could make is marked, never refused.** Writes on two
+different items do not contend, so together they can leave a shape either one
+alone would have been refused — a subtask filed under an item at the moment
+that item is carried into another project, or two items each re-parented under
+the other. A copy cannot refuse a record the log has already accepted without
+stopping every node at it, so every node applies it whole and marks the item
+for the attention queue (`flag=inconsistent_project`, `flag=cycle`). An item
+left outside its root's project is then carried into it, re-keyed there, by
+the engine's own sweep; a cycle has no root to move into, and waits for
+somebody to break it.
 
 **A node too far behind to catch up adopts a peer's snapshot.** The log does
 not keep records for ever (see below), so a node that was down long enough, or

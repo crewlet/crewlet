@@ -22,16 +22,18 @@ import (
 //
 // Every job below completes something a WRITER started and could not end — a
 // re-spread a drag's long key asked for, a merge whose holder died
-// mid-walk, a dependent nobody told. None of them is a scan looking for
-// trouble, and that is the shape rather than an accident: a duty that goes
-// looking is a duty that costs the same whether or not anything is wrong, on
-// every node, for ever.
+// mid-walk, a cross-project move that left part of a subtree behind, a
+// dependent nobody told. None of them is a scan looking for trouble, and that
+// is the shape rather than an accident: a duty that goes looking is a duty
+// that costs the same whether or not anything is wrong, on every node, for
+// ever.
 //
 // So each one is GATED on a fact somebody already wrote down. A project's own
 // row says it needs a re-spread; a task's own row says its merge walk has not
-// finished; the repair holds its own position. The gate is one indexed read
-// where the job's own selection would be a scan, and on a healthy company
-// every tick is that read and nothing else.
+// finished, or that it is outside its subtree root's project; the repair holds
+// its own position. The gate is one indexed read where the job's own selection
+// would be a scan, and on a healthy company every tick is that read and
+// nothing else.
 //
 // # And every one of them is FLEET-WIDE, not per node
 //
@@ -57,15 +59,15 @@ type DutyDeps struct {
 	// indistinguishable from the gesture that abandoned it.
 	NodeID string
 
-	// Reader is what the merge repair decides from: one task, read at
-	// [statelog.ReadLinearizable] — see [duty.finishAbandoned] for why
-	// that level and why after the claim. REQUIRED, and refused by [Jobs]
-	// rather than by the job: a dependency missed only on a tick is missed
-	// on every tick of a node nobody is watching.
+	// Reader is what the merge and move repairs decide from: one task,
+	// read at [statelog.ReadLinearizable] — see [duty.finishAbandoned] for
+	// why that level and why after the claim. REQUIRED, and refused by
+	// [Jobs] rather than by the job: a dependency missed only on a tick is
+	// missed on every tick of a node nobody is watching.
 	Reader TaskReader
 }
 
-// TaskReader is the one read the merge repair makes. [Reader] is the
+// TaskReader is the one read the merge and move repairs make. [Reader] is the
 // implementation.
 type TaskReader interface {
 	Task(ctx context.Context, idOrKey string, want DetailWants,
@@ -74,9 +76,9 @@ type TaskReader interface {
 
 // Jobs is the tracker's housekeeping, as the maintenance worker's own shape.
 //
-// FIVE JOBS, every one [maintenance.Fleet] and all but one gated. The names
-// are the log's, and each is the table or the walk it is about rather than the
-// code that runs it.
+// SIX JOBS, every one [maintenance.Fleet] and all but one gated. The names are
+// the log's, and each is the table, the flag or the walk it is about rather
+// than the code that runs it.
 //
 // A MISSING DEPENDENCY IS REFUSED HERE, naming the field, and never left for a
 // job to find: the jobs run on a timer under a fleet singleton, so a job that
@@ -97,9 +99,10 @@ func Jobs(d DutyDeps) ([]maintenance.Job, error) {
 			"(DutyDeps.NodeID), which every operation id it mints carries")
 	case d.Reader == nil:
 		return nil, errors.New("tracker: the duty has no read authority " +
-			"(DutyDeps.Reader), and the merge repair decides only from a " +
-			"linearizable read — from this node's rows alone it would act on " +
-			"a merge that closed on another node before this one applied the close")
+			"(DutyDeps.Reader), and the merge and move repairs decide only " +
+			"from a linearizable read — from this node's rows alone they would " +
+			"act on a walk that finished on another node before this one " +
+			"applied its last step")
 	}
 	duty := &duty{deps: d}
 	if duty.deps.Logger == nil {
@@ -123,6 +126,12 @@ func Jobs(d DutyDeps) ([]maintenance.Job, error) {
 			Scope: maintenance.Fleet,
 			Gate:  duty.pendingMerges,
 			Run:   duty.finishMerges,
+		},
+		{
+			Name:  "tracker_inconsistent_project",
+			Scope: maintenance.Fleet,
+			Gate:  duty.pendingSplits,
+			Run:   duty.finishSplits,
 		},
 		{
 			Name:  "tracker_unblocked",
@@ -829,6 +838,258 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 		}
 	}
 	return walk, nil
+}
+
+// splitSelection is every task outside its subtree root's project, as the
+// root it belongs under: flagged by the applier ([ProjectFlagRecordVersion]),
+// out of the trash, out of any cycle, and in a project its root is not in.
+//
+// THE PROJECTS ARE READ BESIDE THE FLAG rather than the flag trusted alone. A
+// record below [ProjectFlagRecordVersion] leaves the column as it found it, so
+// one that heals a split leaves the flag standing, and a flag standing on a
+// task already in its root's project would hold the gate open on every tick
+// for a walk with nothing to move. The flag is what makes the read small — one
+// task's own row saying so, where the projects alone are a join over every
+// task in the company — and the projects are what make it true.
+//
+// A TASK IN THE TRASH WAITS FOR ITS RESTORE, because a removed task is frozen
+// ([Writer.UpdateTask] refuses every patch on one); the flag brings it back
+// here once it is out. A TASK IN A CYCLE has no root to move into, and its
+// `cycle` flag is the one somebody resolves first.
+const splitSelection = `
+	SELECT t.root_id AS root_id FROM tracker_tasks t
+	JOIN tracker_tasks r ON r.id = t.root_id
+	WHERE t.inconsistent_project = 1 AND t.removed_at IS NULL AND t.cycle = 0
+	  AND r.id <> t.id AND r.project_key <> t.project_key`
+
+// pendingSplits is the gate: whether any task is still outside its subtree
+// root's project ([splitSelection]).
+//
+// ONE READ OF THE FLAGGED ROWS, over `tracker_tasks_inconsistent_idx` — the
+// index partial on the flag, which `TestEveryIndexServesARegisteredQuery`
+// holds this statement's plan to. A healthy company holds no flagged task, so
+// the read finds none; over any other index it would be every live task in the
+// company, on every tick, to learn that.
+func (d *duty) pendingSplits(ctx context.Context) (bool, error) {
+	var found int
+	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT EXISTS (`+splitSelection+`)`).Scan(&found)
+	})
+	if err != nil {
+		return false, fmt.Errorf("tracker: read whether a subtree is split "+
+			"across projects: %w", err)
+	}
+	return found == 1, nil
+}
+
+// finishSplits moves every task a cross-project move left outside its subtree
+// root's project into it — the rest of [Writer.MoveTaskToProject]'s walk, one
+// root at a time ([duty.finishSplit]). The walk that stopped is one cause;
+// a subtask filed under a subtree after its walk read it, and a subtask a
+// merge moved onto a task in another project, are the others, and the repair
+// is the same for every one.
+//
+// ONE ROOT THE DUTY CANNOT FINISH IS NOT THE TICK'S, for
+// [duty.finishMerges]' reason: the roots in a batch are independent —
+// different claims, different subjects — and the batch is read in root order,
+// so stopping at one would hold every root sorting after it for as long as it
+// keeps failing. What it did not move keeps its flag, so the next sweep reads
+// it again.
+func (d *duty) finishSplits(ctx context.Context, now, _ time.Time) (int64, error) {
+	var roots []string
+	var truncated bool
+	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			// ONE ROW PAST THE BOUND: the extra root is evidence that more
+			// subtrees are split than this sweep finishes, never an
+			// answer. See the log line at the end of this function.
+			`SELECT DISTINCT root_id FROM (`+splitSelection+`)
+			 ORDER BY root_id LIMIT ?`, WalkBatch+1)
+		if err != nil {
+			return fmt.Errorf("tracker: read the split subtrees: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var root string
+			if err := rows.Scan(&root); err != nil {
+				return err
+			}
+			roots = append(roots, root)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		truncated = len(roots) > WalkBatch
+		if truncated {
+			roots = roots[:WalkBatch]
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+
+	var moved, failed int64
+	var first error
+	for _, root := range roots {
+		if ctx.Err() != nil {
+			// THE TICK ITSELF ENDED, which is not one root failing.
+			return moved, ctx.Err()
+		}
+		n, err := d.finishSplit(ctx, root, now)
+		moved += int64(n)
+		if err != nil {
+			d.deps.Logger.WarnContext(ctx, "tracker_split_finish_failed",
+				"root", root, "moved", n, "error", err)
+			failed++
+			if first == nil {
+				first = fmt.Errorf("the subtree under %s: %w", root, err)
+			}
+		}
+	}
+	if moved > 0 || failed > 0 {
+		// THE SWEEP'S OWN LINE, and it exists for the mark: nothing in the
+		// per-root lines distinguishes a tick that finished every split
+		// subtree in the company from one that finished the first batch
+		// of many. WHERE THE REST WENT: still flagged, which is what this
+		// job selects on, so the next sweep reads them.
+		d.deps.Logger.InfoContext(ctx, "tracker_splits_finished",
+			"tasks", moved, "failed", failed, "truncated", truncated)
+	}
+	if first != nil {
+		return moved, fmt.Errorf("tracker: %d of the split subtrees this sweep "+
+			"read could not be finished and stay flagged for the next; the "+
+			"first: %w", failed, first)
+	}
+	return moved, nil
+}
+
+// finishSplit moves what is left outside one root's project, under the move's
+// own claim, and reports how many tasks it moved.
+//
+// # Only when nothing holds the claim
+//
+// [Writer.MoveTaskToProject] holds its claim for the whole of its walk, so a
+// claim somebody holds is a walk still running — on this node or another — and
+// this sweep passes over it; the next one reads the flags again if they
+// outlive it. A holder that returns gives the claim back and one that died
+// loses it when its lease runs out, which is [duty.finishAbandoned]'s rule for
+// a merge, for the same reason: run beside a live walk, this would mint a
+// second number for every descendant the walk had not reached.
+//
+// # And from rows that hold every commit made under it
+//
+// The root is read AFTER the claim is taken, at [statelog.ReadLinearizable],
+// and the tasks left behind from this node's rows once that read has returned:
+// the barrier it waits for was appended after the previous holder gave the
+// claim back, so the rows hold every append that holder had acknowledged
+// ([duty.finishAbandoned] states the argument in full). A root purged since
+// has moved its children onto its own parent, and one that is no longer a root
+// has a root above it: either way the tasks are left to the next sweep, which
+// reads the root the rows then name.
+//
+// THE REST OF THE WALK BY THE WALK'S OWN STEPS ([Writer.moveDescendants]),
+// on a range of its own — [Writer.MoveTaskToProject] says why a completion
+// cannot reuse the walk's — in the (depth, id) order the walk moves in, at
+// most [WalkBatch] tasks a sweep. It declares no tags: the walk's own first
+// step declared the ones its caller named, and a task this moves keeps the
+// slugs it carries.
+func (d *duty) finishSplit(ctx context.Context, rootID string, now time.Time) (int, error) {
+	claim, err := d.deps.Writer.claim(ctx, moveClaim(rootID))
+	switch {
+	case err != nil:
+		return 0, err
+	case claim == nil:
+		return 0, nil
+	}
+	defer claim.release(ctx)
+	// THE REPAIR IS A WALK TOO, and its appends are fenced on the claim
+	// like the holder's were: a sweep that loses the claim stops before its
+	// next append rather than re-key a subtree beside whoever took it.
+	writer := d.deps.Writer.under(claim)
+
+	detail, err := d.deps.Reader.Task(ctx, rootID, DetailWants{},
+		statelog.Freshness{Level: statelog.ReadLinearizable})
+	switch {
+	case errors.Is(err, ErrNoTask):
+		// PURGED since the scan read the rows naming it.
+		return 0, nil
+	case err != nil:
+		// A REFUSAL IS AMONG THESE — a record this node cannot read
+		// covering the root, which may be the very move this repair
+		// would repeat. The flags stay for a sweep on a node, or a build,
+		// that can read it.
+		return 0, fmt.Errorf("tracker: read root %s: %w", rootID, err)
+	}
+	root := detail.Task
+	if root.Parent != nil && *root.Parent != "" {
+		// RE-PARENTED since the scan read the rows naming it.
+		return 0, nil
+	}
+	rest, truncated, err := d.leftBehind(ctx, root)
+	if err != nil || len(rest) == 0 {
+		return 0, err
+	}
+	opID := d.opID("split", rootID, now)
+	base, _, err := writer.mintKey(ctx,
+		stepID(opID, fmt.Sprintf("counter%d", len(rest))), root.Project,
+		len(rest), nil)
+	if err != nil {
+		return 0, err
+	}
+	moved, err := writer.moveDescendants(ctx, opID, rootID, root.Project, rest, base)
+	if err != nil {
+		return moved, err
+	}
+	// THE CUT IS MARKED HERE OR NOWHERE: a root with more tasks left behind
+	// than one sweep moves prints the same count as one with exactly that
+	// many. WHERE THE REST WENT: still flagged, and the next sweep reads them.
+	d.deps.Logger.InfoContext(ctx, "tracker_split_finished",
+		"root", rootID, "project", root.Project, "moved", moved,
+		"truncated", truncated)
+	return moved, nil
+}
+
+// leftBehindSelection is the tasks under a root, outside its project and out
+// of the trash, in the (depth, id) order a move walks: the root's id twice, its
+// project, and the bound.
+const leftBehindSelection = `
+	SELECT t.document, t.version, c.distance
+	FROM tracker_task_closure c
+	JOIN tracker_tasks t ON t.id = c.descendant_id
+	WHERE c.ancestor_id = ? AND c.descendant_id <> ?
+	  AND t.project_key <> ? AND t.removed_at IS NULL
+	ORDER BY c.distance, t.id LIMIT ?`
+
+// leftBehind reads the tasks under root that are outside its project and out
+// of the trash, in (depth, id) order — at most [WalkBatch], and whether there
+// were more.
+//
+// FROM THE PROJECTS, NOT THE FLAGS: a flag a record below
+// [ProjectFlagRecordVersion] left unset is still a task in the wrong project,
+// and one it left standing is not ([splitSelection]).
+func (d *duty) leftBehind(ctx context.Context, root Task) ([]Task, bool, error) {
+	var rest []Task
+	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		// ONE ROW PAST THE BOUND, as evidence and never as an answer.
+		rows, err := tx.QueryContext(ctx, leftBehindSelection,
+			root.ID, root.ID, root.Project, WalkBatch+1)
+		if err != nil {
+			return fmt.Errorf("tracker: read what is left outside %s under %s: %w",
+				root.Project, root.ID, err)
+		}
+		defer rows.Close()
+		rest, err = scanSubtree(rows, root.ID)
+		return err
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(rest) > WalkBatch
+	if truncated {
+		rest = rest[:WalkBatch]
+	}
+	return rest, truncated, nil
 }
 
 // tellUnblocked publishes the late notice for every dependent that became

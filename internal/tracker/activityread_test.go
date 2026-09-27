@@ -267,7 +267,7 @@ func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
 
 	// The harness's own writer is a HUMAN; this one is the operator token,
 	// which is what an audit is about.
-	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	operator := asOperator(r, "ops-1")
 	done := tracker.StatusDone
 	if _, err := operator.UpdateTask(t.Context(), "op-by-token", "t-1", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,

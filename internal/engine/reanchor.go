@@ -192,14 +192,10 @@ func (e *Engine) reanchorDeps(running *runningDomain, by string) (
 	}
 	switch running.domain.Name() {
 	case tracker.Domain{}.Name():
-		w, err := tracker.NewWriter(tracker.WriterDeps{
-			Publisher: running.publisher, NodeID: s.nodeID,
-			Actor: by, ActorKind: tracker.AuthorOperator,
-		})
+		w, err := operatorWriter(running.publisher, s.nodeID, by)
 		if err != nil {
 			return deps, err
 		}
-		w = w.As(by, tracker.AuthorOperator, tracker.Provenance{OperatorID: by})
 		deps.ResetVersions = func(ctx context.Context, gen uint32) error {
 			return tracker.ResetVersions(ctx, e.backends.Store.Replicated(), gen)
 		}
@@ -210,7 +206,10 @@ func (e *Engine) reanchorDeps(running *runningDomain, by string) (
 		})
 		deps.RecordGeneration = func(ctx context.Context, tx *sql.Tx, gen uint32,
 			in statelog.ReanchorInputs) error {
-			return tracker.RecordGeneration(ctx, tx, gen, in, by, s.nodeID)
+			// THE WRITER'S OWN NAME FOR THE OPERATOR, which is what the
+			// generation record carries and what every other node's
+			// applier writes into this same row from it.
+			return tracker.RecordGeneration(ctx, tx, gen, in, w.Actor, s.nodeID)
 		}
 	case pages.Domain{}.Name():
 		// THE RECORD AND NOTHING ELSE. The audit row is the applier's own,

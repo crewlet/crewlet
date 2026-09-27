@@ -409,14 +409,10 @@ func (e *Engine) gateOn(ctx context.Context, running *runningDomain, req GateReq
 
 	switch running.domain.Name() {
 	case tracker.Domain{}.Name():
-		w, err := tracker.NewWriter(tracker.WriterDeps{
-			Publisher: running.publisher, Actor: req.By,
-			ActorKind: tracker.AuthorOperator,
-		})
+		w, err := operatorWriter(running.publisher, "", req.By)
 		if err != nil {
 			return statelog.Result{}, err
 		}
-		w = w.As(req.By, tracker.AuthorOperator, tracker.Provenance{OperatorID: req.By})
 		gate := w.EvictNode
 		if readmit {
 			gate = w.ReadmitNode
@@ -451,6 +447,20 @@ func (e *Engine) gateOn(ctx context.Context, running *runningDomain, req GateReq
 // `operator:` and the token's name, which no seat handle can spell.
 func operatorPageActor(by string) pages.Actor {
 	return pages.Actor{Kind: pages.AuthorOperator, OperatorID: by}
+}
+
+// operatorWriter is the tracker's write authority for an operator gesture: it
+// acts for the API token `by` names, recorded as [tracker.OperatorActor] of it
+// with the token as its credential — the name [operatorPageActor] gives the
+// same operator on the knowledge base's log, so one gesture names one operator
+// on every log it lands on. nodeID is the node the gesture runs on, for a
+// record that names it; empty for one that does not.
+func operatorWriter(publisher *statelog.Publisher, nodeID, by string) (*tracker.Writer, error) {
+	return tracker.NewWriter(tracker.WriterDeps{
+		Publisher: publisher, NodeID: nodeID,
+		Actor: tracker.OperatorActor(by), ActorKind: tracker.AuthorOperator,
+		OperatorID: by,
+	})
 }
 
 // run ticks every [AlarmInterval] until the context ends.

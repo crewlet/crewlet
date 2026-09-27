@@ -132,21 +132,39 @@ func (w *PromotionWriter) CheckDraft(title, _ string) error {
 	return nil
 }
 
-// refusedContainer is a create refused in a space Confluence does not serve
-// to this credential: it does not exist, or the token cannot see it.
+// refusedContainer is a create refused because of the SPACE rather than the
+// page: a space Confluence does not serve to this credential — it does not
+// exist, or the token cannot see it — or a space it serves that refused the
+// drafts parent every draft in it is filed under.
+//
+// TWO CAUSES, SAID APART, because the sentence is what an operator reads: the
+// pass records it as the record's refusal, and the promotion ledger's readers
+// show it. A served space told it is not served sends somebody to check a
+// token that works.
 type refusedContainer struct {
 	space string
-	err   error
+
+	// served is the second cause: the space is served, and what it refused
+	// was the drafts parent.
+	served bool
+
+	err error
 }
 
 func (e *refusedContainer) Error() string {
+	if e.served {
+		return fmt.Sprintf("confluence: the space %s is served and refused the "+
+			"drafts parent every draft in it is filed under, so it takes no "+
+			"draft until it takes that page: %v", e.space, e.err)
+	}
 	return fmt.Sprintf("confluence: the space %s is not served to the org "+
 		"token — it does not exist, or the token cannot see it: %v", e.space, e.err)
 }
 
 func (e *refusedContainer) Unwrap() error { return e.err }
 
-// RefusesContainer says the space will take no page until it is served.
+// RefusesContainer says the space will take no draft until it changes: until
+// it is served, or until it takes the drafts parent.
 func (*refusedContainer) RefusesContainer() bool { return true }
 
 // refusedPage is a create Confluence answered 400 to in a space it serves:
@@ -183,7 +201,7 @@ func (w *PromotionWriter) refusal(ctx context.Context, space string, err error, 
 	case apiErr.Status == http.StatusBadRequest && perDraft:
 		return &refusedPage{err: err}
 	case apiErr.Status == http.StatusBadRequest:
-		return &refusedContainer{space: space, err: err}
+		return &refusedContainer{space: space, served: true, err: err}
 	}
 	return err
 }

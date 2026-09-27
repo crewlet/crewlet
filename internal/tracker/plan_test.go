@@ -87,11 +87,46 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// and a duty's own statement is as much a reader as a board is.
 	for name, statement := range dutyReads() {
 		t.Run(name, func(t *testing.T) {
-			for _, index := range indexesIn(explain(t, db, statement.sql, statement.args)) {
+			plan := explain(t, db, statement.sql, statement.args)
+			for _, index := range indexesIn(plan) {
 				used[index] = true
+			}
+			// AND NONE OF THEM READS tracker_tasks FROM THE HEAP. A duty
+			// statement runs on a timer whether or not anything is
+			// wrong, and a gate that scans is every task in the company
+			// read on every tick to learn that nothing needs doing — the
+			// cost the gates exist to remove.
+			if scansHeap(plan, "tracker_tasks") {
+				t.Errorf("this statement reads tracker_tasks with no index:\n%s",
+					strings.Join(plan, "\n"))
 			}
 		})
 	}
+
+	// THE SPLIT GATE READS THE FLAGGED ROWS AND NOTHING ELSE. It runs on
+	// every tick, on a company where almost always no task carries the
+	// flag, so what its plan reads to learn that is the whole of its cost:
+	// over an index partial on the flag that is nothing, and over any other
+	// index it is every live task in the company, every tick. Both are an
+	// index scan to the loop above, so this reads which index it is.
+	t.Run("the split subtrees' gate reads the flag's own index", func(t *testing.T) {
+		plan := explain(t, db, `SELECT EXISTS (`+splitSelection+`)`, nil)
+		for _, line := range plan {
+			if !strings.HasPrefix(line, "SCAN tracker_tasks") {
+				continue
+			}
+			_, index, found := strings.Cut(line, "USING INDEX ")
+			var partial string
+			if found {
+				partial = indexSQL(t, db, strings.Fields(index)[0])
+			}
+			if !strings.Contains(partial, "WHERE inconsistent_project = 1") {
+				t.Errorf("the gate scans tracker_tasks through %q, which is not "+
+					"partial on the flag — every live task, on every tick:\n%s",
+					partial, strings.Join(plan, "\n"))
+			}
+		}
+	})
 
 	for _, index := range indexesOn(t, db, covered) {
 		if !used[index] {
@@ -188,6 +223,13 @@ func dutyReads() map[string]struct {
 			 ORDER BY rank, id LIMIT 64`, []any{"P01"}},
 		"the abandoned merge walk": {
 			`SELECT id FROM tracker_tasks WHERE merging = 1 LIMIT 64`, nil},
+		"the split subtrees' gate": {
+			`SELECT EXISTS (` + splitSelection + `)`, nil},
+		"the split subtrees' sweep": {
+			`SELECT DISTINCT root_id FROM (` + splitSelection + `)
+			 ORDER BY root_id LIMIT 65`, nil},
+		"what a split subtree left behind": {
+			leftBehindSelection, []any{"t-00001", "t-00001", "P01", 65}},
 		"the apply's duplicate probe": {
 			`SELECT 1 FROM tracker_tasks
 			 WHERE project_key = ? AND rank = ? AND id <> ?`,
@@ -412,6 +454,19 @@ func scansHeap(plan []string, table string) bool {
 		}
 	}
 	return false
+}
+
+// indexSQL is the statement that declared one index, as the schema holds it.
+func indexSQL(t *testing.T, db *store.DB, index string) string {
+	t.Helper()
+	var statement string
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT sql FROM sqlite_master
+			WHERE type = 'index' AND name = ?`, index).Scan(&statement)
+	}); err != nil {
+		t.Fatalf("read the declaration of %s: %v", index, err)
+	}
+	return statement
 }
 
 // indexesOn is every index the schema declares on these tables.

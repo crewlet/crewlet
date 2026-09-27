@@ -18,8 +18,9 @@ import (
 // The two readings of `waiting_on: ["ENG-7"]` are opposite: as a delta it adds
 // one edge, and as a set it silently drops every edge not repeated. A tool
 // that guessed would be right half the time and lose somebody's dependencies
-// the other half — which is exactly what `watchers: [me]` did to the watcher
-// set before the watch gesture existed.
+// the other half — the loss a whole-set `watchers: [me]` would inflict on a
+// watcher set, which is why following a task is a gesture about one person
+// ([tracker.WatchIntent]) rather than a set.
 func TestABareListIsRefusedForASetValuedArgument(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -140,9 +141,10 @@ func TestARerouteIsRefusedToASeatThatDoesNotLead(t *testing.T) {
 
 // AN ASK RESOLVES ITS HANDLE AND TRAVELS ON THE WAKE.
 //
-// `Comment.Ask` had no writer at all, so the whole open-ask mechanism —
-// `my_work.asked_of_me`, the `has_open_asks` filter, the `asked` routing arm —
-// read back columns nothing ever wrote.
+// This argument is what writes `Comment.Ask`, and the whole open-ask
+// mechanism — `my_work.asked_of_me`, the `has_open_asks` filter, the `asked`
+// routing arm — reads back what it writes: an ask that did not reach the
+// comment would leave all three reading columns nothing writes.
 func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

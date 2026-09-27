@@ -143,8 +143,8 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 // thread a comment routes from is a point read about the same task, so it is
 // scoped the same way.
 //
-// Mutation: form the framework read's scope from the reference alone in
-// Reader.pointTerm and both answer `behind`.
+// Mutation: form the framework read's scope for a held task from the
+// reference alone in Reader.pointScope and both answer `behind`.
 func TestARecordDeferredOnTheProjectRefusesTheTaskBeforeItWaits(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -154,25 +154,7 @@ func TestARecordDeferredOnTheProjectRefusesTheTaskBeforeItWaits(t *testing.T) {
 	}.Path())
 
 	at := statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: 1}
-	var lag, first, floor uint64 = 0, 1, 0
-	log, err := statelog.NewReader(statelog.ReaderDeps{
-		Domain: tracker.Domain{}, DB: r.db.Replicated(), Waiter: stuckWaiter{at: at},
-		Health: func() statelog.Health {
-			return statelog.Health{
-				Position: at, AppliedThrough: at.Seq, CaughtUp: true,
-				Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
-				Lag:   &lag, FirstSeq: &first, TrimFloor: &floor,
-				Deferred: 1,
-			}
-		},
-	})
-	if err != nil {
-		t.Fatalf("build the framework reader: %v", err)
-	}
-	reader, err := tracker.NewReader(r.db, log)
-	if err != nil {
-		t.Fatalf("build the tracker reader: %v", err)
-	}
+	reader := probingReader(t, r, stuckWaiter{at: at})
 
 	// A FLOOR THIS NODE NEVER REACHES, so a read the probe let through
 	// waits and is refused as behind.
@@ -239,21 +221,35 @@ func TestAThreadOnATaskARetainedRecordCoversIsRefused(t *testing.T) {
 	}
 }
 
-// AN ABSENT TASK A RETAINED RECORD COULD CREATE IS REFUSED, NOT ANSWERED ABSENT.
+// AN ABSENT TASK A RETAINED RECORD COULD CREATE IS REFUSED, NOT ANSWERED ABSENT
+// — deferred where the read waited for the log's end, and behind where it did
+// not.
 //
 // "There is no such task" is an answer a caller acts on: a seat files the
-// duplicate, a screen shows a dead link. A node retaining the record that
-// creates ENG-77 holds no row for it, so the answer it can give is that it
-// cannot say — by the key, whose project names where that create is filed, and
-// by the id, which names no project and is probed across all of them.
+// duplicate, a screen shows a dead link. A node retaining a record that may be
+// the one creating ENG-77 holds no row for it, so the answer it can give is
+// that it cannot say — by the key, whose project names where that create is
+// filed, and by the id, which names no project and is probed across all of
+// them.
+//
+// WHICH REFUSAL IS THE LEVEL'S. A linearizable read waited for the log's end,
+// so every create committed before it has been consumed and this node cannot
+// rule the retained record out: deferred, which waiting on this node does not
+// clear. A session or stale read did not, so the task may just as well be a
+// create this node has not reached, which clears by itself — and a deferred
+// refusal there would tell the caller that waiting never helps. It is refused
+// as behind, which a client comes back for.
 //
 // Scoped by the key's project, so a record retained in ENG says nothing about
 // OPS-77. And a PURGED task is absent whatever is retained, because the
 // deletion gate drops every later record about it on every node.
 //
-// Mutations: return ErrNoTask from refuseAbsent without probing and all three
-// references answer absent; scope a key across every project and OPS-77 is
-// refused; drop the purge check and the purged key and id are refused.
+// Mutations: return ErrNoTask from refuseAbsent without probing and every
+// reference answers absent; refuse the second probe as deferred at every level
+// and the session and stale reads say deferred; refuse it as behind at every
+// level and the linearizable read says behind; scope a key across every
+// project and OPS-77 is refused; drop the purge check and the purged key and
+// id are refused.
 func TestAnAbsentTaskARetainedRecordCouldCreateIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -265,26 +261,241 @@ func TestAnAbsentTaskARetainedRecordCouldCreateIsRefused(t *testing.T) {
 	r.drain()
 	r.deferRecordOn("t-unapplied", "ENG")
 
-	session := statelog.Freshness{Level: statelog.ReadSession}
-	for _, ref := range []string{"ENG-77", "eng-77", "t-unapplied"} {
-		_, err := r.reader.Task(t.Context(), ref, tracker.DetailWants{}, session)
-		var refused *statelog.Refused
-		if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
-			t.Errorf("%s, which a retained record could create, answered %v — "+
-				"want the read refused as deferred rather than told there is "+
-				"no such task", ref, err)
-			continue
+	linear := linearReader(t, r)
+	for _, tc := range []struct {
+		level  statelog.ReadLevel
+		reader *tracker.Reader
+		want   statelog.ReadRefusal
+	}{
+		{statelog.ReadLinearizable, linear, statelog.RefuseDeferred},
+		{statelog.ReadSession, r.reader, statelog.RefuseBehind},
+		{statelog.ReadStale, r.reader, statelog.RefuseBehind},
+	} {
+		fresh := statelog.Freshness{Level: tc.level}
+		for _, ref := range []string{"ENG-77", "eng-77", "t-unapplied"} {
+			_, err := tc.reader.Task(t.Context(), ref, tracker.DetailWants{}, fresh)
+			var refused *statelog.Refused
+			if !errors.As(err, &refused) || refused.Code != tc.want {
+				t.Errorf("%s read of %s, which a retained record could create, "+
+					"answered %v — want the read refused as %s", tc.level, ref,
+					err, tc.want)
+				continue
+			}
+			if isNoTask(err) {
+				t.Errorf("%s was refused AND answered absent: %v", ref, err)
+			}
 		}
-		if isNoTask(err) {
-			t.Errorf("%s was refused AND answered absent: %v", ref, err)
+		for _, ref := range []string{"OPS-77", gone.Key, gone.ID} {
+			if _, err := tc.reader.Task(t.Context(), ref, tracker.DetailWants{},
+				fresh); !isNoTask(err) {
+				t.Errorf("%s read of %s answered %v, want no such task — "+
+					"nothing retained can create it", tc.level, ref, err)
+			}
 		}
 	}
-	for _, ref := range []string{"OPS-77", gone.Key, gone.ID} {
-		if _, err := r.reader.Task(t.Context(), ref, tracker.DetailWants{},
-			session); !isNoTask(err) {
-			t.Errorf("%s answered %v, want no such task — nothing retained "+
-				"can create it", ref, err)
+}
+
+// A TASK CREATED ELSEWHERE AND NOT APPLIED HERE YET, BESIDE AN UNRELATED
+// RETAINED RECORD, IS REFUSED AS BEHIND — AND THEN ANSWERS BY ITSELF.
+//
+// This is the case the level rule exists for. A stale read — the dashboard's —
+// of a key another node has just minted meets this node's copy before the
+// create does, and a record retained about another task in the same project
+// is one the key's probe cannot rule out. Refused as deferred, a screen would
+// tell a person the task cannot be shown here until the node is upgraded, and
+// a moment later the same read would show it. So the refusal is behind, and
+// the drain is what answers it.
+//
+// A linearizable read of the same key waits for the log's end, which brings
+// the create in, so it answers the task at once.
+//
+// THE CREATE IS PUBLISHED BEFORE THE RECORD IS RETAINED, because that is the
+// order the case has: the create is another node's, and this node's own writer
+// refuses a write whose scope meets what it retains.
+//
+// Mutation: refuse the second probe in refuseAbsent as deferred at every level
+// and the stale read says deferred for a task that is about to appear.
+func TestAnAbsentTaskNotAppliedYetIsBehindAndClearsByItself(t *testing.T) {
+	t.Parallel()
+	// published files a task on the log that r has not applied, and then
+	// retains a record about another task in the same project.
+	published := func(r *roundTrip, id string) string {
+		t.Helper()
+		task := newTask(id)
+		task.Title, task.Key = "filed on another node", ""
+		created, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil)
+		if err != nil {
+			t.Fatalf("create: %v", err)
 		}
+		if created.Key == "" {
+			t.Fatal("the create minted no key to read the task back by")
+		}
+		r.deferRecordOn("t-somebody-else", "ENG")
+		return created.Key
+	}
+
+	r := newRoundTrip(t)
+	key := published(r, "t-fresh")
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	_, err := r.reader.Task(t.Context(), key, tracker.DetailWants{}, stale)
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code != statelog.RefuseBehind {
+		t.Fatalf("a stale read of %s before its create applied answered %v — "+
+			"want behind, which clears as this node catches up", key, err)
+	}
+	if !refused.Code.Retryable() {
+		t.Errorf("the refusal %s is not one a client comes back for", refused.Code)
+	}
+	r.drain()
+	if got, err := r.reader.Task(t.Context(), key, tracker.DetailWants{},
+		stale); err != nil || got.Task.ID != "t-fresh" {
+		t.Fatalf("once the create applied, the same read answered %+v, %v",
+			got.Task.ID, err)
+	}
+
+	// AND A LINEARIZABLE READ NEVER SAW THE GAP: its own wait brings the
+	// create in.
+	linear := newRoundTrip(t)
+	key = published(linear, "t-fresher")
+	if got, err := linearReader(t, linear).Task(t.Context(), key,
+		tracker.DetailWants{}, statelog.Freshness{Level: statelog.ReadLinearizable}); err != nil ||
+		got.Task.ID != "t-fresher" {
+		t.Fatalf("a linearizable read of %s answered %+v, %v — its wait brings "+
+			"the create in", key, got.Task.ID, err)
+	}
+}
+
+// AN ABSENT TASK EVERY CREATE OF WHICH IS HELD BACK IS DEFERRED AT EVERY LEVEL.
+//
+// A record retained about the whole tracker, or about the project a key
+// names, holds back every later record in its scope — so no create of the
+// task can be applied here until this node runs a build that reads the
+// record, and waiting is exactly what does not help. That holds at a level
+// that did not wait for the log's end as much as at one that did.
+//
+// And the key's probe reaches no further than that: a record about the
+// WORKSPACE, which no task is filed under, neither creates ENG-77 nor holds
+// its create back, so it refuses nothing.
+//
+// Mutation: drop the first probe from refuseAbsent and the stale and session
+// reads of a held-back key say behind.
+func TestAnAbsentTaskWhoseCreateIsHeldBackIsDeferredAtEveryLevel(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		path     string
+		deferred []string
+		absent   []string
+		behind   []string
+	}{
+		{
+			name: "a record about the project",
+			path: tracker.ScopeTerm{Kind: tracker.TermContainer, ID: "ENG"}.Path(),
+			// AN ID NAMES NO PROJECT, so the project's record may or may
+			// not hold its create back: the level decides, as it does for
+			// any record that may be the create.
+			deferred: []string{"ENG-77"}, behind: []string{"t-nowhere"},
+			absent: []string{"OPS-77"},
+		},
+		{
+			name:     "a record about the whole tracker",
+			path:     "t",
+			deferred: []string{"ENG-77", "OPS-77", "t-nowhere"},
+		},
+		{
+			name:   "a record about the workspace",
+			path:   tracker.ScopeTerm{Kind: tracker.TermContainer, ID: tracker.WorkspaceContainer}.Path(),
+			absent: []string{"ENG-77"},
+			// THE ID'S PROBE IS EVERY CONTAINER, the workspace's among
+			// them, because it keys on paths alone — see absentScope.
+			behind: []string{"t-nowhere"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			r.deferRecordAt("t-held", tc.path)
+			for _, level := range []statelog.ReadLevel{
+				statelog.ReadStale, statelog.ReadSession,
+			} {
+				fresh := statelog.Freshness{Level: level}
+				for _, ref := range tc.deferred {
+					_, err := r.reader.Task(t.Context(), ref, tracker.DetailWants{}, fresh)
+					var refused *statelog.Refused
+					if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+						t.Errorf("%s read of %s, whose every create is held back, "+
+							"answered %v — want deferred", level, ref, err)
+					}
+				}
+				for _, ref := range tc.behind {
+					_, err := r.reader.Task(t.Context(), ref, tracker.DetailWants{}, fresh)
+					var refused *statelog.Refused
+					if !errors.As(err, &refused) || refused.Code != statelog.RefuseBehind {
+						t.Errorf("%s read of %s answered %v — want behind", level, ref, err)
+					}
+				}
+				for _, ref := range tc.absent {
+					if _, err := r.reader.Task(t.Context(), ref, tracker.DetailWants{},
+						fresh); !isNoTask(err) {
+						t.Errorf("%s read of %s answered %v — want no such task, "+
+							"which that record cannot change", level, ref, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+// THE PROBE BEFORE THE WAIT MEETS ONLY WHAT MAKES AN ABSENT TASK PERMANENT.
+//
+// The framework probes a point read's scope before it waits, and a hit there
+// refuses the read as deferred without ever waiting. For a task this node does
+// not hold, that scope is the key's own term under its project: a record about
+// the project refuses before the wait, and a record about the WORKSPACE — which
+// an object term naming the reference alone resolves under — refuses nothing,
+// so the read goes on to wait and answer. Scoped under the workspace, a read
+// of a key another node has just minted would be refused as deferred over a
+// retained record that neither creates the task nor holds its create back — a
+// default view a newer build saved in the workspace, say — and would answer
+// once this node caught up.
+//
+// Mutation: scope an absent reference in Reader.pointScope as an object term
+// with no container and the workspace case is refused as deferred.
+func TestTheProbeBeforeTheWaitMeetsOnlyWhatMakesAnAbsenceStick(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		path string
+		want statelog.ReadRefusal
+	}{
+		{"a record about the project",
+			tracker.ScopeTerm{Kind: tracker.TermContainer, ID: "ENG"}.Path(),
+			statelog.RefuseDeferred},
+		{"a record about the workspace",
+			tracker.ScopeTerm{Kind: tracker.TermContainer, ID: tracker.WorkspaceContainer}.Path(),
+			// LET THROUGH, so the wait below runs and refuses as behind.
+			statelog.RefuseBehind},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			r.deferRecordAt("t-held", tc.path)
+			at := statelog.Position{Stream: tracker.Domain{}.Stream().Name,
+				Generation: 1, Seq: 1}
+			reader := probingReader(t, r, stuckWaiter{at: at})
+			// A FLOOR THIS NODE NEVER REACHES, so a read the probe let
+			// through waits and is refused as behind.
+			_, err := reader.Task(t.Context(), "ENG-77", tracker.DetailWants{},
+				statelog.Freshness{Level: statelog.ReadSession,
+					MinPosition: statelog.Position{
+						Stream: at.Stream, Generation: at.Generation, Seq: at.Seq + 1,
+					}})
+			var refused *statelog.Refused
+			if !errors.As(err, &refused) || refused.Code != tc.want {
+				t.Errorf("a read of an absent ENG-77 beside %s answered %v, "+
+					"want %s", tc.name, err, tc.want)
+			}
+		})
 	}
 }
 
@@ -392,6 +603,34 @@ func (r *roundTrip) deferRecordAt(taskID, scope string) {
 	}); err != nil {
 		r.t.Fatalf("defer a record: %v", err)
 	}
+}
+
+// probingReader is this harness's rows read through a framework reader whose
+// node reports a retained record, so the framework's own probe runs before the
+// read waits — which [newRoundTrip]'s reader, reporting none, never does.
+func probingReader(t *testing.T, r *roundTrip, waiter statelog.Waiter) *tracker.Reader {
+	t.Helper()
+	at := waiter.Committed()
+	var lag, first, floor uint64 = 0, 1, 0
+	log, err := statelog.NewReader(statelog.ReaderDeps{
+		Domain: tracker.Domain{}, DB: r.db.Replicated(), Waiter: waiter,
+		Health: func() statelog.Health {
+			return statelog.Health{
+				Position: at, AppliedThrough: at.Seq, CaughtUp: true,
+				Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
+				Lag:   &lag, FirstSeq: &first, TrimFloor: &floor,
+				Deferred: 1,
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("build the framework reader: %v", err)
+	}
+	reader, err := tracker.NewReader(r.db, log)
+	if err != nil {
+		t.Fatalf("build the tracker reader: %v", err)
+	}
+	return reader
 }
 
 // stuckWaiter is a node's applier that never moves past where it is.

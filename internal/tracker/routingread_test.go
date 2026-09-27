@@ -137,8 +137,8 @@ func TestAnAnnouncedChangeInsideTheWindowThatReachedNobodySaysSo(t *testing.T) {
 // THE HANDLES ARE CHOSEN SO THAT ALPHABETICAL ORDER IS THE WRONG ANSWER: the
 // assignee is `zoe` and the watcher is `bob`, so a query that sorted only by
 // recipient would put the watcher first and pass a test written the other way
-// round. It did — the first draft of this case used `bob` as the assignee and
-// stayed green with the `addressed DESC` clause deleted.
+// round — with `bob` as the assignee, this case stays green with the
+// `addressed DESC` clause deleted.
 func TestTheAddressedRecipientsComeFirst(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

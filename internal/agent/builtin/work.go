@@ -814,15 +814,15 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// THE TWO OPEN GROUPS, named from the constants rather than
 		// typed: there are FOUR status groups and neither `in_progress`
 		// nor `blocked` is one of them, so a literal naming either is a
-		// filter the parser refuses — which made `open_only` fail the
-		// whole call rather than narrow it.
+		// filter the parser refuses, and `open_only` would fail the whole
+		// call rather than narrow it.
 		params["status_group"] = strings.Join(openGroups(), ",")
 	case held:
 		// FALSE IS A REQUEST FOR FINISHED WORK, and it has to be said to
 		// the grammar: its own default leaves done and cancelled work out
-		// of every answer, so a false that sent nothing listed exactly
-		// what true did — and a model checking whether something had
-		// already been filed and finished was told it had not.
+		// of every answer, so a false that sent nothing would list exactly
+		// what true does — and a model checking whether something was
+		// already filed and finished would be told it was not.
 		params["show_closed"] = "true"
 	}
 
@@ -1021,27 +1021,28 @@ func (t *getWorkItem) Parameters() map[string]any {
 
 // detailWants reads the `include` argument, defaulting to all four.
 //
-// ALL FOUR BY DEFAULT, because that is what this tool answered before the
-// argument existed and a model that never learned to pass it must keep getting
-// a whole item. What the argument buys is the caller who knows they want one
-// part: the answer is then smaller by the parts they did not ask for, rather
-// than by a cap the engine chose for them.
+// ALL FOUR BY DEFAULT, because a call that names no part is asking for the
+// item, and a model that never passes the argument gets a whole one. What the
+// argument buys is the caller who knows they want one part: the answer is then
+// smaller by the parts they did not ask for, rather than by a cap the engine
+// chose for them.
 //
 // `comment` AND `body` ARE THEIR OWN DEFAULTS, and that exception is what
 // keeps either escape hatch usable. Naming one says what the call is for, and
-// both arguments are new enough to have no back-compatible default to honour
-// — where a whole item at its maximum is refused by [ToolAnswerBytes], one
-// whole comment plus fifty history rows plus sixty-four links would be too,
-// so the read that exists to recover a value would meet a refusal telling it
-// to narrow. An explicit `include` still wins: a caller that asks for the
-// comment AND the fields means it.
+// the value it returns whole is up to 32 KiB before escaping
+// ([tracker.MaxCommentBody], [tracker.MaxBody]) — beside the thread, the
+// history and the links it can weigh more than [ToolAnswerBytes] allows, and
+// the read that exists to recover a value would meet a refusal telling it to
+// narrow. An explicit `include` still wins: a caller that asks for the comment
+// AND the fields means it.
 //
 // They do not COMPOSE, and the second return is what says which won: a whole
-// body and a whole comment together are 96 KiB before escaping, against a 64
-// KiB ceiling, so a call naming both would be refused for asking for exactly
-// the two things this pair exists to make reachable. `comment` takes
-// precedence because it is the narrower ask — one value out of a thread,
-// against the item's own description, which the next call gets by dropping it.
+// body and a whole comment together are 64 KiB before escaping — all of
+// [ToolAnswerBytes] before the rest of the answer is counted — so a call naming
+// both would be refused for asking for exactly the two things this pair exists
+// to make reachable. `comment` takes precedence because it is the narrower ask
+// — one value out of a thread, against the item's own description, which the
+// next call gets by dropping it.
 func detailWants(args map[string]any) (tracker.DetailWants, bool, string) {
 	want := tracker.DetailWants{
 		CommentCursor: strings.TrimSpace(argString(args, "comments_cursor")),
@@ -1128,13 +1129,15 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 // TaskBodyShown is how much of a task's description ONE tool answer carries
 // when the caller did not ask for the whole of it.
 //
-// 4 KiB, against [tracker.MaxBody]'s 64 KiB, and the gap is the point: a body
-// at its cap is 64 KiB before JSON escaping, which on its own is already past
-// [ToolAnswerBytes] — so a maximal item was refused by weight with no argument
-// that would narrow it, because `include` governs the collections beside the
-// task and never the task itself. Every part of a detail read is bounded now:
-// the thread is paged, the history is capped, the relation sets are capped,
-// and this was the one value that was not.
+// 4 KiB, against [tracker.MaxBody]'s 32 KiB, and the gap is the point. A body
+// at its cap is half of [ToolAnswerBytes] before JSON escaping — sized so the
+// whole-body read (`body: true`) returns it alone — and an ordinary detail
+// read carries the thread, the history and the links beside it. Carried whole
+// there, a long description can take the answer past the ceiling with no
+// argument that could narrow it, because `include` governs the collections
+// beside the task and never the task itself. With this cut every part of an
+// ordinary detail read is bounded: the thread is paged, the history is capped,
+// the relation sets are capped, and the description is excerpted.
 //
 // 4 KiB is roughly a thousand tokens — enough that an ordinary description
 // arrives whole and is never marked at all, while the outliers that would
@@ -1198,8 +1201,9 @@ func (t *createWorkItem) Parameters() map[string]any {
 					"catalogue. `task` if you are unsure.",
 			},
 			"project": map[string]any{
-				"type":        "string",
-				"description": "The project key. Defaults to your team's.",
+				"type": "string",
+				"description": "The project key. Defaults to the parent's " +
+					"for a subtask, and to your team's otherwise.",
 			},
 			"assignee": map[string]any{
 				"type": "string",
@@ -1211,8 +1215,10 @@ func (t *createWorkItem) Parameters() map[string]any {
 				"description": "One of: " + priorityList() + ". Default none.",
 			},
 			"parent": map[string]any{
-				"type":        "string",
-				"description": "The id or key of the item this belongs under.",
+				"type": "string",
+				"description": "The id or key of the item this belongs under. " +
+					"A subtask is filed in its parent's project, which is the " +
+					"default when `project` is omitted.",
 			},
 			"fields": map[string]any{
 				"type": "object",
@@ -1337,11 +1343,18 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
-		parent, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`parent`", ref)
+		parent, refusal := t.deps.resolveTask(ctx, CreateWorkItemTool, "`parent`", ref)
 		if refusal != "" {
 			return failed(refusal), nil
 		}
-		task.Parent = &parent
+		task.Parent = &parent.ID
+		// A SUBTASK IS FILED IN ITS PARENT'S PROJECT, so that is its
+		// default rather than the seat's own team's: the writer refuses
+		// any other ([tracker.ErrForeignParent]), and a model that named
+		// the parent has already said where the work belongs.
+		if task.Project == "" {
+			task.Project = parent.Project
+		}
 	}
 	if task.Project == "" {
 		if t.deps.DefaultProject != nil {
@@ -1469,20 +1482,28 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // It returns the model-facing refusal rather than an error, because every
 // caller here answers a model rather than a process.
 func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (string, string) {
+	task, refusal := d.resolveTask(ctx, tool, field, ref)
+	return task.ID, refusal
+}
+
+// resolveTask is [WorkDeps.resolveRef] answering with the task it read, for a
+// caller that needs more of it than its id — a subtask's create reads its
+// parent's project.
+func (d WorkDeps) resolveTask(ctx context.Context, tool, field, ref string) (tracker.Task, string) {
 	if d.Reader == nil {
-		return "", unconfiguredText(tool)
+		return tracker.Task{}, unconfiguredText(tool)
 	}
 	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return "", fmt.Sprintf("%s names %s %q and there is no such work item. "+
-			"Check the key with list_work_items rather than guessing — a link "+
-			"to an item that does not exist renders as a dead reference on "+
-			"everybody's board.", tool, field, clip(ref))
+		return tracker.Task{}, fmt.Sprintf("%s names %s %q and there is no "+
+			"such work item. Check the key with list_work_items rather than "+
+			"guessing — a link to an item that does not exist renders as a "+
+			"dead reference on everybody's board.", tool, field, clip(ref))
 	case err != nil:
-		return "", readFailure(tool, err)
+		return tracker.Task{}, readFailure(tool, err)
 	}
-	return got.Task.ID, ""
+	return got.Task, ""
 }
 
 // resolveHandle turns a handle a caller typed into one the company has.
@@ -2108,13 +2129,12 @@ func appendMissing(all []string, handle string, add bool) []string {
 // the write would race every other writer, and on a lagging node would return
 // the state before it.
 func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
-	// THE WRITER'S OWN MERGE, not a copy of it. This was a field-by-field
-	// reimplementation, so every field added to [tracker.TaskPatch] had to
-	// be remembered here too — and when the schedule fields arrived the
-	// durable row took them and this snapshot did not. [tracker.TaskDeltas]
-	// then compared a task against itself on exactly those fields, so a due
-	// date, an estimate or a size a seat moved reached its notification as
-	// a change that changed nothing.
+	// THE WRITER'S OWN MERGE, not a copy of it. A field-by-field copy here
+	// would have to be extended for every field added to
+	// [tracker.TaskPatch], and a field it missed would leave this snapshot
+	// behind the durable row — [tracker.TaskDeltas] then compares a task
+	// against itself on that field, and a change a seat made reaches its
+	// notification as a change that changed nothing.
 	task = tracker.Patched(task, patch)
 
 	if patch.Watch != nil {
@@ -2299,12 +2319,8 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind:   tracker.ChangeComment,
 			Before: before.Task,
 			// THROUGH THE SAME SIMULATION EVERY OTHER WRITE USES, so the
-			// gesture is applied once rather than here and again in
-			// [patched]: a second copy is how the two stop agreeing,
-			// and this one had already drifted — it appended the
-			// commenter to the watcher set unconditionally, which is
-			// wrong at the cap now that an automatic watch is skipped
-			// there rather than refused.
+			// gesture is applied in one place, [patched], rather than
+			// here as well: a second copy is how the two stop agreeing.
 			After:   patched(before.Task, patch),
 			Comment: comment, Mentions: comment.Mentions,
 			Thread: thread.ThreadParties,
@@ -2428,16 +2444,17 @@ func unservedAdvice(what string, err error) (why, next string) {
 				"frees room or an operator raises its ceiling.",
 			"Say you could not check, and try again later if it still matters."
 	case statelog.RefuseDeferred:
-		return fmt.Sprintf("This node holds a change to %s that it cannot "+
-				"apply — written by a newer build of the engine, or queued "+
-				"behind one that was — so its copy may already be wrong and it "+
-				"will not answer from it.", what),
+		return fmt.Sprintf("This node retains a change it cannot apply — "+
+				"written by a newer build of the engine, or held back behind "+
+				"one that was — that covers %s or may be what creates it, so "+
+				"its copy may already be wrong and it will not answer from it.",
+				what),
 			"Calling again will not help: a build that can read that change " +
 				"is what resolves it. " + report
 	case statelog.RefuseDeferredScopeUnknown:
-		return "This node holds a change it cannot apply and could not tell " +
-				"what that change covers, so it will not answer from its copy " +
-				"at all.",
+		return "This node retains a change it cannot apply and could not " +
+				"read what that change covers, so it will not answer from its " +
+				"copy at all.",
 			"Calling again will not help while it holds that change: a build " +
 				"that can read it is what resolves it. " + report
 	case statelog.RefuseBelowFloor:
@@ -2460,10 +2477,8 @@ func unservedAdvice(what string, err error) (why, next string) {
 			"Calling again will not help: an operator changing that setting " +
 				"is what clears it. " + report
 	case statelog.RefuseWrongStream:
-		return "The position this read had to reach is on a different log " +
-				"from the one this node reads — its own copy is from a log " +
-				"that was since recreated, or the read named a position from " +
-				"another log.",
+		return "The position this read had to reach names a different log " +
+				"from the one this node reads.",
 			"Calling again with the same request will not help. " + report
 	}
 	// A NON-RETRYABLE CODE NOT NAMED ABOVE, which the suite refuses for
@@ -2561,8 +2576,8 @@ func priorityList() string { return joinValues(tracker.Priorities) }
 // the closed set rather than listed.
 //
 // A literal here is a filter that goes on parsing after somebody adds a fifth
-// group and stops meaning what it says — and, before that, it is how
-// `open_only` came to name two groups that do not exist.
+// group and stops meaning what it says, and one that can name a group that
+// does not exist.
 func openGroups() []string {
 	out := make([]string, 0, len(tracker.StatusGroups))
 	for _, group := range tracker.StatusGroups {

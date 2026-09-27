@@ -2,22 +2,26 @@ package tracker
 
 import "slices"
 
-// The two exported lists a durable-schema test drives.
+// The exported lists the schema tests drive.
 //
-// Both exist for the same reason: a fact about the schema that is written
-// twice drifts. Each is ONE spelling the schema test holds the migrations to
-// in both directions, and the second is also what [Domain.Tables] derives the
-// snapshot's scrub list and the identity claim from.
+// Each exists for the same reason: a fact about the schema that is written
+// twice drifts. Each is ONE spelling the schema tests hold the migrations to in
+// both directions, and the two table lists are also what [Domain.Tables]
+// classes every table from — [ReproducibleTables] the tables whose rows the
+// identity claim covers (bar the one divergent table [Domain.Tables] names),
+// and [MachineryTables] the log's own, which every donated snapshot is
+// scrubbed of.
 
 // SpendColumns are the seven counters and the derived sort key, in the order
 // the applier writes them.
 //
-// ONE LIST the schema test holds `tracker_tasks`' DDL to, both ways, because
-// the failure it catches is silent: a counter the schema carries and nothing
+// ONE LIST, held to the schema and to the applier, because the failure it
+// guards against is silent: a counter the schema carries and nothing
 // increments reads zero for ever, which looks exactly like a task nobody has
-// worked on. The applier's statements spell the columns out themselves, and
-// the list does not reach them — a counter added here and to the DDL is
-// written only once the applier names it too.
+// worked on. `TestTheSpendColumnsMatchTheSchema` holds `tracker_tasks`' DDL to
+// the list both ways. The turn apply's statement names the columns itself, so
+// `TestEverySpendColumnIsOneATurnMoves` applies a turn carrying every counter
+// the record has and fails on a listed column that did not move.
 //
 // `spend_tokens` is DERIVED — input plus output — rather than transmitted,
 // because it is the sort key and a sort key that can disagree with the columns

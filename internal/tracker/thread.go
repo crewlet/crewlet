@@ -134,16 +134,14 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 	// comment rows it is about to read may already be wrong, and routing a
 	// wake from them would wake the wrong people and close the wrong ask.
 	// So the framework is handed the task under its own project
-	// ([Reader.pointTerm]) and the transaction probes it again
+	// ([Reader.pointScope]) and the transaction probes it again
 	// ([refuseUnaccounted]) — a term naming the task alone resolves to the
 	// workspace's path, which meets no record filed under its project.
-	term, err := r.pointTerm(ctx, q.Task)
+	scope, err := r.pointScope(ctx, q.Task)
 	if err != nil {
 		return ResolvedThread{}, err
 	}
-	if _, err = r.log.Read(ctx, fresh.Query(statelog.ScopeSet{
-		Paths: []string{term.Path()},
-	}.Normalised(), false), func(tx *sql.Tx) error {
+	if _, err = r.log.Read(ctx, fresh.Query(scope, false), func(tx *sql.Tx) error {
 		return readThread(ctx, tx, fresh.Level, q, &out)
 	}); err != nil {
 		return ResolvedThread{}, err
