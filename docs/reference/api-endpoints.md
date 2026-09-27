@@ -531,7 +531,7 @@ On a `409`, re-read `/config` and send the edit again.
 
 ### The `config_audit` query
 
-Recent revision metadata for the dashboard's Configuration screen. **A query, not a REST route** — there is no `GET /config/audit` in this build; the screen asks the query channel for `config_audit` and gets the same revision records `GET /config/revisions` serves, in a wrapper object.
+Recent revision metadata for the dashboard's Configuration and Audit screens. **A query, not a REST route** — there is no `GET /config/audit` in this build; the screen asks the query channel for `config_audit` and gets the same revision records `GET /config/revisions` serves, as a bare array (the one question in the set that is not an object).
 
 ```
 query config_audit { "limit": <N> }
@@ -539,28 +539,37 @@ query config_audit { "limit": <N> }
 
 | Parameter | Default | Range | Description |
 |-----------------|---------|-------|-------------|
-| `limit` | `50` | `1..500` | Number of revisions to return, newest first. An out-of-range number is CLAMPED to the range; only a non-numeric value is `400 invalid_limit`. |
+| `limit` | `50` | `1..500` | Number of revisions to return, newest first. An out-of-range number is CLAMPED to the range, and a value that is not a number reads as the default. |
 
 Response (`200 OK`):
 
 ```json
-{
-  "revisions": [
-    {
-      "revision_id": "11111111-1111-1111-1111-111111111111",
-      "parent_revision_id": "00000000-0000-0000-0000-000000000000",
-      "created_at": "2026-05-17T10:31:02.118431+00:00",
-      "created_by": "founder",
-      "source": "api",
-      "summary": "add Designer role",
-      "is_active": true,
-      "activated_at": "2026-05-17T10:31:02.118431+00:00"
-    }
-  ]
-}
+[
+  {
+    "revision_id": "11111111-1111-1111-1111-111111111111",
+    "parent_revision_id": "00000000-0000-0000-0000-000000000000",
+    "created_at": "2026-05-17T10:31:02.118431Z",
+    "created_by": "founder",
+    "created_by_kind": "operator",
+    "source": "api",
+    "summary": "add Designer role",
+    "is_active": true,
+    "activated_at": "2026-05-17T10:31:02.118431Z"
+  }
+]
 ```
 
 Payloads are NOT included — fetch a specific revision via `GET /config/revisions/{id}` for the full JSON.
+
+**`created_by` is a label and `created_by_kind` says what it names**, on this answer, on `GET /config/revisions` and on `GET /config/revisions/{id}` alike:
+
+| `created_by_kind` | Who wrote the revision | `created_by` |
+|---|---|---|
+| `operator` | A person, through a credential: an API token on `/config` or `/setup`, or the login running `crewlet config import` / `crewlet config rekey` | The token's id, or the login (`$CREWLET_OPERATOR`, else `$USER`) |
+| `node` | The engine itself: a node seeding the store from its `-company` file at boot, or the reconcile loop's own writes (removing a disconnected integration, recording a discovered site, reloading after sealing a credential) | The node's id for a seed; `reconcile loop` for the loop |
+| `""` | **Not recorded**: a revision this node adopted from a pointer an older build published, which named nobody | `""` |
+
+Read the kind rather than inferring it from the label — the two name spaces overlap, and an operator token may be called anything. A revision reads the same on every node: the fleet's activation pointer carries its author, so a node adopting it records the origin's author rather than its own (see [Control Plane](../concepts/control-plane.md#the-design)). A kind a newer engine adds arrives as itself.
 
 ### `GET /config/revisions/{id}/diff`
 

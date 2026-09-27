@@ -57,6 +57,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
@@ -2409,11 +2410,22 @@ func operatorLogFormat() logging.Format {
 // engineConfigWriter lets the reconcile loop remove a block through the same
 // PATCH /config surface every other write uses: one merge, one validation,
 // one compare-and-set onto the document.
+//
+// EVERY WRITE IT MAKES IS THE NODE'S. It is the engine's own writer — the
+// reconcile loop and the setup passes it runs — so the label it is handed
+// ("reconcile loop") is recorded as [store.AuthorNode]. Recorded through the
+// HTTP surface's defaults, those revisions read as an operator's on the audit
+// screen, and a reload nobody asked for is exactly what an audit is read for.
 type engineConfigWriter struct{ surface *configapi.Service }
+
+// nodeAuthor is a label from the engine, as the revision's author.
+func nodeAuthor(name string) store.Author {
+	return store.Author{Name: name, Kind: store.AuthorNode}
+}
 
 func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, operator string) error {
 	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
-		Patch: patch, Summary: summary, Operator: operator,
+		Patch: patch, Summary: summary, Author: nodeAuthor(operator),
 	})
 	return err
 }
@@ -2421,7 +2433,7 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, op
 // Reload re-activates the current document, which is how a pass that sealed a
 // credential gets everything built at apply time rebuilt against it.
 func (w engineConfigWriter) Reload(ctx context.Context, summary, operator string) error {
-	_, err := w.surface.Reload(ctx, summary, operator)
+	_, err := w.surface.Reload(ctx, summary, nodeAuthor(operator))
 	return err
 }
 
@@ -2440,7 +2452,8 @@ func (w engineConfigWriter) SetSeat(
 	ctx context.Context, handle string, body []byte, summary, operator string,
 ) error {
 	_, err := w.surface.ApplyEntity(ctx, configapi.ApplyEntityRequest{
-		Kind: "roles", ID: handle, Body: body, Summary: summary, Operator: operator,
+		Kind: "roles", ID: handle, Body: body, Summary: summary,
+		Author: nodeAuthor(operator),
 	})
 	return err
 }

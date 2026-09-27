@@ -671,16 +671,43 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 		return store.Revision{}, fmt.Errorf("engine: %w: %s",
 			store.ErrNoRevision, target.RevisionID)
 	}
-	revision := store.Revision{
-		ID: target.RevisionID, Source: "fleet", CreatedBy: "peer",
-		Summary: target.Summary, Payload: payload, CreatedAt: target.At,
-	}
+	revision := adopted(target, payload)
 	if err := r.configs.Adopt(ctx, revision); err != nil {
 		r.log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
 			"error", err, "detail", "the revision is applied; this node's config "+
 				"history will not show it and it will be re-fetched next time")
 	}
 	return revision, nil
+}
+
+// adopted is the local row for a revision the fleet's pointer names.
+//
+// THE ORIGIN'S RECORD, NOT THIS NODE'S. The pointer carries who wrote the
+// revision, how and when, and a peer that stored `peer` from `fleet` at the
+// activation instant instead gave one revision a different author on every
+// node — so the audit screen's answer depended on which node served it, and
+// no node but the origin could say an operator had written it at all.
+//
+// A pointer published by an older build carries no origin. Its author is
+// then EMPTY with an empty kind, which every reader shows as "not recorded":
+// naming this node, or the placeholder, would be a claim nobody made. The
+// source and the instant fall back to what the pointer does say — that the
+// revision came from the fleet, activated then — because those two are true
+// of this node's copy either way.
+func adopted(target coord.Activation, payload []byte) store.Revision {
+	origin := target.Origin
+	revision := store.Revision{
+		ID: target.RevisionID, Source: origin.Source, CreatedBy: origin.Author,
+		CreatedByKind: store.AuthorKind(origin.AuthorKind),
+		Summary:       target.Summary, Payload: payload, CreatedAt: origin.CreatedAt,
+	}
+	if revision.Source == "" {
+		revision.Source = "fleet"
+	}
+	if revision.CreatedAt.IsZero() {
+		revision.CreatedAt = target.At
+	}
+	return revision
 }
 
 // record writes this node's outcome twice, to two surfaces with two

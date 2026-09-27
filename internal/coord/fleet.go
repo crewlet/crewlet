@@ -257,6 +257,45 @@ type Activation struct {
 	RevisionID string
 	At         time.Time
 	Summary    string
+
+	// Origin is who wrote the revision, as the node that stored it first
+	// recorded it. See [RevisionOrigin].
+	Origin RevisionOrigin
+}
+
+// RevisionOrigin is the record a revision was WRITTEN with, travelling with
+// the pointer so a peer adopting the revision keeps it.
+//
+// A revision is stored in the database of whichever node served the write;
+// every other node meets it for the first time when the pointer names it. So
+// what the pointer does not carry, a peer cannot know — and it did not carry
+// this: every node but the origin recorded the revision as written by `peer`,
+// from source `fleet`, at the instant it was activated, so the same revision
+// had a different author on every node and the audit screen's answer depended
+// on which node served it.
+//
+// ADDITIVE ON THE WIRE, and both directions are ordinary. An older build
+// decodes a pointer carrying this and ignores it; this build reads an older
+// pointer as a zero origin, which the adopting node records as an author NOT
+// RECORDED rather than inventing one. The fields are plain strings rather than
+// the store's kind type for the reason [NodeApply.Status] gives: this package
+// is where the engine's layers meet, and a backend should not import the
+// store to carry a word.
+//
+// The PARENT is deliberately not here. It names a revision the adopting node
+// may never have held — a node that joined after it was superseded — and the
+// table's parent column is a foreign key into this node's own rows.
+type RevisionOrigin struct {
+	// Author is the label the writer was recorded under.
+	Author string
+	// AuthorKind is what Author names — `operator` or `node` in this
+	// build (store.AuthorKind).
+	AuthorKind string
+	// Source is how the revision was made: `api`, `file`, `rekey`.
+	Source string
+	// CreatedAt is when it was written, which a re-activation of an old
+	// revision makes very different from [Activation.At].
+	CreatedAt time.Time
 }
 
 // MaxApplyErrorLength bounds the failure text a node publishes.
@@ -361,6 +400,11 @@ type ActivationRequest struct {
 	// Activate returns says which, so a caller keeping a local copy of the
 	// instant keeps the pointer's.
 	At time.Time
+
+	// Origin is the revision's own record, so a peer that adopts it keeps
+	// its author. Every writer has one; a zero origin publishes a pointer
+	// every peer records as "author not recorded".
+	Origin RevisionOrigin
 
 	// Expect is the revision the caller read before building this one.
 	//

@@ -23,13 +23,15 @@ func testOnlyOneRevisionIsActive(t *testing.T, db *store.DB) {
 	// one a query happened to return first.
 	configs := db.Configs()
 	first, err := configs.InsertActive(t.Context(), store.Revision{
-		Summary: "one", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base,
+		CreatedByKind: store.AuthorOperator,
+		Summary:       "one", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base,
 	})
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	second, err := configs.InsertActive(t.Context(), store.Revision{
-		ParentID: first, Summary: "two",
+		CreatedByKind: store.AuthorOperator,
+		ParentID:      first, Summary: "two",
 		Payload: json.RawMessage(`{"n":2}`), CreatedAt: base.Add(time.Minute),
 	})
 	if err != nil {
@@ -64,7 +66,8 @@ func testAnInsertedRevisionIsHistoryUntilActivated(t *testing.T, db *store.DB) {
 
 	// With nothing active, an inserted revision leaves nothing active.
 	lone, err := configs.Insert(t.Context(), store.Revision{
-		Summary: "refused", Payload: json.RawMessage(`{"n":0}`), CreatedAt: base,
+		CreatedByKind: store.AuthorOperator,
+		Summary:       "refused", Payload: json.RawMessage(`{"n":0}`), CreatedAt: base,
 	})
 	if err != nil {
 		t.Fatalf("insert: %v", err)
@@ -74,13 +77,15 @@ func testAnInsertedRevisionIsHistoryUntilActivated(t *testing.T, db *store.DB) {
 	}
 
 	live, err := configs.InsertActive(t.Context(), store.Revision{
-		Summary: "live", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base.Add(time.Minute),
+		CreatedByKind: store.AuthorOperator,
+		Summary:       "live", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("insert the live revision: %v", err)
 	}
 	pending, err := configs.Insert(t.Context(), store.Revision{
-		ParentID: live, Summary: "pending",
+		CreatedByKind: store.AuthorOperator,
+		ParentID:      live, Summary: "pending",
 		Payload: json.RawMessage(`{"n":2}`), CreatedAt: base.Add(2 * time.Minute),
 	})
 	if err != nil {
@@ -119,7 +124,8 @@ func testActivatingAMissingRevisionChangesNothing(t *testing.T, db *store.DB) {
 	// unconfigured, every webhook refused, from one mistyped id.
 	configs := db.Configs()
 	id, err := configs.InsertActive(t.Context(), store.Revision{
-		Summary: "live", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base,
+		CreatedByKind: store.AuthorOperator,
+		Summary:       "live", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base,
 	})
 	if err != nil {
 		t.Fatalf("insert: %v", err)
@@ -146,7 +152,8 @@ func testPayloadRoundTrips(t *testing.T, db *store.DB) {
 	// document would not decrypt.
 	sealed := json.RawMessage(`{"__encrypted__":"enc:v1:abc.def"}`)
 	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
-		Summary: "sealed", Payload: sealed, CreatedAt: base,
+		CreatedByKind: store.AuthorOperator,
+		Summary:       "sealed", Payload: sealed, CreatedAt: base,
 	})
 	if err != nil {
 		t.Fatalf("insert: %v", err)
@@ -169,7 +176,8 @@ func testRevisionsListInInsertionOrder(t *testing.T, db *store.DB) {
 	var ids []string
 	for i := range 5 {
 		id, err := configs.InsertActive(t.Context(), store.Revision{
-			Summary: "burst", CreatedAt: base,
+			CreatedByKind: store.AuthorOperator,
+			Summary:       "burst", CreatedAt: base,
 			Payload: json.RawMessage(`{"n":` + string(rune('0'+i)) + `}`),
 		})
 		if err != nil {
@@ -190,5 +198,140 @@ func testRevisionsListInInsertionOrder(t *testing.T, db *store.DB) {
 			t.Fatalf("position %d is %s, want %s — the listing is not newest-first",
 				i, revision.ID, want)
 		}
+	}
+}
+
+func testARevisionRecordsWhatWroteIt(t *testing.T, db *store.DB) {
+	// THE KIND IS STORED, NOT INFERRED. `created_by` is a label, and a
+	// label cannot say whether a person or the engine wrote — so a
+	// revision the node seeded and one an operator wrote must read back
+	// as what they are, through every reader the history has.
+	configs := db.Configs()
+	byOperator, err := configs.InsertActive(t.Context(), store.Revision{
+		CreatedBy: "maya", CreatedByKind: store.AuthorOperator,
+		Source: "api", Summary: "an operator's write", CreatedAt: base,
+	})
+	if err != nil {
+		t.Fatalf("operator insert: %v", err)
+	}
+	byNode, err := configs.Insert(t.Context(), store.Revision{
+		CreatedBy: "node-a", CreatedByKind: store.AuthorNode,
+		Source: "file", Summary: "a node's seed", CreatedAt: base.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("node insert: %v", err)
+	}
+	want := map[string]store.AuthorKind{byOperator: store.AuthorOperator, byNode: store.AuthorNode}
+	for id, kind := range want {
+		got, found, gerr := configs.Get(t.Context(), id)
+		if gerr != nil || !found {
+			t.Fatalf("get %s: found=%v err=%v", id, found, gerr)
+		}
+		if got.CreatedByKind != kind {
+			t.Errorf("Get(%s).CreatedByKind = %q, want %q", id, got.CreatedByKind, kind)
+		}
+	}
+	listed, err := configs.List(t.Context(), 0, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, r := range listed {
+		if r.CreatedByKind != want[r.ID] {
+			t.Errorf("List: %s has kind %q, want %q", r.ID, r.CreatedByKind, want[r.ID])
+		}
+	}
+	active, _, err := configs.Active(t.Context())
+	if err != nil || active.CreatedByKind != store.AuthorOperator {
+		t.Errorf("Active kind = %q (err %v), want operator", active.CreatedByKind, err)
+	}
+}
+
+func testAnUnattributedWriteIsRefused(t *testing.T, db *store.DB) {
+	// A WRITER ALWAYS KNOWS WHAT IT IS. A revision stored without saying is
+	// exactly the row the audit screen used to fill in with a guess, so the
+	// store refuses it — including a kind this build does not write.
+	configs := db.Configs()
+	for _, kind := range []store.AuthorKind{"", "seat", "peer"} {
+		if _, err := configs.InsertActive(t.Context(), store.Revision{
+			CreatedBy: "x", CreatedByKind: kind, Summary: "s", CreatedAt: base,
+		}); err == nil {
+			t.Errorf("InsertActive with kind %q was stored", kind)
+		}
+		if _, err := configs.Insert(t.Context(), store.Revision{
+			CreatedBy: "x", CreatedByKind: kind, Summary: "s", CreatedAt: base,
+		}); err == nil {
+			t.Errorf("Insert with kind %q was stored", kind)
+		}
+	}
+	if all, err := configs.List(t.Context(), 0, 0); err != nil || len(all) != 0 {
+		t.Fatalf("a refused write left %d rows (err %v)", len(all), err)
+	}
+}
+
+func testAnAdoptedRevisionKeepsItsOriginsAuthor(t *testing.T, db *store.DB) {
+	// THE ORIGIN'S AUTHOR, AND ANY KIND IT CARRIES. A peer's copy of a
+	// revision must read the way the origin's does, and a kind a newer
+	// build wrote is a value to keep rather than a write to refuse — this
+	// node is running that revision either way.
+	configs := db.Configs()
+	for id, kind := range map[string]store.AuthorKind{
+		"rev-op": store.AuthorOperator, "rev-new": "seat", "rev-unknown": "",
+	} {
+		if err := configs.Adopt(t.Context(), store.Revision{
+			ID: id, CreatedBy: "maya", CreatedByKind: kind, Source: "api",
+			Summary: "adopted", CreatedAt: base,
+		}); err != nil {
+			t.Fatalf("adopt %s: %v", id, err)
+		}
+		got, found, err := configs.Get(t.Context(), id)
+		if err != nil || !found {
+			t.Fatalf("get %s: found=%v err=%v", id, found, err)
+		}
+		if got.CreatedBy != "maya" || got.CreatedByKind != kind || got.Source != "api" {
+			t.Errorf("%s adopted as (%q, %q, %q), want (maya, %q, api)",
+				id, got.CreatedBy, got.CreatedByKind, got.Source, kind)
+		}
+	}
+}
+
+func testAnAdoptionLearnsAnUnknownAuthor(t *testing.T, db *store.DB) {
+	// A ROW ADOPTED BEFORE THE FLEET SAID WHO WROTE IT IS FILLED IN LATER,
+	// and a row that knows its author is never overwritten: the node that
+	// stored its own write is the authority on it.
+	configs := db.Configs()
+	if err := configs.Adopt(t.Context(), store.Revision{
+		ID: "rev-1", Source: "fleet", Summary: "s", CreatedAt: base,
+	}); err != nil {
+		t.Fatalf("adopt with no author: %v", err)
+	}
+	if err := configs.Adopt(t.Context(), store.Revision{
+		ID: "rev-1", CreatedBy: "maya", CreatedByKind: store.AuthorOperator,
+		Source: "api", Summary: "s", CreatedAt: base,
+	}); err != nil {
+		t.Fatalf("adopt again with the author: %v", err)
+	}
+	got, _, err := configs.Get(t.Context(), "rev-1")
+	if err != nil || got.CreatedBy != "maya" || got.CreatedByKind != store.AuthorOperator {
+		t.Fatalf("after the fleet named the author: (%q, %q) err %v, want (maya, operator)",
+			got.CreatedBy, got.CreatedByKind, err)
+	}
+
+	own, err := configs.InsertActive(t.Context(), store.Revision{
+		CreatedBy: "node-a", CreatedByKind: store.AuthorNode, Source: "file",
+		Summary: "mine", CreatedAt: base,
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err = configs.Adopt(t.Context(), store.Revision{
+		ID: own, CreatedBy: "somebody", CreatedByKind: store.AuthorOperator,
+		Source: "api", Summary: "mine", CreatedAt: base,
+	}); err != nil {
+		t.Fatalf("adopt over a known author: %v", err)
+	}
+	got, _, err = configs.Get(t.Context(), own)
+	if err != nil || got.CreatedBy != "node-a" || got.CreatedByKind != store.AuthorNode {
+		t.Fatalf("a known author was overwritten: (%q, %q) err %v, want (node-a, node)",
+			got.CreatedBy, got.CreatedByKind, err)
 	}
 }

@@ -287,7 +287,7 @@ var wireTags = map[string][]string{
 	"org_stopped":               {"org_name"},
 	"agent_spawned":             {"agent_id", "role"},
 	"agent_terminated":          {"agent_id", "reason", "role"},
-	"config_revision_activated": {"created_by", "revision_id", "revision_summary"},
+	"config_revision_activated": {"created_by", "created_by_kind", "revision_id", "revision_summary"},
 	"operator_acted": {"actor_seat", "failed", "operator_id", "outcome", "position",
 		"refusal", "request_id", "tool", "transport"},
 	"backup_requested": {"actor_seat", "dir", "failed", "operator_id",

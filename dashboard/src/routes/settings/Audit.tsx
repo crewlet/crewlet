@@ -28,6 +28,18 @@
  * a bulk edit nobody asked for is the thing an operator opens an audit
  * to find.
  *
+ * # A config revision says who wrote it, and this screen believes it
+ *
+ * Every revision records its writer's KIND beside the label (`operator` or
+ * `node`), and the pointer a peer adopts from carries both — so this row
+ * reads the same on every node. It used to be drawn as an operator's
+ * unconditionally, which labelled a node's boot seed and the reconcile loop's
+ * reload after sealing a credential as a person's write. The configuration is
+ * the one source read WHOLE rather than narrowed to people: a revision the
+ * engine made is a change to the company as much as one a person made, and
+ * the row's kind says which it was. A revision whose writer nobody recorded —
+ * adopted from an older engine's pointer — says exactly that.
+ *
  * # What each source can and cannot be asked
  *
  * Only the tracker's feed takes a wall-clock window (`from`/`to`); the wiki's
@@ -120,6 +132,13 @@ export interface AuditEntry {
   kind: string;
   /** The handle or token label recorded on the write. */
   actor: string;
+  /**
+   * The record SAYS NOTHING about who wrote this, which is different from
+   * "the engine wrote it" — the reading an empty actor gets everywhere else.
+   * A config revision adopted from an older engine's pointer is the one row
+   * that can carry it.
+   */
+  unrecorded?: true;
   /** `operator`, `human`, `agent`, `system` — empty where none was recorded. */
   actorKind: string;
   /**
@@ -229,12 +248,14 @@ export type Writer =
   | { as: "seat"; handle: string; name: string; kind?: SeatKind; token?: string }
   | { as: "token"; name: string }
   | { as: "system"; name: string }
-  | { as: "engine" };
+  | { as: "engine" }
+  | { as: "unrecorded" };
 
 export function writerOf(
-  row: Pick<AuditEntry, "actor" | "actorKind" | "actorSeat">,
+  row: Pick<AuditEntry, "actor" | "actorKind" | "actorSeat" | "unrecorded">,
   who: (handle: string) => { name: string; kind?: SeatKind },
 ): Writer {
+  if (row.unrecorded) return { as: "unrecorded" };
   if (!row.actor) return { as: "engine" };
   if (row.actorKind === "operator") {
     if (!row.actorSeat) return { as: "token", name: row.actor };
@@ -249,7 +270,12 @@ export function writerOf(
       token: row.actor,
     };
   }
-  if (row.actorKind === "system") return { as: "system", name: row.actor };
+  // A NODE IS THE ENGINE, NAMED: a config revision the engine wrote carries
+  // the node that seeded it or the loop that made it, and neither is a seat
+  // to link to or a person to draw.
+  if (row.actorKind === "system" || row.actorKind === "node") {
+    return { as: "system", name: row.actor };
+  }
   const seat = who(row.actor);
   return {
     as: "seat",
@@ -283,6 +309,10 @@ function WriterCell({ writer }: { writer: Writer }) {
       // writers with no tool invisible on the one screen that exists to name
       // every writer.
       return <span className="muted">the engine</span>;
+    case "unrecorded":
+      // NOT THE ENGINE, AND NOT ANYBODY: the record does not say, and the
+      // cell says that rather than guessing.
+      return <EmptyValue label="Not recorded" />;
   }
 }
 
@@ -381,7 +411,11 @@ export function Audit() {
         // was created rather than what was done.
         kind: revision.source || "revision",
         actor: revision.created_by ?? "",
-        actorKind: "operator",
+        // THE REVISION'S OWN WORD for what wrote it. This was the literal
+        // "operator", so a node's seed and the reconcile loop's reloads were
+        // drawn as a person's writes.
+        actorKind: revision.created_by_kind ?? "",
+        ...(!revision.created_by_kind && !revision.created_by ? { unrecorded: true as const } : {}),
         subject: revision.revision_id.slice(0, 8),
         path: ["settings", "config", "revisions", revision.revision_id],
         detail: revision.summary ?? "",
@@ -580,7 +614,7 @@ export function Audit() {
             subtitle={
               truncated.length > 0
                 ? `${truncated.join(" and ")} answered one page, which does not reach the start of this window — those rows are the newest, not all of them.`
-                : "Every write a person or a token made, across the tracker, the knowledge base, the configuration and the credentials."
+                : "Every write a person or a token made, and every configuration revision, whoever wrote it."
             }
           >
             <Card.Title>What was done</Card.Title>

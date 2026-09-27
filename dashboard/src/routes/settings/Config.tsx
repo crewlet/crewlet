@@ -105,6 +105,28 @@ const NO_REVISION = {
 } as const;
 
 /**
+ * Who wrote a revision: the label it was recorded under, and WHAT that label
+ * names.
+ *
+ * THE KIND IS THE REVISION'S OWN WORD, never inferred from the label: the name
+ * spaces overlap (an operator token may be called `node`), and a label alone
+ * drew a node's boot seed and the reconcile loop's reloads as a person's
+ * writes. A revision nobody recorded an author for — adopted from an older
+ * engine's pointer — says so, which is different from "the engine wrote it".
+ */
+export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
+  const name = revision.created_by;
+  const kind = revision.created_by_kind;
+  if (!name && !kind) return <EmptyValue label="Not recorded" />;
+  return (
+    <span className="row gap-1">
+      {name ? <TextCell>{name}</TextCell> : <EmptyValue label="No name recorded" />}
+      {kind && <Tag appearance="outline">{kind}</Tag>}
+    </span>
+  );
+}
+
+/**
  * The facts a revision is recognised by, in the history table's own order.
  *
  * ONE FUNCTION for the page and the rail, so a reader who peeks a revision and
@@ -115,7 +137,7 @@ const NO_REVISION = {
 function revisionFacts(revision: RevisionMeta, now: number): Fact[] {
   return [
     { label: "Created", value: <DateCell at={revision.created_at} now={now} /> },
-    { label: "By", value: revision.created_by || "nobody recorded" },
+    { label: "By", value: <RevisionAuthor revision={revision} /> },
     { label: "Source", value: revision.source },
     {
       label: "Activated",
@@ -286,7 +308,7 @@ function RevisionBody({
               title: "the revision this one was written against",
             },
             { label: "Source", value: revision.source },
-            { label: "Created by", value: revision.created_by || undefined },
+            { label: "Created by", value: <RevisionAuthor revision={revision} /> },
             { label: "Created", value: fmtDateTime(revision.created_at) },
             {
               label: "Activated",
@@ -796,12 +818,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                     header: "By",
                     shrink: true,
                     sortValue: (r) => r.created_by,
-                    cell: (r) =>
-                      r.created_by ? (
-                        <TextCell>{r.created_by}</TextCell>
-                      ) : (
-                        <EmptyValue label="Nobody recorded" />
-                      ),
+                    cell: (r) => <RevisionAuthor revision={r} />,
                   },
                 ]}
               />

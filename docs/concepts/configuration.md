@@ -473,9 +473,12 @@ correctly-serving node out of a load balancer's rotation for being behind.
 CREATE TABLE company_config (
     revision_id        TEXT    NOT NULL PRIMARY KEY,
     parent_revision_id TEXT    REFERENCES company_config(revision_id),
-    created_at         INTEGER NOT NULL,          -- unix seconds, UTC
-    created_by         TEXT    NOT NULL,          -- token id, e.g. "founder"
-    source             TEXT    NOT NULL,          -- "api" | "cli" | "api.revert" | "api.entity"
+    created_at         INTEGER NOT NULL,          -- unix microseconds, UTC
+    created_by         TEXT    NOT NULL,          -- a label: token id ("founder"), a
+                                                  -- login, a node id, "reconcile loop"
+    created_by_kind    TEXT    NOT NULL DEFAULT '',  -- what created_by names:
+                                                  -- "operator" | "node" | "" (not recorded)
+    source             TEXT    NOT NULL,          -- "api" | "file" | "rekey" | "fleet"
     summary            TEXT    NOT NULL,          -- short human-readable change note
     payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
                                                   -- sealed envelope when a keyring is set
@@ -490,7 +493,7 @@ CREATE UNIQUE INDEX company_config_one_active_idx
 ```
 
 The types here are the four SQLite has (`TEXT`, `INTEGER`, `REAL`, `BLOB`)
-rather than `UUID` / `TIMESTAMPTZ` / `JSONB`, and a timestamp is unix seconds
+rather than `UUID` / `TIMESTAMPTZ` / `JSONB`, and a timestamp is unix microseconds
 rather than a date type — Turso is SQLite-compatible in both its query language
 and its file format, so that is simply what a column can be. It was also, until
 recently, the intersection of two drivers' dialects; the second driver is
@@ -516,8 +519,10 @@ The difference between the last two is the **admission rules**: rules added afte
 <token>`. Reads serve without one by default.** Tokens are listed in Tier A
 under `api.auth.tokens` and resolved from env vars at API startup. The matched
 token's `id` is recorded as `created_by` on each revision the request produces,
-so revision history carries meaningful attribution (`alice`, `ci-pipeline`,
-`ops`) rather than generic strings.
+with `created_by_kind` `operator`, so revision history carries meaningful
+attribution (`alice`, `ci-pipeline`, `ops`) rather than generic strings — and
+says which revisions the engine wrote itself (`node`), which no token id could.
+See [the API reference](../reference/api-endpoints.md#the-config_audit-query).
 
 Reading is what a dashboard does, and the page that would prompt for a token is
 itself served unauthenticated — the page that asks for a credential cannot

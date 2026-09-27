@@ -130,7 +130,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | Flag | Description |
 |------|-------------|
 | `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
-| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. |
+| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. A revision the seed writes is the node's own: its `created_by` is the node's id and its `created_by_kind` is `node`. |
 | `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
@@ -199,7 +199,9 @@ The line it prints says which of the two happened.
 `-summary` is the audit note recorded with the revision (default
 `imported from <path>`). The revision history is the record of who changed what
 and why, so a fleet-wide write is worth a sentence; `created_by` is the token's
-id when it goes through the API, and the invoking operator when it does not.
+id when it goes through the API, and the invoking operator when it does not —
+either way the revision's `created_by_kind` is `operator`, and that author
+travels with the revision to every node in the fleet.
 
 It does **not** refuse because a revision is already active, and there is no
 flag to force it past one: the pointer is append-only, so an import *chains* a

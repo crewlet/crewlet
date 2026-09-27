@@ -637,7 +637,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases, duties and config rollout *(operator)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — each state-log domain and what holds its trim; one domain *(operator)*. Domains live only under `backups/` | |
-| `#/settings/audit` | **Audit log** — every write a person or a token made *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
+| `#/settings/audit` | **Audit log** — every write a person or a token made, and every configuration revision labelled with the kind of writer it recorded (`operator` or `node`) *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
 
 **There is no redirect table.** There was one, and it was always a liability: a
 redirect whose old path is now a live route sends every reader of that route
@@ -3391,6 +3391,15 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   older rows the screen never saw, and a caption reading "some of this may be
   missing" is one nobody can act on where "Knowledge answered one page" says
   where to look.
+- **Not recorded** vs **the engine.** An empty actor on a tracker or wiki
+  commit is the engine's own write, and the Audit screen draws it as "the
+  engine". A configuration revision is different: the revision states WHAT
+  wrote it (`created_by_kind`, `operator` or `node`) and the row shows that
+  word rather than assuming one — it used to label every revision `operator`,
+  so a node's boot seed and the reconcile loop's reloads read as a person's
+  writes. A revision whose kind is EMPTY was adopted from an older engine's
+  pointer that named nobody, and it reads "Not recorded" on both the Audit
+  screen and Configuration's history, never "the engine" and never a guess.
 - **An empty CONTAINER** vs **a query that matched nothing.** A container says
   its own emptiness, from what it already knows about itself, before the list
   it holds has answered anything — and that state REPLACES the list rather than

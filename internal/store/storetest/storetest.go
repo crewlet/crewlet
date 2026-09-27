@@ -74,6 +74,10 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
 		{"PayloadRoundTrips", testPayloadRoundTrips},
 		{"RevisionsListInInsertionOrder", testRevisionsListInInsertionOrder},
+		{"ARevisionRecordsWhatWroteIt", testARevisionRecordsWhatWroteIt},
+		{"AWriteThatDoesNotSayWhatWroteItIsRefused", testAnUnattributedWriteIsRefused},
+		{"AnAdoptedRevisionKeepsItsOriginsAuthor", testAnAdoptedRevisionKeepsItsOriginsAuthor},
+		{"AnAdoptionLearnsAnAuthorItDidNotKnow", testAnAdoptionLearnsAnUnknownAuthor},
 		// NOT HERE: the token counter. It is fleet state now, certified
 		// by coordtest against both coordination backends — a counter
 		// this node kept privately was the whole defect (migration

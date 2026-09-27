@@ -158,7 +158,8 @@ func TestTheReconcilerAppliesTheChartAtThePointersInstant(t *testing.T) {
 	activated := pinnedNow.Add(-time.Hour)
 	document := yamlToJSON(t, chartCompany("ships it"))
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "revision",
+		Source: "test", CreatedBy: "operator", CreatedByKind: store.AuthorOperator,
+		Summary: "revision",
 		Payload: document, CreatedAt: activated,
 	})
 	if err != nil {

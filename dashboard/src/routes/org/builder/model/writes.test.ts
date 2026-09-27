@@ -63,6 +63,7 @@ const revision = (parent: string | undefined, summary: string): HttpAnswer => ({
     summary,
     source: "api",
     created_by: "op",
+    created_by_kind: "operator",
     created_at: "t",
     ...(parent ? { parent_revision_id: parent } : {}),
     payload: {},

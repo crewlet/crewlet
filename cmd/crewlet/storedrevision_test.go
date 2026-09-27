@@ -35,7 +35,8 @@ func activateStored(t *testing.T, cfg, payload string) string {
 	}
 	defer closeStore()
 	id, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		Source: "fleet", CreatedBy: "peer", Summary: "from a peer",
+		CreatedByKind: store.AuthorOperator,
+		Source:        "fleet", CreatedBy: "peer", Summary: "from a peer",
 		Payload: []byte(payload), CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -62,8 +63,8 @@ func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
 		t.Fatalf("open the store: %v", err)
 	}
 	if _, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		Source: "fleet", CreatedBy: "peer", Summary: "from a peer",
-		Payload: []byte(duplicateNamesRevision), CreatedAt: activated,
+		Source: "fleet", CreatedBy: "peer", CreatedByKind: store.AuthorNode,
+		Summary: "from a peer", Payload: []byte(duplicateNamesRevision), CreatedAt: activated,
 	}); err != nil {
 		closeStore()
 		t.Fatalf("store the revision: %v", err)
@@ -95,8 +96,8 @@ func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
 		t.Fatalf("open the store: %v", err)
 	}
 	if _, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		Source: "fleet", CreatedBy: "peer", Summary: "from a peer",
-		Payload: []byte(duplicateNamesRevision), CreatedAt: activated,
+		Source: "fleet", CreatedBy: "peer", CreatedByKind: store.AuthorNode,
+		Summary: "from a peer", Payload: []byte(duplicateNamesRevision), CreatedAt: activated,
 	}); err != nil {
 		closeStore()
 		t.Fatalf("store the revision: %v", err)
@@ -283,7 +284,7 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 	t.Run("an empty store refuses to import it", func(t *testing.T) {
 		db := seedStore(t)
 		fleet := coordmemory.NewFleet()
-		err := seedCompany(t.Context(), db, fleet, nil, seed, nil, quiet())
+		err := seedCompany(t.Context(), db, fleet, nil, seed, nil, testNode, quiet())
 		if err == nil || !strings.Contains(err.Error(), "duplicate unit name") ||
 			!strings.Contains(err.Error(), file) {
 			t.Fatalf("seed into an empty store = %v, want a refusal naming the file and the rule", err)
@@ -299,12 +300,13 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 	t.Run("a store already holding it boots on it", func(t *testing.T) {
 		db := seedStore(t)
 		if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "file", CreatedBy: "node", Summary: "seeded before the rule",
+			CreatedByKind: store.AuthorOperator,
+			Source:        "file", CreatedBy: "node", Summary: "seeded before the rule",
 			Payload: document, CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, nil, testNode, quiet()); err != nil {
 			t.Fatalf("a node whose store holds this very file refused to boot: %v", err)
 		}
 	})
@@ -312,15 +314,15 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 	t.Run("a store holding another company ignores it as a bootstrap and refuses it as an import", func(t *testing.T) {
 		db := seedStore(t)
 		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
-			seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
+			seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
 			t.Fatal(err)
 		}
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, nil, testNode, quiet()); err != nil {
 			t.Errorf("a bootstrap seed the store outranks refused to boot: %v", err)
 		}
 		override := seed
 		override.Override = true
-		err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, override, nil, quiet())
+		err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, override, nil, testNode, quiet())
 		if err == nil || !strings.Contains(err.Error(), "duplicate seat name") {
 			t.Errorf("-import-company of a file with duplicate names = %v, want a refusal", err)
 		}

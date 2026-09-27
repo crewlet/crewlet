@@ -151,6 +151,7 @@ export class Engine {
             summary: revision.summary,
             source: "api",
             created_by: "operator",
+            created_by_kind: "operator",
             created_at: "2026-09-13T12:00:00Z",
             payload: {},
           })

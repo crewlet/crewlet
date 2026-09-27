@@ -162,7 +162,8 @@ func (s *surface) seed(t *testing.T, doc string, cipher secrets.Cipher) string {
 		t.Fatal(err)
 	}
 	id, err := s.configs.InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "seed",
+		CreatedByKind: store.AuthorOperator,
+		Source:        "test", CreatedBy: "operator", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
 	})
 	if err != nil {

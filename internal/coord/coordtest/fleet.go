@@ -457,6 +457,37 @@ var planeCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE AUTHOR TRAVELS WITH THE POINTER. A peer meets a revision for the
+	// first time when the pointer names it, so what the pointer drops, every
+	// node but the origin records as unknown — which is how every adopted
+	// revision came to read "peer" on the audit screen.
+	name: "a pointer carries the revision's origin to every reader",
+	fn: func(h *fleetHarness) {
+		written := h.now().Add(-time.Hour)
+		origin := coord.RevisionOrigin{
+			Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: written,
+		}
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Summary: "first", Payload: []byte("{}"),
+			At: h.now(), Origin: origin,
+		})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, found, err := h.f.Target(h.ctx)
+		if err != nil || !found {
+			h.t.Fatalf("Target: %v found=%v", err, found)
+		}
+		for name, read := range map[string]coord.RevisionOrigin{
+			"the activation answered": published.Origin, "the pointer read back": got.Origin,
+		} {
+			if read.Author != "maya" || read.AuthorKind != "operator" || read.Source != "api" ||
+				!read.CreatedAt.Equal(written) {
+				h.t.Fatalf("%s carries origin %+v, want %+v", name, read, origin)
+			}
+		}
+	},
+}, {
 	// The epoch is a FENCING token: a counter that went backwards would
 	// hand a node a number an older revision already used.
 	name: "the epoch only ever moves forward",

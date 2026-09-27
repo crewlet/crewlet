@@ -1491,10 +1491,26 @@ func (f *FleetStore) RetireLifetimeCounters(ctx context.Context) (bool, error) {
 // activationRecord is the pointer's stored form. The EPOCH IS NOT IN IT: the
 // key's revision is the epoch, so storing one too would give two answers that
 // could disagree.
+//
+// The ORIGIN fields are additive: a pointer an older build wrote has none of
+// them and decodes to a zero [coord.RevisionOrigin], and an older build
+// reading one this build wrote ignores them. See [coord.RevisionOrigin].
 type activationRecord struct {
 	RevisionID string    `json:"revision_id"`
 	At         time.Time `json:"at"`
 	Summary    string    `json:"summary,omitempty"`
+
+	Author     string    `json:"author,omitempty"`
+	AuthorKind string    `json:"author_kind,omitempty"`
+	Source     string    `json:"source,omitempty"`
+	CreatedAt  time.Time `json:"created_at,omitzero"`
+}
+
+// origin is the record's revision origin.
+func (r activationRecord) origin() coord.RevisionOrigin {
+	return coord.RevisionOrigin{
+		Author: r.Author, AuthorKind: r.AuthorKind, Source: r.Source, CreatedAt: r.CreatedAt,
+	}
 }
 
 // Activate publishes a new target revision.
@@ -1549,18 +1565,33 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		RevisionID: req.RevisionID,
 		At:         at,
 		Summary:    req.Summary,
+		Origin:     utcOrigin(req.Origin),
 	}, nil
 }
 
-// encodeActivation is the pointer's stored form for req at the instant at.
+// encodeActivation is the pointer's stored form for req at the instant at,
+// its origin included.
 func encodeActivation(req coord.ActivationRequest, at time.Time) ([]byte, error) {
+	origin := utcOrigin(req.Origin)
 	raw, err := json.Marshal(activationRecord{
 		RevisionID: req.RevisionID, At: at, Summary: req.Summary,
+		Author: origin.Author, AuthorKind: origin.AuthorKind,
+		Source: origin.Source, CreatedAt: origin.CreatedAt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: encode the activation: %w", err)
 	}
 	return raw, nil
+}
+
+// utcOrigin is an origin with its instant in UTC, as every other time this
+// store keeps; a zero instant stays zero, so an origin that named none still
+// encodes without one.
+func utcOrigin(o coord.RevisionOrigin) coord.RevisionOrigin {
+	if !o.CreatedAt.IsZero() {
+		o.CreatedAt = o.CreatedAt.UTC()
+	}
+	return o
 }
 
 // expectedSeq resolves the caller's expectation to the KV sequence to
@@ -1784,6 +1815,7 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 		RevisionID: record.RevisionID,
 		At:         record.At,
 		Summary:    record.Summary,
+		Origin:     record.origin(),
 	}, true, nil
 }
 

@@ -120,7 +120,8 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
 	document := yamlToJSON(t, doc)
 	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "revision",
+		CreatedByKind: store.AuthorOperator,
+		Source:        "test", CreatedBy: "operator", Summary: "revision",
 		Payload: document, CreatedAt: pinnedNow,
 	})
 	if err != nil {
@@ -139,7 +140,8 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMessage) int64 {
 	t.Helper()
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: summary,
+		CreatedByKind: store.AuthorOperator,
+		Source:        "test", CreatedBy: "operator", Summary: summary,
 		Payload: payload, CreatedAt: pinnedNow,
 	})
 	if err != nil {
@@ -459,7 +461,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 			t.Fatalf("Target: %v", err)
 		}
 		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "test", CreatedBy: "operator", Summary: "stray",
+			CreatedByKind: store.AuthorOperator,
+			Source:        "test", CreatedBy: "operator", Summary: "stray",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
 		})
 		if err != nil {
@@ -484,7 +487,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
 		previous, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "test", CreatedBy: "operator", Summary: "before",
+			CreatedByKind: store.AuthorOperator,
+			Source:        "test", CreatedBy: "operator", Summary: "before",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow,
 		})
 		if err != nil {
@@ -492,7 +496,8 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		}
 		document := yamlToJSON(t, grownCompanyDoc)
 		held, err := p.store.Configs().Insert(t.Context(), store.Revision{
-			ParentID: previous, Source: "api", CreatedBy: "operator", Summary: "written",
+			CreatedByKind: store.AuthorOperator,
+			ParentID:      previous, Source: "api", CreatedBy: "operator", Summary: "written",
 			Payload: document, CreatedAt: pinnedNow,
 		})
 		if err != nil {

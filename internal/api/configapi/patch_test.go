@@ -438,7 +438,8 @@ func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]an
 		t.Fatal(err)
 	}
 	id, err := s.configs.InsertActive(t.Context(), store.Revision{
-		Source: "peer", CreatedBy: "another node", Summary: "seed",
+		CreatedByKind: store.AuthorOperator,
+		Source:        "peer", CreatedBy: "another node", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
 	})
 	if err != nil {
@@ -475,7 +476,7 @@ func TestAnExpectAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 			sent := strings.ReplaceAll(expect, id, current.ID)
 			if _, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
 				Patch:   []byte(`{"mission": "ship the thing"}`),
-				Summary: "a patch", Operator: "operator", Expect: sent,
+				Summary: "a patch", Author: store.Author{Name: "operator", Kind: store.AuthorOperator}, Expect: sent,
 			}); err != nil {
 				t.Errorf("Apply with %s (%q) = %v", name, sent, err)
 			}
@@ -492,7 +493,7 @@ func TestAStalePreconditionIsStillRefused(t *testing.T) {
 
 	_, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
 		Patch:   []byte(`{"mission": "ship the thing"}`),
-		Summary: "a patch", Operator: "operator",
+		Summary: "a patch", Author: store.Author{Name: "operator", Kind: store.AuthorOperator},
 		Expect: `"a-revision-that-never-existed"`,
 	})
 	var raced *configapi.RacedError
