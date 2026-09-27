@@ -363,11 +363,12 @@ and shown by the audit trail's per-client failure tally. A credential that
 names nobody — an invitation link, a founder's code, a provider's round trip —
 meets no curve at all, and every refusal of one is still counted in the tally.
 
-The window is fifteen minutes and the fleet shares it — a node meets a pair,
-reads the fleet's record of it once, and writes a failure only while the curve
-is still climbing, so a run the load balancer moves to another node starts that
-node's curve where the fleet left it, and a pair already being refused costs
-the coordination store nothing. What the fleet holds is a keyed digest of the
+The window is fifteen minutes and the fleet shares it at every step: every
+failure is written, and a node reads a climbing pair's record before each
+attempt it admits, so however a load balancer spreads a run across nodes the
+sixth failure anywhere owes the ceiling everywhere. A pair already being
+refused costs the coordination store nothing, and a clean one is read once a
+window. What the fleet holds is a keyed digest of the
 pair, never what was typed.
 
 #### A bearer is its own protection

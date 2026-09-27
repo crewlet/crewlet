@@ -1026,13 +1026,19 @@ attempts are held waiting on a curve at once on a node — past that, a wait is
 answered `429` straight away rather than parked on an open connection an
 attacker chose to open.
 
-**The fleet shares the pair.** The window is fifteen minutes. A node meeting a
-pair for the first time reads the fleet's record of it once, and writes a
-failure only while the curve is still climbing — a seventh failure changes no
-node's answer — so a run the load balancer moves to another node starts that
-node's curve where the fleet left it, and the coordination store is never on
-the path of every attempt; a pair already being refused costs a map lookup,
-not a round trip. What the fleet holds is a digest of the pair under a key
+**The fleet shares the pair, at every step.** The window is fifteen minutes.
+Every failure is written to the coordination store, the ceiling's included —
+the fleet's newest failure is what every node measures the wait from — and a
+node reads a pair's record before each attempt it admits on a pair that is
+already climbing, counting on top of it only its own failures the record could
+not yet hold. So however a load balancer spreads a run across nodes, the sixth
+failure anywhere owes the thirty-second ceiling everywhere. The store is still
+never on the path of every attempt: a pair this node already knows is owed more
+than five seconds is refused with a map lookup and no round trip, so a pair
+costs at most one read per attempt its curve lets through; a clean pair is read
+once a window, so an honest sign-in pays one read and its second-factor step
+none; and a store that fails to answer is left alone for thirty seconds rather
+than timed out on every sign-in. What the fleet holds is a digest of the pair under a key
 derived from the active keyring entry, never what was typed — a password typed
 into the login box is what lands in that field often enough to matter. A node
 whose coordination store is unreachable goes on throttling on its own curve.

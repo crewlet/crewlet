@@ -951,9 +951,9 @@ func (f *FleetStore) Release(ctx context.Context, key string) error {
 
 // Fail records one failed authentication.
 //
-// ONE ROUND TRIP. The count a caller would read back is the throttle's own to
-// keep: it decides on its local curve and reads this window only to seed it,
-// so a second trip reading the record back is a cost nobody reads.
+// ONE ROUND TRIP. The count a caller would read back is one the throttle asks
+// for before its next admitted attempt instead, so a second trip reading the
+// record back here is a cost nobody reads.
 func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) error {
 	if subject == "" {
 		return errors.New("coord/kv: an attempt needs a subject")

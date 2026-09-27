@@ -450,49 +450,95 @@ func TestARefusedPairCostsTheFleetNothing(t *testing.T) {
 	}
 }
 
-// A PAIR IS READ ONCE, AND WRITTEN ONLY WHILE ITS CURVE IS CLIMBING.
+// A PAIR'S ROUND TRIPS ARE BOUNDED BY ITS CURVE, NOT BY WHOEVER IS SENDING.
 //
-// A node seeds a pair from the fleet the first time it meets it and never again
-// while it holds it, and writes a failure only while the curve still moves:
-// past [credential.CurveSteps] a failure changes no node's answer, and a write
-// per attempt is a broker denial of service a stranger would be pricing.
-func TestAPairIsReadOnceAndWrittenOnlyWhileItClimbs(t *testing.T) {
+// Every failure is written — the ceiling's too, since the fleet's newest
+// failure is what every node measures the wait from — and a climbing pair is
+// read before each attempt the curve admits. What keeps that off the path of
+// every request is the refusal before it: an attempt this node already knows
+// is owed more than it holds a request for costs no round trip, so a flood at
+// one pair costs the store one read and one write per step it is let through.
+// Mutation: read before deciding on the local count, and the refused attempts
+// read too.
+func TestAPairsRoundTripsAreBoundedByItsCurve(t *testing.T) {
 	t.Parallel()
 	store := newAttempts()
 	th, clock, _ := newThrottle(t, store)
 	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
-	for range 20 {
-		if err := failOnce(t, th, who); err != nil {
-			clock.advance(credential.RetryAfter(err))
-			if err := failOnce(t, th, who); err != nil {
-				t.Fatal(err)
-			}
+	admitted, failed := 0, 0
+	for range 200 {
+		ticket, err := th.Admit(t.Context(), who)
+		if err != nil {
+			// A flood at the pair: refused on this node's count alone.
+			clock.advance(time.Second)
+			continue
 		}
+		admitted++
+		ticket.Fail(t.Context())
+		failed++
 		clock.advance(time.Second)
 	}
 	reads, writes := store.io()
-	if reads != 1 {
-		t.Errorf("twenty attempts on one pair read the fleet %d times, want once", reads)
+	if reads > admitted {
+		t.Errorf("%d admitted attempts on one pair read the fleet %d times — a "+
+			"refused attempt paid a round trip", admitted, reads)
 	}
-	if writes != credential.CurveSteps {
-		t.Errorf("twenty failures wrote the fleet %d times, want %d — one per "+
-			"step the curve climbs", writes, credential.CurveSteps)
+	if writes != failed {
+		t.Errorf("%d failures wrote the fleet %d times, want every one — the "+
+			"ceiling's included", failed, writes)
+	}
+	if admitted >= 200/2 {
+		t.Errorf("%d of 200 attempts a second apart were admitted: the curve "+
+			"never slowed the flood", admitted)
 	}
 }
 
-// A RUN MOVED TO ANOTHER NODE STARTS WHERE THE FLEET LEFT IT.
+// AN HONEST SIGN-IN'S SECOND STEP COSTS THE FLEET NOTHING.
+//
+// A password that proves itself where a second factor is held releases its
+// attempt, and the code arrives moments later on the same pair. The pair was
+// read clean a moment ago, and nothing but a failure since could have moved
+// it, so the code's attempt is answered from here. Mutation: drop a clean pair
+// on release and the code's attempt reads the fleet again.
+func TestAnHonestSignInsSecondStepCostsTheFleetNothing(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	th, clock, _ := newThrottle(t, store)
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+	password, err := th.Admit(t.Context(), who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password.Release()
+	clock.advance(20 * time.Second)
+	code, err := th.Admit(t.Context(), who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code.Succeed(t.Context())
+	if reads, _ := store.io(); reads != 1 {
+		t.Errorf("a sign-in and its second-factor step read the fleet %d times, "+
+			"want once", reads)
+	}
+}
+
+// A RUN MOVED TO ANOTHER NODE STARTS WHERE THE FLEET LEFT IT — AND CLIMBS FROM
+// THERE.
 //
 // A load balancer puts a guessing run on whichever node it likes. The second
-// node meets the pair for the first time, reads the fleet's window, and owes
-// the wait the first node's failures earned — from the newest of them, which
-// is why the window answers it. Mutation: seed from a count alone and date it
-// to the read, and the second node's wait runs from now instead.
+// node reads the fleet's window, owes the wait the first node's failures
+// earned — from the newest of them, which is why the window answers it — and
+// its own next failure is the next step. It used to take the LARGER of the
+// fleet's count and its own, so its first failure left it at the count it
+// arrived with and the run owed the same wait again. Mutations: seed from a
+// count alone and date it to the read, and the first wait runs from now; take
+// the larger of the two counts, and the step after the move is 8s again.
 func TestARunMovedToAnotherNodeStartsWhereTheFleetLeftIt(t *testing.T) {
 	t.Parallel()
 	store := newAttempts()
 	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
 	first, _, _ := onClock(t, store, clock)
-	second, _, _ := onClock(t, store, clock)
+	second, _, sleeps := onClock(t, store, clock)
 	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
 	for range 4 {
 		if err := failOnce(t, first, who); err != nil {
@@ -506,8 +552,139 @@ func TestARunMovedToAnotherNodeStartsWhereTheFleetLeftIt(t *testing.T) {
 	clock.advance(2 * time.Second)
 	_, err := second.Admit(t.Context(), who)
 	if got := credential.RetryAfter(err); got != 6*time.Second {
-		t.Errorf("the second node owes %s (%v), want the 6s left of the 8s "+
+		t.Fatalf("the second node owes %s (%v), want the 6s left of the 8s "+
 			"the first node's four failures earned", got, err)
+	}
+	clock.advance(6 * time.Second)
+	if err := failOnce(t, second, who); err != nil {
+		t.Fatalf("the attempt after the wait was refused: %v", err)
+	}
+	sleeps.take()
+	// Five failures across the fleet: sixteen seconds.
+	_, err = second.Admit(t.Context(), who)
+	if got := credential.RetryAfter(err); got != 16*time.Second {
+		t.Errorf("after the fifth failure — its first — the second node owes "+
+			"%s (%v), want the 16s five failures earn", got, err)
+	}
+}
+
+// A RUN THE LOAD BALANCER ALTERNATES REACHES THE CEILING AS FAST AS ONE THAT
+// STAYS PUT.
+//
+// Each node read a pair once, when it first met it, and counted its own
+// failures after that — so a round robin over two nodes had each node's curve
+// climb on its own half of the failures and reach the ceiling after about
+// twice as many. Read before every step, the fleet's record is what each
+// attempt is decided on, and the sixth failure anywhere owes the ceiling.
+// Mutation: read a pair only the first time a node meets it, and the seventh
+// attempt owes a fraction of the ceiling.
+func TestAnAlternatingRunReachesTheCeilingAsFastAsOneThatStaysPut(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
+	a, _, _ := onClock(t, store, clock)
+	b, _, _ := onClock(t, store, clock)
+	nodes := []*credential.Throttle{a, b}
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+	for i := range credential.CurveSteps {
+		node := nodes[i%len(nodes)]
+		if err := failOnce(t, node, who); err != nil {
+			clock.advance(credential.RetryAfter(err))
+			if err := failOnce(t, node, who); err != nil {
+				t.Fatalf("failure %d after its wait was refused: %v", i+1, err)
+			}
+		}
+	}
+	for i, node := range nodes {
+		_, err := node.Admit(t.Context(), who)
+		if got := credential.RetryAfter(err); got != credential.DelayCeiling {
+			t.Errorf("after %d failures alternating over two nodes, node %d owes "+
+				"%s (%v), want the %s ceiling", credential.CurveSteps, i, got, err,
+				credential.DelayCeiling)
+		}
+	}
+}
+
+// THE CEILING'S FAILURES ARE SHARED TOO.
+//
+// Past the sixth failure the count stops mattering and the instant does not:
+// every node measures the pair's wait from the fleet's newest failure. The
+// record used to stop at the sixth, so each node timed the ceiling from its
+// own last failure and a round-robin run at the ceiling was admitted once per
+// node per thirty seconds. Mutation: stop writing a failure once the curve has
+// stopped climbing, and the other node admits an attempt the moment its own
+// view of the wait has run out.
+func TestTheCeilingsFailuresAreSharedToo(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
+	a, _, _ := onClock(t, store, clock)
+	b, _, _ := onClock(t, store, clock)
+	who := credential.Attempt{Source: "203.0.113.7", Subject: "sarah.chen"}
+	for range credential.CurveSteps {
+		if err := failOnce(t, a, who); err != nil {
+			clock.advance(credential.RetryAfter(err))
+			if err := failOnce(t, a, who); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// b meets the pair at the ceiling and learns when it ends.
+	_, err := b.Admit(t.Context(), who)
+	clock.advance(credential.RetryAfter(err))
+	// a's seventh failure lands the moment b's wait would have run out.
+	if err := failOnce(t, a, who); err != nil {
+		t.Fatalf("a's attempt at the end of the wait was refused: %v", err)
+	}
+	_, err = b.Admit(t.Context(), who)
+	if got := credential.RetryAfter(err); got != credential.DelayCeiling {
+		t.Errorf("b owes %s (%v) the instant after a's failure at the ceiling, "+
+			"want the whole %s from it", got, err, credential.DelayCeiling)
+	}
+}
+
+// A STORE THAT DOES NOT ANSWER IS LEFT ALONE FOR A WHILE — AND A CALLER HANGING
+// UP IS NOT ONE.
+//
+// A read now precedes every step of a climbing curve, so a store that is down
+// would put its timeout under every sign-in after a mistake. After one
+// failure to answer, the throttle asks nothing for [credential.FleetRetry] and
+// then asks again. A request that went away while its read was in flight says
+// nothing about the store, and must not silence it for the whole node.
+// Mutations: drop the pause and every attempt below reads; pause on a
+// cancelled request's read and the later ones do not.
+func TestAStoreThatDoesNotAnswerIsLeftAloneForAWhile(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	th, clock, _ := newThrottle(t, store)
+
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	store.breaks(context.Canceled)
+	if _, err := th.Admit(gone, credential.Attempt{Source: "203.0.113.7",
+		Subject: "left.early"}); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	store.breaks(errors.New("the coordination store is unreachable"))
+	for i := range 10 {
+		if _, err := th.Admit(t.Context(), credential.Attempt{Source: "203.0.113.7",
+			Subject: fmt.Sprintf("person.%d", i)}); err != nil {
+			t.Fatalf("attempt %d was refused while the store was down: %v", i, err)
+		}
+	}
+	if reads, _ := store.io(); reads != 2 {
+		t.Errorf("the store was asked %d times, want twice: once by the request "+
+			"that went away, which proves nothing about it, and once more "+
+			"before the pause", reads)
+	}
+	clock.advance(credential.FleetRetry)
+	store.breaks(nil)
+	if _, err := th.Admit(t.Context(), credential.Attempt{Source: "203.0.113.7",
+		Subject: "after.the.pause"}); err != nil {
+		t.Fatal(err)
+	}
+	if reads, _ := store.io(); reads != 3 {
+		t.Errorf("after the pause the store was asked %d times in all, want 3", reads)
 	}
 }
 

@@ -124,14 +124,32 @@ import (
 // was a way for a stranger to hold a company's provider sign-ins shut, since a
 // callback nobody started fails for free.
 //
-// # What the fleet holds, and what it does not
+// # The fleet shares the pair, at every step
 //
-// The PAIR's window is seeded from [coord.Attempts] — read once when a node
-// first meets the pair, written while its curve is still climbing, flushed by
-// its success — so a run moved by the load balancer to another node starts
-// that node's curve where the fleet left it. Nothing the fleet holds is what
-// was typed: a pair is a keyed digest, and the key never leaves the
-// deployment's keyring.
+// A load balancer puts each attempt of a guessing run on whichever node it
+// likes, so a curve each node kept to itself would be one the attacker divides
+// by the number of nodes without knowing it. So a pair's curve is the FLEET's:
+// every failure is written to [coord.Attempts], a success flushes it, and a
+// node READS the pair's record before each attempt it admits on a pair that is
+// already climbing — that is, before every step of the curve — and counts, on
+// top of what it read, only its own failures the record could not yet have
+// held. A clean pair is read when a node first meets it and not again for the
+// window while it stays clean, so an honest sign-in pays one read, and its
+// second-factor step none.
+//
+// What that costs the store is bounded by the curve itself rather than by
+// whoever is sending: a pair whose wait this node already knows is past
+// [InlineDelay] is refused with no round trip at all, so a pair is read at
+// most once per attempt the curve admits and written once per failure — and a
+// spray of fresh names costs a read and a write each, as it always did. Every
+// failure is written, the ceiling's included: the fleet's newest failure is
+// what every node measures a pair's wait from, and a record that stopped at
+// the sixth left every node timing the ceiling from its own last failure, so a
+// round-robin run was admitted once per node per thirty seconds rather than
+// once.
+//
+// Nothing the fleet holds is what was typed: a pair is a keyed digest, and the
+// key never leaves the deployment's keyring.
 //
 // # Concurrency is paid for, too
 //
@@ -165,6 +183,21 @@ const PadDeadline = 400 * time.Millisecond
 // disk. One line per window says the same thing and says it once.
 const DegradeInterval = coord.AttemptWindow
 
+// FleetRetry is how long a throttle leaves the attempts store alone after it
+// failed to answer: no read and no failure written until it has passed.
+//
+// A round trip to a store that is down costs whoever is waiting on it the
+// store's own timeout, and a read now precedes every step of every climbing
+// curve — so without a pause an outage would put that timeout under every
+// sign-in that follows a mistake. THIRTY SECONDS, the curve's own
+// [DelayCeiling]: a store that answers again is back in use within one
+// ceiling's wait, so no pair at full strength takes more than one attempt on
+// this node's count alone, and one that stays down costs one failing round
+// trip per half minute rather than one per attempt. A success's flush is
+// still attempted, because it is what lifts a person's wait on every other
+// node and it happens once per sign-in.
+const FleetRetry = DelayCeiling
+
 // The curve.
 const (
 	// DelayFloor is the wait a pair's first failure costs: one second, which is invisible to a person who mistyped and
@@ -179,9 +212,7 @@ const (
 	DelayCeiling = 30 * time.Second
 
 	// CurveSteps is how many failures take a pair's delay from nothing
-	// to [DelayCeiling]: 1, 2, 4, 8, 16, then 30 seconds. A pair's fleet window is written only while its curve is
-	// still climbing — a seventh failure changes no node's answer — so
-	// this is also the most writes one pair costs the fleet per window.
+	// to [DelayCeiling]: 1, 2, 4, 8, 16, then 30 seconds.
 	CurveSteps = 6
 
 	// InlineDelay is the longest wait served inside the request: five
@@ -279,12 +310,15 @@ type Throttle struct {
 	pairs    *keyed
 	delayed  int
 	degraded time.Time
+	// quietUntil is when the attempts store may be asked again after it
+	// failed to answer. See [FleetRetry].
+	quietUntil time.Time
 }
 
 // ThrottleDeps is what a throttle is built from.
 type ThrottleDeps struct {
-	// Attempts is the fleet's window the pair curve is seeded from. NIL IS
-	// A REAL POSTURE, not a misconfiguration: a single node with no
+	// Attempts is the fleet's window every pair's curve is shared through.
+	// NIL IS A REAL POSTURE, not a misconfiguration: a single node with no
 	// coordination backend still throttles on its own curve.
 	Attempts coord.Attempts
 
@@ -389,9 +423,10 @@ func randomKey() []byte {
 //
 // It is called before the subject resolves. The PAIR is decided on this
 // node's own count first, with no I/O, so a pair already past [InlineDelay]
-// costs this node a map lookup and the fleet nothing; then it is seeded from
-// the fleet the first time this node meets it, and the attempt waits up to
-// [InlineDelay] inside this call. A longer wait is a [*Throttled].
+// costs this node a map lookup and the fleet nothing; then, unless the pair is
+// clean and was read inside the window, the fleet's record of it is read and
+// the wait decided again on both, and the attempt waits up to [InlineDelay]
+// inside this call. A longer wait is a [*Throttled].
 //
 // # What it hands back
 //
@@ -421,15 +456,22 @@ func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
 	// ON THIS NODE'S OWN COUNT FIRST, before anything is read from
 	// anywhere: a pair this node already refuses costs the fleet nothing.
 	t.mu.Lock()
-	wait := t.waitLocked(pair, t.now())
+	now := t.now()
+	wait := t.waitLocked(pair, now)
+	var read *pendingRead
+	if wait <= InlineDelay {
+		read = t.issueRead(pair, now)
+	}
 	t.mu.Unlock()
 	if wait > InlineDelay {
 		return nil, &Throttled{RetryAfter: wait}
 	}
-	t.seed(ctx, pair)
+	if read != nil {
+		t.refresh(ctx, read)
+	}
 
 	t.mu.Lock()
-	now := t.now()
+	now = t.now()
 	wait = t.waitLocked(pair, now)
 	if wait > InlineDelay || (wait > 0 && t.delayed >= DelayedCap) {
 		t.mu.Unlock()
@@ -470,10 +512,12 @@ type Ticket struct {
 
 // Fail resolves the attempt as a credential that did not prove itself.
 //
-// Recorded against the pair, whose fleet window is written only while its
-// curve is still climbing: a failure past [CurveSteps] changes no node's
-// answer, and a write per attempt is a broker denial of service an
-// unauthenticated caller would be pricing.
+// Recorded against the pair, here and in the fleet — every failure, the
+// ceiling's included, because the fleet's newest failure is what every node
+// measures the pair's wait from; see this file's head for why that costs the
+// store no more than the curve admits. A failure the store did not
+// acknowledge stays this node's own, and is counted on top of whatever the
+// fleet says until a read could have seen it.
 func (k *Ticket) Fail(ctx context.Context) {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return
@@ -486,18 +530,20 @@ func (k *Ticket) Fail(ctx context.Context) {
 	}
 	p := t.pairs.take(k.pair)
 	p.unpend(k.at)
-	// A STEP IS A FAILURE THE CURVE HAD NOT YET REACHED ITS CEILING
-	// BEFORE — counted before this one lands, because a pair keeps only as
-	// many instants as its curve has steps and its count after a failure
-	// never reads past the last one.
-	prior, _ := p.weight(at)
-	p.fail(at, pairKeep)
-	write := t.attempts != nil && prior < CurveSteps
+	seq := p.fail(at)
+	write := t.attempts != nil && !at.Before(t.quietUntil)
 	t.mu.Unlock()
-	if write {
-		if err := t.attempts.Fail(ctx, k.pair, at); err != nil {
-			t.degrade(err)
-		}
+	if !write {
+		return
+	}
+	if err := t.attempts.Fail(ctx, k.pair, at); err != nil {
+		t.unanswered(ctx, err)
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if cur := t.pairs.get(k.pair); cur == p {
+		p.shared(seq)
 	}
 }
 
@@ -518,20 +564,25 @@ func (k *Ticket) Succeed(ctx context.Context) {
 	// failure their success has answered.
 	p := t.pairs.get(k.pair)
 	flush := t.attempts != nil &&
-		(p == nil || len(p.fails) > 0 || p.seeded.Count > 0)
+		(p == nil || len(p.fails) > 0 || p.fleet.Count > 0)
 	t.pairs.drop(k.pair)
 	t.mu.Unlock()
 	if flush {
 		if err := t.attempts.Flush(ctx, k.pair); err != nil {
-			t.degrade(err)
+			t.unanswered(ctx, err)
 		}
 	}
 }
 
 // Release resolves an attempt that never reached a verdict — a body that did
-// not parse, a store that could not be read, a request that went away — so it
+// not parse, a store that could not be read, a request that went away, a
+// password that proved itself where a second factor is still to come — so it
 // counts as nothing. A no-op once the ticket is resolved, so it is what a
 // caller defers.
+//
+// THE PAIR'S READ IS KEPT: the attempt that follows a released one is almost
+// always the same person's next step — the code after the password — and a
+// clean pair read inside the window needs no second round trip.
 func (k *Ticket) Release() {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return
@@ -593,33 +644,59 @@ func (t *Throttle) waitLocked(pair string, now time.Time) time.Duration {
 	return max(t.pairs.next(pair, now).Sub(now), 0)
 }
 
-// seed merges the fleet's window for pair into this node's, the first time
-// this node meets the pair.
+// pendingRead is one read of the fleet's record of a pair, issued and not yet
+// answered.
+type pendingRead struct {
+	pair  string
+	into  *standing
+	index uint64
+	at    time.Time
+}
+
+// issueRead is the read an attempt on pair must make before its wait is
+// decided, or nil when none is needed. Held under the lock.
 //
-// ONCE, AND FAILING OPEN. A pair already met is answered from here, and a read
-// the fleet cannot answer is recorded as seeded-with-nothing: the local curve
-// goes on applying from what this node has seen, and asking again on every
-// attempt while coordination is down would put its latency under every
-// sign-in. An unreachable store is reported once per window.
-func (t *Throttle) seed(ctx context.Context, pair string) {
-	if t.attempts == nil {
-		return
+// NONE WHERE NOTHING COULD HAVE MOVED IT: a pair this node has read inside the
+// window and found clean — nothing in the fleet's record, and no failure here
+// since — is answered from here, which is what spares an honest sign-in's
+// second step a round trip. EVERY OTHER PAIR IS READ, because another node may
+// have failed on it since this one last looked, and a curve decided on a
+// stale count is the curve divided by the number of nodes. None while the
+// store is being left alone after failing to answer ([FleetRetry]).
+func (t *Throttle) issueRead(pair string, now time.Time) *pendingRead {
+	if t.attempts == nil || now.Before(t.quietUntil) {
+		return nil
 	}
-	t.mu.Lock()
-	known := t.pairs.get(pair) != nil
-	t.mu.Unlock()
-	if known {
-		return
+	s := t.pairs.take(pair)
+	if s.clean(now) {
+		return nil
 	}
-	window, err := t.attempts.Failures(ctx, pair, t.now())
+	s.reads++
+	return &pendingRead{pair: pair, into: s, index: s.reads, at: now}
+}
+
+// refresh performs read and folds what the fleet said into the pair it was
+// issued for.
+//
+// FAILING OPEN: a store that cannot answer leaves the pair on this node's own
+// count and is left alone for [FleetRetry] — asking again on every attempt
+// while coordination is down would put its timeout under every sign-in. An
+// unreachable store is reported once per window.
+//
+// A READ THAT LOST A RACE CHANGES NOTHING. Two attempts on one pair may each
+// issue a read, and the later-issued one is the one that can have seen more:
+// an answer older than the one already held is dropped, and so is one for a
+// standing the bound has since forgotten.
+func (t *Throttle) refresh(ctx context.Context, read *pendingRead) {
+	window, err := t.attempts.Failures(ctx, read.pair, read.at)
 	if err != nil {
-		t.degrade(err)
-		window = coord.Attempted{}
+		t.unanswered(ctx, err)
+		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if p := t.pairs.take(pair); !p.fromFleet {
-		p.fromFleet, p.seeded = true, window
+	if cur := t.pairs.get(read.pair); cur == read.into {
+		cur.learn(window, read.index, read.at)
 	}
 }
 
@@ -672,10 +749,26 @@ func sourceKeyOf(source string) string {
 	return addr.String()
 }
 
-// degrade reports an unreachable attempts store, at most once per window.
+// unanswered is an attempts store call that failed: the store's fault unless
+// the request it was made for went away first.
+//
+// A CALLER HANGING UP IS NOT AN OUTAGE. The call runs on the request's
+// context, so a client that disconnects mid-read cancels it — and read as the
+// store failing, one closed tab would leave the whole node deciding every
+// curve on its own count for [FleetRetry].
+func (t *Throttle) unanswered(ctx context.Context, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+	t.degrade(err)
+}
+
+// degrade leaves an unreachable attempts store alone for [FleetRetry], and
+// reports it at most once per window.
 func (t *Throttle) degrade(err error) {
 	now := t.now()
 	t.mu.Lock()
+	t.quietUntil = now.Add(FleetRetry)
 	quiet := now.Sub(t.degraded) < DegradeInterval
 	if !quiet {
 		t.degraded = now
@@ -765,7 +858,7 @@ func (k *keyed) drop(key string) {
 	}
 }
 
-// tidy forgets key once nothing it holds can delay anybody.
+// tidy forgets key once nothing it holds can delay anybody or spare a read.
 func (k *keyed) tidy(key string, s *standing, now time.Time) {
 	if s.empty(now) {
 		k.drop(key)
@@ -790,42 +883,68 @@ func (k *keyed) next(key string, now time.Time) time.Time {
 // len is how many keys this holds.
 func (k *keyed) len() int { return k.order.Len() }
 
-// standing is what one key has against it.
+// standing is what one pair has against it.
 type standing struct {
 	key string
 
 	// fails are this node's failures inside the window, oldest first and
-	// the newest at most keep of them.
-	fails []time.Time
+	// the newest at most [pairKeep] of them.
+	fails []failure
 
 	// pending are the start instants of attempts admitted and not yet
 	// resolved, each counted as a failure until it is.
 	pending []time.Time
 
-	// seeded is the fleet's window as it stood when this node first met
-	// the pair, and fromFleet whether that read has happened.
-	seeded    coord.Attempted
-	fromFleet bool
+	// fleet is the fleet's record of the pair as the newest read to land
+	// found it, readIndex which read that was (zero: none has landed),
+	// and readAt when it was issued. reads is how many have been issued.
+	fleet     coord.Attempted
+	readIndex uint64
+	readAt    time.Time
+	reads     uint64
+
+	// seq numbers this node's failures, so a write acknowledged after the
+	// lock was let go can find the one it recorded.
+	seq uint64
 }
 
-// weight is how many failures count against this key at now, pending
+// failure is one failed attempt on this node.
+type failure struct {
+	at  time.Time
+	seq uint64
+
+	// sharedFrom is the index of the first read that could hold this
+	// failure — the one issued after the store acknowledged it — or zero
+	// while it is unacknowledged. A read issued before the acknowledgement
+	// may or may not have seen it, so it is counted on top of that read's
+	// answer: the strict direction, one step at most, and only in a race.
+	sharedFrom uint64
+}
+
+// weight is how many failures count against this pair at now, pending
 // attempts included, and the latest instant among them.
 //
-// THE FLEET'S SEED AND THIS NODE'S OWN ARE NEVER ADDED: this node's failures
-// were written to the fleet before a later seed could read them, so the larger
-// of the two is the count and their sum would count one failure twice.
+// THE FLEET'S RECORD PLUS THIS NODE'S FAILURES IT CANNOT HOLD YET, never the
+// larger of the two: the record is every node's failures, this node's that it
+// had acknowledged before the read was issued among them, so those are
+// counted once through it; every other failure here — made after the read, or
+// never acknowledged — is on top of it. Taking the larger held a run moved to
+// this node at the count it arrived with until this node's own failures
+// overtook it.
 func (s *standing) weight(now time.Time) (int, time.Time) {
 	cut := now.Add(-coord.AttemptWindow)
 	s.prune(cut)
-	count := len(s.fails)
+	var count int
 	var last time.Time
-	if count > 0 {
-		last = s.fails[count-1]
+	if s.readIndex > 0 && s.fleet.Count > 0 && s.fleet.Last.After(cut) {
+		count, last = s.fleet.Count, s.fleet.Last
 	}
-	if s.seeded.Count > 0 && s.seeded.Last.After(cut) {
-		count = max(count, s.seeded.Count)
-		if s.seeded.Last.After(last) {
-			last = s.seeded.Last
+	for _, f := range s.fails {
+		if !s.holds(f) {
+			count++
+		}
+		if f.at.After(last) {
+			last = f.at
 		}
 	}
 	for _, at := range s.pending {
@@ -837,25 +956,57 @@ func (s *standing) weight(now time.Time) (int, time.Time) {
 	return count, last
 }
 
-// prune drops the failures that have aged out of the window.
-func (s *standing) prune(cut time.Time) {
+// holds reports whether the fleet's record as last read already counts f.
+func (s *standing) holds(f failure) bool {
+	return f.sharedFrom != 0 && s.readIndex >= f.sharedFrom
+}
+
+// clean reports a pair read inside the window and found with nothing against
+// it, fleet or local: one whose read still answers for it.
+func (s *standing) clean(now time.Time) bool {
+	cut := now.Add(-coord.AttemptWindow)
+	s.prune(cut)
+	return s.readIndex > 0 && s.readAt.After(cut) && len(s.fails) == 0 &&
+		(s.fleet.Count == 0 || !s.fleet.Last.After(cut))
+}
+
+// learn folds a read that landed into the pair: the newest answer wins, and a
+// local failure that answer already counts is forgotten here, since the
+// record holds it and its instant.
+func (s *standing) learn(window coord.Attempted, index uint64, at time.Time) {
+	if index <= s.readIndex {
+		return
+	}
+	s.fleet, s.readIndex, s.readAt = window, index, at
 	kept := s.fails[:0]
-	for _, at := range s.fails {
-		if at.After(cut) {
-			kept = append(kept, at)
+	for _, f := range s.fails {
+		if !s.holds(f) {
+			kept = append(kept, f)
 		}
 	}
 	clear(s.fails[len(kept):])
 	s.fails = kept
 }
 
-// empty reports a standing that can delay nobody: no failure in the window,
-// nothing pending, and nothing the fleet said that is still in it.
+// prune drops the failures that have aged out of the window.
+func (s *standing) prune(cut time.Time) {
+	kept := s.fails[:0]
+	for _, f := range s.fails {
+		if f.at.After(cut) {
+			kept = append(kept, f)
+		}
+	}
+	clear(s.fails[len(kept):])
+	s.fails = kept
+}
+
+// empty reports a standing that can delay nobody and spare no read: no
+// failure in the window, nothing pending, and no read still answering for it.
 func (s *standing) empty(now time.Time) bool {
 	cut := now.Add(-coord.AttemptWindow)
 	s.prune(cut)
 	return len(s.fails) == 0 && len(s.pending) == 0 &&
-		(s.seeded.Count == 0 || !s.seeded.Last.After(cut))
+		(s.readIndex == 0 || !s.readAt.After(cut))
 }
 
 // pend counts an admitted attempt that starts at.
@@ -871,11 +1022,25 @@ func (s *standing) unpend(at time.Time) {
 	}
 }
 
-// fail records a failure, keeping the newest keep of them.
-func (s *standing) fail(at time.Time, keep int) {
-	s.fails = append(s.fails, at)
-	if over := len(s.fails) - keep; over > 0 {
+// fail records a failure, keeping the newest [pairKeep], and answers its
+// number.
+func (s *standing) fail(at time.Time) uint64 {
+	s.seq++
+	s.fails = append(s.fails, failure{at: at, seq: s.seq})
+	if over := len(s.fails) - pairKeep; over > 0 {
 		s.fails = append(s.fails[:0], s.fails[over:]...)
+	}
+	return s.seq
+}
+
+// shared marks failure seq acknowledged by the store: every read issued from
+// now on holds it.
+func (s *standing) shared(seq uint64) {
+	for i := range s.fails {
+		if s.fails[i].seq == seq {
+			s.fails[i].sharedFrom = s.reads + 1
+			return
+		}
 	}
 }
 

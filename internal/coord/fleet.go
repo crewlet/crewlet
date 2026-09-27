@@ -54,8 +54,8 @@ import (
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
 // may still have, the [PositionRegister] and its neighbours the state log
 // trims against, the [SetupClaims] that spend a setup callback exactly once,
-// and the [Attempts] the sign-in throttle seeds its curve from. The list above is the migration,
-// not the estate.
+// and the [Attempts] the sign-in throttle shares its curves through. The list
+// above is the migration, not the estate.
 //
 // # Every contract here fails in a stated direction
 //
@@ -323,11 +323,13 @@ type SetupClaims interface {
 //
 // A guessing run reaches whichever ingress node a load balancer picks, so a
 // per-process counter is one the attacker divides by the number of nodes
-// without knowing it. The throttle keeps its curve per node and SEEDS it from
-// here — reading a (subject, source) pair's window once when the node first
-// meets it, and writing a failure only while the curve is still climbing — so
-// a guessing run moved to another node starts that node's curve where the
-// fleet left it, and the store is never on the path of every attempt.
+// without knowing it. The throttle shares each (subject, source) pair's curve
+// through here — writing every failure, and reading a climbing pair's window
+// before each attempt its curve admits — so every step of a run is decided on
+// what the whole fleet has seen, whichever node it lands on. The store is
+// never on the path of every attempt: an attempt a node already knows is owed
+// a long wait is refused with no round trip, so what reaches here is bounded
+// by what the curve lets through.
 //
 // # Both bounds are the bucket's
 //
@@ -350,9 +352,9 @@ type SetupClaims interface {
 type Attempts interface {
 	// Fail records one failed authentication against subject at now.
 	//
-	// ONE WRITE AND NO ANSWER. The throttle decides on its own curve and
-	// reads the window only to seed it, so a count read back here would
-	// be a second round trip nobody reads.
+	// ONE WRITE AND NO ANSWER. The throttle reads the window before the
+	// next attempt it admits, not after this one, so a count read back
+	// here would be a second round trip nobody reads.
 	//
 	// An empty subject is an error for [Claims.Claim]'s reason: a count
 	// nobody can be throttled by reads exactly like a caller with a clean
@@ -372,10 +374,10 @@ type Attempts interface {
 	// NOT ON THE PATH OF EVERY REQUEST. This is a round trip, and on the
 	// KV backend it is an ephemeral consumer over the subject's own record
 	// (internal/coord/kv's package doc says what that costs on a clustered
-	// bucket). The throttle reads a pair once, when a node first meets it,
-	// and a source it has already refused locally never reaches here at
-	// all — the trade [Cooldowns.Since] refuses for the same reason one
-	// layer down.
+	// bucket). The throttle reads a pair before an attempt its curve
+	// admits — a clean pair once a window — and a pair it has already
+	// refused locally never reaches here at all, the trade
+	// [Cooldowns.Since] refuses for the same reason one layer down.
 	Failures(ctx context.Context, subject string, now time.Time) (Attempted, error)
 
 	// Flush forgets every attempt against subject — what a SUCCESSFUL
