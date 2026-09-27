@@ -43,6 +43,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T, ages FleetAges) coord.Fl
 		{"budgets", budgetCases},
 		{"plane", planeCases},
 		{"payload", payloadCases},
+		{"payload_race", payloadRaceCases},
 		{"channels", channelCases},
 		{"follows", followCases},
 		{"fires", fireCases},
@@ -2465,6 +2466,87 @@ var payloadCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE BODY COMES BACK AS IT WENT IN. It is a sealed envelope, and what
+	// a peer adopts into its own history is what it read here, so a store
+	// that re-spelled it would hand every node a different copy of one
+	// revision. The real backend embeds it inside a JSON record, where
+	// encoding/json's default is to escape `<`, `>` and `&` — which a
+	// ciphertext never holds and a document may — so the case carries all
+	// three beside an envelope-shaped value.
+	name: "a sealed body round-trips byte for byte",
+	fn: func(h *fleetHarness) {
+		body := []byte(`{"__encrypted__":"enc:v1:2026-01:q8+/Zm9vYmFy==","note":"a<b && c>d"}`)
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: body, At: h.now()}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, found, err := h.f.Payload(h.ctx, "rev-1")
+		if err != nil || !found {
+			h.t.Fatalf("Payload: found=%v err=%v", found, err)
+		}
+		if string(got) != string(body) {
+			h.t.Errorf("payload = %s, want the bytes activated, %s", got, body)
+		}
+	},
+}, {
+	// ONE FORM ON BOTH BACKENDS: the broker's record compacts what it
+	// embeds, so the twin must too, or a case certified on the twin
+	// certifies bytes the broker never hands back.
+	name: "a body is served in its compact form",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("  {\n  \"name\" : \"Acme\",\n  \"agents\": { }\n}\n"),
+			At: h.now()}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, found, err := h.f.Payload(h.ctx, "rev-1")
+		if err != nil || !found {
+			h.t.Fatalf("Payload: found=%v err=%v", found, err)
+		}
+		if want := `{"name":"Acme","agents":{}}`; string(got) != want {
+			h.t.Errorf("payload = %q, want %q", got, want)
+		}
+	},
+}, {
+	// A BODY NO NODE COULD DECODE IS NOT PUBLISHED. It is a company
+	// document, sealed or not, so anything but a JSON object is a caller's
+	// mistake — and a pointer naming it is a fleet that converges on
+	// nothing. Refused before anything is written: the fleet stays where
+	// it was.
+	name: "a payload that is not a document is refused and moves nothing",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-good", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		for name, payload := range map[string][]byte{
+			"nothing":     nil,
+			"empty":       []byte(""),
+			"not json":    []byte("name: Acme"),
+			"truncated":   []byte(`{"name":`),
+			"a string":    []byte(`"enc:v1:k:abc"`),
+			"an array":    []byte(`[1,2]`),
+			"json null":   []byte("null"),
+			"blank space": []byte("   "),
+		} {
+			_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+				RevisionID: "rev-" + name, Payload: payload, At: h.now()})
+			if !errors.Is(err, coord.ErrPayloadNotDocument) {
+				h.t.Errorf("%s: Activate = %v, want ErrPayloadNotDocument", name, err)
+			}
+		}
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found || target.RevisionID != "rev-good" {
+			h.t.Fatalf("a refused payload moved the pointer: %+v found=%v err=%v",
+				target, found, err)
+		}
+		if got, found, err := h.f.Payload(h.ctx, "rev-good"); err != nil || !found ||
+			string(got) != `{"v":1}` {
+			h.t.Errorf("a refused payload disturbed the body: %q found=%v err=%v",
+				got, found, err)
+		}
+	},
+}, {
 	// A caller mutating what it read must not reach the store: the body is
 	// handed to a decoder that unseals in place on some paths.
 	name: "a caller mutating a payload cannot reach the store",
@@ -2479,6 +2561,73 @@ var payloadCases = []fleetCase{{
 		again, _, _ := h.f.Payload(h.ctx, "rev-1")
 		if string(again) != `{"v":1}` {
 			h.t.Errorf("the store took a caller's mutation: %q", again)
+		}
+	},
+}}
+
+// payloadRaceCases hold the body and the pointer to ONE decision under
+// concurrent writers.
+var payloadRaceCases = []fleetCase{{
+	// THE BODY AND THE POINTER CANNOT COME APART. They were two keys written
+	// in two steps — the body, then the flip — so two nodes activating at
+	// once could each write a body, and the one whose flip landed FIRST was
+	// then pointed at by a pointer whose body the other had overwritten.
+	// Every peer read "no such revision" for the epoch the fleet was on
+	// until somebody activated again. The boot path does exactly this:
+	// two nodes starting together each publish the revision they hold,
+	// unconditionally. And an edit's compare-and-set only decided the
+	// pointer — the loser's body had already landed.
+	name: "racing activations leave the pointer's own body readable",
+	fn: func(h *fleetHarness) {
+		const writers = 8
+		for round := range 6 {
+			var wg sync.WaitGroup
+			for w := range writers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					id := fmt.Sprintf("rev-%d-%d", round, w)
+					req := coord.ActivationRequest{
+						RevisionID: id, At: h.now(),
+						Payload: []byte(fmt.Sprintf(`{"revision":%q}`, id)),
+					}
+					// Half race unconditionally, as two booting nodes do;
+					// half as editors naming what they read, where all but
+					// one lose the compare-and-set.
+					if w%2 == 1 && round > 0 {
+						req.Expect = fmt.Sprintf("rev-%d-0", round-1)
+					}
+					_, err := h.f.Activate(h.ctx, req)
+					if err != nil && !errors.Is(err, coord.ErrActivationRaced) {
+						h.t.Errorf("Activate(%s): %v", id, err)
+					}
+				}()
+			}
+			wg.Wait()
+			target, found, err := h.f.Target(h.ctx)
+			if err != nil || !found {
+				h.t.Fatalf("round %d: Target: %v found=%v", round, err, found)
+			}
+			body, found, err := h.f.Payload(h.ctx, target.RevisionID)
+			if err != nil {
+				h.t.Fatalf("round %d: Payload: %v", round, err)
+			}
+			if !found {
+				h.t.Fatalf("round %d: the fleet points at %s and its body is "+
+					"nowhere — every peer would fail to converge", round,
+					target.RevisionID)
+			}
+			if want := fmt.Sprintf(`{"revision":%q}`, target.RevisionID); string(body) != want {
+				h.t.Fatalf("round %d: the body of %s is %s", round, target.RevisionID, body)
+			}
+			// The next round's editors expect the round's first writer;
+			// point the fleet there so half of them can win.
+			if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+				RevisionID: fmt.Sprintf("rev-%d-0", round), At: h.now(),
+				Payload: []byte(fmt.Sprintf(`{"revision":"rev-%d-0"}`, round)),
+			}); err != nil {
+				h.t.Fatalf("round %d: re-point: %v", round, err)
+			}
 		}
 	},
 }}

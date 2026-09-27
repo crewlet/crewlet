@@ -78,7 +78,7 @@ roles:
 		t.Fatalf("roster with no activation = %v, want ErrNoActiveRevision", err)
 	}
 
-	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: "rev-1", At: time.Now()})
+	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now()})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}

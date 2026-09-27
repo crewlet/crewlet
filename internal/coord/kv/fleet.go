@@ -503,13 +503,18 @@ const (
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
 	mailboxesSuffix    = "_mailboxes"
-	activationKey      = "activation"
-	// payloadKey holds the CURRENT revision's sealed body, in the same
-	// bucket as the pointer and for the same reason: neither may expire,
-	// and a payload in a bucket the pointer is not in could age out from
-	// under the epoch it belongs to.
-	payloadKey      = "revision_payload"
-	fleetCASRetries = 16
+	// activationKey holds the pointer AND the current revision's sealed
+	// body, in one record — see [activationRecord].
+	activationKey = "activation"
+	// legacyPayloadKey is where a build before the body moved into the
+	// pointer kept it, in [legacyPayloadRecord]'s shape. Nothing writes it
+	// any more. It is READ, and only for a pointer that carries no body of
+	// its own: a bucket such a build wrote is the state a node upgraded in
+	// place finds, and its pointer is not rewritten until somebody next
+	// activates — a node that could not read the body beside it would
+	// refuse to join the fleet it had just been part of.
+	legacyPayloadKey = "revision_payload"
+	fleetCASRetries  = 16
 )
 
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
@@ -1626,6 +1631,29 @@ type activationRecord struct {
 	CreatedBy     string `json:"created_by,omitempty"`
 	CreatedByKind string `json:"created_by_kind,omitempty"`
 	OperatorID    string `json:"operator_id,omitempty"`
+
+	// Payload is the revision's sealed body, IN the pointer so the two are
+	// one write (see [coord.Plane.Activate] for the race two writes lost),
+	// and as the JSON object it is rather than as bytes, which the record
+	// would encode as base64 over an envelope whose ciphertext is base64
+	// already. ADDITIVE in the one direction a record has to be: a build
+	// that predates it reads the pointer and ignores the field. Absent on
+	// a pointer such a build wrote, whose body is under [legacyPayloadKey].
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// encodeActivation is the record's wire form, with the payload embedded
+// VERBATIM: encoding/json HTML-escapes what it embeds unless told not to, and
+// a body that came back with `<` spelled `\u003c` would be a different body
+// from the one [coord.CanonicalPayload] promised.
+func encodeActivation(record activationRecord) ([]byte, error) {
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(record); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
 // Activate publishes a new target revision.
@@ -1637,38 +1665,28 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		return coord.Activation{}, errors.New("coord/kv: an activation cannot " +
 			"expect a revision and no revision at once")
 	}
-	// THE EXPECTATION IS RESOLVED FIRST, before anything is written: a
-	// caller that has already lost the race must not leave a payload
-	// behind for a revision the fleet will never point at.
+	payload, err := coord.CanonicalPayload(req.Payload)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/kv: %w", err)
+	}
 	seq, err := f.expectedSeq(ctx, req)
 	if err != nil {
 		return coord.Activation{}, err
 	}
-	raw, err := json.Marshal(activationRecord{
+	raw, err := encodeActivation(activationRecord{
 		RevisionID: req.RevisionID, At: req.At.UTC(), Summary: req.Summary,
 		CreatedBy: req.CreatedBy, CreatedByKind: req.CreatedByKind,
-		OperatorID: req.OperatorID,
+		OperatorID: req.OperatorID, Payload: payload,
 	})
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: encode the activation: %w", err)
 	}
-	// THE PAYLOAD FIRST. A crash here leaves a body nothing points at,
-	// which the next activation replaces; the other order points the fleet
-	// at bytes no node can read.
-	body, err := json.Marshal(payloadRecord{RevisionID: req.RevisionID, Payload: req.Payload})
-	if err != nil {
-		return coord.Activation{}, fmt.Errorf("coord/kv: encode the revision payload: %w", err)
-	}
-	if _, put := f.config.Put(ctx, payloadKey, body); put != nil {
-		return coord.Activation{}, unavailable("publish the revision payload", put)
-	}
-	// ONE WRITE for the flip. The store returns the revision it assigned,
-	// and that revision IS the epoch — so the append and the flip cannot
-	// come apart, and two nodes activating at the same instant are handed
-	// two epochs by the store rather than racing over a counter this engine
-	// keeps. Writing the payload into the same bucket moves the sequence
-	// too, which is harmless: the epoch has to be monotonic and unique,
-	// never dense.
+	// ONE WRITE, the body inside the flip. The store returns the revision
+	// it assigned, and that revision IS the epoch — so the append and the
+	// flip cannot come apart, two nodes activating at the same instant are
+	// handed two epochs by the store rather than racing over a counter
+	// this engine keeps, and the pointer can never name a body another
+	// writer replaced (see [coord.Plane.Activate]).
 	//
 	// UPDATE RATHER THAN PUT when the caller said what it was replacing.
 	// Update carries the sequence read above, so anything that wrote in
@@ -1785,36 +1803,63 @@ func isWrongLastSequence(err error) bool {
 		api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant
 }
 
-// payloadRecord is the current revision's sealed body on the wire. The
-// revision id travels WITH it so a reader can tell "the payload for the epoch
-// I am converging on" from "a payload a newer activation has already
-// replaced" — the two are one key, and only the id separates them.
-type payloadRecord struct {
+// legacyPayloadRecord is the body as a build before [activationRecord.Payload]
+// wrote it, under [legacyPayloadKey]: bytes, which encoding/json spells as a
+// base64 string. The revision id travels with it because it was a key of its
+// own that any activation overwrote.
+type legacyPayloadRecord struct {
 	RevisionID string `json:"revision_id"`
 	Payload    []byte `json:"payload"`
 }
 
 // Payload returns the current revision's sealed payload.
-func (f *FleetStore) Payload(ctx context.Context, revisionID string) ([]byte, bool, error) {
+//
+// A DIFFERENT REVISION'S is reported as absent rather than as the wrong body:
+// a node converging on epoch N that applied whatever happened to be there
+// would converge on a revision the fleet is not pointed at, and say it
+// succeeded. With the body inside the pointer that is a pointer that moved
+// between this node's Target and this read.
+func (f *FleetStore) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
 	if revisionID == "" {
 		return nil, false, errors.New("coord/kv: a payload read needs a revision id")
 	}
-	entry, err := f.config.Get(ctx, payloadKey)
+	entry, err := f.config.Get(ctx, activationKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, unavailable("read the activation pointer", err)
+	}
+	var record activationRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return nil, false, unavailable("decode the activation pointer", err)
+	}
+	if record.RevisionID != revisionID {
+		return nil, false, nil
+	}
+	if len(record.Payload) > 0 {
+		return record.Payload, true, nil
+	}
+	return f.legacyPayload(ctx, revisionID)
+}
+
+// legacyPayload reads the body a pointer with none of its own was written
+// beside — see [legacyPayloadKey]. Its revision id is checked for the reason
+// it always was: that key was overwritten by every activation, the losers of
+// a race included, so it may hold a body the pointer does not name.
+func (f *FleetStore) legacyPayload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
+	entry, err := f.config.Get(ctx, legacyPayloadKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, unavailable("read the revision payload", err)
 	}
-	var record payloadRecord
+	var record legacyPayloadRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		return nil, false, unavailable("decode the revision payload", err)
 	}
 	if record.RevisionID != revisionID {
-		// A newer activation has replaced it. Reported as absent rather
-		// than as the wrong body: a node that applied whatever happened
-		// to be there would converge on a revision the fleet is not
-		// pointed at, and say it succeeded.
 		return nil, false, nil
 	}
 	return record.Payload, true, nil

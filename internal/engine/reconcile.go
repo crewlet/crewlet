@@ -512,7 +512,7 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		// written to the database of whichever node served the write,
 		// and every other node meets the revision for the first time
 		// here. Fetching it from the coordination store — where
-		// Activate puts it before it moves the pointer — is what makes
+		// Activate writes it inside the pointer's own record — is what makes
 		// a live config change reach a fleet at all. Before this, a
 		// peer read nothing and reported "no such revision" once per
 		// tick for the life of the deployment.

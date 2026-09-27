@@ -1172,7 +1172,7 @@ func declaredFields(t *testing.T, source, iface string) map[string]bool {
 // fleet view has to survive one of its columns being unreadable.
 type brokenPlane struct{}
 
-func (brokenPlane) Payload(context.Context, string) ([]byte, bool, error) {
+func (brokenPlane) Payload(context.Context, string) (json.RawMessage, bool, error) {
 	return nil, false, errUnreadablePlane
 }
 

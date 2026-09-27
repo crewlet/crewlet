@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -436,6 +437,123 @@ func TestFleetContract(t *testing.T) {
 		}
 		return store
 	})
+}
+
+// payloadFleet opens a fleet store whose config bucket a case can reach.
+func payloadFleet(t *testing.T) *FleetStore {
+	t.Helper()
+	store, err := OpenFleet(t.Context(), embeddedNATS(t), FleetConfig{
+		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		SetupOnceRetention: time.Minute, AttemptWindow: time.Minute,
+		LedgerRetention: time.Minute, FireRetention: time.Minute,
+		FollowRetention: time.Minute,
+		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
+		BucketPrefix: fmt.Sprintf("f%d", bucketSeq.Add(1)),
+	})
+	if err != nil {
+		t.Fatalf("OpenFleet: %v", err)
+	}
+	return store
+}
+
+// THE BODY RIDES THE POINTER AS THE JSON IT IS.
+//
+// It was bytes on a key of its own, which encoding/json spells as a base64
+// string — over an envelope whose ciphertext is base64 already, so every body
+// crossed the wire encoded twice and a third larger than it was. The contract
+// suite cannot see the record, only what Payload hands back, so the WIRE SHAPE
+// is asserted here: the pointer's own record carries the body as an object,
+// and nothing is written to the key the body used to live under.
+//
+// Mutation: carry the payload as []byte in activationRecord and the field is a
+// string; write it beside the pointer again and the legacy key exists.
+func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
+	t.Parallel()
+	store := payloadFleet(t)
+	body := `{"__encrypted__":"enc:v1:k1:q8+/Zm9vYmFy=="}`
+	if _, err := store.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte(body), At: time.Now()}); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	entry, err := store.config.Get(t.Context(), activationKey)
+	if err != nil {
+		t.Fatalf("read the pointer: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(entry.Value(), &fields); err != nil {
+		t.Fatalf("decode the pointer: %v", err)
+	}
+	if got := string(fields["payload"]); got != body {
+		t.Errorf("the pointer's payload field is %s, want the object %s", got, body)
+	}
+	if _, err := store.config.Get(t.Context(), legacyPayloadKey); !errors.Is(err, jetstream.ErrKeyNotFound) {
+		t.Errorf("a body was written beside the pointer as well (err=%v)", err)
+	}
+}
+
+// A POINTER AN OLDER BUILD WROTE STILL NAMES A BODY THIS ONE CAN READ.
+//
+// A bucket written before the body moved into the pointer holds a pointer with
+// no payload and the body under its own key, as a base64 string. That is the
+// state a node upgraded in place wakes up to, and the pointer is not rewritten
+// until somebody next activates — so a build that could not read the body
+// beside it would refuse to rejoin the fleet it had just been part of. And the
+// revision id on that key is still checked, because every activation, the
+// losers of a race included, overwrote it.
+//
+// Mutation: drop the legacy read and the first half answers "not found".
+func TestAnOlderPointersBodyIsReadFromBesideIt(t *testing.T) {
+	t.Parallel()
+	store := payloadFleet(t)
+	ctx := t.Context()
+	body := []byte(`{"__encrypted__":"enc:v1:k1:b2xkZXI="}`)
+	plant := func(key string, v any) {
+		t.Helper()
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.config.Put(ctx, key, raw); err != nil {
+			t.Fatalf("plant %s: %v", key, err)
+		}
+	}
+	// Exactly the two records such a build wrote: the pointer with no
+	// payload field, and the body as bytes.
+	plant(activationKey, map[string]any{"revision_id": "rev-old", "at": time.Now().UTC()})
+	plant(legacyPayloadKey, legacyPayloadRecord{RevisionID: "rev-old", Payload: body})
+	raw, _ := store.config.Get(ctx, legacyPayloadKey)
+	if !strings.Contains(string(raw.Value()), `"payload":"`) {
+		t.Fatalf("the planted legacy record is not the base64 form: %s", raw.Value())
+	}
+
+	if target, found, err := store.Target(ctx); err != nil || !found || target.RevisionID != "rev-old" {
+		t.Fatalf("Target over an older pointer = %+v found=%v err=%v", target, found, err)
+	}
+	got, found, err := store.Payload(ctx, "rev-old")
+	if err != nil || !found {
+		t.Fatalf("the older pointer's body is unreadable: found=%v err=%v", found, err)
+	}
+	if string(got) != string(body) {
+		t.Errorf("payload = %s, want %s", got, body)
+	}
+
+	// THE CONTROL: the same key holding another revision's body is absent,
+	// not served — which is the race the legacy shape could lose.
+	plant(legacyPayloadKey, legacyPayloadRecord{RevisionID: "rev-racer", Payload: []byte(`{"v":2}`)})
+	if got, found, err := store.Payload(ctx, "rev-old"); err != nil || found {
+		t.Errorf("another revision's body was served for rev-old: %s found=%v err=%v",
+			got, found, err)
+	}
+
+	// And the next activation replaces the older shape outright: its body
+	// is the pointer's own, whatever is still under the legacy key.
+	if _, err := store.Activate(ctx, coord.ActivationRequest{
+		RevisionID: "rev-new", Payload: []byte(`{"v":3}`), At: time.Now()}); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if got, found, err := store.Payload(ctx, "rev-new"); err != nil || !found || string(got) != `{"v":3}` {
+		t.Errorf("rev-new = %s found=%v err=%v", got, found, err)
+	}
 }
 
 // A CORRUPT CREDENTIAL RECORD RAISES RATHER THAN VANISHING.

@@ -352,6 +352,17 @@ Two consequences worth stating plainly:
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
 
+**Edit the company once the rollout has finished**, too. A revision reaches
+every node through the activation pointer, which carries the sealed document
+inside its own record. A build from before that change reads the document from
+a key beside the pointer, so it cannot read one a newer node activated. It
+records the apply as an error, and once an upgraded peer has applied the epoch
+it sheds its work to that peer and, three attempts later, fails `/ready` until
+it is upgraded (visible on the fleet screen). Restarting nodes onto the new
+build activates nothing by itself, so a rollout that leaves the company alone
+never meets this. See
+[Control Plane § The design](../concepts/control-plane.md#the-design).
+
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two
 builds that disagree about what a node must hold.

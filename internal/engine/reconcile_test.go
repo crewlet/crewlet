@@ -547,16 +547,32 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	}
 }
 
+// bodiless is a plane whose pointer names a revision it holds no body for.
+//
+// The store cannot be made to produce one — the body is written inside the
+// pointer's own record — so the case needs a plane that says so: it is what a
+// node sees when the pointer moved between its read of the target and its read
+// of the body, and what a pointer an older build wrote beside a body a racing
+// writer had replaced looks like.
+type bodiless struct{ coord.Plane }
+
+func (bodiless) Payload(context.Context, string) (json.RawMessage, bool, error) {
+	return nil, false, nil
+}
+
 func TestAPointerNamingAMissingRevisionIsReported(t *testing.T) {
 	t.Parallel()
 	// A fleet where every node quietly ignores an unreadable pointer
 	// converges on nothing while reporting convergence.
-	p := newPlane(t)
-	// No payload with it either: a pointer whose revision is in neither
-	// store is exactly the ghost this reports.
+	e := newEngine(t, engine.Options{})
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
+		o.Fleet = bodiless{o.Fleet}
+	})
+	// A revision in neither store: the node's database has never seen it,
+	// and the plane has no body for it.
 	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "00000000-0000-0000-0000-000000000000",
-		Summary:    "ghost", At: pinnedNow}); err != nil {
+		Summary:    "ghost", Payload: []byte("{}"), At: pinnedNow}); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.recon.Tick(t.Context()); err == nil {

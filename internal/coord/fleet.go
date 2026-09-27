@@ -1,9 +1,12 @@
 package coord
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -657,9 +660,14 @@ type ActivationRequest struct {
 	CreatedByKind string
 	OperatorID    string
 
-	// Payload is the SEALED body, travelling with the pointer so a peer
-	// can apply the revision it names.
-	Payload []byte
+	// Payload is the SEALED body, travelling IN the pointer's own write so
+	// a peer can apply the revision it names. Required, and a JSON object —
+	// a company document, which the caller has sealed into an envelope
+	// that is one ([CanonicalPayload]). It is carried as JSON rather than
+	// as bytes because it IS JSON: as bytes, the record encoded it as
+	// base64, and the envelope's ciphertext was base64 already, so every
+	// body went on the wire encoded twice and a third larger for nothing.
+	Payload json.RawMessage
 
 	At time.Time
 
@@ -703,6 +711,35 @@ type ActivationRequest struct {
 	ExpectAbsent bool
 }
 
+// ErrPayloadNotDocument reports an activation whose payload is not a JSON
+// object. Both backends refuse it with this, before anything is written,
+// because a pointer whose body no node can decode is a fleet that converges on
+// nothing — and the body is a company document, sealed or not, so anything
+// else is a caller's mistake rather than a shape to store.
+var ErrPayloadNotDocument = errors.New("coord: an activation's payload must be a JSON object")
+
+// CanonicalPayload is the form a backend stores and serves a payload in: the
+// document COMPACTED, and otherwise byte for byte what the caller handed in —
+// no HTML escaping, no re-ordering.
+//
+// ONE FORM FOR BOTH BACKENDS, because the real one encodes the payload inside
+// a JSON record, and encoding/json compacts whatever it embeds: a twin that
+// kept the caller's whitespace would hand back bytes the broker never would,
+// and a case certified on the twin would be certifying a different store. A
+// sealed envelope is compact already, so for the one producer in production
+// this is the identity.
+func CanonicalPayload(payload json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+		return nil, fmt.Errorf("%w (got %d bytes)", ErrPayloadNotDocument, len(payload))
+	}
+	var out bytes.Buffer
+	if err := json.Compact(&out, trimmed); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPayloadNotDocument, err)
+	}
+	return out.Bytes(), nil
+}
+
 // ErrActivationRaced reports an activation whose Expect no longer matches.
 //
 // Its own sentinel because the caller's answer is specific: re-read the
@@ -713,8 +750,9 @@ var ErrActivationRaced = errors.New("coord: the activation moved under this writ
 
 // Plane is the fleet's config activation pointer and per-node apply status.
 type Plane interface {
-	// Activate publishes a revision's PAYLOAD and then points the fleet at
-	// it, returning the activation with the epoch the store assigned.
+	// Activate points the fleet at a revision and publishes its PAYLOAD in
+	// the same write, returning the activation with the epoch the store
+	// assigned.
 	//
 	// THE PAYLOAD TRAVELS WITH THE POINTER, and it has to: a peer applies
 	// the revision the pointer names by reading it, and while the payload
@@ -724,21 +762,32 @@ type Plane interface {
 	// life of the deployment, reporting the failure as "no such revision"
 	// once per reconcile tick.
 	//
-	// TWO WRITES, in this order, and the order is the invariant: the
-	// payload first, then the pointer. A crash between them leaves a
-	// payload nothing points at, which the next activation replaces. The
-	// other order points the fleet at bytes no node can read — the exact
-	// thing the seeding path's own comment says must never happen.
+	// ONE WRITE, pointer and payload together, and that is the invariant.
+	// They were two keys written in two steps — the payload, then the
+	// pointer — and the order was argued as the safe one, since a crash
+	// between them left a body nothing pointed at. What the order could
+	// not stop was a SECOND writer: two nodes activating at once each
+	// wrote a body to the one payload key, the flip that landed first was
+	// then pointed at a body the other had overwritten, and every peer
+	// read "no such revision" for the epoch the fleet was on until
+	// somebody activated again. Two booting nodes publishing what they
+	// hold do exactly that, and so did an edit that LOST its
+	// compare-and-set, whose body had landed before its flip was refused.
+	// One record cannot come apart. The pointer key's new revision IS the
+	// epoch, so there is also no window in which a node can read an epoch
+	// whose pointer has not been published, and no way for two concurrent
+	// activations to be handed the same number.
 	//
-	// The flip itself is still ONE write: the pointer key's new revision
-	// IS the epoch, so there is no window in which a node can read an
-	// epoch whose pointer has not been published, and no way for two
-	// concurrent activations to be handed the same number.
+	// What that costs is the payload's bytes on every read of the pointer,
+	// which a reconcile tick makes. A company document is kilobytes, and a
+	// pointer that cannot name a body its fleet can read is the one
+	// failure this store exists to prevent.
 	//
 	// The payload is whatever the caller sealed. This store never opens it
 	// — a node reads it with the Tier A keyring it was deployed with, and
 	// the coordination store holds ciphertext exactly as the node's own
-	// database does.
+	// database does. It checks only that it IS a document, and refuses
+	// anything else with [ErrPayloadNotDocument] before writing.
 	//
 	// # COMPARE-AND-SET, when the caller says what it was editing
 	//
@@ -758,17 +807,19 @@ type Plane interface {
 	// Payload returns the sealed payload of the revision the fleet is
 	// pointed at, and false when the store holds a DIFFERENT revision's.
 	//
-	// Only the current one is kept. A node that has fallen behind needs
-	// exactly the revision the pointer names — never an older one — so a
-	// per-revision history here would be unbounded growth in a bucket with
-	// no retention, for rows nothing would ever read. Each node's own
-	// company_config table is still where its history and its diffs live.
+	// Only the current one is kept: it is the pointer's own. A node that
+	// has fallen behind needs exactly the revision the pointer names —
+	// never an older one — so a per-revision history here would be
+	// unbounded growth in a bucket with no retention, for rows nothing
+	// would ever read. Each node's own company_config table is still where
+	// its history and its diffs live. What comes back is
+	// [CanonicalPayload]'s form of what was activated.
 	//
 	// RAISES rather than answering false on an unreachable store, for the
 	// same reason [Plane.Target] does: "the fleet has a revision I cannot
 	// build" and "I cannot reach the store" send a node down opposite
 	// paths.
-	Payload(ctx context.Context, revisionID string) ([]byte, bool, error)
+	Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error)
 
 	// Target reads the pointer, reporting whether one has ever been set.
 	//
