@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -406,3 +407,69 @@ func TestFileDigestOfAnUnreadableFileIsEmpty(t *testing.T) {
 		t.Fatalf("FileDigest(absent) = %q, want \"\"", got)
 	}
 }
+
+// THE PUBLISHED TABLE OF WHAT A CHILD SEES IS THESE LISTS, NAME FOR NAME.
+//
+// docs/guides/tools-and-mcp.md tells an operator exactly which host variables
+// a tool server receives, so they know which ones to declare — and it is a
+// copy of [PassthroughEnv], [HostUserEnv] and the container runtime's rule,
+// written in another file in another language. Copies drift: the CLI backend's
+// own copy of the allowlist had already disagreed with this one by five names.
+// So each row's names are read out of the page and held to the Go list in BOTH
+// directions — a name added here and not there, or published and never passed.
+func TestThePublishedChildEnvironmentIsHostboxsOwn(t *testing.T) {
+	t.Parallel()
+	const page = "../../docs/guides/tools-and-mcp.md"
+	raw, err := os.ReadFile(page)
+	if err != nil {
+		t.Fatalf("read %s: %v", page, err)
+	}
+	names := func(row string) []string {
+		t.Helper()
+		for line := range strings.SplitSeq(string(raw), "\n") {
+			cells := strings.Split(line, "|")
+			if len(cells) < 4 || !strings.HasPrefix(strings.TrimSpace(cells[1]), row) {
+				continue
+			}
+			var out []string
+			for _, m := range backticked.FindAllStringSubmatch(cells[2], -1) {
+				out = append(out, m[1])
+			}
+			slices.Sort(out)
+			return out
+		}
+		t.Fatalf("%s has no row starting %q: the table this gate reads was renamed "+
+			"or removed, so nothing holds what it publishes", page, row)
+		return nil
+	}
+	sorted := func(in []string) []string {
+		out := slices.Clone(in)
+		slices.Sort(out)
+		return out
+	}
+
+	if got, want := names("The host allowlist"), sorted(PassthroughEnv); !slices.Equal(got, want) {
+		t.Errorf("the published host allowlist is %v, and PassthroughEnv is %v", got, want)
+	}
+	if got, want := names("The engine user's locations"), sorted(HostUserEnv); !slices.Equal(got, want) {
+		t.Errorf("the published host user's locations are %v, and HostUserEnv is %v", got, want)
+	}
+	var named, families []string
+	for _, name := range names("A container runtime's own settings") {
+		if family, ok := strings.CutSuffix(name, "*"); ok {
+			families = append(families, family)
+			continue
+		}
+		named = append(named, name)
+	}
+	if want := sorted(ContainerRuntimeEnv); !slices.Equal(named, want) {
+		t.Errorf("the published runtime settings by name are %v, and ContainerRuntimeEnv is %v",
+			named, want)
+	}
+	if want := sorted(ContainerRuntimeFamilies); !slices.Equal(sorted(families), want) {
+		t.Errorf("the published runtime families are %v, and ContainerRuntimeFamilies is %v",
+			families, want)
+	}
+}
+
+var backticked = regexp.MustCompile("`([^`]+)`")
