@@ -13,16 +13,35 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// flightCookieName is where the sealed login-in-progress rides.
+// flightCookieBase is the name the sealed login-in-progress rides under,
+// before the prefix — see [Service.flightCookieName].
 //
 // ITS OWN COOKIE rather than a field of the session one, because the two exist
 // at opposite times: the flight is set before anybody is signed in and cleared
 // the moment they are, and a session cookie carrying a login in progress would
 // be a cookie whose meaning depends on which half of a round trip it is in.
-const flightCookieName = "crewlet_oidc_flight"
+const flightCookieBase = "crewlet_oidc_flight"
+
+// flightCookieName is the name the flight is set and read under on this
+// deployment: `__Host-crewlet_oidc_flight` wherever the session cookie takes
+// the prefix, the bare name on plain http — [session.NameFor], one rule for
+// every cookie a browser is handed.
+//
+// THE PREFIX IS WHY IT IS ONE NAME, READ AS ISSUED. A browser sets a
+// `__Host-` cookie only from this exact host, Secure, at `Path=/`, so a
+// sibling host cannot write one; the bare name any sibling can write, with a
+// Domain covering this one. Read under both names on https, a flight another
+// host planted — one its author began, for the provider account the browser
+// happens to hold — would be the one this callback finished. A flight lives
+// ten minutes, so a deployment moving from http to https costs a login begun
+// in those minutes its restart and nothing more.
+func (s *Service) flightCookieName() string {
+	return session.NameFor(s.boot.API.ExternalBase(), flightCookieBase)
+}
 
 // OIDCStart sends the browser to the provider: an ordinary sign-in, or — with
 // `?step_up=<window>` — a signed-in person confirming who they are, inside the
@@ -131,7 +150,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// check refused it. The subject is the provider's own, once an ID
 	// token verified and there is one; before that nothing names anybody.
 	attempt := authevents.Failure{Client: source, Method: types.FailOIDC}
-	cookie, err := r.Cookie(flightCookieName)
+	cookie, err := r.Cookie(s.flightCookieName())
 	if err != nil || cookie.Value == "" {
 		s.refuseSignIn(w, r, adm, attempt, "no flight cookie")
 		return
@@ -513,11 +532,17 @@ const maxReturnPath = 400
 // the callback is a cross-site navigation from the provider, and Strict would
 // withhold the cookie on exactly the request that needs it. Lax sends it on a
 // top-level GET, which is what a redirect back from a provider is.
+//
+// `Path=/`, SECURE WHEN PREFIXED AND NO DOMAIN, which are the three things a
+// browser requires of a `__Host-` cookie before it will set one — see
+// [Service.flightCookieName]. It was scoped to `/auth/`, which the prefix does
+// not allow; the cost of `/` is a sealed value of a few hundred bytes riding
+// every request for the ten minutes a login takes.
 func (s *Service) flightCookie(value string, expires time.Time) *http.Cookie {
 	cookie := &http.Cookie{
-		Name: flightCookieName, Value: value, Path: "/auth/",
+		Name: s.flightCookieName(), Value: value, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		Secure:  strings.HasPrefix(s.boot.API.ExternalBase(), "https://"),
+		Secure:  session.HostPrefixed(s.boot.API.ExternalBase()),
 		Expires: expires,
 	}
 	if value == "" {

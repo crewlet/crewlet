@@ -1299,7 +1299,14 @@ attacker who can *read* it has defeated exactly the protection PKCE is.
 
 The flight cookie lives ten minutes — long enough for a person to fetch their
 phone for a second factor at the provider, short enough that a cookie carrying
-a verifier is not sitting in a browser for the length of a meeting.
+a verifier is not sitting in a browser for the length of a meeting. It is
+named as the session cookie is: `__Host-crewlet_oidc_flight` on an https
+deployment, which a browser sets only from this exact host, `Secure`, at
+`Path=/` and with no `Domain` — so no sibling host can plant a login in
+progress beside it — and `crewlet_oidc_flight` on plain http, which can hold
+no prefixed cookie. On https the bare name is never read: a flight a sibling
+host planted would be one its author began, finished with whatever provider
+account the browser holds.
 
 ### What a sign-in wave costs the provider
 

@@ -397,7 +397,7 @@ func (d *countingInvitations) InvitationByID(ctx context.Context, id string) (
 // flightSet is the flight cookie a response set, or "" when it set none.
 func flightSet(rec *httptest.ResponseRecorder) string {
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "crewlet_oidc_flight" && c.Value != "" {
+		if strings.HasSuffix(c.Name, "crewlet_oidc_flight") && c.Value != "" {
 			return c.Value
 		}
 	}

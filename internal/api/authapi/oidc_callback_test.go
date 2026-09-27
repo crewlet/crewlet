@@ -530,3 +530,62 @@ func (d failingSubjects) PersonBySubjectBlind(context.Context, string, time.Time
 
 	return iamdomain.Sighting{}, d.err
 }
+
+// THE FLIGHT COOKIE IS `__Host-` ON HTTPS, AND ONLY THAT NAME IS READ THERE.
+//
+// A browser sets a `__Host-` cookie only from this exact host, Secure, at
+// `Path=/` and with no Domain, so no sibling host can write one; the bare name
+// any sibling can write with a Domain covering this host. The flight is what
+// the callback finishes — a flight a sibling planted would be one its author
+// began, finished with the provider account the victim's browser holds — so on
+// https it is set under the prefix and a flight under the bare name is not
+// read at all. Plain http can hold no prefixed cookie, so it takes the bare
+// name, as the session cookie does.
+//
+// Mutation: drop the prefix and the https case fails on the name; read the
+// bare name as well and the planted flight is finished.
+func TestTheFlightCookieIsHostPrefixedOnHTTPS(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	rig := newProviderRig(t, idp, b, func(*authapi.Options) {})
+
+	started := rig.start(t, "/work")
+	cookies := started.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("the start set %d cookies, want the flight", len(cookies))
+	}
+	flight := cookies[0]
+	if flight.Name != "__Host-crewlet_oidc_flight" || flight.Path != "/" ||
+		!flight.Secure || flight.Domain != "" {
+		t.Errorf("an https deployment set the flight as %q, Path=%q, Secure=%v, "+
+			"Domain=%q — want __Host-crewlet_oidc_flight at / , Secure, no Domain",
+			flight.Name, flight.Path, flight.Secure, flight.Domain)
+	}
+
+	// THE SAME FLIGHT UNDER THE BARE NAME, as a sibling host would plant it.
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	planted := *flight
+	planted.Name = "crewlet_oidc_flight"
+	refused := rig.callback(t, []*http.Cookie{&planted}, code, state)
+	if refused.Code != http.StatusUnauthorized {
+		t.Errorf("a flight under the bare name answered %d on https, want the "+
+			"sign-in refusal", refused.Code)
+	}
+	if n := idp.exchanges.Load(); n != 0 {
+		t.Errorf("a flight under the bare name reached the provider %d times", n)
+	}
+
+	// AND PLAIN HTTP TAKES THE BARE NAME, which is all it can hold.
+	plain := bootstrapFor(t)
+	plain.API.ExternalURL = "http://127.0.0.1:8080"
+	plain.API.Auth.Backend = config.AuthBackendOIDC
+	plain.API.Auth.OIDC = b.API.Auth.OIDC
+	onHTTP := newProviderRig(t, idp, plain, func(*authapi.Options) {}).start(t, "/work")
+	if c := onHTTP.Result().Cookies(); len(c) != 1 || c[0].Name != "crewlet_oidc_flight" ||
+		c[0].Secure || c[0].Path != "/" {
+		t.Errorf("a plain http deployment set %+v, want the bare name at /, not Secure", c)
+	}
+}

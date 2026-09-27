@@ -133,11 +133,32 @@ const HostCookieName = "__Host-" + CookieBaseName
 // setup, while an unprefixed cookie on a public https deployment works
 // perfectly and silently accepts one a sibling subdomain wrote.
 func CookieName(externalURL string) string {
-	parsed, err := url.Parse(strings.TrimSpace(externalURL))
-	if err == nil && parsed.Scheme == "http" {
-		return CookieBaseName
+	return NameFor(externalURL, CookieBaseName)
+}
+
+// NameFor is what a cookie of this engine's called base is set under for a
+// deployment reachable at externalURL: `__Host-` + base wherever the bearer
+// takes the prefix, and the bare base on plain http — [CookieName]'s rule, for
+// the OTHER cookies a browser is handed (the provider round trip's flight).
+//
+// ONE RULE FOR EVERY COOKIE, because the prefix's guarantee is per cookie: a
+// flight cookie a sibling host could write beside a session cookie it cannot
+// is a second way to hand a browser somebody else's login in progress. A
+// prefixed cookie must be Secure, carry `Path=/` and no Domain — see
+// [HostPrefixed] for the first.
+func NameFor(externalURL, base string) string {
+	if HostPrefixed(externalURL) {
+		return "__Host-" + base
 	}
-	return HostCookieName
+	return base
+}
+
+// HostPrefixed reports whether a deployment reachable at externalURL names its
+// cookies with the `__Host-` prefix — everything but plain http, for
+// [CookieName]'s reasons — which is also whether they must be Secure.
+func HostPrefixed(externalURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(externalURL))
+	return err != nil || parsed.Scheme != "http"
 }
 
 // Cookie is the bearer as a browser must be given it.
