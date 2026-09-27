@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -286,6 +287,11 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	}{
 		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
 			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused},
+		// A BARRIER THE CLIENT REFUSED AS TOO LARGE is a server whose
+		// max_payload refuses every record, and the client's decision, so
+		// it is the broker's refusal too — never an unanswered append.
+		{"a barrier past the server's max_payload",
+			fmt.Errorf("append: %w", nats.ErrMaxPayload), statelog.RefuseBrokerRefused},
 		{"nobody answered", errors.New("nats: timeout"), statelog.RefuseNoQuorum},
 		// A STORE THAT CLOSED UNDER THE BARRIER is a stream restarting:
 		// the broker answered, and what it said is that the entry may

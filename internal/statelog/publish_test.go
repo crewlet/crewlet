@@ -1071,3 +1071,64 @@ func TestAnAppendTheBrokerSaysMayYetLandIsNeverRefused(t *testing.T) {
 		})
 	}
 }
+
+// A REFUSAL THE BROKER NAMED AND THIS BUILD HAS NO REMEDY FOR IS FINAL, AND
+// CARRIES THE BROKER'S WORDS.
+//
+// A sealed stream, a JetStream store out of resources: they were `log_full`,
+// whose detail sends an operator to a ceiling and a trim neither involves, and
+// are now `broker_refused` with the broker's code and description as the
+// remedy. What this pins is the PUBLISHER's arm rather than the classification
+// beneath it — that it refuses at round one after one append, keeps the
+// broker's code and words, and tells nobody to come back: the arm could
+// return `log_full`, drop the words or fall through to the lost-race path and
+// retry for the whole round budget with every classification test still
+// green. The control is a full log answered through the same fake, which
+// stays `log_full`.
+func TestABrokerRefusalIsFinalAndCarriesItsWords(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		err  error
+		want statelog.Reason
+		says []string
+	}{
+		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
+			Description: "invalid operation on sealed stream"},
+			statelog.ReasonBrokerRefused,
+			[]string{"code 10109", "invalid operation on sealed stream"}},
+		{"a full log, the control", &jetstream.APIError{Code: 503, ErrorCode: 10077,
+			Description: "maximum bytes exceeded"},
+			statelog.ReasonLogFull,
+			[]string{"maximum bytes exceeded", "byte ceiling"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.appends.fail(fmt.Errorf("nats: %w", c.err), true)
+			res, err := h.write(probeSubject("a"), "op-1", "hello")
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) || refusal.Reason != c.want {
+				t.Fatalf("a write the broker answered %v = %v, want a %s refusal",
+					c.err, err, c.want)
+			}
+			if got := h.appends.appends.Load(); res.Rounds != 1 || got != 1 {
+				t.Errorf("the refusal took %d round(s) and %d append(s), want one "+
+					"of each — the broker will answer the next append the same",
+					res.Rounds, got)
+			}
+			for _, want := range c.says {
+				if !strings.Contains(refusal.Detail, want) {
+					t.Errorf("the refusal does not say %q: %s", want, refusal.Detail)
+				}
+			}
+			if refusal.OpID != "op-1" {
+				t.Errorf("the refusal carries op id %q, want op-1", refusal.OpID)
+			}
+			if got := statelog.RetryAfter(err, 2*time.Second); got != 0 {
+				t.Errorf("a %s refusal says come back in %s — waiting changes "+
+					"nothing about it", c.want, got)
+			}
+		})
+	}
+}
