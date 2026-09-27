@@ -147,10 +147,24 @@ const (
 	// company data and can stop the company dead: POST /backup (which
 	// copies every credential and every seat's memory to a path the
 	// caller names), the retention floor, the capacity window, the
-	// maintenance gestures, evict and readmit, POST /budgets/reset and a
-	// work item's purge. One grant rather than eight because they share a
-	// blast radius and an audience — whoever runs the deployment — and
-	// splitting them would invite a gate that holds seven of eight.
+	// maintenance gestures, evict and readmit, and POST /budgets/reset —
+	// and the purges, a work item's and a page's, which nothing undoes.
+	// One grant rather than one per gesture because they share a blast
+	// radius and an audience — whoever runs the deployment — and
+	// splitting them would invite a gate that holds all of them but one.
+	//
+	// IT IS HALF OF TWO MORE, each asked beside a second grant because it
+	// is the deployment's reach over somebody else's subject: an object's
+	// REMOVAL from the org chart takes it with [GrantConfigWrite] — the
+	// one structural change nothing undoes, the address tombstoned for
+	// ever and a seat's mailbox, lease and diary gone with it, which is a
+	// purge's reach over the company's own structure — and ending every
+	// session in the company takes it with [GrantPeopleManage].
+	//
+	// AND IT IS THE ADMIN PATH over the relation classes internal/authz
+	// decides somebody's WORK by — a colleague's queue, a project's
+	// policy — though not over an org chart object's prose, which is
+	// [GrantConfigWrite]'s.
 	GrantFleetOperate Grant = "fleet:operate"
 
 	// GrantPeopleManage is authority over PERSON ROWS: inviting somebody,
