@@ -172,7 +172,7 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 					"nothing: %s", name, unvouched, got.Output)
 				continue
 			}
-			checkUnknownAnswer(t, name, unvouched, got)
+			checkUnknownAnswer(t, name, unvouched, got, u.ops)
 			if restates[name] {
 				if !strings.Contains(got.Output, u.ops[0]) ||
 					!strings.Contains(got.Output, "harmless") {
@@ -222,7 +222,7 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 				t.Errorf("%s (unvouched %v) wrote nothing: %s", name, unvouched, got.Output)
 				continue
 			}
-			checkUnknownAnswer(t, name, unvouched, got)
+			checkUnknownAnswer(t, name, unvouched, got, u.ops)
 			if !strings.Contains(got.Output, u.ops[0]) {
 				t.Errorf("%s does not name operation %s: %s", name, u.ops[0], got.Output)
 			}
@@ -238,16 +238,29 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 	}
 }
 
-// checkUnknownAnswer is what every one of those answers has in common.
-func checkUnknownAnswer(t *testing.T, name string, unvouched bool, got tools.Result) {
+// checkUnknownAnswer is what every one of those answers has in common. ops are
+// the operations the write went out under, which the answer names.
+//
+// THE RECEIPT IS LOOKED FOR OUTSIDE THOSE NAMES. An operation id is a random
+// UUID and a hex digest, so a receipt value made of digits — the version,
+// 9901 — turns up inside one by chance: about 45 places in each id, one in
+// 65,536 at each, over the thirty-odd writes below, is roughly one run in
+// fifty (it did, in `069901a6`), and read as a leak it failed a correct
+// answer. Taking the names out is exact where a word-boundary match is not: a
+// UUID's four-character groups can be the value itself, bounded by hyphens.
+func checkUnknownAnswer(t *testing.T, name string, unvouched bool, got tools.Result, ops []string) {
 	t.Helper()
 	if !got.Failed {
 		t.Errorf("%s (unvouched %v) answered an unknown outcome as a receipt: %s",
 			name, unvouched, got.Output)
 		return
 	}
+	prose := got.Output
+	for _, op := range ops {
+		prose = strings.ReplaceAll(prose, op, "<operation>")
+	}
 	for _, leak := range receipt {
-		if strings.Contains(got.Output, leak) {
+		if strings.Contains(prose, leak) {
 			t.Errorf("%s (unvouched %v) carries %s beside an unknown outcome: %s",
 				name, unvouched, leak, got.Output)
 		}
