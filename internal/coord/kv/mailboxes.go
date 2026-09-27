@@ -135,11 +135,11 @@ func (f *FleetStore) Mailboxes(ctx context.Context) ([]coord.MailboxRecord, erro
 
 // CreateMailbox writes a new record, leaving an existing one alone.
 //
-// Create rather than Put, so the first writer wins and every other gets
-// ErrKeyExists: a record that exists may be mid-way through a retirement, and
-// only an update conditioned on the version its writer read may change it. A
-// key a previous retirement purged is created again, which the client does by
-// conditioning on the purge marker's own revision.
+// Create rather than Put, so the first writer wins and every other loses the
+// race ([lostCreateRace]): a record that exists may be mid-way through a
+// retirement, and only an update conditioned on the version its writer read
+// may change it. A key a previous retirement purged is created again, which
+// the client does by conditioning on the purge marker's own revision.
 func (f *FleetStore) CreateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
 	if rec.Seat == uuid.Nil {
 		return coord.MailboxRecord{}, false, errors.New("coord/kv: a mailbox record needs a seat id")
@@ -150,7 +150,7 @@ func (f *FleetStore) CreateMailbox(ctx context.Context, rec coord.MailboxRecord)
 	}
 	revision, err := f.mailboxes.Create(ctx, encodeKey(rec.Seat.String()), raw)
 	switch {
-	case errors.Is(err, jetstream.ErrKeyExists):
+	case lostCreateRace(err):
 		return coord.MailboxRecord{}, false, nil
 	case err != nil:
 		return coord.MailboxRecord{}, false, unavailable("create the mailbox record", err)

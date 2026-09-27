@@ -843,7 +843,7 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 			switch {
 			case created == nil:
 				return true, nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return false, unavailable("increment the rate window", created)
@@ -914,11 +914,11 @@ func claimOnce(ctx context.Context, bucket jetstream.KeyValue, what, key string,
 		return false, errors.New("coord/kv: a claim needs a key")
 	}
 	// Create is the whole mechanism: it fails when the key exists, so the
-	// FIRST caller wins and every other gets ErrKeyExists. Expiry is the
+	// FIRST caller wins and every other loses the race. Expiry is the
 	// bucket's, which means the server decides when a claim lapses and no
 	// node compares its own clock to a peer's deadline.
 	if _, err := bucket.Create(ctx, encodeKey(key), []byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
-		if errors.Is(err, jetstream.ErrKeyExists) {
+		if lostCreateRace(err) {
 			return false, nil
 		}
 		return false, unavailable(what, err)
@@ -1027,7 +1027,7 @@ func (f *FleetStore) Fail(ctx context.Context, subject string, now time.Time) er
 			switch {
 			case created == nil:
 				return nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return unavailable("record the failed attempt", created)
@@ -1154,7 +1154,7 @@ func (f *FleetStore) Record(ctx context.Context, scope, key, detail string, at t
 	// FIRST WRITER WINS, and losing is not a failure: two nodes completing
 	// one trigger is the case the ledger exists to collapse.
 	if _, err := f.ledger.Create(ctx, ledgerKey(scope, key), raw); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyExists) {
+		!lostCreateRace(err) {
 		return unavailable("record the completion", err)
 	}
 	return nil
@@ -1179,7 +1179,7 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 			switch {
 			case created == nil:
 				return nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return unavailable("record the cooldown", created)
@@ -1421,7 +1421,7 @@ func (f *FleetStore) stampRefusal(ctx context.Context, scope string) error {
 			switch {
 			case created == nil:
 				return nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return unavailable("record the budget refusal", created)
@@ -1542,7 +1542,7 @@ func (f *FleetStore) bump(ctx context.Context, scope string, delta, limit int) (
 			switch {
 			case created == nil:
 				return record, true, nil
-			case errors.Is(created, jetstream.ErrKeyExists):
+			case lostCreateRace(created):
 				continue
 			default:
 				return budgetRecord{}, false, unavailable("charge the budget", created)
@@ -1801,7 +1801,7 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest, seq 
 	case req.ExpectAbsent:
 		revision, err := f.config.Create(ctx, activationKey, raw)
 		if err != nil {
-			if errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err) {
+			if lostCreateRace(err) {
 				return 0, fmt.Errorf("%w: an activation was published while this "+
 					"write was being prepared", coord.ErrActivationRaced)
 			}
@@ -1847,6 +1847,53 @@ func isWrongLastSequence(err error) bool {
 	}
 	return api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence ||
 		api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant
+}
+
+// The two CAS-race classifiers.
+//
+// Every conditional write in this package — a create-only record, a
+// compare-and-set append — has to tell "somebody else wrote first" from "the
+// store could not be reached". Reading the second as the first is a lost
+// update reported as a conflict a caller retries into; reading the first as
+// the second is a race reported as an outage, which is the failure the
+// three-valued rule exists to prevent from the other side.
+
+// lostCreateRace reports whether a create lost to a first writer, and EVERY
+// Create in this package asks it rather than matching a sentinel of its own.
+//
+// THREE SHAPES FOR ONE FACT, and every one of them is somebody else's second
+// writer. ErrKeyExists is the ordinary case. A revision mismatch is what the
+// client reports when the key carried a delete or purge marker it tried to
+// step over and lost. And on a REPLICATED stream a share of those losers come
+// back as a bare API error the client wraps in neither sentinel — the client
+// steps over a marker with a second conditional publish and hands back that
+// publish's refusal unmapped, and a replicated stream refuses with 10164
+// where a solo one refuses with the 10071 the sentinel matches. Measured at
+// three replicas, a fifth of the losers of a create over a marker arrived
+// that way.
+//
+// Getting this wrong is not loud, and it reaches every bucket whose records
+// are ever removed: a delivery claim answered "unknown" after its release and
+// was processed twice, a failed sign-in racing another node's to a flushed
+// record went unrecorded and left its node's throttle on its own curve for
+// the half minute it leaves an unanswering store alone, a charge racing
+// another to a reset counter failed as an outage — each on a clustered estate
+// only, which is exactly where nobody is running the single-server suite that
+// would show it.
+func lostCreateRace(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyExists) ||
+		errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
+		isWrongLastSequence(err)
+}
+
+// lostUpdateRace reports whether a conditional write lost its race.
+//
+// A deleted key lands here too: the record it was conditioned on is gone,
+// which is the same answer for the caller — re-read and re-decide.
+func lostUpdateRace(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
+		errors.Is(err, jetstream.ErrKeyNotFound) ||
+		isWrongLastSequence(err)
 }
 
 // payloadRecord is the current revision's sealed body on the wire. The
@@ -2094,7 +2141,8 @@ func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
 // re-publishes at the purge marker's revision rather than refusing a key whose
 // only history is a delete. What it does not map is that re-publish LOSING — a
 // second creator landing between the two — which answers a bare
-// wrong-last-sequence, so that is read as the row somebody else created too.
+// wrong-last-sequence, so that is read as the row somebody else created too
+// ([lostCreateRace]).
 func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (bool, error) {
 	raw, err := encodeSecret(rec)
 	if err != nil {
@@ -2104,7 +2152,7 @@ func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, jetstream.ErrKeyExists), isWrongLastSequence(err):
+	case lostCreateRace(err):
 		return false, nil
 	default:
 		return false, unavailable("create the secret", err)
@@ -2262,7 +2310,7 @@ func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 	}
 	_, err = f.channels.Create(ctx, encodeKey(ch.ID), raw)
 	switch {
-	case err == nil, errors.Is(err, jetstream.ErrKeyExists):
+	case err == nil, lostCreateRace(err):
 		return nil
 	default:
 		return unavailable("open the channel", err)
@@ -2450,7 +2498,7 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, jetstream.ErrKeyExists):
+	case lostCreateRace(err):
 		return false, nil
 	default:
 		// RAISED, never reported as "somebody else has it". The caller
@@ -2516,7 +2564,7 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, jetstream.ErrKeyExists):
+	case lostCreateRace(err):
 		return false, nil
 	default:
 		return false, unavailable("create the sandbox run", err)

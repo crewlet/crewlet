@@ -458,6 +458,17 @@ var claimCases = []fleetCase{{
 	name: "an unnamed record is an error, not a race somebody else won",
 	fn:   func(h *fleetHarness) { h.report(CheckUnnamedRecordsAreRefused(h.ctx, h.f, h.now())) },
 }, {
+	// AND A RACE SOMEBODY ELSE WON IS NOT AN OUTAGE, above all over a
+	// record just removed: a create over the marker a removal leaves is a
+	// compare-and-set every loser of which was beaten by a first writer.
+	// The check covers every verb whose record can be removed, not just
+	// the claims — see it for why — and a replicated stream is where it
+	// bites, which internal/queue/jetstream/jetstreamtest carries it to.
+	name: "creates racing over a removed record are races, never outages",
+	fn: func(h *fleetHarness) {
+		h.report(CheckCreatesOverARemovedRecordAreRaces(h.ctx, h.f, h.now()))
+	},
+}, {
 	name: "exactly one of many concurrent callers claims",
 	fn: func(h *fleetHarness) {
 		at := h.now()
