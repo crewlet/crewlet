@@ -86,14 +86,27 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 	}
 	// The shipped answers, so that a domain silently losing its read index
 	// is a failure here rather than a strongest read level nobody notices
-	// has stopped being available.
-	for name, want := range map[string]bool{
-		tracker.Domain{}.Name(): true,
-		pages.Domain{}.Name():   true,
-		search.Domain{}.Name():  false,
-	} {
+	// has stopped being available — for EVERY registered domain, since a
+	// table naming three of five pinned nothing about the org chart's or
+	// the identity estate's, and docs/guides/consistency.md publishes all
+	// five.
+	shipped := map[string]bool{
+		tracker.Domain{}.Name():   true,
+		pages.Domain{}.Name():     true,
+		chart.Domain{}.Name():     true,
+		iamdomain.Domain{}.Name(): true,
+		search.Domain{}.Name():    false,
+	}
+	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
 			t.Errorf("%s: barrier declared %v, want %v (held %v)", name, got, want, held)
+		}
+	}
+	for name := range stated {
+		if _, pinned := shipped[name]; !pinned {
+			t.Errorf("%s is registered and its barrier decision is pinned nowhere "+
+				"— say here, and in docs/guides/consistency.md, whether it grants "+
+				"linearizable", name)
 		}
 	}
 
