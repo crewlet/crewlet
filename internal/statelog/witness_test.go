@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -238,5 +239,135 @@ func TestARefusalNamesNoKeyForATruncatedFrame(t *testing.T) {
 	}
 	if got := seen.all(); len(got) != 1 || got[0].KeyID != "" {
 		t.Errorf("witnessed %+v, want one refusal naming no key", got)
+	}
+}
+
+// keyedRunner rebuilds the harness's runner over the same database, applier
+// and broker with a verifier over ring — the shape of a node restarting after
+// an operator added a key to its secrets.keys.
+func (h *applyHarness) keyedRunner(ring statelog.Keyring) {
+	h.t.Helper()
+	verifier, err := statelog.NewVerifier(probeDomain{}.Name(), ring)
+	if err != nil {
+		h.t.Fatalf("NewVerifier: %v", err)
+	}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain:     probeDomain{},
+		Verifier:   verifier,
+		Applier:    h.applier,
+		Fetch:      h.fetch,
+		DB:         h.db.Replicated(),
+		Generation: 1,
+		Metrics:    h.metrics,
+	})
+	if err != nil {
+		h.t.Fatalf("NewRunner: %v", err)
+	}
+	h.runner = runner
+}
+
+// probeRowAt reports whether the probe applier wrote a row for seq.
+func (h *applyHarness) probeRowAt(seq uint64) bool {
+	h.t.Helper()
+	var count int
+	at := statelog.Position{Stream: probeStream, Generation: 1, Seq: seq}
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(),
+			`SELECT COUNT(*) FROM probe_rows WHERE position = ?`, at.Packed()).Scan(&count)
+	}); err != nil {
+		h.t.Fatalf("read the probe rows: %v", err)
+	}
+	return count == 1
+}
+
+// A RECORD RETAINED UNDER A KEY THIS NODE LACKED IS APPLIED ONCE THE KEY
+// ARRIVES.
+//
+// That is the whole of what "retained" promises: an unknown key id is a
+// rotation that reached another node first, so the record is kept rather than
+// refused, and the node that restarts with the key applies it — through the
+// reprocess, which is the one place a restarted process meets a retained
+// record again. The Verifier's own case proves the bytes open under the key;
+// this proves the RUNNER acts on it: the row lands, the operation is held and
+// the deferral is released, while the neighbour that verified all along was
+// applied in the first pass rather than waiting behind it.
+//
+// Mutations: count a Verified record as kept in the reprocess, or drop the
+// re-verify and hand the stored frame to the envelope decode, and either way
+// the record stays retained with its key in hand.
+func TestARetainedRecordAppliesOnceItsKeyArrives(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offerFramed(1, sealedUnder(t, "k9", env(1, "edit", "a", "op-1", 1)))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := h.retainedCount(); got != 1 {
+		t.Fatalf("retained %d, want the one record signed under k9", got)
+	}
+	if !h.probeRowAt(2) {
+		t.Fatal("the record signed under a held key was not applied beside " +
+			"the one this node could not authenticate")
+	}
+	if h.probeRowAt(1) {
+		t.Fatal("a record signed under a key this node lacks was applied")
+	}
+
+	// THE KEY ARRIVES: k9 with the material the writer signed under,
+	// beside the key this node already held.
+	h.keyedRunner(statelog.Keyring{ActiveID: "k1", Keys: []statelog.Key{
+		{ID: "k1", Material: "test-material"},
+		{ID: "k9", Material: "material-this-node-lacks-k9"},
+	}})
+	if err := h.boot(0); err != nil {
+		t.Fatalf("the reprocess did not release the record: %v", err)
+	}
+	if !h.probeRowAt(1) {
+		t.Error("the retained record was released without its row being written")
+	}
+	if _, held, err := h.runner.Op(t.Context(), "op-1"); err != nil || !held {
+		t.Errorf("Op(op-1) = held %v, %v: the reprocessed record's operation "+
+			"is not in the ledger, so its writer's retry would apply it twice",
+			held, err)
+	}
+}
+
+// AND A RETAINED RECORD THAT FAILS UNDER THE KEY IT NAMES STOPS THE NODE.
+//
+// Filed under an unknown key, a record is only a claim that some node holds
+// that key. When the key arrives and the bytes do not verify under it, the
+// claim was false — the record was written by something that is not this
+// fleet — and applying it, or retaining it for ever, would both be wrong.
+//
+// Mutation: treat a reprocessed Tampered like KeyUnknown and the node goes on
+// retaining a forgery with the key in hand.
+func TestARetainedRecordThatFailsUnderItsArrivedKeyStopsTheNode(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offerFramed(1, sealedUnder(t, "k9", env(1, "edit", "a", "op-1", 1)))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := h.retainedCount(); got != 1 {
+		t.Fatalf("retained %d, want the one record signed under k9", got)
+	}
+
+	// A k9 THAT IS NOT THE ONE THE RECORD WAS SIGNED UNDER.
+	h.keyedRunner(statelog.Keyring{ActiveID: "k1", Keys: []statelog.Key{
+		{ID: "k1", Material: "test-material"},
+		{ID: "k9", Material: "the-fleets-real-k9"},
+	}})
+	if err := h.boot(0); !errors.Is(err, statelog.ErrStopped) {
+		t.Fatalf("reprocessing a record that fails under its named key: err = %v, "+
+			"want ErrStopped", err)
+	}
+	if h.probeRowAt(1) {
+		t.Error("a record that failed under the key it names was applied")
+	}
+	if got := h.retainedCount(); got != 1 {
+		t.Errorf("retained %d after the stop, want the forgery left where it "+
+			"was for an operator to see", got)
 	}
 }
