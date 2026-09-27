@@ -81,10 +81,11 @@ func (s *Service) Routes(mux auth.Mux) {
 		// can refuse another site starting it.
 		mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}"+providerRedemption,
 			s.StartProviderRedemption)
-		// SIGNING OUT OF THE PROVIDER TOO, where there is one. Registered
-		// beside `/auth/logout/{lineage}`, which it would otherwise read
-		// as a lineage named `oidc`; the mux prefers the literal segment
-		// whatever the order.
+		// SIGNING OUT OF THE PROVIDER TOO, where there is one. It shares
+		// its shape with `/auth/logout/{lineage}` below, which would
+		// otherwise read it as a lineage named `oidc`: the mux prefers
+		// the literal segment whatever the order, so the two can sit in
+		// different groups, unguarded here and guarded there.
 		mux.HandleFunc("POST "+auth.PathAuthLogoutProvider, s.LogoutProvider)
 	}
 
