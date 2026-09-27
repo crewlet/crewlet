@@ -123,8 +123,8 @@ func (e *Engine) companyKey(ctx context.Context, name, source string,
 	defer leave()
 	hold := e.workerHold("company-key-"+name, companyKeyHoldTTL)
 	for {
-		if value, err := presentKey(ctx, store, name); value != "" || err != nil {
-			return value, err
+		if value, readErr := presentKey(ctx, store, name); value != "" || readErr != nil {
+			return value, readErr
 		}
 		release, held := func() {}, true
 		if hold != nil {
@@ -172,7 +172,7 @@ func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name,
 	// header — and whoever's landed is the one read back. THE NODE, AS THE
 	// ENGINE: nobody asked for this key — the first write that needed one
 	// did — so no credential made it either.
-	if _, err := store.Create(ctx, name, secrets.EncodeKey(minted), secrets.Author{
+	if _, err = store.Create(ctx, name, secrets.EncodeKey(minted), secrets.Author{
 		Name: e.id, Kind: string(iam.ActorSystem),
 	}, source, time.Now().UTC()); err != nil {
 		return "", fmt.Errorf("engine: store %s: %w", name, err)

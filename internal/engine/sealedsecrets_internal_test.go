@@ -147,7 +147,7 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 		return applies
 	}
 	apply := func(ctx context.Context) error {
-		e.refreshParties(t.Context(), company)
+		e.refreshParties(ctx, company)
 		if _, err := e.startJira(ctx, company, company.Config.Integrations.Jira); err != nil {
 			return err
 		}

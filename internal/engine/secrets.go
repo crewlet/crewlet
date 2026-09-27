@@ -272,7 +272,7 @@ func (c *chartSealer) Seal(ctx context.Context, name, value string,
 	return c.store.Set(ctx, name, value, by, "chart", c.now())
 }
 
-// personSealer is the per-person key store, which seals a person's own values
+// PersonSealer is the per-person key store, which seals a person's own values
 // AND is what the identity applier shreds through.
 //
 // ONE CONSTRUCTION FOR BOTH, deliberately: a sealer IS a shredder, because

@@ -1,8 +1,6 @@
 package engine_test
 
 import (
-	"testing"
-
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/engine"
@@ -42,14 +40,4 @@ func seatID(e *engine.Engine, handle string) (id uuid.UUID, ok bool) {
 	}
 	got, found := c.Org.AgentIDFor(c.Org.AgentSeatByHandle(handle))
 	return got, found
-}
-
-// mustSeatInbox is [seatInbox] for a case that cannot proceed without one.
-func mustSeatInbox(t *testing.T, e *engine.Engine, handle string) (string, string) {
-	t.Helper()
-	id, ok := seatID(e, handle)
-	if !ok {
-		t.Fatalf("seat %q is no agent seat in the running company, so it has no mailbox", handle)
-	}
-	return topics.AgentInbox(id), topics.AgentInboxGroup(id)
 }

@@ -238,7 +238,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 
 	if runTracker {
 		running := sl.Domain(tracker.Domain{}.Name())
-		writer, err := tracker.NewWriter(tracker.WriterDeps{
+		n.writer, err = tracker.NewWriter(tracker.WriterDeps{
 			Publisher: running.publisher,
 			// THE APPLIER'S OWN MEASURED RATE, so a refusal's
 			// `retry_after_seconds` is derived from what this node
@@ -279,7 +279,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		if err != nil {
 			return fmt.Errorf("engine: tracker writer: %w", err)
 		}
-		n.writer = writer
 		// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for
 		// is a level served: the refusal ladder, the coverage probe and
 		// the barrier a linearizable read waits through. Built beside
@@ -324,12 +323,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// every node with an index answers, whether or not anybody on it ever
 	// searches.
 	if e.backends.Queue != nil {
-		stop, err := search.ServeSlices(runCtx, e.backends.Queue, nodeID,
+		n.stopSlices, err = search.ServeSlices(runCtx, e.backends.Queue, nodeID,
 			search.NodeScanner{Index: n.indexer})
 		if err != nil {
 			return fmt.Errorf("engine: serve search slices: %w", err)
 		}
-		n.stopSlices = stop
 	}
 
 	// THE CHART, WHICH EVERY COMPANY HAS. There is no backend setting for
@@ -339,7 +337,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// failure an operator reads first: a node that cannot say who reports
 	// to whom cannot run a seat at all, and one that cannot sign anybody
 	// in merely serves no sign-in surface.
-	if err := n.openIAM(e, sl, nodeID); err != nil {
+	if err = n.openIAM(e, sl, nodeID); err != nil {
 		return err
 	}
 	// AND THIS NODE ANSWERS FOR THE NODES THAT HOLD NO DIRECTORY. A
@@ -350,19 +348,18 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if n.iamReader != nil && e.backends.Queue != nil {
 		// SIGNED UNDER THE FLEET'S KEYRING, as every state-log record is:
 		// an unsigned answer is one anything on the broker could give.
-		signer, err := statelog.NewSigner(holdersSignatureLabel, sl.ring)
-		if err != nil {
+		signer, signerErr := statelog.NewSigner(holdersSignatureLabel, sl.ring)
+		if signerErr != nil {
 			return fmt.Errorf("engine: sign the identity directory's "+
-				"answers: %w", err)
+				"answers: %w", signerErr)
 		}
-		stop, err := serveHolders(runCtx, e.backends.Queue, nodeID,
+		n.stopHolders, err = serveHolders(runCtx, e.backends.Queue, nodeID,
 			n.iamReader, signer)
 		if err != nil {
 			return fmt.Errorf("engine: serve the identity directory: %w", err)
 		}
-		n.stopHolders = stop
 	}
-	if err := n.openChart(e, sl, nodeID); err != nil {
+	if err = n.openChart(e, sl, nodeID); err != nil {
 		return err
 	}
 
@@ -373,7 +370,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				"knowledge base has nowhere to write — the domain is in the " +
 				"register and its stream failed to come up")
 		}
-		var err error
 		if n.pages, err = pages.NewStore(pages.Options{
 			Publisher: running.publisher, DB: e.backends.Store,
 			// LIVE off the epoch for the reason the searcher below is:
@@ -381,11 +377,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// are Tier B, and this store is built once per node while an
 			// apply can move either key underneath it.
 			Reserved: func() pages.Reserved {
-				c := e.Company()
-				if c == nil {
+				current := e.Company()
+				if current == nil {
 					return pages.Reserved{}
 				}
-				return reservedContainers(c.Config)
+				return reservedContainers(current.Config)
 			},
 		}); err != nil {
 			return fmt.Errorf("engine: pages store: %w", err)

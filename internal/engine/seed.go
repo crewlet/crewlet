@@ -311,7 +311,7 @@ func (e *Engine) publishStagedChart(ctx context.Context) error {
 			staged.SourcePath, err)
 	}
 	var authored chart.Authored
-	if err := json.Unmarshal(body, &authored); err != nil {
+	if err = json.Unmarshal(body, &authored); err != nil {
 		return fmt.Errorf("engine: decode the chart staged from %s: %w",
 			staged.SourcePath, err)
 	}

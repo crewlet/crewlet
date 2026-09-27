@@ -1,10 +1,6 @@
 package engine
 
-import (
-	"testing"
-
-	"github.com/crewlet/crewlet/internal/queue/topics"
-)
+import "github.com/crewlet/crewlet/internal/queue/topics"
 
 // seatInbox and seatInboxGroup are one seat's mailbox as the engine names it.
 //
@@ -26,14 +22,4 @@ func seatInboxGroup(e *Engine, handle string) string {
 		return ""
 	}
 	return topics.AgentInboxGroup(id)
-}
-
-// mustSeatInbox is [seatInbox] for a case that cannot proceed without one.
-func mustSeatInbox(t *testing.T, e *Engine, handle string) (string, string) {
-	t.Helper()
-	id, err := e.seatID(handle)
-	if err != nil {
-		t.Fatalf("seat %q has no mailbox on this engine: %v", handle, err)
-	}
-	return topics.AgentInbox(id), topics.AgentInboxGroup(id)
 }

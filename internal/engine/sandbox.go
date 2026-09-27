@@ -948,7 +948,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		// reason coding_agent is: a catalogue change reaches every seat
 		// that named nothing without rewriting their blocks.
 		Placement:       sandbox.Placement(gate.RunIn),
-		CodingAgent:     string(gate.CodingAgent),
+		CodingAgent:     gate.CodingAgent,
 		PauseTTL:        pauseTTL(gate),
 		MaxTurns:        gate.MaxTurns,
 		Env:             env,
