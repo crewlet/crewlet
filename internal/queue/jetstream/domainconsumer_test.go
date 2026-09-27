@@ -670,3 +670,49 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 		t.Errorf("stopping twice: %v", err)
 	}
 }
+
+// A RECORD THAT REACHES AN ABANDONED PULL IS HANDED BACK AT ONCE, not after the
+// ack window.
+//
+// A drain whose context ends leaves its pull request standing on the server
+// for the rest of its wait, and a record appended in that window is delivered
+// to it — to a batch nobody reads. Over a connection that stays open (an
+// applier stopped and another started in the same process) the next pull then
+// waited out the thirty-second ack window for a record already on the log, and
+// a read barrier appended in that window refused every linearizable read as
+// behind for the whole of it. Measured against the build without the hand-back
+// the second fetch below returns nothing.
+func TestARecordReachingAnAbandonedPullIsHandedBack(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_ABANDON_LOG", "crewlet.abandon.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_ABANDON_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// THE ABANDONED PULL: a long wait, given up on almost at once.
+	drain, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if got, err := cons.Fetch(drain, 1, 0, 20*time.Second); len(got) != 0 {
+		t.Fatalf("an empty log answered %d record(s) (%v)", len(got), err)
+	}
+	// A record the standing pull is still asking for.
+	appendN(t, log, "crewlet.abandon.log.task", 1)
+
+	// THE NEXT READER, well inside the ack window.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := cons.Fetch(t.Context(), 1, 0, 500*time.Millisecond)
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if len(got) == 1 {
+			if got[0].Seq != 1 {
+				t.Fatalf("the next reader was handed sequence %d, want 1", got[0].Seq)
+			}
+			return
+		}
+	}
+	t.Fatal("the record appended while an abandoned pull stood was not handed to " +
+		"the next reader within five seconds: it sat in a batch nobody reads " +
+		"until the ack window redelivered it")
+}

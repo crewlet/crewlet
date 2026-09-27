@@ -1040,8 +1040,8 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	//
 	// WHAT IS COLLECTED IS RETURNED. A cancelled drain is this caller
 	// deciding it has waited long enough, not a failure — the messages
-	// already taken are real, and the ones still in the batch are
-	// redelivered because they were never acknowledged.
+	// already taken are real, and the ones still in the batch are handed
+	// back (see handBack).
 	var out []statelog.Message
 	msgs := batch.Messages()
 	for {
@@ -1053,6 +1053,7 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 				msg = nil
 			}
 		case <-ctx.Done():
+			go handBack(msgs)
 		}
 		if msg == nil {
 			break
@@ -1076,6 +1077,29 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 		return out, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
 	}
 	return out, ctx.Err()
+}
+
+// handBack returns to the broker every record an ABANDONED pull still delivers,
+// until the pull expires and its channel closes.
+//
+// A cancelled drain leaves its pull request standing on the server for the
+// rest of its wait, and a record appended in that window is delivered to it —
+// to a batch nobody is reading, where it is held against the consumer's
+// in-flight count until the ACK WINDOW redelivers it, thirty seconds later.
+// On a process that exits the connection goes with it and so does the pull;
+// on one that stops an applier and starts another over the same connection —
+// an engine restarted in-process, an estate adopted and reopened — the next
+// applier waited out that window for a record already on the log, and a
+// barrier appended in it refused every linearizable read as `behind` for the
+// whole of it. A negative acknowledgement redelivers at once, to whichever
+// pull asks next.
+//
+// Its lifetime is the pull's: the channel closes when the request expires,
+// which is at most the wait the fetch asked for.
+func handBack(msgs <-chan jetstream.Msg) {
+	for msg := range msgs {
+		_ = msg.Nak()
+	}
 }
 
 // Pending implements [statelog.Fetcher]: how many records this consumer has
