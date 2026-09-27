@@ -480,7 +480,7 @@ func Catalogue() []Instrument {
 			Attributes: []string{"op", "reason"},
 			Shows: "Chart changes an apply declined to write, by what was " +
 				"declined (`place`, `create`, `move`, `set_lead`, `set_kind`, " +
-				"`rename`, `content`) " +
+				"`set_manages`, `rename`, `content`) " +
 				"and why (`reserved`, `shape`, `removed`, `taken`, " +
 				"`identity`, `alias`, `present`, `absent`, `parent`). A " +
 				"decline is how " +

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -706,9 +707,9 @@ func TestAWriteRefusedOnItsBodyNamesTheGrant(t *testing.T) {
 
 // A REFUSAL THE DOMAIN MADE ON A GRANT IS THE TABLE'S REFUSAL.
 //
-// Whether a lead's body CHANGES a seat's `manages`, its project, its space or
-// its email is a comparison against the row, which only the domain's decide
-// can make — so the route admits the lead and the domain refuses the fields.
+// Whether a lead's body CHANGES a seat's project, its space or its email is a
+// comparison against the row, which only the domain's decide can make — so the
+// route admits the lead and the domain refuses the fields.
 // Rendered as one of the chart's own rules (`422 refused`), that refusal told
 // the caller the request would never land and never which grant would have
 // admitted it; it is `403 unauthorized`, `no_grant`, the grants, and the fields
@@ -719,9 +720,9 @@ func TestADomainGrantRefusalIsTheTablesRefusal(t *testing.T) {
 	r.writer.err = fmt.Errorf("chart: publish: %w", &chart.GrantRefusal{
 		Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sre"},
 		Class:  chart.ClassPrivileged, Grants: []iam.Grant{iam.GrantConfigWrite},
-		Fields: []string{"manages", "project"}, Actor: "cto",
+		Fields: []string{"project", "space"}, Actor: "cto",
 	})
-	rec := patch(r.mux, "/chart/seats/sre", `{"name":"SRE","manages":["ceo"]}`)
+	rec := patch(r.mux, "/chart/seats/sre", `{"name":"SRE","project":"CEO","space":"CEO"}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("answered %d, want 403: %s", rec.Code, rec.Body)
 	}
@@ -738,8 +739,8 @@ func TestADomainGrantRefusalIsTheTablesRefusal(t *testing.T) {
 	if body.Error != string(httpjson.CodeUnauthorized) ||
 		body.Reason != string(authz.ReasonNoGrant) ||
 		!slices.Equal(body.Grants, []string{string(iam.GrantConfigWrite)}) ||
-		!slices.Equal(body.Fields, []string{"manages", "project"}) ||
-		!strings.Contains(body.Detail, "manages, project") {
+		!slices.Equal(body.Fields, []string{"project", "space"}) ||
+		!strings.Contains(body.Detail, "project, space") {
 		t.Errorf("refusal = %+v, want unauthorized, no_grant, [config:write], "+
 			"the fields and the domain's sentence", body)
 	}
@@ -1096,7 +1097,7 @@ func TestARenameIsPublishedAsAStructuralBatch(t *testing.T) {
 	want := chart.Batch{Operations: []chart.Operation{{Kind: chart.OpRename,
 		Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"},
 		To:     "platform"}}}
-	if len(r.writer.batches) != 1 || !slices.Equal(r.writer.batches[0].Operations,
+	if len(r.writer.batches) != 1 || !reflect.DeepEqual(r.writer.batches[0].Operations,
 		want.Operations) {
 		t.Fatalf("published %+v, want %+v", r.writer.batches, want)
 	}
@@ -1157,6 +1158,50 @@ func TestASeatsKindTravelsAsStructure(t *testing.T) {
 	// THE CONTROL: the same body without the kind is written.
 	if rec := patch(lead.mux, "/chart/seats/ana", `{"name":"Ana"}`); rec.Code != http.StatusOK {
 		t.Errorf("a seat's content answered %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// A SEAT'S `manages` IS STRUCTURE ON THIS SURFACE TOO: a batch's set_manages
+// and an import's edge carry the list, and a seat's content refuses it.
+//
+// Carried, because each states a seat's whole list and a dropped one would
+// publish a seat that manages nobody; refused on the content write, because
+// the domain no longer reads it there — a lead's goal edit that sent the list
+// back as they had read it wrote a renamed entry back over the rename — and a
+// dropped field would answer 200 for a list that never changed.
+func TestASeatsManagesTravelsAsStructure(t *testing.T) {
+	t.Parallel()
+	r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	rec := post(r.mux, "/chart/batch", `{"operations":[
+		{"kind":"set_manages","object":{"kind":"seat","id":"cto"},
+		 "manages":["platform","sre"]}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a set_manages answered %d: %s", rec.Code, rec.Body)
+	}
+	if len(r.writer.batches) != 1 || !slices.Equal(
+		r.writer.batches[0].Operations[0].Manages, []string{"platform", "sre"}) {
+		t.Errorf("published %+v, want the list carried", r.writer.batches)
+	}
+
+	rec = post(r.mux, "/chart/import", `{"revision":"r1","edges":[
+		{"object":{"kind":"seat","id":"cto"},"seat_kind":"human","manages":["sre"]}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an import answered %d: %s", rec.Code, rec.Body)
+	}
+	if len(r.writer.imports) != 1 ||
+		!slices.Equal(r.writer.imports[0][0].Manages, []string{"sre"}) {
+		t.Errorf("imported %+v, want the list carried", r.writer.imports)
+	}
+
+	lead := serve(t, nil, leadOf(iam.GrantConfigWrite),
+		rel{seats: map[[2]string]bool{{"cto", "ana"}: true}})
+	if rec := patch(lead.mux, "/chart/seats/ana", `{"name":"Ana","manages":["cto"]}`); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "manages") {
+		t.Errorf("a seat's content naming manages answered %d, want 400 naming "+
+			"the field — the domain does not read it there: %s", rec.Code, rec.Body)
+	}
+	if len(lead.writer.calls) != 0 {
+		t.Errorf("a refused body reached the writer: %v", lead.writer.calls)
 	}
 }
 

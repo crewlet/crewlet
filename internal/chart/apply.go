@@ -141,10 +141,11 @@ const (
 	// declinedCreate is a create_unit or a create_seat.
 	declinedCreate declineOp = "create"
 
-	declinedMove    declineOp = "move"
-	declinedSetLead declineOp = "set_lead"
-	declinedSetKind declineOp = "set_kind"
-	declinedRename  declineOp = "rename"
+	declinedMove       declineOp = "move"
+	declinedSetLead    declineOp = "set_lead"
+	declinedSetKind    declineOp = "set_kind"
+	declinedSetManages declineOp = "set_manages"
+	declinedRename     declineOp = "rename"
 
 	// declinedContent is a content record that met no row.
 	declinedContent declineOp = "content"
@@ -153,7 +154,7 @@ const (
 // declineOps is every word a decline is counted under.
 var declineOps = []declineOp{
 	declinedPlace, declinedCreate, declinedMove, declinedSetLead,
-	declinedSetKind, declinedRename, declinedContent,
+	declinedSetKind, declinedSetManages, declinedRename, declinedContent,
 }
 
 // NewApplier builds the chart's applier for one node.
@@ -436,6 +437,12 @@ func (c applyContext) subject() Subject { return c.record.Subject }
 // keyed on — so a version-1 record is applied as what it meant, identically on
 // the build that applied it first and on this one.
 func (c applyContext) exact() bool { return c.record.V >= exactVersion }
+
+// managesStructural reports whether the record was written under version 3's
+// rules ([managesVersion]): a seat's edge states its whole `manages:` list and
+// a seat's content record carries none. Below it the list is the content
+// record's, and an edge leaves it alone.
+func (c applyContext) managesStructural() bool { return c.record.V >= managesVersion }
 
 // applyEviction records a node's removal from this log, or its readmission.
 //

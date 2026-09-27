@@ -562,17 +562,20 @@ func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
 			"and the ledger that makes a re-import a no-op is keyed on one: %w",
 			ErrRefused)
 	}
+	placed := make([]Edge, len(edges))
 	for i, edge := range edges {
-		if err := checkImportEdge(edge); err != nil {
+		checked, err := importEdge(edge)
+		if err != nil {
 			return WriteResult{}, fmt.Errorf("chart: the import's edge %d (%s) "+
 				"is refused: %w: %w", i, edge.Object, err, ErrRefused)
 		}
+		placed[i] = checked
 	}
 	subject := TreeSubject()
 	at := w.Now()
-	terms := make([]ScopeTerm, 0, len(edges))
-	objects := make([]ObjectRef, 0, len(edges))
-	for _, edge := range edges {
+	terms := make([]ScopeTerm, 0, len(placed))
+	objects := make([]ObjectRef, 0, len(placed))
+	for _, edge := range placed {
 		terms = append(terms, scopeTermFor(edge.Object, edge.Parent))
 		objects = append(objects, edge.Object)
 	}
@@ -591,14 +594,15 @@ func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
 			// that has not applied the previous import publish a second
 			// one. The apply is where every node sees the same ledger.
 			return w.record(subject, OpImport, opID, at, scope, ImportPayload{
-				V: DocumentVersion, Revision: revision, Edges: edges,
+				V: DocumentVersion, Revision: revision, Edges: placed,
 			}, structural)
 		},
 	})
 	return WriteResult{Result: result, Objects: objects}, err
 }
 
-// checkImportEdge refuses an import edge its apply would not read as meant.
+// importEdge is an import edge as its record carries it, or why its apply would
+// not read it as meant.
 //
 // AN IMPORT STATES PLACEMENTS, NOT OPERATIONS: it is a revision's complete
 // authored structure and decides nothing about which of its objects exist, so
@@ -608,21 +612,38 @@ func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
 // AND A SEAT'S KIND, which is structure: the content records that follow an
 // import carry none, so a seat edge without one would make every new seat in
 // the revision an agent — the one kind that runs — whatever the document said.
-func checkImportEdge(edge Edge) error {
+//
+// AND A SEAT'S `manages:` LIST, which is structure too and held to the rules a
+// set_manages is ([manageList]); a unit's edge may carry none, because a unit
+// manages nobody — its lead does. The record carries the list as the apply
+// stores it — folded, de-duplicated and sorted — as a batch's edge does, so
+// the edge an import published and the rows it produced say the same thing.
+func importEdge(edge Edge) (Edge, error) {
 	switch {
 	case edge.Op != "" || edge.From != "":
-		return fmt.Errorf("an import places objects and states no operation " +
-			"(`op`, `from`)")
+		return Edge{}, fmt.Errorf("an import places objects and states no " +
+			"operation (`op`, `from`)")
 	case edge.Object.Kind == KindSeat && !edge.Kind.Valid():
-		return fmt.Errorf("a seat's edge states what holds it: %q is not %q "+
-			"or %q", edge.Kind, SeatAgent, SeatHuman)
+		return Edge{}, fmt.Errorf("a seat's edge states what holds it: %q is "+
+			"not %q or %q", edge.Kind, SeatAgent, SeatHuman)
 	case edge.Object.Kind == KindUnit && edge.Kind != "":
-		return fmt.Errorf("a unit is held by nobody, and its edge states the "+
-			"seat kind %q", edge.Kind)
+		return Edge{}, fmt.Errorf("a unit is held by nobody, and its edge "+
+			"states the seat kind %q", edge.Kind)
+	case edge.Object.Kind == KindUnit && len(edge.Manages) > 0:
+		return Edge{}, fmt.Errorf("a unit manages nobody — its lead does — and "+
+			"its edge states the `manages:` list %v", edge.Manages)
 	case edge.Object.Kind != KindUnit && edge.Object.Kind != KindSeat:
-		return fmt.Errorf("%s is not an object in the chart", edge.Object.Kind)
+		return Edge{}, fmt.Errorf("%s is not an object in the chart",
+			edge.Object.Kind)
 	}
-	return nil
+	if edge.Object.Kind == KindSeat {
+		list, bad := manageList(edge.Manages)
+		if bad != nil {
+			return Edge{}, fmt.Errorf("%s", bad.detail)
+		}
+		edge.Manages = list
+	}
+	return edge, nil
 }
 
 // scopeTermFor is one object's term in this domain's alphabet.

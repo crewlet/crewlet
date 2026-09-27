@@ -49,24 +49,27 @@ import (
 //   - PROSE — a seat's name, backstory, goal, responsibilities and behavioural
 //     guidelines; a unit's name, type, purpose, goals and knowledge refs.
 //     Whoever leads the object, decided at the door.
-//   - AUTHORITY-BEARING RELATIONS — a seat's `manages`, `project`, `space` and
-//     `email`; a unit's `project`, `space` and `channel`. The company's grant,
-//     because each is what somebody's AUTHORITY is derived from: `manages` is
-//     who a seat's manager is, so a lead adding the founder to a report's list
-//     made themselves the founder's ancestor, with every owner-or-lead read and
-//     every further edit that brings; `project` and `space` are which tracker
-//     project and which page container a seat or unit leads, so a lead pointing
-//     their unit at another team's key — or at the org root's container — took
-//     over its removals, its archive and its policy; a unit's `channel` is
-//     which chat channel's messages it answers; and a seat's `email` is whose
-//     vendor actions — a Jira comment, a push — are attributed and routed to
-//     it. [ownFields] names them per kind, and a write CHANGING one is
-//     [ClassPrivileged].
+//   - AUTHORITY-BEARING RELATIONS — a seat's `project`, `space` and `email`;
+//     a unit's `project`, `space` and `channel`. The company's grant, because
+//     each is what somebody's AUTHORITY is derived from: `project` and `space`
+//     are which tracker project and which page container a seat or unit leads,
+//     so a lead pointing their unit at another team's key — or at the org
+//     root's container — took over its removals, its archive and its policy; a
+//     unit's `channel` is which chat channel's messages it answers; and a
+//     seat's `email` is whose vendor actions — a Jira comment, a push — are
+//     attributed and routed to it. [ownFields] names them per kind, and a
+//     write CHANGING one is [ClassPrivileged].
 //   - RUNTIME — the opaque half. The company's grant.
-//   - STRUCTURE — create, move, lead, kind, rename: [ClassStructure], the
-//     company's grant. And a REMOVAL, [ClassRemoval], which takes the
-//     deployment's grant as well: it is the one structural change nothing
-//     undoes (see that class).
+//   - STRUCTURE — create, move, lead, kind, `manages:`, rename:
+//     [ClassStructure], the company's grant. A seat's `manages:` list is who
+//     its manager is — a lead adding the founder to a report's list made
+//     themselves the founder's ancestor — and it is STRUCTURE rather than a
+//     relation on the content record because a rename's cascade moves its
+//     entries on the tree's subject: restated by a content write on the
+//     seat's own, a list read before a rename applied was accepted after it
+//     and wrote the renamed entry back ([OpSetManages]). And a REMOVAL,
+//     [ClassRemoval], which takes the deployment's grant as well: it is the
+//     one structural change nothing undoes (see that class).
 //
 // # Fail-closed, including for a record this file does not name
 //
@@ -105,10 +108,10 @@ const (
 
 	// ClassStructure is every record the chart serialises on one subject
 	// for the whole tree that PLACES something — a create, a move, a lead,
-	// a kind, a rename, an import. A rename is among them for the same
-	// reason a create is: an address is how every other domain refers to
-	// an object, so reassigning one in a namespace the whole company
-	// shares is not a fact about one team.
+	// a kind, a `manages:` list, a rename, an import. A rename is among
+	// them for the same reason a create is: an address is how every other
+	// domain refers to an object, so reassigning one in a namespace the
+	// whole company shares is not a fact about one team.
 	ClassStructure PayloadClass = "structure"
 
 	// ClassRemoval is the record that takes objects OUT of the chart —
@@ -191,7 +194,7 @@ func contentRequirement(changed []string) requirement {
 // second time: a field added to a decide and not here would be compared by
 // nothing, which is a lead's write the company's grant was meant to decide.
 var ownFields = map[ObjectKind][]string{
-	KindSeat: {"email", "manages", "project", "space", "runtime"},
+	KindSeat: {"email", "project", "space", "runtime"},
 	KindUnit: {"channel", "project", "space", "runtime"},
 }
 
@@ -260,11 +263,11 @@ func (e *GrantRefusal) Error() string {
 		return fmt.Sprintf("chart: %s acts with %v, and this write to %s changes "+
 			"%s, which needs %v. A chart object's runtime half is the company's "+
 			"configuration (a seat's models, its credentials, its sandbox cell, "+
-			"its mcp_env), and a seat's manages, project, space and email and a "+
-			"unit's project, space and channel are what leadership and "+
-			"attribution are derived from — so none of them is one team's to "+
-			"change. Send the value you read to keep it, and leave the runtime "+
-			"out", e.Actor, e.Held, e.Object, strings.Join(e.Fields, ", "),
+			"its mcp_env), and a seat's project, space and email and a unit's "+
+			"project, space and channel are what leadership and attribution "+
+			"are derived from — so none of them is one team's to change. Send "+
+			"the value you read to keep it, and leave the runtime out",
+			e.Actor, e.Held, e.Object, strings.Join(e.Fields, ", "),
 			e.Grants)
 	}
 	return fmt.Sprintf("chart: %s acts with %v and a %s record needs %v — the "+

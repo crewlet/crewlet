@@ -69,6 +69,11 @@ type wnode struct {
 	// seatKind is what holds a seat. Empty for a unit.
 	seatKind SeatKind
 
+	// manages is a seat's authored `manages:` list, folded and sorted as
+	// the apply stores it. Empty for a unit, and for a seat that manages
+	// nobody.
+	manages []string
+
 	// origin is the address the object was CREATED under — its identity,
 	// which no rename moves.
 	origin string
@@ -108,6 +113,7 @@ type wnode struct {
 var opRank = map[OperationKind]int{
 	OpSetLead:    1,
 	OpSetKind:    1,
+	OpSetManages: 1,
 	OpMove:       2,
 	OpCreateUnit: 3,
 	OpCreateSeat: 3,
@@ -268,6 +274,23 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 		w.did(n, op.Kind)
 		return nil
 
+	case OpSetManages:
+		if ref.Kind != KindSeat {
+			return refuse(RuleUnknownKind, "only a seat manages anybody — a "+
+				"unit's authority over its members is its lead's")
+		}
+		n, refused := w.checkPresent(refuse, ref)
+		if refused != nil {
+			return refused
+		}
+		list, bad := manageList(op.Manages)
+		if bad != nil {
+			return refuse(bad.rule, "%s", bad.detail)
+		}
+		n.manages = list
+		w.did(n, op.Kind)
+		return nil
+
 	case OpRename:
 		n, refused := w.checkPresent(refuse, ref)
 		if refused != nil {
@@ -294,6 +317,7 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			return refuse(refused.Rule, "%q cannot take the address %q — %s",
 				n.key, to, refused.Detail)
 		}
+		w.moveManages(ctx, n, to)
 		w.rename(n, to)
 		w.touch(n)
 		return nil
@@ -348,12 +372,19 @@ func unusedField(refuse refuseFunc, op Operation) *RefusalError {
 		OpMove:         {"parent"},
 		OpSetLead:      {"lead"},
 		OpSetKind:      {"seat_kind"},
+		OpSetManages:   {"manages"},
 		OpRename:       {"to"},
 		OpRemoveObject: nil,
 	}[op.Kind]
+	// A LIST IS SUPPLIED WHEN IT HOLDS ANYTHING, for the empty value's
+	// reason: a set_manages clearing a seat's list sends none.
+	manages := ""
+	if len(op.Manages) > 0 {
+		manages = "stated"
+	}
 	for field, value := range map[string]string{
 		"parent": op.Parent, "lead": op.Lead, "to": op.To,
-		"seat_kind": string(op.SeatKind)} {
+		"seat_kind": string(op.SeatKind), "manages": manages} {
 		if value != "" && !slices.Contains(takes, field) {
 			return refuse(RuleUnusedField, "%s takes %s and no %q — nothing "+
 				"would read it, and a batch that dropped it would answer as "+
@@ -476,6 +507,46 @@ func (w *working) rename(n *wnode, to string) {
 			other.parent = to
 		case n.kind == KindSeat && other.kind == KindUnit && other.lead == old:
 			other.lead = to
+		}
+	}
+}
+
+// moveManages moves, in every seat's list the replay holds, the entries that
+// reach n onto to — the address n's rename is about to land on — exactly as the
+// apply's cascade will move the stored ones ([Applier.moveManages]).
+//
+// ASKED BEFORE THE REPLAY MOVES n, because which object an entry reaches is a
+// question about the chart as the rename found it, as the apply asks it of the
+// rows before its rekey ([managesNaming]).
+//
+// WHY THE REPLAY HAS TO: a seat's edge states its whole list ([Edge.Manages])
+// and the apply writes it after the cascade, so a list the replay left on the
+// old address would be written back over the one the cascade moved — the
+// very reversion version 3 exists to end, reached from inside one batch. An
+// entry already naming to is the rename coming back onto an address the entry
+// already names, and stays.
+//
+// THE REPLAY ANSWERS FROM MEMORY, so the book never fails.
+func (w *working) moveManages(ctx context.Context, n *wnode, to string) {
+	if follow, _ := managesFollow(ctx, w, n.kind, to); !follow {
+		return
+	}
+	for _, seat := range w.live {
+		if seat.kind != KindSeat || len(seat.manages) == 0 {
+			continue
+		}
+		moved := false
+		next := make([]string, 0, len(seat.manages))
+		for _, entry := range seat.manages {
+			if entry != to {
+				if reaches, _ := managesResolves(ctx, w, n.kind, entry, n.key); reaches {
+					entry, moved = to, true
+				}
+			}
+			next = append(next, entry)
+		}
+		if moved {
+			seat.manages = sortedKeys(next)
 		}
 	}
 }
@@ -617,7 +688,11 @@ func (w *working) edges() []Edge {
 		case KindUnit:
 			edge.Lead = n.lead
 		case KindSeat:
+			// THE SEAT'S WHOLE STRUCTURAL POST-STATE, its list included:
+			// the apply replaces the stored list with this one, so an edge
+			// that left it out would clear it ([Edge.Manages]).
 			edge.Kind = n.seatKind
+			edge.Manages = slices.Clone(n.manages)
 		}
 		out = append(out, edge)
 	}
@@ -658,6 +733,21 @@ func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
 			return seat.Origin(), err
 		}); err != nil {
 		return nil, err
+	}
+	// EVERY SEAT'S `manages:` LIST, because it is structure an edge states
+	// whole ([Edge.Manages]): a batch that moves a seat publishes the list
+	// it has, and a rename moves the entries of every list that reaches it.
+	manages, err := readManages(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for manager, targets := range manages {
+		// A LIST WHOSE MANAGER THE ROWS DO NOT HOLD belongs to nothing a
+		// batch can name, so nothing reads it here: a removal deletes the
+		// rows a seat owns, and a rename moves them with it.
+		if n, live := state.live[refKey(ObjectRef{Kind: KindSeat, ID: manager})]; live {
+			n.manages = targets
+		}
 	}
 	// THE TOMBSTONES TOO, because a removed address never resolves again
 	// and a create onto one must be refused rather than silently writing a

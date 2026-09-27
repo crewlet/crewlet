@@ -261,15 +261,18 @@ is nothing to splice into.
 The chart is a domain of its own, so it has its own verbs. What decides them is
 **which fields your write changes**: an object's prose — a name, a purpose, a
 goal — is whoever leads that object; the relations authority is derived from —
-a seat's `manages`, `project`, `space` and `email`, a unit's `project`, `space`
-and `channel` — and anything under `runtime` — a seat's model chain, its
+a seat's `project`, `space` and `email`, a unit's `project`, `space` and
+`channel` — and anything under `runtime` — a seat's model chain, its
 credentials, its sandbox cell, its `mcp_env` — are the company's own
-`config:write` grant, because a lead who could write the first could make
-themselves anybody's manager and a stdio MCP server is `exec.Command` with the
+`config:write` grant, because a lead who could write the first could take over
+another team's project and a stdio MCP server is `exec.Command` with the
 config's command. Sending back what you read changes nothing, so a lead's
 `PATCH` of a goal carries the seat's relations unchanged and lands — and a
 relation the body leaves out is a **change**: refused to a lead, naming the
-field, and applied for an administrator.
+field, and applied for an administrator. Whom a seat **manages** is none of
+these: it is structure, a batch's `set_manages` (below), because a rename moves
+the entries naming its object and only a write ordered against the rename can
+never put the old address back.
 
 ### Edit one seat's goal
 
@@ -281,9 +284,9 @@ runtime half with `?runtime=true`, and you get it only if you also hold
 curl -s "$CREWLET_URL/chart/seats/sre" -H "$AUTH" > sre.json
 
 # The seat as it will be: every field the read served, with the one you mean
-# to change changed. `manages` is served beside the seat rather than inside it.
-jq '.seat + {manages: .manages}
-    | {unit, name, email, goal, manages, project, space}
+# to change changed.
+jq '.seat
+    | {unit, name, email, goal, project, space}
     | with_entries(select(.value != null))
     | .goal = "keep the platform boring"' sre.json > sre-edit.json
 
@@ -295,12 +298,10 @@ curl -X PATCH $CREWLET_URL/chart/seats/sre \
 A content write is **full post-state**, like the record it becomes: a field you
 leave out is a field you set to empty — with one exception, `runtime`. That is
 why the body is built from the whole read rather than typed out. A body naming
-only the field you meant to change leaves out the seat's `email`, `manages`,
-`project` and `space`, and each of those is then a change: a lead is refused
-`403` naming them, and an administrator holding `config:write` is **granted**
-it — the seat's address, the teams it manages, its project and its space are
-cleared under a `200`, and losing `manages` is itself a change of authority,
-since it decides whom that seat manages.
+only the field you meant to change leaves out the seat's `email`, `project` and
+`space`, and each of those is then a change: a lead is refused `403` naming
+them, and an administrator holding `config:write` is **granted** it — the
+seat's address, its project and its space are cleared under a `200`.
 
 **Three prose fields are not in the read**: a seat's `backstory`,
 `responsibilities` and `behavioral_guidelines`. `GET /chart/seats/{handle}`
@@ -311,12 +312,13 @@ author before you send it.
 Leaving `runtime` out keeps the runtime half the seat has, which is what lets
 somebody who leads the seat correct its goal without holding, or seeing, its
 model chain and credentials; removing the half is `"clear_runtime": true`,
-which takes `config:write` like any runtime write. It carries no
-**kind**: whether a person or an agent holds the seat is structure, set by the
-batch that creates it and changed by a `set_kind` operation, and a content body
-naming one is refused — which is why the `jq` above picks the fields it sends
-rather than sending `.seat` whole, whose `handle`, `kind` and
-`former_handles` no content body reads.
+which takes `config:write` like any runtime write. It carries no **kind** and
+no **`manages`**: whether a person or an agent holds the seat, and whom it
+manages, are structure — set by the batch that creates the seat and changed by
+a `set_kind` or a `set_manages` operation — and a content body naming either is
+refused `400` — which is why the `jq` above picks the fields it sends rather
+than sending `.seat` whole, whose `handle`, `kind` and `former_handles` no
+content body reads.
 
 ### Hire, move, dissolve
 
@@ -340,6 +342,21 @@ whose second write never arrives never gets a mailbox. A content write never cre
 `PATCH` naming a seat the chart does not hold is refused, pointing here — and
 it waits for a `202` batch this node has not applied yet, so the second write
 can follow the first straight away.
+
+Whom a seat manages is a `set_manages` in a batch, stating the **whole** list —
+seat handles and unit keys; an empty one clears it:
+
+```bash
+curl -X POST $CREWLET_URL/chart/batch \
+  -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"operations":[
+        {"kind":"set_manages","object":{"kind":"seat","id":"cto"},
+         "manages":["platform","sre"]}
+      ]}'
+```
+
+It takes `config:write` like every structural write, because it decides who the
+listed seats' manager is.
 
 Removals go in a batch of their own and carry a `reason`, which rides into the
 tombstone so somebody asking where their team went reads "merged into

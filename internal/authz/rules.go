@@ -126,11 +126,14 @@ const (
 	// every engine host: a stdio MCP server is exec.Command with the
 	// config's command. So it is decided as an operator surface, and so
 	// are the RELATIONS somebody's authority is derived from — a seat's
-	// manages, project, space and email, a unit's project, space and
-	// channel — which internal/chart refuses below the company's grant
-	// because only its decide can see whether a write changes one. The
-	// PROSE — a name, a purpose, a goal — is decided by whoever leads the
-	// object ([ActionChartContent]).
+	// project, space and email, a unit's project, space and channel —
+	// which internal/chart refuses below the company's grant because only
+	// its decide can see whether a write changes one. The PROSE — a name,
+	// a purpose, a goal — is decided by whoever leads the object
+	// ([ActionChartContent]). Whom a seat manages is STRUCTURE
+	// ([ActionChartStructure]): a rename moves the entries naming its
+	// object on the chart's structural subject, and a list restated on the
+	// seat's own subject could put a renamed entry back.
 	ActionChartRead        Action = "chart.read"
 	ActionChartReadRuntime Action = "chart.runtime.read"
 	ActionChartContent     Action = "chart.content.write"

@@ -39,6 +39,7 @@ roles:
   - name: Ops
     handle: ops
     llm: zulu
+    manages: [cto]
 `
 
 // THE SETTINGS HALF IS THE FILE MINUS TWO KEYS, and nothing else.
@@ -224,9 +225,9 @@ func TestOneFileReachesBothSurfacesInOrder(t *testing.T) {
 
 		t.Errorf("the chart reached the settings surface:\n%s", node.settings)
 	}
-	// A SEAT'S KIND TRAVELS WITH ITS PLACE, in the import, and never in its
-	// content: the node reads it as structure and refuses it on a content
-	// write.
+	// A SEAT'S KIND AND ITS `manages` TRAVEL WITH ITS PLACE, in the import,
+	// and never in its content: the node reads both as structure and refuses
+	// either on a content write.
 	edges, _ := node.imported["edges"].([]any)
 	for _, raw := range edges {
 		edge, _ := raw.(map[string]any)
@@ -234,10 +235,21 @@ func TestOneFileReachesBothSurfacesInOrder(t *testing.T) {
 		if object["kind"] == "seat" && edge["seat_kind"] == nil {
 			t.Errorf("the import's edge for seat %v states no seat_kind", object["id"])
 		}
+		if object["id"] == "ops" {
+			if got, _ := json.Marshal(edge["manages"]); string(got) != `["cto"]` {
+				t.Errorf("the import's edge for ops states manages %s, want [\"cto\"]", got)
+			}
+		}
 	}
 	for path, body := range node.bodies {
-		if _, carried := body["kind"]; carried && strings.HasPrefix(path, "PATCH /chart/seats/") {
-			t.Errorf("%s carried a kind, which the node refuses on a content write", path)
+		if !strings.HasPrefix(path, "PATCH /chart/seats/") {
+			continue
+		}
+		for _, structure := range []string{"kind", "manages"} {
+			if _, carried := body[structure]; carried {
+				t.Errorf("%s carried %s, which the node refuses on a content write",
+					path, structure)
+			}
 		}
 	}
 	// AND EVERY OBJECT STATES ITS RUNTIME HALF OR CLEARS IT. A content

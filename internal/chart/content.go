@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -101,6 +100,15 @@ type UnitContent struct {
 // and a set_kind changes it ([OpSetKind]) — because it decides whether a node
 // runs the seat at all, and a lead editing a backstory must not be able to
 // turn a person's seat into an agent's by the same write.
+//
+// AND NO `manages:` LIST, which is structure for a reason of its own: a
+// rename's cascade moves the entries naming the renamed object, on the tree's
+// subject, and a content write arbitrates on the seat's. Restated here, a list
+// read on a node that had not applied a rename yet was accepted after it —
+// the seat's own subject had not moved — and wrote the renamed entry back onto
+// the retired address, so a lead correcting a goal undid the cascade and could
+// end up managing whoever a creation later gave that address. A set_manages
+// ([OpSetManages]) changes it, decided in one order with every rename.
 type SeatContent struct {
 	Handle string
 
@@ -133,7 +141,6 @@ type SeatContent struct {
 	Goal                 string
 	Responsibilities     []string
 	BehavioralGuidelines []string
-	Manages              []string
 	Project              string
 	Space                string
 
@@ -262,6 +269,10 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 // email is a value a read MASKS — the stored value a write that hands the mask
 // back is restored from, rather than written as eight characters of
 // `__redacted__`.
+//
+// IT NEVER TOUCHES THE SEAT'S `manages:` LIST, which is structure
+// ([SeatContent]): the record is written at version 3, whose content apply
+// leaves the stored list as it is.
 func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent) (
 	WriteResult, error) {
 
@@ -315,13 +326,8 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			manages, err := readManagesOf(ctx, tx, handle)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
 			changed, err := fieldChanges(KindSeat, map[string]bool{
 				"email":   emailChanges(content.Email, prior.Email),
-				"manages": managesChanges(content.Manages, manages),
 				"project": statedChanges(content.Project, prior.Project),
 				"space":   statedChanges(content.Space, prior.Space),
 				"runtime": runtimeChanges,
@@ -342,7 +348,6 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 				Name: content.Name, Backstory: content.Backstory,
 				Goal: content.Goal, Responsibilities: content.Responsibilities,
 				BehavioralGuidelines: content.BehavioralGuidelines,
-				Manages:              content.Manages,
 				Project:              content.Project, Space: content.Space,
 				Runtime: runtime,
 			}
@@ -558,14 +563,6 @@ func statedChanges(stated, stored string) bool { return stated != stored }
 // this class exists to refuse.
 func emailChanges(stated, stored string) bool {
 	return stated != redact.FieldMask && stated != stored
-}
-
-// managesChanges reports whether a caller's `manages:` list differs from the
-// edges the row authored, compared as the apply stores them — folded,
-// de-duplicated and sorted ([sortedKeys]) — so the order a lead sends back
-// what they read in, and its spelling's case, change nothing.
-func managesChanges(stated, stored []string) bool {
-	return !slices.Equal(sortedKeys(stated), sortedKeys(stored))
 }
 
 // holdsObject reports whether a stored runtime half is the one canonical names.

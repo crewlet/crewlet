@@ -38,6 +38,10 @@ type batchOp struct {
 	Lead     string `json:"lead,omitempty"`
 	To       string `json:"to,omitempty"`
 	SeatKind string `json:"seat_kind,omitempty"`
+
+	// Manages is the whole list a `set_manages` gives its seat; an empty
+	// one is a seat that manages nobody.
+	Manages []string `json:"manages,omitempty"`
 }
 
 // postBatch applies one structural change.
@@ -78,7 +82,7 @@ func (s *Service) postBatch(w http.ResponseWriter, r *http.Request) {
 			Kind:   kind,
 			Object: chart.ObjectRef{Kind: chart.ObjectKind(op.Object.Kind), ID: op.Object.ID},
 			Parent: op.Parent, Lead: op.Lead, To: op.To,
-			SeatKind: chart.SeatKind(op.SeatKind),
+			SeatKind: chart.SeatKind(op.SeatKind), Manages: op.Manages,
 		})
 	}
 	// A REMOVAL TAKES THE DEPLOYMENT'S GRANT AS WELL, asked the moment the

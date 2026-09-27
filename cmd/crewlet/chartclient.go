@@ -63,15 +63,17 @@ func (c *chartClient) ImportStructure(ctx context.Context, revision string,
 			Kind string `json:"kind"`
 			ID   string `json:"id"`
 		} `json:"object"`
-		Parent   string `json:"parent,omitempty"`
-		Lead     string `json:"lead,omitempty"`
-		SeatKind string `json:"seat_kind,omitempty"`
+		Parent   string   `json:"parent,omitempty"`
+		Lead     string   `json:"lead,omitempty"`
+		SeatKind string   `json:"seat_kind,omitempty"`
+		Manages  []string `json:"manages,omitempty"`
 	}
 	out := make([]edgeBody, 0, len(edges))
 	for _, e := range edges {
 		var one edgeBody
 		one.Object.Kind, one.Object.ID = string(e.Object.Kind), e.Object.ID
 		one.Parent, one.Lead, one.SeatKind = e.Parent, e.Lead, string(e.Kind)
+		one.Manages = e.Manages
 		out = append(out, one)
 	}
 	body, err := json.Marshal(map[string]any{"revision": revision, "edges": out})
@@ -117,8 +119,8 @@ func (c *chartClient) WriteUnit(ctx context.Context, unit chart.AuthoredUnit) er
 }
 
 func (c *chartClient) WriteSeat(ctx context.Context, seat chart.AuthoredSeat) error {
-	// NO KIND: what holds a seat is structure, and the import's edge for
-	// this seat already stated it.
+	// NO KIND AND NO `manages`: what holds a seat and whom it manages are
+	// structure, and the import's edge for this seat already stated both.
 	fields := map[string]any{
 		// THE UNIT THE STRUCTURE JUST PLACED IT IN. The domain refuses a
 		// value that disagrees with the row, so this is what makes the
@@ -129,7 +131,6 @@ func (c *chartClient) WriteSeat(ctx context.Context, seat chart.AuthoredSeat) er
 		"backstory": seat.Backstory, "goal": seat.Goal,
 		"responsibilities":      seat.Responsibilities,
 		"behavioral_guidelines": seat.BehavioralGuidelines,
-		"manages":               seat.Manages,
 		"project":               seat.Project, "space": seat.Space,
 	}
 	statesRuntime(fields, seat.Runtime)

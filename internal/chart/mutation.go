@@ -100,6 +100,32 @@ type Edge struct {
 	// otherwise. From version 2 the kind is structure and never content, so
 	// every seat edge a batch or an import publishes carries it.
 	Kind SeatKind `json:"k,omitempty"`
+
+	// Manages is a SEAT's authored `manages:` list — part of its structural
+	// post-state, as its place and its kind are — folded, de-duplicated and
+	// sorted as the apply stores it ([sortedKeys]), and empty on a unit's
+	// edge.
+	//
+	// # Why it rides the structure
+	//
+	// `manages:` is what a seat's manager is derived from, and a rename's
+	// cascade — a structural record — moves the entries naming the renamed
+	// object ([Applier.moveManages]). While the list was a field of the
+	// seat's CONTENT record it had two writers on two subjects, and only one
+	// of them saw the other: a lead's goal edit decided on a node that had
+	// not applied a rename yet sent the list back as it had read it, the
+	// seat's own subject had not moved, so the broker accepted it — and its
+	// apply wrote the entry the rename had just moved back onto the retired
+	// address. On the tree's one subject a rename and every change to a
+	// list are decided in one order, so whichever is decided second sees the
+	// other.
+	//
+	// FULL POST-STATE FROM VERSION 3: every seat edge a batch or an import
+	// publishes states the seat's WHOLE list, and the apply replaces the
+	// seat's edge set with it — so EMPTY IS A SEAT THAT MANAGES NOBODY. On a
+	// record below version 3 it is read as absent ([readAt]): the list was
+	// the content record's to state, and such an edge leaves it as it is.
+	Manages []string `json:"m,omitempty"`
 }
 
 // PlacementPayload states edges. Its subject is [KindTree].
@@ -222,7 +248,8 @@ type UnitPayload struct {
 // [KindSeat].
 //
 // IT CARRIES NO UNIT, for [UnitPayload]'s reason: which unit a seat sits in is
-// structure.
+// structure — and from version 3 no kind and no `manages:` list either, for
+// the same one.
 type SeatPayload struct {
 	V int `json:"v"`
 
@@ -257,6 +284,12 @@ type SeatPayload struct {
 
 	// Manages is the AUTHORED list: seat handles and unit keys exactly as
 	// they were written, including entries that resolve to nothing.
+	//
+	// VERSIONS 1 AND 2 ONLY. From version 3 the list is STRUCTURE — a
+	// seat's edge states it and a set_manages changes it, on the tree's
+	// subject ([Edge.Manages]) — so a content record carries none, and its
+	// apply leaves the seat's edge set as it is. An older record's is
+	// applied as it was meant, for ever.
 	//
 	// KEPT AS WRITTEN AND NEVER EXPANDED HERE. A `manages:` entry naming a
 	// unit reaches every seat in its subtree, and that expansion is a

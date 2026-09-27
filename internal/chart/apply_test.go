@@ -277,6 +277,23 @@ func v1(rec chart.MutationRecord) chart.MutationRecord {
 	return rec
 }
 
+// v2 is rec as a version-2 writer published it: the cases that hold the
+// permanent reader to what version 2 meant — a seat's content record carrying
+// its `manages:` list, and an edge that has none.
+func v2(rec chart.MutationRecord) chart.MutationRecord {
+	rec.V = 2
+	return rec
+}
+
+// setManages is a structural record replacing one agent seat's whole
+// `manages:` list, as a batch's set_manages publishes it — from record version
+// 3 the only record that writes one.
+func setManages(opID, handle, unit string, entries ...string) chart.MutationRecord {
+	return place(opID, chart.Edge{
+		Object: chart.ObjectRef{Kind: chart.KindSeat, ID: handle}, Parent: unit,
+		Op: chart.OpSetManages, Kind: chart.SeatAgent, Manages: entries})
+}
+
 // unitRecord is one unit's content.
 func unitRecord(opID, key string, edit func(*chart.UnitPayload)) chart.MutationRecord {
 	payload := chart.UnitPayload{V: chart.DocumentVersion, Key: key,
@@ -402,9 +419,8 @@ func TestAnAuthoredEdgeSetIsFoldedAndDeduplicated(t *testing.T) {
 	h := newHarness(t)
 
 	h.must(create("op-create", chart.KindSeat, "sarah-chen", "engineering"))
-	h.must(seatRecord("op-seat", "sarah-chen", "engineering", func(p *chart.SeatPayload) {
-		p.Manages = []string{"zoe", "Platform", "adam", "platform", "", "bob"}
-	}))
+	h.must(setManages("op-seat", "sarah-chen", "engineering",
+		"zoe", "Platform", "adam", "platform", "", "bob"))
 
 	got := h.column(
 		`SELECT target FROM chart_manages WHERE manager = 'sarah-chen' ORDER BY target`)
@@ -435,9 +451,8 @@ func TestAnAuthoredEdgeSetIsWrittenSorted(t *testing.T) {
 	h := newHarness(t)
 
 	h.must(create("op-create", chart.KindSeat, "sarah-chen", "engineering"))
-	h.must(seatRecord("op-seat", "sarah-chen", "engineering", func(p *chart.SeatPayload) {
-		p.Manages = []string{"zoe", "Platform", "adam", "platform", "", "bob"}
-	}))
+	h.must(setManages("op-seat", "sarah-chen", "engineering",
+		"zoe", "Platform", "adam", "platform", "", "bob"))
 
 	got := h.column(
 		`SELECT target FROM chart_manages WHERE manager = 'sarah-chen' ORDER BY rowid`)
@@ -459,12 +474,8 @@ func TestRewritingAnEdgeSetRemovesWhatTheRecordNoLongerNames(t *testing.T) {
 	h := newHarness(t)
 
 	h.must(create("op-create", chart.KindSeat, "sarah-chen", "engineering"))
-	h.must(seatRecord("op-one", "sarah-chen", "engineering", func(p *chart.SeatPayload) {
-		p.Manages = []string{"adam", "bob"}
-	}))
-	h.must(seatRecord("op-two", "sarah-chen", "engineering", func(p *chart.SeatPayload) {
-		p.Manages = []string{"bob"}
-	}))
+	h.must(setManages("op-one", "sarah-chen", "engineering", "adam", "bob"))
+	h.must(setManages("op-two", "sarah-chen", "engineering", "bob"))
 
 	got := h.column(
 		`SELECT target FROM chart_manages WHERE manager = 'sarah-chen' ORDER BY target`)
@@ -723,9 +734,7 @@ func TestARekeyMovesTheStructureAndNotTheAuthoredText(t *testing.T) {
 		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"},
 			Parent: "platform"}))
 	h.must(create("op-create-ana", chart.KindSeat, "ana", "engineering"))
-	h.must(seatRecord("op-seat", "ana", "engineering", func(p *chart.SeatPayload) {
-		p.Manages = []string{"platform"}
-	}))
+	h.must(setManages("op-seat", "ana", "engineering", "platform"))
 
 	h.must(v1(record(chart.RekeySubject("infrastructure"), chart.OpRekey, "op-rekey",
 		chart.RekeyPayload{V: chart.DocumentVersion, Key: "infrastructure",
@@ -820,9 +829,7 @@ func TestASeatsRekeyMovesTheUnitsItLeads(t *testing.T) {
 			Lead: "ana"},
 		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ana"},
 			Parent: "design"}))
-	h.must(seatRecord("op-ana", "ana", "design", func(p *chart.SeatPayload) {
-		p.Manages = []string{"design"}
-	}))
+	h.must(setManages("op-ana", "ana", "design", "design"))
 	h.must(seatRekey("op-rename", "ana-lopez", "ana"))
 
 	if got := h.unit("design").Lead; got != "ana-lopez" {

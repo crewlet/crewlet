@@ -179,6 +179,47 @@ func TestASeatDocumentHoldingNoRuntimeClearsTheSeats(t *testing.T) {
 	}
 }
 
+// A SEAT DOCUMENT WRITTEN BACK NEVER RESTRUCTURES THE COMPANY.
+//
+// The document holds the whole seat so a pass can hand back what it did not
+// touch, and its unit, its kind and its `manages:` list are in it — but each is
+// the tree's to change, on the tree's subject. The list rode the content write
+// once, and a pass's write decided before a rename applied put the renamed
+// entry back; so a document naming different structure writes its content and
+// leaves the structure as the chart holds it. Mutation: have the write publish
+// the document's list, through any record, and the seat's list follows it.
+func TestASeatDocumentWrittenBackLeavesTheSeatsStructure(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, seedCompanyDoc)})
+	readChart(t, e)
+	by := iam.Actor{Name: "ops", Kind: iam.ActorOperator}
+
+	doc := seatDocumentOf(t, e, "ceo")
+	doc["manages"] = []string{"somebody-else"}
+	doc["goal"] = "run the company"
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.SetSeatDocument(t.Context(), "ceo", body, "a pass", by); err != nil {
+		t.Fatalf("SetSeatDocument: %v", err)
+	}
+	detail, err := e.Chart().Seat(t.Context(), "ceo", statelog.Freshness{
+		Level: statelog.ReadLinearizable,
+	})
+	if err != nil {
+		t.Fatalf("read the seat: %v", err)
+	}
+	if detail.Seat.Goal != "run the company" {
+		t.Errorf("the seat's goal is %q, want the document's", detail.Seat.Goal)
+	}
+	if !reflect.DeepEqual(detail.Manages, []string{"dev"}) {
+		t.Errorf("the seat manages %v after a document write, want [dev] — "+
+			"the list is structure, and a content write does not change it",
+			detail.Manages)
+	}
+}
+
 // sameJSON reports whether two JSON values are equal as values.
 func sameJSON(t *testing.T, a, b json.RawMessage) bool {
 	t.Helper()

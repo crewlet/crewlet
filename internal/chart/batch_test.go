@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -648,7 +649,7 @@ func TestABatchMarksEachEdgeWithWhatItDid(t *testing.T) {
 		{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "bob"},
 			Parent: "product", Op: chart.OpCreateSeat, Kind: chart.SeatAgent},
 	}
-	if !slices.Equal(edges, want) {
+	if !reflect.DeepEqual(edges, want) {
 		t.Errorf("the batch published\n  %+v\nwant\n  %+v", edges, want)
 	}
 
@@ -744,6 +745,13 @@ func renameOp(kind chart.ObjectKind, id, to string) chart.Operation {
 		Object: chart.ObjectRef{Kind: kind, ID: id}, To: to}
 }
 
+// managesOp is a set_manages giving one seat the whole list entries.
+func managesOp(handle string, entries ...string) chart.Operation {
+	return chart.Operation{Kind: chart.OpSetManages,
+		Object:  chart.ObjectRef{Kind: chart.KindSeat, ID: handle},
+		Manages: entries}
+}
+
 // A RENAME IS REPLAYED LIKE EVERY OTHER OPERATION: what follows it in the batch
 // sees the chart it leaves.
 //
@@ -779,7 +787,7 @@ func TestARenameIsReplayedForTheOperationsAfterIt(t *testing.T) {
 		{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "infra"},
 			Op: chart.OpCreateUnit},
 	}
-	if !slices.Equal(edges, want) {
+	if !reflect.DeepEqual(edges, want) {
 		t.Fatalf("the batch published\n  %+v\nwant\n  %+v", edges, want)
 	}
 

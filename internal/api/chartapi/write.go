@@ -51,9 +51,12 @@ type unitBody struct {
 	ClearRuntime  bool            `json:"clear_runtime,omitempty"`
 }
 
-// IT CARRIES NO KIND: what holds a seat is structure, changed by a batch's
-// `set_kind`, and a body still naming one is refused as a field this route
-// does not read rather than dropped.
+// IT CARRIES NO KIND AND NO `manages`: what holds a seat and whom it manages
+// are structure, changed by a batch's `set_kind` and `set_manages`, and a body
+// still naming either is refused as a field this route does not read rather
+// than dropped. The list was a field here once, and a lead's goal edit sent it
+// back as they had read it — which, decided before a rename applied, wrote the
+// renamed entry back over the one the rename moved.
 type seatBody struct {
 	Unit                 string          `json:"unit"`
 	Name                 string          `json:"name"`
@@ -62,7 +65,6 @@ type seatBody struct {
 	Goal                 string          `json:"goal"`
 	Responsibilities     []string        `json:"responsibilities"`
 	BehavioralGuidelines []string        `json:"behavioral_guidelines"`
-	Manages              []string        `json:"manages"`
 	Project              string          `json:"project"`
 	Space                string          `json:"space"`
 	Runtime              json.RawMessage `json:"runtime,omitempty"`
@@ -105,7 +107,6 @@ func (s *Service) patchSeat(w http.ResponseWriter, r *http.Request) {
 		Backstory: body.Backstory, Goal: body.Goal,
 		Responsibilities:     body.Responsibilities,
 		BehavioralGuidelines: body.BehavioralGuidelines,
-		Manages:              body.Manages,
 		Project:              body.Project, Space: body.Space,
 		Runtime: body.Runtime, ClearRuntime: body.ClearRuntime,
 	})
@@ -143,10 +144,10 @@ func runtimeStated(w http.ResponseWriter, runtime json.RawMessage) bool {
 // Whether the half it states actually DIFFERS from the one the object holds
 // is the domain's to say, inside its own snapshot: this is the upper bound a
 // route can decide from the body alone. The fields leadership is derived from
-// — a seat's `manages`, `project`, `space` and `email`, a unit's `project`,
-// `space` and `channel` — are in every body, so which of them a write CHANGES
-// is the domain's alone, and its refusal reaches the caller through
-// [refuseGrant] in the same words this one uses.
+// — a seat's `project`, `space` and `email`, a unit's `project`, `space` and
+// `channel` — are in every body, so which of them a write CHANGES is the
+// domain's alone, and its refusal reaches the caller through [refuseGrant] in
+// the same words this one uses.
 // A body that states no runtime is a lead editing their team, and the ROUTE has
 // already decided that: its policy names the object the pattern names, and the
 // authority table asked who leads it.
@@ -283,8 +284,8 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 // # Why the domain's refusal is rendered as the table's
 //
 // Some of what a write asks for is visible only inside the decide: whether a
-// lead's body CHANGES a seat's `manages`, its project, its space or its email
-// is a comparison against the row, which the route cannot read. So the route
+// lead's body CHANGES a seat's project, its space or its email is a comparison
+// against the row, which the route cannot read. So the route
 // admits a lead to the write and the domain refuses the fields — and a refusal
 // on authority must say the same thing wherever it was made, or a client that
 // learned to read `grants` off one would find `refused` on the other and be

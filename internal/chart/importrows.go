@@ -244,13 +244,16 @@ func (a Authored) Edges() []Edge {
 		remaining = next
 	}
 
-	// A SEAT'S KIND TRAVELS WITH ITS PLACE, because both are structure: the
-	// content records an import is followed by carry none.
+	// A SEAT'S KIND AND ITS `manages:` LIST TRAVEL WITH ITS PLACE, because
+	// all three are structure: the content records an import is followed by
+	// carry none of them. The list goes as the apply stores it — folded,
+	// de-duplicated and sorted — which is also how [Authored.Rows] states it.
 	for _, seat := range a.Seats {
 		out = append(out, Edge{
-			Object: ObjectRef{Kind: KindSeat, ID: NormalizeKey(seat.Handle)},
-			Parent: NormalizeKey(seat.Unit),
-			Kind:   seat.Kind,
+			Object:  ObjectRef{Kind: KindSeat, ID: NormalizeKey(seat.Handle)},
+			Parent:  NormalizeKey(seat.Unit),
+			Kind:    seat.Kind,
+			Manages: sortedKeys(seat.Manages),
 		})
 	}
 	return out

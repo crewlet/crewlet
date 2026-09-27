@@ -182,13 +182,18 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	if err != nil {
 		return 0, err
 	}
-	// THE AUTHORED EDGE, written from the CONTENT record because that is
-	// where `manages:` is authored — a seat states what it manages, and the
-	// other end is derived by the index over `target`.
-	edges, err := replaceEdgeSet(ctx, tx, at, "chart_manages", "manager",
-		"target", handle, content.Manages)
-	if err != nil {
-		return 0, err
+	// THE AUTHORED EDGE, BELOW VERSION 3 ONLY: that is where `manages:` was
+	// authored then, and a record already on the log is applied as it was
+	// meant. From version 3 the list is structure ([Edge.Manages]) and a
+	// content record carries none — so its apply leaves the stored list
+	// alone rather than reading the absence as a clear.
+	edges := 0
+	if !at.managesStructural() {
+		edges, err = replaceEdgeSet(ctx, tx, at, "chart_manages", "manager",
+			"target", handle, content.Manages)
+		if err != nil {
+			return 0, err
+		}
 	}
 	n, err := a.writeHistory(ctx, tx, at, ObjectRef{Kind: KindSeat, ID: handle},
 		ChangeEdited)
@@ -778,10 +783,12 @@ func replaceEdgeSet(ctx context.Context, tx *sql.Tx, at applyContext,
 
 // sortedKeys is a folded, de-duplicated copy in a deterministic order.
 //
-// FOLDED HERE rather than by the writer, because an authored `manages:` entry
-// is what a founder typed and the row is an ADDRESS: `Platform` and `platform`
-// are one unit, and storing both would make the inverse index answer one seat
-// twice for one edge.
+// FOLDED HERE whatever the writer did, because an authored `manages:` entry is
+// what a founder typed and the row is an ADDRESS: `Platform` and `platform` are
+// one unit, and storing both would make the inverse index answer one seat twice
+// for one edge. A version-3 writer states the list folded already
+// ([manageList]); a version-1 or version-2 content record carries it as typed,
+// and is applied for ever.
 //
 // SORTED FOR THE LAYER UNDERNEATH THE ROWS, which is why it survives a table
 // whose primary key already makes every READ order-independent: a b-tree built

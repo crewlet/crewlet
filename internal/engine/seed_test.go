@@ -66,6 +66,12 @@ func TestABootSeedTurnsAFileIntoChartRows(t *testing.T) {
 			t.Errorf("seat %q sits in %q, want %q", seat.Handle, seat.UnitKey, want)
 		}
 	}
+	// WHOM A SEAT MANAGES IS STRUCTURE TOO, and it rides the same record: the
+	// content records that follow carry none, so a seed that left it off the
+	// import would boot a company where nobody manages anybody.
+	if got := rows.Manages["ceo"]; !slices.Equal(got, []string{"dev"}) {
+		t.Errorf("ceo manages %v, want [dev] from the file", got)
+	}
 
 	// AND THE CONTENT, from each seat's own record. Read through the view
 	// rather than off the row, because what a turn holds is the view and a
@@ -92,6 +98,9 @@ func TestABootSeedTurnsAFileIntoChartRows(t *testing.T) {
 	}
 	if unit.Channel != "c-eng" {
 		t.Errorf("channel = %q, want the file's", unit.Channel)
+	}
+	if boss := company.Org.Manager(dev); boss == nil || boss.Handle() != "ceo" {
+		t.Errorf("dev's manager in the view is %v, want ceo", boss)
 	}
 }
 
@@ -265,6 +274,7 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
+    manages: [dev]
 units:
   - name: Engineering
     id: eng

@@ -177,9 +177,7 @@ func TestARenameMovesTheManagesEntriesThatNamedItsObject(t *testing.T) {
 	// ANA WAS RENAMED BY AN OLDER BUILD, whose rekey left the entries naming
 	// her as typed: `ana` is her origin now, and still reaches her.
 	h.must(seatRekey("op-old-rename", "ana-lopez", "ana"))
-	h.must(seatRecord("op-vee", "vee", "", func(p *chart.SeatPayload) {
-		p.Manages = []string{"ana", "ana-l", "design", "ops", "platform"}
-	}))
+	h.must(setManages("op-vee", "vee", "", "ana", "ana-l", "design", "ops", "platform"))
 
 	h.must(place("op-batch",
 		renameEdge(chart.KindSeat, "ana-lopez", "ana-l", "", ""),
@@ -208,9 +206,7 @@ func TestARenameMovesTheManagesEntriesThatNamedItsObject(t *testing.T) {
 
 	// THE CONTROL: a version-1 rekey is read for ever as what it meant, and
 	// it left an entry as typed.
-	h.must(seatRecord("op-vee-2", "vee", "", func(p *chart.SeatPayload) {
-		p.Manages = []string{"omar"}
-	}))
+	h.must(setManages("op-vee-2", "vee", "", "omar"))
 	h.must(seatRekey("op-old-rekey", "omar-h", "omar"))
 	if got := h.column(`SELECT target FROM chart_manages WHERE manager = 'vee'`); !slices.Equal(
 		got, []string{"omar"}) {

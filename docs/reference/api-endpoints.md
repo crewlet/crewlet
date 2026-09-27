@@ -193,10 +193,10 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/chart/seats/{handle}` | One seat, what it manages, and its own history |
 | `GET` | `/chart/history` | The company-wide **reorganisation feed**, newest first: who moved, who was hired, which team was dissolved — quiet changes included. **Takes `audit:read`**: the record of what happened across the whole company, where one object's own history above is the context of the object you asked about and takes the board's read |
 | `PATCH` | `/chart/units/{key}` | Edit one unit's content. Its **prose** is whoever leads that unit; changing its `project`, `space` or `channel`, or a body carrying `runtime`, takes `config:write` (see [below](#who-may-write-which-part-of-an-object)) |
-| `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same classes — its prose decided by whoever leads **that seat**, and a change to its `manages`, `project`, `space` or `email` taking `config:write`. It carries no `kind`: that is structure, a batch's `set_kind` |
-| `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, rename, set a kind, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write`, and a batch that **removes** anything takes `fleet:operate` as well |
+| `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same classes — its prose decided by whoever leads **that seat**, and a change to its `project`, `space` or `email` taking `config:write`. It carries no `kind` and no `manages`: both are structure, a batch's `set_kind` and `set_manages` |
+| `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, rename, set a kind, set whom a seat manages, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write`, and a batch that **removes** anything takes `fleet:operate` as well |
 | `POST` | `/chart/units/{key}/rename` `/chart/seats/{handle}/rename` | Change an object's **address**, as a one-operation structural batch. The former one goes on resolving. Takes `config:write` |
-| `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Each edge is `{"object":{...},"parent":...,"lead":...}`, and a seat's edge states its `seat_kind` too — the content writes that follow carry none. Takes `config:write` |
+| `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Each edge is `{"object":{...},"parent":...,"lead":...}`, and a seat's edge states its `seat_kind` and its whole `manages` list too — the content writes that follow carry neither. Takes `config:write` |
 | `GET` | `/chart/imports` `/chart/imports/{revision}` | Which revision this company's structure is running, and when it landed |
 | `GET` | `/chart/check` | The **continuous report**: every way the chart and the applied settings disagree (see [below](#the-continuous-report)). **Takes `audit:read`** — it names every seat nobody in the identity directory holds; the counts ride `/health` for everybody |
 | `GET` | `/company/export` | The chart as an authored **document**, whole and unstripped, for a round trip through a file. Takes `config:read` |
@@ -531,27 +531,34 @@ is decided by who leads the object:
 | Class | Fields | Who may write it |
 |---|---|---|
 | **Prose** | a seat's `name`, `backstory`, `goal`, `responsibilities`, `behavioral_guidelines`; a unit's `name`, `type`, `purpose`, `goals`, `knowledge_refs` | whoever **leads that object** — the unit's lead for a unit, the seat's lead for a seat — or `config:write` |
-| **Authority-bearing relations** | a seat's `manages`, `project`, `space`, `email`; a unit's `project`, `space`, `channel` | `config:write` |
+| **Authority-bearing relations** | a seat's `project`, `space`, `email`; a unit's `project`, `space`, `channel` | `config:write` |
 | **Runtime** | `runtime` (a seat's model chain, its credentials, its sandbox cell, its worker grants, its schedules, its `mcp_env`, its `contact` and `availability`), and `clear_runtime` | `config:write` |
-| **Structure** | create, move, lead, kind, rename, remove — [`POST /chart/batch`](#structure-is-neither) | `config:write`; a removal also `fleet:operate` |
+| **Structure** | create, move, lead, kind, whom a seat manages, rename, remove — [`POST /chart/batch`](#structure-is-neither) | `config:write`; a removal also `fleet:operate` |
 
 The **relations** are what somebody's authority is derived from, which is why
-leading the object does not reach them: a seat's `manages` says who its manager
-is, so a lead adding the founder to a report's list would become the founder's
-ancestor; `project` and `space` are which tracker project and which page
-container a seat or unit leads, so a lead pointing their unit at another team's
-key — or the org root's container — would take over its removals, its archive
-and its policy; a unit's `channel` is which chat channel it answers; and a
-seat's `email` is whose vendor actions — a Jira comment, a push — are
-attributed and routed to it. The **runtime** half is the company's
+leading the object does not reach them: `project` and `space` are which tracker
+project and which page container a seat or unit leads, so a lead pointing their
+unit at another team's key — or the org root's container — would take over its
+removals, its archive and its policy; a unit's `channel` is which chat channel
+it answers; and a seat's `email` is whose vendor actions — a Jira comment, a
+push — are attributed and routed to it. The **runtime** half is the company's
 configuration under another name, and writing it is equivalent to shell on
 every engine host, because a stdio MCP server is `exec.Command` with the
 config's command.
 
+**A seat's `manages` list is structure**, and a `PATCH` naming it is refused
+`400 invalid_body`. It is who the seat's manager is — a lead adding the founder
+to a report's list would become the founder's ancestor — and a rename moves the
+entries naming its object on the chart's structural subject. While a seat's
+content carried the list, a lead's goal edit decided on a node that had not
+applied a rename yet sent the list back as it was read and wrote the renamed
+entry back onto the retired address; now a batch's `set_manages` states it,
+ordered against every rename.
+
 **What a write asks for is what it CHANGES.** A body is full post-state, so a
 lead's `PATCH` carries the relations too — and sending back the values they
-read (the `email` as the read served it, the `manages` list in any order)
-changes nothing and asks for nothing. Only a relation whose value differs from
+read (the `email` as the read served it) changes nothing and asks for
+nothing. Only a relation whose value differs from
 the one the object holds, compared inside the write's own snapshot, asks for
 `config:write`. The route can see the runtime half in the body and asks for the
 grant before it writes; it cannot see which relations a body changes, so the
@@ -653,11 +660,12 @@ that kind reads:
 | `move` | `parent` | A unit's lead stays with it |
 | `set_lead` | `lead` | The unit stays where it is |
 | `set_kind` | `seat_kind` | A seat's kind is structure, so it changes here and never in the seat's content. Making a person's seat an agent's is refused while somebody in the identity directory holds it, naming them — on a node that cannot read the directory too |
+| `set_manages` | `manages` | The seat's **whole** `manages` list — seat handles and unit keys, kept as written (folded) whether or not they resolve yet, at most 64 of them; an empty or absent list is a seat that manages nobody. A seat only: a unit's reports are its lead's. A batch that also renames an object the list reaches publishes the list the rename leaves |
 | `rename` | `to` | The object is named by the address it answers to **at this point in the batch**, and moves onto `to`; its former address goes on resolving. An operation after it uses the new key, and an object the same batch creates cannot be renamed — create it under the address you mean |
 | `remove` | nothing | The removal is named by the address the chart holds the object at — the one it answered to when the batch began — because it is published as a record of its own and applied against the chart as the batch found it. A rename earlier in the same batch is superseded: the object is removed from the address it held, its identity is tombstoned beside it, and the address the rename would have given it is never tombstoned, so it stays free |
 
-An empty `parent` is the org root and an empty `lead` clears the unit's own
-lead. A field the kind does not take is refused `422 refused` (`the operation
+An empty `parent` is the org root, an empty `lead` clears the unit's own lead
+and an empty `manages` clears the seat's list. A field the kind does not take is refused `422 refused` (`the operation
 does not take the field`) rather than dropped, because a batch that dropped it would
 answer as though it asked for less than it said.
 
@@ -710,7 +718,9 @@ still works rather than reporting it broken.
 
 The **`manages:` entries** naming the object move with it: every entry that
 reached it before the rename names its new address after, so it does not hang
-on an alias a new object may take or sixteen further renames retire. An entry
+on an alias a new object may take or sixteen further renames retire — and since
+a seat's list is structure, ordered against the rename, no content write can
+put the old address back. An entry
 the organisation reads as naming something else is left — one naming a unit by
 a key some seat also answers to names the seat, and a unit renamed onto a key a
 seat answers to keeps its entries on the retired key, which still reaches it.

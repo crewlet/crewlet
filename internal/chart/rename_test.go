@@ -533,10 +533,7 @@ func TestAManagerGoesOnManagingTheSeatItNamedWhoeverTakesTheOldHandle(t *testing
 	// take: the seat was created as ana and answers to ana-2 when vee's
 	// entry is written.
 	r.applySeatRekey("op-rename-1", "ana-2", "ana")
-	if _, err := r.seat("op-vee", chart.SeatContent{Handle: "vee", Name: "Vee",
-		Manages: []string{"ana-2"}}); err != nil {
-		t.Fatalf("write vee: %v", err)
-	}
+	r.batch("op-vee", managesOp("vee", "ana-2"))
 	r.applySeatRekey("op-rename-2", "ana-lopez", "ana-2")
 	r.batch("op-newcomer", op(chart.OpCreateSeat, chart.KindSeat, "ana-2", ""))
 

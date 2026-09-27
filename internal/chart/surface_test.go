@@ -156,11 +156,11 @@ func TestALeadsPatchThroughTheSurfaceKeepsTheRuntimeItLeftOut(t *testing.T) {
 // REFUSES, AND THE COMPANY'S GRANT MAKES IT.
 //
 // The route admits a lead to the seat they lead and cannot see which fields
-// the body changes; the domain can, and refuses the one that would make the
-// lead the founder's manager. The caller reads the refusal the authority table
-// would have written — `403`, `no_grant`, `config:write` — with the field that
-// asked, and a holder of the company's grant, who leads nothing, makes the
-// same change.
+// the body changes; the domain can, and refuses the one that would hand the
+// lead another team's tracker project. The caller reads the refusal the
+// authority table would have written — `403`, `no_grant`, `config:write` —
+// with the field that asked, and a holder of the company's grant, who leads
+// nothing, makes the same change.
 func TestALeadsPatchOfAFieldAuthorityComesFromIsRefusedAsTheTableRefuses(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
@@ -174,7 +174,7 @@ func TestALeadsPatchOfAFieldAuthorityComesFromIsRefusedAsTheTableRefuses(t *test
 		t.Fatalf("seed the seat: %v", err)
 	}
 	r.drain()
-	body := `{"name":"Report","manages":["founder"]}`
+	body := `{"name":"Report","project":"FOUNDERS"}`
 
 	rec := serveChart(r, signedIn(), "report").send(http.MethodPatch,
 		"/chart/seats/report", body)
@@ -188,13 +188,12 @@ func TestALeadsPatchOfAFieldAuthorityComesFromIsRefusedAsTheTableRefuses(t *test
 	if rec.Code != http.StatusForbidden || refusal.Error != "unauthorized" ||
 		refusal.Reason != "no_grant" ||
 		strings.Join(refusal.Grants, ",") != string(iam.GrantConfigWrite) ||
-		strings.Join(refusal.Fields, ",") != "manages" {
+		strings.Join(refusal.Fields, ",") != "project" {
 		t.Fatalf("the lead's PATCH answered %d %s, want 403 unauthorized, "+
-			"no_grant, [config:write] and the field [manages]", rec.Code, rec.Body)
+			"no_grant, [config:write] and the field [project]", rec.Code, rec.Body)
 	}
-	if got := r.column(`SELECT target FROM chart_manages WHERE manager = ?`,
-		"report"); len(got) != 0 {
-		t.Fatalf("the refused edge reached the rows: %v", got)
+	if got := r.mustSeat("report").Project; got != "" {
+		t.Fatalf("the refused project reached the rows: %q", got)
 	}
 
 	rec = serveChart(r, signedIn(iam.GrantConfigWrite)).send(http.MethodPatch,
@@ -202,6 +201,65 @@ func TestALeadsPatchOfAFieldAuthorityComesFromIsRefusedAsTheTableRefuses(t *test
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the company's grant, leading nothing, answered %d: %s",
 			rec.Code, rec.Body)
+	}
+	if got := r.mustSeat("report").Project; got != "FOUNDERS" {
+		t.Errorf("after the company's grant the seat's project is %q, want FOUNDERS", got)
+	}
+}
+
+// A SEAT'S `manages` IS STRUCTURE ON THE SURFACE TOO: A PATCH NAMING IT IS
+// REFUSED, AND A LEAD'S SET_MANAGES STOPS AT THE DOOR.
+//
+// A PATCH carrying `manages` is refused `400 invalid_body` naming the field —
+// the route does not read it, and a dropped field would answer 200 for a list
+// that never landed — before anything is published. The list is a batch's
+// `set_manages`, at the company's grant: a lead who leads the seat is refused
+// `403` by the route's own verb, and the grant's holder lands it.
+func TestASeatsManagesIsABatchNeverAPatch(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-tree",
+		op(chart.OpCreateSeat, chart.KindSeat, "report", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "founder", ""),
+	)
+	if _, err := r.writer.WriteSeat(t.Context(), "op-seed", chart.SeatContent{
+		Handle: "report", Name: "Report",
+	}); err != nil {
+		t.Fatalf("seed the seat: %v", err)
+	}
+	r.drain()
+	before, err := r.log.End(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+
+	admin := serveChart(r, signedIn(iam.GrantConfigWrite))
+	rec := admin.send(http.MethodPatch, "/chart/seats/report",
+		`{"name":"Report","manages":["founder"]}`)
+	if rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "manages") {
+		t.Errorf("a PATCH naming manages answered %d %s, want 400 naming the field",
+			rec.Code, rec.Body)
+	}
+	if after, _ := r.log.End(t.Context()); after != before {
+		t.Errorf("the log moved from %d to %d — a refused PATCH published a record",
+			before, after)
+	}
+
+	batch := `{"operations":[{"kind":"set_manages",` +
+		`"object":{"kind":"seat","id":"report"},"manages":["founder"]}]}`
+	rec = serveChart(r, signedIn(), "report").send(http.MethodPost, "/chart/batch", batch)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("a lead's set_manages answered %d %s, want 403", rec.Code, rec.Body)
+	}
+	if got := r.column(`SELECT target FROM chart_manages WHERE manager = ?`,
+		"report"); len(got) != 0 {
+		t.Fatalf("the refused list reached the rows: %v", got)
+	}
+
+	rec = admin.send(http.MethodPost, "/chart/batch", batch)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the company's grant answered %d: %s", rec.Code, rec.Body)
 	}
 	if got := r.column(`SELECT target FROM chart_manages WHERE manager = ?`,
 		"report"); strings.Join(got, ",") != "founder" {

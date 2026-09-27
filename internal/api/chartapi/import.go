@@ -70,6 +70,11 @@ type importEdge struct {
 	// kind is structure, and the content writes that follow an import
 	// carry none.
 	SeatKind string `json:"seat_kind,omitempty"`
+
+	// Manages is a seat's whole `manages:` list, structure for the same
+	// reason: absent or empty is a seat that manages nobody, and a unit's
+	// edge carries none.
+	Manages []string `json:"manages,omitempty"`
 }
 
 // postImport publishes one revision's authored structure.
@@ -108,6 +113,7 @@ func (s *Service) postImport(w http.ResponseWriter, r *http.Request) {
 				Kind: chart.ObjectKind(e.Object.Kind), ID: e.Object.ID,
 			},
 			Parent: e.Parent, Lead: e.Lead, Kind: chart.SeatKind(e.SeatKind),
+			Manages: e.Manages,
 		})
 	}
 	result, err := s.writerFor(r).WriteImport(r.Context(), s.opID(r),

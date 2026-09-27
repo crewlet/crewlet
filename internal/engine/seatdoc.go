@@ -40,13 +40,20 @@ import (
 // rather than from whatever the caller happens to be holding, which is what
 // stops a stale form clearing a field nobody touched.
 //
-// # What it deliberately does not carry back
+// # What it deliberately does not write back
 //
-// The view's DERIVATIONS. [org.SeatFrom] is the row rather than the view, so
-// a `manages:` entry naming a unit is still a unit key and no auto-managed
-// handle has been added. Writing an expanded list back would turn an answer
-// the view recomputes on every build into a stored one that nothing
-// recomputes, and it would grow every time a pass ran.
+// The seat's STRUCTURE — its unit, its kind and its `manages:` list. Each is
+// read into the document so the caller holds the whole seat, and each is the
+// tree's to change, on the tree's subject: a provisioning pass hands the
+// document back as it read it, and a pass that wrote any of them from here
+// would be a pass reorganising the company, contending with nothing a rename or
+// a move arbitrates on. The unit comes from the row, and the kind and the list
+// are not in the content record at all.
+//
+// Nor is what it reads the view's DERIVATIONS. [org.SeatFrom] is the row rather
+// than the view, so a `manages:` entry naming a unit is still a unit key and no
+// auto-managed handle has been added: the document is the seat as authored,
+// not an answer the view recomputes on every build.
 
 // SeatDocument is one seat's whole document, as JSON.
 func (e *Engine) SeatDocument(ctx context.Context, handle string) ([]byte, error) {
@@ -141,7 +148,6 @@ func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte
 		Backstory: role.Backstory, Goal: role.Goal,
 		Responsibilities:     role.Responsibilities,
 		BehavioralGuidelines: role.BehavioralGuidelines,
-		Manages:              role.Manages,
 		Project:              role.Project, Space: role.Space,
 		// THE WHOLE DOCUMENT STATES THE RUNTIME HALF, so a document
 		// holding none clears it: a content write that left the half out

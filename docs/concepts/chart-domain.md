@@ -45,9 +45,9 @@ This is the one place the chart departs from the shape the tracker and the
 knowledge base share, and it is worth understanding because it is what you will
 see in a contention error.
 
-**Structure** — who sits under whom, who leads what, what each object is
-called, and what the chart no longer names — arbitrates on **one subject for
-the whole chart**. Every reparent, every placement, every rename, every removal
+**Structure** — who sits under whom, who leads what, whom each seat manages,
+what each object is called, and what the chart no longer names — arbitrates on
+**one subject for the whole chart**. Every reparent, every placement, every rename, every removal
 and every import contends there, and exactly one wins.
 
 **Content** — a backstory, a goal, a purpose, a channel, a model chain —
@@ -101,14 +101,16 @@ whole revision's authored placement, and `GET /company/export` for the document
 back out. What decides them is **which class of field you are changing**, and
 there are four. A unit's and a seat's **prose** — a name, a purpose, a goal,
 responsibilities — is whoever leads that object. The **relations somebody's
-authority is derived from** — a seat's `manages`, `project`, `space` and
-`email`, a unit's `project`, `space` and `channel` — take the company's own
-`config:write` grant, because a lead who could write them could make themselves
-the founder's manager or take over another team's project. The **runtime** half
+authority is derived from** — a seat's `project`, `space` and `email`, a unit's
+`project`, `space` and `channel` — take the company's own `config:write` grant,
+because a lead who could write them could take over another team's project or
+have somebody else's vendor actions attributed to them. The **runtime** half
 — a seat's model chain, its credentials, its sandbox cell, its `mcp_env`, its
 `contact` and `availability` — takes `config:write` too, because a stdio MCP
 server is `exec.Command` with the config's command. And **structure** is the
-batch's, below, at `config:write` — with `fleet:operate` beside it for a
+batch's, below, at `config:write` — a seat's `manages:` list among it, a
+`set_manages`, because a lead who could write it could make themselves the
+founder's manager — with `fleet:operate` beside it for a
 **removal**, the one structural change nothing undoes: the address is tombstoned
 for ever and the seat's mailbox goes with it, which is a purge's reach and takes
 a purge's grant. What a write asks for is what it **changes**, read against the
@@ -302,6 +304,22 @@ stored document and `agent` in the row's `kind` column, and every read of the
 row takes the column's — so such a seat is an agent's to every reader, and its
 first content write fills it as one.
 
+**Whom a seat manages is structure.** A seat's `manages:` list is who its
+manager is, and a rename moves the entries naming the renamed object (below) —
+on the tree's one subject. While the list rode the seat's content record it had
+two writers on two subjects, and only one saw the other: a lead correcting a
+goal on a node that had not applied a rename yet sent the list back as they had
+read it, the seat's own subject had not moved, so the write was accepted after
+the rename — and put the renamed entry back on the retired address, where a
+later hire on that address became the lead's report. So the list is stated by a
+batch's `set_manages` (the whole list; an empty one is a seat that manages
+nobody), carried on every seat edge as part of its structural post-state — an
+import's included — and never by a content write, and a `PATCH` of a seat
+naming `manages` is refused `400` as a field the route does not read. Every
+entry is a seat's handle or a unit's key, as the company file requires, kept as
+written (folded) whether or not it resolves yet, and a seat manages at most 64
+entries directly — a unit key reaches a whole team in one.
+
 **A seat nothing has filled is incomplete.** A hire is two records, and the
 second may be late or never arrive: until a content record lands the seat has a
 place and a kind and no name, backstory or model chain. It is in the chart and
@@ -312,7 +330,7 @@ row every build ever wrote answers it the same way.
 
 **A create says it is one.** Every edge a batch publishes carries the verb of
 what the batch did to that object — `create_unit`, `create_seat`, `move`,
-`set_lead`, `set_kind` or `rename` — beside the object's whole structural post-state, and the apply
+`set_lead`, `set_kind`, `set_manages` or `rename` — beside the object's whole structural post-state, and the apply
 decides by it. Without the verb an edge is only a placement, and a placement of
 an object the chart already holds is a move: so a create that met an address
 somebody had taken since its decide — a rename or a content record from a
@@ -336,17 +354,21 @@ verb and keep meaning what they always have — create what is absent, place wha
 is present — because an import states a revision's complete structure and
 decides nothing about which of its objects exist.
 
-These are **version 2** of the chart's record. A record a version-1 build wrote
-is read for ever as what it meant, under the rules it met when it was first
-applied: its edges are placements, its content records may create their row,
-each creation is declined only onto a removed address or another object's
-identity (a rekey, onto any address somebody else answers to), its history
-names its first edge, and none of the rules version 2 added — the address's
-shape below, an edge declined under a unit its record failed to make — is asked
-of it. That is what keeps one log one chart: a node that applied a version-1
-placement of `jane.doe` holds the seat, and a node replaying the same record on
-this build must hold it too. A version-1 build meeting a version-2 record
-retains it rather than applying a create as a move, and applies it once it is
+These arrived at **version 2** of the chart's record, and **version 3** made a
+seat's `manages:` list structure. A record a version-1 build wrote is read for
+ever as what it meant, under the rules it met when it was first applied: its
+edges are placements, its content records may create their row, each creation
+is declined only onto a removed address or another object's identity (a rekey,
+onto any address somebody else answers to), its history names its first edge,
+and none of the rules version 2 added — the address's shape below, an edge
+declined under a unit its record failed to make — is asked of it. A version-1
+or version-2 content record replaces the seat's `manages:` list with the one it
+carries, and an edge below version 3 leaves the list alone. That is what keeps
+one log one chart: a node that applied a version-1 placement of `jane.doe`
+holds the seat, and a node replaying the same record on this build must hold it
+too. An older build meeting a newer record retains it — a version-1 build
+rather than applying a create as a move, a version-2 build rather than reading
+a content record's absent list as a cleared one — and applies it once it is
 upgraded.
 
 Every path that gives an address — a create, an import and a rename — asks
@@ -463,8 +485,11 @@ entries are left, because the organisation reads them as naming something else:
 one naming a unit by a key some **seat** also answers to names that seat, since
 a seat reading of a spelling wins; and a unit renamed onto a key a seat answers
 to keeps the entries on its retired key, which still reaches it, rather than
-handing them to the seat. A version-1 rekey on the log left every entry as
-typed, and is read for ever as that.
+handing them to the seat. A batch that renames an object and also names a seat
+whose list reaches it — a `set_manages` before the rename, a move of the
+manager after it — publishes the list the rename leaves, since the seat's edge
+states the whole list and lands after the rename's cascade. A version-1 rekey
+on the log left every entry as typed, and is read for ever as that.
 
 Both edge tables store **what was authored**, including an entry that resolves
 to nothing. A `manages:` naming a seat nobody has added yet is kept as written:

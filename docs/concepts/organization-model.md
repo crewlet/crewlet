@@ -64,15 +64,19 @@ produce half a reorganisation with no record of which half — and which half
 would depend on the order you happened to write them in.
 
 The operations are `create_unit`, `create_seat`, `move`, `set_lead`,
-`set_kind`, `rename` and `remove`. Each takes its object and only the fields its
-kind reads — `create_unit` a `parent` and a `lead` (so "add the platform team,
-led by the SRE" is one operation), `create_seat` a `parent` and a `seat_kind`,
-`move` a `parent`, `set_lead` a `lead`, `set_kind` a `seat_kind`, `rename` a
-`to`, and `remove` nothing — and one carrying a field its kind does not take
-is refused rather than having the field dropped, because a batch that dropped it
-would answer as though it asked for less than it said. An empty `parent` is the
-org root and an empty `lead` clears the unit's own lead, so neither counts as a
-field supplied.
+`set_kind`, `set_manages`, `rename` and `remove`. Each takes its object and only
+the fields its kind reads — `create_unit` a `parent` and a `lead` (so "add the
+platform team, led by the SRE" is one operation), `create_seat` a `parent` and a
+`seat_kind`, `move` a `parent`, `set_lead` a `lead`, `set_kind` a `seat_kind`,
+`set_manages` a seat's whole `manages` list, `rename` a `to`, and `remove`
+nothing — and one carrying a field its kind does not take is refused rather than
+having the field dropped, because a batch that dropped it would answer as though
+it asked for less than it said. An empty `parent` is the org root, an empty
+`lead` clears the unit's own lead and an empty `manages` clears the seat's list,
+so none of them counts as a field supplied. A seat's `manages` list is
+structure rather than part of its content because a rename moves the entries
+naming its object, and only a write ordered against the rename — on the chart's
+one structural subject — can never put the renamed entry back.
 
 Each operation is checked against the state the ones **before it** produced,
 which is the only reading under which the ordinary ways of editing a chart

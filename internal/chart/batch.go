@@ -98,6 +98,29 @@ const (
 	// with no kind at all between its create and its content.
 	OpSetKind OperationKind = "set_kind"
 
+	// OpSetManages replaces a seat's authored `manages:` list — the seat
+	// handles and unit keys it manages, as written.
+	//
+	// STRUCTURE, ON THE TREE'S ONE SUBJECT, for the reason a rename is:
+	// `manages:` is what a seat's manager is derived from, and a rename's
+	// cascade moves the entries naming the renamed object. As a field of
+	// the seat's content record the list arbitrated on the seat's own
+	// subject, which a rename never moves — so a list read before a rename
+	// applied was accepted after it and wrote the entry back onto the
+	// retired address, where a later creation could take it. Here the
+	// rename and the list are decided in one order, and a batch that does
+	// both publishes the list the rename leaves ([Edge.Manages]). And it is
+	// the company's shape to change, as every structural write is: a lead
+	// adding the founder to a report's list would make themselves the
+	// founder's ancestor.
+	//
+	// THE WHOLE LIST, never a diff: an empty one is a seat that manages
+	// nobody. Entries are kept as written — folded, since each is an
+	// address — including ones that resolve to nothing, because a chart is
+	// assembled in pieces and the organisation reports a dangling entry
+	// rather than refusing it.
+	OpSetManages OperationKind = "set_manages"
+
 	// OpRename moves an object onto a new address, and the one it answered
 	// to goes on resolving to it.
 	//
@@ -117,10 +140,10 @@ const (
 	OpRemoveObject OperationKind = "remove"
 )
 
-// OperationKinds are the seven.
+// OperationKinds are the eight.
 var OperationKinds = []OperationKind{
-	OpCreateUnit, OpCreateSeat, OpMove, OpSetLead, OpSetKind, OpRename,
-	OpRemoveObject,
+	OpCreateUnit, OpCreateSeat, OpMove, OpSetLead, OpSetKind, OpSetManages,
+	OpRename, OpRemoveObject,
 }
 
 // Valid reports whether an operation kind is one this build performs.
@@ -153,6 +176,11 @@ type Operation struct {
 	// without one was an agent by omission, which is the one kind that
 	// runs.
 	SeatKind SeatKind `json:"seat_kind,omitempty"`
+
+	// Manages is the whole `manages:` list a set_manages gives its seat.
+	// Empty clears it — a seat that manages nobody — which is why no other
+	// operation may carry one: nothing else would read it.
+	Manages []string `json:"manages,omitempty"`
 }
 
 // Batch is one caller-visible structural change.
@@ -245,6 +273,10 @@ const (
 	// RuleSeatKind is a create_seat or a set_kind that states no seat kind
 	// this build serves.
 	RuleSeatKind = "the seat kind is not one this build serves"
+
+	// RuleTooManyManaged is a `manages:` list past [MaxManages] entries.
+	// An entry that is not an address at all is [RuleBadKey]'s.
+	RuleTooManyManaged = "the seat manages too many entries"
 
 	// RuleRenameUnchanged is a rename onto the address the object already
 	// answers to, which moves nothing and would retire the address it keeps.

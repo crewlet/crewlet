@@ -30,6 +30,16 @@ import (
 //     it ([addressShape]), an edge under a unit the same record failed to
 //     make or keep is declined rather than filed under an address nobody
 //     meant, and its history names the first edge that landed.
+//   - 3: a seat's `manages:` list is structure — every seat edge states the
+//     whole list ([Edge.Manages]) and a `set_manages` operation changes it
+//     ([OpSetManages]), on the tree's subject beside the renames whose
+//     cascade moves its entries — and a seat's content record neither
+//     carries nor changes it. A content record that restated the list
+//     arbitrated on the seat's own subject, which a rename's cascade never
+//     moves, so a list decided on a node that had not applied a rename yet
+//     was accepted after it and wrote the renamed entry back — and a
+//     creation that later took the retired address made the manager manage
+//     whoever took it.
 //
 // A LOWER VERSION IS READ FOR EVER, as what it meant when it was written: a
 // version-1 edge carries no verb and is a placement that creates what is
@@ -37,19 +47,22 @@ import (
 // identity; a version-1 content record may create its row, on the same terms,
 // and sets the seat's kind; a version-1 rekey is declined only for an address
 // somebody else answers to or a removal took; and a version-1 placement's
-// history names its first edge. Nothing rewrites a record on the log, and the
-// fleet mid-upgrade still has version-1 writers, so every change of meaning is
-// read off the record itself at the apply ([exactVersion]) — never off this
-// constant, which the next reshape moves. A rule added at version 2 and asked
-// of a version-1 record would have this build derive different rows from the
-// log than the build that applied it first: one replicated estate, two
-// rosters.
+// history names its first edge. A version-1 or version-2 content record
+// replaces the seat's `manages:` list with the one it carries, and an edge
+// below version 3 leaves the list as it is. Nothing rewrites a record on the
+// log, and the fleet mid-upgrade still has older writers, so every change of
+// meaning is read off the record itself at the apply ([exactVersion],
+// [managesVersion]) — never off this constant, which the next reshape moves. A
+// rule added at one version and asked of a record written under an earlier
+// one would have this build derive different rows from the log than the build
+// that applied it first: one replicated estate, two rosters.
 //
 // A HIGHER ONE IS WHAT KEEPS AN OLDER PEER HONEST. A version-1 build reading a
 // version-2 edge would apply a create as a move — the very thing version 2
-// exists to stop — so it retains the record instead, and applies it once
-// upgraded.
-const RecordVersion = 2
+// exists to stop — and a version-2 build reading a version-3 content record
+// would read the list it no longer carries as one somebody cleared, so each
+// retains the record instead, and applies it once upgraded.
+const RecordVersion = 3
 
 // exactVersion is the first record version whose structure is EXACT: its edges
 // state their verb, and every version-2 rule above is asked of it.
@@ -58,6 +71,12 @@ const RecordVersion = 2
 // that constant, and every rule version 2 introduced must go on being asked of
 // the version-2 records already on the log. See [applyContext.exact].
 const exactVersion = 2
+
+// managesVersion is the first record version on which a seat's `manages:` list
+// is STRUCTURE: a seat edge states it and a content record does not.
+//
+// PINNED AT 3 for [exactVersion]'s reason — see [applyContext.managesStructural].
+const managesVersion = 3
 
 // BaseRecordVersion is the version a record that has never changed shape is
 // written at, so every build still on the stream reads it: the read index's

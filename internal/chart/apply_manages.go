@@ -47,6 +47,18 @@ import (
 //
 // FROM VERSION 2. A version-1 rekey left the entries as authored, which is
 // what it meant, and it is read for ever as that ([Applier.applyRekey]).
+//
+// # And the batch's replay moves them the same way
+//
+// From version 3 a seat's `manages:` list is structure, and every seat edge
+// states the whole list ([Edge.Manages]). So a batch that renames an object
+// and also names a seat whose list reaches it — a set_manages before the
+// rename, a move of the manager after it — has to publish the list the rename
+// leaves, or the edge, applied after the cascade, would write the old address
+// back. The replay asks the same two questions of its own state
+// ([working.moveManages]) — which entries reach the object, and whether its
+// new address still names it — through the one reading both answer by
+// ([managesResolves]).
 
 // managesNaming is every address an authored `manages:` entry names the object
 // at `from` by — read before its rename moves anything.
@@ -127,7 +139,11 @@ func manageTargets(ctx context.Context, tx *sql.Tx, addresses []string) ([]strin
 // managesResolves reports whether an entry naming address reaches the object
 // of kind answering to key — a SEAT reading first, as the organisation's own
 // manages index reads an entry, and the object's own kind after it.
-func managesResolves(ctx context.Context, book txBook, kind ObjectKind,
+//
+// ASKED OF AN [addressBook], so the apply's rows and the batch's replay answer
+// it by one reading: the two disagreeing would be a list the edge states and a
+// cascade that moved it somewhere else.
+func managesResolves(ctx context.Context, book addressBook, kind ObjectKind,
 	address, key string) (bool, error) {
 
 	seat, how, err := book.holder(ctx, KindSeat, address)
@@ -160,16 +176,8 @@ func (a *Applier) moveManages(ctx context.Context, tx *sql.Tx, at applyContext,
 	if len(named) == 0 {
 		return 0, nil
 	}
-	if kind == KindUnit {
-		// THE NEW KEY MUST NAME THE UNIT, which it does not where a seat
-		// answers to it: see this file's header.
-		_, how, err := txBook{tx: tx}.holder(ctx, KindSeat, key)
-		if err != nil {
-			return 0, err
-		}
-		if how != heldByNothing {
-			return 0, nil
-		}
+	if moves, err := managesFollow(ctx, txBook{tx: tx}, kind, key); err != nil || !moves {
+		return 0, err
 	}
 	rows := 0
 	for _, target := range named {
@@ -204,6 +212,71 @@ func (a *Applier) moveManages(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 	}
 	return rows, nil
+}
+
+// managesFollow reports whether the entries naming an object of kind may move
+// onto key, the address its rename lands on: always for a seat, whose live
+// handle wins every reading, and for a unit only where no seat answers to key —
+// a seat reading wins there, so the entries would name the seat instead. See
+// this file's header.
+func managesFollow(ctx context.Context, book addressBook, kind ObjectKind,
+	key string) (bool, error) {
+
+	if kind != KindUnit {
+		return true, nil
+	}
+	_, how, err := book.holder(ctx, KindSeat, key)
+	if err != nil {
+		return false, err
+	}
+	return how == heldByNothing, nil
+}
+
+// managesRefusal is why a list may not be a seat's `manages:`, in a batch
+// rule's vocabulary.
+type managesRefusal struct {
+	rule   string
+	detail string
+}
+
+// manageList is entries as a seat's `manages:` list is held — folded,
+// de-duplicated and sorted, exactly as the apply stores them ([sortedKeys]) —
+// or why it may not be one.
+//
+// CHECKED WHERE A RECORD IS WRITTEN — a set_manages at its batch's replay, an
+// import's edge at its writer — and never where one is applied, for the
+// asymmetry every value rule here follows ([Unit.Validate]).
+//
+// TWO RULES. Every entry is an ADDRESS — a seat's handle or a unit's key — so
+// one no address could take ([checkKey]) names nothing any chart can hold, and
+// the company file refuses the same entry for the same reason. And the list is
+// bounded at [MaxManages], counted as it lands: two spellings of one address
+// are one row. An empty entry is dropped rather than refused, as the apply
+// always dropped it, because an edge to nothing is not an entry.
+//
+// AN ENTRY THAT RESOLVES TO NOTHING IS KEPT: a chart is assembled in pieces,
+// and a seat managing somebody not hired yet is what the organisation's own
+// dangling-reference report is for.
+func manageList(entries []string) ([]string, *managesRefusal) {
+	for _, entry := range entries {
+		folded := NormalizeKey(entry)
+		if folded == "" {
+			continue
+		}
+		if err := checkKey("manages", folded); err != nil {
+			return nil, &managesRefusal{rule: RuleBadKey,
+				detail: fmt.Sprintf("the `manages:` entry %q names no seat handle "+
+					"and no unit key: %v", entry, err)}
+		}
+	}
+	list := sortedKeys(entries)
+	if len(list) > MaxManages {
+		return nil, &managesRefusal{rule: RuleTooManyManaged,
+			detail: fmt.Sprintf("the list holds %d entries and a seat manages at "+
+				"most %d directly — a unit key reaches a whole team in one entry, "+
+				"which is what a list this long wants", len(list), MaxManages)}
+	}
+	return list, nil
 }
 
 // managersOf is every seat with an authored entry naming target, in order.

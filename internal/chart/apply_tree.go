@@ -13,9 +13,9 @@ import (
 //
 // Three ops share this subject and one apply path, because all three write the
 // same two columns — `chart_units.parent_key` and `chart_seats.unit_key` — plus
-// the authored lead edge. What differs is what else each one writes: an import
-// also stamps the ledger, and a removal also writes tombstones and deletes the
-// rows.
+// the authored lead edge and, from record version 3, a seat's authored
+// `manages:` edges. What differs is what else each one writes: an import also
+// stamps the ledger, and a removal also writes tombstones and deletes the rows.
 //
 // THE STRUCTURAL WRITE STAMPS `scoped_through` AND NEVER `version`. The record
 // arbitrated on the TREE's subject, not on the object's own, so writing an
@@ -61,13 +61,23 @@ func (a *Applier) applyTree(ctx context.Context, tx *sql.Tx, at applyContext) (i
 // version-1 writer states one, and a record that did meant nothing by it to the
 // build that first applied it — so it means nothing here either, or a replay
 // would decline a "create" that build applied as the placement it was.
+//
+// AND A SEAT'S `manages:` LIST IS A VERSION-3 FIELD, on the same terms: below
+// it the list was the content record's to state, so an edge's is read as absent
+// and the apply leaves the stored list alone rather than replacing it with
+// nothing.
 func readAt(at applyContext, edges []Edge) []Edge {
-	if at.exact() {
-		return edges
-	}
 	out := make([]Edge, len(edges))
 	for i, edge := range edges {
-		out[i] = Edge{Object: edge.Object, Parent: edge.Parent, Lead: edge.Lead}
+		switch {
+		case at.managesStructural():
+			out[i] = edge
+		case at.exact():
+			edge.Manages = nil
+			out[i] = edge
+		default:
+			out[i] = Edge{Object: edge.Object, Parent: edge.Parent, Lead: edge.Lead}
+		}
 	}
 	return out
 }
@@ -235,7 +245,7 @@ func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 		if declined, refuseErr := a.declineCreate(ctx, tx, at, edgeOp(edge), ref); refuseErr != nil || declined {
 			return 0, false, refuseErr
 		}
-	case OpMove, OpSetLead, OpSetKind, OpRename:
+	case OpMove, OpSetLead, OpSetKind, OpSetManages, OpRename:
 		// A RENAME'S EDGE IS PLACED ONLY ONCE ITS RENAME LANDED, so its
 		// object is on the address it names: its final parent and lead
 		// are written exactly as a move's are.
@@ -329,10 +339,17 @@ func (a *Applier) renameEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 // A VERB THIS BUILD DOES NOT KNOW, on a record at a version it reads, is a
 // writer publishing an operation it never declared. Failing is what makes that
 // mistake visible, for [Applier.Apply]'s reason.
+//
+// A SET_MANAGES BELOW VERSION 3 IS ONE OF THOSE: no writer at an earlier
+// version declared the verb, since the list was the content record's.
 func checkVerb(at applyContext, edge Edge) error {
 	switch edge.Op {
 	case "", OpCreateUnit, OpCreateSeat, OpMove, OpSetLead, OpSetKind, OpRename:
 		return nil
+	case OpSetManages:
+		if at.managesStructural() {
+			return nil
+		}
 	}
 	return fmt.Errorf("chart: the structural record at %s states %s on %s, "+
 		"which is not an operation this build applies at version %d",
@@ -355,6 +372,8 @@ func edgeOp(edge Edge) declineOp {
 		return declinedSetLead
 	case OpSetKind:
 		return declinedSetKind
+	case OpSetManages:
+		return declinedSetManages
 	case OpRename:
 		return declinedRename
 	}
@@ -444,6 +463,8 @@ func changeFor(op OperationKind, fallback ChangeKind) ChangeKind {
 		return ChangeRekeyed
 	case OpSetKind:
 		return ChangeKindSet
+	case OpSetManages:
+		return ChangeManages
 	}
 	return fallback
 }
@@ -512,8 +533,20 @@ func (a *Applier) placeOne(ctx context.Context, tx *sql.Tx, at applyContext,
 		if err != nil {
 			return 0, err
 		}
+		// THE SEAT'S WHOLE `manages:` LIST, FROM VERSION 3 — structure, so
+		// the edge states it whole and empty is a seat that manages nobody
+		// ([Edge.Manages]). Below it [readAt] has read the list as absent
+		// and the rows keep the one a content record wrote.
+		edges := 0
+		if at.managesStructural() {
+			edges, err = replaceEdgeSet(ctx, tx, at, "chart_manages", "manager",
+				"target", id, edge.Manages)
+			if err != nil {
+				return 0, err
+			}
+		}
 		a.note(edge.Object)
-		return n, nil
+		return n + edges, nil
 	}
 	return 0, fmt.Errorf("chart: the structural record at %s places a %s, and "+
 		"only a unit and a seat have a place in the tree",

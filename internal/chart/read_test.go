@@ -174,9 +174,10 @@ func TestTheWholeChartComesBackAsOneAnswer(t *testing.T) {
 		op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", "platform"),
 		chart.Operation{Kind: chart.OpSetLead,
 			Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
-			Lead:   "sarah-chen"})
-	if _, err := r.seat("op-manages", chart.SeatContent{
-		Handle: "sarah-chen", Unit: "platform", Name: "Sarah Chen", Manages: []string{"platform"},
+			Lead:   "sarah-chen"},
+		managesOp("sarah-chen", "platform"))
+	if _, err := r.seat("op-content", chart.SeatContent{
+		Handle: "sarah-chen", Unit: "platform", Name: "Sarah Chen",
 	}); err != nil {
 		t.Fatalf("write the seat: %v", err)
 	}

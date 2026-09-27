@@ -34,9 +34,9 @@ func TestAContentRecordWithAPrivilegedFieldIsRefusedBelowItsGrant(t *testing.T) 
 
 	// A PROSE edit lands: who may edit an object's name and goal is the lead
 	// relation's to decide, at the door, and this package deliberately does
-	// not. A write that CHANGED an authority-bearing relation — `manages`,
-	// `project`, `space`, `email` — would be refused here below the company's
-	// grant, as the runtime half is next.
+	// not. A write that CHANGED an authority-bearing relation — `project`,
+	// `space`, `email` — would be refused here below the company's grant, as
+	// the runtime half is next.
 	if _, err := lead.WriteSeat(t.Context(), "op-public", chart.SeatContent{
 		Handle: "sarah-chen", Name: "Sarah Chen",
 		Goal: "ship the thing",
@@ -132,8 +132,8 @@ func (r *writeRig) seedCompany(doc string) chart.Authored {
 				Email: seat.Email, Backstory: seat.Backstory, Goal: seat.Goal,
 				Responsibilities:     seat.Responsibilities,
 				BehavioralGuidelines: seat.BehavioralGuidelines,
-				Manages:              seat.Manages, Project: seat.Project,
-				Space: seat.Space, Runtime: seat.Runtime,
+				Project:              seat.Project, Space: seat.Space,
+				Runtime: seat.Runtime,
 			}); err != nil {
 			r.t.Fatalf("seed the content of seat %s: %v", seat.Handle, err)
 		}
@@ -370,17 +370,16 @@ func TestAWriteAsksForWhatItChangesAndCarriesTheRuntimeItLeftOut(t *testing.T) {
 
 // THE FIELDS LEADERSHIP IS DERIVED FROM TAKE THE COMPANY'S GRANT.
 //
-// A seat's `manages` says who its manager is, and its `project`, `space` and
-// `email` which tracker project and page container it leads and whose vendor
-// actions are attributed to it; a unit's `project`, `space` and `channel` the
-// same for the team. Decided on the lead relation, each was a way for a lead
-// to grow their own authority: adding the founder to a report's `manages` made
-// the lead the founder's ancestor, and pointing their unit at another team's
-// project key gave them that project's removals, archive and policy. So a
-// write CHANGING one asks for config:write in the decide, and is refused with
-// a GrantRefusal naming exactly the fields that asked — while a lead sending
-// back what they read, in any order and any case the apply folds, changes
-// nothing and writes their prose.
+// A seat's `project`, `space` and `email` say which tracker project and page
+// container it leads and whose vendor actions are attributed to it; a unit's
+// `project`, `space` and `channel` the same for the team. Decided on the lead
+// relation, each was a way for a lead to grow their own authority: pointing
+// their unit at another team's project key gave them that project's removals,
+// archive and policy. So a write CHANGING one asks for config:write in the
+// decide, and is refused with a GrantRefusal naming exactly the fields that
+// asked — while a lead sending back what they read changes nothing and writes
+// their prose. A seat's `manages` is not among them: it is structure
+// ([TestAManagesListIsStructureALeadCannotWrite]).
 //
 // A SEALED EMAIL IS NEVER RESEALED BY A REFUSED WRITE: the refusal is decided
 // before the seal, so the address in the secret store is the one it was.
@@ -397,8 +396,7 @@ func TestTheFieldsLeadershipIsDerivedFromTakeTheCompanysGrant(t *testing.T) {
 	)
 	authored := chart.SeatContent{
 		Handle: "report", Unit: "eng", Name: "Report", Goal: "ship",
-		Email: "report@example.com", Manages: []string{"intern"},
-		Project: "ENG", Space: "ENG",
+		Email: "report@example.com", Project: "ENG", Space: "ENG",
 	}
 	unit := chart.UnitContent{
 		Key: "eng", Name: "Engineering", Purpose: "ships the product",
@@ -419,10 +417,9 @@ func TestTheFieldsLeadershipIsDerivedFromTakeTheCompanysGrant(t *testing.T) {
 	}
 	restore("op-seed")
 	// WHAT A READ SERVES, which is what a lead sends back: the sealed
-	// email's reference, and the edges in whatever order and case.
+	// email's reference.
 	seat := authored
 	seat.Email = r.mustSeat("report").Email
-	seat.Manages = []string{"INTERN"}
 	sealed := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "report"}, "email")
 
 	lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
@@ -466,9 +463,6 @@ func TestTheFieldsLeadershipIsDerivedFromTakeTheCompanysGrant(t *testing.T) {
 		write  func(w *chart.Writer, opID string) error
 		fields []string
 	}{
-		{"manages gains a top seat", seatWrite(edit(func(s *chart.SeatContent) {
-			s.Manages = []string{"intern", "ceo"}
-		})), []string{"manages"}},
 		{"the seat's project moves to another team's", seatWrite(edit(func(s *chart.SeatContent) {
 			s.Project = "OPS"
 		})), []string{"project"}},
@@ -482,8 +476,8 @@ func TestTheFieldsLeadershipIsDerivedFromTakeTheCompanysGrant(t *testing.T) {
 			s.Email = ""
 		})), []string{"email"}},
 		{"two at once, named in order", seatWrite(edit(func(s *chart.SeatContent) {
-			s.Space, s.Manages = "ORG", nil
-		})), []string{"manages", "space"}},
+			s.Space, s.Project = "ORG", "OPS"
+		})), []string{"project", "space"}},
 		{"the unit's project moves to another team's", unitWrite(editUnit(func(u *chart.UnitContent) {
 			u.Project = "OPS"
 		})), []string{"project"}},

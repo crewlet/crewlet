@@ -16,7 +16,7 @@ import (
 func TestEveryPrivilegedFieldIsAnswered(t *testing.T) {
 	t.Parallel()
 	if _, err := fieldChanges(KindSeat, map[string]bool{
-		"email": true, "manages": false, "project": false, "runtime": false,
+		"email": true, "project": false, "runtime": false,
 	}); err == nil {
 		t.Error("a seat write that did not answer for its space was accepted")
 	}
@@ -26,14 +26,21 @@ func TestEveryPrivilegedFieldIsAnswered(t *testing.T) {
 	}); err == nil {
 		t.Error("a unit write answering for a field a unit has none of was accepted")
 	}
+	// A SEAT'S `manages` IS NO PRIVILEGED CONTENT FIELD: it is structure, and a
+	// content write that answered for it answered for a field it cannot change.
+	if _, err := fieldChanges(KindSeat, map[string]bool{
+		"email": false, "manages": true, "project": false, "space": false,
+		"runtime": false,
+	}); err == nil {
+		t.Error("a seat write answering for a manages list was accepted")
+	}
 	got, err := fieldChanges(KindSeat, map[string]bool{
-		"runtime": true, "space": true, "email": false, "manages": true,
-		"project": false,
+		"runtime": true, "space": true, "email": true, "project": false,
 	})
 	if err != nil {
 		t.Fatalf("a seat write answering for every field: %v", err)
 	}
-	if want := []string{"manages", "space", "runtime"}; !slices.Equal(got, want) {
+	if want := []string{"email", "space", "runtime"}; !slices.Equal(got, want) {
 		t.Errorf("the changed fields are %v, want %v in the list's order", got, want)
 	}
 }

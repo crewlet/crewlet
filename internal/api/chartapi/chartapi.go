@@ -13,11 +13,11 @@
 // # The fields of an object are decided differently, and the domain drew the line
 //
 // A unit and a seat each carry PROSE — a name, a purpose, a goal — the
-// RELATIONS somebody's authority is derived from — a seat's `manages`,
-// `project`, `space` and `email`, a unit's `project`, `space` and `channel` —
-// and a RUNTIME half that internal/chart holds as opaque bytes on the row's
-// `document`, because that domain can say what a unit key and a parent mean
-// and cannot say what an `mcp_env` key is for. That opaque half is a seat's
+// RELATIONS somebody's authority is derived from — a seat's `project`, `space`
+// and `email`, a unit's `project`, `space` and `channel` — and a RUNTIME half
+// that internal/chart holds as opaque bytes on the row's `document`, because
+// that domain can say what a unit key and a parent mean and cannot say what an
+// `mcp_env` key is for. That opaque half is a seat's
 // model chain, its credentials, its sandbox cell, its worker grants and its
 // schedules: a stdio MCP server is exec.Command with the config's command, so
 // writing it is equivalent to shell on every engine host.
@@ -35,10 +35,12 @@
 //
 // # And structure is neither
 //
-// A create, a move, a rename and a removal are STRUCTURE, which internal/chart
-// serialises on one subject for the whole chart — deliberately, because two
-// reparents through a common ancestor can each be locally valid and jointly
-// produce a cycle no node could see from the subject it arbitrated on. A move
+// A create, a move, a rename, a seat's kind, whom a seat manages and a removal
+// are STRUCTURE, which internal/chart serialises on one subject for the whole
+// chart — deliberately, because two reparents through a common ancestor can
+// each be locally valid and jointly produce a cycle no node could see from the
+// subject it arbitrated on, and a list of whom a seat manages restated on the
+// seat's own subject could write back an entry a rename had just moved. A move
 // is therefore not a fact about one unit and not one lead's to make: it takes
 // the company's own grant. A REMOVAL takes the deployment's grant beside it —
 // the one structural change nothing undoes, a tombstoned address and a retired

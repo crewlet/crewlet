@@ -128,12 +128,12 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 
 	// AND THEN THE CONTENT, one record per object.
 	//
-	// THE IMPORT CARRIES STRUCTURE ONLY — where each object sits and who
-	// leads each unit — because that is the one thing that has to be
-	// arbitrated as a whole: it is one graph, and a cycle has to be
-	// impossible rather than merely detectable. Everything else about an
-	// object is its own, contends with nothing, and is a record on its own
-	// subject.
+	// THE IMPORT CARRIES STRUCTURE ONLY — where each object sits, who leads
+	// each unit, what holds each seat and whom it manages — because that is
+	// the one thing that has to be arbitrated as a whole: it is one graph,
+	// and a cycle has to be impossible rather than merely detectable.
+	// Everything else about an object is its own, contends with nothing, and
+	// is a record on its own subject.
 	//
 	// So a seeded chart without this half is a company of empty seats:
 	// every handle in the right unit, with no model, no credentials and no
@@ -259,7 +259,6 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 				Backstory: seat.Backstory, Goal: seat.Goal,
 				Responsibilities:     seat.Responsibilities,
 				BehavioralGuidelines: seat.BehavioralGuidelines,
-				Manages:              seat.Manages,
 				Project:              seat.Project, Space: seat.Space,
 				Runtime: seat.Runtime, ClearRuntime: len(seat.Runtime) == 0,
 			})
