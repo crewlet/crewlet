@@ -1297,6 +1297,17 @@ Sealed, not merely signed. One of the three is a secret: the PKCE verifier is
 what proves the party redeeming the code is the party that asked for it, so an
 attacker who can *read* it has defeated exactly the protection PKCE is.
 
+**What the test suite certifies, and what it cannot.** Every part of the round
+trip here — discovery, PKCE, the code exchange, the key set, each ID-token
+check, the deactivation probe — is exercised against an issuer the suite runs
+itself, in an `httptest` TLS server that signs real tokens with keys it minted.
+That certifies the *protocol*. It cannot certify a particular provider's
+quirks — the shape its groups claim takes, how often it rotates signing keys,
+whether it honours `prompt=login` and `max_age`, what its refresh tokens do —
+because no provider is reached from CI. Those are verified by an operator's own
+sign-in against their provider, and the [discovery report](#what-is-checked-in-an-id-token-and-what-each-check-is-for)
+is the first thing to read when one does not work.
+
 The flight cookie lives ten minutes — long enough for a person to fetch their
 phone for a second factor at the provider, short enough that a cookie carrying
 a verifier is not sitting in a browser for the length of a meeting. It is

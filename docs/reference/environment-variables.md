@@ -28,6 +28,18 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 
 ---
 
+## Identity provider
+
+Only on a deployment that signs people in through OpenID Connect
+(`api.auth.backend: oidc`, or an `api.auth.oidc` block beside a local one).
+See [Signing in through an identity provider](../concepts/identity-and-access.md#signing-in-through-an-identity-provider).
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `CREWLET_OIDC_CLIENT_SECRET` | The conventional `${VAR}` for `api.auth.oidc.client_secret`: the secret this engine's code exchange authenticates with at the provider's token endpoint (sent as `client_secret_post`). It is a **Tier A** value, and Tier A resolves every `${VAR}` from the **environment only** — it holds the keys to the [secret store](../concepts/secret-store.md), so it can never read a value out of it — so this is set in each node's own environment (an orchestrator secret, a systemd `EnvironmentFile`) and **never** with `crewlet secrets set`. Every node serving the API needs the same value, and changing it is a restart | Your provider's registration of this deployment as a confidential web application: the client secret beside its client id (Okta: *Applications → the app → Client Credentials*; Microsoft Entra ID: *App registrations → Certificates & secrets*; Google: *APIs & Services → Credentials*). Register `<api.external_url>/auth/oidc/callback` as its redirect URI |
+
+---
+
 ## Logging
 
 Read directly by the engine and the CLI. Each describes the **invocation**
