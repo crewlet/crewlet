@@ -193,7 +193,8 @@ func register() []registration {
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.LogMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
-					Field: "stream.tracker_log_max_bytes", Explicit: !derived}
+					Field: "stream.tracker_log_max_bytes", Explicit: !derived,
+					Floor: config.TrackerLogMaxBytesFloor}
 			},
 		},
 		{
@@ -220,7 +221,8 @@ func register() []registration {
 				bytes, _ := stream.VectorsMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
 					Field:    "stream.tracker_vectors_max_bytes",
-					Explicit: stream.TrackerVectorsMaxBytes > 0}
+					Explicit: stream.TrackerVectorsMaxBytes > 0,
+					Floor:    config.TrackerVectorsMaxBytesFloor}
 			},
 		},
 		{
@@ -252,7 +254,8 @@ func register() []registration {
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.PagesMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
-					Field: "stream.pages_log_max_bytes", Explicit: !derived}
+					Field: "stream.pages_log_max_bytes", Explicit: !derived,
+					Floor: config.PagesLogMaxBytesFloor}
 			},
 		},
 		{
@@ -305,7 +308,8 @@ func register() []registration {
 			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 				bytes, derived := stream.ChartMaxBytes()
 				return domainCeiling{Bytes: bytes,
-					Field: "stream.chart_log_max_bytes", Explicit: !derived}
+					Field: "stream.chart_log_max_bytes", Explicit: !derived,
+					Floor: config.ChartLogMaxBytesFloor}
 			},
 		},
 		{
@@ -358,7 +362,8 @@ func register() []registration {
 			Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 				bytes, derived := stream.IamMaxBytes()
 				return domainCeiling{Bytes: bytes,
-					Field: "stream.iam_log_max_bytes", Explicit: !derived}
+					Field: "stream.iam_log_max_bytes", Explicit: !derived,
+					Floor: config.IamLogMaxBytesFloor}
 			},
 		},
 	}
@@ -397,6 +402,11 @@ func checkRegister(entries []registration) error {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares no "+
 				"Tier A ceiling for its stream, so it would reserve its own default "+
 				"outside the budget every other state log is sized into", name)
+		}
+		if floor := entry.Ceiling(config.Stream{}, 0).Floor; floor <= 0 {
+			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
+				"no floor for its ceiling's field, so a boot the broker refuses could "+
+				"not say how small a ceiling the field accepts", name)
 		}
 		if entry.OpsRetention <= 0 {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares an "+

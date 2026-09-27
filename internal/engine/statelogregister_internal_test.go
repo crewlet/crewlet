@@ -57,6 +57,28 @@ func TestANilApplierFailsTheBootCheck(t *testing.T) {
 	}
 }
 
+// TestACeilingWithNoFloorFailsTheBootCheck is the same control for the floor a
+// ceiling's field accepts: without it, a boot the broker refuses cannot say how
+// small a ceiling to set, and read as zero it would offer a smaller one for
+// every log, the org chart's at its floor included.
+func TestACeilingWithNoFloorFailsTheBootCheck(t *testing.T) {
+	entries := register()
+	last := len(entries) - 1
+	declared := entries[last].Ceiling
+	entries[last].Ceiling = func(stream config.Stream, free int64) domainCeiling {
+		ceiling := declared(stream, free)
+		ceiling.Floor = 0
+		return ceiling
+	}
+	err := checkRegister(entries)
+	if err == nil {
+		t.Fatal("a register entry whose ceiling declares no floor passed the boot check")
+	}
+	if !strings.Contains(err.Error(), entries[last].Domain.Name()) {
+		t.Errorf("the refusal does not name the domain: %v", err)
+	}
+}
+
 // TestNoWriteAuthorityFailsTheBootCheck is the same control for the seams.
 func TestNoWriteAuthorityFailsTheBootCheck(t *testing.T) {
 	entries := register()

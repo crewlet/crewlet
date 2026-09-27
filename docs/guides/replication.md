@@ -435,20 +435,31 @@ left to reserve (… of its …-byte limit already reserved), and that limit is
 stream.store_max_bytes where you set one, and otherwise three quarters of the
 free space on the volume holding stream.store_dir (/var/lib/crewlet/stream),
 counting what the broker's streams already hold there.
-stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
-into the state logs' share of the broker, and it goes no lower than
-1073741824 bytes. Give the broker more room; the state logs that already exist
-keep the ceilings they were created with, and no Tier A setting changes them: …
+stream.pages_log_max_bytes is unset, so the ceiling was derived from the
+stream volume's free space and scaled into the state logs' share of the
+broker, and scaling takes it no lower than 1073741824 bytes. Give the broker
+more room; the state logs that already exist keep the ceilings they were
+created with, and no Tier A setting changes them: …
 ```
+
+The sentence about the Tier A field says which of three things the ceiling
+was: **set** (`… sets the ceiling`, with what would have fitted), **derived**
+from the volume and scaled, as above, or the log's own **fixed default** —
+the org chart's and the identity log's, which neither follow the volume nor
+stop at the gibibyte scaling does.
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
 on that volume (a first boot needs at least 4.75 GiB free there, three
 quarters of which — 3.56 GiB — is what the floors reserve: the three 1 GiB
 floors, the org chart's 64 MiB and the identity log's 512 MiB), which the
-broker measures again when the node next starts. Or, when the refused log's ceiling is
-above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
-so when that applies.
+broker measures again when the node next starts. Or, when the refused log's
+ceiling is above the smallest value its own field accepts, set that field to a
+smaller ceiling — the refusal offers it only then, and names that floor: 1 GiB
+for the tracker's, the vectors' and the knowledge base's fields, 64 MiB for
+`stream.chart_log_max_bytes` and `stream.iam_log_max_bytes`. So a refused
+identity log at its 512 MiB default is offered a smaller one, and a refused
+org chart log at its 64 MiB default, already its field's floor, is not.
 
 A log that already exists cannot be shrunk to make room from here. Its ceiling
 changes only through `crewlet retention set-capacity`, which runs on a node
