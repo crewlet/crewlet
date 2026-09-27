@@ -759,7 +759,10 @@ func (f *filler) fill(v reflect.Value, name string) {
 		}
 		for i := range v.NumField() {
 			field := v.Type().Field(i)
-			if field.IsExported() {
+			// A FIELD THE ENCODER SKIPS stays unset — a carry's Extra
+			// among them, which holds what a newer build wrote rather
+			// than anything this build's value says.
+			if field.IsExported() && field.Tag.Get("json") != "-" {
 				f.fill(v.Field(i), field.Name)
 			}
 		}

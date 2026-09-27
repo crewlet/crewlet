@@ -2,6 +2,7 @@ package codingagent_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -121,7 +122,7 @@ func TestTheClaudeParserReadsThePerModelAccount(t *testing.T) {
 		{Model: "claude-haiku", InputTokens: 30, OutputTokens: 6, CostUSD: 0.15},
 		{Model: "claude-sonnet", InputTokens: 960, OutputTokens: 40, CostUSD: 0.75},
 	}
-	if !slices.Equal(res.Models, want) {
+	if !reflect.DeepEqual(res.Models, want) {
 		t.Errorf("models = %+v, want %+v", res.Models, want)
 	}
 	if res.InputTokens != 990 || res.OutputTokens != 46 || res.CostUSD != 0.9 {

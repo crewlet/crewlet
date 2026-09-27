@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"math"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -165,7 +166,7 @@ func TestASuspensionRecordsItsModelSplit(t *testing.T) {
 		{Model: "model-a", InputTokens: 70, OutputTokens: 7},
 		{Model: "model-b", InputTokens: 20, OutputTokens: 2},
 	}
-	if !slices.Equal(parked.State.Models, want) || parked.State.Model != "model-a" {
+	if !reflect.DeepEqual(parked.State.Models, want) || parked.State.Model != "model-a" {
 		t.Errorf("the parked row carries model %q and split %+v, want model-a and %+v",
 			parked.State.Model, parked.State.Models, want)
 	}

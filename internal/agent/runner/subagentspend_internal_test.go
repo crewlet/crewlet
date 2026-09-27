@@ -2,7 +2,7 @@ package runner
 
 import (
 	"context"
-	"slices"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -33,7 +33,7 @@ func TestAWorkersRecordCarriesItsModelSplit(t *testing.T) {
 	}
 	for _, ev := range pub.events {
 		if done, ok := ev.Data.(*types.AgentPhaseCompleted); ok && done.Phase == types.PhaseSubagent {
-			if !slices.Equal(done.Models, want) {
+			if !reflect.DeepEqual(done.Models, want) {
 				t.Errorf("models = %+v, want %+v", done.Models, want)
 			}
 			return
