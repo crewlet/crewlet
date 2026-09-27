@@ -1494,6 +1494,18 @@ func (e *Engine) Node() *node.Node { return e.node }
 // one process, so a second open is contention with itself.
 func (e *Engine) Backends() *Backends { return e.backends }
 
+// Cipher is this node's keyring: the ONE cipher of the process.
+//
+// EXPOSED for the reason [Engine.Backends] is. `crewlet run` composes the
+// config surface, the secret surface and the sign-in surface beside the
+// engine, and each seals or opens under the keyring the engine already built
+// from Tier A — the reconciler authenticates a peer's revision under it, and a
+// revision the config surface sealed under anything else would be one no node
+// could open. Handing the surfaces this one rather than letting the command
+// build its own is what makes "one keyring" a fact instead of a promise two
+// constructors keep. Never nil on an engine [New] built.
+func (e *Engine) Cipher() secrets.Cipher { return e.cipher }
+
 // Recorder is the process's one metrics recorder, or nil.
 //
 // EXPOSED for the same reason [Engine.Backends] is: a subsystem the CLI

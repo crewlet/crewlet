@@ -42,7 +42,12 @@ type Reconciler struct {
 	plane   coord.Plane
 	queue   Nudger
 	nodeID  string
-	cipher  secrets.Cipher
+
+	// cipher is the ENGINE's keyring, never one handed in: it opens a
+	// sealed revision and AUTHENTICATES one, because a peer's revision
+	// arrives through the coordination store and anything that reaches
+	// the broker can write a body there. See [Engine.NewReconciler].
+	cipher secrets.Cipher
 
 	// progress is this node's convergence state, published as ONE value.
 	//
@@ -123,17 +128,6 @@ type ReconcilerOptions struct {
 	// dozen nodes should be.
 	NodeID string
 
-	// Cipher opens a sealed revision, and it is also what AUTHENTICATES
-	// one: with a keyring, a revision that is not sealed is refused
-	// ([secrets.ErrUnsealedWithKey]) rather than applied, because a peer's
-	// revision arrives through the coordination store and anything that
-	// reaches the broker can write a plaintext body there. `crewlet run`
-	// passes the node's own keyring, which every node holds. Nil is a
-	// caller holding none — a unit that seals nothing — which reads
-	// plaintext and refuses a sealed revision rather than boot onto an
-	// empty company.
-	Cipher secrets.Cipher
-
 	// OnApply observes every outcome.
 	OnApply func(epoch int64, status configplane.ApplyStatus)
 
@@ -177,8 +171,26 @@ var ErrNoPlane = errors.New("engine: reconciler needs a coordination plane")
 // queue, not a database or a coordination store.
 var ErrNoPublisher = errors.New("engine: reconciler needs a publisher")
 
+// ErrNoKeyring reports a reconciler on an engine that holds no keyring, which
+// only an Engine built by hand can be: [New] refuses to start without one.
+var ErrNoKeyring = errors.New("engine: reconciler needs the engine's keyring " +
+	"(secrets.keys): a peer's revision is authenticated by its seal, and a " +
+	"reconciler without one would apply a body anything reaching the " +
+	"coordination store could have written")
+
 // NewReconciler builds the loop.
+//
+// THE KEYRING IS THE ENGINE'S, and there is no option to hand in another or
+// none. It used to be one: a nil read every payload as plaintext, which is
+// exactly the forged document the seal exists to refuse, and a caller that
+// forgot the field got that reconciler without a word — the e2e harness was
+// built that way until it was noticed by hand. The engine already holds the
+// one keyring Tier A names, and it is the one every revision this fleet
+// writes is sealed under.
 func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
+	if e.cipher == nil {
+		return nil, ErrNoKeyring
+	}
 	if opts.Store == nil {
 		return nil, ErrNoStore
 	}
@@ -207,7 +219,7 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 		plane:   opts.Fleet,
 		queue:   opts.Queue,
 		nodeID:  opts.NodeID,
-		cipher:  opts.Cipher,
+		cipher:  e.cipher,
 		onApply: opts.OnApply,
 		now:     now,
 	}

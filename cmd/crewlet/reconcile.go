@@ -69,7 +69,7 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
 		Store: db, Fleet: plane, Queue: e.Backends().Queue,
-		NodeID: nodeID, Cipher: cipher,
+		NodeID: nodeID,
 		OnApply: func(epoch int64, status configplane.ApplyStatus) {
 			log.InfoContext(ctx, "config_revision_applied",
 				"epoch", epoch, "status", string(status))

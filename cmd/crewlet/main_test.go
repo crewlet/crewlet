@@ -655,10 +655,7 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 // reconciler that owns the posture, then the listener.
 func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, error) {
 	t.Helper()
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		t.Fatalf("keyring: %v", err)
-	}
+	cipher := e.Cipher()
 	configSurface, err := configapi.New(configapi.Options{
 		Store: e.Backends().Store, Cipher: cipher,
 		Plane: e.Backends().Fleet, Queue: e.Backends().Queue,
@@ -672,7 +669,7 @@ func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSur
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
 		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
-		Queue: e.Backends().Queue, NodeID: nodeID, Cipher: cipher,
+		Queue: e.Backends().Queue, NodeID: nodeID,
 	})
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)

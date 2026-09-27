@@ -106,21 +106,19 @@ func wireAPI(
 		}
 		return nil, nil
 	}
-	// ONE KEYRING FOR THE PROCESS, the Tier A one, handed to every surface
+	// ONE KEYRING FOR THE PROCESS, the engine's, handed to every surface
 	// that seals or opens, as cmd/crewlet hands it over: every node in this
 	// suite carries one (withKeyring). The setup surface was the only one
 	// given it here, so the reconciler trusted a plaintext revision, the
 	// config surface stored one and /secrets could seal nothing — three
-	// shapes `crewlet run` never produces.
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		return fail("secrets keyring", err)
-	}
+	// shapes `crewlet run` never produces. The reconciler reads the
+	// engine's own now, and /secrets refuses to be built without one.
+	cipher := e.Cipher()
 	// THE RECONCILER, because the health surface reports this node's config
 	// posture and its applied epoch, and the reconciler is what knows both.
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
 		Store: backends.Store, Fleet: backends.Fleet, Queue: backends.Queue,
-		NodeID: nodeID, Cipher: cipher,
+		NodeID: nodeID,
 	})
 	if err != nil {
 		return fail("reconciler", err)

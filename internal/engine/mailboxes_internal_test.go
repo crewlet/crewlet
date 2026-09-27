@@ -70,7 +70,10 @@ roles:
 	}
 
 	fleet := &rosterFleet{memoryFleet: coordmem.NewFleet()}
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	// A KEYRING, because a reconciler reads the engine's own and refuses
+	// an engine that holds none.
+	_, cipher := testKeyring(t)
+	e := &Engine{backends: &Backends{Fleet: fleet}, cipher: cipher}
 	e.epoch.current.Store(company)
 
 	// Nothing activated: not a fault, and not a roster of nobody either.

@@ -1167,15 +1167,12 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		return err
 	}
 
-	// ONE keyring for the process. The reconciler opens revisions with it
-	// and the config surface seals them with it; two ciphers over one
-	// store would mean a revision written by this node is one it cannot
-	// read back.
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
-		return fmt.Errorf("secrets keyring: %w", err)
-	}
+	// ONE keyring for the process, and it is the ENGINE's: the reconciler
+	// opens and authenticates revisions under it, so the config surface
+	// seals them with the same one and the seed seals the file with it.
+	// Built a second time here from the same Tier A, it matched only
+	// because two constructors happened to agree.
+	cipher := e.Cipher()
 
 	// THE STORE IS AUTHORITATIVE AT RUNTIME; the file is a seed. Both
 	// halves matter: without the seed a first run has nothing to activate

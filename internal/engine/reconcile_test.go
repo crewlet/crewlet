@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -122,11 +123,43 @@ func planeFor(t *testing.T, e *engine.Engine, opts ...func(*engine.ReconcilerOpt
 	return p
 }
 
-// activate writes a revision and points the fleet at it, returning its epoch.
+// fleetPeers is two nodes of ONE fleet: each its own engine and database, the
+// author's coordination store for both, and ONE keyring between them — the
+// shape a deployment has, where every node's Tier A names the same keys. Two
+// engines built apart hold two random keyrings, and a peer could open nothing
+// its author sealed.
+func fleetPeers(t *testing.T, peerOpts ...func(*engine.ReconcilerOptions)) (author, peer *plane) {
+	t.Helper()
+	material := testKeyMaterial(t)
+	keyed := func() *engine.Engine {
+		return newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			b.Secrets.Keys = []config.SecretKey{{ID: b.Secrets.ActiveKeyID, Material: material}}
+		})})
+	}
+	author = planeFor(t, keyed())
+	peer = planeFor(t, keyed(), append([]func(*engine.ReconcilerOptions){
+		func(o *engine.ReconcilerOptions) { o.Fleet = author.fleet },
+	}, peerOpts...)...)
+	return author, peer
+}
+
+// seal is a document as this node's writers store and publish it: sealed under
+// the engine's own keyring, which is the one its reconciler opens with.
+func (p *plane) seal(t *testing.T, document json.RawMessage) json.RawMessage {
+	t.Helper()
+	sealed, err := secrets.Seal(p.engine.Cipher(), document)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	return sealed
+}
+
+// activate stores a revision and points the fleet at it, returning its epoch.
 //
 // TWO STORES, which is the shape the engine itself now has: the payload goes
-// in the node's database, the pointer in the coordination store.
-// activate stores a revision and points the fleet at it.
+// in the node's database, the pointer in the coordination store — SEALED in
+// both, as every writer stores it.
 //
 // TAKES THE CALLER'S CONTEXT rather than reaching for t.Context(). Most cases
 // pass t.Context() and nothing changes, but the concurrency case below drives
@@ -135,7 +168,7 @@ func planeFor(t *testing.T, e *engine.Engine, opts ...func(*engine.ReconcilerOpt
 // past the window the readers are watching.
 func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
-	document := yamlToJSON(t, doc)
+	document := p.seal(t, yamlToJSON(t, doc))
 	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
 		Source: "test", CreatedBy: revisionAuthor, CreatedByKind: "operator",
 		OperatorID: revisionCredential, Summary: "revision",
@@ -164,10 +197,11 @@ const (
 )
 
 // activatePayload is activate for a document that is not a company — a broken
-// one, or a sealed one. Same two writes, because a payload the fleet does not
-// point at is a payload no reconciler will ever read.
+// one, sealed like any other. Same two writes, because a payload the fleet
+// does not point at is a payload no reconciler will ever read.
 func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMessage) int64 {
 	t.Helper()
+	payload = p.seal(t, payload)
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
 		Source: "test", CreatedBy: "operator", Summary: summary,
 		Payload: payload, CreatedAt: pinnedNow,
@@ -492,7 +526,7 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		if err != nil {
 			t.Fatalf("store the previous revision: %v", err)
 		}
-		document := yamlToJSON(t, grownCompanyDoc)
+		document := p.seal(t, yamlToJSON(t, grownCompanyDoc))
 		held, err := p.store.Configs().Insert(t.Context(), store.Revision{
 			ParentID: previous, Source: "api", CreatedBy: "operator", Summary: "written",
 			Payload: document, CreatedAt: pinnedNow,
@@ -612,36 +646,47 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 	}
 }
 
-func TestASealedRevisionNeedsItsKeyring(t *testing.T) {
+// A REVISION SEALED UNDER A KEY THIS NODE DOES NOT HOLD IS AN ERROR, NEVER AN
+// EMPTY COMPANY.
+//
+// Booting onto nothing would read on every surface as an operator who
+// configured nothing, where the actual fault is a keyring that does not name
+// the key the revision was sealed under — a node deployed with another fleet's
+// Tier A, or a key dropped before every revision was re-sealed off it.
+//
+// The control is the same document sealed under this node's own keyring.
+func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	t.Parallel()
-	cipher, err := secrets.NewCipher(secrets.Keyring{
-		ActiveID: "k1", Keys: map[string][]byte{"k1": testKey(t)},
+	foreign, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "elsewhere", Keys: map[string][]byte{"elsewhere": testKey(t)},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := secrets.Seal(cipher, yamlToJSON(t, grownCompanyDoc))
+	sealed, err := secrets.Seal(foreign, yamlToJSON(t, grownCompanyDoc))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Without the keyring: an ERROR, never an empty company. Booting onto
-	// nothing reads on every surface as an operator who configured nothing,
-	// where the actual fault is a deployment that lost its root of trust.
-	blind := newPlane(t)
-	blind.activatePayload(t, "sealed", sealed)
-	err = blind.recon.Tick(t.Context())
-	if !errors.Is(err, secrets.ErrSealedWithoutKey) {
-		t.Fatalf("err = %v, want the sealed-without-key error", err)
+	p := newPlane(t)
+	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "sealed-elsewhere", Summary: "sealed", Payload: sealed, At: pinnedNow,
+	}); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if err := p.recon.Tick(t.Context()); !errors.Is(err, secrets.ErrDecrypt) {
+		t.Fatalf("err = %v, want the revision refused as undecryptable", err)
+	}
+	if got := p.engine.Company().Config.TokenBudget; got == 4242 {
+		t.Error("the node runs a revision it could not open")
 	}
 
-	// With it: applied.
-	keyed := newPlane(t, func(o *engine.ReconcilerOptions) { o.Cipher = cipher })
-	keyed.activatePayload(t, "sealed", sealed)
-	if err := keyed.recon.Tick(t.Context()); err != nil {
-		t.Fatalf("a sealed revision with its keyring: %v", err)
+	// THE CONTROL: its own keyring opens it.
+	p.activatePayload(t, "sealed", yamlToJSON(t, grownCompanyDoc))
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("a revision sealed under this node's keyring: %v", err)
 	}
-	if got := keyed.engine.Company().Config.TokenBudget; got != 4242 {
+	if got := p.engine.Company().Config.TokenBudget; got != 4242 {
 		t.Errorf("token budget = %d, want the sealed revision's", got)
 	}
 }
@@ -658,73 +703,61 @@ func TestASealedRevisionNeedsItsKeyring(t *testing.T) {
 // own config history — where it would have been shown, diffed and offered as a
 // revert target.
 //
-// The control is the same document sealed under the ring: applied and kept.
+// THE FORGERY IS PUBLISHED STRAIGHT ONTO THE PLANE, as anything reaching the
+// broker could, rather than through a writer: every writer this build has
+// seals under the node's keyring, and none can be built without it.
+//
+// The control is the same document sealed by a node of the fleet: applied and
+// kept.
 //
 // Mutation: let secrets.Open hand back a plaintext payload with a keyring in
 // hand, and the forged revision applies; drop the open in fetchRevision and it
 // is kept although it is refused.
 func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	t.Parallel()
-	cipher, err := secrets.NewCipher(secrets.Keyring{
-		ActiveID: "k1", Keys: map[string][]byte{"k1": testKey(t)},
+	author, node := fleetPeers(t)
+
+	forged, err := author.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "0192f00d-0000-7000-8000-00000000f0f0", Summary: "forged",
+		Payload: yamlToJSON(t, grownCompanyDoc), At: pinnedNow,
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("publish the forgery: %v", err)
 	}
-
-	// THE FORGERY: a plaintext body published straight onto the fleet's
-	// coordination store, as anything reaching the broker could.
-	forger := newPlane(t)
-	epoch := forger.activate(t.Context(), t, grownCompanyDoc)
-	target, found, err := forger.fleet.Target(t.Context())
-	if err != nil || !found {
-		t.Fatalf("Target: found=%v err=%v", found, err)
-	}
-	node := newPlane(t, func(o *engine.ReconcilerOptions) {
-		o.Fleet, o.Cipher = forger.fleet, cipher
-	})
 	err = node.recon.Tick(t.Context())
 	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
-	if got := node.recon.Applied(); got == epoch {
+	if got := node.recon.Applied(); got == forged.Epoch {
 		t.Error("the node applied the epoch an unsealed revision was published at")
 	}
 	if got := node.engine.Company().Config.TokenBudget; got == 4242 {
 		t.Error("the node runs the forged document's settings")
 	}
 	// THE FLEET VIEW the node reports into is the one it reads, the
-	// forger's: the forger itself never ticked, so the one row is the
+	// author's: the author itself never ticked, so the one row is the
 	// node's.
-	if row := forger.fleetRow(t); configplane.ApplyStatus(row.Status) != configplane.StatusError ||
-		row.Epoch != epoch {
-		t.Errorf("the node recorded %+v, want an error against epoch %d", row, epoch)
+	if row := author.fleetRow(t); configplane.ApplyStatus(row.Status) != configplane.StatusError ||
+		row.Epoch != forged.Epoch {
+		t.Errorf("the node recorded %+v, want an error against epoch %d", row, forged.Epoch)
 	}
-	if _, held, err := node.store.Configs().Get(t.Context(), target.RevisionID); err != nil || held {
+	if _, held, err := node.store.Configs().Get(t.Context(), forged.RevisionID); err != nil || held {
 		t.Errorf("the forged revision is in the node's own history (held=%v err=%v)", held, err)
 	}
 
-	// THE CONTROL: the same document sealed under the ring.
-	sealed, err := secrets.Seal(cipher, yamlToJSON(t, grownCompanyDoc))
-	if err != nil {
-		t.Fatal(err)
-	}
-	author := newPlane(t)
-	sealedEpoch := author.activatePayload(t, "sealed", sealed)
+	// THE CONTROL: the same document, sealed by a node of the fleet.
+	sealedEpoch := author.activate(t.Context(), t, grownCompanyDoc)
 	sealedTarget, _, err := author.fleet.Target(t.Context())
 	if err != nil {
 		t.Fatalf("Target: %v", err)
 	}
-	peer := newPlane(t, func(o *engine.ReconcilerOptions) {
-		o.Fleet, o.Cipher = author.fleet, cipher
-	})
-	if err := peer.recon.Tick(t.Context()); err != nil {
+	if err := node.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("a sealed revision from the peers: %v", err)
 	}
-	if got := peer.recon.Applied(); got != sealedEpoch {
-		t.Errorf("the peer applied epoch %d, want the sealed revision's %d", got, sealedEpoch)
+	if got := node.recon.Applied(); got != sealedEpoch {
+		t.Errorf("the node applied epoch %d, want the sealed revision's %d", got, sealedEpoch)
 	}
-	if _, held, err := peer.store.Configs().Get(t.Context(), sealedTarget.RevisionID); err != nil || !held {
+	if _, held, err := node.store.Configs().Get(t.Context(), sealedTarget.RevisionID); err != nil || !held {
 		t.Errorf("the sealed revision was not kept (held=%v err=%v)", held, err)
 	}
 }
@@ -1142,10 +1175,10 @@ func waitForApplied(t *testing.T, ch <-chan *events.Event) *events.Event {
 // whole feature.
 func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	t.Parallel()
-	author := newPlane(t)
-	// A second node: its own database, the same coordination store. That is
-	// the shape of a fleet, and the only thing the two share.
-	peer := newPlane(t, func(o *engine.ReconcilerOptions) { o.Fleet = author.fleet })
+	// A second node: its own database, the same coordination store and
+	// the same keyring. That is the shape of a fleet, and the only things
+	// the two share.
+	author, peer := fleetPeers(t)
 
 	epoch := author.activate(t.Context(), t, grownCompanyDoc)
 	target, found, err := author.fleet.Target(t.Context())

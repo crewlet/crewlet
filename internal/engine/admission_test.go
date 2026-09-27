@@ -86,7 +86,7 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 
 	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "from-an-older-peer", Summary: "written before the rule",
-		Payload: duplicateStepsRevision, At: pinnedNow,
+		Payload: p.seal(t, duplicateStepsRevision), At: pinnedNow,
 	})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
