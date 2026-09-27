@@ -119,8 +119,9 @@ const (
 
 	// AttemptWindow is how long a failed authentication counts against the
 	// caller that made it, and therefore the attempts bucket's age: each
-	// attempt is one record and the bucket's own expiry is what ends the
-	// window, so nothing sweeps and no node compares its clock to a peer's.
+	// failure's own instant is what ends its part of the window, and the
+	// bucket's expiry is what removes a caller's record a window after the
+	// last write to it, so nothing sweeps.
 	//
 	// Fifteen minutes is the interval a throttle actually has to reason
 	// over: long enough that a guessing run cannot wait it out between
@@ -210,23 +211,19 @@ const (
 
 // AttemptCap is how many failed authentications one caller's record keeps.
 //
-// NOT A RETENTION AND NOT CONFIGURATION. It is the attempts bucket's
-// per-record message cap, and the one thing it decides is what happens when a
-// caller overflows it: the OLDEST attempt is discarded and the newest is
-// kept. The other direction is what a KV bucket does by default — its stream
-// is created DiscardNew, so a full record refuses the newest write — and for
-// a throttle that is the one failure that cannot be survived: the record
-// would freeze at the oldest attempts, they would age out of [AttemptWindow]
-// one by one, and the caller would be un-throttled in the middle of exactly
-// the flood the cap was reached by.
+// NOT A RETENTION AND NOT CONFIGURATION. It bounds the instants one record
+// holds, and the one thing it decides is what happens when a caller overflows
+// it: the OLDEST attempt is discarded and the newest is kept. The other
+// direction is the one that cannot be survived: the record would freeze at the
+// oldest attempts, they would age out of [AttemptWindow] one by one, and the
+// caller would be un-throttled in the middle of exactly the flood the cap was
+// reached by.
 //
 // Sixteen is comfortably above the six failures that take the sign-in curve to
 // its ceiling, so the count a caller reads is a real count rather than a
-// saturation — and the throttle stops writing a pair once its curve stops
-// climbing, so a record rarely holds more than six — and it is small enough
-// that the whole estate an unauthenticated stranger can grow is sixteen
-// instants per name they can reach. The broker's own ceiling on a per-record
-// history is 64.
+// saturation, and it is small enough that the whole estate an unauthenticated
+// stranger can grow is sixteen instants per name they can reach — a value of a
+// few hundred bytes, which is what every read of the record carries.
 //
 // A constant rather than a field on either backend's config: the twin and the
 // KV must cap identically or the contract suite certifies two different
@@ -331,13 +328,14 @@ type SetupClaims interface {
 // a long wait is refused with no round trip, so what reaches here is bounded
 // by what the curve lets through.
 //
-// # Both bounds are the bucket's
+// # Neither bound is a sweep
 //
-// An attempt is one record that expires [AttemptWindow] after it is written,
-// and a caller's record keeps at most [AttemptCap] of them, the oldest
-// discarded. Neither is arithmetic anybody here performs: nothing sweeps,
-// nothing resets a counter, and two nodes recording a failure in the same
-// instant record two attempts rather than racing over one number.
+// A caller's record keeps at most [AttemptCap] instants, the oldest discarded,
+// and each counts until it is [AttemptWindow] old; the record itself leaves
+// the store a window after its last write. Nothing sweeps and nothing resets a
+// counter, and two nodes recording a failure in the same instant record two
+// attempts rather than racing over one number — a backend that holds the
+// instants in one value writes it by compare-and-set.
 //
 // # It fails OPEN, and the asymmetry is deliberate
 //
@@ -371,13 +369,14 @@ type Attempts interface {
 	// moment it asked, and a pair re-read on each attempt would then never
 	// see its delay end.
 	//
-	// NOT ON THE PATH OF EVERY REQUEST. This is a round trip, and on the
-	// KV backend it is an ephemeral consumer over the subject's own record
-	// (internal/coord/kv's package doc says what that costs on a clustered
-	// bucket). The throttle reads a pair before an attempt its curve
-	// admits — a clean pair once a window — and a pair it has already
-	// refused locally never reaches here at all, the trade
-	// [Cooldowns.Since] refuses for the same reason one layer down.
+	// ONE READ AND NO CONSUMER. The throttle asks this before an attempt
+	// its curve admits — a clean pair once a window — which puts it on the
+	// path of every fresh name a guessing run types, so a backend answers
+	// it with a single get of one record. On the KV backend it was an
+	// ephemeral ordered consumer over the subject's revisions: two
+	// proposals through a clustered fleet's metadata group per read. A
+	// pair the throttle has already refused locally never reaches here at
+	// all.
 	Failures(ctx context.Context, subject string, now time.Time) (Attempted, error)
 
 	// Flush forgets every attempt against subject — what a SUCCESSFUL

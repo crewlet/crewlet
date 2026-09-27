@@ -93,13 +93,16 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 			"refuse at, so the count a throttle reads saturates before it can tell "+
 			"a caller at the limit from one far past it", coord.AttemptCap)
 	}
-	// 64 is the broker's own ceiling on a per-record history, and the cap
-	// IS that history on the KV backend: a value above it is a bucket
-	// nobody can create, which fails at boot rather than here.
+	// AND THE RECORD STAYS SMALL, because it is read WHOLE: the throttle
+	// reads a pair's record before every step its curve admits and on
+	// every fresh name a guessing run types, so each instant the cap
+	// admits is carried by every one of those reads. Sixty-four instants
+	// is a value of a couple of kilobytes; past that the cap is buying a
+	// count nothing reads — the curve stops climbing at its sixth failure.
 	if coord.AttemptCap > 64 {
-		t.Errorf("coord.AttemptCap %d exceeds the 64-message ceiling a KV bucket's "+
-			"per-record history has, so the attempts bucket cannot be created at all",
-			coord.AttemptCap)
+		t.Errorf("coord.AttemptCap %d makes the record every throttle read "+
+			"carries grow past a couple of kilobytes, for counts past the "+
+			"sixth failure that no curve reads", coord.AttemptCap)
 	}
 
 	// The thread-follow horizon is the one here that is not sized from

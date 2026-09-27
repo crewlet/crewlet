@@ -688,6 +688,30 @@ var attemptCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE CAP KEEPS THE NEWEST BY INSTANT, NOT BY ARRIVAL. Two nodes'
+	// failures reach the store in whichever order it takes them, so an
+	// older failure can land after a record is already full of newer ones —
+	// and the one to drop is that older one, since the newest failures are
+	// what a curve's count and its wait are read from. Dropped by arrival,
+	// the record loses a newer attempt to make room for a failure that
+	// ages out first, and the count reads one short once it has.
+	name: "the cap keeps the newest attempts whatever order they arrive in",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		later := at.Add(h.ages.Attempt / 2)
+		for range coord.AttemptCap {
+			h.fail("token:late-arrival", later)
+		}
+		h.fail("token:late-arrival", at)
+		past := at.Add(h.ages.Attempt + time.Second)
+		if got := h.window("token:late-arrival", past); got.Count != coord.AttemptCap ||
+			!got.Last.Equal(later) {
+			h.t.Fatalf("window once the late-arriving older attempt aged out = %+v, "+
+				"want the %d newer attempts at %v: the cap dropped a newer attempt to "+
+				"keep an older one", got, coord.AttemptCap, later)
+		}
+	},
+}, {
 	// Two nodes refusing the same caller in the same instant record two
 	// attempts. A counter they had to agree on would lose one of them,
 	// which is the per-process throttle's own arithmetic wearing a fleet's

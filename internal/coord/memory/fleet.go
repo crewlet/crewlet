@@ -239,14 +239,19 @@ func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) error {
 	defer f.mu.Unlock()
 
 	f.attempts[subject] = append(f.attempts[subject], now)
-	// DISCARD THE OLDEST, which is what the KV bucket's per-record history
-	// does when it overflows. The other direction — refusing the newest —
+	at := f.attempts[subject]
+	// THE NEWEST BY INSTANT, which is what the KV backend's record keeps:
+	// two nodes' failures land in whichever order the store takes them,
+	// so the one dropped on overflow is the OLDEST instant, never merely
+	// the first to arrive. The other direction — refusing the newest —
 	// would leave the record frozen at attempts that then age out, and the
 	// caller un-throttled under the flood that filled it. Deleted in place,
 	// so the backing array stays the cap's size under a flood.
-	if over := len(f.attempts[subject]) - coord.AttemptCap; over > 0 {
-		f.attempts[subject] = slices.Delete(f.attempts[subject], 0, over)
+	slices.SortStableFunc(at, time.Time.Compare)
+	if over := len(at) - coord.AttemptCap; over > 0 {
+		at = slices.Delete(at, 0, over)
 	}
+	f.attempts[subject] = at
 	return nil
 }
 
