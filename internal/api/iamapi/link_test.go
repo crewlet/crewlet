@@ -1,6 +1,7 @@
 package iamapi_test
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -173,8 +174,8 @@ func TestALinkConflictIsNamed(t *testing.T) {
 			if strings.Contains(detail, blind) {
 				t.Errorf("the conflict carries the blind: %q", detail)
 			}
-			if _, claimed := refusal.(*iamdomain.ErrClaimed); claimed &&
-				got.body["holder"] != alice.String() {
+			var claimed *iamdomain.ErrClaimed
+			if errors.As(refusal, &claimed) && got.body["holder"] != alice.String() {
 				t.Errorf("the conflict names holder %v, want %s", got.body["holder"],
 					alice)
 			}

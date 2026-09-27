@@ -359,10 +359,10 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	// one is an UNLINK.
 	if proof && named.Method == iamdomain.MethodOIDC {
 		unlinkOp := s.opIDFor(r, "credentials:unlink:"+id)
-		unlinked, err := writer.Unlink(r.Context(), person, iamdomain.Link{
+		unlinked, unlinkErr := writer.Unlink(r.Context(), person, iamdomain.Link{
 			Issuer: named.Issuer, Blind: named.SubjectBlind,
 		}, unlinkOp, "a provider link was revoked")
-		s.answerWrite(w, r, unlinkOp, unlinked, err, map[string]any{"id": id})
+		s.answerWrite(w, r, unlinkOp, unlinked, unlinkErr, map[string]any{"id": id})
 		return
 	}
 	found = false

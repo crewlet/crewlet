@@ -530,10 +530,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		// refused. A move names the link the person holds NOW — read a
 		// moment ago — so a relink never happens in passing; the domain
 		// refuses it if that link moved underneath this edit.
-		var (
-			linked statelog.Result
-			err    error
-		)
+		var linked statelog.Result
 		if link.Blind == "" {
 			linked, err = writer.Unlink(r.Context(), id, held.Link,
 				opID+":unlink", reason)

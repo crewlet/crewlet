@@ -142,7 +142,7 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 	var findings []Finding
 	manage := 0
 	unchecked := 0
-	position := ""
+	var position string
 	after := ""
 	for {
 		page, err := s.directory.People(r.Context(), iamdomain.PeopleQuery{
