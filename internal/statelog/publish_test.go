@@ -226,11 +226,17 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 	t.Run("an unreadable eviction blocks and says to come back", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		h.fence.evictErr = errors.New("coordination unreachable")
+		h.fence.evictErr = errors.New("open /var/lib/crewlet/replicated.db: database is locked")
 		_, err := h.write(probeSubject("a"), "op-1", "hello")
 		var refusal *statelog.Unavailable
 		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvictionUnknown {
 			t.Fatalf("write = %v, want an eviction_unknown refusal", err)
+		}
+		// IN THIS PACKAGE'S WORDS: every surface sends a refusal's detail
+		// to the caller, and the fence's error is the store's own — a
+		// database path here — which belongs in the log.
+		if strings.Contains(err.Error(), "/var/lib") {
+			t.Errorf("the refusal carries the store's own words to the caller: %q", err)
 		}
 		if got := h.appends.appends.Load(); got != 0 {
 			t.Fatalf("appended %d time(s) under an unreadable eviction", got)

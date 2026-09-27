@@ -219,6 +219,11 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		}
 		body, err := r.encode(env)
 		if err != nil {
+			// LOGGED HERE, once, for the reason [barrierAppendFailed]
+			// logs: every reader waiting on this run is told the
+			// refusal's own sentence, never these words.
+			log.Warn("statelog_barrier_unconfirmed", "subject", r.subject,
+				"stage", "encode", "error", err.Error())
 			run.err = fmt.Errorf("statelog: encode a barrier: %w", err)
 			return
 		}
@@ -271,6 +276,12 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 // barrier carries no message id, so the one such answer it can meet is a
 // store that closed under an entry raft had committed, which is a stream
 // restarting and clears exactly as a missed quorum does.
+//
+// THAT ERROR IS LOGGED HERE, once per append, and never told to a caller: it
+// is the transport's or the broker's own words, and every reader waiting on
+// the append is told [barrierRefusal]'s sentence instead. A refusal the broker
+// NAMED is different — its words are the remedy, so they travel on the
+// refusal's detail.
 func barrierAppendFailed(subject string, err error) error {
 	switch f, detail := classify(err); f {
 	case faultFull:
@@ -293,5 +304,7 @@ func barrierAppendFailed(subject string, err error) error {
 				subject, detail),
 		}
 	}
+	log.Warn("statelog_barrier_unconfirmed", "subject", subject,
+		"stage", "append", "error", err.Error())
 	return fmt.Errorf("statelog: append a barrier on %s: %w", subject, err)
 }

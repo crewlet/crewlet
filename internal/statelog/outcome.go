@@ -283,6 +283,12 @@ var ErrConflict = errors.New("statelog: conflict")
 // A REASON AND A DETAIL rather than a message, because two different readers
 // need it: a surface switches on the reason to decide whether to retry
 // elsewhere, and a person reads the detail to find out what to change.
+//
+// THE DETAIL IS WRITTEN FOR THAT PERSON, and every surface sends it on — so it
+// is composed by this package, naming positions, versions, settings and the
+// words a broker chose for its refusal, and never an error's own text: a
+// store's error is a driver's message or a database path, and it goes to the
+// log. [Refused.Detail] is held to the same rule.
 type Unavailable struct {
 	Reason   Reason
 	Detail   string

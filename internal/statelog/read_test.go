@@ -103,6 +103,11 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 	for name, tc := range map[string]struct {
 		health func() statelog.Health
 		want   statelog.ReadRefusal
+
+		// absent is what the refusal must NOT say: a refusal's detail
+		// reaches every caller, and an applier's own error is a
+		// driver's message or a database path.
+		absent string
 	}{
 		"an evicted node": {
 			health: func() statelog.Health {
@@ -136,6 +141,16 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			},
 			want: statelog.RefuseStalled,
 		},
+		"a halted applier": {
+			health: func() statelog.Health {
+				h := healthy()
+				h.Err = "apply CREWLET_PROBE_LOG@1:41: open " +
+					"/var/lib/crewlet/replicated.db: disk I/O error"
+				return h
+			},
+			want:   statelog.RefuseStalled,
+			absent: "/var/lib",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -168,6 +183,10 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			// AND IT REFUSES WITH A REASON A PERSON CAN ACT ON.
 			if refusal.Detail == "" {
 				t.Error("the refusal names nothing to do about it")
+			}
+			if tc.absent != "" && strings.Contains(err.Error(), tc.absent) {
+				t.Errorf("the refusal carries the applier's own error to the "+
+					"caller: %q", err)
 			}
 		})
 	}
@@ -281,24 +300,37 @@ func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender) {
 // barrier nobody answered IS the missed quorum, which the control holds.
 func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	t.Parallel()
+	//
+	// AND THE WORDS: a refusal the broker NAMED carries them, because they
+	// are the remedy; a barrier nobody confirmed is told in this package's
+	// words, naming the barrier's subject, because the error behind it is
+	// the transport's own and every surface sends a refusal's detail to the
+	// caller. `words` is what the detail must say and `absent` what it must
+	// not.
 	for _, c := range []struct {
-		name string
-		err  error
-		want statelog.ReadRefusal
+		name   string
+		err    error
+		want   statelog.ReadRefusal
+		words  string
+		absent string
 	}{
 		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
-			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused},
+			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused,
+			"invalid operation on sealed stream", ""},
 		// A BARRIER THE CLIENT REFUSED AS TOO LARGE is a server whose
 		// max_payload refuses every record, and the client's decision, so
 		// it is the broker's refusal too — never an unanswered append.
 		{"a barrier past the server's max_payload",
-			fmt.Errorf("append: %w", nats.ErrMaxPayload), statelog.RefuseBrokerRefused},
-		{"nobody answered", errors.New("nats: timeout"), statelog.RefuseNoQuorum},
+			fmt.Errorf("append: %w", nats.ErrMaxPayload), statelog.RefuseBrokerRefused,
+			"max_payload", ""},
+		{"nobody answered", errors.New("nats: timeout dialling 10.0.0.7:4222"),
+			statelog.RefuseNoQuorum, "was not confirmed", "10.0.0.7"},
 		// A STORE THAT CLOSED UNDER THE BARRIER is a stream restarting:
 		// the broker answered, and what it said is that the entry may
 		// yet land — which clears exactly as a missed quorum does.
 		{"a store closed under it", &jetstream.APIError{Code: 503, ErrorCode: 10077,
-			Description: "store is closed"}, statelog.RefuseNoQuorum},
+			Description: "store is closed"}, statelog.RefuseNoQuorum,
+			"was not confirmed", "store is closed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -318,6 +350,18 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 			}
 			if got, want := refusal.RetryAfter > 0, c.want.Retryable(); got != want {
 				t.Errorf("%q carries a hint of %s", c.want, refusal.RetryAfter)
+			}
+			if !strings.Contains(refusal.Detail, c.words) {
+				t.Errorf("detail = %q, want it to say %q", refusal.Detail, c.words)
+			}
+			if c.absent != "" && strings.Contains(err.Error(), c.absent) {
+				t.Errorf("the refusal carries the transport's own words to the "+
+					"caller: %q", err)
+			}
+			if c.want == statelog.RefuseNoQuorum &&
+				!strings.Contains(refusal.Detail, probePrefix+"."+statelog.BarrierKind) {
+				t.Errorf("detail = %q, want it to name the barrier's subject",
+					refusal.Detail)
 			}
 		})
 	}
@@ -601,6 +645,62 @@ func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 		t.Errorf("the reasons spelled like a read refusal are %v, want %v — "+
 			"docs/guides/consistency.md names which write reasons have a read "+
 			"twin and why the rest have none", twins, want)
+	}
+}
+
+// A DEFERRED SCOPE THIS NODE COULD NOT READ IS REFUSED IN THIS PACKAGE'S
+// WORDS, NEVER THE STORE'S.
+//
+// Every surface that answers a refusal sends its detail to the caller — the
+// query registry in a REST body and a socket frame, `/chart` in its own — so a
+// detail built from the probe's error handed a driver's message or a database
+// path to anybody holding the question's grant. The refusal says what could
+// not be read and where the reason is; the reason goes to the log. The
+// control is the read that declares no scope, whose words ARE this package's
+// and are told as they are.
+func TestAnUnreadableDeferredScopeIsRefusedInThisPackagesWords(t *testing.T) {
+	t.Parallel()
+	deferredHealth := func() statelog.Health {
+		s := healthy()
+		s.Deferred = 1
+		s.DeferredFrom = 1
+		return s
+	}
+	storeWords := "open /var/lib/crewlet/replicated.db: database is locked"
+	for _, c := range []struct {
+		name   string
+		store  *stubStore
+		scope  statelog.ScopeSet
+		want   string
+		absent string
+	}{
+		{"a store that could not be read",
+			&stubStore{err: errors.New(storeWords)},
+			statelog.ScopeSet{Paths: []string{"object/a"}},
+			"could not be read", "/var/lib"},
+		{"a read that names no objects, the control",
+			&stubStore{}, statelog.ScopeSet{},
+			"declares no scope", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newReader(t, c.store, deferredHealth,
+				&stubWaiter{at: healthy().Position}, nil)
+			_, err := r.Read(t.Context(), statelog.Query{
+				Level: statelog.ReadStale, Scope: c.scope,
+			}, func(*sql.Tx) error { return nil })
+			var refusal *statelog.Refused
+			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseDeferredScopeUnknown {
+				t.Fatalf("Read = %v, want a deferred_scope_unknown refusal", err)
+			}
+			if !strings.Contains(refusal.Detail, c.want) {
+				t.Errorf("detail = %q, want it to say %q", refusal.Detail, c.want)
+			}
+			if c.absent != "" && strings.Contains(err.Error(), c.absent) {
+				t.Errorf("the refusal carries the store's own words to the "+
+					"caller: %q", err)
+			}
+		})
 	}
 }
 

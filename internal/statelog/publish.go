@@ -995,9 +995,18 @@ func (p *Publisher) checkEvicted(ctx context.Context) error {
 		// eviction either, and the reason says which: this one clears
 		// when the state is read again, and a caller is told to come
 		// back rather than to give up on this node.
+		//
+		// AND THE STORE'S OWN WORDS GO TO THE LOG, never onto the
+		// detail: every surface sends a refusal's detail to the caller,
+		// and the read's error is a driver's message or a database
+		// path — see [Reader.scopeUnread].
+		p.logger.Warn("statelog_eviction_unread", "domain", p.domain.Name(),
+			"error", err.Error())
 		return &Unavailable{
 			Reason: ReasonEvictionUnknown,
-			Detail: fmt.Sprintf("this node's own eviction state could not be read: %v", err),
+			Detail: "this node's own eviction state could not be read from its " +
+				"store, and publishing under an eviction nobody can see produces " +
+				"records every node drops — the reason is in this node's log",
 		}
 	}
 	if evicted {

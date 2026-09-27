@@ -185,7 +185,9 @@ type Refused struct {
 	Level ReadLevel
 
 	// Detail names the specific thing — the deferred record's version and
-	// position, the field an operator has to change.
+	// position, the field an operator has to change. Written for a CALLER,
+	// since every surface sends it on, so it is never an error's own text
+	// — see [Unavailable]'s detail, held to the same rule.
 	Detail string
 
 	// RetryAfter is DERIVED rather than fixed where it can be: how far
@@ -472,7 +474,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	if h.Deferred > 0 {
 		gap, err := r.coverage(ctx, q.Scope)
 		if err != nil {
-			return r.refuse(h, q, RefuseDeferredScopeUnknown, err.Error(), started)
+			return r.refuse(h, q, RefuseDeferredScopeUnknown, r.scopeUnread(err), started)
 		}
 		if gap != nil {
 			if !q.Set {
@@ -586,14 +588,18 @@ type gap struct {
 	scope   ScopeSet
 }
 
+// errNoScope is a read that names no objects on a node holding a deferred
+// record: it cannot be certified about any, so it is the domain term rather
+// than a free pass. Its words are this package's own, and a caller is told
+// them.
+var errNoScope = errors.New("this read declares no scope, so nothing can be " +
+	"said about what a deferred record would cover")
+
 // coverage probes this node's deferred scope index for anything covering what
 // the read is about.
 func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
 	if s.Empty() {
-		// A READ THAT NAMES NO OBJECTS cannot be certified about any,
-		// so it is the domain term rather than a free pass.
-		return nil, fmt.Errorf("this read declares no scope, so nothing can be " +
-			"said about what a deferred record would cover")
+		return nil, errNoScope
 	}
 	var found *gap
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
@@ -610,6 +616,27 @@ func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
 		return nil, err
 	}
 	return found, nil
+}
+
+// scopeUnread is what a caller is told about a deferred scope this node could
+// not read, and the one place the reason is sent to the log instead.
+//
+// A REFUSAL'S DETAIL IS WRITTEN FOR A CALLER — every surface that answers a
+// refusal sends it on, because it names what the refusal is about and what
+// changes it. The probe's own error is not that: it is the store's, a driver's
+// words or a database path, and it reached every holder of the question's
+// grant in a REST body and a socket frame the day refusals stopped being
+// answered as faults. So the sentence is this package's, and the error is
+// logged where an operator reads it.
+func (r *Reader) scopeUnread(err error) string {
+	if errors.Is(err, errNoScope) {
+		return errNoScope.Error()
+	}
+	log.Warn("statelog_deferred_scope_unread", "domain", r.domain.Name(),
+		"error", err.Error())
+	return "the scope of a record this node cannot decode could not be read " +
+		"from its store, so nothing can be said about what it covers — the " +
+		"reason is in this node's log"
 }
 
 // target is the position this read must wait for, by level.
@@ -629,7 +656,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 		}
 		at, err := r.index.Read(ctx)
 		if err != nil {
-			return Position{}, barrierRefusal(q.Level, err)
+			return Position{}, barrierRefusal(q.Level, r.index.subject, err)
 		}
 		// THE FLOOR CANNOT BE PAST THE BARRIER on the stream the barrier
 		// was appended to — a position a write returned was acknowledged
@@ -718,7 +745,15 @@ func (r *Reader) pastBound(q Query, h Health) *Refused {
 // duplicate answer that proves nothing. Only the first is worth coming back
 // for; a full log names a field an operator has to change, and a broker's
 // refusal names what the broker wants changed.
-func barrierRefusal(level ReadLevel, err error) error {
+//
+// A BARRIER NOBODY CONFIRMED IS TOLD IN THIS PACKAGE'S WORDS, never the
+// error's. The error is the client's or the broker's own — a timeout, a
+// connection closed, whatever the transport said — and a refusal's detail is
+// sent to the caller by every surface that answers one, so it reached every
+// holder of the question's grant the day refusals stopped being answered as
+// faults. [barrierAppendFailed] logs the error once per append, where an
+// operator reads it, rather than once per reader waiting on it.
+func barrierRefusal(level ReadLevel, subject string, err error) error {
 	var unavailable *Unavailable
 	if errors.As(err, &unavailable) {
 		switch unavailable.Reason {
@@ -741,7 +776,10 @@ func barrierRefusal(level ReadLevel, err error) error {
 	}
 	return &Refused{
 		Code: RefuseNoQuorum, Level: level,
-		Detail: err.Error(),
+		Detail: fmt.Sprintf("the barrier on %s was not confirmed — the broker "+
+			"did not answer its append, or a majority of its members did not "+
+			"agree — so no position could be established as the log's end; "+
+			"the broker's own error is in this node's log", subject),
 	}
 }
 
@@ -786,7 +824,15 @@ func (r *Reader) refusalDetail(h Health, code ReadRefusal, now time.Time) string
 			"are missing state no replay can supply; it adopts a peer's snapshot"
 	case RefuseStalled:
 		if h.Err != "" {
-			return h.Err
+			// NOT h.Err, which is the applier's own error or the one a
+			// health read failed with — a driver's message, a database
+			// path — and a refusal's detail reaches every caller. An
+			// operator reads the error where it already is.
+			return "this node's applier has stopped, or has retried one " +
+				"failure for longer than its budget, so its rows are frozen " +
+				"rather than merely old — `crewlet retention status` names the " +
+				"domain, its position and the error, which this node's log " +
+				"carries too"
 		}
 		return fmt.Sprintf("this node's applied prefix has not moved for %s, so "+
 			"its rows are frozen rather than merely old", StallGrace)

@@ -36,7 +36,10 @@ type Unavailable struct {
 	// Detail is that refusal's own words: what it is about and what
 	// changes it. Written for a caller, which is why it may be sent where
 	// a failure's text may not — a fault can carry a database path, and a
-	// refusal names positions, record versions and settings.
+	// refusal names positions, record versions and settings. The state log
+	// holds itself to that: it composes every refusal's detail and sends
+	// the error behind one — a store's, a transport's — to its log
+	// ([statelog.Unavailable]).
 	Detail string `json:"detail,omitempty"`
 
 	// RetryAfter is how many whole seconds to wait before asking THIS node
