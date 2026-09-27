@@ -54,7 +54,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
-	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -676,19 +675,6 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// wholeRef is the variable a setting points at, or empty when it is a literal.
-//
-// Only a WHOLE reference, which is what [setup.Resolution] decides `resolved`
-// on: a value with a reference embedded in a longer string resolves per
-// segment and naming one of them would be advice about the wrong half.
-func wholeRef(stored string) string {
-	name, ok := envref.Whole(stored)
-	if !ok {
-		return ""
-	}
-	return name
-}
-
 // activeRevision is the revision this node is serving, or empty when it
 // cannot say.
 //
@@ -863,7 +849,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.Slack
 		summary = slack.Summary()
 		reqs = slack.CompanyRequirements(block)
-		seats = slackSeats(company, roster, s.resolve, s.apps(), s.externalBase)
+		seats = slackSeats(roster, s.resolve, s.apps(), s.externalBase)
 		managePath = slack.ManagePath()
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
 		// the block is optional settings, and a company with seven working
@@ -1650,7 +1636,7 @@ func seatChoices(roster *org.Organization, reqs []setup.Requirement) {
 // transport is running.
 func (s *Service) apps() map[string]string { return s.slackApps() }
 
-func slackSeats(company *config.Company, roster *org.Organization,
+func slackSeats(roster *org.Organization,
 	resolve func(string) (string, bool),
 	apps map[string]string, externalBase string,
 ) []SeatState {

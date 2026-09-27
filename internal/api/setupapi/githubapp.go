@@ -269,7 +269,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Seat string `json:"seat"`
 	}
-	if err := json.Unmarshal(body, &in); err != nil {
+	if err = json.Unmarshal(body, &in); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{"hint": err.Error()})
 		return
 	}
@@ -366,7 +366,7 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	// manifest code is itself one-time, so a conversion that fails needs a
 	// fresh code and therefore a fresh creation either way. Spending first
 	// means a replay cannot race a slow exchange.
-	if err := f.spend(ctx, state); err != nil {
+	if err = f.spend(ctx, state); err != nil {
 		return handle, err
 	}
 	s := f.service
