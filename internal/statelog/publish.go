@@ -497,7 +497,22 @@ const (
 
 // attempt publishes once and reads the answer.
 func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64, gen uint32, round int) (Result, disposition, error) {
-	seq, _, err := p.append(ctx, req, snap, expect)
+	// FENCE 0 AGAIN, because a round is not free of it: a write that has
+	// spent fifteen rounds losing races has been running for as long as
+	// those races took, and the eviction it must not publish under may
+	// have landed inside that window.
+	//
+	// ITS REFUSAL IS RETURNED, NEVER CLASSIFIED. It used to be raised from
+	// inside the append, and the append's error went through [classify],
+	// which read an eviction as an append nobody answered: the subject was
+	// probed, nothing of this write's was found, the round re-decided and
+	// met the same refusal — sixteen times, until the caller was told the
+	// rows kept changing under a write a removed node had refused itself.
+	if err := p.checkEvicted(ctx); err != nil {
+		return Result{Rounds: round}, dispDone, err
+	}
+	seq, _, err := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect,
+		snap.Decision.Payload)
 	f, detail := classify(err)
 	switch f {
 	case faultNone:
@@ -942,19 +957,6 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 
 	// Somebody else won. Re-decide.
 	return Result{}, nil
-}
-
-// append publishes one record, stamping the framework's own fields onto the
-// envelope the domain decided.
-func (p *Publisher) append(ctx context.Context, req Request, snap Snap, expect *uint64) (uint64, bool, error) {
-	// FENCE 0 AGAIN, because a round is not free of it: a write that has
-	// spent fifteen rounds losing races has been running for as long as
-	// those races took, and the eviction it must not publish under may
-	// have landed inside that window.
-	if err := p.checkEvicted(ctx); err != nil {
-		return 0, false, err
-	}
-	return p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
 }
 
 // checkEvicted is fence 0.

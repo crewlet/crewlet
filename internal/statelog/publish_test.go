@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -903,4 +904,84 @@ func (tinyLogDomain) Stream() statelog.StreamSpec {
 	spec := probeDomain{}.Stream()
 	spec.MaxBytes = 32 << 10
 	return spec
+}
+
+// AN EVICTION THAT LANDS WHILE A WRITE IS IN FLIGHT REFUSES IT AT THE NEXT
+// APPEND, as an eviction.
+//
+// Fence 0 runs before the first snapshot and again before every append,
+// because a write that has spent rounds losing races has run for as long as
+// they took and the eviction may have landed inside that window. The second
+// check's refusal went through the append's error classification, which read
+// it as an append nobody answered: it asked the broker for the subject's last
+// sequence, found nothing of its own there, re-decided — and met the same
+// refusal every round until the budget ran out, when the caller was told the
+// rows kept changing under the write. A node that KNEW it had been removed
+// reported contention.
+//
+// The fence here answers "not evicted" to the check before the snapshot and
+// the other answer to the one before the append.
+func TestAnEvictionLandingMidWriteRefusesAsAnEviction(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		answer func() (bool, error)
+		want   statelog.Reason
+	}{
+		{"evicted", func() (bool, error) { return true, nil }, statelog.ReasonEvicted},
+		{"unreadable", func() (bool, error) {
+			return false, errors.New("coordination unreachable")
+		}, statelog.ReasonEvictionUnknown},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			fence := &laterFence{fakeFence: h.fence, after: 1, answer: c.answer}
+			pub, err := statelog.NewPublisher(statelog.Deps{
+				Domain: probeDomain{}, Log: h.appends,
+				Signer: testSigner(t, probeDomain{}), Rows: h.rows, Fence: fence,
+				Gates: h.gates, Waiter: h.applier, NodeID: "node-a",
+				Generation: h.gen.Load, ResolveBudget: 250 * time.Millisecond,
+			})
+			if err != nil {
+				t.Fatalf("NewPublisher: %v", err)
+			}
+			res, err := pub.Publish(t.Context(), statelog.Request{
+				Subject:  probeSubject("a"),
+				Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
+				OpID:     "op-1",
+				MintedAt: time.Now(),
+				Pattern:  statelog.PatternArbitrated,
+				Decide: func(*sql.Tx) (statelog.Decision, error) {
+					return statelog.Decision{Payload: []byte("x"), Version: 1}, nil
+				},
+			})
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) || refusal.Reason != c.want {
+				t.Fatalf("a write whose fence answered %s at the append = %v "+
+					"after %d round(s), want a %s refusal", c.name, err,
+					res.Rounds, c.want)
+			}
+			if res.Rounds != 1 || h.appends.appends.Load() != 0 {
+				t.Errorf("the refusal took %d round(s) and %d append(s), want one "+
+					"round and no append", res.Rounds, h.appends.appends.Load())
+			}
+		})
+	}
+}
+
+// laterFence answers "not evicted" for its first `after` questions and
+// answer's value from then on.
+type laterFence struct {
+	*fakeFence
+	after  int64
+	calls  atomic.Int64
+	answer func() (bool, error)
+}
+
+func (f *laterFence) Evicted(ctx context.Context) (bool, error) {
+	if f.calls.Add(1) <= f.after {
+		return f.fakeFence.Evicted(ctx)
+	}
+	return f.answer()
 }
