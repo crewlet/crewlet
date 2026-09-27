@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -573,29 +574,33 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 // again, and a below-floor node rejoins by itself.
 func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 	t.Parallel()
-	twins := 0
+	// THE PAIRS ARE DERIVED from the two vocabularies rather than listed, so
+	// a reason added to one side and spelled like the other is compared the
+	// day it lands instead of skipped by a list nobody extended.
+	var twins []string
 	for _, read := range statelog.ReadRefusals {
 		write := statelog.Reason(read)
-		switch write {
-		case statelog.ReasonBehind, statelog.ReasonDeferred,
-			statelog.ReasonBelowFloor, statelog.ReasonFloorUnknown,
-			statelog.ReasonEvicted, statelog.ReasonLogFull,
-			statelog.ReasonBrokerRefused:
-		default:
+		if !write.Valid() {
 			continue
 		}
-		twins++
+		twins = append(twins, string(read))
 		if write.Retryable() != read.Retryable() {
 			t.Errorf("%q: a write refusal says retryable=%v and a read refusal "+
 				"says %v, about one state of one node", read, write.Retryable(),
 				read.Retryable())
 		}
 	}
-	// THE SEVEN, so a twin renamed on one side stops being compared rather
-	// than silently passing.
-	if twins != 7 {
-		t.Errorf("compared %d twins, want 7 — a reason and a refusal spelled "+
-			"alike went missing from one side", twins)
+	// AND THE SET IS THE ONE THE CONSISTENCY GUIDE STATES, both ways: a twin
+	// renamed on one side stops being compared, and a new one is a sentence
+	// in that guide nobody has written yet.
+	want := []string{"behind", "deferred", "below_floor", "floor_unknown",
+		"evicted", "log_full", "broker_refused"}
+	slices.Sort(twins)
+	slices.Sort(want)
+	if !slices.Equal(twins, want) {
+		t.Errorf("the reasons spelled like a read refusal are %v, want %v — "+
+			"docs/guides/consistency.md names which write reasons have a read "+
+			"twin and why the rest have none", twins, want)
 	}
 }
 

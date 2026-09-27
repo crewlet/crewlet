@@ -292,9 +292,23 @@ often it is sent here.
 | `broker_refused` | The broker refused to store the record for a reason it named and this build has no remedy for — a sealed stream, a JetStream store with no resources left. The detail carries the broker's code and words. Two answers the broker names are deliberately **not** this: a record under the write's own operation id still being committed, and a store that closed under a record raft had committed. Each says the record may yet land, so the write answers `unknown` with its operation id instead. | Act on the broker's words; asking again changes nothing. |
 | `skew` | The broker answered a last sequence below an expectation this node formed, which a healthy stream never does. | A store or stream was restored out of step; see [Retention](retention.md#re-anchoring-a-recreated-stream). |
 
-Two write reasons have no read twin. `eviction_unknown` is one; the other is
-`record_too_large`, because the one record a read appends — a barrier — is a
-few hundred bytes.
+Seven write reasons have a read twin spelled the same, and each agrees with it
+about waiting: `behind`, `deferred`, `below_floor`, `floor_unknown`,
+`evicted`, `log_full` and `broker_refused`. The other six describe something
+only a write meets:
+
+- `eviction_unknown` — a write's fence reads this node's own eviction rows
+  before every append, and that read can fail; a read takes the eviction flag
+  this node's health already holds, and answers `evicted` from it.
+- `deleted` — a create that would bring back an object carrying a permanent
+  deletion marker. A read of that object simply finds nothing.
+- `gated` and `retired` — what became of a record already durable on the log.
+  A read appends no record except a barrier, and a barrier is never gated or
+  retired.
+- `record_too_large` — the one record a read appends, a barrier, is a few
+  hundred bytes.
+- `skew` — a last sequence below an expectation this node formed. A read forms
+  no expectation.
 
 ## Completeness is a different fact from freshness
 
