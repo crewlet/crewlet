@@ -243,7 +243,9 @@ internal/
 │                         #   the engine — the only place either is reachable
 ├── maintenance/          # The retention sweep, behind one singleton duty
 ├── tokens/               # Token accounting shared by the meter and the API
-├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
+├── hostbox/ procgroup/   # Running somebody else's process on the engine host —
+│                         #   the one environment allowlist every child gets —
+│                         #   and process-tree teardown
 ├── whsec/                # Webhook signing secrets: the format, minting and the HMAC key
 ├── jsprovision/          # How long a replicated JetStream create gets, and
 │                         #   what "the cluster is still forming" looks like:

@@ -149,6 +149,27 @@ func TestInheritTakesOnlyTheAllowlist(t *testing.T) {
 	}
 }
 
+// A BOX REPLACES WHERE ITS CHILD KEEPS ITS FILES, so the base allowlist must
+// not carry the engine user's own: a box consumer that inherited HOME and then
+// forgot to overwrite one XDG directory would have a coding agent writing its
+// login into the engine user's real dotfiles. The host user's locations are a
+// separate list a child that runs in no box asks for by name.
+func TestTheBaseAllowlistCarriesNoneOfTheHostUsersLocations(t *testing.T) {
+	for _, name := range HostUserEnv {
+		if slices.Contains(PassthroughEnv, name) {
+			t.Errorf("%s is on the base allowlist, so every box inherits the "+
+				"engine user's own before overwriting it", name)
+		}
+	}
+	t.Setenv("HOME", "/home/engine")
+	if _, ok := Inherit()["HOME"]; ok {
+		t.Error("Inherit() passed the engine's HOME to a child that did not ask for it")
+	}
+	if got := Inherit(HostUserEnv...)["HOME"]; got != "/home/engine" {
+		t.Errorf("Inherit(HostUserEnv...) HOME = %q, want the engine user's", got)
+	}
+}
+
 // A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec reads a nil Cmd.Env as
 // "inherit the parent's", so an empty map rendered as nil would hand a child
 // the whole engine environment — the exact opposite of the empty one it asked

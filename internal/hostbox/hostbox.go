@@ -1,17 +1,21 @@
-// Package hostbox holds the primitives for running somebody else's process in
-// a directory on the engine host.
+// Package hostbox holds the primitives for running somebody else's process on
+// the engine host.
 //
-// Two subsystems do that, and they must do it identically: the subscription
-// CLI LLM backend, which drives a coding CLI per seat with its own HOME, and
-// the local sandbox provider, which runs a whole coding agent in a box. Both
-// seed operator-supplied credential paths in, both copy a refreshed login back
-// out, and both hand a child process an environment. A second implementation
-// of any of those is the one that drifts — and each of them is a guard, so
-// drift means a hole. The environment had already drifted: the CLI backend
-// carried a copy of the allowlist that disagreed with this one about five
-// names.
+// Three subsystems do that, and they must do it identically: the subscription
+// CLI LLM backend, which drives a coding CLI per seat with its own HOME; the
+// local sandbox provider, which runs a whole coding agent in a box and drives a
+// container runtime's CLI to make one; and the MCP client, which starts every
+// stdio tool server a company declares. The first two seed operator-supplied
+// credential paths in and copy a refreshed login back out, and all three hand
+// a child process an environment. A second implementation of any of those is
+// the one that drifts — and each of them is a guard, so drift means a hole.
+// The environment had already drifted: the CLI backend carried a copy of the
+// allowlist that disagreed with this one about five names, and the MCP client
+// carried none at all and handed every tool server the engine's whole
+// environment — its keyring, its Tier A token values and its identity
+// provider's client secret among it.
 //
-// Nothing here imports the rest of Crewlet: it sits below both consumers.
+// Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox
 
 import (
@@ -26,9 +30,9 @@ import (
 	"strings"
 )
 
-// DirMode is the mode for every directory these two subsystems create.
-// Credentials and prompt transcripts both land under one, on a host that may
-// run other services.
+// DirMode is the mode for every directory the CLI backend and the local
+// sandbox create. Credentials and prompt transcripts both land under one, on a
+// host that may run other services.
 const DirMode os.FileMode = 0o700
 
 // FileMode is the mode for every file they create, for the same reason.
@@ -77,10 +81,34 @@ var PassthroughEnv = []string{
 	"no_proxy",
 }
 
+// HostUserEnv is where the engine's own user keeps its files and its runtime
+// state: the home, the user's name, the temporary directory and the XDG base
+// directories.
+//
+// SEPARATE FROM [PassthroughEnv] because a box REPLACES every one of these: a
+// coding CLI and a sandboxed coding agent each get a HOME, an XDG tree and a
+// TMPDIR of their own, which is the isolation, so inheriting the engine's would
+// only be overwritten. A child that runs AS the host user in no box of its own —
+// a stdio MCP server launched through `npx` or `uvx`, which keeps its package
+// cache under HOME, and a container runtime's CLI, which finds its config and
+// a rootless daemon's socket through HOME and XDG_RUNTIME_DIR — needs the real
+// ones, and none of them authenticates anything.
+var HostUserEnv = []string{
+	"HOME",
+	"USER",
+	"LOGNAME",
+	"TMPDIR",
+	"XDG_CONFIG_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_DATA_HOME",
+	"XDG_STATE_HOME",
+	"XDG_RUNTIME_DIR",
+}
+
 // Inherit returns the allowlisted slice of the host environment, ready to be
-// extended with a box's own variables. Names that are unset are omitted rather
-// than passed through empty: a child that distinguishes "unset" from "empty"
-// (curl does, for NO_PROXY) must see the same thing the engine saw.
+// extended with a child's own variables. Names that are unset are omitted
+// rather than passed through empty: a child that distinguishes "unset" from
+// "empty" (curl does, for NO_PROXY) must see the same thing the engine saw.
 func Inherit(extra ...string) map[string]string {
 	env := make(map[string]string, len(PassthroughEnv)+len(extra))
 	for _, name := range append(append([]string{}, PassthroughEnv...), extra...) {
