@@ -754,7 +754,8 @@ api:
                         #   never a bool; 0.0.0.0/0 is refused. Empty with
                         #   an https external_url is warned about: whatever
                         #   terminates the TLS is then every caller's
-                        #   source, and the sign-in throttle's too
+                        #   source — in every audit row, and in the
+                        #   sign-in throttle's key for every login
   auth:
     backend: local      # local | oidc | none. Unset derives from which of
                         #   the two blocks below is present

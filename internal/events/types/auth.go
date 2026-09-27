@@ -194,14 +194,13 @@ const (
 
 	// FailInvite is an invitation link that did not prove itself: an id
 	// nobody issued, or a secret that is not the id's link's — each a
-	// 410 — and a view or a redemption the throttle turned away. THE ID
-	// IN THE LINK IS THE CREDENTIAL, so a source presenting ids that
-	// resolve to nothing is guessing at one; counted, the source's curve
-	// slows the walk as it slows a guessed password. A link that DID prove
+	// 410. THE LINK IS THE CREDENTIAL, so a source presenting ids or
+	// secrets that open nothing is guessing at one, and the tally's count
+	// of distinct values is what shows the walk. A link that DID prove
 	// itself and is spent — redeemed, aged out, its address enrolled — is
 	// the same 410 and NOT a failure: it is the link's holder, or a mail
-	// scanner re-reading it, and counting it put a scanner's address on
-	// the curve.
+	// scanner re-reading it, and counting it named a scanner's address as
+	// a guesser.
 	FailInvite FailureMethod = "invite"
 
 	// FailBearer is a credential presented on a request and refused: an

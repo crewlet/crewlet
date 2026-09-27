@@ -607,8 +607,9 @@ the proxy has already terminated TLS — so the session cookie's `Secure` flag,
 its `__Host-` prefix, the origin every write is checked against and the base
 every webhook URL is built on all come from this one value. Behind a proxy,
 name the proxy's own block in `api.trusted_proxies` too, or every caller shares
-the proxy's address — one sign-in throttle curve for the whole company, and one
-client in every audit row. `crewlet validate` warns about an `https` external
+the proxy's address — one sign-in throttle curve per login for everybody,
+so a stranger guessing at somebody's login slows that person's own sign-in,
+and one client in every audit row. `crewlet validate` warns about an `https` external
 URL with no proxy trusted, because the engine never terminates TLS itself.
 
 ```bash

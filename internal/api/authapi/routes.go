@@ -35,8 +35,10 @@ const Prefix = "/auth/"
 // deployment nobody can enter: the posture read, the sign-in, the bootstrap
 // and the OIDC pair — and the invitation's own three, its view, its
 // redemption and its redemption through the provider, because holding the
-// link is the credential. Every one is admitted per SOURCE by the throttle
-// and every one is origin-checked like any other state change.
+// link is the credential. The sign-in meets the throttle's curve, keyed on
+// the login as TYPED from the caller's source; the rest present a credential
+// that names nobody and meet no curve ([Service.uncounted]). Every one is
+// origin-checked like any other state change.
 //
 // THE REST NEED A SESSION, and they are guarded by the same middleware every
 // other route is — reading what it resolved rather than validating a second

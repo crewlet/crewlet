@@ -1340,10 +1340,12 @@ func (a API) warnings() []Warning {
 	// AN `https://` EXTERNAL URL WITH NO TRUSTED PROXY is one client. The
 	// engine never terminates TLS itself, so an https address means
 	// something in front of it does — and unless that something is named
-	// here, every request's source is ITS address: the sign-in throttle's
-	// source curve, the audit trail's client and every per-source rule then
-	// see the whole company as one caller, and one stranger's guesses put
-	// every honest sign-in behind the same wait.
+	// here, every request's source is ITS address: the sign-in throttle,
+	// the audit trail's client and every per-source rule then see the whole
+	// company as one caller — the throttle keys every caller's attempts at
+	// one login together, so a stranger guessing at somebody's login puts
+	// that person's own sign-in behind the same wait, and every audit row
+	// names the proxy.
 	//
 	// A WARNING RATHER THAN A REFUSAL because one front end is right with
 	// the list empty — a balancer that passes the client's own address
@@ -1354,10 +1356,11 @@ func (a API) warnings() []Warning {
 			"this deployment is reached over https, which something in front "+
 				"of it terminates, and no proxy is trusted — so every caller's "+
 				"source is that front end's address. The sign-in throttle then "+
-				"counts the whole company as one client, and one stranger's "+
-				"failures slow everybody's sign-in. Name the proxy's own "+
-				"address block here; leave it empty only where the front end "+
-				"passes each client's own address through as the peer"))
+				"keys every caller's attempts at one login together, so a "+
+				"stranger guessing at somebody's login slows that person's own "+
+				"sign-in, and every audit row names the front end. Name the "+
+				"proxy's own address block here; leave it empty only where the "+
+				"front end passes each client's own address through as the peer"))
 	}
 
 	if oidc := auth.OIDC; oidc != nil && auth.Resolved() == AuthBackendOIDC {

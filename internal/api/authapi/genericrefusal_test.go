@@ -188,9 +188,10 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 		})
 		r := httptest.NewRequest(http.MethodPost, "/auth/login",
 			strings.NewReader(string(body)))
-		// A SOURCE PER ARM, so no arm is the one the per-source ceiling
-		// turned away: that refusal is deliberately specific, and it is
-		// not what this case is about.
+		// A SOURCE PER ARM, so no two arms share a pair on the curve —
+		// the two second-factor arms type one login — and none is the
+		// one the curve turned away: that refusal is deliberately
+		// specific, and it is not what this case is about.
 		r.RemoteAddr = "198.51.100." + strconv.Itoa(source) + ":5100"
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, r)

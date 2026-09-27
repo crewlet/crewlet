@@ -23,10 +23,10 @@ import (
 //     row in the audit trail — so the throttle never fires and the log names
 //     whoever they decided to blame.
 //   - FALSE behind a real proxy buckets the entire internet under one address.
-//     The throttle's source curve then belongs to everybody at once: one
-//     attacker's guesses put every honest sign-in in the company behind the
-//     same thirty-second wait, which is a slowdown the defence caused, and
-//     every audit row names the proxy. `crewlet validate` warns about exactly
+//     The throttle's curve for a login then belongs to everybody at once: a
+//     stranger guessing at somebody's login puts that person's own sign-in
+//     behind the same thirty-second wait, which is a slowdown the defence
+//     caused, and every audit row names the proxy. `crewlet validate` warns about exactly
 //     this shape — an `https` external URL, which only a proxy can terminate,
 //     with no proxy trusted.
 //

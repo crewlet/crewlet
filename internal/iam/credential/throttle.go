@@ -31,10 +31,10 @@ import (
 //
 // # 1. The throttle is keyed on what was TYPED, never on what it resolved to
 //
-// [Throttle.Admit] decides before anything is looked up, on the request's
-// SOURCE and on the subject as the caller TYPED it — normalised, never
-// resolved. A throttle keyed on the RESOLVED subject is one only real subjects
-// can trigger, so its delay becomes the oracle it was added to prevent: an
+// [Throttle.Admit] decides before anything is looked up, on the subject as the
+// caller TYPED it — normalised, never resolved — from the request's source. A
+// throttle keyed on the RESOLVED subject is one only real subjects can
+// trigger, so its delay becomes the oracle it was added to prevent: an
 // attacker fails a few times per name and reads the roster off which names
 // start slowing down. Keyed on the typed value, a name nobody holds climbs
 // the curve exactly as a real one does, and the curve says nothing about
@@ -79,46 +79,64 @@ import (
 //
 // A hard refusal after N failures is a lockout an outsider can cause: keyed on
 // a login it locks the company's only administrator out for ever at less than
-// a request a minute, and keyed on a source it locks out everybody who shares
-// one — an office behind one address, or the whole company behind a proxy this
-// deployment was not told to trust. So a failure costs DELAY, never refusal:
-// each one past a key's allowance doubles the wait before that key's next
-// attempt, from [DelayFloor] to [DelayCeiling], and a correct credential after
-// the wait succeeds. A wait up to [InlineDelay] is served inside the request;
-// a longer one is answered 429 with the time left, which is the whole of the
-// specific answer this surface gives.
+// a request a minute. So a failure costs DELAY, never refusal: each one
+// doubles the wait before its key's next attempt, from [DelayFloor] to
+// [DelayCeiling], and a correct credential after the wait succeeds. A wait up
+// to [InlineDelay] is served inside the request; a longer one is answered 429
+// with the time left, which is the whole of the specific answer this surface
+// gives.
 //
-// # Two keys, because they catch two different runs
+// # One key: the subject as typed, from one source
 //
-//   - THE PAIR — (typed subject, source) — catches a run at ONE account. It
-//     has no allowance: the first failure is already a second's wait. A
-//     success clears THIS PAIR and nothing else, because clearing the source
-//     was the bypass: somebody holding any account could sign in as
-//     themselves every few guesses and wipe the record of their guesses at
-//     somebody else's.
-//   - THE SOURCE catches a run across MANY accounts, and it is the only key a
-//     credential that names nobody (an invitation link, a bootstrap code, a
-//     Tier A bearer) has. It allows [SourceAllowance] failures before its own
-//     curve starts, because many people share addresses; and a success
-//     strikes that pair's own failures from it, so a person who mistyped and
-//     then got in leaves nothing behind for their neighbours to pay for.
+// THE PAIR catches a run at ONE account, and it has no allowance: the first
+// failure is already a second's wait. A success clears THIS PAIR and nothing
+// else, so somebody holding any account cannot sign in as themselves between
+// guesses at somebody else's and wipe the record of them.
+//
+// # And never the source alone
+//
+// A curve on the source alone would catch a run across many accounts, and this
+// throttle had one: ten failures free, then the same doubling wait, refused
+// past five seconds. A refusal decided on an address is one ANYBODY SHARING IT
+// holds shut for everybody else at it — an office behind one NAT, a VPN's
+// egress, and on a deployment whose proxy is not in `api.trusted_proxies` the
+// whole internet — and it took one failed attempt every twenty-five seconds,
+// from anybody, at any name, to keep every sign-in from that address at 429,
+// the right passwords included, since a refusal before the verification never
+// reaches one. And because an attempt still being checked counted against it
+// as a failure, a dozen honest people signing in at once from one office met
+// the same 429 with nobody failing at all. A gate on the source that nobody
+// else could hold shut would have to be one that never refuses, and a wait
+// that is never a refusal slows the guesser no more than the verify cap
+// already does.
+//
+// WHAT THAT LEAVES UNBOUNDED BY A CURVE is one password tried against many
+// names from one address — every pair is fresh. What bounds it is the password
+// floor and the blocklist, [VerifyCap] on the argon2id work a real name costs,
+// and the pad on every answer; what makes it seen is the audit trail's
+// per-client, per-minute failure tally, which counts the distinct names a
+// client tried.
+//
+// AN ATTEMPT THAT NAMES NOBODY IS NOT COUNTED — an invitation link, a
+// founder's one-time code, a provider's round trip. There is no subject to key
+// a pair on, and each of those credentials is minted with 256 bits of
+// crypto/rand, so there is nothing a curve would slow; keyed on the source it
+// was a way for a stranger to hold a company's provider sign-ins shut, since a
+// callback nobody started fails for free.
 //
 // # What the fleet holds, and what it does not
 //
 // The PAIR's window is seeded from [coord.Attempts] — read once when a node
 // first meets the pair, written while its curve is still climbing, flushed by
 // its success — so a run moved by the load balancer to another node starts
-// that node's curve where the fleet left it. The SOURCE is this node's alone:
-// its job is to bound one address's reach, a fleet-wide count of it would put
-// a coordination write under every failure from every address, and a source
-// already refused here is refused with no I/O at all. Nothing the fleet holds
-// is what was typed: a pair is a keyed digest, and the key never leaves the
+// that node's curve where the fleet left it. Nothing the fleet holds is what
+// was typed: a pair is a keyed digest, and the key never leaves the
 // deployment's keyring.
 //
 // # Concurrency is paid for, too
 //
-// An attempt that is admitted and not yet resolved counts against its keys as
-// a failure until it resolves: a burst of concurrent guesses at one pair is
+// An attempt that is admitted and not yet resolved counts against its pair as
+// a failure until it resolves: a burst of concurrent guesses at one account is
 // then served one after another along the curve rather than all at once. A
 // success refunds it; a request that verified nothing releases it.
 
@@ -149,8 +167,7 @@ const DegradeInterval = coord.AttemptWindow
 
 // The curve.
 const (
-	// DelayFloor is the wait a key's first failure past its allowance
-	// costs: one second, which is invisible to a person who mistyped and
+	// DelayFloor is the wait a pair's first failure costs: one second, which is invisible to a person who mistyped and
 	// is already a sixty-fold cut in what a script gets through.
 	DelayFloor = time.Second
 
@@ -161,9 +178,8 @@ const (
 	// close.
 	DelayCeiling = 30 * time.Second
 
-	// CurveSteps is how many failures past a key's allowance take its
-	// delay from nothing to [DelayCeiling]: 1, 2, 4, 8, 16, then 30
-	// seconds. A pair's fleet window is written only while its curve is
+	// CurveSteps is how many failures take a pair's delay from nothing
+	// to [DelayCeiling]: 1, 2, 4, 8, 16, then 30 seconds. A pair's fleet window is written only while its curve is
 	// still climbing — a seventh failure changes no node's answer — so
 	// this is also the most writes one pair costs the fleet per window.
 	CurveSteps = 6
@@ -185,32 +201,20 @@ const (
 	// against a morning.
 	DelayedCap = 64
 
-	// SourceAllowance is how many failures one source makes inside the
-	// window before its own curve starts: ten, which is more failed
-	// sign-ins in a quarter of an hour than a building of people behind
-	// one address leaves behind once each success has struck its own
-	// mistakes, and few enough that a run across the directory from one
-	// address is on the curve after its tenth name.
-	SourceAllowance = 10
-
-	// LocalKeys is how many keys of each kind one throttle holds, the
-	// least recently used forgotten past it: 16384. Every key costs at
-	// most [coord.AttemptCap] instants, so the bound is a few megabytes
-	// of memory an unauthenticated caller cannot grow — where a map
-	// walked on every failure was both unbounded and O(sources) per
-	// write. A key forgotten early is re-seeded from the fleet the next
-	// time it is met.
+	// LocalKeys is how many pairs one throttle holds, the least recently
+	// used forgotten past it: 16384. Every pair costs at most
+	// [CurveSteps] instants, so the bound is a few megabytes of memory an
+	// unauthenticated caller cannot grow — where a map walked on every
+	// failure was both unbounded and O(keys) per write. A pair forgotten
+	// early is re-seeded from the fleet the next time it is met.
 	LocalKeys = 16384
 )
 
-// pairKeep and sourceKeep are how many failure instants a key keeps, NEWEST
-// FIRST OUT LAST: a curve reads the count up to where it stops climbing and
-// the newest instant, and keeping the newest N answers both exactly — the
-// older failures age out of the window before any of these do.
-const (
-	pairKeep   = CurveSteps
-	sourceKeep = SourceAllowance + CurveSteps
-)
+// pairKeep is how many failure instants a pair keeps, NEWEST FIRST OUT LAST:
+// the curve reads the count up to where it stops climbing and the newest
+// instant, and keeping the newest N answers both exactly — the older failures
+// age out of the window before any of these do.
+const pairKeep = CurveSteps
 
 // ErrThrottled reports an attempt the curve says must wait longer than
 // [InlineDelay]. The error that carries it is a [*Throttled], whose
@@ -253,8 +257,9 @@ type Attempt struct {
 	Source string
 
 	// Subject is who the caller TYPED that they are — a login or an
-	// address — or empty for a credential that names nobody. Never what
-	// it resolved to: see this file's head.
+	// address — or empty for a credential that names nobody, which is
+	// admitted uncounted: see this file's head. Never what it resolved
+	// to.
 	Subject string
 }
 
@@ -271,7 +276,6 @@ type Throttle struct {
 	logger   *slog.Logger
 
 	mu       sync.Mutex
-	sources  *keyed
 	pairs    *keyed
 	delayed  int
 	degraded time.Time
@@ -329,7 +333,7 @@ func build(deps ThrottleDeps) *Throttle {
 		decoy:    randomKey(),
 		deadline: deps.Deadline,
 		now:      deps.Now, sleep: deps.Sleep, logger: deps.Logger,
-		sources: newKeyed(LocalKeys), pairs: newKeyed(LocalKeys),
+		pairs: newKeyed(LocalKeys),
 	}
 	if t.deadline <= 0 {
 		t.deadline = PadDeadline
@@ -383,70 +387,62 @@ func randomKey() []byte {
 // # Nothing is looked up before it, and nothing about the subject is looked up
 // inside it
 //
-// It is called before the subject resolves. The SOURCE is decided first, on
-// this node's own count and with no I/O, so a source already past
-// [InlineDelay] costs this node a map lookup and the fleet nothing. Then the
-// PAIR — seeded from the fleet the first time this node meets it — and the
-// attempt waits for whichever of the two is later, up to [InlineDelay] inside
-// this call. A longer wait is a [*Throttled].
+// It is called before the subject resolves. The PAIR is decided on this
+// node's own count first, with no I/O, so a pair already past [InlineDelay]
+// costs this node a map lookup and the fleet nothing; then it is seeded from
+// the fleet the first time this node meets it, and the attempt waits up to
+// [InlineDelay] inside this call. A longer wait is a [*Throttled].
 //
 // # What it hands back
 //
 // A [Ticket] the caller resolves exactly once: [Ticket.Fail] for a credential
 // that did not prove itself, [Ticket.Succeed] for one that did, and
 // [Ticket.Release] — safe to defer, and a no-op after either — for an attempt
-// that never reached a verdict. Until then the attempt counts against its keys
-// as a failure, which is what serialises a burst.
+// that never reached a verdict. Until then the attempt counts against its pair
+// as a failure, which is what serialises a burst at one account.
+//
+// AN ATTEMPT THAT NAMES NOBODY IS ADMITTED, and uncounted: there is no pair to
+// key it on, and the source alone is a key anybody at the address could hold
+// shut — see this file's head.
 //
 // AN UNIDENTIFIABLE SOURCE IS ADMITTED, and uncounted, which is the safe
 // direction rather than the lax one: refusing would mean a misconfigured proxy
 // — one that strips the header a source is derived from — locks every person
 // in the company out at once, which is an outage the throttle caused. What
-// still bounds that caller is the password cost and the verify cap. Its ticket
-// is nil, whose methods do nothing.
+// still bounds that caller is the password cost and the verify cap.
+//
+// An uncounted attempt's ticket is nil, whose methods do nothing.
 func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
-	if a.Source == "" {
+	if a.Source == "" || a.Subject == "" {
 		return nil, nil
 	}
-	source := sourceKeyOf(a.Source)
-	pair := ""
-	if a.Subject != "" {
-		pair = t.pairOf(a.Subject, source)
-	}
+	pair := t.pairOf(a.Subject, sourceKeyOf(a.Source))
 
 	// ON THIS NODE'S OWN COUNT FIRST, before anything is read from
-	// anywhere: a source this node already refuses costs the fleet nothing.
-	// The pair is asked too, from what this node already holds — so the
-	// time a refusal names is the whole wait, rather than the source's
-	// share of it and a second refusal when the caller comes back.
+	// anywhere: a pair this node already refuses costs the fleet nothing.
 	t.mu.Lock()
-	wait := t.waitLocked(source, pair, t.now())
+	wait := t.waitLocked(pair, t.now())
 	t.mu.Unlock()
 	if wait > InlineDelay {
 		return nil, &Throttled{RetryAfter: wait}
 	}
-	if pair != "" {
-		t.seed(ctx, pair)
-	}
+	t.seed(ctx, pair)
 
 	t.mu.Lock()
 	now := t.now()
-	wait = t.waitLocked(source, pair, now)
+	wait = t.waitLocked(pair, now)
 	if wait > InlineDelay || (wait > 0 && t.delayed >= DelayedCap) {
 		t.mu.Unlock()
 		return nil, &Throttled{RetryAfter: wait}
 	}
 	start := now.Add(wait)
-	t.sources.take(source).pend(start)
-	if pair != "" {
-		t.pairs.take(pair).pend(start)
-	}
+	t.pairs.take(pair).pend(start)
 	if wait > 0 {
 		t.delayed++
 	}
 	t.mu.Unlock()
 
-	ticket := &Ticket{t: t, source: source, pair: pair, at: start}
+	ticket := &Ticket{t: t, pair: pair, at: start}
 	if wait > 0 {
 		t.sleep(ctx, wait)
 		t.mu.Lock()
@@ -462,22 +458,21 @@ func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
 
 // Ticket is one admitted attempt, until it is resolved.
 //
-// A NIL TICKET IS AN UNCOUNTED ATTEMPT — an unidentifiable source — and every
-// method on it does nothing, so a caller never branches on which it holds.
+// A NIL TICKET IS AN UNCOUNTED ATTEMPT — one that names nobody, or an
+// unidentifiable source — and every method on it does nothing, so a caller
+// never branches on which it holds.
 type Ticket struct {
-	t      *Throttle
-	source string
-	pair   string
-	at     time.Time
-	done   atomic.Bool
+	t    *Throttle
+	pair string
+	at   time.Time
+	done atomic.Bool
 }
 
 // Fail resolves the attempt as a credential that did not prove itself.
 //
-// Recorded against the source — tagged with its pair, so that pair's success
-// can strike it — and against the pair, whose fleet window is written only
-// while its curve is still climbing: a failure past [CurveSteps] changes no
-// node's answer, and a write per attempt is a broker denial of service an
+// Recorded against the pair, whose fleet window is written only while its
+// curve is still climbing: a failure past [CurveSteps] changes no node's
+// answer, and a write per attempt is a broker denial of service an
 // unauthenticated caller would be pricing.
 func (k *Ticket) Fail(ctx context.Context) {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
@@ -489,21 +484,15 @@ func (k *Ticket) Fail(ctx context.Context) {
 	if at.Before(k.at) {
 		at = k.at
 	}
-	src := t.sources.take(k.source)
-	src.unpend(k.at)
-	src.fail(at, k.pair, sourceKeep)
-	write := false
-	if k.pair != "" {
-		p := t.pairs.take(k.pair)
-		p.unpend(k.at)
-		// A STEP IS A FAILURE THE CURVE HAD NOT YET REACHED ITS CEILING
-		// BEFORE — counted before this one lands, because a pair keeps
-		// only as many instants as its curve has steps and its count
-		// after a failure never reads past the last one.
-		prior, _ := p.weight(at)
-		p.fail(at, "", pairKeep)
-		write = t.attempts != nil && prior < CurveSteps
-	}
+	p := t.pairs.take(k.pair)
+	p.unpend(k.at)
+	// A STEP IS A FAILURE THE CURVE HAD NOT YET REACHED ITS CEILING
+	// BEFORE — counted before this one lands, because a pair keeps only as
+	// many instants as its curve has steps and its count after a failure
+	// never reads past the last one.
+	prior, _ := p.weight(at)
+	p.fail(at, pairKeep)
+	write := t.attempts != nil && prior < CurveSteps
 	t.mu.Unlock()
 	if write {
 		if err := t.attempts.Fail(ctx, k.pair, at); err != nil {
@@ -513,35 +502,24 @@ func (k *Ticket) Fail(ctx context.Context) {
 }
 
 // Succeed resolves the attempt as a credential that proved itself: its pair is
-// forgotten, here and in the fleet, and its failures are struck from its
-// source — and NOTHING ELSE is, which is what keeps an account holder from
-// wiping the record of their guesses at somebody else's by signing in as
-// themselves between them.
+// forgotten, here and in the fleet — and NOTHING ELSE is, which is what keeps
+// an account holder from wiping the record of their guesses at somebody
+// else's by signing in as themselves between them.
 func (k *Ticket) Succeed(ctx context.Context) {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return
 	}
 	t := k.t
 	t.mu.Lock()
-	if src := t.sources.get(k.source); src != nil {
-		src.unpend(k.at)
-		if k.pair != "" {
-			src.strike(k.pair)
-		}
-		t.sources.tidy(k.source, src, t.now())
-	}
-	flush := false
-	if k.pair != "" {
-		// A PAIR THIS NODE NO LONGER HOLDS IS FLUSHED ANYWAY: admission
-		// took it, so it is gone only because the bound forgot it, and
-		// what the fleet has under it is then unknown here rather than
-		// nothing — left, it would delay this person's next attempt on
-		// every other node for a failure their success has answered.
-		p := t.pairs.get(k.pair)
-		flush = t.attempts != nil &&
-			(p == nil || len(p.fails) > 0 || p.seeded.Count > 0)
-		t.pairs.drop(k.pair)
-	}
+	// A PAIR THIS NODE NO LONGER HOLDS IS FLUSHED ANYWAY: admission took
+	// it, so it is gone only because the bound forgot it, and what the
+	// fleet has under it is then unknown here rather than nothing — left,
+	// it would delay this person's next attempt on every other node for a
+	// failure their success has answered.
+	p := t.pairs.get(k.pair)
+	flush := t.attempts != nil &&
+		(p == nil || len(p.fails) > 0 || p.seeded.Count > 0)
+	t.pairs.drop(k.pair)
 	t.mu.Unlock()
 	if flush {
 		if err := t.attempts.Flush(ctx, k.pair); err != nil {
@@ -561,16 +539,9 @@ func (k *Ticket) Release() {
 	t := k.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	now := t.now()
-	if src := t.sources.get(k.source); src != nil {
-		src.unpend(k.at)
-		t.sources.tidy(k.source, src, now)
-	}
-	if k.pair != "" {
-		if p := t.pairs.get(k.pair); p != nil {
-			p.unpend(k.at)
-			t.pairs.tidy(k.pair, p, now)
-		}
+	if p := t.pairs.get(k.pair); p != nil {
+		p.unpend(k.at)
+		t.pairs.tidy(k.pair, p, t.now())
 	}
 }
 
@@ -616,16 +587,10 @@ func (t *Throttle) Deadline() time.Duration { return t.deadline }
 // from once an attempt is admitted.
 func (t *Throttle) Now() time.Time { return t.now() }
 
-// waitLocked is how long an attempt on source (and pair, when there is one)
-// must wait at now. Held under the lock.
-func (t *Throttle) waitLocked(source, pair string, now time.Time) time.Duration {
-	next := t.sources.next(source, SourceAllowance, now)
-	if pair != "" {
-		if n := t.pairs.next(pair, 0, now); n.After(next) {
-			next = n
-		}
-	}
-	return max(next.Sub(now), 0)
+// waitLocked is how long an attempt on pair must wait at now. Held under the
+// lock.
+func (t *Throttle) waitLocked(pair string, now time.Time) time.Duration {
+	return max(t.pairs.next(pair, now).Sub(now), 0)
 }
 
 // seed merges the fleet's window for pair into this node's, the first time
@@ -684,12 +649,12 @@ func (t *Throttle) pairOf(subject, source string) string {
 	return hex.EncodeToString(mac.Sum(nil)[:16])
 }
 
-// sourceKeyOf is the key a source is held under: the address, and for IPv6
+// sourceKeyOf is the source half of a pair's key: the address, and for IPv6
 // its /64.
 //
 // THE /64 IS WHAT ONE IPv6 CUSTOMER IS GIVEN, and every address inside it is
-// theirs to use: keyed per address, a run from one host rotates through 2^64
-// fresh sources and the source curve never starts. A value that is not an
+// theirs to use: keyed per address, a run at one account from one host rotates
+// through 2^64 fresh pairs and its curve never starts. A value that is not an
 // address — a test's name for a caller, or whatever a misconfigured proxy
 // forwarded — is keyed as it is.
 func sourceKeyOf(source string) string {
@@ -741,23 +706,21 @@ func sleepUntil(ctx context.Context, d time.Duration) {
 	}
 }
 
-// delayFor is the wait a key's next attempt owes after count failures, of
-// which allowance were free.
-func delayFor(count, allowance int) time.Duration {
-	over := count - allowance
+// delayFor is the wait a pair's next attempt owes after count failures.
+func delayFor(count int) time.Duration {
 	switch {
-	case over <= 0:
+	case count <= 0:
 		return 0
-	case over >= CurveSteps:
+	case count >= CurveSteps:
 		return DelayCeiling
 	}
-	return min(DelayFloor<<(over-1), DelayCeiling)
+	return min(DelayFloor<<(count-1), DelayCeiling)
 }
 
 // ---- the local curve --------------------------------------------------------- //
 
-// keyed is one kind of key's standings, the least recently used forgotten past
-// its bound.
+// keyed is the pairs' standings, the least recently used forgotten past its
+// bound.
 type keyed struct {
 	bound int
 	byKey map[string]*list.Element // of *standing
@@ -809,16 +772,15 @@ func (k *keyed) tidy(key string, s *standing, now time.Time) {
 	}
 }
 
-// next is the earliest instant key's next attempt may start, given allowance
-// free failures — the zero instant when it owes no wait. A key nobody has met
-// owes nothing.
-func (k *keyed) next(key string, allowance int, now time.Time) time.Time {
+// next is the earliest instant key's next attempt may start — the zero instant
+// when it owes no wait. A key nobody has met owes nothing.
+func (k *keyed) next(key string, now time.Time) time.Time {
 	s := k.get(key)
 	if s == nil {
 		return time.Time{}
 	}
 	count, last := s.weight(now)
-	delay := delayFor(count, allowance)
+	delay := delayFor(count)
 	if delay == 0 {
 		return time.Time{}
 	}
@@ -833,9 +795,8 @@ type standing struct {
 	key string
 
 	// fails are this node's failures inside the window, oldest first and
-	// the newest at most keep of them; for a source, each tagged with the
-	// pair it was made on.
-	fails []failure
+	// the newest at most keep of them.
+	fails []time.Time
 
 	// pending are the start instants of attempts admitted and not yet
 	// resolved, each counted as a failure until it is.
@@ -845,12 +806,6 @@ type standing struct {
 	// the pair, and fromFleet whether that read has happened.
 	seeded    coord.Attempted
 	fromFleet bool
-}
-
-// failure is one failed attempt.
-type failure struct {
-	at   time.Time
-	pair string
 }
 
 // weight is how many failures count against this key at now, pending
@@ -865,7 +820,7 @@ func (s *standing) weight(now time.Time) (int, time.Time) {
 	count := len(s.fails)
 	var last time.Time
 	if count > 0 {
-		last = s.fails[count-1].at
+		last = s.fails[count-1]
 	}
 	if s.seeded.Count > 0 && s.seeded.Last.After(cut) {
 		count = max(count, s.seeded.Count)
@@ -885,9 +840,9 @@ func (s *standing) weight(now time.Time) (int, time.Time) {
 // prune drops the failures that have aged out of the window.
 func (s *standing) prune(cut time.Time) {
 	kept := s.fails[:0]
-	for _, f := range s.fails {
-		if f.at.After(cut) {
-			kept = append(kept, f)
+	for _, at := range s.fails {
+		if at.After(cut) {
+			kept = append(kept, at)
 		}
 	}
 	clear(s.fails[len(kept):])
@@ -917,33 +872,21 @@ func (s *standing) unpend(at time.Time) {
 }
 
 // fail records a failure, keeping the newest keep of them.
-func (s *standing) fail(at time.Time, pair string, keep int) {
-	s.fails = append(s.fails, failure{at: at, pair: pair})
+func (s *standing) fail(at time.Time, keep int) {
+	s.fails = append(s.fails, at)
 	if over := len(s.fails) - keep; over > 0 {
 		s.fails = append(s.fails[:0], s.fails[over:]...)
 	}
 }
 
-// strike removes every failure made on pair.
-func (s *standing) strike(pair string) {
-	kept := s.fails[:0]
-	for _, f := range s.fails {
-		if f.pair != pair {
-			kept = append(kept, f)
-		}
-	}
-	clear(s.fails[len(kept):])
-	s.fails = kept
-}
-
-// LocalKeysHeld is how many sources and pairs this throttle's own curve holds,
-// for the suite that asserts the bound.
+// LocalKeysHeld is how many pairs this throttle's own curve holds, for the
+// suite that asserts the bound.
 //
 // EXPORTED FOR A TEST AND SAYING SO: the bound is the property, and the only
 // way to see it hold is to count what is left after more keys than it admits
 // have been met.
-func LocalKeysHeld(t *Throttle) (sources, pairs int) {
+func LocalKeysHeld(t *Throttle) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.sources.len(), t.pairs.len()
+	return t.pairs.len()
 }

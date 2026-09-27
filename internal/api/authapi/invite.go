@@ -130,15 +130,10 @@ type inviteRedeem struct {
 // ViewInvite renders an invitation without spending it.
 //
 // UNGUARDED, because holding the link IS the credential — its secret, in
-// [inviteSecretHeader] — and throttled per source, because an id and a secret
-// are values somebody could otherwise walk.
+// [inviteSecretHeader], 256 bits nobody can walk — and on no curve, because a
+// link names nobody until it opens: see [Service.uncounted].
 func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
-	adm, ok := s.admit(w, r, credential.Attempt{Source: s.sourceOf(r)},
-		types.FailInvite)
-	if !ok {
-		return
-	}
-	defer adm.ticket.Release()
+	adm := s.uncounted(r)
 	held, ok := s.presentedInvitation(w, r, adm, r.PathValue("id"),
 		r.Header.Get(inviteSecretHeader))
 	if !ok {
@@ -171,12 +166,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 // nothing in it is answered until the invitation has opened: a password too
 // short is the invited person's to fix, told to nobody else.
 func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
-	adm, ok := s.admit(w, r, credential.Attempt{Source: s.sourceOf(r)},
-		types.FailInvite)
-	if !ok {
-		return
-	}
-	defer adm.ticket.Release()
+	adm := s.uncounted(r)
 	body, err := httpjson.ReadBody(w, r, maxLoginBody)
 	if err != nil {
 		httpjson.Refuse(w, err)
@@ -300,7 +290,6 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	s.spendInvitation(r, held, person, opID)
 	log.InfoContext(r.Context(), "api_invite_redeemed",
 		"invitation", held.ID, "person", person, "login", in.Login)
-	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, iamdomain.Sighting{
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: in.Login, Grants: held.Grants, Colleague: held.Colleague,
@@ -405,20 +394,20 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 //
 // The link is the credential, and walking ids and secrets is how somebody
 // without one looks for one — so an id nobody issued and a secret that is not
-// its link's are FAILED ATTEMPTS: the source's curve, the audit trail's
-// failure tally. A link that DID prove itself and no longer works — redeemed,
-// aged out, its address enrolled — is not a guess: it is the link's holder, or
-// a mail scanner that fetched it for them, and those fetch the same link again
-// and again. Counted, a scanner re-reading one spent link put the address it
-// scans from on the curve, and on a deployment behind one proxy address, that
-// was the whole company. The difference is invisible to a caller who does not
-// hold the link — every one of them is refused the same way — so it tells a
-// guesser nothing.
+// its link's are FAILED ATTEMPTS, in the audit trail's failure tally. A link
+// that DID prove itself and no longer works — redeemed, aged out, its address
+// enrolled — is not a guess: it is the link's holder, or a mail scanner that
+// fetched it for them, and those fetch the same link again and again. Counted,
+// a scanner re-reading one spent link put the address it scans from in the
+// tally as a guesser — and while a link was on its source's curve, it put that
+// address on the curve, which on a deployment behind one proxy address was the
+// whole company. The difference is invisible to a caller who does not hold the
+// link — every one of them is refused the same way — so it tells a guesser
+// nothing.
 func (s *Service) refuseInvitation(w http.ResponseWriter, r *http.Request,
 	adm admission, id string, proved bool) {
 
 	if !proved {
-		adm.ticket.Fail(r.Context())
 		s.audit.Failed(r.Context(), authevents.Failure{
 			Client: adm.source, Method: types.FailInvite,
 			// THE ID PRESENTED, keyed in memory and never kept: how many

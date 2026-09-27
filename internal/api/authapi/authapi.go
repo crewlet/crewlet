@@ -26,9 +26,9 @@
 // Both halves are needed and neither works alone: a distinguishing code makes
 // the timing pad pointless, and a distinguishing delay makes the single code
 // pointless. internal/iam/credential owns the timing half — a delay curve
-// decided BEFORE the subject resolves, on the source and on the subject as it
-// was TYPED, a fixed-cost decoy on the miss, both arms padded to one deadline —
-// and this package owns the shape half.
+// decided BEFORE the subject resolves, on the subject as it was TYPED from the
+// source it came from, a fixed-cost decoy on the miss, both arms padded to one
+// deadline — and this package owns the shape half.
 //
 // The exceptions are named rather than assumed, and each discloses nothing a
 // stranger did not already have: a throttle refusal names only the caller's
@@ -597,7 +597,8 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 }
 
 // admission is one attempt the throttle let through: its ticket, the instant a
-// refusal is padded from, and where it came from.
+// refusal is padded from, and where it came from. An attempt on no curve —
+// [Service.uncounted] — holds a nil ticket, whose methods do nothing.
 type admission struct {
 	ticket *credential.Ticket
 	at     time.Time
@@ -607,10 +608,10 @@ type admission struct {
 // admit runs the throttle's curve for one attempt, answering its [admission]
 // or false once it has written the refusal.
 //
-// BEFORE ANYTHING IS LOOKED UP, on the source and on the subject as the caller
-// TYPED it (empty for a credential that names nobody): keyed on what it
-// resolved to, the curve would be one only real people could climb, and the
-// roster again. A wait of up to [credential.InlineDelay] is served inside this
+// BEFORE ANYTHING IS LOOKED UP, on the subject as the caller TYPED it and the
+// source it came from: keyed on what it resolved to, the curve would be one
+// only real people could climb, and the roster again. A route whose
+// credential names nobody takes [Service.uncounted] instead. A wait of up to [credential.InlineDelay] is served inside this
 // call; a longer one is `429 throttled` naming the time left.
 //
 // THE CALLER RESOLVES THE TICKET — [credential.Ticket.Fail] through
@@ -648,6 +649,26 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request,
 		"error", err, "source", attempt.Source)
 	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 	return admission{}, false
+}
+
+// uncounted is the admission of an attempt whose credential names nobody — a
+// founder's code, an invitation link, a provider's round trip: the instant its
+// refusal is padded from and where it came from, and no ticket.
+//
+// # No curve, and not for want of a key
+//
+// The only key such an attempt has is its SOURCE, and a curve on the source
+// alone is one anybody sharing the address holds shut for everybody else at
+// it — an office, a VPN's egress, the whole internet behind a proxy this
+// deployment was not told to trust. These routes had one: a provider callback
+// nobody started fails for free, so one stranger could keep every provider
+// sign-in, every invitation and the founder's code at that address answering
+// 429. What bounds a walk is the credential itself — a link's secret and a
+// founder's code are each 256 bits of crypto/rand, and a provider's round trip
+// is the provider's — and what shows one is the audit trail's failure tally,
+// which every refusal still reaches.
+func (s *Service) uncounted(r *http.Request) admission {
+	return admission{at: s.throttle.Now(), source: s.sourceOf(r)}
 }
 
 // stageAdmits reports whether a person's enrolment stage lets them act.

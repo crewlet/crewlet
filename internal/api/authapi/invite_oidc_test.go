@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -378,63 +377,6 @@ func TestARedemptionIsNeverStartedByALink(t *testing.T) {
 					directory.reads.Load(), writer.enrolled)
 			}
 		})
-	}
-}
-
-// A REDEMPTION START IS ADMITTED BEFORE THE INVITATION IS READ.
-//
-// The id in the link is the credential, so the start is throttled per source
-// like the invitation's own routes — and the admission comes first, or a
-// source past its curve could still walk ids through this door and learn
-// which are live from the answers it was refused on.
-//
-// Mutation: drop the start's admission and the directory is read.
-func TestARedemptionStartIsAdmittedBeforeTheInvitationIsRead(t *testing.T) {
-	t.Parallel()
-	idp := newProvider(t)
-	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendOIDC
-	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
-	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
-		Now: func() time.Time { return clock }, Sleep: func(context.Context, time.Duration) {},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// THE SOURCE PAST ITS CURVE: its allowance spent and the curve climbed
-	// until the next attempt owes more than a request is held open for.
-	for {
-		ticket, err := throttle.Admit(context.Background(),
-			credential.Attempt{Source: "198.51.100.7"})
-		if err != nil {
-			break
-		}
-		ticket.Fail(context.Background())
-	}
-	start := redemptionStart(invitationID, url.Values{"login": {"dana.ops"}})
-	directory := &countingInvitations{offeredInvitation: offeredInvitation{
-		id: invitationID}}
-	mux := http.NewServeMux()
-	buildWith(t, b, oidc.NewProvider(oidc.Config{
-		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
-		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
-	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
-		o.Directory = directory
-		o.Throttle = throttle
-	}).Routes(mux)
-
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, start)
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("a source the curve owes a long wait answered %d (%s), want 429", rec.Code,
-			rec.Body)
-	}
-	if directory.reads.Load() != 0 {
-		t.Errorf("a source the curve owes a long wait had %d invitations read for it",
-			directory.reads.Load())
-	}
-	if flight := flightSet(rec); flight != "" {
-		t.Errorf("a throttled start set a flight: %q", flight)
 	}
 }
 

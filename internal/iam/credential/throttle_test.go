@@ -298,49 +298,26 @@ func TestTheCurveNeverDependsOnWhoExists(t *testing.T) {
 // A success used to flush the whole SOURCE, so anybody holding an account could
 // guess at somebody else's five times, sign in as themselves, and guess again
 // with a clean record — for ever. Their own sign-in clears their own pair, and
-// the target's pair keeps every failure; and a spray across many names from the
-// same address keeps the source's count however often the insider signs in
-// between. Mutation: clear the source, or every pair from it, on a success and
-// either half owes nothing.
+// the target's pair keeps every failure. Mutation: clear every pair from the
+// source on a success and the insider's fourth guess owes nothing.
 func TestASuccessClearsOnlyItsOwnPair(t *testing.T) {
 	t.Parallel()
 	th, _, sleeps := newThrottle(t, newAttempts())
 	target := credential.Attempt{Source: "198.51.100.9", Subject: "the.cfo"}
 	self := credential.Attempt{Source: "198.51.100.9", Subject: "an.insider"}
-	signIn := func() {
-		t.Helper()
-		ticket, err := th.Admit(t.Context(), self)
-		if err != nil {
-			t.Fatalf("the insider's own sign-in was refused: %v", err)
-		}
-		ticket.Succeed(t.Context())
-	}
 	for range 3 {
 		if err := failOnce(t, th, target); err != nil {
 			t.Fatal(err)
 		}
 	}
-	signIn()
+	ticket, err := th.Admit(t.Context(), self)
+	if err != nil {
+		t.Fatalf("the insider's own sign-in was refused: %v", err)
+	}
+	ticket.Succeed(t.Context())
 	if owed := owedBy(t, th, sleeps, target); owed == 0 {
 		t.Error("after the insider's own sign-in their fourth guess at the " +
 			"CFO owed nothing — a success wiped somebody else's record")
-	}
-
-	// THE SPRAY: a new name each time, the insider signing in between.
-	spray, _, sleeps := newThrottle(t, newAttempts())
-	th = spray
-	for i := range credential.SourceAllowance + 2 {
-		if err := failOnce(t, spray, credential.Attempt{Source: "198.51.100.9",
-			Subject: fmt.Sprintf("colleague.%d", i)}); err != nil &&
-			!errors.Is(err, credential.ErrThrottled) {
-			t.Fatal(err)
-		}
-		signIn()
-	}
-	if owed := owedBy(t, spray, sleeps, credential.Attempt{
-		Source: "198.51.100.9", Subject: "colleague.next"}); owed == 0 {
-		t.Error("a spray across names from one address owed nothing because " +
-			"the sprayer signed in as themselves between names")
 	}
 }
 
@@ -363,109 +340,108 @@ func owedBy(t *testing.T, th *credential.Throttle, sleeps *counting,
 	return owed
 }
 
-// A SOURCE'S FAILURES THAT ITS OWN PEOPLE THEN FIXED DO NOT CATCH UP WITH IT.
+// NO ADDRESS IS EVER REFUSED ON ITS OWN.
 //
-// Many people share one address — an office, a VPN. Each success strikes that
-// pair's own mistakes from the source, so twelve people who each mistyped once
-// and then signed in leave the thirteenth nothing to wait for; twelve names
-// that never signed in put the source on its curve. The first is the control
-// the second is measured against.
-func TestASourceCarriesOnlyTheMistakesNobodyFixed(t *testing.T) {
+// Many people share one address — an office, a VPN's egress, and every caller
+// behind a proxy the deployment was not told to trust — and a stranger among
+// them shares it too. The source had a curve of its own: ten failures free,
+// then a doubling wait, refused past five seconds. So a stranger who warmed it
+// up and then failed once every twenty-five seconds, at any name, kept every
+// colleague at that address at 429, their right passwords never compared. The
+// curve is keyed on the (typed subject, source) PAIR alone, so the stranger's
+// failures are theirs and a colleague signing in owes nothing — run here for
+// ten simulated minutes, the colleague trying every second.
+//
+// Mutation: put the source's own curve back and the colleague is refused on
+// every attempt after the warm-up.
+func TestNoAddressIsEverRefusedOnItsOwn(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name  string
-		fixed bool
-		owes  bool
-	}{
-		{"twelve people who mistyped and got in", true, false},
-		{"twelve names that never got in", false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			th, clock, sleeps := newThrottle(t, newAttempts())
-			for i := range 12 {
-				who := credential.Attempt{Source: "192.0.2.10",
-					Subject: fmt.Sprintf("person.%d", i)}
-				if err := failOnce(t, th, who); err != nil &&
-					!errors.Is(err, credential.ErrThrottled) {
-					t.Fatal(err)
-				}
-				if tc.fixed {
-					clock.advance(time.Second)
-					ticket, err := th.Admit(t.Context(), who)
-					if err != nil {
-						t.Fatalf("person %d's correct password was refused: %v", i, err)
-					}
-					ticket.Succeed(t.Context())
-				}
-			}
-			clock.advance(time.Second)
-			next := credential.Attempt{Source: "192.0.2.10", Subject: "person.new"}
-			owes := owedBy(t, th, sleeps, next) > 0
-			if owes != tc.owes {
-				t.Errorf("the thirteenth person's first attempt owes a wait: %v, "+
-					"want %v", owes, tc.owes)
-			}
-		})
-	}
-}
+	th, clock, sleeps := newThrottle(t, newAttempts())
+	const office = "192.0.2.10"
 
-// A RUN ACROSS MANY NAMES FROM ONE SOURCE MEETS THE SOURCE'S CURVE.
-//
-// Every pair is fresh, so the pair curve alone never slows a spray: one
-// password against every login in the company. The source allows ten failures
-// and then climbs the same curve, until a wait past five seconds is a 429 with
-// the time left — decided on this node's own count.
-func TestASprayAcrossNamesMeetsTheSourceCurve(t *testing.T) {
-	t.Parallel()
-	th, _, _ := newThrottle(t, newAttempts())
-	var refused error
-	for i := range credential.SourceAllowance + credential.CurveSteps {
-		err := failOnce(t, th, credential.Attempt{Source: "203.0.113.50",
-			Subject: fmt.Sprintf("name.%d", i)})
-		if err != nil {
-			refused = err
-			if i < credential.SourceAllowance {
-				t.Fatalf("name %d was refused inside the allowance: %v", i, err)
-			}
-			break
+	// THE WARM-UP: a spray across the directory from the shared address.
+	for i := range 48 {
+		if err := failOnce(t, th, credential.Attempt{Source: office,
+			Subject: fmt.Sprintf("name.%d", i)}); err != nil {
+			t.Fatalf("a spray's name %d was refused on the address alone: %v", i, err)
 		}
 	}
-	if !errors.Is(refused, credential.ErrThrottled) || credential.RetryAfter(refused) <= credential.InlineDelay {
-		t.Errorf("a spray across %d names was never refused (%v), want a 429 "+
-			"with more than %s left", credential.SourceAllowance+credential.CurveSteps,
-			refused, credential.InlineDelay)
+	if got := sleeps.take(); len(got) != 0 {
+		t.Errorf("a spray across fresh names waited %v — every pair was new", got)
 	}
-	// And another source is untouched, which is what makes it a throttle
-	// rather than a company-wide lockout.
-	if err := failOnce(t, th, credential.Attempt{Source: "198.51.100.4",
-		Subject: "name.0"}); err != nil {
-		t.Errorf("a second source paid for the first's spray: %v", err)
+
+	colleague := credential.Attempt{Source: office, Subject: "alice"}
+	for second := range 600 {
+		if second%25 == 0 {
+			if err := failOnce(t, th, credential.Attempt{Source: office,
+				Subject: fmt.Sprintf("stranger.%d", second)}); err != nil {
+				t.Fatalf("the stranger's failure at %ds was refused: %v", second, err)
+			}
+		}
+		ticket, err := th.Admit(t.Context(), colleague)
+		if err != nil {
+			t.Fatalf("the colleague's correct password at %ds was refused (%v) — a "+
+				"stranger at the address held it shut", second, err)
+		}
+		ticket.Succeed(t.Context())
+		clock.advance(time.Second)
+	}
+	if got := sleeps.take(); len(got) != 0 {
+		t.Errorf("the colleague was made to wait %v for a stranger's failures", got)
 	}
 }
 
-// A SOURCE THIS NODE ALREADY REFUSES COSTS THE FLEET NOTHING.
+// HONEST SIGN-INS IN FLIGHT TOGETHER FROM ONE ADDRESS ARE NEVER HELD.
 //
-// The source is decided on this node's own count before anything is read, so a
-// flood from a source past its curve is refused with no round trip at all. It
-// used to read the fleet's window on every attempt — refused ones included — so
-// an unauthenticated caller priced a coordination read per request. Mutation:
-// seed the pair before deciding the source, and the refused attempts read.
-func TestARefusedSourceCostsTheFleetNothing(t *testing.T) {
+// A dozen people signing in at once from one office is a morning, not an
+// attack. When an attempt still being checked counted against its SOURCE as a
+// failure, the twelfth waited a second, the thirteenth three and the
+// fourteenth and every one after it answered 429 — with nobody failing at
+// all. Pending attempts count against their own pair, which serialises a burst
+// at ONE account, and nowhere else.
+//
+// Mutation: count a pending attempt against its source and the requests past
+// the eleventh wait or are refused.
+func TestHonestSignInsInFlightTogetherAreNeverHeld(t *testing.T) {
+	t.Parallel()
+	th, _, sleeps := newThrottle(t, newAttempts())
+	var tickets []*credential.Ticket
+	for i := range 32 {
+		ticket, err := th.Admit(t.Context(), credential.Attempt{
+			Source: "192.0.2.10", Subject: fmt.Sprintf("person.%d", i)})
+		if err != nil {
+			t.Fatalf("sign-in %d of a morning was refused: %v", i, err)
+		}
+		tickets = append(tickets, ticket)
+	}
+	if got := sleeps.take(); len(got) != 0 {
+		t.Errorf("honest sign-ins in flight together were held %v", got)
+	}
+	for _, ticket := range tickets {
+		ticket.Succeed(t.Context())
+	}
+}
+
+// A PAIR THIS NODE ALREADY REFUSES COSTS THE FLEET NOTHING.
+//
+// The pair is decided on this node's own count before anything is read, so a
+// flood at a pair past its curve is refused with no round trip at all — an
+// unauthenticated caller never prices a coordination read per request.
+// Mutation: seed the pair before deciding it, and the refused attempts read.
+func TestARefusedPairCostsTheFleetNothing(t *testing.T) {
 	t.Parallel()
 	store := newAttempts()
 	th, _, _ := newThrottle(t, store)
-	for i := 0; ; i++ {
-		if err := failOnce(t, th, credential.Attempt{Source: "203.0.113.66",
-			Subject: fmt.Sprintf("name.%d", i)}); err != nil {
+	who := credential.Attempt{Source: "203.0.113.66", Subject: "sarah.chen"}
+	for {
+		if err := failOnce(t, th, who); err != nil {
 			break
 		}
 	}
 	reads, writes := store.io()
 	for i := range 200 {
-		if _, err := th.Admit(t.Context(), credential.Attempt{Source: "203.0.113.66",
-			Subject: fmt.Sprintf("another.%d", i)}); !errors.Is(err, credential.ErrThrottled) {
-			t.Fatalf("attempt %d from a refused source answered %v", i, err)
+		if _, err := th.Admit(t.Context(), who); !errors.Is(err, credential.ErrThrottled) {
+			t.Fatalf("attempt %d at a refused pair answered %v", i, err)
 		}
 	}
 	if r, w := store.io(); r != reads || w != writes {
@@ -676,29 +652,29 @@ func TestAReleasedAttemptCountsAsNothing(t *testing.T) {
 // AN IPv6 HOST IS ONE SOURCE ACROSS ITS /64.
 //
 // One customer is given a /64 and every address in it is theirs to use: keyed
-// per address, a run rotates through fresh sources and the source curve never
-// starts. Mutation: key an IPv6 source by its full address and the spray below
-// is never refused.
+// per address, a run at one account rotates through fresh pairs and its curve
+// never starts. Mutation: key an IPv6 source by its full address and the run
+// below is never throttled.
 func TestAnIPv6HostIsOneSourceAcrossItsSlash64(t *testing.T) {
 	t.Parallel()
 	th, _, _ := newThrottle(t, newAttempts())
 	var refused error
-	for i := range credential.SourceAllowance + credential.CurveSteps {
+	for i := range credential.CurveSteps {
 		if err := failOnce(t, th, credential.Attempt{
 			Source:  fmt.Sprintf("2001:db8:1:2::%x", i+1),
-			Subject: fmt.Sprintf("name.%d", i),
+			Subject: "sarah.chen",
 		}); err != nil {
 			refused = err
 			break
 		}
 	}
 	if !errors.Is(refused, credential.ErrThrottled) {
-		t.Errorf("a spray rotating through one /64 was never throttled")
+		t.Errorf("a run at one account rotating through one /64 was never throttled")
 	}
 	// A neighbouring /64 is somebody else.
 	if err := failOnce(t, th, credential.Attempt{Source: "2001:db8:1:3::1",
-		Subject: "name.0"}); err != nil {
-		t.Errorf("another /64 paid for the first one's spray: %v", err)
+		Subject: "sarah.chen"}); err != nil {
+		t.Errorf("another /64 paid for the first one's run: %v", err)
 	}
 }
 
@@ -762,10 +738,9 @@ func TestTheLocalCurveIsBounded(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sources, pairs := credential.LocalKeysHeld(th)
-	if sources > credential.LocalKeys || pairs > credential.LocalKeys {
-		t.Errorf("the local curve holds %d sources and %d pairs, past its "+
-			"bound of %d each", sources, pairs, credential.LocalKeys)
+	if pairs := credential.LocalKeysHeld(th); pairs > credential.LocalKeys {
+		t.Errorf("the local curve holds %d pairs, past its bound of %d",
+			pairs, credential.LocalKeys)
 	}
 }
 
@@ -814,23 +789,38 @@ func TestASuccessOnAPairThisNodeForgotStillClearsTheFleet(t *testing.T) {
 	}
 }
 
-// AN UNIDENTIFIABLE SOURCE IS ADMITTED, NOT REFUSED.
+// AN UNIDENTIFIABLE SOURCE IS ADMITTED, NOT REFUSED — AND SO IS AN ATTEMPT
+// THAT NAMES NOBODY.
 //
-// Refusing would mean a misconfigured proxy — one that strips the header the
-// source is derived from — locks every person in the company out at once,
-// which is an outage the throttle caused. What still bounds that caller is the
-// password cost and the verify cap. Its ticket is nil, and does nothing.
-func TestAnUnidentifiableSourceIsAdmitted(t *testing.T) {
+// Refusing an unidentifiable source would mean a misconfigured proxy — one that
+// strips the header the source is derived from — locks every person in the
+// company out at once, which is an outage the throttle caused. What still
+// bounds that caller is the password cost and the verify cap. And a
+// credential that names nobody — an invitation link, a founder's code, a
+// provider's round trip — has no pair to key, and keyed on its source alone it
+// was a way to hold every provider sign-in at an address shut, since a
+// callback nobody started fails for free. Either ticket is nil, and does
+// nothing. Mutation: count a subject-less attempt against its source and the
+// callbacks below meet 429.
+func TestAnUncountableAttemptIsAdmitted(t *testing.T) {
 	t.Parallel()
-	th, _, _ := newThrottle(t, newAttempts())
-	for range 20 {
-		ticket, err := th.Admit(t.Context(), credential.Attempt{Subject: "sarah.chen"})
-		if err != nil {
-			t.Fatalf("a request with no identifiable source was refused: %v — "+
-				"a proxy that stops setting the header would lock the company "+
-				"out", err)
+	th, _, sleeps := newThrottle(t, newAttempts())
+	for _, a := range []credential.Attempt{
+		{Subject: "sarah.chen"}, {Source: "203.0.113.7"},
+	} {
+		for range 40 {
+			ticket, err := th.Admit(t.Context(), a)
+			if err != nil {
+				t.Fatalf("an uncountable attempt %+v was refused: %v", a, err)
+			}
+			if ticket != nil {
+				t.Fatalf("an uncountable attempt %+v was handed a ticket", a)
+			}
+			ticket.Fail(t.Context())
 		}
-		ticket.Fail(t.Context())
+	}
+	if got := sleeps.take(); len(got) != 0 {
+		t.Errorf("uncountable attempts were made to wait %v", got)
 	}
 }
 

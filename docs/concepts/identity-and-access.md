@@ -979,7 +979,7 @@ behind it — an office, or the whole company behind a proxy nobody named in
 
 ```mermaid
 flowchart LR
-    A[attempt] --> W{wait owed<br/>by its keys}
+    A[attempt] --> W{wait owed<br/>by its pair}
     W -- none --> V[verify]
     W -- "up to 5 s" --> S[held inside<br/>the request] --> V
     W -- "longer" --> T["429 throttled<br/>Retry-After: the wait"]
@@ -987,49 +987,61 @@ flowchart LR
     V -- refused --> F[failure doubles<br/>the next wait]
 ```
 
-Each failure past a key's allowance doubles the wait before that key's next
-attempt — 1, 2, 4, 8, 16, then 30 seconds, and never more — and a correct
-credential after the wait always succeeds. Two keys, because they catch two
-different runs:
+Each failure doubles the wait before the next attempt on its key — 1, 2, 4, 8,
+16, then 30 seconds, and never more — and a correct credential after the wait
+always succeeds. The key is **the pair**: the subject as typed (an address
+folded the way the directory folds one, anything else by case), from one
+source — the client's address as the trusted proxies resolve it, an IPv6
+client by its `/64`, since every address in it is one customer's. It catches a
+run at one account, and has no allowance: the first failure already costs a
+second. **A success clears this pair and nothing else**, so somebody holding an
+account cannot sign in as themselves between guesses at somebody else's and
+wipe the record of every one.
 
-- **The pair** — the subject as typed (an address folded the way the directory
-  folds one, anything else by case), from one source. It catches a run at one
-  account, and has no allowance: the first failure already costs a second.
-  **A success clears this pair and nothing else.** Clearing the source was the
-  bypass: anybody holding an account could sign in as themselves between
-  guesses at somebody else's and wipe the record of every one.
-- **The source** alone — the client's address as the trusted proxies resolve
-  it, an IPv6 client by its `/64`, since every address in it is one
-  customer's. It catches a run across many accounts, and it is the only key a
-  credential that names nobody has: an invitation link, a founder code. Ten
-  failures in the window are free, because many people share an address; past
-  them it climbs the same curve. A success strikes its **own** pair's failures
-  from it, so somebody who mistyped and then got in leaves nothing behind for
-  their neighbours to pay for.
+**There is no curve on the source alone.** There was one — ten failures from an
+address free, then the same doubling wait — and it was a lockout by another
+name: a refusal decided on an address is one anybody sharing it holds shut for
+everybody else, so one stranger failing once every twenty-five seconds, at any
+name at all, kept every sign-in from that office, that VPN or that proxy at
+`429`, the right passwords included; and since an attempt still being checked
+counted against it, a dozen colleagues signing in at once met the same `429`
+with nobody failing. What that leaves unslowed by a curve is one password tried
+against many names from one address. What bounds that is the twelve-character
+floor and its blocklist, the argon2id cost a real name pays behind the node's
+verify cap, and the pad on every answer; what shows it is the audit trail's
+per-client, per-minute failure tally, which counts how many different names
+one client tried.
 
-An attempt still being checked counts as a failure until it resolves, so a
-burst of concurrent guesses at one pair is served one after another along the
-curve rather than all at once; and at most sixty-four attempts are held waiting on a curve
-at once on a node — past that, a wait is answered `429` straight away rather
-than parked on an open connection an attacker chose to open.
+A credential that **names nobody** — an invitation link, a founder's one-time
+code, an identity provider's round trip — meets no curve at all: there is no
+subject to pair with its address, each is 256 bits from `crypto/rand` (or the
+provider's own), and a callback nobody started fails for free, so a curve on
+the address alone was a way to hold a whole company's provider sign-ins shut.
+Every refusal of one is still a failed attempt in the tally.
 
-**The fleet shares the pair and not the source.** The window is fifteen
-minutes. A node meeting a pair for the first time reads the fleet's record of
-it once, and writes a failure only while the curve is still climbing — a
-seventh failure changes no node's answer — so a run the load balancer moves to
-another node starts that node's curve where the fleet left it, and the
-coordination store is never on the path of every attempt. The source is each
-node's own: a source already being refused costs a map lookup, not a round
-trip. What the fleet holds is a digest of the pair under a key derived from the
-active keyring entry, never what was typed — a password typed into the login
-box is what lands in that field often enough to matter. A node whose
-coordination store is unreachable goes on throttling on its own curve.
+An attempt still being checked counts as a failure against its pair until it
+resolves, so a burst of concurrent guesses at one account is served one after
+another along the curve rather than all at once; and at most sixty-four
+attempts are held waiting on a curve at once on a node — past that, a wait is
+answered `429` straight away rather than parked on an open connection an
+attacker chose to open.
+
+**The fleet shares the pair.** The window is fifteen minutes. A node meeting a
+pair for the first time reads the fleet's record of it once, and writes a
+failure only while the curve is still climbing — a seventh failure changes no
+node's answer — so a run the load balancer moves to another node starts that
+node's curve where the fleet left it, and the coordination store is never on
+the path of every attempt; a pair already being refused costs a map lookup,
+not a round trip. What the fleet holds is a digest of the pair under a key
+derived from the active keyring entry, never what was typed — a password typed
+into the login box is what lands in that field often enough to matter. A node
+whose coordination store is unreachable goes on throttling on its own curve.
 
 A spent invitation link that **proved itself** — redeemed, expired, its
 address already enrolled — is refused like every other `410` and is **not** a
-failure: that is the link's holder, or a mail scanner re-reading it. Counted, a
-scanner re-fetching one old link put the address it scans from on the curve.
-A guesser who does not hold the link can never reach the difference.
+failure: that is the link's holder, or a mail scanner re-reading it, and
+counted it named the scanner's address as a guesser. A guesser who does not
+hold the link can never reach the difference.
 
 ### A bearer is protected by its value, not by a curve
 

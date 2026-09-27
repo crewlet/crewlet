@@ -124,7 +124,7 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 // nothing: the view, the redemption and the provider redemption each check the
 // secret the link carries beside it. And each refuses a missing or wrong one
 // with EXACTLY the answer an id nobody issued gets — the same status, the same
-// bytes, counted against the source as a failed attempt — because told apart, a
+// bytes, counted as a failed attempt — because told apart, a
 // guessed secret against a leaked id would say the id exists.
 //
 // Mutation: drop the secret check from the lookup and every wrong-secret arm

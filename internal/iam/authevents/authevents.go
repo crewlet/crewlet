@@ -172,25 +172,23 @@ const (
 	// MaxSubjectsCounted is how many distinct subjects one tally counts
 	// before it saturates.
 	//
-	// 256, well past any honest caller and past what the throttle lets a
-	// guesser reach: somebody mistyping their own login presents one or
-	// two, and one node's source curve admits one client sixteen VERIFIED
-	// attempts in its first minute (credential.SourceAllowance free, then
-	// a wait that doubles) and two a minute after that. The one arm that
-	// can present hundreds of distinct values in a minute from one client
-	// is a bearer spray, which no curve slows because a bearer's value is
-	// its protection — and for that, "at least 256" is already all an
-	// operator does anything with. At eight bytes a digest it bounds the
-	// counting to about 130 KiB across every tally a minute can hold.
+	// 256, well past any honest caller: somebody mistyping their own login
+	// presents one or two. What presents hundreds of distinct values in a
+	// minute from one client is a spray — one password across the
+	// directory, or bearers — and no curve slows either, because the
+	// sign-in curve is keyed on the pair and a bearer's value is its own
+	// protection; for a spray, "at least 256" is already all an operator
+	// does anything with. At eight bytes a digest it bounds the counting to
+	// about 130 KiB across every tally a minute can hold.
 	MaxSubjectsCounted = 256
 
 	// MaxPeopleNamed is how many resolved people one row names.
 	//
-	// SIXTEEN, which is every verified attempt one node's source curve
-	// admits one client in its first minute — credential.SourceAllowance
-	// free, then 1, 2, 4, 8 and 16 seconds — so a row from one node names
-	// everybody that client tried. A client a load balancer spreads across
-	// nodes gets a curve on each and a row from each. Past it, an attempt
+	// SIXTEEN, which is past every account a TARGETED run aims at — a
+	// handful of people worth becoming — so a row names all of them, while
+	// a spray across the directory is told apart by the distinct-subject
+	// count beside the names rather than by a list of everybody it tried,
+	// which would put the company's roster in one row. Past it, an attempt
 	// is still COUNTED — only the name list stops growing.
 	MaxPeopleNamed = 16
 

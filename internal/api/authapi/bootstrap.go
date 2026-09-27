@@ -184,18 +184,14 @@ type bootstrapRequest struct {
 
 // Bootstrap creates the first person.
 //
-// UNGUARDED and throttled per source, like the sign-in it stands in for: there
-// is nobody to authenticate as. What bounds it is the code's own entropy, the
-// throttle, and the fact that it stops existing the moment it has been used.
+// UNGUARDED, like the sign-in it stands in for: there is nobody to
+// authenticate as. What bounds it is the code's own entropy — 256 bits of
+// crypto/rand — and the fact that it stops existing the moment it has been
+// used.
 func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
-	// ON THE SOURCE ALONE: a code names nobody, so there is no subject to
-	// key a curve on, and the source's own curve is what bounds a walk.
-	adm, ok := s.admit(w, r, credential.Attempt{Source: s.sourceOf(r)},
-		types.FailBootstrap)
-	if !ok {
-		return
-	}
-	defer adm.ticket.Release()
+	// ON NO CURVE: a code names nobody — see [Service.uncounted]. A wrong
+	// one still reaches the failure tally.
+	adm := s.uncounted(r)
 	closed, err := s.bootstrapClosed(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_bootstrap_estate_unreadable", "error", err)
@@ -310,7 +306,6 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 
 	log.InfoContext(r.Context(), "api_bootstrap_redeemed",
 		"person", person, "login", in.Login)
-	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, iamdomain.Sighting{
 		ID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Login: in.Login, Grants: s.boot.API.Auth.MaxGrants,
@@ -402,16 +397,15 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 //
 // # A failed attempt like every other
 //
-// Counted against the SOURCE's curve, reaching the failure tally and padded
-// to the deadline — a refusal is a refusal whichever arm produced it, and a
-// code that does not work is one the curve bounds however it stopped working.
+// Counted in the failure tally and padded to the deadline — a refusal is a
+// refusal whichever arm produced it, and an operator reading the tally sees a
+// code that does not work however it stopped working.
 // The specificity is safe because presenting a code whose digest is on the
 // log, or in this node's own file, is proof of holding one, and a code whose
 // own expiry has passed is answered alike whoever minted it.
 func (s *Service) refuseStaleCode(w http.ResponseWriter, r *http.Request,
 	adm admission, presented, state string) {
 
-	adm.ticket.Fail(r.Context())
 	s.audit.Failed(r.Context(), authevents.Failure{
 		Client: adm.source, Method: types.FailBootstrap, Subject: presented,
 	})

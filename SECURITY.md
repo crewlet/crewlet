@@ -43,7 +43,7 @@ A few things worth knowing when deploying Crewlet:
   second-factor code, code already spent — because telling a caller which one
   applies tells an attacker the same, and the first of them is the company's
   roster. Three mechanisms keep the timing from saying it instead: the
-  throttle is keyed on the request's SOURCE and on the subject as TYPED, and
+  throttle is keyed on the subject as TYPED from the request's source, and
   decides before anything is looked up (a throttle keyed on who the subject
   resolved to is one only real people can trigger, so its delay becomes the
   oracle); a subject that does not exist is still verified against, with a
@@ -56,15 +56,22 @@ A few things worth knowing when deploying Crewlet:
   credential after the wait always succeeds — a lockout is something an
   outsider can cause, against any login they can type. A success clears only
   its own (subject, source) pair, so holding one account never wipes the
-  record of guesses at another. No curve stands in front of a bearer — a Tier
+  record of guesses at another. No address is ever refused on its own: a
+  curve on the source alone let any stranger at an office's or a proxy's
+  address hold every sign-in from it at `429`, so one password tried across
+  many names from one address is bounded by the password floor, the argon2id
+  cost and the verify cap instead, and shown in the audit trail's per-client
+  failure tally; an invitation link, a founder code and a provider round trip
+  meet no curve at all, their 256 bits being what bounds a walk. No curve
+  stands in front of a bearer — a Tier
   A token, a machine token or a session cookie: a bearer names nobody until it
   is compared, so a curve there could only be keyed on the address, and one was
   a way for any stranger at an address to hold every token used from it at
   `429`. A bearer's protection is its length and randomness (a Tier A value is
   refused under 26 characters), and every refused one is counted in the audit
   trail's per-client failure tally. Behind a proxy, name it in
-  `api.trusted_proxies`: otherwise every caller is the proxy, and one
-  guesser's failures slow the whole company.
+  `api.trusted_proxies`: otherwise every caller is the proxy, and a stranger
+  guessing at somebody's login slows that person's own sign-in.
 - **Passwords are argon2id at 64 MiB, t=3, p=1, with a twelve-character
   minimum and no composition rules.** The parameters are in the stored
   verifier, so raising the cost re-hashes each person's on their next

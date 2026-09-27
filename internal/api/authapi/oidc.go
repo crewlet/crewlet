@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
-	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -123,13 +122,11 @@ func (s *Service) launch(w http.ResponseWriter, r *http.Request, want oidc.Fligh
 // on by accident.
 func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
-	// ON THE SOURCE ALONE: before an ID token verifies nothing here names
-	// anybody, and afterwards the provider has already proved who it is.
-	adm, ok := s.admit(w, r, credential.Attempt{Source: source}, types.FailOIDC)
-	if !ok {
-		return
-	}
-	defer adm.ticket.Release()
+	// ON NO CURVE: before an ID token verifies nothing here names anybody,
+	// and afterwards the provider has already proved who it is — see
+	// [Service.uncounted]. A round trip that ends in nobody still reaches
+	// the failure tally.
+	adm := s.uncounted(r)
 	// A ROUND TRIP THAT ENDS IN NOBODY is one failed attempt, whichever
 	// check refused it. The subject is the provider's own, once an ID
 	// token verified and there is one; before that nothing names anybody.
@@ -230,7 +227,6 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		s.refuseSignIn(w, r, adm, attempt, "no linked credential for this subject")
 		return
 	}
-	adm.ticket.Succeed(r.Context())
 
 	// BACK TO WHERE THE LOGIN BEGAN, by redirect. The callback is a
 	// browser following the provider's redirect, and it used to answer the

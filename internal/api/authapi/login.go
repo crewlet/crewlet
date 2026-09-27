@@ -1082,13 +1082,14 @@ func (s *Service) passwordFloor() int { return s.boot.API.Auth.Local.Passwords()
 //
 // THE CLIENT, RESOLVED THROUGH THE TRUSTED PROXIES — the half of the key that
 // says where an attempt came from, so a run at one account from one address is
-// slowed without anybody else sharing its curve.
+// slowed without the person it is aimed at, signing in from somewhere else,
+// sharing its curve.
 //
 // THROUGH THE GUARD, because resolving it is the one place `api.trusted_proxies`
-// is read: keyed on a proxy's own address this throttle would bucket the whole
-// internet together and lock the company out the moment one attacker arrives,
-// and keyed on a header anybody may send it would let that attacker pick their
-// own bucket. See internal/api/auth/client.go.
+// is read: keyed on a proxy's own address, every caller's attempts at one login
+// would share one curve, so a stranger guessing at somebody's login would slow
+// that person's own sign-in; keyed on a header anybody may send, the stranger
+// would pick their own curve. See internal/api/auth/client.go.
 func (s *Service) sourceOf(r *http.Request) string { return s.clients.Of(r) }
 
 // lastStep reads the last accepted TOTP step off a credential's carried
