@@ -2313,7 +2313,20 @@ func jsonResult(v any) (tools.Result, error) {
 // IT NEVER SAYS "NOTHING FOUND". A projection that has not caught up must not
 // be able to tell a seat the company has no work — it would file a duplicate,
 // or abandon work it was told to do.
+//
+// AND IT NEVER SAYS "TRY AGAIN" ABOUT THE REQUEST. A read refused for what it
+// asked — a feed's cursor that is not a position, a cursor or `since` from
+// another log, a text search wider than the feed scans ([tracker.ErrBadQuery]),
+// a floor on another log ([statelog.ErrForeignPosition]) — is refused the same
+// on every attempt, so the sentence that told a model the tracker could not be
+// read "right now" sent it round with the same arguments. It names the
+// refusal and says the arguments are what has to change.
 func readFailure(name string, err error) string {
+	if errors.Is(err, tracker.ErrBadQuery) || errors.Is(err, statelog.ErrForeignPosition) {
+		return fmt.Sprintf("%s refused what it was asked: %v. Nothing is wrong "+
+			"with the tracker — change the arguments, because the same ones "+
+			"are refused again.", name, err)
+	}
 	return fmt.Sprintf("%s could not read the tracker right now (%v). This is "+
 		"NOT an empty result — do not conclude the item or the list does not "+
 		"exist. Try again, or say you could not check.", name, err)

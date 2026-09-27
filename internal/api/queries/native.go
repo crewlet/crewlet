@@ -742,17 +742,21 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		q.Notified = &notified
 	}
 	answer, err := s.Work.Activity(ctx, q, time.Now().UTC())
-	if err != nil {
-		switch {
-		case errors.Is(err, tracker.ErrNoTask):
-			return nil, ErrNotFound
-		case errors.Is(err, statelog.ErrUnavailable):
-			return nil, err
-		}
+	switch {
+	case errors.Is(err, tracker.ErrNoTask):
+		return nil, ErrNotFound
+	case errors.Is(err, tracker.ErrBadQuery):
 		// A GATE REFUSAL IS A BAD REQUEST, not a failure: the caller
-		// asked a question this surface will not run, and the message
-		// names the keys that make it runnable.
+		// asked a question this surface will not run — a text search
+		// wider than the feed can scan, a cursor or a `since` from
+		// another log — and the message names what makes it runnable.
+		//
+		// BY ITS SENTINEL and nothing wider. Every failure that was not
+		// the state log's used to take this arm, so a store this node
+		// could not read was answered 400 as the caller's mistake.
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
+		return nil, err
 	}
 	return answer, nil
 }

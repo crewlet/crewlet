@@ -586,6 +586,46 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 	}
 }
 
+// A FEED'S REQUEST MISTAKE IS BAD PARAMS, AND A FEED'S FAULT IS NOT.
+//
+// `work_activity` and `work_inbox` read two positions off the wire — a cursor
+// and a `since` — and the reader refuses one it cannot use, before any row, as
+// [tracker.ErrBadQuery]: not a position, or a position from another log. That
+// is the caller's, so it is bad params. `work_activity` used to answer EVERY
+// failure that was not the state log's as bad params, so a store this node
+// could not read was told to the caller as their mistake; `work_inbox` answered
+// none, so a malformed cursor was a fault. The sentinel decides now, and a
+// store's own error stays a fault — the control.
+func TestAFeedsRequestMistakeIsBadParamsAndItsFaultIsNot(t *testing.T) {
+	t.Parallel()
+	mistake := fmt.Errorf("%w: cursor: statelog: a position on another log",
+		tracker.ErrBadQuery)
+	fault := errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+	for _, what := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"work_activity", map[string]any{"container": "workspace"}},
+		{"work_inbox", map[string]any{"handle": "ana"}},
+	} {
+		t.Run(what.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := askAsOperator(t, queries.Sources{Work: &stubWork{err: mistake}},
+				what.name, what.args)
+			if !errors.Is(err, queries.ErrBadParams) {
+				t.Errorf("a refused request answered %v, want %v", err, queries.ErrBadParams)
+			}
+			_, err = askAsOperator(t, queries.Sources{Work: &stubWork{err: fault}},
+				what.name, what.args)
+			if err == nil || errors.Is(err, queries.ErrBadParams) ||
+				errors.Is(err, queries.ErrUnavailable) {
+				t.Errorf("a store fault answered %v, want a plain failure — it "+
+					"is this node's, not the caller's and not a refusal", err)
+			}
+		})
+	}
+}
+
 // AND A REFUSAL WAITING CANNOT CLEAR IS UNAVAILABLE TOO — WITH NO HINT.
 //
 // A node holding a record it cannot decode will not catch up however long the

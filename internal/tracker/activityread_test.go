@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -139,6 +140,91 @@ func TestAnActivitySearchIsRefusedByWhatItWouldScan(t *testing.T) {
 	// position cursor are all indexed, so a company-wide feed is the
 	// ordinary case rather than the dangerous one.
 	r.activity(tracker.ActivityQuery{Workspace: true})
+}
+
+// A FEED'S POSITIONS ARE THE CALLER'S TO GET RIGHT, AND A MISTAKE IN ONE IS
+// REFUSED AS THE REQUEST'S.
+//
+// Both feeds take two positions from their caller — the cursor they resume
+// from and a `since` bound — and compare each against `log_seq`, a packed
+// column carrying no stream. A position from another domain's log answered a
+// page of THIS feed chosen by a number from that one, with nothing to say so;
+// a cursor that was not a position at all was parsed inside the read's
+// transaction and failed the way a store does, which every surface answered as
+// a fault of the node. Each is now refused before a row is read, with
+// [tracker.ErrBadQuery] — the one sentinel a surface answers as a bad request —
+// and a foreign one with [statelog.ErrForeignPosition] beside it. None of them
+// is a state-log refusal. The activity gate and an unknown inbox reason are
+// the same kind of refusal and carry the same sentinel. The control is the
+// cursor the feed itself handed out, which pages.
+func TestAFeedRefusesAPositionItCannotUseAsTheRequestsMistake(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+	filedTask(t, r, "t-2")
+
+	pages := statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 5}
+	type ask struct {
+		name    string
+		run     func() error
+		foreign bool
+	}
+	activity := func(q tracker.ActivityQuery) func() error {
+		return func() error {
+			q.Level = statelog.ReadStale
+			_, err := r.reader.Activity(t.Context(), q, wednesday)
+			return err
+		}
+	}
+	inbox := func(q tracker.InboxQuery) func() error {
+		return func() error {
+			q.Handle, q.Level = "bob", statelog.ReadStale
+			_, err := r.reader.Inbox(t.Context(), q, wednesday)
+			return err
+		}
+	}
+	for _, c := range []ask{
+		{"an activity cursor from another log",
+			activity(tracker.ActivityQuery{Workspace: true, Cursor: pages.String()}), true},
+		{"an activity since from another log",
+			activity(tracker.ActivityQuery{Workspace: true, Since: pages}), true},
+		{"an activity cursor that is not a position",
+			activity(tracker.ActivityQuery{Workspace: true, Cursor: "42"}), false},
+		{"an activity search wider than the feed scans",
+			activity(tracker.ActivityQuery{Workspace: true, Q: "deploy"}), false},
+		{"an inbox cursor from another log",
+			inbox(tracker.InboxQuery{Cursor: pages.String()}), true},
+		{"an inbox since from another log",
+			inbox(tracker.InboxQuery{Since: pages}), true},
+		{"an inbox cursor that is not a position",
+			inbox(tracker.InboxQuery{Cursor: "42"}), false},
+		{"an unknown wake reason",
+			inbox(tracker.InboxQuery{Reasons: []tracker.Reason{"because-i-said-so"}}), false},
+	} {
+		err := c.run()
+		if !errors.Is(err, tracker.ErrBadQuery) {
+			t.Errorf("%s: %v, want %v", c.name, err, tracker.ErrBadQuery)
+			continue
+		}
+		if c.foreign && !errors.Is(err, statelog.ErrForeignPosition) {
+			t.Errorf("%s: %v, want it to say the position is on another log", c.name, err)
+		}
+		if errors.Is(err, statelog.ErrUnavailable) {
+			t.Errorf("%s: %v is a state-log refusal — the request is what is "+
+				"wrong, on every node alike", c.name, err)
+		}
+	}
+
+	// THE CONTROL: the feed's own cursor is on this log and pages.
+	first := r.activity(tracker.ActivityQuery{Workspace: true, Limit: 1})
+	if first.NextCursor == "" {
+		t.Fatal("a one-row page over two commits carries no cursor")
+	}
+	if next := r.activity(tracker.ActivityQuery{
+		Workspace: true, Limit: 1, Cursor: first.NextCursor,
+	}); len(next.Records) != 1 {
+		t.Errorf("the feed's own cursor paged to %d records, want 1", len(next.Records))
+	}
 }
 
 // THE CURSOR IS A LOG POSITION, and it pages with no gap and no repeat.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -197,6 +198,9 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 	if err := gateActivityQuery(q, now); err != nil {
 		return ActivityAnswer{}, err
 	}
+	if err := feedPositions(q.Cursor, q.Since); err != nil {
+		return ActivityAnswer{}, err
+	}
 	limit := q.Limit
 	if limit <= 0 || limit > MaxActivityRows {
 		limit = MaxActivityRows
@@ -253,23 +257,63 @@ func gateActivityQuery(q ActivityQuery, now time.Time) error {
 		return nil
 	}
 	if ProjectKey(q.Project) == "" {
-		return fmt.Errorf("tracker: searching the activity feed needs a "+
+		return fmt.Errorf("%w: searching the activity feed needs a "+
 			"subject or a container: pass `task`, or `container=project:<KEY>` "+
 			"with a `since` no further back than %d days — at company scope a "+
 			"text search reads every commit this company has ever made and "+
-			"times out rather than answering", ActivityQuerySpanDays)
+			"times out rather than answering", ErrBadQuery, ActivityQuerySpanDays)
 	}
 	span := activitySpan(q, now)
 	if span <= 0 {
-		return fmt.Errorf("tracker: searching a project's activity needs a "+
+		return fmt.Errorf("%w: searching a project's activity needs a "+
 			"`since` bound no further back than %d days — without one this "+
-			"reads the project's whole history", ActivityQuerySpanDays)
+			"reads the project's whole history", ErrBadQuery, ActivityQuerySpanDays)
 	}
 	if span > ActivityQuerySpanDays*24*time.Hour {
-		return fmt.Errorf("tracker: `since` reaches back %d days and a text "+
+		return fmt.Errorf("%w: `since` reaches back %d days and a text "+
 			"search over the activity feed covers at most %d — narrow the "+
 			"window, or drop `q` and filter by `kinds` and `actor`, which are "+
-			"indexed", int(span.Hours()/24), ActivityQuerySpanDays)
+			"indexed", ErrBadQuery, int(span.Hours()/24), ActivityQuerySpanDays)
+	}
+	return nil
+}
+
+// ErrBadQuery is a feed read whose REQUEST this package refused before reading
+// a row: a text search wider than the feed can scan, a cursor that is not a
+// log position, a cursor or a `since` bound on another log. The caller changes
+// what it asks — the same keys are refused the same on every node however
+// often they are sent.
+//
+// ITS OWN SENTINEL, because a surface must tell it from everything else a
+// read can fail with. The query surface answered every activity failure that
+// was not the state log's as a bad request, so a store this node could not
+// read was told to the caller as their mistake; and it answered a malformed
+// inbox cursor, parsed inside the read's transaction, as a fault of the node.
+// A seat's tool told a model holding a bad cursor that the tracker could not be
+// read "right now" and to try again, which it did with the same cursor.
+var ErrBadQuery = errors.New("tracker: this read's request cannot be run")
+
+// feedPositions holds the two positions a feed's caller names — the cursor it
+// resumes from and its `since` bound — to what they must be before a row is
+// read: a well-formed position, on THIS log ([statelog.Position.On]).
+//
+// ON THIS LOG, because both are compared against `log_seq`, a packed column
+// that carries no stream: a position from the knowledge base's log answered a
+// page of this feed chosen by a number from another, with nothing to say so.
+// And BEFORE THE READ, because a cursor parsed inside the transaction failed
+// as the read did — indistinguishable, to every surface, from a store fault.
+func feedPositions(cursor string, since statelog.Position) error {
+	if raw := strings.TrimSpace(cursor); raw != "" {
+		at, err := ParseLogPosition(raw)
+		if err != nil {
+			return fmt.Errorf("%w: cursor: %w", ErrBadQuery, err)
+		}
+		if err := at.On(trackerStream); err != nil {
+			return fmt.Errorf("%w: cursor: %w", ErrBadQuery, err)
+		}
+	}
+	if err := since.On(trackerStream); err != nil {
+		return fmt.Errorf("%w: since: %w", ErrBadQuery, err)
 	}
 	return nil
 }

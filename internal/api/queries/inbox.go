@@ -4,6 +4,8 @@ package queries
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -80,7 +82,14 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		q.Since = at
 	}
 	answer, err := s.Work.Inbox(ctx, q, time.Now().UTC())
-	if err != nil {
+	switch {
+	case errors.Is(err, tracker.ErrBadQuery):
+		// THE CALLER'S, like a malformed `since` above: a cursor that is
+		// not a log position, or a position from another log. The cursor
+		// is parsed by the reader, and it used to be parsed inside the
+		// read's transaction, so a pasted-wrong cursor was a 500.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
 		return nil, err
 	}
 	return answer, nil
