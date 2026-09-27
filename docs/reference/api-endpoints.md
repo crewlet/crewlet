@@ -363,8 +363,11 @@ one anybody sharing the address holds shut for everybody else: one stranger's
 failure every twenty-five seconds, at any name, kept every sign-in from that
 office or proxy at `429`, the right passwords included. So one password tried
 against many names from one address meets no curve; it is bounded by the
-password floor and blocklist, the argon2id cost a real name pays and the pad,
-and shown by the audit trail's per-client failure tally. A credential that
+address's one turn at the node's verify cap — one name per verification,
+however many it sends at once — by its allowance of fresh names the
+coordination store is asked about (sixteen at once, then one a second), by the
+password floor and blocklist, and by the pad, and it is shown by the audit
+trail's per-client failure tally. A credential that
 names nobody — an invitation link, a founder's code, a provider's round trip —
 meets no curve at all, and every refusal of one is still counted in the tally.
 
