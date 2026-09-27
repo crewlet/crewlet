@@ -751,7 +751,10 @@ api:
                         #   what the two lines above bind
   trusted_proxies: ["10.0.0.0/8"]
                         # whose X-Forwarded-For is believed. A CIDR list,
-                        #   never a bool; 0.0.0.0/0 is refused
+                        #   never a bool; 0.0.0.0/0 is refused. Empty with
+                        #   an https external_url is warned about: whatever
+                        #   terminates the TLS is then every caller's
+                        #   source, and the sign-in throttle's too
   auth:
     backend: local      # local | oidc | none. Unset derives from which of
                         #   the two blocks below is present

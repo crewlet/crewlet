@@ -812,15 +812,17 @@ as written with its consequence somewhere else:
 |---------|-------------------------|
 | `api.auth.local.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, a password backend with an optional second factor, already is one |
+| `api.external_url` is `https://` and `api.trusted_proxies` is empty | The engine never terminates TLS itself, so something in front of it does — and unless it is named, every caller's source is its address. The sign-in throttle then counts the whole company as one client, one stranger's failures slow everybody's sign-in, and every audit row names the proxy. Not a refusal because one front end is right with the list empty: a balancer that passes each client's own address through as the peer rather than in a header |
 | An OIDC `scopes` list written without `offline_access` (an unset list asks for it) | Nothing notices a deactivation. An identity provider tells this engine nothing when somebody is disabled, so the session it already minted works until its absolute deadline — and the deactivation probe, which is what would end it early, is a refresh-token exchange with nothing to exchange |
 | A group mapping conferring `secrets:read` or `secrets:write` | Adding somebody to a directory group is an ordinary act performed by whoever administers the identity provider, and those two grants read and write this company's credentials. Declaring them on the person's own record puts the decision where it is reviewed |
 
 `api.trusted_proxies` is a **CIDR list, never a bool**, because the question a
 forwarded header poses is not "does this deployment sit behind a proxy" but "is
 *this* peer the proxy". A bool set true trusts a header anybody can send, which
-hands an attacker their own rate-limit bucket and their own audit row; set false
+hands an attacker their own throttle key and their own audit row; set false
 behind a real proxy it buckets the entire internet under one address. `0.0.0.0/0`
-is refused for the first reason.
+is refused for the first reason, and an `https` external URL with the list
+empty is warned about for the second.
 
 **CORS** defaults to same-origin. The dashboard is served by this process so it
 needs no entry; list any other browser origin explicitly in

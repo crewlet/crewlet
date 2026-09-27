@@ -1337,6 +1337,29 @@ func (a API) warnings() []Warning {
 				"node and name the https address here"))
 	}
 
+	// AN `https://` EXTERNAL URL WITH NO TRUSTED PROXY is one client. The
+	// engine never terminates TLS itself, so an https address means
+	// something in front of it does — and unless that something is named
+	// here, every request's source is ITS address: the sign-in throttle's
+	// source curve, the audit trail's client and every per-source rule then
+	// see the whole company as one caller, and one stranger's guesses put
+	// every honest sign-in behind the same wait.
+	//
+	// A WARNING RATHER THAN A REFUSAL because one front end is right with
+	// the list empty — a balancer that passes the client's own address
+	// through as the peer rather than in a header — and nothing in this
+	// file can tell the two apart.
+	if strings.HasPrefix(a.ExternalBase(), "https://") && len(a.TrustedProxies) == 0 {
+		out = append(out, advisory(field("api.trusted_proxies"),
+			"this deployment is reached over https, which something in front "+
+				"of it terminates, and no proxy is trusted — so every caller's "+
+				"source is that front end's address. The sign-in throttle then "+
+				"counts the whole company as one client, and one stranger's "+
+				"failures slow everybody's sign-in. Name the proxy's own "+
+				"address block here; leave it empty only where the front end "+
+				"passes each client's own address through as the peer"))
+	}
+
 	if oidc := auth.OIDC; oidc != nil && auth.Resolved() == AuthBackendOIDC {
 		// WITHOUT A REFRESH TOKEN NOTHING NOTICES A DEACTIVATION. An
 		// identity provider tells this engine nothing when somebody is
