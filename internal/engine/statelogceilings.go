@@ -125,11 +125,41 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 		// this engine runs on.
 		log.WarnContext(ctx, "statelog_free_space_unmeasured",
 			"path", volume, "error", err.Error(),
-			"detail", "every derived state-log ceiling falls back to its floor; "+
-				"set stream.tracker_log_max_bytes, stream.tracker_vectors_max_bytes "+
-				"and stream.pages_log_max_bytes to choose them")
+			"detail", unmeasuredDetail(diskDerivedFields(boot.Stream)))
 	}
 	return sizeCeilings(ctx, host, boot.Stream, free, volume)
+}
+
+// diskDerivedFields is the Tier A field of every state log whose ceiling is
+// unset AND derived from the stream volume's free space — the ones a volume
+// this node cannot measure sizes at their smallest.
+//
+// ASKED OF THE REGISTER'S OWN CEILINGS rather than listed: a ceiling depends
+// on the disk exactly when an empty volume and an enormous one give it
+// different sizes. A list written beside the warning named three fields while
+// five logs were registered, and went on naming a field an operator had
+// already set.
+func diskDerivedFields(stream config.Stream) []string {
+	var fields []string
+	for _, entry := range register() {
+		empty, vast := entry.Ceiling(stream, 0), entry.Ceiling(stream, 1<<50)
+		if !empty.Explicit && empty.Bytes != vast.Bytes {
+			fields = append(fields, empty.Field)
+		}
+	}
+	return fields
+}
+
+// unmeasuredDetail is what a node that could not measure its stream volume
+// says it did about the ceilings that volume decides.
+func unmeasuredDetail(fields []string) string {
+	if len(fields) == 0 {
+		return "every state log's ceiling is set in Tier A or fixed, so none " +
+			"depends on the free space this node could not measure"
+	}
+	return "the ceilings derived from the volume's free space are sized as " +
+		"though it had none, which is each one's smallest; set " +
+		strings.Join(fields, ", ") + " to choose them"
 }
 
 // sizeCeilings is [ceilingsFor] on a volume already measured.

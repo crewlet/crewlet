@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -492,5 +493,50 @@ func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
 	}
 	if strings.Contains(unstated, "-1") {
 		t.Errorf("an unstated limit reaches an operator as the number -1: %s", unstated)
+	}
+}
+
+// A NODE THAT CANNOT MEASURE ITS VOLUME NAMES THE FIELDS THAT VOLUME DECIDES,
+// and only those.
+//
+// The warning is the operator's one chance to choose the ceilings a missing
+// measurement shrinks, so it has to name exactly the unset ones that follow
+// the free space: not the org chart's or the identity log's, whose flat asks
+// the volume has no say in, and not a field the operator already set. It was a
+// list of three written beside the warning, which went on naming a set field.
+func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		stream config.Stream
+		want   []string
+	}{
+		{"nothing set", config.Stream{}, []string{"stream.tracker_log_max_bytes",
+			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes"}},
+		{"the mutation log set", config.Stream{TrackerLogMaxBytes: 8 << 30},
+			[]string{"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes"}},
+		{"every volume-derived log set", config.Stream{TrackerLogMaxBytes: 8 << 30,
+			TrackerVectorsMaxBytes: 8 << 30, PagesLogMaxBytes: 2 << 30}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := diskDerivedFields(c.stream)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("a volume this node cannot measure names %v, want %v", got, c.want)
+			}
+			detail := unmeasuredDetail(got)
+			for _, field := range got {
+				if !strings.Contains(detail, field) {
+					t.Errorf("the warning does not name %s: %s", field, detail)
+				}
+			}
+			for _, flat := range []string{"stream.chart_log_max_bytes",
+				"stream.iam_log_max_bytes"} {
+				if strings.Contains(detail, flat) {
+					t.Errorf("the warning names %s, whose ceiling no volume "+
+						"decides: %s", flat, detail)
+				}
+			}
+		})
 	}
 }
