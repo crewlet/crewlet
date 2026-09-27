@@ -1358,10 +1358,10 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 // Revoke bumps a person's revocation epoch, ending every session they hold.
 //
 // NO GRANT IS REQUIRED and that is deliberate: signing out everywhere is
-// something a person does to themselves, and reuse detection is something the
-// engine does on their behalf at the moment somebody else has their cookie.
-// Gating it behind an administrative capability would make the fastest
-// response to a compromise the one that needs an administrator.
+// something a person does to themselves, at the moment they fear somebody
+// else has their cookie. Gating it behind an administrative capability would
+// make the fastest response to a compromise the one that needs an
+// administrator.
 //
 // THE NEW EPOCH IS READ INSIDE THE SNAPSHOT AND STATED ON THE RECORD, never
 // incremented by the applier: an applier that did `epoch + 1` would fold over
@@ -1369,35 +1369,6 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 // a different order.
 func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 	statelog.Result, error) {
-
-	return w.revoke(ctx, personID, nil, opID, reason)
-}
-
-// RevokePast ends every session a person opened at or below epoch — the
-// revocation reuse detection makes on their behalf when a cookie minted at
-// that epoch is replayed.
-//
-// # Conditional, and decided in the snapshot it is published from
-//
-// It bumps the epoch only while the current one is still at or below the
-// bearer's; past it, every session the replay could reach is already over and
-// NOTHING IS PUBLISHED — the answer is `applied` with no position, the
-// framework's own "nothing to write". That is what makes the revocation safe
-// to ask for more than once: every ingress node that sees one replayed cookie
-// asks, and so does one node whose once-per-lineage dedupe forgot the lineage,
-// and an unconditional [Writer.Revoke] would move the epoch once per asking —
-// each move ending the sessions the person opened since the last. A dedupe is
-// the place to save work, never the place correctness is kept.
-func (w *Writer) RevokePast(ctx context.Context, personID string, epoch uint64,
-	opID, reason string) (statelog.Result, error) {
-
-	return w.revoke(ctx, personID, &epoch, opID, reason)
-}
-
-// revoke is the body both revocations share: unconditional when past is nil,
-// and a no-op once the epoch has moved beyond *past.
-func (w *Writer) revoke(ctx context.Context, personID string, past *uint64,
-	opID, reason string) (statelog.Result, error) {
 
 	if personID == "" || opID == "" {
 		return statelog.Result{}, errors.New("iamdomain: a revocation needs " +
@@ -1418,9 +1389,6 @@ func (w *Writer) revoke(ctx context.Context, personID string, past *uint64,
 		if err != nil {
 			return err
 		}
-		if past != nil && current > *past {
-			return errNothingToPublish
-		}
 		rec.Mutation, err = EncodeRevocation(Revocation{
 			V: DocumentVersion, Epoch: current + 1,
 		})
@@ -1435,11 +1403,11 @@ func (w *Writer) revoke(ctx context.Context, personID string, past *uint64,
 // token.
 //
 // AN ADMINISTRATOR'S GESTURE, unlike [Writer.Revoke], and the asymmetry is the
-// blast radius: revoking is something a person does to themselves and
-// something the engine does on their behalf at the moment somebody else has
-// their cookie, so gating it would make the fastest response to a compromise
-// the one that needs an administrator. Ending EVERYBODY's sessions is a
-// company-wide act with no self-service reading at all.
+// blast radius: revoking is something a person does to themselves at the
+// moment they fear somebody else has their cookie, so gating it would make the
+// fastest response to a compromise the one that needs an administrator.
+// Ending EVERYBODY's sessions is a company-wide act with no self-service
+// reading at all.
 //
 // BOTH HATS: [AdminGrant], because it ends every person's authority at once,
 // AND fleet:operate, because a restore is run by whoever runs the deployment.

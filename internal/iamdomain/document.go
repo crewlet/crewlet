@@ -310,9 +310,10 @@ type Session struct {
 	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
 
 	// EndedReason is why a session stopped, on the CLOSE record: signed
-	// out, revoked, expired, or reuse detected. "This session was ended by
-	// reuse detection" is the sentence an investigation is looking for,
-	// and it is the one an ordinary delete would not have left behind.
+	// out, revoked, expired, or the identity provider withdrew it. "This
+	// session was revoked, and why" is the sentence an investigation is
+	// looking for, and it is the one an ordinary delete would not have
+	// left behind.
 	EndedReason string `json:"ended_reason,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`

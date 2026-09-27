@@ -246,7 +246,6 @@ var categories = map[string]placement{
 	// once, under a cap on how many distinct ids it will ever name.
 	"iam_session_started":           {"auth", RateAuthenticated},
 	"iam_session_ended":             {"auth", RateAuthenticated},
-	"iam_session_reuse_detected":    {"auth", RateAuthenticated},
 	"iam_login_failures":            {"auth", RateEngine},
 	"iam_stepup_completed":          {"auth", RateAuthenticated},
 	"iam_credential_minted":         {"auth", RateAuthenticated},

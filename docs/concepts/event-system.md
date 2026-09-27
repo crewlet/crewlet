@@ -292,8 +292,6 @@ iam_session_ended          # logout / logout_all / idle / absolute / revoked
                            # / idp_revoked / person_removed. An idle or
                            # absolute end is noticed when the bearer is next
                            # presented, once per session per node
-iam_session_reuse_detected # a cookie replayed past the rotation overlap;
-                           # every session the person held was ended
 iam_login_failures         # ONE per client per minute, from the engine's own
                            # flush loop: counts, the distinct-subject count,
                            # the methods (a rejected bearer is `bearer`), how

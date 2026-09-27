@@ -23,7 +23,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Finding the running node, and authenticating to it.
@@ -159,8 +158,7 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		return nil, nil, nil
 	}
 	signer, err := session.New(session.Options{
-		Material:    boot.Secrets.TokenMaterial(),
-		RotateAfter: boot.API.Auth.Session.RotateAfter(),
+		Material: boot.Secrets.TokenMaterial(),
 	})
 	if err != nil {
 		if errors.Is(err, session.ErrNoKeyring) {
@@ -238,10 +236,8 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		// seatless arm. See [engine.SeatViewOf].
 		Chart:    engine.SeatViewOf(e),
 		External: boot.API.ExternalBase(),
-		OnReuse:  sessionReuse(e),
-		// The same trail, whose once-per-lineage claim is what OnReuse
-		// hangs on: a replayed cookie ends its sessions once it lands,
-		// and asks again on its next presentation while it has not.
+		// The same trail, whose once-per-lineage claim is what keeps a
+		// cookie presented past its deadline announcing that ending once.
 		Audit: e.AuthEvents(),
 	})
 	if err != nil {
@@ -249,72 +245,6 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 	}
 	return surface, sessions, nil
 }
-
-// sessionReuse ends every session of a person whose cookie was replayed past
-// the rotation overlap — every one they opened at or below the replayed
-// bearer's epoch.
-//
-// CONDITIONAL AND DETERMINISTIC, because it is asked for by every ingress node
-// the replay reaches: [iamdomain.Writer.RevokePast] moves the epoch only while
-// it is still at the bearer's, and the op id is the person and that epoch, so
-// the second node's ask publishes nothing and the same node's retry is the
-// same operation. It used to mint a fresh op id and bump unconditionally, so
-// each node — and each lineage a node's bounded dedupe forgot — ended the
-// sessions the person had opened since the last bump.
-//
-// THE EPOCH AND NOT THE ONE SESSION, because a cookie that was replayed is a
-// cookie somebody else has, and the one thing nobody can establish from the
-// replay is which of the two holders is the person. Bumping the revocation
-// epoch ends them both and costs that person one sign-in; ending only the
-// lineage would leave whoever captured it holding whatever they rotate to
-// next.
-//
-// THE WRITE IS THE NODE'S OWN, not the person's: they did not ask for it, and
-// an authentication trail that recorded them as the author of their own
-// lockout would be wrong about the one row an investigation reads.
-//
-// # An error is a revocation nobody can say landed
-//
-// A refusal, a failure and an `unknown` outcome all leave the person's other
-// sessions possibly live, so each answers an error — which is what makes the
-// guard hand its claim back and ask again on the cookie's next presentation.
-// The deterministic op id is what makes that retry the SAME operation: one
-// that landed after all is answered by the ledger rather than written twice.
-func sessionReuse(e *engine.Engine) func(context.Context, string, uint64) error {
-	return func(ctx context.Context, person string, epoch uint64) error {
-		writer := e.IAMWriter()
-		if writer == nil {
-			return errNoIdentityWriter
-		}
-		// WITHOUT CANCEL, because the request this was noticed on is
-		// about to be refused and its context cancelled — and a
-		// revocation that inherits a dead context does nothing at all,
-		// which is this engine's rule for every cleanup.
-		ctx = context.WithoutCancel(ctx)
-		opID := "session-reuse:" + person + ":" + strconv.FormatUint(epoch, 10)
-		revoked, err := writer.RevokePast(ctx, person, epoch, opID,
-			"a session cookie was replayed past the rotation overlap")
-		switch {
-		case err != nil:
-			return fmt.Errorf("revoke %s past epoch %d (op %s): %w", person,
-				epoch, opID, err)
-		case revoked.Outcome == statelog.OutcomeUnknown || !revoked.Outcome.Valid():
-			// AN UNKNOWN OUTCOME IS NOT A REVOCATION: nothing can say the
-			// epoch moved, so the person's other sessions may be live.
-			return fmt.Errorf("revoke %s past epoch %d: the outcome of op %s "+
-				"is %q: %w", person, epoch, revoked.OpID, revoked.Outcome,
-				statelog.ErrUnavailable)
-		}
-		return nil
-	}
-}
-
-// errNoIdentityWriter is the revocation a node with no identity writer cannot
-// make. The session arm is built only where the identity domain runs, so this
-// is a wiring fault rather than a posture — and reported as an error, the
-// replay's next presentation asks again rather than treating it as done.
-var errNoIdentityWriter = errors.New("this node holds no identity writer, so " +
-	"the revocation a replay asks for cannot be published here")
 
 // refreshCustody is the engine's refresh-token custody as the sign-in surface's
 // seam, or a genuine nil.

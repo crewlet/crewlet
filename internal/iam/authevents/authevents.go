@@ -53,15 +53,14 @@
 //
 // [Trail.EmitOnce] is the other shape a rate needs: a fact that repeats and is
 // worth one row per window — a Tier A token's first use in an hour or its
-// overreach, a replayed cookie, a session noticed past its deadline. It is the
-// notification digest's idiom (one row stands for the window) applied to a
-// single key, and it reports whether it published so a caller that has to act
-// exactly once alongside the row can hang the action on the same decision.
-// [Trail.Claim] is the same decision for a caller that must READ or WRITE
-// before it knows what the fact is, and hands the key back when it cannot say
-// — the revocation a replayed cookie triggers is taken on a claim of its own
-// ([OnceReuseRevocation]) rather than on the row's, because the row is said
-// once whatever happens and the revocation is asked for again until it lands.
+// overreach, a session noticed past its deadline. It is the notification
+// digest's idiom (one row stands for the window) applied to a single key, and
+// it reports whether it published so a caller that has to act exactly once
+// alongside the row can hang the action on the same decision. [Trail.Claim] is
+// the same decision for a caller that must READ before it knows what the fact
+// is, and hands the key back when it cannot say — a deadline ending is claimed
+// before the rows are asked whether a record ended the session first, and
+// handed back when this node cannot read them.
 //
 // EACH CLASS OF FACT KEEPS ITS OWN BOUNDED SET ([OnceClass]), so a class
 // remembered for the life of the process can never evict one that expires —

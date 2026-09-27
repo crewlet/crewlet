@@ -1282,7 +1282,7 @@ database read for every forged cookie an attacker sends, and has nothing to say
 at all until the row it names has been applied on the node the request reached.
 
 ```
-__Host-crewlet_session=v2.<key tag>.<generation>.<lineage>~<rotation>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
+__Host-crewlet_session=v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
                         Path=/; HttpOnly; Secure; SameSite=Lax
 ```
 
@@ -1322,8 +1322,7 @@ to know it:
 |---|---|
 | key tag | Which keyring entry signed this, so a verifier looks one key up rather than trying each — which is what makes adding a key zero-downtime |
 | generation | The fleet-wide counter `crewlet iam invalidate-all` moves, so one write ends every session — and every machine token — in the company |
-| lineage | The session's identity, the subject its records arbitrate on, and — being a uuid7 — the instant it began, which the rotation index is derived from |
-| rotation | The window this cookie was issued in, derived from the session's age rather than recorded anywhere |
+| lineage | The session's identity, and the subject its records arbitrate on |
 | person | So a node can read their row without first reading the session's |
 | epoch | The person's revocation epoch at sign-in: a node that has **not yet applied** the session's start record still holds proof the sign-in happened |
 | start position | What turns "no row" into the two answers it actually is |
@@ -1342,30 +1341,28 @@ nothing to cache. The lookup is a local read of a replicated row and a map
 lookup on a pinned chart view, and the store is never on a network path from
 the request.
 
-### Rotation is derived, so an hour of use writes nothing
+### A cookie cannot tell its owner from a copy, and nothing pretends it can
 
-The rotation index is the session's age in `session.rotate_after` windows, and
-the age is the instant inside the lineage's own uuid7. Any node recomputes it
-with no I/O and nothing is written anywhere — the design this replaces wrote
-one record per session per hour, which measured at ten per person per working
-day and nine tenths of the authentication trail, to keep a clock in a log.
+A re-issue moves the idle deadline, which lives in the cookie's own signed
+payload, so an hour of use writes nothing anywhere. What a cookie **cannot**
+carry is evidence that it was copied: somebody who stopped at noon and came
+back at two holds a cookie issued two hours ago, and so does somebody replaying
+one they captured at noon — **the same bytes**. The only thing that could tell
+them apart is a record of what was last issued, one write per session per
+re-issue, which is exactly the traffic this design exists not to write.
 
-What an index can and cannot prove is worth stating, because it is easy to
-expect more of it. With no rotation record a node holds two numbers: the index
-the cookie carries and the index the clock implies. A cookie whose index is
-*behind* the clock is produced by two completely different things — somebody
-who stopped at noon and came back at two, and somebody replaying a cookie they
-captured — and **they are the same bytes**. So a lagging index is served and
-re-issued rather than treated as theft; treating it as theft does not detect
-theft with a false-positive rate, it detects idleness. What bounds a captured
-cookie instead is the idle deadline, the absolute deadline and the revocation
-epoch.
-
-What *is* positive evidence, and does bump the person's epoch and end every
-session they hold, is an index the engine could not have issued: one ahead of
-the clock by more than the two-minute overlap. An index somebody *edited* never
-reaches that check at all — it is inside the signed payload, so the bearer is
-refused as malformed first.
+An earlier format carried a **rotation index** — the session's age in hourly
+windows — and treated one *ahead* of the validating node's clock by more than
+two minutes as a replay, bumping the person's revocation epoch. The index was
+inside the signed payload, so only a node holding the keyring could have
+written it, from its own clock: the rule fired on two hosts' clocks
+disagreeing and on nothing else, and its answer signed an honest person out of
+every session and machine token they held. It is gone, along with
+`session.rotate_after`. What bounds a captured cookie is what always did: the
+**idle deadline** (twelve hours from the last use), the **absolute deadline**
+(`session.absolute`), and one write — the person's revocation epoch through
+**sign out everywhere**, or the fleet's generation — which ends it everywhere
+at once.
 
 ### Validation is three-valued, twice
 
@@ -1374,9 +1371,8 @@ because each is a row in a domain that **lags independently**.
 
 | What this node's rows say about the session | Reads | Writes | Step-up surfaces |
 |---|---|---|---|
-| Signature valid, rotation index current or in overlap, row present, the row's epoch equals the bearer's and the person's, generation current, both deadlines unexpired | serve | serve | serve if the proof is inside the window the gesture asks for; otherwise `403 step_up_required` |
+| Signature valid, row present, the row's epoch equals the bearer's and the person's, generation current, both deadlines unexpired | serve | serve | serve if the proof is inside the window the gesture asks for; otherwise `403 step_up_required` |
 | Row ended, the person's epoch ahead of the bearer's, the person suspended, or the generation moved | 401 `session_revoked` | 401 | 401 |
-| Rotation index ahead of the window past the overlap | 401, and the epoch bump is published | 401 | 401 |
 | Row absent, and this node's iam position covers the bearer's start position | 401 `session_revoked` | 401 | 401 |
 | Row absent, this node below the bearer's start position, applier lag under 60 s | serve: the signature and the epoch are the proof, and the cookie's own scope what it may reach | wait up to 5 s for this node to apply the bearer's start position, then decide on the rows; 503 `identity_unavailable` if it has not | the same wait, then the same answer |
 | The iam applier stalled past 60 s, the person's bucket deferred, or the replicated store answers `ErrNoEstate` | 503 | 503 | 503 |
@@ -1507,19 +1503,6 @@ second factor and regenerating a recovery set are gestures about a person's own
 credential. Without the exemption an offboarded person would hold a live cookie
 with no way to end it, and every screen they opened would loop through a
 refusal.
-
-**A replayed cookie ends every session that person holds.** A rotation index
-ahead of what the clock can justify, past the overlap, is the one positive
-evidence of theft — and the one thing nobody can establish from it is which of
-the two holders is the person. So the revocation epoch is bumped rather than
-the lineage ended: ending only the lineage would leave whoever captured it
-holding whatever they rotate to next.
-
-The bump is **conditional on the epoch the replayed cookie was minted at**: it
-moves the person's epoch only while it is still there. Every node the replay
-reaches asks for it, and a node asks again if it has forgotten the session
-since, so an unconditional bump would end — once per asking — the sessions the
-person opened after the first one. Past that epoch the ask publishes nothing.
 
 ---
 
@@ -1895,7 +1878,6 @@ Identity has **two trails**, and they answer different questions.
 | `iam_session_started` | The sign-in surface, on a password, app-code, identity-provider, invitation, bootstrap-code or token sign-in | Once per session |
 | `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are: the person, the new session and the one it replaced, the second factor presented and the client — and never which surface it was for, because a step-up proves the session for every surface until `reauth_at`, and the request that prompted it is refused before it and never reaches it, so the only source would be the client's word | Once per step-up |
 | `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), the deactivation probe (`idp_revoked`), or the request guard noticing a deadline (`idle`, `absolute`) | Once per ending, from the fact that ended it: a deadline once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute` |
-| `iam_session_reuse_detected` | The request guard, for a cookie presented past its rotation overlap | Once per session per node — and the sessions the person held are ended once, however often the replay repeats and however many nodes see it: the revocation moves the epoch only while it is still at the replayed cookie's. A revocation that failed or came back unknown is asked for again on the cookie's next presentation, and never announced as a second replay |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
@@ -1982,9 +1964,9 @@ events filtered out of the store:
 - **the authorization decision** — the answer is the response the caller got,
   and the question is the route they asked; a refusal worth auditing is already
   the overreach row, or the failure count;
-- **a session being used** — rotation is derived from the session's age, so an
-  hour of use writes nothing, and a touch event would be the one row per request
-  the rest of this design exists to avoid.
+- **a session being used** — a re-issue moves a deadline inside the cookie's
+  own signature, so an hour of use writes nothing, and a touch event would be
+  the one row per request the rest of this design exists to avoid.
 
 **Neither link event carries the subject.** It identifies a person at a third
 party, so the estate holds it only as a keyed blind — and an event row is the
@@ -2141,7 +2123,7 @@ Rotating it is a migration, not a setting.
 | `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, and a **link**: an identity-provider subject's blind, which only the link's claim ever writes and which a person's own record never carries. Never a secret that could be presented to anything |
 | `iam_invites` | An address spoken for by somebody who has no person yet, and the grants redeeming it confers |
 | `iam_bootstrap_codes` | How a company with nobody in it acquires its first administrator |
-| `iam_sessions` | One row per session **lineage**. Rotations are not rows — a rotation id is derived — so this grows with sign-ins, not with requests |
+| `iam_sessions` | One row per session **lineage**. A re-issue is not a row — the deadline it moves is inside the cookie's own signature — so this grows with sign-ins, not with requests |
 | `iam_revocation_epochs` | One person's **revocation epoch**, in its own table because every request compares against it |
 | `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session and machine token in the company at once |
 | `iam_history` | The authentication trail: who did what to whom, through which credential, and why |
@@ -2164,8 +2146,9 @@ never two nodes comparing clocks. There are two of them, and they end different
 sets of sessions:
 
 - **A person's revocation epoch** (`iam_revocation_epochs`) ends every session
-  *that person* holds. Signing out everywhere, a password change and detected
-  token reuse all move it, and no capability is needed to move your own:
+  *that person* holds. Signing out everywhere, an administrator ending their
+  sessions and a second-factor reset all move it, and no capability is needed
+  to move your own:
   gating it would make the fastest response to a stolen cookie the one that
   needs an administrator.
 - **The fleet-wide session generation** (`iam_session_generation`) ends *every*

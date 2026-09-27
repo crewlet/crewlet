@@ -422,7 +422,7 @@ const (
 	CodeSecondFactorEnrolmentRequired Code = "second_factor_enrolment_required"
 
 	// CodeSessionRevoked is a bearer this node KNOWS is over: signed out,
-	// revoked, expired, or ended by reuse detection.
+	// revoked or expired.
 	//
 	// DISTINCT FROM [CodeInvalidToken], because a client acts on them
 	// differently: this one means discard the cookie and sign in again,

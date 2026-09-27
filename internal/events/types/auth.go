@@ -54,7 +54,6 @@ import (
 func init() {
 	events.Register[IAMSessionStarted]()
 	events.Register[IAMSessionEnded]()
-	events.Register[IAMSessionReuseDetected]()
 	events.Register[IAMLoginFailures]()
 	events.Register[IAMStepUpCompleted]()
 	events.Register[IAMCredentialMinted]()
@@ -346,30 +345,6 @@ func (e IAMSessionEnded) Summary() string {
 	}
 	return fmt.Sprintf("%s of %s ended (%s)", upperFirst(which),
 		orSomebody(e.Person, ""), why)
-}
-
-// IAMSessionReuseDetected is a session cookie presented with a rotation index
-// this engine could not have issued — ahead of the clock past the overlap —
-// which is the one positive evidence of a copied cookie a derived rotation can
-// give. Every session the person holds was ended in response.
-type IAMSessionReuseDetected struct {
-	Person  string `json:"person"`
-	Lineage string `json:"lineage"`
-
-	// Rotation is the index the replayed bearer carried.
-	Rotation uint64 `json:"rotation"`
-
-	Remote string `json:"remote"`
-}
-
-// EventType is the "iam_session_reuse_detected" wire type.
-func (IAMSessionReuseDetected) EventType() string { return "iam_session_reuse_detected" }
-
-// Summary says what was done about it, because the reader's next question is
-// whether anything was.
-func (e IAMSessionReuseDetected) Summary() string {
-	return fmt.Sprintf("A replayed session cookie for %s was refused; every "+
-		"session they held was ended", orSomebody(e.Person, ""))
 }
 
 // IAMLoginFailures is every failed attempt one client made inside one minute,

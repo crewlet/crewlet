@@ -509,19 +509,6 @@ type APISession struct {
 	// deployment can stand not being able to shorten.
 	AbsoluteRaw string `yaml:"absolute,omitempty" json:"absolute,omitempty" desc:"Longest a session may live from sign-in (default 168h, 1h..720h)."`
 
-	// RotateAfterRaw is the window a session's bearer is re-issued in.
-	// Default 1h.
-	//
-	// THE FLOOR IS FIVE MINUTES, and it is arithmetic rather than taste:
-	// the rotation index is derived from the session's own age on
-	// whichever node serves the request, so two nodes' clocks differing
-	// by up to session.Overlap (two minutes) must not reach a different
-	// index. Five minutes is more than twice that overlap. Below it an
-	// ordinary NTP spread starts reading as a bearer the engine could not
-	// have issued, which ends every session the person holds.
-	// THE CEILING IS A DAY, past which a rotation is not a rotation.
-	RotateAfterRaw string `yaml:"rotate_after,omitempty" json:"rotate_after,omitempty" desc:"How often a session's bearer is re-issued (default 1h, 5m..24h)."`
-
 	// StepUpRaw is how long after proving identity an ordinary
 	// administrative action is allowed without proving it again.
 	// Default 1h.
@@ -546,10 +533,6 @@ const (
 	SessionAbsoluteFloor   = time.Hour
 	SessionAbsoluteCeiling = 720 * time.Hour
 
-	DefaultSessionRotateAfter = time.Hour
-	SessionRotateAfterFloor   = 5 * time.Minute
-	SessionRotateAfterCeiling = 24 * time.Hour
-
 	DefaultSessionStepUp = time.Hour
 	SessionStepUpFloor   = 5 * time.Minute
 	SessionStepUpCeiling = 24 * time.Hour
@@ -561,11 +544,6 @@ const (
 // Absolute is the longest a session may live, with the default applied.
 func (s APISession) Absolute() time.Duration {
 	return durationOr(s.AbsoluteRaw, DefaultSessionAbsolute)
-}
-
-// RotateAfter is the bearer re-issue window, with the default applied.
-func (s APISession) RotateAfter() time.Duration {
-	return durationOr(s.RotateAfterRaw, DefaultSessionRotateAfter)
 }
 
 // StepUp is the ordinary step-up window, with the default applied.
@@ -581,8 +559,7 @@ func (s APISession) StepUpSensitive() time.Duration {
 
 // IsZero lets an unset block drop out of a JSON round trip.
 func (s APISession) IsZero() bool {
-	return s.AbsoluteRaw == "" && s.RotateAfterRaw == "" &&
-		s.StepUpRaw == "" && s.StepUpSensitiveRaw == ""
+	return s.AbsoluteRaw == "" && s.StepUpRaw == "" && s.StepUpSensitiveRaw == ""
 }
 
 func (s APISession) validate(path Path) error {
@@ -594,11 +571,6 @@ func (s APISession) validate(path Path) error {
 		"below an hour a session ends inside its own step-up window, and past a "+
 			"month a bearer already issued outlives any change to this setting, "+
 			"because the deadline is signed into it")
-	check("rotate_after", s.RotateAfterRaw, SessionRotateAfterFloor, SessionRotateAfterCeiling,
-		"the rotation index is derived from wall-clock age on whichever node "+
-			"serves the request, so a window near the two-minute clock overlap "+
-			"makes ordinary NTP spread read as a bearer this engine could not "+
-			"have issued; past a day it is not a rotation")
 	check("step_up", s.StepUpRaw, SessionStepUpFloor, SessionStepUpCeiling,
 		"below five minutes an administrator re-proves their identity between "+
 			"one screen and the next, and past a day a step-up is not one")
@@ -612,12 +584,6 @@ func (s APISession) validate(path Path) error {
 				"than swapped: the file says the opposite of what its writer "+
 				"meant, and a silent swap leaves the document and the engine "+
 				"disagreeing", s.StepUpSensitive(), s.StepUp())
-	}
-	if s.RotateAfter() > s.Absolute() {
-		p.add(at(path, "rotate_after"), ErrConflict,
-			"%s is longer than `absolute` (%s), so no session ever reaches its "+
-				"second rotation window and the rotation buys nothing",
-			s.RotateAfter(), s.Absolute())
 	}
 	return p.err()
 }

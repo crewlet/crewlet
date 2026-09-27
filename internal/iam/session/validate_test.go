@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -16,7 +17,7 @@ import (
 
 // THE FULL SESSION TABLE, EVERY ROW REACHED BY A REAL BEARER.
 //
-// Not the map read back — that asserts nothing — but seven states of the world
+// Not the map read back — that asserts nothing — but every state of the world
 // driven through [Signer.Validate], each landing on the row the design names,
 // with the cell each row permits for each of the three kinds of request.
 //
@@ -64,12 +65,6 @@ func TestTheFullSessionTable(t *testing.T) {
 			s.dir.identity.Generation = 2
 		},
 		row:   session.RowEnded,
-		reads: session.AnswerRefuse, writes: session.AnswerRefuse,
-		stepUp: session.AnswerRefuse,
-	}, {
-		name:  "the rotation index is ahead of the window",
-		world: aheadOfTheWindow,
-		row:   session.RowReuse,
 		reads: session.AnswerRefuse, writes: session.AnswerRefuse,
 		stepUp: session.AnswerRefuse,
 	}, {
@@ -183,22 +178,12 @@ func TestEveryRowHasAPolicyAndTheSuiteReachesThemAll(t *testing.T) {
 	}
 }
 
-// aheadOfTheWindow leaves the rig holding a cookie three windows ahead of what
-// its own clock says, which is the node-whose-clock-ran-fast case: mint, let
-// three hours pass so a re-issue stamps index 3, then put the clock back.
-func aheadOfTheWindow(s *signedIn) {
-	s.clock.advance(3 * time.Hour)
-	s.cookie = mustReissue(s.t, s)
-	s.clock.advance(-3 * time.Hour)
-}
-
 // worlds is every state the table case drives, so the coverage check above and
 // the table itself cannot drift apart.
 func worlds() []func(*signedIn) {
 	return []func(*signedIn){
 		func(*signedIn) {},
 		func(s *signedIn) { s.dir.identity.Session.Ended = true },
-		aheadOfTheWindow,
 		func(s *signedIn) {
 			s.dir.identity.Session.Found = false
 			s.dir.identity.Applied = startPos + 1
@@ -330,19 +315,18 @@ func TestTheAbsoluteDeadlineBeatsARenewedIdleClock(t *testing.T) {
 	}
 }
 
-// AN IDLE SESSION IS SERVED AND RE-ISSUED, NOT CALLED THEFT.
+// AN IDLE SESSION IS SERVED AND RE-ISSUED.
 //
-// THE DECISION rotate.go argues, asserted. The rule this replaces treated an
-// index more than one window behind the clock as reuse — so a person who
-// stopped at noon and came back at two would have had their revocation epoch
-// bumped, every session they hold ended, and a WARN alarm raised naming them.
-// It also made the twelve-hour idle deadline unreachable, which is a mechanism
-// the design spends a whole field in the bearer on.
-func TestALongIdleSessionIsServedRatherThanCalledReuse(t *testing.T) {
+// A person who stopped at noon and came back at two holds a cookie issued two
+// hours ago, and that is all it is: a captured copy of it would be the same
+// bytes, so nothing about the cookie can call it theft. What bounds it is the
+// twelve-hour idle deadline, which a rule that refused it after an hour would
+// have made unreachable.
+func TestALongIdleSessionIsServedAndReissued(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
-	// Six hours away: six rotation windows, and well inside both the idle
-	// deadline and the absolute one.
+	// Six hours away, well inside both the idle deadline and the absolute
+	// one.
 	rig.clock.advance(6 * time.Hour)
 
 	got := rig.validate()
@@ -350,13 +334,9 @@ func TestALongIdleSessionIsServedRatherThanCalledReuse(t *testing.T) {
 		t.Fatalf("a session idle for six hours landed on %q: %s", got.Row,
 			got.Detail)
 	}
-	if got.Reuse {
-		t.Error("coming back from lunch bumped the person's revocation epoch, " +
-			"which ends every session they hold and fires a theft alarm " +
-			"naming them")
-	}
 	if got.Reissue == "" {
-		t.Fatal("no re-issue, so the cookie stays on an old window for ever")
+		t.Fatal("no re-issue, so the idle deadline stays where the last use " +
+			"six hours ago put it")
 	}
 	// And the re-issued cookie is current: the next request does not
 	// re-issue again inside the throttle.
@@ -367,87 +347,66 @@ func TestALongIdleSessionIsServedRatherThanCalledReuse(t *testing.T) {
 	}
 }
 
-// AN INDEX AHEAD OF THE WINDOW BUMPS THE EPOCH AND ENDS EVERY SESSION.
+// TWO NODES WHOSE CLOCKS DISAGREE NEVER END A SESSION BETWEEN THEM.
 //
-// What survives as POSITIVE theft evidence once a lagging index no longer
-// counts: the engine issues an index for the window it is in, so a bearer
-// claiming one that has not begun was not issued in the ordinary way. The
-// overlap absorbs a couple of minutes of clock skew between two ingress nodes,
-// and anything past it is a fault worth ending sessions over — a clock that
-// far out has also been minting deadlines that are wrong.
-func TestAnIndexPastTheOverlapBumpsTheEpochAndEndsEverySession(t *testing.T) {
-	t.Parallel()
-
-	// Inside the overlap: a node whose clock trails the minting node's by
-	// a minute, a second after a boundary.
-	inside := newSignedIn(t)
-	inside.clock.advance(time.Hour)
-	inside.cookie = mustReissue(t, inside)
-	inside.clock.advance(-time.Minute)
-	if got := inside.validate(); got.Row != session.RowValid || got.Reuse {
-		t.Errorf("a cookie one minute across a boundary landed on %q (reuse "+
-			"%v): %s — four parallel requests from one page would be refused "+
-			"three times", got.Row, got.Reuse, got.Detail)
-	}
-
-	// Past it: three hours of skew.
-	past := newSignedIn(t)
-	past.clock.advance(3 * time.Hour)
-	past.cookie = mustReissue(t, past)
-	past.clock.advance(-3 * time.Hour)
-	got := past.validate()
-	if got.Row != session.RowReuse {
-		t.Fatalf("an index three windows ahead landed on %q: %s", got.Row,
-			got.Detail)
-	}
-	if !got.Reuse {
-		t.Error("the reuse row did not ask the caller to bump the epoch, so " +
-			"detection would be a log line and the captured cookie would go " +
-			"on working")
-	}
-	if got.Answer(session.NeedRead) != session.AnswerRefuse {
-		t.Error("a reused bearer was served")
-	}
-}
-
-// FOUR CONCURRENT REQUESTS ACROSS A ROTATION BOUNDARY ALL SUCCEED.
+// The rotation index this format used to carry had one arm that acted: a
+// bearer whose index was ahead of the validating node's clock by more than a
+// two-minute overlap bumped the person's revocation epoch, ending every
+// session and every machine token they held. The index was inside the signed
+// payload, so only a node holding the keyring wrote it, from its own clock —
+// the arm fired on an NTP fault and on nothing else. So a cookie minted and
+// re-issued by a node three hours fast, and one by a node three hours slow,
+// are both served by a node on time, re-issued, and ask nobody to revoke
+// anything.
 //
-// A page that loads at 10:59:58 fires several requests at once; the window
-// turns over between them. Every one must be served — and on a node that has
-// applied NOTHING since the login, which is the arm where the bearer's own
-// signature and epoch are the only proof the sign-in happened.
-func TestFourConcurrentRequestsAcrossARotationBoundaryAllSucceed(t *testing.T) {
+// THE CONTROL is the previous format: the same fast node's cookie landed on
+// the reuse row there, refused, with the revocation asked for.
+func TestClockSkewBetweenNodesNeverEndsASession(t *testing.T) {
 	t.Parallel()
-	rig := newSignedIn(t)
-	// A node that has applied nothing since the login: no session row, and
-	// an applied position below the bearer's start.
-	rig.dir.identity.Session.Found = false
-	rig.dir.identity.Applied = startPos - 1
-	// One second before the first boundary.
-	rig.clock.advance(time.Hour - time.Second)
-
-	var wg sync.WaitGroup
-	rows := make([]session.Validation, 4)
-	for i := range rows {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// The window turns over underneath the fan-out.
-			if i == 1 {
-				rig.clock.advance(2 * time.Second)
+	for name, skew := range map[string]time.Duration{
+		"minted by a node three hours fast": 3 * time.Hour,
+		"minted by a node three hours slow": -3 * time.Hour,
+		"minted by a node a minute fast":    time.Minute,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			// The other node: the same keyring, its own clock.
+			elsewhere := &clock{at: rig.clock.now().Add(skew)}
+			other, err := session.New(session.Options{
+				Material: keyring(), Now: elsewhere.now,
+			})
+			if err != nil {
+				t.Fatalf("build the other node's signer: %v", err)
 			}
-			rows[i] = rig.signer.Validate(t.Context(), rig.dir, rig.cookie)
-		}()
-	}
-	wg.Wait()
-	for i, got := range rows {
-		if got.Answer(session.NeedRead) != session.AnswerServe {
-			t.Errorf("request %d answered %q on row %q: %s", i,
-				got.Answer(session.NeedRead), got.Row, got.Detail)
-		}
-		if got.Reuse {
-			t.Errorf("request %d was called theft: %s", i, got.Detail)
-		}
+			// ITS LINEAGE IS ITS OWN, a uuid7 minted on its own clock,
+			// which is the instant the old index was read out of.
+			cookie, err := other.Mint(session.Mint{
+				Lineage: lineageAt(t, elsewhere.now()), Person: personID, Epoch: 3,
+				Generation: 1, StartPosition: startPos,
+				AbsoluteExpiresAt: elsewhere.now().Add(absolute),
+			})
+			if err != nil {
+				t.Fatalf("mint on the other node: %v", err)
+			}
+			// An hour of use on the other node, re-issued there.
+			elsewhere.advance(time.Hour)
+			rig.clock.advance(time.Hour)
+			reissued := other.Validate(t.Context(), rig.dir, cookie)
+			if reissued.Reissue == "" {
+				t.Fatalf("the other node did not re-issue: %s", reissued.Detail)
+			}
+
+			got := rig.signer.Validate(t.Context(), rig.dir, reissued.Reissue)
+			if got.Row != session.RowValid {
+				t.Fatalf("a node on time landed a cookie from a node %s off on "+
+					"%q: %s — a clock fault on one host signs a person out "+
+					"everywhere", skew, got.Row, got.Detail)
+			}
+			if got.Answer(session.NeedWrite) != session.AnswerServe {
+				t.Errorf("a write answers %q", got.Answer(session.NeedWrite))
+			}
+		})
 	}
 }
 
@@ -495,20 +454,26 @@ func TestAPreLoginCookieIsNeverHonoured(t *testing.T) {
 func swapPerson(t *testing.T, cookie string) string {
 	t.Helper()
 	parts := strings.Split(cookie, ".")
-	triple := strings.Split(parts[3], "~")
-	triple[2] = "018f3a9c-0000-7000-8000-0000000000bb"
-	parts[3] = strings.Join(triple, "~")
+	pair := strings.Split(parts[3], "~")
+	pair[1] = "018f3a9c-0000-7000-8000-0000000000bb"
+	parts[3] = strings.Join(pair, "~")
 	return strings.Join(parts, ".")
 }
 
-// mustReissue drives one validation and returns the cookie it handed back.
-func mustReissue(t *testing.T, rig *signedIn) string {
+// lineageAt is a uuid7 whose embedded instant is at, which is what a node
+// whose clock reads at mints: the library reads the real clock, and a case
+// about two clocks has to name both.
+func lineageAt(t *testing.T, at time.Time) uuid.UUID {
 	t.Helper()
-	got := rig.validate()
-	if got.Reissue == "" {
-		t.Fatalf("no re-issue on row %q: %s", got.Row, got.Detail)
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("mint a lineage: %v", err)
 	}
-	return got.Reissue
+	millis := at.UnixMilli()
+	for i := range 6 {
+		id[i] = byte(millis >> (8 * (5 - i)))
+	}
+	return id
 }
 
 // --- the seat table ---------------------------------------------------------- //

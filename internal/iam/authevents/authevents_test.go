@@ -445,10 +445,10 @@ func TestEveryOnceClassIsBounded(t *testing.T) {
 //
 // The dedupe was one set, evicting whichever entry's window ended soonest —
 // which is never a key remembered for the life of the process. So a node that
-// had seen as many deadline endings as the set held evicted a REPLAY's key on
-// every further ending, and the next presentation of the replayed cookie
-// published another reuse row and revoked again. Mutation: share one set
-// between the classes and the replay publishes twice.
+// had seen as many deadline endings as the set held evicted a token's hour on
+// every further ending, and a Tier A token's use published once per session
+// ending rather than once an hour. Mutation: share one set between the classes
+// and the token's use publishes twice.
 func TestAFullClassEvictsOnlyItsOwnKeys(t *testing.T) {
 	t.Parallel()
 	trail, _, clk, _ := newTrail(t)
@@ -457,23 +457,22 @@ func TestAFullClassEvictsOnlyItsOwnKeys(t *testing.T) {
 	for i := range OnceBound(OnceSessionEnded) - 1 {
 		trail.EmitOnce(ctx, OnceSessionEnded, "ended-"+strconv.Itoa(i), 0, payload)
 	}
-	replay := types.IAMSessionReuseDetected{Lineage: "A"}
-	if !trail.EmitOnce(ctx, OnceSessionReuse, "A", 8*time.Hour, replay) {
-		t.Fatal("the replay's first presentation did not publish")
+	overreach := types.IAMTokenOverreach{Token: "ops"}
+	if !trail.EmitOnce(ctx, OnceTokenOverreach, "ops", time.Hour, overreach) {
+		t.Fatal("the token's first overreach did not publish")
 	}
 	if !trail.EmitOnce(ctx, OnceTokenUse, "ops", time.Hour,
 		types.IAMTokenFirstUse{Token: "ops"}) {
 		t.Fatal("the token's first use did not publish")
 	}
 	// A WHOLE BOUND'S WORTH MORE, so no eviction order that shared one set
-	// between the classes could have kept the replay's key.
+	// between the classes could have kept the token's keys.
 	for i := range OnceBound(OnceSessionEnded) + 1 {
 		clk.Set(noon.Add(time.Duration(i) * time.Millisecond))
 		trail.EmitOnce(ctx, OnceSessionEnded, "later-"+strconv.Itoa(i), 0, payload)
 	}
-	if trail.EmitOnce(ctx, OnceSessionReuse, "A", 8*time.Hour, replay) {
-		t.Error("a deadline ending evicted the replay's key, so the replay " +
-			"published — and revoked — a second time")
+	if trail.EmitOnce(ctx, OnceTokenOverreach, "ops", time.Hour, overreach) {
+		t.Error("a deadline ending evicted the token's overreach hour")
 	}
 	if trail.EmitOnce(ctx, OnceTokenUse, "ops", time.Hour,
 		types.IAMTokenFirstUse{Token: "ops"}) {
@@ -490,25 +489,25 @@ func TestAFullClassForgetsTheExpiredBeforeTheOldest(t *testing.T) {
 	t.Parallel()
 	trail, _, clk, _ := newTrail(t)
 	ctx := context.Background()
-	payload := types.IAMSessionReuseDetected{}
-	bound := OnceBound(OnceSessionReuse)
-	trail.EmitOnce(ctx, OnceSessionReuse, "oldest", 8*time.Hour, payload)
-	trail.EmitOnce(ctx, OnceSessionReuse, "short", time.Minute, payload)
+	payload := types.IAMTokenFirstUse{Token: "ops"}
+	bound := OnceBound(OnceTokenUse)
+	trail.EmitOnce(ctx, OnceTokenUse, "oldest", 8*time.Hour, payload)
+	trail.EmitOnce(ctx, OnceTokenUse, "short", time.Minute, payload)
 	for i := range bound - 2 {
-		trail.EmitOnce(ctx, OnceSessionReuse, "long-"+strconv.Itoa(i), 8*time.Hour, payload)
+		trail.EmitOnce(ctx, OnceTokenUse, "long-"+strconv.Itoa(i), 8*time.Hour, payload)
 	}
 	clk.Set(noon.Add(2 * time.Minute))
-	trail.EmitOnce(ctx, OnceSessionReuse, "one-more", 8*time.Hour, payload)
-	if trail.EmitOnce(ctx, OnceSessionReuse, "oldest", 8*time.Hour, payload) {
+	trail.EmitOnce(ctx, OnceTokenUse, "one-more", 8*time.Hour, payload)
+	if trail.EmitOnce(ctx, OnceTokenUse, "oldest", 8*time.Hour, payload) {
 		t.Error("at the bound the class evicted a live key while an expired " +
 			"one was there to go")
 	}
 	// Full again, nothing expired: the key claimed longest ago goes.
-	trail.EmitOnce(ctx, OnceSessionReuse, "and-another", 8*time.Hour, payload)
-	if !trail.EmitOnce(ctx, OnceSessionReuse, "oldest", 8*time.Hour, payload) {
+	trail.EmitOnce(ctx, OnceTokenUse, "and-another", 8*time.Hour, payload)
+	if !trail.EmitOnce(ctx, OnceTokenUse, "oldest", 8*time.Hour, payload) {
 		t.Error("with nothing expired, the class kept its oldest claim")
 	}
-	if got := trail.held(OnceSessionReuse); got > bound {
+	if got := trail.held(OnceTokenUse); got > bound {
 		t.Errorf("the class holds %d keys, past its bound of %d", got, bound)
 	}
 }

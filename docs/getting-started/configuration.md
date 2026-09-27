@@ -594,8 +594,8 @@ stream:
                                     #   Unset takes a flat 512 MiB. SESSIONS SIZE
                                     #   IT — a session writes one record when it
                                     #   opens and one when it closes and nothing
-                                    #   in between, because a rotation id is
-                                    #   derived rather than recorded — so this is
+                                    #   in between, because a re-issue moves a
+                                    #   deadline inside the cookie — so this is
                                     #   about eighteen months of a completely
                                     #   blocked trim for a few hundred people at
                                     #   a pessimistic sign-in rate. Set it toward
@@ -763,7 +763,6 @@ api:
        fleet:operate, people:manage, sandbox:run]
     session:
       absolute: 168h          # 1h..720h (default 168h)
-      rotate_after: 1h        # 5m..24h  (default 1h)
       step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
                               #   identity a config, chart, setup, credential,
                               #   deployment or /iam write asks for

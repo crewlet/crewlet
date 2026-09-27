@@ -68,10 +68,10 @@ type Identity struct {
 type LineageRow struct {
 	Found bool
 
-	// Ended reports a session that stopped — signed out, revoked, expired
-	// or ended by reuse detection. The row is KEPT until the sweep
-	// collects it, because "this session was ended by reuse detection" is
-	// the sentence an investigation is looking for.
+	// Ended reports a session that stopped — signed out, revoked or
+	// expired. The row is KEPT until the sweep collects it, because "this
+	// session was revoked, and when" is the sentence an investigation is
+	// looking for.
 	Ended bool
 
 	// Epoch is the revocation epoch the session was opened at.
@@ -134,21 +134,14 @@ type Row string
 
 const (
 	// RowValid is everything checking out: the signature verifies, the
-	// rotation index is current or inside the overlap, the row is present
-	// and live, its epoch equals the bearer's and the person's, the
-	// generation matches, and neither deadline has passed.
+	// row is present and live, its epoch equals the bearer's and the
+	// person's, the generation matches, and neither deadline has passed.
 	RowValid Row = "valid"
 
 	// RowEnded is a session that is over: the row says ended, or the
 	// person's epoch has moved past the bearer's, or the fleet-wide
 	// generation has.
 	RowEnded Row = "ended"
-
-	// RowReuse is an index the engine could not have issued, or a
-	// rotation id that does not verify for the index beside it. The
-	// person's revocation epoch is bumped, which ends every session they
-	// hold. rotate.go argues what does and does not reach here.
-	RowReuse Row = "reuse"
 
 	// RowGone is no row, on a node whose applied position COVERS the
 	// bearer's start position. That node has seen everything up to and
@@ -222,9 +215,13 @@ func (d Deadline) Valid() bool {
 	return d == "" || d == DeadlineIdle || d == DeadlineAbsolute
 }
 
-// Rows are the seven, in the order the design's table states them.
+// Rows are the six, in the order the design's table states them.
+//
+// THERE IS NO REUSE ROW. A bearer carries nothing that tells a replayed copy
+// from the cookie its owner holds — see the bearer format's doc for what the
+// rotation index that used to stand for one actually detected.
 var Rows = []Row{
-	RowValid, RowEnded, RowReuse, RowGone, RowBehind, RowStalled, RowMalformed,
+	RowValid, RowEnded, RowGone, RowBehind, RowStalled, RowMalformed,
 }
 
 // Need is what a request is asking to do, which picks the column.
@@ -275,7 +272,6 @@ const (
 var sessionTable = map[Row]struct{ Reads, Writes, StepUp Answer }{
 	RowValid:     {AnswerServe, AnswerServe, AnswerStepUp},
 	RowEnded:     {AnswerRefuse, AnswerRefuse, AnswerRefuse},
-	RowReuse:     {AnswerRefuse, AnswerRefuse, AnswerRefuse},
 	RowGone:      {AnswerRefuse, AnswerRefuse, AnswerRefuse},
 	RowBehind:    {AnswerServe, AnswerUnavailable, AnswerUnavailable},
 	RowStalled:   {AnswerUnavailable, AnswerUnavailable, AnswerUnavailable},
@@ -304,20 +300,10 @@ type Validation struct {
 	Bearer Bearer
 
 	// Reissue is a fresh cookie value to set, or empty. It is produced on
-	// a served row only, and only when the idle deadline or the rotation
-	// index has actually moved — a Set-Cookie on every response is a
-	// header nobody needs.
+	// a served row only, and only once the idle deadline has drifted past
+	// [ReissueAfter] — a Set-Cookie on every response is a header nobody
+	// needs.
 	Reissue string
-
-	// Reuse reports that the caller must bump this person's revocation
-	// epoch, which ends every session they hold, and log
-	// `iam_session_reuse_detected` at WARN.
-	//
-	// A FLAG RATHER THAN A WRITE FROM HERE. This package holds no
-	// publisher and must not: minting and validating happen on every
-	// ingress node on every request, and a validator that could append to
-	// the log is one an unauthenticated caller can make write.
-	Reuse bool
 
 	// Person is the holder's row as this node has it, empty on the rows
 	// that read nothing.
@@ -421,16 +407,6 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 			Detail: "the idle deadline has passed"}
 	}
 
-	// THEN THE ROTATION, because reuse is the one verdict that makes this
-	// node WRITE, and it must not wait on a read that may not be servable.
-	// rotate.go argues what reaches each arm.
-	rotation := s.rotationOf(b, now)
-	if rotation == rotationReuse {
-		return Validation{Row: RowReuse, Bearer: b, Reuse: true,
-			Detail: fmt.Sprintf("rotation index %d is ahead of the window "+
-				"this session is in", b.Rotation)}
-	}
-
 	// AND ONLY THEN THE ROWS. Nothing above this line reads anything, so
 	// an unauthenticated caller cannot price a request by sending rubbish.
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
@@ -441,13 +417,13 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 		// served without re-issuing would let a session in continuous
 		// use on a lagging node expire on the deadline it was minted
 		// with.
-		return s.served(v.Row, b, identity, rotation, now, v.Detail)
+		return s.served(v.Row, b, identity, now, v.Detail)
 	}
 	return v
 }
 
-// Standing is the row a bearer's ROWS put it on, with its own deadlines and
-// its rotation set aside: what this node's copy of the estate says about the
+// Standing is the row a bearer's ROWS put it on, with its own deadlines set
+// aside: what this node's copy of the estate says about the
 // session, and nothing the bearer says about itself.
 //
 // # It exists for one question, and answers it three ways
@@ -469,8 +445,8 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 //   - [RowBehind] or [RowStalled]: this node cannot say, and a fact nobody
 //     could confirm is not one to announce.
 //
-// NO RE-ISSUE AND NO ROTATION VERDICT: the answer is about the rows alone, and
-// a bearer past its deadline is never served.
+// NO RE-ISSUE: the answer is about the rows alone, and a bearer past its
+// deadline is never served.
 func Standing(ctx context.Context, directory Directory, b Bearer) Validation {
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
 	v := standing(b, identity, err)
@@ -553,25 +529,23 @@ func standing(b Bearer, identity Identity, err error) Validation {
 	return Validation{Row: RowValid, Bearer: b}
 }
 
-// served finishes a row that is allowed to serve, re-issuing the cookie when
-// something in it has actually moved.
+// served finishes a row that is allowed to serve, re-issuing the cookie once
+// its idle deadline has drifted past [ReissueAfter].
 //
-// TWO REASONS TO RE-ISSUE and both are free: the idle deadline has drifted
-// past [ReissueAfter], or the rotation window has turned over. Neither writes
-// anything — the deadline and the index are both in the signature — so the
-// only cost being managed is a Set-Cookie header, which is why the throttle
-// exists at all.
+// THE RE-ISSUE IS FREE — the deadline is in the signature, so nothing is
+// written — and the only cost being managed is a Set-Cookie header, which is
+// why the throttle exists at all.
 func (s *Signer) served(row Row, b Bearer, identity Identity,
-	rotation rotationVerdict, now time.Time, detail string) Validation {
+	now time.Time, detail string) Validation {
 
 	out := Validation{Row: row, Bearer: b, Person: identity.Person,
 		Session: identity.Session, Detail: detail}
 	issuedAt := b.IdleExpiresAt.Add(-Idle)
 	stale := now.Sub(issuedAt) >= ReissueAfter
-	if !stale && rotation != rotationBehind {
+	if !stale {
 		return out
 	}
-	fresh, err := s.issue(b, s.rotationAt(b.Lineage, now), now)
+	fresh, err := s.issue(b, now)
 	if err != nil {
 		// A RE-ISSUE THAT CANNOT BE SIGNED DOES NOT REFUSE THE REQUEST.
 		// The bearer in hand has already verified and has not expired,

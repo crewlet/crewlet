@@ -254,10 +254,10 @@ const (
 	// OpRevoke bumps a person's REVOCATION EPOCH, which ends every session
 	// they hold, everywhere, at once. Its subject is [KindPerson].
 	//
-	// Three things reach it and they are deliberately one op: signing out
-	// everywhere, changing a password, and a session bearer presenting a
-	// rotation index past the overlap window — which is REUSE, and the only
-	// safe reading of reuse is that somebody else has the cookie.
+	// Three things reach it and they are deliberately one op: a person
+	// signing out everywhere, an administrator ending somebody's sessions,
+	// and a second factor reset — each of which has to end whatever that
+	// person's cookies are doing wherever they are.
 	//
 	// IT CARRIES A [MutationRecord.Reason] because the three are
 	// indistinguishable afterwards and an operator investigating a
@@ -287,12 +287,12 @@ const (
 
 	// OpClose ends one session. Its subject is [KindSession].
 	//
-	// ROTATIONS ARE NOT RECORDS and this is the reason the pair is only
-	// two: a rotation id is an HMAC over the lineage and the session's age
-	// in rotate_after units, so the busiest thing a signed-in person does
-	// writes nothing on this log at all. What lands here is a session
-	// beginning and a session ending, which is a handful of records per
-	// person per day.
+	// A RE-ISSUE IS NOT A RECORD and this is the reason the pair is only
+	// two: the idle deadline a re-issue moves lives in the bearer's own
+	// signed payload, so the busiest thing a signed-in person does writes
+	// nothing on this log at all. What lands here is a session beginning
+	// and a session ending, which is a handful of records per person per
+	// day.
 	OpClose OpKind = "close"
 
 	// OpInvalidate ends EVERY session in the company at once, on
@@ -501,10 +501,10 @@ type MutationRecord struct {
 	// Reason is why, in at most [MaxReason] bytes, for the operations
 	// whose motive is not recoverable from their effect.
 	//
-	// A REVOCATION IS THE CASE IT EXISTS FOR: signing out everywhere, a
-	// password change and detected token reuse produce an identical epoch
-	// bump, and which one fired is the first question anybody investigating
-	// a compromise asks. It is prose an operator wrote or a constant the
+	// A REVOCATION IS THE CASE IT EXISTS FOR: signing out everywhere, an
+	// administrator ending somebody's sessions and a second factor reset
+	// produce an identical epoch bump, and which one fired is the first
+	// question anybody investigating a compromise asks. It is prose an operator wrote or a constant the
 	// engine chose, never a stack trace and never a value from a request.
 	Reason string `json:"reason,omitempty"`
 

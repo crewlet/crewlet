@@ -341,15 +341,12 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 	signer, err := session.New(session.Options{
 		Material: runtoken.Material{ActiveID: "k1",
 			Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "the-active-key-material"}}},
-		RotateAfter: time.Hour, Now: func() time.Time { return at },
+		Now: func() time.Time { return at },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	lineage := uuid.Must(uuid.NewV7())
-	for i := range 6 {
-		lineage[i] = byte(at.UnixMilli() >> (8 * (5 - i)))
-	}
 	cookie, err := signer.Mint(session.Mint{Lineage: lineage,
 		Person: bob.String(), Epoch: 1, StartPosition: 5,
 		AbsoluteExpiresAt: at.Add(8 * time.Hour)})

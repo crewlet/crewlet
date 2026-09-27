@@ -445,9 +445,9 @@ func (s SessionRecord) Live(now time.Time) bool {
 
 // Sessions lists one person's sessions, newest first.
 //
-// ENDED ONES INCLUDED, because "this session was ended by reuse detection" is
-// the sentence an investigation is looking for and a listing that showed only
-// the live ones could never carry it. The row is kept until the sweep
+// ENDED ONES INCLUDED, because "this session was revoked, and why" is the
+// sentence an investigation is looking for and a listing that showed only the
+// live ones could never carry it. The row is kept until the sweep
 // collects it for exactly that reason.
 func (r *Reader) Sessions(ctx context.Context, personID string) (
 	[]SessionRecord, error) {

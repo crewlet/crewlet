@@ -282,8 +282,7 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 		return r.WithContext(withTierA(ctx, entry, true)), refusal
 	}
 	if g.sessions != nil {
-		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.Client,
-			g.tokenByLogin)
+		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.tokenByLogin)
 		if answer.presented {
 			if answer.tierA != nil && answer.how == iam.Resolved {
 				return g.exchanged(r, *answer.tierA, answer.via)

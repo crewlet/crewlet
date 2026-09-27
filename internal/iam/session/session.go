@@ -65,7 +65,7 @@ import (
 
 // Version prefixes every bearer, so a later format is told from this one
 // rather than failing as a bad signature.
-const Version = "v2"
+const Version = "v3"
 
 // SigningDomain separates a session bearer from every other thing this fleet's
 // keyring signs.
@@ -80,8 +80,8 @@ const SigningDomain = "crewlet/iam/session/v2"
 
 // Idle is how long a session survives with nothing happening on it.
 //
-// A CONSTANT AND NOT A CONFIGURED FIELD, unlike the absolute lifetime and the
-// rotation period, because it RIDES IN EVERY BEARER: a node moves the deadline
+// A CONSTANT AND NOT A CONFIGURED FIELD, unlike the absolute lifetime, because
+// it RIDES IN EVERY BEARER: a node moves the deadline
 // out by this much on a re-issue, and two nodes disagreeing about it would
 // hand one browser two different expiries depending on which node it reached.
 // A configured value would also mean a deployment that lowered it did not
@@ -104,25 +104,6 @@ const Idle = 12 * time.Hour
 // twenty times. It costs no store write at all — the deadline is in the
 // signature — so the only cost being managed here is the header.
 const ReissueAfter = 5 * time.Minute
-
-// Overlap is how long a cookie from the window either side of a rotation
-// boundary is still served.
-//
-// TWO MINUTES, and it exists for requests IN FLIGHT ACROSS THE BOUNDARY: a
-// page that loaded at 10:59:58 and fires four parallel requests at 11:00:01
-// must not have three of them refused because the window turned over between
-// the first and the rest. It also absorbs the ordinary skew between two
-// ingress nodes' clocks, which is what makes the forward arm safe.
-const Overlap = 2 * time.Minute
-
-// DefaultRotateAfter is how long one rotation window lasts when nothing says
-// otherwise.
-//
-// ONE HOUR. What it bounds is how long a CAPTURED cookie goes on looking
-// current beside the one its owner keeps being re-issued — see rotate.go for
-// what the index can and cannot prove. It is a default rather than the value:
-// the configured field lands with the rest of the session block.
-const DefaultRotateAfter = time.Hour
 
 // CookieBaseName is the bearer's name without the `__Host-` prefix.
 const CookieBaseName = "crewlet_session"
@@ -269,16 +250,14 @@ type Options struct {
 	// fleet is REFUSED — see the package doc.
 	Material runtoken.Material
 
-	// RotateAfter is one rotation window. Zero takes
-	// [DefaultRotateAfter].
-	RotateAfter time.Duration
-
 	// Now is the clock.
 	//
 	// WALL CLOCK, NOT MONOTONIC, and there is no choice about it: every
 	// instant a bearer carries was written by another process on another
 	// node, and a monotonic reading's epoch is per-boot — meaningless
-	// anywhere but where it was taken. rotate.go states what that costs.
+	// anywhere but where it was taken. What that costs is a deadline read
+	// on a node whose clock is off by the difference, and no more: nothing
+	// here turns a disagreement between two clocks into a revocation.
 	Now func() time.Time
 }
 
@@ -288,10 +267,9 @@ type Options struct {
 // of the keyring, the session's own facts and the clock. There is nothing here
 // to invalidate, which is the same sentence as "there is no validation cache".
 type Signer struct {
-	activeTag   string
-	keys        map[string][]byte
-	rotateAfter time.Duration
-	now         func() time.Time
+	activeTag string
+	keys      map[string][]byte
+	now       func() time.Time
 }
 
 // New builds a signer, or refuses the deployment.
@@ -303,14 +281,7 @@ func New(opts Options) (*Signer, error) {
 			"signed in on whichever node its request happened to reach: %w",
 			ErrNoKeyring, errNoActiveKey(opts.Material))
 	}
-	s := &Signer{
-		keys:        map[string][]byte{},
-		rotateAfter: opts.RotateAfter,
-		now:         opts.Now,
-	}
-	if s.rotateAfter <= 0 {
-		s.rotateAfter = DefaultRotateAfter
-	}
+	s := &Signer{keys: map[string][]byte{}, now: opts.Now}
 	if s.now == nil {
 		s.now = time.Now
 	}
