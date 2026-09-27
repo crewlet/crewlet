@@ -108,7 +108,14 @@ const (
 	SkipDeferred SkipReason = "deferred"
 
 	// SkipRecent — the newest local snapshot is younger than the
-	// interval.
+	// interval AND names every domain this node runs.
+	//
+	// YOUNG IS NOT ENOUGH. An artefact short of a domain this node runs —
+	// taken before a role added one, or by the build before a domain was
+	// added — is refused wholesale by every joiner that runs it, so it
+	// suppresses nothing: a complete one is taken at once, and the node
+	// logs `statelog_snapshot_recent_but_short` rather than resting on an
+	// artefact nobody can adopt.
 	SkipRecent SkipReason = "recent"
 
 	// SkipAheadOfLog — this node's checkpoint sits PAST the log's last

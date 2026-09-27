@@ -285,7 +285,7 @@ answer rather than a silence:
 | `deferred` | this node holds a record it cannot decode |
 | `insufficient_space` | not enough disk in `store.snapshot_dir` |
 | `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
-| `recent` | the newest artefact is younger than `snapshot_interval` — but see below |
+| `recent` | the newest artefact is younger than `snapshot_interval` **and names every domain this node runs**; a young artefact short of a domain is replaced at once (`statelog_snapshot_recent_but_short`), because no joiner can adopt it — see [Running a Fleet](fleet.md#draining-and-rolling-upgrades). And see below |
 | `failed` | the copy was attempted and errored; the engine log carries the error |
 
 `recent` is the one reason a healthy node reaches, and it is therefore **not**
