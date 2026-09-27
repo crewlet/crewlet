@@ -261,9 +261,28 @@ object may have been answered `202` and not be applied on this node yet, which
 is the ordinary shape of a hire, so the write waits for this node to apply
 everything the structure had been written by and decides once more.
 
+**A seat's kind is structure.** Whether a person or an agent holds a seat
+decides whether anything runs there — whether a node claims it and gives it a
+mailbox, whether a person can be bound to it — so it is stated by the
+`create_seat` that makes the seat and changed only by a `set_kind`, on the
+tree's one subject, and never by a content write: a lead editing a backstory
+cannot turn a person's seat into an agent's. It used to ride in the content
+record, which left a hire's seat with no kind at all between its create and its
+content — an agent by omission, which a node would claim. A seat's edge carries
+its kind as part of its structural post-state, an import's included. Making a
+person's seat an agent's is refused while somebody holds it, as a removal is.
+
+**A seat nothing has filled is incomplete.** A hire is two records, and the
+second may be late or never arrive: until a content record lands the seat has a
+place and a kind and no name, backstory or model chain. It is in the chart and
+in the organization, so the structure around it reads whole, and **no node
+places it** — so a hire whose content never arrives never gets a mailbox. The
+signal is the row's own `version`, which only a content record writes, so every
+row every build ever wrote answers it the same way.
+
 **A create says it is one.** Every edge a batch publishes carries the verb of
-what the batch did to that object — `create_unit`, `create_seat`, `move` or
-`set_lead` — beside the object's whole structural post-state, and the apply
+what the batch did to that object — `create_unit`, `create_seat`, `move`,
+`set_lead`, `set_kind` or `rename` — beside the object's whole structural post-state, and the apply
 decides by it. Without the verb an edge is only a placement, and a placement of
 an object the chart already holds is a move: so a create that met an address
 somebody had taken since its decide — a rename or a content record from a

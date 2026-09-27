@@ -193,10 +193,10 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/chart/seats/{handle}` | One seat, what it manages, and its own history |
 | `GET` | `/chart/history` | The company-wide **reorganisation feed**, newest first: who moved, who was hired, which team was dissolved — quiet changes included |
 | `PATCH` | `/chart/units/{key}` | Edit one unit's content. The **public half** is whoever leads that unit; a body carrying `runtime` takes `config:write` (see [below](#the-two-halves-of-every-object)) |
-| `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same split — decided by whoever leads **that seat** |
+| `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same split — decided by whoever leads **that seat**. It carries no `kind`: that is structure, a batch's `set_kind` |
 | `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write` |
 | `POST` | `/chart/units/{key}/rename` `/chart/seats/{handle}/rename` | Change an object's **address**, as a one-operation structural batch. The former one goes on resolving. Takes `config:write` |
-| `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Takes `config:write` |
+| `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Each edge is `{"object":{...},"parent":...,"lead":...}`, and a seat's edge states its `seat_kind` too — the content writes that follow carry none. Takes `config:write` |
 | `GET` | `/chart/imports` `/chart/imports/{revision}` | Which revision this company's structure is running, and when it landed |
 | `GET` | `/chart/check` | The **continuous report**: every way the chart and the applied settings disagree (see [below](#the-continuous-report)) |
 | `GET` | `/company/export` | The chart as an authored **document**, whole and unstripped, for a round trip through a file. Takes `config:read` |
@@ -607,9 +607,10 @@ that kind reads:
 | `kind` | Takes | Notes |
 |---|---|---|
 | `create_unit` | `parent`, `lead` | The new unit's place and its own lead, so a team is created led in one operation |
-| `create_seat` | `parent` | The unit the seat sits in |
+| `create_seat` | `parent`, `seat_kind` | The unit the seat sits in, and what holds it — `agent` or `human`, **required**: an agent is the one kind that runs, so it is never a default. Until the seat's content is written it is **incomplete**, and no node places it |
 | `move` | `parent` | A unit's lead stays with it |
 | `set_lead` | `lead` | The unit stays where it is |
+| `set_kind` | `seat_kind` | A seat's kind is structure, so it changes here and never in the seat's content. Making a person's seat an agent's is refused while somebody in the identity directory holds it, naming them — on a node that cannot read the directory too |
 | `rename` | `to` | The object is named by the address it answers to **at this point in the batch**, and moves onto `to`; its former address goes on resolving. An operation after it uses the new key, and an object the same batch creates cannot be renamed — create it under the address you mean |
 | `remove` | nothing | |
 

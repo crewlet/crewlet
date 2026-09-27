@@ -511,8 +511,13 @@ the founder seat there carries a single `contact` identity
 
 ## Hot Reload
 
-A seat's kind is ordinary configuration, applied like any other change
-(see [Organization Model: Hot Reload](organization-model.md#hot-reload)):
+A seat's kind is **structure** on the org chart: a `create_seat` states it and
+a `set_kind` operation in `POST /chart/batch` changes it — never the seat's
+content write, so a lead editing a backstory cannot turn a person's seat into an
+agent's. Making a person's seat an agent's is refused while somebody holds it,
+naming them. A document import states every seat's kind with its place. The
+change is then applied like any other (see
+[Organization Model: Hot Reload](organization-model.md#hot-reload)):
 
 - `human` to `agent`: the seat joins the next epoch's seat list, so a node
   claims it, creates its mailbox and starts its per-role MCP children the

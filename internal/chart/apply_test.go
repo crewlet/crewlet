@@ -259,13 +259,15 @@ func place(opID string, edges ...chart.Edge) chart.MutationRecord {
 
 // create is a structural record creating one object — from record version 2
 // the only record that makes one, since a content record never does.
+//
+// A SEAT IS AN AGENT'S, as every version-2 seat edge states its kind.
 func create(opID string, kind chart.ObjectKind, id, parent string) chart.MutationRecord {
-	verb := chart.OpCreateSeat
-	if kind == chart.KindUnit {
-		verb = chart.OpCreateUnit
+	edge := chart.Edge{Object: chart.ObjectRef{Kind: kind, ID: id}, Parent: parent,
+		Op: chart.OpCreateUnit}
+	if kind == chart.KindSeat {
+		edge.Op, edge.Kind = chart.OpCreateSeat, chart.SeatAgent
 	}
-	return place(opID, chart.Edge{
-		Object: chart.ObjectRef{Kind: kind, ID: id}, Parent: parent, Op: verb})
+	return place(opID, edge)
 }
 
 // v1 is rec as a version-1 writer published it: the cases that hold the

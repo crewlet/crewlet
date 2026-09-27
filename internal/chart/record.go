@@ -24,11 +24,13 @@ import (
 //     never creates its object at the apply either; and a rename is a
 //     structural edge on the tree's subject ([OpRename], [Edge.From]) rather
 //     than a claim on the address's own ([OpRekey], which only version 1
-//     carries).
+//     carries); and a seat's kind is structure ([Edge.Kind], [OpSetKind]),
+//     which a content record neither carries nor changes.
 //
 // A LOWER VERSION IS READ FOR EVER, as what it meant when it was written: a
 // version-1 edge carries no verb and is a placement that creates what is
-// absent, and a version-1 content record may create its row. Nothing rewrites a
+// absent, and a version-1 content record may create its row and sets the
+// seat's kind. Nothing rewrites a
 // record on the log, and the fleet mid-upgrade still has version-1 writers, so
 // every change of meaning is read off the record itself at the apply — an
 // edge's verb, a content record's own version — and never off this constant.

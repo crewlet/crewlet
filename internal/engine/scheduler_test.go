@@ -204,8 +204,7 @@ func setSeatSchedules(t *testing.T, e *engine.Engine, handle string, each []org.
 	if _, err := writer.WriteSeat(t.Context(),
 		fmt.Sprintf("test:schedules:%s:%d", handle, len(each)),
 		chart.SeatContent{
-			Handle: handle, Kind: chart.SeatKind(edited.EffectiveKind()),
-			Name: edited.Name, Email: edited.Email, Runtime: runtime,
+			Handle: handle, Name: edited.Name, Email: edited.Email, Runtime: runtime,
 		}); err != nil {
 		t.Fatalf("write %s: %v", handle, err)
 	}

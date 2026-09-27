@@ -247,7 +247,7 @@ func rotateSeatCredential(t *testing.T, e *engine.Engine, handle, token string) 
 	}
 	if _, err := writer.WriteSeat(t.Context(), "test:rotate:"+handle+":"+token,
 		chart.SeatContent{
-			Handle: handle, Kind: chart.SeatAgent, Unit: seatUnitKey(t, e, handle),
+			Handle: handle, Unit: seatUnitKey(t, e, handle),
 			Name: seat.Name, Runtime: runtime,
 		}); err != nil {
 		t.Fatalf("rotate %s's credential: %v", handle, err)
@@ -336,7 +336,7 @@ func hireWithSlack(t *testing.T, e *engine.Engine, handle string) error {
 	}
 	if _, err := e.ChartWriter().WriteSeat(t.Context(), "test:slack:"+handle,
 		chart.SeatContent{
-			Handle: handle, Kind: chart.SeatAgent, Unit: seatUnitKey(t, e, handle),
+			Handle: handle, Unit: seatUnitKey(t, e, handle),
 			Name: seat.Name, Runtime: runtime,
 		}); err != nil {
 		return fmt.Errorf("give %s a slack app: %w", handle, err)

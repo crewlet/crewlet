@@ -822,15 +822,16 @@ func TestTheNodeSeesTheNewEpochsSeats(t *testing.T) {
 	}
 	if _, err := writer.WriteBatch(t.Context(), "hire-designer", chart.Batch{
 		Operations: []chart.Operation{{
-			Kind:   chart.OpCreateSeat,
-			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "designer"},
+			Kind:     chart.OpCreateSeat,
+			Object:   chart.ObjectRef{Kind: chart.KindSeat, ID: "designer"},
+			SeatKind: chart.SeatAgent,
 		}},
 	}); err != nil {
 		t.Fatalf("hire: %v", err)
 	}
 	if _, err := writer.WriteSeat(t.Context(), "hire-designer-content",
 		chart.SeatContent{
-			Handle: "designer", Kind: chart.SeatAgent, Name: "Designer",
+			Handle: "designer", Name: "Designer",
 		}); err != nil {
 		t.Fatalf("the new seat's content: %v", err)
 	}

@@ -441,11 +441,10 @@ func TestTwoBatchesRacingOnOneAddressLeaveOneObject(t *testing.T) {
 func TestALiteralInASecretFieldIsSealedAndAReferenceIsNot(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
-	r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
+	r.batch("op-seat", seatOp(chart.SeatHuman, "sarah-chen", ""))
 
 	if _, err := r.seat("op-literal", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatHuman,
-		Name: "Sarah Chen", Email: "sarah.chen@example.com",
+		Handle: "sarah-chen", Name: "Sarah Chen", Email: "sarah.chen@example.com",
 	}); err != nil {
 		t.Fatalf("write a seat with a literal address: %v", err)
 	}
@@ -467,8 +466,7 @@ func TestALiteralInASecretFieldIsSealedAndAReferenceIsNot(t *testing.T) {
 	through := r.writer.As("jane.doe", chart.AuthorOperator,
 		[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{OperatorID: pat})
 	if _, err := through.WriteSeat(r.t.Context(), "op-literal-token",
-		chart.SeatContent{Handle: "sarah-chen", Kind: chart.SeatHuman,
-			Name: "Sarah Chen", Email: "s.chen@example.com"}); err != nil {
+		chart.SeatContent{Handle: "sarah-chen", Name: "Sarah Chen", Email: "s.chen@example.com"}); err != nil {
 		t.Fatalf("write through a token: %v", err)
 	}
 	r.drain()
@@ -490,8 +488,7 @@ func TestALiteralInASecretFieldIsSealedAndAReferenceIsNot(t *testing.T) {
 	// and the record would carry a pointer to a pointer.
 	before := len(r.sealer.sealed)
 	if _, err := r.seat("op-ref", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatHuman,
-		Name: "Sarah Chen", Email: "${SARAH_EMAIL}",
+		Handle: "sarah-chen", Name: "Sarah Chen", Email: "${SARAH_EMAIL}",
 	}); err != nil {
 		t.Fatalf("write a seat with a reference: %v", err)
 	}
@@ -515,11 +512,10 @@ func TestALiteralInASecretFieldIsSealedAndAReferenceIsNot(t *testing.T) {
 func TestAPatchBuiltFromAMaskedReadKeepsTheStoredValue(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
-	r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
+	r.batch("op-seat", seatOp(chart.SeatHuman, "sarah-chen", ""))
 
 	if _, err := r.seat("op-one", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatHuman,
-		Name: "Sarah Chen", Email: "${SARAH_EMAIL}",
+		Handle: "sarah-chen", Name: "Sarah Chen", Email: "${SARAH_EMAIL}",
 	}); err != nil {
 		t.Fatalf("seed the seat: %v", err)
 	}
@@ -527,8 +523,7 @@ func TestAPatchBuiltFromAMaskedReadKeepsTheStoredValue(t *testing.T) {
 	// THE ROUND TRIP: a reader fetched the seat, the surface masked the
 	// address, they changed the NAME and sent the whole thing back.
 	if _, err := r.seat("op-two", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatHuman,
-		Name: "Sarah Chen-Okoro", Email: redacted(),
+		Handle: "sarah-chen", Name: "Sarah Chen-Okoro", Email: redacted(),
 	}); err != nil {
 		t.Fatalf("write a patch built from a masked read: %v", err)
 	}
@@ -550,11 +545,10 @@ func TestAPatchBuiltFromAMaskedReadKeepsTheStoredValue(t *testing.T) {
 func TestAMaskWithNoStoredValueIsRefusedNamingTheField(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
-	r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
+	r.batch("op-seat", seatOp(chart.SeatHuman, "sarah-chen", ""))
 
 	_, err := r.seat("op-mask", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatHuman,
-		Name: "Sarah Chen", Email: redacted(),
+		Handle: "sarah-chen", Name: "Sarah Chen", Email: redacted(),
 	})
 	if err == nil {
 		t.Fatal("a mask over a field with nothing behind it was accepted — " +

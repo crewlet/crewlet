@@ -108,6 +108,7 @@ type recordingNode struct {
 	settings []byte
 	paths    []string
 	imported map[string]any
+	bodies   map[string]map[string]any
 	server   *httptest.Server
 }
 
@@ -140,8 +141,16 @@ func newRecordingNode(t *testing.T) *recordingNode {
 
 func (n *recordingNode) record(prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		body, _ := readAll(r)
+		var decoded map[string]any
+		_ = json.Unmarshal(body, &decoded)
+		path := prefix + r.PathValue("key") + r.PathValue("handle")
 		n.mu.Lock()
-		n.paths = append(n.paths, prefix+r.PathValue("key")+r.PathValue("handle"))
+		n.paths = append(n.paths, path)
+		if n.bodies == nil {
+			n.bodies = map[string]map[string]any{}
+		}
+		n.bodies[path] = decoded
 		n.mu.Unlock()
 		_, _ = w.Write([]byte(`{"outcome":"applied","position":"CHART@1:5"}`))
 	}
@@ -215,6 +224,23 @@ func TestOneFileReachesBothSurfacesInOrder(t *testing.T) {
 
 		t.Errorf("the chart reached the settings surface:\n%s", node.settings)
 	}
+	// A SEAT'S KIND TRAVELS WITH ITS PLACE, in the import, and never in its
+	// content: the node reads it as structure and refuses it on a content
+	// write.
+	edges, _ := node.imported["edges"].([]any)
+	for _, raw := range edges {
+		edge, _ := raw.(map[string]any)
+		object, _ := edge["object"].(map[string]any)
+		if object["kind"] == "seat" && edge["seat_kind"] == nil {
+			t.Errorf("the import's edge for seat %v states no seat_kind", object["id"])
+		}
+	}
+	for path, body := range node.bodies {
+		if _, carried := body["kind"]; carried && strings.HasPrefix(path, "PATCH /chart/seats/") {
+			t.Errorf("%s carried a kind, which the node refuses on a content write", path)
+		}
+	}
+
 	// AND THE IMPORT IS KEYED, so a second run of the same file is a no-op
 	// every node reaches the same way rather than a rewrite of every row.
 	if rev, _ := node.imported["revision"].(string); !strings.HasPrefix(rev, "file:") {

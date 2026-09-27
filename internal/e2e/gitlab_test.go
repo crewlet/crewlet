@@ -397,7 +397,7 @@ func rotateSeatToken(t *testing.T, n *node, handle, server, key, token string) {
 	}
 	if _, err := writer.WriteSeat(t.Context(), "test:rotate:"+handle+":"+token,
 		chart.SeatContent{
-			Handle: handle, Kind: chart.SeatAgent, Unit: seatRowUnit(t, n, handle),
+			Handle: handle, Unit: seatRowUnit(t, n, handle),
 			Name: seat.Name, Runtime: runtime,
 		}); err != nil {
 		t.Fatalf("rotate %s's credential: %v", handle, err)

@@ -157,7 +157,11 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		seat = Seat{V: DocumentVersion, Handle: handle, CreatedAt: at.brokerAt}
 	}
 	seat.V = DocumentVersion
-	seat.Kind = content.Kind
+	// THE KIND IS STRUCTURE FROM VERSION 2 ([OpSetKind]), so a content
+	// record keeps the row's; a version-1 record's is what it meant.
+	if at.record.V < 2 {
+		seat.Kind = content.Kind
+	}
 	seat.Name = content.Name
 	seat.Email = content.Email
 	seat.Backstory = content.Backstory
@@ -493,17 +497,26 @@ func restampUnit(ctx context.Context, tx *sql.Tx, at applyContext, unit Unit) (i
 }
 
 // restampSeat is [restampUnit] for a seat.
+//
+// A SEAT WHOSE DOCUMENT NAMES NO KIND IS AN AGENT'S, because that is what its
+// column says: a stub an earlier build placed carried an empty kind in its
+// document and `agent` in its column, and now that this statement writes the
+// column from the document, reading the empty one through would blank it.
 func restampSeat(ctx context.Context, tx *sql.Tx, at applyContext, seat Seat) (int, error) {
+	if seat.Kind == "" {
+		seat.Kind = SeatAgent
+	}
 	document, err := EncodeSeat(seat)
 	if err != nil {
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, `
 		UPDATE chart_seats
-		SET unit_key = ?, updated_at = ?, scoped_through = ?, document = ?
+		SET unit_key = ?, kind = ?, updated_at = ?, scoped_through = ?,
+		    document = ?
 		WHERE handle = ? AND scoped_through <= ?`,
-		seat.UnitKey, store.EncodeTime(seat.UpdatedAt), at.packed,
-		document, seat.Handle, at.packed)
+		seat.UnitKey, string(seat.Kind), store.EncodeTime(seat.UpdatedAt),
+		at.packed, document, seat.Handle, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("chart: restamp seat %s at %s: %w",
 			seat.Handle, at.position, err)
@@ -660,8 +673,10 @@ func readUnit(ctx context.Context, tx *sql.Tx, key string) (Unit, bool, error) {
 // readSeat reads one seat's stored document out of this transaction.
 func readSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, error) {
 	var document []byte
+	var version int64
 	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM chart_seats WHERE handle = ?`, handle).Scan(&document)
+		`SELECT document, version FROM chart_seats WHERE handle = ?`, handle).
+		Scan(&document, &version)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Seat{}, false, nil
@@ -672,6 +687,7 @@ func readSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, error
 	if err != nil {
 		return Seat{}, false, fmt.Errorf("chart: decode seat %s: %w", handle, err)
 	}
+	seat.HasContent = version > 0
 	return seat, true, nil
 }
 

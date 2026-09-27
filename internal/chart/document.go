@@ -186,6 +186,19 @@ type Seat struct {
 
 	LastChange *Change `json:"last_change,omitempty"`
 
+	// HasContent reports whether a content record has ever been applied to
+	// this seat. False for a seat its create made and nothing has filled
+	// since — a hire whose second write has not landed, or never will.
+	//
+	// READ OFF THE ROW'S OWN `version`, never stored in the document. Only
+	// a content record writes that column — a structural record stamps
+	// `scoped_through` and never `version` — so zero is exactly "no content
+	// yet", on every row every build ever wrote, and every node reads the
+	// same answer without a field an older build would not stamp. A seat
+	// with no content has no backstory and no model chain, so a node that
+	// claimed it would give a mailbox to a turn loop with nothing to run.
+	HasContent bool `json:"-"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 

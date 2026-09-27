@@ -358,5 +358,7 @@ func seatFrom(row chart.Seat, manages []string) *Role {
 	// reference is what a ROOT seat writes to ask to be moved. A seat built
 	// from rows is already where it belongs.
 	seat.UnitRef = ""
+	// DERIVED FROM THE ROW, like AutoManaged from the cascade.
+	seat.Incomplete = !row.HasContent
 	return seat
 }

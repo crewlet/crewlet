@@ -63,14 +63,15 @@ func (c *chartClient) ImportStructure(ctx context.Context, revision string,
 			Kind string `json:"kind"`
 			ID   string `json:"id"`
 		} `json:"object"`
-		Parent string `json:"parent,omitempty"`
-		Lead   string `json:"lead,omitempty"`
+		Parent   string `json:"parent,omitempty"`
+		Lead     string `json:"lead,omitempty"`
+		SeatKind string `json:"seat_kind,omitempty"`
 	}
 	out := make([]edgeBody, 0, len(edges))
 	for _, e := range edges {
 		var one edgeBody
 		one.Object.Kind, one.Object.ID = string(e.Object.Kind), e.Object.ID
-		one.Parent, one.Lead = e.Parent, e.Lead
+		one.Parent, one.Lead, one.SeatKind = e.Parent, e.Lead, string(e.Kind)
 		out = append(out, one)
 	}
 	body, err := json.Marshal(map[string]any{"revision": revision, "edges": out})
@@ -108,8 +109,9 @@ func (c *chartClient) WriteUnit(ctx context.Context, unit chart.AuthoredUnit) er
 }
 
 func (c *chartClient) WriteSeat(ctx context.Context, seat chart.AuthoredSeat) error {
+	// NO KIND: what holds a seat is structure, and the import's edge for
+	// this seat already stated it.
 	body, err := json.Marshal(map[string]any{
-		"kind": string(seat.Kind),
 		// THE UNIT THE STRUCTURE JUST PLACED IT IN. The domain refuses a
 		// value that disagrees with the row, so this is what makes the
 		// order of the two writes load-bearing: the placement lands

@@ -31,7 +31,7 @@ func TestAContentRecordWithAPrivilegedFieldIsRefusedBelowItsGrant(t *testing.T) 
 	// The public half lands, because a public edit is a RELATION and this
 	// package deliberately decides none of it.
 	if _, err := lead.WriteSeat(t.Context(), "op-public", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatAgent, Name: "Sarah Chen",
+		Handle: "sarah-chen", Name: "Sarah Chen",
 		Goal: "ship the thing",
 	}); err != nil {
 		t.Fatalf("a public content write by a party with no grants: %v", err)
@@ -40,7 +40,7 @@ func TestAContentRecordWithAPrivilegedFieldIsRefusedBelowItsGrant(t *testing.T) 
 
 	// The same write carrying the opaque half does not.
 	_, err := lead.WriteSeat(t.Context(), "op-runtime", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatAgent, Name: "Sarah Chen",
+		Handle: "sarah-chen", Name: "Sarah Chen",
 		Goal:    "ship the thing",
 		Runtime: json.RawMessage(`{"mcp_env":{"SHELL":"/bin/sh"}}`),
 	})
@@ -90,8 +90,7 @@ func TestClearingTheRuntimeHalfIsStillAPrivilegedWrite(t *testing.T) {
 				r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
 				if _, err := r.writer.WriteSeat(r.t.Context(), "op-runtime",
 					chart.SeatContent{
-						Handle: "sarah-chen", Kind: chart.SeatAgent,
-						Runtime: json.RawMessage(`{"models":["opus"]}`),
+						Handle: "sarah-chen", Runtime: json.RawMessage(`{"models":["opus"]}`),
 					}); err != nil {
 					r.t.Fatalf("seed the runtime half: %v", err)
 				}
@@ -99,8 +98,7 @@ func TestClearingTheRuntimeHalfIsStillAPrivilegedWrite(t *testing.T) {
 			},
 			wipe: func(w *chart.Writer) error {
 				_, err := w.WriteSeat(t.Context(), "op-clear", chart.SeatContent{
-					Handle: "sarah-chen", Kind: chart.SeatAgent,
-				})
+					Handle: "sarah-chen"})
 				return err
 			},
 		},

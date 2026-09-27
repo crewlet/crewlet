@@ -46,7 +46,7 @@ func TestEveryPathThatGivesAnAddressRefusesTheSameNames(t *testing.T) {
 		}
 		// A CONTENT WRITE ON AN ADDRESS NOTHING HOLDS.
 		_, err = r.writer.WriteSeat(t.Context(), "op-content-"+name,
-			chart.SeatContent{Handle: name, Kind: chart.SeatAgent, Name: "Nobody"})
+			chart.SeatContent{Handle: name, Name: "Nobody"})
 		if !errors.Is(err, chart.ErrRefused) {
 			t.Errorf("a content write created the seat %q: %v", name, err)
 		}
@@ -55,7 +55,8 @@ func TestEveryPathThatGivesAnAddressRefusesTheSameNames(t *testing.T) {
 	edges := make([]chart.Edge, 0, len(forbiddenHandles))
 	for _, name := range forbiddenHandles {
 		edges = append(edges, chart.Edge{
-			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: name}})
+			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: name},
+			Kind:   chart.SeatAgent})
 	}
 	r.mustImport("op-import", "rev-forbidden", edges...)
 

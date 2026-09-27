@@ -61,6 +61,38 @@ func TestAHumanSeatHasNoAgentIDInTheView(t *testing.T) {
 	}
 }
 
+// A SEAT NO CONTENT HAS FILLED IS IN THE VIEW, AND MARKED INCOMPLETE.
+//
+// A hire is two records, and the second may be late or never come: the seat has
+// a place and a kind and nothing else. It stays in the organization — the
+// structure around it must read whole — and says it is incomplete, which is
+// what keeps a node from placing it ([engine.Company.Seats]).
+func TestASeatNoContentHasFilledIsInTheViewAndIncomplete(t *testing.T) {
+	t.Parallel()
+
+	rows := chart.Authored{
+		Units: []chart.AuthoredUnit{{Key: "eng", Name: "Engineering"}},
+		Seats: []chart.AuthoredSeat{
+			{Handle: "ada", Unit: "eng", Kind: chart.SeatAgent, Name: "Ada"},
+			{Handle: "intern", Unit: "eng", Kind: chart.SeatAgent},
+		},
+	}.Rows()
+	rows.Seats[1].HasContent = false
+	view := org.FromRows(rows, org.Settings{Name: "Acme"})
+
+	intern := view.Org.Role("intern")
+	if intern == nil {
+		t.Fatal("a seat with no content is not in the organization, so the " +
+			"structure around a hire in progress reads with a hole in it")
+	}
+	if !intern.Incomplete {
+		t.Error("a seat no content has filled reads complete")
+	}
+	if ada := view.Org.Role("ada"); ada == nil || ada.Incomplete {
+		t.Errorf("a filled seat reads incomplete: %+v", ada)
+	}
+}
+
 // A SEAT UNDER A UNIT NOTHING DECLARES STAYS AT THE ROOT.
 //
 // The same answer the document path gives for a `unit:` reference that

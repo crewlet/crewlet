@@ -244,7 +244,7 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 	for _, seat := range authored.Seats {
 		result, err := writer.WriteSeat(ctx, seedOpID(revision, "s", seat.Handle),
 			chart.SeatContent{
-				Handle: seat.Handle, Kind: seat.Kind, Unit: seat.Unit,
+				Handle: seat.Handle, Unit: seat.Unit,
 				Name: seat.Name, Email: seat.Email,
 				Backstory: seat.Backstory, Goal: seat.Goal,
 				Responsibilities:     seat.Responsibilities,

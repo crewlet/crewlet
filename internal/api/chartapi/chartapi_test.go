@@ -96,6 +96,7 @@ type writer struct {
 	err     error
 	opIDs   []string
 	batches []chart.Batch
+	imports [][]chart.Edge
 }
 
 func (w *writer) result(verb, opID string) (chart.WriteResult, error) {
@@ -134,8 +135,9 @@ func (w *writer) WriteRemoval(_ context.Context, opID string, _ chart.Batch) (
 	return w.result("removal", opID)
 }
 
-func (w *writer) WriteImport(_ context.Context, opID, _ string, _ []chart.Edge) (
+func (w *writer) WriteImport(_ context.Context, opID, _ string, edges []chart.Edge) (
 	chart.WriteResult, error) {
+	w.imports = append(w.imports, edges)
 	return w.result("import", opID)
 }
 
@@ -616,7 +618,7 @@ func TestABatchReachesThePlacementOrTheRemovalVerb(t *testing.T) {
 		body string
 		want string
 	}{
-		{"a hire", `{"operations":[{"kind":"create_seat","object":{"kind":"seat","id":"ana"}}]}`,
+		{"a hire", `{"operations":[{"kind":"create_seat","object":{"kind":"seat","id":"ana"},"seat_kind":"human"}]}`,
 			"batch"},
 		{"a departure", `{"operations":[{"kind":"remove","object":{"kind":"seat","id":"ana"}}],` +
 			`"reason":"left"}`, "removal"},
@@ -624,7 +626,7 @@ func TestABatchReachesThePlacementOrTheRemovalVerb(t *testing.T) {
 		// THERE, in the domain's own words: this surface restating that
 		// rule would be a second copy of it.
 		{"both at once", `{"operations":[` +
-			`{"kind":"create_seat","object":{"kind":"seat","id":"ana"}},` +
+			`{"kind":"create_seat","object":{"kind":"seat","id":"ana"},"seat_kind":"human"},` +
 			`{"kind":"remove","object":{"kind":"seat","id":"bo"}}]}`, "batch"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -885,6 +887,47 @@ func TestABatchCarriesARenamesNewAddress(t *testing.T) {
 	if len(r.writer.batches) != 1 || len(r.writer.batches[0].Operations) != 2 ||
 		r.writer.batches[0].Operations[0].To != "platform" {
 		t.Fatalf("published %+v, want the rename's new address carried", r.writer.batches)
+	}
+}
+
+// A SEAT'S KIND IS STRUCTURE ON THIS SURFACE TOO: a batch and an import carry
+// it, and a seat's content refuses it.
+//
+// Carried, because a create_seat and an import edge each state what holds a
+// seat and the domain refuses one that does not; refused on the content write,
+// because the domain no longer reads it there and a dropped field would answer
+// 200 for a kind change that never happened.
+func TestASeatsKindTravelsAsStructure(t *testing.T) {
+	t.Parallel()
+	r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	rec := post(r.mux, "/chart/batch", `{"operations":[
+		{"kind":"set_kind","object":{"kind":"seat","id":"cto"},"seat_kind":"human"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a set_kind answered %d: %s", rec.Code, rec.Body)
+	}
+	if len(r.writer.batches) != 1 ||
+		r.writer.batches[0].Operations[0].SeatKind != chart.SeatHuman {
+		t.Errorf("published %+v, want the seat kind carried", r.writer.batches)
+	}
+
+	rec = post(r.mux, "/chart/import", `{"revision":"r1","edges":[
+		{"object":{"kind":"seat","id":"cto"},"seat_kind":"human"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an import answered %d: %s", rec.Code, rec.Body)
+	}
+	if len(r.writer.imports) != 1 || r.writer.imports[0][0].Kind != chart.SeatHuman {
+		t.Errorf("imported %+v, want the seat kind carried", r.writer.imports)
+	}
+
+	lead := serve(t, nil, leadOf(iam.GrantConfigWrite),
+		rel{seats: map[[2]string]bool{{"cto", "ana"}: true}})
+	if rec := patch(lead.mux, "/chart/seats/ana", `{"name":"Ana","kind":"agent"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a seat's content naming a kind answered %d, want 400 — the "+
+			"domain does not read it there: %s", rec.Code, rec.Body)
+	}
+	// THE CONTROL: the same body without the kind is written.
+	if rec := patch(lead.mux, "/chart/seats/ana", `{"name":"Ana"}`); rec.Code != http.StatusOK {
+		t.Errorf("a seat's content answered %d: %s", rec.Code, rec.Body)
 	}
 }
 

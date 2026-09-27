@@ -65,6 +65,9 @@ type wnode struct {
 	// lead is a unit's AUTHORED lead, "" where it inherits one.
 	lead string
 
+	// seatKind is what holds a seat. Empty for a unit.
+	seatKind SeatKind
+
 	// origin is the address the object was CREATED under — its identity,
 	// which no rename moves.
 	origin string
@@ -103,6 +106,7 @@ type wnode struct {
 // whatever else the batch did to it ([working.edges]).
 var opRank = map[OperationKind]int{
 	OpSetLead:    1,
+	OpSetKind:    1,
 	OpMove:       2,
 	OpCreateUnit: 3,
 	OpCreateSeat: 3,
@@ -123,6 +127,16 @@ func (w *working) did(n *wnode, op OperationKind) {
 	if opRank[op] > opRank[n.op] {
 		n.op = op
 	}
+}
+
+// seat is the replay's copy of the object ref names, as it stands before the
+// next operation, and whether the replay holds it.
+func (w *working) seat(ref ObjectRef) (wnode, bool) {
+	n, held := w.live[refKey(ref)]
+	if !held {
+		return wnode{}, false
+	}
+	return *n, true
 }
 
 // created reports whether an earlier operation in this batch created n.
@@ -176,11 +190,21 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			return refused
 		}
 		n := &wnode{kind: ref.Kind, key: id, origin: id, parent: parent}
-		if ref.Kind == KindUnit {
+		switch ref.Kind {
+		case KindUnit:
 			// A UNIT MAY BE CREATED LED, which is one gesture — "add the
 			// platform team, led by the SRE" — and the lead a set_lead
 			// would otherwise have to state a second time.
 			n.lead = NormalizeKey(op.Lead)
+		case KindSeat:
+			// A SEAT IS CREATED KNOWING WHAT HOLDS IT. Its content comes
+			// in a second record on another subject, and a seat whose kind
+			// waited for that record was, between the two, an agent with
+			// no model chain — which a node would claim and give a mailbox.
+			if refused := checkSeatKind(refuse, op); refused != nil {
+				return refused
+			}
+			n.seatKind = op.SeatKind
 		}
 		w.live[refKey(ref)] = n
 		w.did(n, op.Kind)
@@ -211,6 +235,22 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			return refused
 		}
 		n.lead = NormalizeKey(op.Lead)
+		w.did(n, op.Kind)
+		return nil
+
+	case OpSetKind:
+		if ref.Kind != KindSeat {
+			return refuse(RuleUnknownKind, "only a seat has a kind — a unit is "+
+				"held by nobody")
+		}
+		n, refused := w.checkPresent(refuse, ref)
+		if refused != nil {
+			return refused
+		}
+		if refused := checkSeatKind(refuse, op); refused != nil {
+			return refused
+		}
+		n.seatKind = op.SeatKind
 		w.did(n, op.Kind)
 		return nil
 
@@ -286,14 +326,16 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 func unusedField(refuse refuseFunc, op Operation) *RefusalError {
 	takes := map[OperationKind][]string{
 		OpCreateUnit:   {"parent", "lead"},
-		OpCreateSeat:   {"parent"},
+		OpCreateSeat:   {"parent", "seat_kind"},
 		OpMove:         {"parent"},
 		OpSetLead:      {"lead"},
+		OpSetKind:      {"seat_kind"},
 		OpRename:       {"to"},
 		OpRemoveObject: nil,
 	}[op.Kind]
 	for field, value := range map[string]string{
-		"parent": op.Parent, "lead": op.Lead, "to": op.To} {
+		"parent": op.Parent, "lead": op.Lead, "to": op.To,
+		"seat_kind": string(op.SeatKind)} {
 		if value != "" && !slices.Contains(takes, field) {
 			return refuse(RuleUnusedField, "%s takes %s and no %q — nothing "+
 				"would read it, and a batch that dropped it would answer as "+
@@ -302,6 +344,21 @@ func unusedField(refuse refuseFunc, op Operation) *RefusalError {
 		}
 	}
 	return nil
+}
+
+// checkSeatKind refuses a create_seat or a set_kind whose seat kind this build
+// does not serve — the empty one included, because a default would be `agent`,
+// which is the one kind that runs.
+func checkSeatKind(refuse refuseFunc, op Operation) *RefusalError {
+	if op.SeatKind.Valid() {
+		return nil
+	}
+	if op.SeatKind == "" {
+		return refuse(RuleSeatKind, "%s states what holds the seat: "+
+			"`seat_kind` is %q or %q", op.Kind, SeatAgent, SeatHuman)
+	}
+	return refuse(RuleSeatKind, "%q is not a seat kind this build serves — "+
+		"want %q or %q", op.SeatKind, SeatAgent, SeatHuman)
 }
 
 // fieldList renders the fields an operation takes, for a refusal.
@@ -538,8 +595,11 @@ func (w *working) edges() []Edge {
 		if verb == OpRename {
 			edge.From = n.from
 		}
-		if n.kind == KindUnit {
+		switch n.kind {
+		case KindUnit:
 			edge.Lead = n.lead
+		case KindSeat:
+			edge.Kind = n.seatKind
 		}
 		out = append(out, edge)
 	}
@@ -574,7 +634,7 @@ func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
 		return nil, err
 	}
 	if err := state.scan(ctx, tx, KindSeat,
-		`SELECT handle, unit_key, '', former_keys_json, document FROM chart_seats`,
+		`SELECT handle, unit_key, kind, former_keys_json, document FROM chart_seats`,
 		func(doc []byte) (string, error) {
 			seat, err := DecodeSeat(doc)
 			return seat.Origin(), err
@@ -618,12 +678,20 @@ func (w *working) scan(ctx context.Context, tx *sql.Tx, kind ObjectKind,
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var key, parent, lead, formerJSON string
+		// THE THIRD COLUMN is the one structural field the kind has beyond
+		// its place: a unit's lead, a seat's kind.
+		var key, parent, third, formerJSON string
 		var document []byte
-		if err := rows.Scan(&key, &parent, &lead, &formerJSON, &document); err != nil {
+		if err := rows.Scan(&key, &parent, &third, &formerJSON, &document); err != nil {
 			return fmt.Errorf("chart: read a %s row: %w", kind, err)
 		}
-		n := &wnode{kind: kind, key: key, origin: key, parent: parent, lead: lead}
+		n := &wnode{kind: kind, key: key, origin: key, parent: parent}
+		switch kind {
+		case KindUnit:
+			n.lead = third
+		case KindSeat:
+			n.seatKind = SeatKind(third)
+		}
 		w.live[refKey(ObjectRef{Kind: kind, ID: key})] = n
 		if formerJSON == "" || formerJSON == "[]" {
 			continue

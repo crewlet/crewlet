@@ -241,14 +241,15 @@ func hire(t *testing.T, e *engine.Engine, handle string) error {
 	// right place, with no name and no model.
 	if _, err := writer.WriteBatch(t.Context(), "test:hire:"+handle, chart.Batch{
 		Operations: []chart.Operation{{
-			Kind:   chart.OpCreateSeat,
-			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: handle},
+			Kind:     chart.OpCreateSeat,
+			Object:   chart.ObjectRef{Kind: chart.KindSeat, ID: handle},
+			SeatKind: chart.SeatAgent,
 		}},
 	}); err != nil {
 		return fmt.Errorf("hire %s: %w", handle, err)
 	}
 	if _, err := writer.WriteSeat(t.Context(), "test:content:"+handle, chart.SeatContent{
-		Handle: handle, Kind: chart.SeatAgent, Name: handle,
+		Handle: handle, Name: handle,
 	}); err != nil {
 		return fmt.Errorf("give %s its content: %w", handle, err)
 	}
@@ -262,6 +263,75 @@ func hire(t *testing.T, e *engine.Engine, handle string) error {
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the hire of %s never reached the view", handle)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A HIRE WHOSE CONTENT NEVER ARRIVES IS NEVER RUN.
+//
+// A hire is two records — the seat's place and kind on the tree's subject,
+// then its content on its own — and a node that booted, crashed or lost the
+// second leaves a seat with a handle and nothing else: no backstory, no name,
+// no model chain. The seat is in the organization, so the structure around it
+// reads whole, and it is NOT among the seats a node places, so nothing claims
+// it and attaches a mailbox to a turn loop with nothing to run. The moment its
+// content lands it is.
+func TestAHireWhoseContentNeverArrivesIsNeverPlaced(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, seedCompanyDoc)})
+	readChart(t, e)
+	writer := e.ChartWriter()
+	if _, err := writer.WriteBatch(t.Context(), "test:hire:intern", chart.Batch{
+		Operations: []chart.Operation{{Kind: chart.OpCreateSeat,
+			Object:   chart.ObjectRef{Kind: chart.KindSeat, ID: "intern"},
+			SeatKind: chart.SeatAgent}},
+	}); err != nil {
+		t.Fatalf("create the seat: %v", err)
+	}
+	company := viewWith(t, e, func(c *engine.Company) bool {
+		return c.Org.Role("intern") != nil
+	})
+	if role := company.Org.Role("intern"); !role.Incomplete {
+		t.Errorf("a seat no content has filled reads complete: %+v", role)
+	}
+	if placed(company, "intern") {
+		t.Fatal("a seat with no content is among the seats a node places, so " +
+			"one would claim it and give it a mailbox")
+	}
+
+	// THE CONTROL: its content lands, and it is placed.
+	if _, err := writer.WriteSeat(t.Context(), "test:content:intern",
+		chart.SeatContent{Handle: "intern", Name: "Intern"}); err != nil {
+		t.Fatalf("give the seat its content: %v", err)
+	}
+	viewWith(t, e, func(c *engine.Company) bool { return placed(c, "intern") })
+}
+
+// placed reports whether handle is among the seats company places.
+func placed(company *engine.Company, handle string) bool {
+	for _, seat := range company.Seats() {
+		if seat.Handle == handle {
+			return true
+		}
+	}
+	return false
+}
+
+// viewWith refreshes the engine's view until ready holds of the company it
+// publishes, and returns that company.
+func viewWith(t *testing.T, e *engine.Engine, ready func(*engine.Company) bool) *engine.Company {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := engine.RefreshChartForTest(t.Context(), e); err != nil {
+			t.Fatalf("refresh the view: %v", err)
+		}
+		if c := e.Company(); c != nil && c.Org != nil && ready(c) {
+			return c
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the view never reached the state the case waits for")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -241,12 +241,18 @@ const (
 	ChangeRekeyed  ChangeKind = "rekeyed"
 	ChangeRemoved  ChangeKind = "removed"
 	ChangeImported ChangeKind = "imported"
+
+	// ChangeKindSet is a seat whose kind a batch changed — an agent's seat
+	// given to a person, or the other way — which is the change that decides
+	// whether anything runs there.
+	ChangeKindSet ChangeKind = "kind_set"
 )
 
 // ChangeKinds is every kind.
 func ChangeKinds() []ChangeKind {
 	return []ChangeKind{ChangeCreated, ChangeEdited, ChangeMoved, ChangeLed,
-		ChangeManages, ChangeRekeyed, ChangeRemoved, ChangeImported}
+		ChangeManages, ChangeRekeyed, ChangeRemoved, ChangeImported,
+		ChangeKindSet}
 }
 
 // Valid reports whether k is a kind this build serves.

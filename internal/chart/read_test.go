@@ -176,8 +176,7 @@ func TestTheWholeChartComesBackAsOneAnswer(t *testing.T) {
 			Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
 			Lead:   "sarah-chen"})
 	if _, err := r.seat("op-manages", chart.SeatContent{
-		Handle: "sarah-chen", Unit: "platform", Kind: chart.SeatAgent,
-		Name: "Sarah Chen", Manages: []string{"platform"},
+		Handle: "sarah-chen", Unit: "platform", Name: "Sarah Chen", Manages: []string{"platform"},
 	}); err != nil {
 		t.Fatalf("write the seat: %v", err)
 	}
@@ -356,8 +355,7 @@ func TestOneObjectsHistoryIsBoundedAndNewestFirst(t *testing.T) {
 
 	for i := range 3 {
 		if _, err := r.seat("op-edit-"+string(rune('a'+i)), chart.SeatContent{
-			Handle: "sarah-chen", Kind: chart.SeatAgent,
-			Name: "Sarah " + string(rune('A'+i)),
+			Handle: "sarah-chen", Name: "Sarah " + string(rune('A'+i)),
 		}); err != nil {
 			t.Fatalf("edit %d: %v", i, err)
 		}

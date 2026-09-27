@@ -167,6 +167,14 @@ func (c *Company) Seats() []placement.Seat {
 		if !role.IsAgent() {
 			continue
 		}
+		// A SEAT NO CONTENT HAS FILLED IS NOT RUN: it has a place and a
+		// kind and no backstory, no model chain and no name, so a node
+		// that claimed it would attach a mailbox to a turn loop with
+		// nothing to run — for good, if the hire's second write never
+		// lands. It is listed the moment its content does.
+		if role.Incomplete {
+			continue
+		}
 		// No empty-handle guard: validation refuses any role whose name
 		// yields no handle ("the name yields no handle, so set one
 		// explicitly"), and NewCompany validates. Probed, not assumed —

@@ -276,13 +276,16 @@ curl -s "$CREWLET_URL/chart/seats/sre" -H "$AUTH" | jq .seat
 
 curl -X PATCH $CREWLET_URL/chart/seats/sre \
   -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"kind":"agent","unit":"engineering","name":"SRE",
+  -d '{"unit":"engineering","name":"SRE",
        "goal":"keep the platform boring"}'
 ```
 
 A content write is **full post-state**, like the record it becomes: a field you
 leave out is a field you set to empty. That is also why omitting `runtime` is
-itself a privileged write — it clears the half you did not send.
+itself a privileged write — it clears the half you did not send. It carries no
+**kind**: whether a person or an agent holds the seat is structure, set by the
+batch that creates it and changed by a `set_kind` operation, and a content body
+naming one is refused.
 
 ### Hire, move, dissolve
 
@@ -298,8 +301,11 @@ curl -X POST $CREWLET_URL/chart/batch \
       ]}'
 ```
 
-A hire is **two** writes, in this order: the batch that creates the seat, then
-a `PATCH` with its content. A content write never creates its object — a
+A hire is **two** writes, in this order: the batch that creates the seat —
+stating what holds it, `{"kind":"create_seat","object":{"kind":"seat","id":"sre"},"parent":"platform","seat_kind":"agent"}`
+— then a `PATCH` with its content. Until the content lands the seat is in the
+chart and **incomplete**: no node runs an agent seat with no content, so a hire
+whose second write never arrives never gets a mailbox. A content write never creates its object — a
 `PATCH` naming a seat the chart does not hold is refused, pointing here — and
 it waits for a `202` batch this node has not applied yet, so the second write
 can follow the first straight away.

@@ -624,6 +624,18 @@ type Role struct {
 	// wire form: it is derived, and a caller building a Role leaves it empty.
 	AutoManaged []string `yaml:"-" json:"-"`
 
+	// Incomplete marks a seat the chart has created and no content write
+	// has filled yet — a hire whose second record has not landed, or never
+	// will. It has a place and a kind and nothing else: no backstory, no
+	// model chain, no name. Such a seat is in the organization, so the
+	// structure around it reads whole, and nothing RUNS it: a node that
+	// claimed it would give a mailbox to a turn loop with nothing to run.
+	//
+	// Derived from the chart row ([chart.Seat.HasContent]) and never
+	// written: a Role built from a document is complete by construction,
+	// which is why the zero value is the complete one.
+	Incomplete bool `yaml:"-" json:"-"`
+
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 
 	// TokenBudget caps this seat's spend; 0 is unlimited.

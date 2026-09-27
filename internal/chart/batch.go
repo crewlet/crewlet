@@ -77,7 +77,7 @@ const (
 	// tombstone, because a removed key never resolves again.
 	OpCreateUnit OperationKind = "create_unit"
 
-	// OpCreateSeat adds a seat, on the same terms.
+	// OpCreateSeat adds a seat, on the same terms, and states its kind.
 	OpCreateSeat OperationKind = "create_seat"
 
 	// OpMove reparents an object. The one operation that can close a
@@ -86,6 +86,17 @@ const (
 
 	// OpSetLead sets or clears a unit's authored lead.
 	OpSetLead OperationKind = "set_lead"
+
+	// OpSetKind changes what holds a seat: an agent, or a person.
+	//
+	// STRUCTURE, like the seat's place, because it decides what the seat IS
+	// to everything that reads the chart — whether a node claims it and
+	// gives it a mailbox, whether a person can be bound to it, whether a
+	// message addressed to it wakes a turn — and a lead editing a seat's
+	// backstory must not be able to turn it from one into the other. It
+	// was a field of the content record, which also left a hire's seat
+	// with no kind at all between its create and its content.
+	OpSetKind OperationKind = "set_kind"
 
 	// OpRename moves an object onto a new address, and the one it answered
 	// to goes on resolving to it.
@@ -106,9 +117,10 @@ const (
 	OpRemoveObject OperationKind = "remove"
 )
 
-// OperationKinds are the six.
+// OperationKinds are the seven.
 var OperationKinds = []OperationKind{
-	OpCreateUnit, OpCreateSeat, OpMove, OpSetLead, OpRename, OpRemoveObject,
+	OpCreateUnit, OpCreateSeat, OpMove, OpSetLead, OpSetKind, OpRename,
+	OpRemoveObject,
 }
 
 // Valid reports whether an operation kind is one this build performs.
@@ -135,6 +147,12 @@ type Operation struct {
 	// To is the address a rename moves the object onto. The object is
 	// named by the address it answers to at this point in the batch.
 	To string `json:"to,omitempty"`
+
+	// SeatKind is what holds the seat a create_seat makes or a set_kind
+	// changes. REQUIRED on both, and there is no default: a seat created
+	// without one was an agent by omission, which is the one kind that
+	// runs.
+	SeatKind SeatKind `json:"seat_kind,omitempty"`
 }
 
 // Batch is one caller-visible structural change.
@@ -156,7 +174,7 @@ type Batch struct {
 // somebody retrying a write that can never land.
 //
 // ITS TEXT NAMES NO SHAPE OF WRITE, because it is a suffix on every one of
-// them: a batch, a key claim, a removal, one object's content. It read "the
+// them: a batch, an import, a removal, one object's content. It read "the
 // batch is refused" and was wrapped by ten sentences, six of which are about
 // something that is not a batch — so a person renaming a unit was handed a
 // sentence ending in a noun their command never used, and the sentence in
@@ -224,6 +242,10 @@ const (
 	// RuleTooManyOperations is a batch past [MaxBatchOperations].
 	RuleTooManyOperations = "the batch is too large"
 
+	// RuleSeatKind is a create_seat or a set_kind that states no seat kind
+	// this build serves.
+	RuleSeatKind = "the seat kind is not one this build serves"
+
 	// RuleRenameUnchanged is a rename onto the address the object already
 	// answers to, which moves nothing and would retire the address it keeps.
 	RuleRenameUnchanged = "the object already answers to the address"
@@ -240,7 +262,8 @@ const (
 	RuleUnusedField = "the operation does not take the field"
 
 	// RuleSeatHeld is a removal of a seat somebody in the identity
-	// directory is bound to.
+	// directory is bound to, or a set_kind making their seat an agent's
+	// ([heldGesture]).
 	//
 	// ADVISORY, and the doc on [Batch.Validate] says why at length: this
 	// is a read of ANOTHER domain's rows inside this domain's snapshot,
@@ -249,8 +272,8 @@ const (
 	// person's name in the message.
 	RuleSeatHeld = "somebody holds the seat"
 
-	// RuleDirectoryUnreadable is a seat removal on a node that cannot see
-	// the identity directory at all.
+	// RuleDirectoryUnreadable is either of [RuleSeatHeld]'s gestures on a
+	// node that cannot see the identity directory at all.
 	//
 	// A REFUSAL AND NOT A PASS, which is the whole of it: a node that does
 	// not run the identity domain has a legitimately EMPTY copy of those
@@ -336,13 +359,22 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 	}
 	var gone []ObjectRef
 	for i, op := range b.Operations {
+		// WHAT THE SEAT WAS before this operation, read off the replay: a
+		// removal and a change from person to agent each ask the directory
+		// about the seat's IDENTITY, which a rename earlier in the batch
+		// leaves in place and the rows cannot give for a seat the batch
+		// created.
+		before, known := state.seat(op.Object)
 		if refused := state.apply(ctx, i, op); refused != nil {
 			return nil, nil, refused
 		}
-		if op.Kind == OpRemoveObject {
-			if err := checkHeld(ctx, tx, i, op, holders); err != nil {
+		if gesture := heldGesture(op, before, known); gesture != "" {
+			if err := checkHeld(ctx, tx, i, op, before.origin, gesture,
+				holders); err != nil {
 				return nil, nil, err
 			}
+		}
+		if op.Kind == OpRemoveObject {
 			gone = append(gone, ObjectRef{
 				Kind: op.Object.Kind, ID: NormalizeKey(op.Object.ID)})
 		}
@@ -387,56 +419,65 @@ type Holders interface {
 	HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string, error)
 }
 
-// checkHeld refuses a seat removal the directory contradicts.
+// heldGesture is what op does to a seat that a person holding it would lose,
+// in the words a refusal names it by — or empty where it does nothing of the
+// kind.
 //
-// AN ERROR RATHER THAN A REFUSAL when the chart's own row cannot be read, which
-// is the one failure here that is neither a rule nor the directory's: the
-// identity the directory is asked about is on that row.
-func checkHeld(ctx context.Context, tx *sql.Tx, index int, op Operation,
-	holders Holders) error {
-
-	if op.Object.Kind != KindSeat {
-		return nil
+// TWO GESTURES: removing the seat, and turning a person's seat into an agent.
+// Both leave whoever is bound to it signed in as a seat they can no longer act
+// as — gone from the chart, or run by a turn loop and a model chain — and both
+// are the ordinary mistake of a reorganisation that forgot somebody sits there.
+// An agent made a person's seat takes nothing from anybody.
+func heldGesture(op Operation, before wnode, known bool) string {
+	if !known || before.kind != KindSeat {
+		return ""
 	}
+	switch {
+	case op.Kind == OpRemoveObject:
+		return "removing it"
+	case op.Kind == OpSetKind && before.seatKind == SeatHuman &&
+		op.SeatKind == SeatAgent:
+		return "making it an agent's"
+	}
+	return ""
+}
+
+// checkHeld refuses a gesture on a seat the directory says somebody holds.
+//
+// THE SEAT IS ASKED ABOUT BY ITS IDENTITY — the address it was created under,
+// off the replay — because that is what a binding names (ADR-0020). A seat
+// renamed earlier in the same batch answers to an address the rows do not hold
+// yet, and one the batch created has no row at all; the replay has both.
+func checkHeld(ctx context.Context, tx *sql.Tx, index int, op Operation,
+	identity, gesture string, holders Holders) error {
+
 	handle := NormalizeKey(op.Object.ID)
 	if holders == nil {
 		return &RefusalError{
-			Index: index, Rule: RuleDirectoryUnreadable,
-			Detail: fmt.Sprintf("seat %q cannot be removed here: this node "+
-				"does not run the identity domain, so its copy of the "+
-				"directory is empty for every seat and cannot say whether "+
-				"anybody holds this one. Make the removal on a node that "+
-				"serves people", handle),
+			Index: index, Operation: op, Rule: RuleDirectoryUnreadable,
+			Detail: fmt.Sprintf("seat %q cannot be changed here — %s is refused "+
+				"on a node that does not run the identity domain, because its "+
+				"copy of the directory is empty for every seat and cannot say "+
+				"whether anybody holds this one. Make the change on a node that "+
+				"serves people", handle, gesture),
 		}
-	}
-	// THE IDENTITY, off the row. A seat created earlier in this same batch
-	// has no row yet, and its identity is the handle it is being created
-	// under.
-	identity := handle
-	seat, found, err := readSeat(ctx, tx, handle)
-	if err != nil {
-		return fmt.Errorf("chart: read seat %q to ask who holds it: %w", handle, err)
-	}
-	if found {
-		identity = seat.Origin()
 	}
 	holder, err := holders.HolderOf(ctx, tx, identity)
 	if err != nil {
 		return &RefusalError{
-			Index: index, Rule: RuleDirectoryUnreadable,
-			Detail: fmt.Sprintf("seat %q cannot be removed: the directory "+
-				"could not be read on this node, and a removal decided "+
-				"without it is one that silently orphans whoever holds the "+
-				"seat: %v", handle, err),
+			Index: index, Operation: op, Rule: RuleDirectoryUnreadable,
+			Detail: fmt.Sprintf("seat %q cannot be changed: the directory could "+
+				"not be read on this node, and %s without it is how whoever "+
+				"holds the seat is silently orphaned: %v", handle, gesture, err),
 		}
 	}
 	if holder != "" {
 		return &RefusalError{
-			Index: index, Rule: RuleSeatHeld,
-			Detail: fmt.Sprintf("seat %q is held by %s — removing it leaves "+
-				"them signed in as a seat that is not in the chart, so every "+
-				"authority rule asking what they lead falls through. Unbind "+
-				"them first, or remove the person", handle, holder),
+			Index: index, Operation: op, Rule: RuleSeatHeld,
+			Detail: fmt.Sprintf("seat %q is held by %s — %s leaves them signed "+
+				"in as a seat they can no longer act as, so every authority "+
+				"rule asking what they lead falls through. Unbind them first, "+
+				"or remove the person", handle, holder, gesture),
 		}
 	}
 	return nil

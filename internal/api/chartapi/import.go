@@ -65,6 +65,11 @@ type importEdge struct {
 	// Lead is the handle leading a unit, and empty is a unit whose lead
 	// comes from an ancestor — also a real state, and the common one.
 	Lead string `json:"lead,omitempty"`
+
+	// SeatKind is what holds a seat, required on a seat's edge: a seat's
+	// kind is structure, and the content writes that follow an import
+	// carry none.
+	SeatKind string `json:"seat_kind,omitempty"`
 }
 
 // postImport publishes one revision's authored structure.
@@ -102,7 +107,7 @@ func (s *Service) postImport(w http.ResponseWriter, r *http.Request) {
 			Object: chart.ObjectRef{
 				Kind: chart.ObjectKind(e.Object.Kind), ID: e.Object.ID,
 			},
-			Parent: e.Parent, Lead: e.Lead,
+			Parent: e.Parent, Lead: e.Lead, Kind: chart.SeatKind(e.SeatKind),
 		})
 	}
 	result, err := s.writerFor(r).WriteImport(r.Context(), s.opID(r),

@@ -90,6 +90,16 @@ type Edge struct {
 	// anybody could have referred to, so retiring it would put an alias on
 	// the object that nothing ever answered to. Version 2 of the record.
 	From string `json:"from,omitempty"`
+
+	// Kind is what holds a SEAT — part of its structural post-state, as its
+	// place is — and empty on a unit's edge.
+	//
+	// EMPTY ON A SEAT'S EDGE IS WHAT A VERSION-1 RECORD MEANS: the seat's
+	// kind was not the structure's to say, so the apply leaves the row's as
+	// it is and makes a new seat's `agent` until its content says
+	// otherwise. From version 2 the kind is structure and never content, so
+	// every seat edge a batch or an import publishes carries it.
+	Kind SeatKind `json:"k,omitempty"`
 }
 
 // PlacementPayload states edges. Its subject is [KindTree].
@@ -223,7 +233,13 @@ type SeatPayload struct {
 	// Kind is what holds the seat. An agent seat has an inbox, a turn loop
 	// and a model chain; a human seat has none of them and is addressable
 	// only.
-	Kind SeatKind `json:"kind"`
+	//
+	// VERSION 1 ONLY. From version 2 a seat's kind is STRUCTURE — a
+	// create_seat states it and a set_kind changes it, on the tree's
+	// subject ([Edge.Kind]) — so a content record carries none, and its
+	// apply keeps the row's. A version-1 record's is applied as it was
+	// meant, for ever.
+	Kind SeatKind `json:"kind,omitempty"`
 
 	Name string `json:"name,omitempty"`
 

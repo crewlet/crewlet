@@ -44,8 +44,10 @@ type unitBody struct {
 	Runtime       json.RawMessage `json:"runtime,omitempty"`
 }
 
+// IT CARRIES NO KIND: what holds a seat is structure, changed by a batch's
+// `set_kind`, and a body still naming one is refused as a field this route
+// does not read rather than dropped.
 type seatBody struct {
-	Kind                 string          `json:"kind"`
 	Unit                 string          `json:"unit"`
 	Name                 string          `json:"name"`
 	Email                string          `json:"email"`
@@ -87,8 +89,8 @@ func (s *Service) patchSeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.writerFor(r).WriteSeat(r.Context(), s.opID(r), chart.SeatContent{
-		Handle: r.PathValue("handle"), Kind: chart.SeatKind(body.Kind),
-		Unit: body.Unit, Name: body.Name, Email: body.Email,
+		Handle: r.PathValue("handle"),
+		Unit:   body.Unit, Name: body.Name, Email: body.Email,
 		Backstory: body.Backstory, Goal: body.Goal,
 		Responsibilities:     body.Responsibilities,
 		BehavioralGuidelines: body.BehavioralGuidelines,

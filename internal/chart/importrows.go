@@ -137,6 +137,10 @@ func (a Authored) Rows() Chart {
 			Project:              seat.Project, Space: seat.Space,
 			UnitKey: NormalizeKey(seat.Unit),
 			Runtime: seat.Runtime,
+			// AN AUTHORED SEAT IS WRITTEN WITH ITS CONTENT: these are the
+			// rows once the import and every content write behind it have
+			// landed, which is the chart the document describes.
+			HasContent: true,
 		})
 		// THE EDGE SET IS FOLDED AND DE-DUPLICATED exactly as the applier
 		// folds it, because this is what the applier would have written:
@@ -232,10 +236,13 @@ func (a Authored) Edges() []Edge {
 		remaining = next
 	}
 
+	// A SEAT'S KIND TRAVELS WITH ITS PLACE, because both are structure: the
+	// content records an import is followed by carry none.
 	for _, seat := range a.Seats {
 		out = append(out, Edge{
 			Object: ObjectRef{Kind: KindSeat, ID: NormalizeKey(seat.Handle)},
 			Parent: NormalizeKey(seat.Unit),
+			Kind:   seat.Kind,
 		})
 	}
 	return out

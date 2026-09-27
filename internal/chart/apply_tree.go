@@ -195,7 +195,7 @@ func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 		if declined, refuseErr := a.declineCreate(ctx, tx, at, "create", ref); refuseErr != nil || declined {
 			return 0, false, refuseErr
 		}
-	case OpMove, OpSetLead, OpRename:
+	case OpMove, OpSetLead, OpSetKind, OpRename:
 		// A RENAME'S EDGE IS PLACED ONLY ONCE ITS RENAME LANDED, so its
 		// object is on the address it names: its final parent and lead
 		// are written exactly as a move's are.
@@ -345,6 +345,8 @@ func changeFor(op OperationKind, fallback ChangeKind) ChangeKind {
 		return ChangeLed
 	case OpRename:
 		return ChangeRekeyed
+	case OpSetKind:
+		return ChangeKindSet
 	}
 	return fallback
 }
@@ -400,6 +402,11 @@ func (a *Applier) placeOne(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 		if !found {
 			seat = Seat{V: DocumentVersion, Handle: id, CreatedAt: at.brokerAt}
+		}
+		// THE KIND WHERE THE EDGE STATES ONE, which every version-2 edge
+		// does ([Edge.Kind]); a version-1 edge leaves the row's alone.
+		if edge.Kind != "" {
+			seat.Kind = edge.Kind
 		}
 		seat.UnitKey = parent
 		seat.UpdatedAt = at.brokerAt
@@ -464,15 +471,19 @@ func (a *Applier) writeSeatStructure(ctx context.Context, tx *sql.Tx,
 	if exists {
 		return restampSeat(ctx, tx, at, seat)
 	}
+	// A NEW SEAT'S KIND IS THE EDGE'S, and `agent` only where a version-1
+	// edge stated none: `kind` is NOT NULL, and in that version every seat
+	// a chart placed was one the company intended to run until its content
+	// record said otherwise — which a version-1 content record still does.
+	// In the DOCUMENT as well as the column, which a stub used to leave
+	// empty while the column said `agent`.
+	if seat.Kind == "" {
+		seat.Kind = SeatAgent
+	}
 	document, err := EncodeSeat(seat)
 	if err != nil {
 		return 0, err
 	}
-	// A STUB SEAT'S KIND IS `agent`, and that is a real decision rather
-	// than a default falling out of the zero value: `kind` is NOT NULL and
-	// every seat a chart places is one a company intends to run until its
-	// content record says otherwise. A human seat's own record follows on
-	// its subject and corrects it under the ordinary version guard.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO chart_seats
 			(handle, former_keys_json, kind, name, email, email_index,
@@ -480,7 +491,7 @@ func (a *Applier) writeSeatStructure(ctx context.Context, tx *sql.Tx,
 			 version, scoped_through, document)
 		VALUES (?, '[]', ?, '', '', '', '', '', '', '', ?, ?, ?, 0, ?, ?)
 		ON CONFLICT (handle) DO NOTHING`,
-		seat.Handle, string(SeatAgent), seat.UnitKey,
+		seat.Handle, string(seat.Kind), seat.UnitKey,
 		store.EncodeTime(seat.CreatedAt), store.EncodeTime(seat.UpdatedAt),
 		at.packed, document)
 	if err != nil {

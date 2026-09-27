@@ -48,7 +48,8 @@ type Writer struct {
 
 	// holders reads who, in the identity directory, is bound to a seat.
 	// Nil is a node that does not run that domain, and every seat removal
-	// is then refused naming the node — see [Holders].
+	// and every person's seat made an agent's is then refused naming the
+	// node — see [Holders].
 	holders Holders
 
 	// Actor and ActorKind are who this writer acts as, and OperatorID and
@@ -152,13 +153,14 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 }
 
 // WithHolders installs the identity directory this writer consults before a
-// seat removal, and returns the writer for chaining.
+// seat removal or a person's seat is made an agent's, and returns the writer
+// for chaining.
 //
 // CALLED ONCE AT WIRING TIME, like [Writer.As]'s siblings: the seam is read
 // inside a decide, and a writer whose directory moved under a write in flight
 // would decide two removals two ways.
 //
-// NIL IS A NODE THAT DOES NOT RUN THE IDENTITY DOMAIN, and every seat removal
+// NIL IS A NODE THAT DOES NOT RUN THE IDENTITY DOMAIN, and either gesture
 // through it is then REFUSED naming the node rather than allowed — see
 // [Holders].
 func (w *Writer) WithHolders(h Holders) *Writer {
@@ -555,6 +557,12 @@ func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
 			"and the ledger that makes a re-import a no-op is keyed on one: %w",
 			ErrRefused)
 	}
+	for i, edge := range edges {
+		if err := checkImportEdge(edge); err != nil {
+			return WriteResult{}, fmt.Errorf("chart: the import's edge %d (%s) "+
+				"is refused: %w: %w", i, edge.Object, err, ErrRefused)
+		}
+	}
 	subject := TreeSubject()
 	at := w.Now()
 	terms := make([]ScopeTerm, 0, len(edges))
@@ -583,6 +591,33 @@ func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
 		},
 	})
 	return WriteResult{Result: result, Objects: objects}, err
+}
+
+// checkImportEdge refuses an import edge its apply would not read as meant.
+//
+// AN IMPORT STATES PLACEMENTS, NOT OPERATIONS: it is a revision's complete
+// authored structure and decides nothing about which of its objects exist, so
+// an edge carrying a batch's verb or a rename's former address is one whose
+// author meant something an import does not do.
+//
+// AND A SEAT'S KIND, which is structure: the content records that follow an
+// import carry none, so a seat edge without one would make every new seat in
+// the revision an agent — the one kind that runs — whatever the document said.
+func checkImportEdge(edge Edge) error {
+	switch {
+	case edge.Op != "" || edge.From != "":
+		return fmt.Errorf("an import places objects and states no operation " +
+			"(`op`, `from`)")
+	case edge.Object.Kind == KindSeat && !edge.Kind.Valid():
+		return fmt.Errorf("a seat's edge states what holds it: %q is not %q "+
+			"or %q", edge.Kind, SeatAgent, SeatHuman)
+	case edge.Object.Kind == KindUnit && edge.Kind != "":
+		return fmt.Errorf("a unit is held by nobody, and its edge states the "+
+			"seat kind %q", edge.Kind)
+	case edge.Object.Kind != KindUnit && edge.Object.Kind != KindSeat:
+		return fmt.Errorf("%s is not an object in the chart", edge.Object.Kind)
+	}
+	return nil
 }
 
 // scopeTermFor is one object's term in this domain's alphabet.

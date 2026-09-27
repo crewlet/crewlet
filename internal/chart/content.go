@@ -85,9 +85,13 @@ type UnitContent struct {
 }
 
 // SeatContent is one seat's own content.
+//
+// IT CARRIES NO KIND. What holds a seat is STRUCTURE — a create_seat states it
+// and a set_kind changes it ([OpSetKind]) — because it decides whether a node
+// runs the seat at all, and a lead editing a backstory must not be able to
+// turn a person's seat into an agent's by the same write.
 type SeatContent struct {
 	Handle string
-	Kind   SeatKind
 
 	// Unit is the unit key this seat sits in, stated by the CALLER and
 	// verified against the row inside the decide.
@@ -258,7 +262,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 					object, unit, prior.UnitKey, ErrRefused)
 			}
 			payload := SeatPayload{
-				V: DocumentVersion, Handle: handle, Kind: content.Kind,
+				V: DocumentVersion, Handle: handle,
 				Name: content.Name, Backstory: content.Backstory,
 				Goal: content.Goal, Responsibilities: content.Responsibilities,
 				BehavioralGuidelines: content.BehavioralGuidelines,
@@ -272,7 +276,11 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 				return statelog.Decision{}, err
 			}
 			payload.Email = email
-			if err := payload.seat().Validate(); err != nil {
+			// VALIDATED AS THE SEAT IT WILL BE, which keeps the row's kind:
+			// the payload carries none, and the apply keeps the row's.
+			candidate := payload.seat()
+			candidate.Kind = prior.Kind
+			if err := candidate.Validate(); err != nil {
 				return statelog.Decision{}, fmt.Errorf("%w: %w", ErrRefused, err)
 			}
 			return w.record(subject, OpUpsert, opID, at, scope, payload)

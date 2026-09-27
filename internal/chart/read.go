@@ -534,9 +534,32 @@ func readSeats(ctx context.Context, tx *sql.Tx) ([]Seat, error) {
 
 func readSeatsWhere(ctx context.Context, tx *sql.Tx, where string, args ...any) (
 	[]Seat, error) {
-	return readDocuments(ctx, tx,
-		`SELECT document FROM chart_seats WHERE `+where+` ORDER BY handle`,
-		args, DecodeSeat)
+
+	query := `SELECT document, version FROM chart_seats WHERE ` + where +
+		` ORDER BY handle`
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("chart: read %q: %w", query, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Seat
+	for rows.Next() {
+		var document []byte
+		var version int64
+		if err := rows.Scan(&document, &version); err != nil {
+			return nil, fmt.Errorf("chart: read a seat row: %w", err)
+		}
+		seat, err := DecodeSeat(document)
+		if err != nil {
+			return nil, err
+		}
+		seat.HasContent = version > 0
+		out = append(out, seat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chart: read %q: %w", query, err)
+	}
+	return out, nil
 }
 
 // readDocuments decodes one table's stored documents, in the query's own order.

@@ -63,11 +63,12 @@ broke, because a batch that applied what it could and skipped the rest would
 produce half a reorganisation with no record of which half — and which half
 would depend on the order you happened to write them in.
 
-The operations are `create_unit`, `create_seat`, `move`, `set_lead`, `rename`
-and `remove`. Each takes its object and only the fields its kind reads —
-`create_unit` a `parent` and a `lead` (so "add the platform team, led by the
-SRE" is one operation), `create_seat` and `move` a `parent`, `set_lead` a
-`lead`, `rename` a `to`, and `remove` nothing — and one carrying a field its kind does not take
+The operations are `create_unit`, `create_seat`, `move`, `set_lead`,
+`set_kind`, `rename` and `remove`. Each takes its object and only the fields its
+kind reads — `create_unit` a `parent` and a `lead` (so "add the platform team,
+led by the SRE" is one operation), `create_seat` a `parent` and a `seat_kind`,
+`move` a `parent`, `set_lead` a `lead`, `set_kind` a `seat_kind`, `rename` a
+`to`, and `remove` nothing — and one carrying a field its kind does not take
 is refused rather than having the field dropped, because a batch that dropped it
 would answer as though it asked for less than it said. An empty `parent` is the
 org root and an empty `lead` clears the unit's own lead, so neither counts as a
@@ -107,6 +108,8 @@ The rest of the rules:
 | An operation carrying a field its kind does not take — a `parent` on a `set_lead`, a `lead` on a `move` | Nothing would read it, so the batch would land having done less than it said |
 | A rename onto the address the object already answers to, or of an object the same batch creates | The first moves nothing and would retire the address it keeps; the second would give the object an identity — the address it is created under — nothing ever answered to. Create it under the address you mean |
 | An object named by an address it no longer answers to | A batch names each object by its current address, so a former one is refused naming the address to use |
+| A `create_seat` or a `set_kind` with no `seat_kind`, or one this build does not serve | Whether a person or an agent holds a seat decides whether anything runs there, so it is never a default — the default would be the kind that runs |
+| Making a person's seat an agent's while somebody holds it | The same mistake a removal is refused for: whoever is bound to it would be signed in as a seat a turn loop runs. The refusal names them, and a node that cannot read the identity directory refuses naming itself |
 | A create whose object is the other kind — a `create_unit` naming a seat | The operation and its object disagree about what is being made, and applying either reading makes something the other half did not ask for |
 | More than 500 operations | One batch is one record, and a record past the broker's maximum payload is refused **permanently** with no retry that can place it. Submit several batches; each is arbitrated on its own |
 

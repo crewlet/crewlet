@@ -27,7 +27,7 @@ func TestAContentWriteNeverCreatesItsObject(t *testing.T) {
 	}
 
 	_, err = r.writer.WriteSeat(t.Context(), "op-seat", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatAgent, Name: "Sarah Chen",
+		Handle: "sarah-chen", Name: "Sarah Chen",
 	})
 	if !errors.Is(err, chart.ErrRefused) || !strings.Contains(err.Error(), "POST /chart/batch") {
 		t.Errorf("a content write on a seat nobody created: %v — want a refusal "+
@@ -75,14 +75,12 @@ func TestAContentWriteSaysWhereItsObjectWent(t *testing.T) {
 	r.applySeatRekey("op-rename", "lena-ops", "lena")
 
 	_, err := r.writer.WriteSeat(t.Context(), "op-omar", chart.SeatContent{
-		Handle: "omar", Kind: chart.SeatAgent,
-	})
+		Handle: "omar"})
 	if !errors.Is(err, chart.ErrRefused) || !strings.Contains(err.Error(), "left the company") {
 		t.Errorf("a content write on a removed seat: %v — want the removal and its reason", err)
 	}
 	_, err = r.writer.WriteSeat(t.Context(), "op-lena", chart.SeatContent{
-		Handle: "lena", Kind: chart.SeatAgent,
-	})
+		Handle: "lena"})
 	if !errors.Is(err, chart.ErrRefused) || !strings.Contains(err.Error(), `"lena-ops"`) {
 		t.Errorf("a content write on a renamed seat's old handle: %v — want the "+
 			"handle it answers to now", err)
@@ -128,7 +126,7 @@ func TestAContentWriteAfterAPendingCreateWaitsForIt(t *testing.T) {
 		}
 	}()
 	_, err := r.writer.WriteSeat(t.Context(), "op-content", chart.SeatContent{
-		Handle: "sarah-chen", Kind: chart.SeatAgent, Name: "Sarah Chen",
+		Handle: "sarah-chen", Name: "Sarah Chen",
 	})
 	close(done)
 	drained.Wait()

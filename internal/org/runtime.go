@@ -59,6 +59,7 @@ var seatRowFields = map[string]string{
 	"Manages":              "the `chart_manages` edge table, which is indexed in the unauthored direction",
 	"UnitRef":              "the row's `unit_key`, written only by a record on the structure's own subject",
 	"AutoManaged":          "derived by the view from the lead cascade on every build",
+	"Incomplete":           "derived from the row's `version`: zero until a content record fills the seat",
 }
 
 // unitRowFields is [seatRowFields] for a unit.
@@ -97,6 +98,7 @@ func SeatRuntime(r *Role) (json.RawMessage, error) {
 	content.Responsibilities, content.BehavioralGuidelines = nil, nil
 	content.Project, content.Space = "", ""
 	content.Manages, content.AutoManaged, content.UnitRef = nil, nil, ""
+	content.Incomplete = false
 	content.OriginHandle, content.FormerHandles = "", nil
 
 	body, err := json.Marshal(content)

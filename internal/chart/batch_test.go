@@ -67,12 +67,27 @@ func refusal(t *testing.T, err error) *chart.RefusalError {
 	return ref
 }
 
+// op is one operation. A create_seat is an AGENT's unless a case says
+// otherwise ([seatOp]): a create_seat states its kind, and these cases are
+// about everything else.
 func op(kind chart.OperationKind, objectKind chart.ObjectKind, id, parent string) chart.Operation {
-	return chart.Operation{
+	o := chart.Operation{
 		Kind:   kind,
 		Object: chart.ObjectRef{Kind: objectKind, ID: id},
 		Parent: parent,
 	}
+	if kind == chart.OpCreateSeat {
+		o.SeatKind = chart.SeatAgent
+	}
+	return o
+}
+
+// seatOp is a create_seat of the kind named.
+func seatOp(kind chart.SeatKind, handle, parent string) chart.Operation {
+	return chart.Operation{Kind: chart.OpCreateSeat,
+		Object:   chart.ObjectRef{Kind: chart.KindSeat, ID: handle},
+		Parent:   parent,
+		SeatKind: kind}
 }
 
 // A PARENT CREATED EARLIER IN THE BATCH IS A PARENT.
@@ -631,7 +646,7 @@ func TestABatchMarksEachEdgeWithWhatItDid(t *testing.T) {
 		{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"},
 			Lead: "omar", Op: chart.OpSetLead},
 		{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "bob"},
-			Parent: "product", Op: chart.OpCreateSeat},
+			Parent: "product", Op: chart.OpCreateSeat, Kind: chart.SeatAgent},
 	}
 	if !slices.Equal(edges, want) {
 		t.Errorf("the batch published\n  %+v\nwant\n  %+v", edges, want)
@@ -760,7 +775,7 @@ func TestARenameIsReplayedForTheOperationsAfterIt(t *testing.T) {
 			Parent: "engineering", Lead: "sarah-chen", Op: chart.OpRename,
 			From: "platform"},
 		{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ana"},
-			Parent: "core", Op: chart.OpCreateSeat},
+			Parent: "core", Op: chart.OpCreateSeat, Kind: chart.SeatAgent},
 		{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "infra"},
 			Op: chart.OpCreateUnit},
 	}

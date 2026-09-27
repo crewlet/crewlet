@@ -245,7 +245,8 @@ func TestACreateOrderedAfterARenameNeverMovesTheRenamedObject(t *testing.T) {
 				op(chart.OpCreateUnit, chart.KindUnit, "product", ""),
 				chart.Operation{Kind: createOf(kind),
 					Object: chart.ObjectRef{Kind: kind, ID: "platform"},
-					Parent: "engineering", Lead: leadFor(kind, "sarah-chen")})
+					Parent: "engineering", Lead: leadFor(kind, "sarah-chen"),
+					SeatKind: kindFor(kind)})
 
 			// PUBLISHED, NOT APPLIED: this node's snapshot has no infra yet.
 			if _, err := r.publishRename("op-rename", kind, "platform", "infra"); err != nil {
@@ -306,6 +307,15 @@ func createOf(kind chart.ObjectKind) chart.OperationKind {
 		return chart.OpCreateUnit
 	}
 	return chart.OpCreateSeat
+}
+
+// kindFor is the seat kind a create of kind states: an agent's for a seat,
+// nothing for a unit.
+func kindFor(kind chart.ObjectKind) chart.SeatKind {
+	if kind == chart.KindSeat {
+		return chart.SeatAgent
+	}
+	return ""
 }
 
 // leadFor is lead where kind has one — a unit — and nothing for a seat.
@@ -442,13 +452,14 @@ func TestACreationNeverTakesAnotherSeatsIdentity(t *testing.T) {
 		t.Errorf("a batch created a seat on another seat's identity: %+v", ref)
 	}
 	_, err = r.writer.WriteSeat(t.Context(), "op-steal-content", chart.SeatContent{
-		Handle: "founder", Kind: chart.SeatHuman, Name: "A Stranger",
+		Handle: "founder", Name: "A Stranger",
 	})
 	if !errors.Is(err, chart.ErrRefused) {
 		t.Errorf("a content write created a seat on another seat's identity: %v", err)
 	}
 	r.mustImport("op-steal-import", "rev-1", chart.Edge{
 		Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "founder"},
+		Kind:   chart.SeatHuman,
 	})
 	if got := r.mustSeat("founder"); got.Handle != "dana" {
 		t.Errorf("an import placed a new seat on another seat's identity: "+

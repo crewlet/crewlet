@@ -136,8 +136,7 @@ func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte
 		[]iam.Grant{iam.GrantConfigWrite},
 		chart.Provenance{OperatorID: by.OperatorID})
 	result, err := party.WriteSeat(ctx, uuid.NewString(), chart.SeatContent{
-		Handle: detail.Seat.Handle, Kind: detail.Seat.Kind,
-		Unit: detail.Seat.UnitKey,
+		Handle: detail.Seat.Handle, Unit: detail.Seat.UnitKey,
 		Name: role.Name, Email: role.Email,
 		Backstory: role.Backstory, Goal: role.Goal,
 		Responsibilities:     role.Responsibilities,
