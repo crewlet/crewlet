@@ -25,6 +25,13 @@ import (
 //  2. A collection the write TOUCHES is carried whole; one it does not touch
 //     is absent. That is what makes a record able to rebuild the row, and it
 //     is affordable because every collection here is capped.
+//
+// A PAYLOAD DOES NOT CARRY what this build does not know, unlike every
+// document and the record around it, because nothing re-encodes one: the
+// record holds its mutation as the bytes its writer published, so a relay
+// writes back exactly those, and the applier writes rows from the members it
+// reads. A member that changes what those rows hold is a new record shape, and
+// a record above [RecordVersion] is retained rather than applied.
 
 // CreatePayload makes a page. Its subject is the TITLE.
 //

@@ -360,8 +360,7 @@ func TestAnOperatorWritesTheReservedContainers(t *testing.T) {
 // operatorPageActor is what the operator surface's own page actor answers: the
 // token's name, the operator kind, and no turn.
 func operatorPageActor(context.Context, *turnctx.Turn) (pages.Actor, error) {
-	return pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
-		OperatorID: "founder"}, nil
+	return pages.Actor{Kind: pages.AuthorOperator, OperatorID: "founder"}, nil
 }
 
 // A TITLE COLLISION SENDS THE MODEL TO THE EXISTING PAGE. Two pages on one

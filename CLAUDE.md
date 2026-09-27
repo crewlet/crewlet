@@ -116,9 +116,9 @@ When in doubt, ask: "If I stopped right now, would a reader of this diff conside
 ```
 cmd/crewlet/          # The one binary. run / validate / schema / migrate /
                       #   budgets / backup / retention / work / secrets /
-                      #   config / llm / search, and the six vendor CLIs
-                      #   (gitlab, github, jira, slack, confluence,
-                      #   mattermost).
+                      #   config / llm / search / promotions, and the six
+                      #   vendor CLIs (gitlab, github, jira, slack,
+                      #   confluence, mattermost).
                       #   Every command the switch dispatches must appear in
                       #   usage() — nothing connects them, and a test asserts it
 internal/             # Everything else. No package here is importable from
