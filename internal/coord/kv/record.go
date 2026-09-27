@@ -34,7 +34,8 @@ const layoutDutyLane = 1
 // leaseValue is the JSON body of a key in the leases or the duties bucket, the
 // EPHEMERAL half of a resource's state. Its deadline, or on the seat lease
 // bucket the bucket's MaxAge, ends it, which is exactly what makes a dead
-// node's seat or duty reclaimable.
+// node's seat or duty reclaimable — and what takes a dead node's presence and
+// object-store membership out of the listings that count them.
 //
 // Schema evolution here is additive-only, for the reason coord.ProtocolVersion
 // states: a rolling upgrade has two builds reading each other's records, and a

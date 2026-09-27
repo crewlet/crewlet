@@ -849,3 +849,10 @@ func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread str
 	delete(f.follows, key)
 	return true, nil
 }
+
+// SweepMarkers removes nothing, because the twin keeps no markers: a delete
+// here removes the entry from its map, so the state a KV backend reaches only
+// after its sweep is the state this one is always in. That is the contract's
+// promise read from the other side — sweeping changes no answer — and the
+// suite holds both backends to it.
+func (f *Fleet) SweepMarkers(context.Context, time.Time) (int64, error) { return 0, nil }

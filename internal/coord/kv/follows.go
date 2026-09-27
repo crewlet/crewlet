@@ -93,7 +93,7 @@ func (f *FleetStore) FollowIfAbsent(ctx context.Context, backend, handle, channe
 	if err != nil {
 		return false, fmt.Errorf("coord/kv: encode the follow: %w", err)
 	}
-	_, err = f.follows.Create(ctx, followKey(backend, handle, channel, thread), raw)
+	_, err = f.create(ctx, f.follows, followKey(backend, handle, channel, thread), raw)
 	switch {
 	case err == nil:
 		return true, nil

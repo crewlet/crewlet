@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -273,11 +274,12 @@ type Channels interface {
 // a channel closed by this tick is a week away from being deleted, which is
 // the week an operator has to read it.
 //
-// The ONE shared record still swept here, and the exception the coordination
-// store's retention rule makes room for. Every other bucket expires on its own
-// age, which is why the four records above left this file — but a bucket's age
-// cannot tell an OPEN channel from a closed one, so a TTL would reap the
-// authorization record of an ask still waiting for its answer. Both halves are
+// A shared record swept here, and the first exception the coordination store's
+// retention rule made room for — the mailboxes and the removal markers
+// ([MarkerJobs]) are the others. Most buckets expire on their own age, which is
+// why the four records above left this file — but a bucket's age cannot tell
+// an OPEN channel from a closed one, so a TTL would reap the authorization
+// record of an ask still waiting for its answer. Both halves are
 // therefore decisions, taken under the same singleton duty as every local
 // sweep. See coord.Channels and internal/store/schema/0012.
 func ChannelJobs(c Channels) []Job {
@@ -298,6 +300,36 @@ func ChannelJobs(c Channels) []Job {
 		},
 		Purge("a2a_channels", Fleet, Fixed(ChannelRetention), c.Purge),
 	}
+}
+
+// Markers is the coordination store's marker sweep. Declared here, by the
+// consumer, like every other seam in this tree; coord.Fleet is the
+// implementation.
+type Markers interface {
+	// SweepMarkers removes the removal markers written before cutoff from
+	// every record family no clock ages, reporting how many went.
+	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// MarkerJobs is the sweep for the coordination store's removal MARKERS: the
+// delete or purge record a KV removal leaves behind in a bucket the broker
+// never ages, which every listing that meets one pays a leader read for.
+//
+// The third shared record swept here, beside the channels and the mailboxes,
+// and for their reason: no bucket age can express it. The buckets that keep
+// these markers are exactly the ones whose records no clock may reap — an open
+// ask, a parked run, a credential — so removing the markers is a decision this
+// duty takes rather than something a broker does on its own.
+//
+// [Fleet]: the buckets are the company's, one copy agreed by every node, so one
+// node sweeping them per tick is the whole job and N would be N times the
+// purges for one bucket's worth of benefit. Its horizon is
+// [coord.MarkerRetention], which is where the value is argued.
+func MarkerJobs(m Markers) []Job {
+	if m == nil {
+		return nil
+	}
+	return []Job{Purge("coordination_markers", Fleet, Fixed(coord.MarkerRetention), m.SweepMarkers)}
 }
 
 // ScheduleJobs is the sweep for the scheduled-run ledger.

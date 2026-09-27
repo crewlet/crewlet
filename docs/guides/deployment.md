@@ -405,20 +405,45 @@ shared records — the object store's placement map among them. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
-**A coordination read costs one ordered pass, and an account needs the
-consumer API.** A node lists coordination records constantly — several
+**A coordination read costs one ordered pass certified against the stream's
+key index, and an account needs the consumer, stream-info, message-get and
+purge APIs.** A node lists coordination records constantly — several
 fifteen-second duty loops on every tick, and the state-log write fence, which
 lists the published trim floors on every write at an expectation of zero, a
-subject's first write among them — and each of those is one pass over a temporary
-consumer, which on a replicated bucket is two metadata-raft proposals. The
-engine deliberately does **not** use the batched direct get that would avoid
-the consumer: it is served by any replica, and this estate has reads whose
-answer is acted on with nothing to arbitrate them. So a credential scoped only
-to publishing and consuming is not enough; the account needs the consumer API
-alongside the rest of `$JS.API`. If the broker's own debug logging is on, that
-consumer churn is what produces a steady stream of `JetStream connection
-closed: Client Closed` lines — see `stream.debug`, which is off by default for
-exactly this reason.
+subject's first write among them. Each listing is one pass over a temporary
+consumer, which on a replicated bucket is two metadata-raft proposals, and
+beside it one stream-info request narrowed to the listing's keys, which names
+every key that has a message. A pass alone cannot tell that it is complete — a
+key rewritten under it can land behind the marker that ends it, and every renew
+is such a rewrite — so a key the index names that the pass missed, or delivered
+only as a delete marker, is read by itself from the **stream leader**
+(`$JS.API.STREAM.MSG.GET`), never through the bucket's direct get, which any
+replica — one that has fallen behind included — may answer. A marker needs that
+read because on a replicated bucket the pass may be served by a replica that
+applied a key's delete and not yet its re-creation. On a quiet bucket the
+certification therefore costs the index read and one leader read per recent
+removal the pass meets, and under writes one more per key the pass lost. What
+keeps "recent" recent is the maintenance duty, which sweeps the removal markers
+older than three hours out of every shared bucket with no age, each with a
+leader-side `$JS.API.STREAM.PURGE` bounded at the marker's own revision so a
+key written again since is untouched (see
+[Coordination](../concepts/coordination.md#removal-markers-are-swept)). While a
+bucket's stream is **electing a leader**, a listing of it answers unavailable
+rather than a short list, since every member answers the index from its own
+store until one leads — the answer every caller already treats as a store
+that did not answer, never as "no records". A listing's one bound is
+the broker's page size for that index, **100,000 keys under one filter**; see
+[Coordination](../concepts/coordination.md#the-three-valued-answer) for what
+happens past it.
+The engine deliberately does **not** use the batched direct get that would
+avoid the consumer: it is served by any replica, and this estate has reads
+whose answer is acted on with nothing to arbitrate them. So a credential
+scoped only to publishing and consuming is not enough; the account needs the
+consumer API, `$JS.API.STREAM.INFO`, `$JS.API.STREAM.MSG.GET` and
+`$JS.API.STREAM.PURGE` alongside the rest of `$JS.API`. If the broker's own
+debug logging is on, that consumer churn is what produces a steady stream of
+`JetStream connection closed: Client Closed` lines — see `stream.debug`, which
+is off by default for exactly this reason.
 
 **A clustered node is given longer to create them than a solo one.** Every
 one of those creates is a local file-store setup on a solo node and a raft
@@ -743,7 +768,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* A shared counter in the coordination slot, so an org cap of 500 k is 500 k across the fleet — and it covers **every** completion the engine makes on a seat's behalf, the turn loop, the coding sandbox and the auxiliary learning passes alike.
 - *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
-- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
+- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. Tier A's
 `node.max_concurrent` (default 32) is the gate every agent turn takes a slot

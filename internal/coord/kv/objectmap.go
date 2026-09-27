@@ -31,7 +31,7 @@ func (f *FleetStore) CreateObjectMap(ctx context.Context, value []byte) (coord.O
 	if len(value) == 0 {
 		return coord.ObjectMapRecord{}, false, errors.New("coord/kv: an object map needs a value")
 	}
-	revision, err := f.objects.Create(ctx, objectMapKey, value)
+	revision, err := f.create(ctx, f.objects, objectMapKey, value)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyExists):
 		return coord.ObjectMapRecord{}, false, nil

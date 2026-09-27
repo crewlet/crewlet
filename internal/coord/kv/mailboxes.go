@@ -79,38 +79,39 @@ func (f *FleetStore) Mailbox(ctx context.Context, handle string) (coord.MailboxR
 }
 
 // Mailboxes returns every record, ordered by handle.
+//
+// ONE CERTIFIED WALK, like every other listing in this package (walk.go),
+// and it was the one that was not. It used the client's ListKeys and then a
+// Get per handle, which is each of the three things the walk exists to
+// prevent: a read per record on top of the lister's own consumer; a listing
+// cut off half way that came back SHORT with a nil error, because the lister
+// ends on the nil a closed subscription yields; and a key lister built on the
+// same watcher, which ends where it GUESSES the initial values end — so a
+// record rewritten while it was listed could be left out. A record left out
+// is one the retention sweep does not judge that tick, and one its discovery
+// step then reads as a mailbox that escaped the registry: the inference that
+// step's ordering exists to make safe (internal/maintenance/mailboxes.go).
 func (f *FleetStore) Mailboxes(ctx context.Context) ([]coord.MailboxRecord, error) {
-	keys, err := f.mailboxes.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the mailbox records", err)
-	}
 	var out []coord.MailboxRecord
-	for key := range keys.Keys() {
-		handle, ok := decodeKey(key)
+	err := f.each(ctx, f.mailboxes, func(kve jetstream.KeyValueEntry) error {
+		handle, ok := decodeKey(kve.Key())
 		if !ok {
 			// A key this backend did not write. Skipped rather than
 			// guessed at: an invented handle would send a sweep to delete
 			// the mailbox of a seat nobody named.
-			continue
+			return nil
 		}
-		entry, err := f.mailboxes.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Deleted between the listing and the read, which is a
-			// retirement finishing. The outcome the reader would have
-			// acted towards, so it is skipped rather than raised.
-			continue
-		}
+		// RAISED, never skipped: a record dropped here is the record left
+		// out above, by another route.
+		rec, err := decodeMailbox(handle, kve.Value(), kve.Revision())
 		if err != nil {
-			// RAISED, never skipped: a listing that quietly dropped a
-			// record is a sweep that concludes a removed seat has no
-			// mailbox left to retire.
-			return nil, unavailable("read a mailbox record", err)
-		}
-		rec, err := decodeMailbox(handle, entry.Value(), entry.Revision())
-		if err != nil {
-			return nil, err
+			return err
 		}
 		out = append(out, rec)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.MailboxRecord) int { return cmp.Compare(a.Handle, b.Handle) })
 	return out, nil
@@ -131,7 +132,7 @@ func (f *FleetStore) CreateMailbox(ctx context.Context, rec coord.MailboxRecord)
 	if err != nil {
 		return coord.MailboxRecord{}, false, err
 	}
-	revision, err := f.mailboxes.Create(ctx, encodeKey(rec.Handle), raw)
+	revision, err := f.create(ctx, f.mailboxes, encodeKey(rec.Handle), raw)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyExists):
 		return coord.MailboxRecord{}, false, nil
@@ -171,9 +172,9 @@ func (f *FleetStore) UpdateMailbox(ctx context.Context, rec coord.MailboxRecord)
 
 // DeleteMailbox removes a record at a version.
 //
-// Purge rather than Delete, matching every other ageless bucket here: a Delete
-// leaves a tombstone revision, and a bucket with no TTL keeps every one of them
-// for the life of the deployment.
+// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
+// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
+// marker it leaves.
 func (f *FleetStore) DeleteMailbox(ctx context.Context, handle string, version uint64) (bool, error) {
 	if handle == "" {
 		return false, errors.New("coord/kv: a mailbox record needs a handle")

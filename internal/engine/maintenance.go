@@ -114,6 +114,13 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				jobs = append(jobs, maintenance.ChannelJobs(svc)...)
 			}
 		}
+		// AND THE COORDINATION STORE'S OWN REMOVAL MARKERS, for the
+		// channels' reason one level down: the buckets that keep them
+		// are the ones no clock may age, so a marker there stays for the
+		// life of the deployment unless a decision removes it — and
+		// every listing that meets one pays a leader read for it. See
+		// [maintenance.MarkerJobs].
+		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can

@@ -2,6 +2,8 @@ package coordtest
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -290,5 +292,117 @@ var concurrencyCases = []testCase{
 			h.t.Fatalf("epoch %d after churn that reached %d — the counter rewound",
 				final.Epoch, maxEpoch)
 		}
+	}},
+
+	{"a_lease_renewed_throughout_a_listing_is_in_every_listing", func(h *harness) {
+		// "A class listing may lag" is about a lease that CHANGED — a
+		// peer claimed a second ago is discovered a second late. It is
+		// not licence to drop one that was live before the listing
+		// began and after it ended, and a renew is the write every live
+		// lease takes on every heartbeat. Missing one is a live node
+		// that looks gone (placement divides the seats by the rest), an
+		// owner whose drain looks finished, and — for an older-protocol
+		// peer — a floor that lets the newer build claim beside it.
+		//
+		// Measured on the embedded KV before its listings were
+		// certified: a store that keeps one revision per key REMOVES the
+		// revision a listing is about to read when the key is renewed,
+		// and 23% of listings lost a lease that way.
+		nodes := []string{"n0", "n1", "n2", "n3", "n4"}
+		held := map[string]*coord.Lease{}
+		for _, n := range nodes {
+			held[n] = h.claim(coord.NodeResource(n), coord.AcquireOptions{
+				Owner: n + ":1", TTL: LongTTL, Ungated: true, Protocol: 2,
+			})
+		}
+		// The older build's presence, so the floor has a lease that
+		// only it can see.
+		held["old"] = h.claim(coord.NodeResource("old"), coord.AcquireOptions{
+			Owner: "old:1", TTL: LongTTL, Ungated: true, Protocol: 1,
+		})
+		want := []string{"node:n0", "node:n1", "node:n2", "node:n3", "node:n4", "node:old"}
+
+		c := startChurn([]string{"n0", "n2", "old"}, func(n string) error {
+			l := held[n]
+			ok, err := h.b.Renew(h.ctx, l.Resource, l.Owner, l.Epoch, LongTTL)
+			if err == nil && !ok {
+				err = fmt.Errorf("the renew reported the lease lost")
+			}
+			return err
+		})
+		raced, wrong := c.readThrough(h.ctx, func() (string, bool) {
+			live, err := h.b.ListLive(h.ctx, coord.ClassNode)
+			if err != nil {
+				return fmt.Sprintf("ListLive: %v", err), true
+			}
+			if got := slices.Sorted(slices.Values(resources(live))); !slices.Equal(got, want) {
+				return fmt.Sprintf("ListLive(node) = %v", got), false
+			}
+			owned, err := h.b.ListOwned(h.ctx, "old:1")
+			if err != nil {
+				return fmt.Sprintf("ListOwned: %v", err), true
+			}
+			if got := resources(owned); !slices.Equal(got, []string{"node:old"}) {
+				return fmt.Sprintf("ListOwned(old:1) = %v", got), false
+			}
+			floor, found, err := h.b.FleetProtocolFloor(h.ctx)
+			if err != nil {
+				return fmt.Sprintf("FleetProtocolFloor: %v", err), true
+			}
+			if !found || floor != 1 {
+				return fmt.Sprintf("FleetProtocolFloor = (%d, %v), want (1, true)", floor, found), false
+			}
+			return "", false
+		})
+		c.verdict(h.t, "the lease reads", raced, wrong)
+	}},
+
+	{"a_hint_rewritten_throughout_a_listing_is_in_every_listing", func(h *harness) {
+		// The stickiness hint's record is rewritten whenever its resource
+		// changes tenure, and a restarted node reads the hints to find
+		// the seats it had warm. A listing that dropped a hint whose
+		// record was mid-rewrite sends those seats to whichever node
+		// sweeps first — the one thing the hint exists to prevent.
+		seats := []string{"seat:s0", "seat:s1", "seat:s2", "seat:s3", "seat:s4"}
+		// A cell per seat rather than a map of leases: the map is only
+		// READ once the rewriters start, and each rewriter writes its own
+		// seat's cell and nothing else.
+		type tenure struct{ lease *coord.Lease }
+		held := map[string]*tenure{}
+		for _, s := range seats {
+			held[s] = &tenure{h.claim(s, coord.AcquireOptions{
+				Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",
+			})}
+		}
+		// A new tenure per round: released, then claimed again naming the
+		// same node, so the hint never changes and its record always does.
+		c := startChurn([]string{"seat:s0", "seat:s2"}, func(s string) error {
+			cell := held[s]
+			if _, err := h.b.Release(h.ctx, s, cell.lease.Owner, cell.lease.Epoch); err != nil {
+				return err
+			}
+			next, err := h.b.TryAcquire(h.ctx, s, coord.AcquireOptions{
+				Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",
+			})
+			if err == nil && next == nil {
+				err = fmt.Errorf("refused a resource its own owner had just released")
+			}
+			if err != nil {
+				return err
+			}
+			cell.lease = next
+			return nil
+		})
+		raced, wrong := c.readThrough(h.ctx, func() (string, bool) {
+			hints, err := h.b.PreferredResources(h.ctx, coord.ClassSeat, "node-a")
+			if err != nil {
+				return fmt.Sprintf("PreferredResources: %v", err), true
+			}
+			if got := slices.Sorted(maps.Keys(hints)); !slices.Equal(got, seats) {
+				return fmt.Sprintf("%v", got), false
+			}
+			return "", false
+		})
+		c.verdict(h.t, "PreferredResources", raced, wrong)
 	}},
 }

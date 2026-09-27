@@ -160,6 +160,33 @@ const (
 	// StatusFreshness is a multiple of it and a package that imported the
 	// configplane for one constant would invert the dependency.
 	ReconcileInterval = 15 * time.Second
+
+	// MarkerRetention is how long the record that a key was REMOVED — a
+	// delete or purge marker — stays in a store that never ages its
+	// records, before [Markers.SweepMarkers] removes it.
+	//
+	// NOT A CORRECTNESS BOUND, and that is established rather than hoped:
+	// every reader of a backend that keeps markers asks what the key holds
+	// NOW before it trusts one — a listing reads a marker its pass
+	// delivered again from the stream leader, and a create re-reads the key
+	// before conditioning on one — so a marker swept the instant after it
+	// was written changes no answer. The contract suite sweeps with a
+	// cutoff in the future and holds every other answer to what it was.
+	//
+	// What the horizon decides is how long a removal stays VISIBLE, against
+	// what that costs. Every marker still held is one leader read on each
+	// listing whose pass delivers it, so a listing pays for the records
+	// removed in the last horizon plus one sweep interval. And a marker is
+	// the store's only trace that a key was removed rather than never
+	// written, so it has to outlive every operation that could still be
+	// acting on what it read before the removal: a listing runs inside the
+	// tick that takes it, every read-decide-write on these records runs
+	// under a claim, and no claim outlives [MaxDutyTTL]. Hence three hours —
+	// every operation in flight when a key was removed has finished before
+	// its marker goes, and a listing re-reads at most the removals of the
+	// last three hours and a quarter, where without the sweep it re-read
+	// every removal the deployment had ever made.
+	MarkerRetention = MaxDutyTTL
 )
 
 // Counter is the fleet's shared fixed-window counter, behind the notification
@@ -1055,6 +1082,34 @@ type Mailboxes interface {
 	DeleteMailbox(ctx context.Context, handle string, version uint64) (bool, error)
 }
 
+// Markers is the one piece of housekeeping the shared state asks of its
+// caller: removing the record that a key was removed.
+//
+// # Why a store that forgets on its own still needs it
+//
+// A KV backend removes a key by appending a delete or purge MARKER, and a
+// bucket the broker ages takes the marker with everything else when it ages
+// out. The families above that no clock may reap — the runs, the channels,
+// the mailboxes, the secrets, the budgets, the integration statuses, the
+// positions register — keep every marker for the life of the deployment, and
+// each one is a leader read on every listing that meets it (internal/coord/kv
+// walk.go says why a marker is read again rather than trusted). So the
+// markers are swept, as a DECISION under the maintenance duty, for the reason
+// the channels are: a bucket's age cannot express which records may go.
+//
+// # It changes no answer
+//
+// That is the contract, and the suite holds it: sweep every marker, and every
+// read, listing, create and conditional write answers exactly as before. A
+// backend that keeps no marker at all — the memory twin deletes the entry —
+// satisfies it by sweeping nothing.
+type Markers interface {
+	// SweepMarkers removes every marker written before cutoff from the
+	// record families no clock ages, reporting how many went. A failure
+	// part-way reports the markers already removed beside the error.
+	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
@@ -1082,6 +1137,7 @@ type Fleet interface {
 	FloorRegister
 	BackupRegister
 	MaintenanceRegister
+	Markers
 }
 
 // ObjectMapRecord is the fleet's object placement map as the store holds it.

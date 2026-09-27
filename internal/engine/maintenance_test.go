@@ -54,6 +54,13 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"agent_diary",
 		"agent_diary_long",
 		"conversation_sessions",
+		// THE COORDINATION STORE'S REMOVAL MARKERS. A bucket no clock
+		// ages keeps the marker every removal leaves for the life of
+		// the deployment, and every listing that meets one reads it
+		// again from the stream leader — so without this entry a
+		// listing's cost grew with every record the company had ever
+		// removed, with nothing anywhere saying so.
+		"coordination_markers",
 		// Added the same way the diary was: the table shipped with a
 		// memsync entry that republishes every row to every peer on
 		// every cycle, and no horizon anywhere — so it grew with the

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
 
@@ -724,5 +725,64 @@ func TestTheIdleChannelJobDrivesTheServiceThatAnnounces(t *testing.T) {
 	}
 	if n, err := jobs[1].Run(context.Background(), base, cutoff); err != nil || n != 5 {
 		t.Fatalf("purge Run = (%d, %v), want the store's count", n, err)
+	}
+}
+
+// fakeMarkers records the cutoffs the marker sweep was driven with.
+type fakeMarkers struct {
+	cutoffs []time.Time
+	swept   int64
+}
+
+func (m *fakeMarkers) SweepMarkers(_ context.Context, cutoff time.Time) (int64, error) {
+	m.cutoffs = append(m.cutoffs, cutoff)
+	return m.swept, nil
+}
+
+// THE COORDINATION STORE'S MARKERS ARE SWEPT ONCE PER FLEET, AT THEIR OWN
+// HORIZON.
+//
+// Fleet-scoped because the buckets are one copy the whole company shares, so a
+// node sweeping them per tick is the job and N nodes would be N times the
+// purges. And the horizon is coord.MarkerRetention, taken from where it is
+// argued rather than restated: every marker younger than it is one leader read
+// on each listing that meets it, and older than it is past every operation
+// that could still be acting on what it read before the removal.
+func TestTheMarkerSweepRunsUnderTheDutyAtItsOwnHorizon(t *testing.T) {
+	t.Parallel()
+	if jobs := maintenance.MarkerJobs(nil); len(jobs) != 0 {
+		t.Fatalf("a nil marker sweep produced %d jobs", len(jobs))
+	}
+	m := &fakeMarkers{swept: 4}
+	jobs := maintenance.MarkerJobs(m)
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %d, want the one marker sweep", len(jobs))
+	}
+	job := jobs[0]
+	if job.Name != "coordination_markers" || job.Scope != maintenance.Fleet {
+		t.Fatalf("job = %q scope %v, want coordination_markers under the duty", job.Name, job.Scope)
+	}
+	if got := job.Horizon(); got != coord.MarkerRetention {
+		t.Errorf("horizon = %v, want coord.MarkerRetention", got)
+	}
+
+	var ran atomic.Bool
+	w := newWorker(t, maintenance.Options{
+		Jobs:      jobs,
+		ClaimDuty: func(context.Context) (bool, error) { return ran.Swap(true), nil },
+		Now:       func() time.Time { return base },
+	})
+	if swept, err := w.Tick(context.Background()); err != nil || swept != nil {
+		t.Fatalf("a tick without the duty = (%v, %v), want (nil, nil)", swept, err)
+	}
+	if len(m.cutoffs) != 0 {
+		t.Fatalf("the markers were swept by a node without the duty: %v", m.cutoffs)
+	}
+	swept, err := w.Tick(context.Background())
+	if err != nil || swept["coordination_markers"] != 4 {
+		t.Fatalf("a tick with the duty = (%v, %v), want the store's count", swept, err)
+	}
+	if want := base.Add(-coord.MarkerRetention); len(m.cutoffs) != 1 || !m.cutoffs[0].Equal(want) {
+		t.Errorf("the sweep saw cutoffs %v, want %v", m.cutoffs, want)
 	}
 }

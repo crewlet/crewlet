@@ -50,6 +50,8 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"mailboxes", mailboxCases},
 		{"object maps", objectMapCases},
 		{"maintenance", maintenanceCases},
+		{"listings", listingCases},
+		{"markers", markerCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {

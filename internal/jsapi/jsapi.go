@@ -119,8 +119,18 @@ const accountPrefix = "$JS.API."
 // `JSApi…` constants, which is what a caller reaching past the client uses —
 // into the subject this API answers the same request on.
 //
-// For the ONE caller that reaches past the client: the backup's stream
-// snapshot, a request the client library has no call for.
+// For the callers that reach past the client, each for a request the client
+// library does not make in the shape it needs, and each addressed here so a
+// leaf of the embedded fleet reaches the same JetStream a member does:
+//
+//   - the backup's stream snapshot, which the client has no call for at all;
+//   - coord/kv's certifying read of one key, `STREAM.MSG.GET` by last subject,
+//     which only the stream LEADER answers — on a bucket that allows direct
+//     gets, which every KV bucket does, the client only ever sends a
+//     `DIRECT.GET` that any replica answers, one that is behind included;
+//   - and coord/kv's marker sweep, a `STREAM.PURGE` bounded at a marker's
+//     own revision, whose answer carries how many messages went — which the
+//     client's own purge drops.
 func (a API) Subject(subject string) (string, error) {
 	switch {
 	case !a.named:

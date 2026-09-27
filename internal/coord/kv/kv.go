@@ -16,7 +16,8 @@
 //
 //   - crewlet_leases, created with KeyValueConfig.TTL = the seat lease TTL
 //     this node asks for, and ADOPTED at whatever a peer created it with.
-//     It holds `seat:` and `node:` leases. That age is the STREAM's MaxAge,
+//     It holds `seat:`, `node:` and `objects:` leases — every class renewed
+//     on the seat heartbeat. That age is the STREAM's MaxAge,
 //     which is the renewable one: every write refreshes the entry's age, so
 //     Update at the current revision IS the renew, an unrenewed key expires
 //     SERVER-SIDE, and a peer's Create then succeeds. The store's own expiry
@@ -148,14 +149,16 @@
 // deliberate difference, not an oversight. The gate reads both lease buckets,
 // because the contract counts every live lease.
 //
-// # Every listing is ONE PASS, and never the client's ListKeys
+// # Every listing is ONE CERTIFIED PASS, and never the client's ListKeys
 //
 // Reading a whole bucket goes through [eachEntry], which hands over the KEY
-// AND THE VALUE TOGETHER in a single ordered pass, and narrows to one key
-// class at the BROKER where the caller wants one. walk.go is the authority on
-// that, including why the batched direct read that would drop even the
-// consumer is deliberately not used; what follows is why the obvious shape is
-// worse than either.
+// AND THE VALUE TOGETHER in a single ordered pass, narrows to one key class at
+// the BROKER where the caller wants one, and CERTIFIES the pass against the
+// stream's own key index before handing anything over, because a pass cannot
+// tell a complete answer from one that lost a key being rewritten under it.
+// walk.go is the authority on all of that, including why the batched direct
+// read that would drop even the consumer is deliberately not used; what
+// follows is why the obvious shape is worse than either.
 //
 // A key listing is not a cheap read. The client implements ListKeys as a
 // watcher, so each call CREATES AND DELETES AN ORDERED EPHEMERAL CONSUMER —
@@ -174,9 +177,11 @@
 // not be reached" are three different facts, and a short list with no error
 // collapses the third into the second at every caller at once. For the trim's
 // published floor it is not a degraded read but a delete of records a node
-// still needs. Both walks end on one explicit marker and ONLY on it — the nil
-// entry, or the broker's end-of-batch — and anything else is
-// [coord.ErrUnavailable], named as such.
+// still needs. The pass ends on one explicit marker and ONLY on it — the nil
+// entry — and anything else is [coord.ErrUnavailable], named as such. The
+// marker is where the pass ends rather than proof that it saw every key,
+// which is what the certification is for: it is the client's guess, and
+// measured against three renewers it guessed early on 23% of listings.
 //
 // The ordered walk also owns its watcher, so there is no early-return path
 // that leaks one — the abandoned-listing case the client's blocking 256-entry
@@ -265,7 +270,7 @@ type Config struct {
 	// MaxAge. Required.
 	//
 	// It is a property of the BUCKET, not of a call: see the package doc.
-	// A per-call seat or presence TTL longer than the age in force is
+	// A per-call seat, presence or objects TTL longer than the age in force is
 	// refused; a shorter one is honoured against the store's own clock. Duty
 	// TTLs do not depend on it: they are bounded by coord.MaxDutyTTL.
 	//
@@ -345,8 +350,8 @@ type lane struct {
 type Store struct {
 	js jetstream.JetStream
 
-	// leases holds seat and presence leases, and a duty an older build
-	// claimed before the duty bucket existed.
+	// leases holds seat, presence and object-store membership leases, and
+	// a duty an older build claimed before the duty bucket existed.
 	leases *lane
 	// duties holds every duty lease this build claims.
 	duties *lane
@@ -414,7 +419,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 
 	leases, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket:      cfg.BucketPrefix + leasesSuffix,
-		Description: "Crewlet seat and presence leases; the bucket TTL is the lease TTL and its expiry is the arbiter",
+		Description: "Crewlet seat, presence and object-store membership leases; the bucket TTL is the lease TTL and its expiry is the arbiter",
 		TTL:         cfg.TTL,
 		Replicas:    cfg.Replicas,
 	})
@@ -603,8 +608,8 @@ func readBucket(ctx context.Context, bucket jetstream.KeyValue) (bucketFacts, er
 }
 
 // TTL reports the seat lease TTL IN FORCE, which is the seat lease bucket's
-// own age: what expires a seat or presence lease, and what [Store.validateTTL]
-// holds every such claim to.
+// own age: what expires a seat, presence or object-store membership lease, and
+// what [Store.validateTTL] holds every such claim to.
 //
 // NOT NECESSARILY THIS NODE'S CONFIGURED VALUE: the bucket is adopted rather
 // than rewritten, so on a fleet it carries whatever the member that created it
@@ -619,7 +624,14 @@ func (s *Store) TTL() time.Duration { return s.ttl }
 func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, kv, visit)
+	return eachEntry(ctx, s.js, kv, visit)
+}
+
+// create writes a key that must not hold a live value — see [createKey], the
+// one create this package makes, and markers.go for why it is not the bucket
+// handle's own.
+func (s *Store) create(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) (uint64, error) {
+	return createKey(ctx, s.js, kv, key, value)
 }
 
 // eachUnder is [Store.each] over one resource class, narrowed at the broker —
@@ -627,7 +639,7 @@ func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
 func (s *Store) eachUnder(ctx context.Context, kv jetstream.KeyValue, class coord.Class, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, kv, coord.DocumentFilter(string(class)), what, visit)
+	return eachEntryUnder(ctx, s.js, kv, coord.DocumentFilter(string(class)), what, visit)
 }
 
 // checkClass refuses a class that cannot address a key.
@@ -661,8 +673,9 @@ func (s *Store) laneFor(resource string) *lane {
 // Only the duty class is in two: the duty bucket, where this build writes one,
 // and the seat lease bucket after it, where a node of an older build still
 // holds one during the rolling upgrade the package doc describes. Every other
-// class lives in the seat lease bucket alone, so the membership read on every
-// heartbeat costs what it did before duties had a bucket of their own.
+// class — seats, presence and object-store membership — lives in the seat
+// lease bucket alone, so each membership read on a heartbeat costs what it did
+// before duties had a bucket of their own.
 func (s *Store) lanesFor(class coord.Class) []*lane {
 	if class == coord.ClassWorker {
 		return []*lane{s.duties, s.leases}
@@ -820,7 +833,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		}
 		var rev uint64
 		if mine == nil {
-			if rev, err = l.kv.Create(ctx, key, claimData); err != nil {
+			if rev, err = s.create(ctx, l.kv, key, claimData); err != nil {
 				if errors.Is(err, jetstream.ErrKeyExists) {
 					continue
 				}
@@ -1089,7 +1102,8 @@ func (s *Store) ListOwned(ctx context.Context, owner string) ([]coord.Lease, err
 
 // ListLive returns the live leases of one class. ListLive(coord.ClassNode) is
 // the membership read: counting live presence leases is how a node learns the
-// fleet size it divides the seats by.
+// fleet size it divides the seats by. ListLive(coord.ClassObjects) is the
+// object store's, read by the placement map's maintainer every tick.
 //
 // THE BROKER NARROWS THIS ONE. A class is the leading segment of a resource
 // and therefore a subject token of its key, so each scan asks for that class
@@ -1239,7 +1253,7 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 			if err != nil {
 				return 0, "", err
 			}
-			if _, err := s.epochs.Create(ctx, key, data); err != nil {
+			if _, err := s.create(ctx, s.epochs, key, data); err != nil {
 				if errors.Is(err, jetstream.ErrKeyExists) {
 					continue
 				}
@@ -1336,9 +1350,10 @@ type snapshot struct {
 // readForClaim gathers what TryAcquire needs.
 //
 // An UNGATED claim reads one key instead of the whole of both lease buckets,
-// and that is not a micro-optimisation: node presence is renewed on every
-// heartbeat of every node, and scanning the fleet's leases to renew one's own
-// presence would make the read cost of a heartbeat grow with the fleet.
+// and that is not a micro-optimisation: node presence and object-store
+// membership are each renewed on every heartbeat of every node, and scanning
+// the fleet's leases to renew one's own would make the read cost of a
+// heartbeat grow with the fleet.
 func (s *Store) readForClaim(ctx context.Context, l *lane, resource string, ungated bool) (snapshot, error) {
 	snap := snapshot{clock: s.newClock()}
 	if ungated {
@@ -1483,7 +1498,7 @@ func (s *Store) scanIn(ctx context.Context, l *lane, class coord.Class) ([]entry
 func (s *Store) collect(ctx context.Context, l *lane,
 	walk func(func(jetstream.KeyValueEntry) error) error) ([]entry, error) {
 
-	byResource := map[string]entry{}
+	var out []entry
 	err := walk(func(kve jetstream.KeyValueEntry) error {
 		e, ok := decodeEntry(kve, l)
 		if !ok {
@@ -1493,24 +1508,17 @@ func (s *Store) collect(ctx context.Context, l *lane,
 			log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", l.kv.Bucket(), "key", kve.Key())
 			return nil
 		}
-		// A write landing mid-listing can report a key twice; the later
-		// revision is the record.
-		if prev, seen := byResource[e.resource]; seen && prev.revision > e.revision {
-			return nil
-		}
-		byResource[e.resource] = e
+		// Once per resource: the walk hands each key over once, at the
+		// newest revision the listing read, and a resource is one key.
+		out = append(out, e)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]entry, 0, len(byResource))
-	for _, e := range byResource {
-		out = append(out, e)
-	}
-	// Sorted because a map iterates in a different order every time, and an
-	// unstable listing turns any downstream ordering bug into one that
-	// reproduces once in ten runs.
+	// Sorted by RESOURCE, where the walk hands keys over in KEY order: a key
+	// is the resource's encoding — another separator, escaped segments — so
+	// the two orders are not the same order.
 	slices.SortFunc(out, func(a, b entry) int { return strings.Compare(a.resource, b.resource) })
 	return out, nil
 }
@@ -1593,7 +1601,7 @@ func (s *Store) held(ctx context.Context, e entry, clk *clock) (bool, error) {
 	// A seat lease taken at the bucket's full age expires by DISAPPEARING
 	// (the bucket's MaxAge reaps it), so a record that can still be read is
 	// live by construction, and no clock is consulted at all. This is the
-	// whole production path for seats and presence.
+	// whole production path for seats, presence and object-store membership.
 	if e.lane.reapsAtMax && e.value.ttl() >= e.lane.maxTTL {
 		return true, nil
 	}

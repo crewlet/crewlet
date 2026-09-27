@@ -232,6 +232,12 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // running fleet (the KV backend only ever raises its duty bucket's age);
 // lowering it leaves an existing bucket older than it needs to be, which costs
 // nothing, because no duty record is judged by the bucket's age.
+//
+// It is also the removal-marker horizon, [MarkerRetention], by definition
+// rather than by coincidence: no operation that read a record before it was
+// removed outlives the claim it runs under, so none is still acting on that
+// read when the marker goes. Moving this moves that, which lengthens or
+// shortens the tail of markers a listing re-reads and changes no answer.
 const MaxDutyTTL = 3 * time.Hour
 
 // CheckDutyTTL refuses a claim on a duty resource whose TTL exceeds
@@ -380,9 +386,36 @@ type AcquireOptions struct {
 //
 // A BACKEND MUST SERVE ITS OWN WRITES, PER RESOURCE. A claim, renew or
 // release that has returned must be visible to this caller's next read of
-// THAT resource. Prefix listings are free to lag: ListLive is how a node
-// discovers peers, and a peer discovered a second late is a placement that
-// converges a second later.
+// THAT resource. A class listing may LAG — see a recent change late: ListLive
+// is how a node discovers peers, and a peer claimed a second ago and
+// discovered a second late is a placement that converges a second later. Lag
+// is never licence to DROP: a key live from before a listing began until
+// after it ended is in that listing, however often it was rewritten in
+// between. A renew is the write every live lease takes on every heartbeat, so
+// a listing that loses a key under rewrite loses live peers exactly when a
+// fleet is healthiest — a live node that looks gone to placement, an owner
+// whose drain looks finished, a minimum that rises over a row it never saw.
+// The conformance suite holds every backend to it with listings read
+// throughout a churn of renews and rewrites (coordtest's
+// "…_throughout_a_listing_is_in_every_listing" cases).
+//
+// And a listing that cannot establish it answers UNKNOWN — an error, never a
+// shorter list, since "no rows" is a legitimate answer everywhere one is
+// asked. On the KV backend that is not free, and internal/coord/kv's walk.go
+// is where it is argued: a pass cannot tell that it is complete, so every
+// listing is certified against the stream's own key index; a key the index
+// names that the pass lost, or delivered only as a delete marker — which a
+// replica behind a re-creation serves for a key live throughout — is read
+// again from the stream LEADER, never through a direct get any replica
+// answers; and an index answered while the stream has no leader is refused,
+// so a listing during a leader election is unknown rather than short. Its one
+// bound is a size: past the broker's 100,000-subject page for that index, a
+// key the pass also lost can go uncertified.
+//
+// Those markers are the one record of a removal a backend may keep, and no
+// answer may rest on one: every read that meets a marker asks what the key
+// holds NOW. That is what lets [Markers] sweep them, and the suite holds it by
+// sweeping every marker at once and every answer staying what it was.
 //
 // It reads like an implementation detail and it is the whole basis of mutual
 // exclusion: a claim you cannot read back cannot exclude anybody, and the
