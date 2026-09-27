@@ -280,8 +280,7 @@ func (p *Prober) Run(ctx context.Context) (Pass, error) {
 func (p *Prober) check(ctx context.Context, tokenEndpoint string,
 	session LiveSession) (Verdict, string) {
 
-	tokens, err := p.provider.Config().Refresh(ctx, p.provider.client,
-		tokenEndpoint, session.Refresh)
+	tokens, err := p.provider.Refresh(ctx, tokenEndpoint, session.Refresh)
 	switch {
 	case errors.Is(err, ErrDeactivated):
 		return VerdictDeactivated, ""

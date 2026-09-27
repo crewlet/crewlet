@@ -93,6 +93,10 @@ type Provider struct {
 	client *http.Client
 	now    func() time.Time
 
+	// slots admits a request to the token endpoint: a buffered channel of
+	// [ExchangeSlots], taken for the length of one exchange or refresh.
+	slots chan struct{}
+
 	mu        sync.Mutex
 	metadata  Metadata
 	fetchedAt time.Time
@@ -111,31 +115,89 @@ type discovery struct {
 	err      error
 }
 
-// NewProvider builds one. A nil client takes one from [httpx].
+// ExchangeSlots is how many requests this node has in flight to one identity
+// provider's token endpoint at once — code exchanges and deactivation probes
+// together.
+//
+// EIGHT, the design's figure, and what it is sized against is the morning's
+// sign-in wave: at a hundred milliseconds an exchange, eight slots clear a
+// 3,000-person company in about 37 seconds, each person waiting only for the
+// exchanges ahead of theirs. What it buys is that this engine never shows a
+// provider more than eight requests from one node, however many callbacks
+// land at once — including a burst an unauthenticated caller can make by
+// starting flights and calling back, each of which costs an exchange. No
+// legitimate callback is REFUSED for it: a caller waits for a slot on its own
+// request's context, for as long as that lives, and a browser that gives up
+// has asked for nothing more.
+const ExchangeSlots = 8
+
+// NewProvider builds one. A nil client takes the identity provider's own from
+// [httpx.IdentityProviderClient], whose connection cap is derived from
+// [ExchangeSlots].
+//
+// ONE PROVIDER PER ISSUER PER PROCESS, which is what makes its slots the
+// per-issuer bound: the engine builds one from Tier A's one `api.auth.oidc`
+// block, and the sign-in surface and the probe share it.
 func NewProvider(config Config, client *http.Client, now func() time.Time) *Provider {
 	if client == nil {
-		client = httpx.Client(ExchangeTimeout)
+		client = httpx.IdentityProviderClient(ExchangeTimeout)
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return &Provider{config: config, client: client, now: now}
+	return &Provider{config: config, client: client, now: now,
+		slots: make(chan struct{}, ExchangeSlots)}
 }
 
 // Config is the provider's configuration.
 func (p *Provider) Config() Config { return p.config }
 
-// Exchange redeems an authorization code over THIS PROVIDER'S OWN CLIENT, the
-// one its discovery and its key set already use: the three requests go to one
-// party, and a caller reaching [Config.Exchange] with a client of its own — or
-// with none, which takes a fresh default — gives that party a second timeout
-// policy and a second trust store. The callback did exactly that, so a
-// provider built with a client that trusted its issuer discovered and fetched
-// keys fine and then failed every code exchange.
+// Exchange redeems an authorization code, inside one of this provider's
+// [ExchangeSlots] and over THIS PROVIDER'S OWN CLIENT, the one its discovery
+// and its key set already use: the three requests go to one party, and a
+// client of the caller's own gave that party a second timeout policy and a
+// second trust store — the callback did exactly that, so a provider built
+// with a client that trusted its issuer discovered and fetched keys fine and
+// then failed every code exchange. The configuration's exchange is unexported
+// so there is no way to the token endpoint that skips the slots.
+//
+// A caller waits for a slot on its own context; one that ends first is
+// answered its context's error, having asked the provider nothing.
 func (p *Provider) Exchange(ctx context.Context, tokenEndpoint, code, verifier string) (
 	Tokens, error) {
 
-	return p.config.Exchange(ctx, p.client, tokenEndpoint, code, verifier)
+	release, err := p.slot(ctx)
+	if err != nil {
+		return Tokens{}, err
+	}
+	defer release()
+	return p.config.exchange(ctx, p.client, tokenEndpoint, code, verifier)
+}
+
+// Refresh exchanges a refresh token — the deactivation probe's one question —
+// inside a slot and over the provider's own client, for [Provider.Exchange]'s
+// reasons.
+func (p *Provider) Refresh(ctx context.Context, tokenEndpoint, refresh string) (
+	Tokens, error) {
+
+	release, err := p.slot(ctx)
+	if err != nil {
+		return Tokens{}, err
+	}
+	defer release()
+	return p.config.refresh(ctx, p.client, tokenEndpoint, refresh)
+}
+
+// slot waits for one of the provider's [ExchangeSlots], answering how to give
+// it back, or the caller's own context ending first.
+func (p *Provider) slot(ctx context.Context) (func(), error) {
+	select {
+	case p.slots <- struct{}{}:
+		return func() { <-p.slots }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("oidc: wait for a turn at the provider's token "+
+			"endpoint: %w", ctx.Err())
+	}
 }
 
 // Metadata returns the discovery document, fetching it when the cache is cold

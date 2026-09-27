@@ -167,6 +167,13 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	tokens, err := s.provider.Exchange(r.Context(),
 		metadata.TokenEndpoint, code, flight.Verifier)
+	if err != nil && r.Context().Err() != nil {
+		// THE BROWSER WENT AWAY, most often while it waited its turn at
+		// the provider's token endpoint ([oidc.ExchangeSlots]): nothing
+		// was refused, so nothing is counted as a failed attempt.
+		abandoned(w, r, source, err)
+		return
+	}
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_exchange_failed", "error", err)
 		s.refuseSignIn(w, r, adm, attempt, "code exchange failed")

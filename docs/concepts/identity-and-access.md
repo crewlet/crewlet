@@ -1301,6 +1301,27 @@ The flight cookie lives ten minutes — long enough for a person to fetch their
 phone for a second factor at the provider, short enough that a cookie carrying
 a verifier is not sitting in a browser for the length of a meeting.
 
+### What a sign-in wave costs the provider
+
+Every callback exchanges a code at the provider's token endpoint, and so does
+anybody who starts a flight and calls back with a made-up code — an
+unauthenticated caller can make one exchange per round trip. So a node puts
+**at most eight requests** on one provider's token endpoint at once, code
+exchanges and deactivation probes together. A callback beyond the eight
+**waits its turn** on its own request rather than being refused: at a hundred
+milliseconds an exchange, a 3,000-person company signing in at nine o'clock
+clears in about 37 seconds, and a browser that gives up waiting is answered
+`503` and counted as no attempt, having asked the provider nothing.
+
+Everything a node sends the provider — the discovery document, the key set,
+every exchange and every probe — goes through one HTTP client with a
+transport of its own, holding **at most ten connections** to that host: the
+eight exchanges and the two fetches beside them. The discovery document and
+the key set are each fetched **once however many sign-ins ask**, on a request
+no single browser owns, so a node restarted in the middle of the morning's
+wave asks the provider for its metadata once rather than once per person, and
+one person closing their tab fails nobody else's sign-in.
+
 ### What is checked in an ID token, and what each check is for
 
 An ID token is a bearer assertion by a third party. Every check is invisible

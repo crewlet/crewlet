@@ -211,7 +211,7 @@ func TestALoginBegunOnOneNodeFinishesOnAnother(t *testing.T) {
 	if flight.Return != "/work" {
 		t.Errorf("the return address reads %q", flight.Return)
 	}
-	tokens, err := config.Exchange(t.Context(), idp.Client(), metadata.TokenEndpoint,
+	tokens, err := nodeB.Exchange(t.Context(), metadata.TokenEndpoint,
 		code, flight.Verifier)
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
@@ -335,13 +335,14 @@ func TestACodeCannotBeRedeemedWithoutTheVerifier(t *testing.T) {
 	}
 	code := idp.authorize(t, redirect)
 	_ = sealed
+	provider := oidc.NewProvider(config, idp.Client(), func() time.Time { return at })
 
 	for name, verifier := range map[string]string{
 		"no verifier at all": "",
 		"somebody else's":    "a-verifier-the-challenge-was-not-made-from",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := config.Exchange(t.Context(), idp.Client(),
+			if _, err := provider.Exchange(t.Context(),
 				idp.Server.URL+"/token", code, verifier); err == nil {
 				t.Error("the provider redeemed a code against the wrong " +
 					"verifier, so this case is asserting about a provider " +

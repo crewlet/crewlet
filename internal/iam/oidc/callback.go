@@ -10,8 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // THE SECOND HALF OF THE ROUND TRIP: the provider sends the browser back with
@@ -60,18 +58,16 @@ type Tokens struct {
 	Refresh string
 }
 
-// Exchange redeems an authorization code.
+// exchange redeems an authorization code, over the provider's own client and
+// inside one of its slots — [Provider.Exchange] is the only way in.
 //
 // THE VERIFIER GOES WITH IT, which is the whole of PKCE: the provider hashed
 // the challenge at the authorization request and compares it to this, so a code
 // intercepted between the provider and this engine cannot be redeemed by
 // whoever intercepted it.
-func (c Config) Exchange(ctx context.Context, client *http.Client,
+func (c Config) exchange(ctx context.Context, client *http.Client,
 	tokenEndpoint, code, verifier string) (Tokens, error) {
 
-	if client == nil {
-		client = httpx.Client(ExchangeTimeout)
-	}
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -92,14 +88,12 @@ func (c Config) Exchange(ctx context.Context, client *http.Client,
 	return Tokens{IDToken: body.IDToken, Refresh: body.RefreshToken}, nil
 }
 
-// Refresh exchanges a refresh token, which is what the deactivation probe
+// refresh exchanges a refresh token, which is what the deactivation probe
 // does: an account the provider has deactivated answers `invalid_grant`.
-func (c Config) Refresh(ctx context.Context, client *http.Client,
+// [Provider.Refresh] is the only way in, for [Config.exchange]'s reason.
+func (c Config) refresh(ctx context.Context, client *http.Client,
 	tokenEndpoint, refresh string) (Tokens, error) {
 
-	if client == nil {
-		client = httpx.Client(ExchangeTimeout)
-	}
 	body, err := c.post(ctx, client, tokenEndpoint, url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refresh},
