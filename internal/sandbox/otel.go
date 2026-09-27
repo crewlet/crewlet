@@ -231,9 +231,13 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 //
 // The ENDPOINT carries the run's own token in its path, so
 // OTEL_EXPORTER_OTLP_HEADERS stays EMPTY — set explicitly rather than left
-// unset, because the exporter reads it from the ambient environment
-// otherwise, and a box inherits whatever the engine host exported. An empty
-// value is the difference between "no credential" and "the engine's".
+// unset, because an exporter reads it from its ambient environment otherwise,
+// and a box's ambient environment is not only what the engine hands it. The
+// engine hands a box none of its own (see internal/hostbox), but an image or
+// an E2B template may bake in a value of its own, and so may a `-e` an
+// operator put in `local.run_args`. An empty value is the difference between
+// "no credential" and one this run's exporter was never meant to present —
+// the endpoint's token is the whole of what it needs.
 //
 // The RESOURCE ATTRIBUTES are non-secret routing facts — which turn, which
 // seat — so a span from inside a box lands under the turn that started it
