@@ -2854,7 +2854,11 @@ In that posture:
   are derived from the copy the fleet has abandoned.
 - **Queries are refused** with `unavailable`, and the query surface is never
   reached. `unavailable` is the one code that must never be flattened into an
-  empty result: "this company has no work" is an answer a person acts on.
+  empty result: "this company has no work" is an answer a person acts on. The
+  frame carries `retry_after` like every other `unavailable` frame — one
+  health tick, the soonest the posture can change — and names no `refusal`,
+  because none of the state log's is behind it; the `health` frame is what
+  says why.
 - **`snapshot` still arrives** on connect. It is a direct frame and it carries
   the node's own health, so the one frame a degraded client is handed is the
   one that says why the rest stopped.

@@ -365,7 +365,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 	defer checking.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, slots)
+	code, reason := readLoop(ctx, conn, seats, client, query, who, slots, svc.interval)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -427,9 +427,12 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // that end a socket at all; everything else this loop can go wrong about is
 // answered ON the socket and the socket stays open. See [CloseUnauthenticated]
 // and [FrameDegraded].
+//
+// healthEvery is the shared tick's cadence, which is when a degraded posture
+// can next change — the hint a query refused on one carries.
 func readLoop(ctx context.Context, conn *websocket.Conn,
 	seats *watching, client *Client, query Query, who *asking,
-	slots chan struct{},
+	slots chan struct{}, healthEvery time.Duration,
 ) (websocket.StatusCode, string) {
 	// THE CONCURRENCY BOUND ARRIVES FROM THE SERVICE rather than being
 	// made here, and that is the whole of the per-principal change: a
@@ -471,8 +474,22 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// out of it — "there is no such work item" — is something a
 			// person acts on. The refusal is a DIRECT frame, so it
 			// reaches the client whatever the posture.
+			//
+			// AND IT SAYS WHEN TO ASK AGAIN, like every other
+			// `unavailable` frame: `retry_after` is never omitted,
+			// because a frame without it is what a node too old to say
+			// sends. The posture is re-derived on the shared health
+			// tick — a node shedding or stuck on a configuration, or
+			// this socket's own credential unverifiable — so one tick
+			// is the soonest this node could answer differently, and
+			// the health frame the tab keeps receiving says why. No
+			// state-log refusal is behind it, so none is named.
 			if !client.Posture().ServesQueries() {
-				client.Reply(queryError(req, CodeUnavailable))
+				env := queryError(req, CodeUnavailable)
+				env.Unavailable = &Unavailable{
+					RetryAfter: httpjson.RetrySeconds(healthEvery),
+				}
+				client.Reply(env)
 				continue
 			}
 			if query == nil {
