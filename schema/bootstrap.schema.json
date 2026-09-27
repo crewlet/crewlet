@@ -8,122 +8,263 @@
         },
         "host": {
           "description": "Bind address for the HTTP surface.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "port": {
-          "description": "Bind port; 0 disables the HTTP surface entirely.",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Bind port; 0 disables the HTTP surface entirely."
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "APIAuth": {
       "additionalProperties": false,
       "properties": {
         "allow_anonymous_read": {
+          "anyOf": [
+            {
+              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
           "description": "Serve reads without a token (default true).",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "allowed_origins": {
           "description": "CORS origins. Empty = same-origin only.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "disabled": {
+          "anyOf": [
+            {
+              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
           "description": "Local-dev only: serve every route unauthenticated.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "tokens": {
           "description": "Accepted bearer tokens. Empty refuses every write.",
           "items": {
             "$ref": "#/$defs/APIToken"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "APIToken": {
       "additionalProperties": false,
       "properties": {
         "id": {
           "description": "Short label recorded as the author of writes made with this token.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "token": {
           "description": "Token value or ${VAR} reference.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
         "id",
         "token"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Coordination": {
       "additionalProperties": false,
       "properties": {
         "lease_ttl_seconds": {
-          "description": "Seat and presence lease TTL; 0 takes the measured default. Fleet duties size their own.",
-          "minimum": 0,
-          "type": "number"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Seat and presence lease TTL; 0 takes the measured default. Fleet duties size their own."
         },
         "type": {
-          "description": "local (single node, default) or embedded-kv (a fleet).",
-          "enum": [
-            "local",
-            "embedded-kv"
+          "anyOf": [
+            {
+              "enum": [
+                "local",
+                "embedded-kv",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
           ],
-          "type": "string"
+          "description": "local (single node, default) or embedded-kv (a fleet)."
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "LogFile": {
       "additionalProperties": false,
       "properties": {
         "format": {
-          "description": "Shape written to the file. Empty follows logging.format; set json when a shipper reads it.",
-          "enum": [
-            "console",
-            "text",
-            "json"
+          "anyOf": [
+            {
+              "enum": [
+                "console",
+                "text",
+                "json",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
           ],
-          "type": "string"
+          "description": "Shape written to the file. Empty follows logging.format; set json when a shipper reads it."
         },
         "level": {
-          "description": "How loud the file is. Empty follows logging.level.",
-          "enum": [
-            "debug",
-            "info",
-            "warn",
-            "error"
+          "anyOf": [
+            {
+              "enum": [
+                "debug",
+                "info",
+                "warn",
+                "error",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
           ],
-          "type": "string"
+          "description": "How loud the file is. Empty follows logging.level."
         },
         "max_backups": {
-          "description": "Rotated files kept beside the live one. Unset = 5; 0 keeps none. Each rotation renames every file it keeps, so the count is bounded.",
-          "maximum": 1000,
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 1000,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Rotated files kept beside the live one. Unset = 5; 0 keeps none. Each rotation renames every file it keeps, so the count is bounded."
         },
         "max_size_mb": {
-          "description": "Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled, and the cap is bounded above because the byte arithmetic wraps.",
-          "maximum": 1073741824,
-          "minimum": 1,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 1073741824,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled, and the cap is bounded above because the byte arithmetic wraps."
         },
         "path": {
           "description": "Log file written in addition to stderr. Empty writes no file. Missing directories are created.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Logging": {
       "additionalProperties": false,
@@ -132,175 +273,384 @@
           "$ref": "#/$defs/LogFile"
         },
         "format": {
-          "description": "console (default, columns and colour for a person), text (slog key=value) or json (for a log shipper).",
-          "enum": [
-            "console",
-            "text",
-            "json"
+          "anyOf": [
+            {
+              "enum": [
+                "console",
+                "text",
+                "json",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
           ],
-          "type": "string"
+          "description": "console (default, columns and colour for a person), text (slog key=value) or json (for a log shipper)."
         },
         "level": {
-          "description": "debug, info (default), warn or error.",
-          "enum": [
-            "debug",
-            "info",
-            "warn",
-            "error"
+          "anyOf": [
+            {
+              "enum": [
+                "debug",
+                "info",
+                "warn",
+                "error",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
           ],
-          "type": "string"
+          "description": "debug, info (default), warn or error."
         },
         "stderr": {
+          "anyOf": [
+            {
+              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
           "description": "Whether the ordinary log stream reaches stderr. Unset = true. false needs logging.file.path, and never silences a boot failure or the watchdog's exit notice.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "NATSTLS": {
       "additionalProperties": false,
       "properties": {
         "ca": {
           "description": "Path to a PEM CA bundle for the server certificate; empty uses the host roots.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "cert": {
           "description": "Path to the client certificate PEM, for a server requiring mutual TLS. Needs key.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "key": {
           "description": "Path to the client private key PEM. Needs cert.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Node": {
       "additionalProperties": false,
       "properties": {
         "id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+            },
+            {
+              "const": ""
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
           "description": "Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0.",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "labels": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Free-form node facts a seat's placement selector matches on.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "max_concurrent": {
-          "description": "Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this.",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this."
         },
         "roles": {
           "description": "What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state: it needs store.scratch, and an embedded stream joins the fleet through stream.leaf.urls.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Retention": {
       "additionalProperties": false,
       "properties": {
         "backup_owner": {
           "description": "Who owns this deployment's backups — a person, a team, a scheduler. Warned about when unset.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "SecretKey": {
       "additionalProperties": false,
       "properties": {
         "id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            {
+              "const": ""
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
           "description": "Stable key id, colon-free so the envelope parses.",
-          "pattern": "^[A-Za-z0-9._-]+$",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "material": {
           "description": "base64(32 bytes), or a ${VAR} reference to it.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
         "id",
         "material"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Secrets": {
       "additionalProperties": false,
       "properties": {
         "active_key_id": {
           "description": "Which key seals new writes.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "keys": {
           "description": "The keyring; several entries support online rotation.",
           "items": {
             "$ref": "#/$defs/SecretKey"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Store": {
       "additionalProperties": false,
       "properties": {
         "busy_timeout_seconds": {
-          "description": "Lock wait before a write gives up, whether it waits in the driver or in the store's own queue, and the anchor for the one retry it then gets; 0 takes the store default.",
-          "minimum": 0,
-          "type": "number"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Lock wait before a write gives up, whether it waits in the driver or in the store's own queue, and the anchor for the one retry it then gets; 0 takes the store default."
         },
         "max_open_conns": {
-          "description": "Connection pool bound; 0 takes the store default.",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Connection pool bound; 0 takes the store default."
         },
         "objects": {
           "$ref": "#/$defs/StoreObjects"
         },
         "path": {
           "description": "Local database file this node owns exclusively.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "replicated_path": {
           "description": "Second local database, for replicated state; empty puts it beside path.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "scratch": {
+          "anyOf": [
+            {
+              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
           "description": "Delete this node's store at every boot. Required on a node without the data role, refused on one with it.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "snapshot_dir": {
           "description": "Where this node keeps snapshots of the replicated estate; empty is \u003cdir of path\u003e/snapshots.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "StoreObjects": {
       "additionalProperties": false,
       "properties": {
         "dir": {
           "description": "Where this node keeps its share of the object store; empty is \u003cdir of store.path\u003e/objects.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "weight": {
-          "description": "This node's share of the object store relative to the other data nodes, 1..64; 0 is the default, 1.",
-          "maximum": 64,
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "This node's share of the object store relative to the other data nodes, 1..64; 0 is the default, 1."
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Stream": {
       "additionalProperties": false,
@@ -310,169 +660,386 @@
         },
         "credentials": {
           "description": "Path to a NATS credentials file for an external server.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "debug": {
+          "anyOf": [
+            {
+              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
           "description": "Turn on the EMBEDDED broker's own debug logging. Separate from logging.level, which is the engine's; refused for type: nats. Its warnings and errors are never gated by this.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "event_retention_hours": {
-          "description": "Event stream retention; 0 takes the queue default.",
-          "minimum": 0,
-          "type": "number"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Event stream retention; 0 takes the queue default."
         },
         "leaf": {
           "$ref": "#/$defs/StreamLeaf"
         },
         "pages_log_max_bytes": {
-          "description": "Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB.",
-          "maximum": 274877906944,
-          "minimum": 1073741824,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 274877906944,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB."
         },
         "replicas": {
-          "description": "Stream replica count: 1 solo, 3 in a fleet.",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 5,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Copies of every stream and coordination bucket, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members. Not the object store's copies; those are objects.replicas in the company."
         },
         "store_dir": {
           "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "store_max_bytes": {
-          "description": "How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem.",
-          "maximum": 70368744177664,
-          "minimum": 4294967296,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 70368744177664,
+              "minimum": 4294967296,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."
         },
         "sync": {
           "description": "always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "tls": {
           "$ref": "#/$defs/NATSTLS"
         },
         "token": {
           "description": "Bearer token for an external server; ${VAR} supported.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "tracker_log_max_bytes": {
-          "description": "Byte ceiling on the mutation log; unset derives a quarter of the free space on the volume the streams live on - stream.store_dir where an embedded broker has one, store.path otherwise - clamped to 4 GiB..64 GiB.",
-          "maximum": 1099511627776,
-          "minimum": 1073741824,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 1099511627776,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the mutation log; unset derives a quarter of the free space on the volume the streams live on - stream.store_dir where an embedded broker has one, store.path otherwise - clamped to 4 GiB..64 GiB."
         },
         "tracker_retention": {
           "$ref": "#/$defs/TrackerRetention"
         },
         "tracker_vectors_max_bytes": {
-          "description": "Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state.",
-          "maximum": 274877906944,
-          "minimum": 1073741824,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 274877906944,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state."
         },
         "type": {
-          "description": "embedded (default) or nats.",
-          "enum": [
-            "embedded",
-            "nats"
+          "anyOf": [
+            {
+              "enum": [
+                "embedded",
+                "nats",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
           ],
-          "type": "string"
+          "description": "embedded (default) or nats."
         },
         "url": {
           "description": "External NATS URL. Required for nats, refused for embedded.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "StreamCluster": {
       "additionalProperties": false,
       "properties": {
         "advertise": {
           "description": "host:port peers should dial for this member, when it differs from what it binds.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "host": {
           "description": "Interface the route listener binds. Empty binds every interface.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "name": {
           "description": "Cluster name shared by every member.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "peers": {
-          "description": "Route URLs of the other members.",
+          "description": "Route URLs of the OTHER members, e.g. nats://node-b.internal:6222. An entry that is this node's own route (cluster.host and port, or cluster.advertise) or a repeat is not counted as a member.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "port": {
-          "description": "Route port for cluster traffic.",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Route port for cluster traffic."
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "StreamLeaf": {
       "additionalProperties": false,
       "properties": {
         "advertise": {
           "description": "host:port leaves should dial for this member, when it differs from what it binds.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "host": {
           "description": "Interface the leaf listener binds. Empty binds every interface.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "port": {
-          "description": "A member's leaf listener, where nodes without the data role join. Accepts any connection that reaches it, like the route port.",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "A member's leaf listener, where nodes without the data role join. Accepts any connection that reaches it, like the route port."
         },
         "urls": {
           "description": "Leaf listeners of the members a node without the data role joins through, e.g. nats-leaf://data-a.internal:7422. Any one that answers will do.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "TrackerRetention": {
       "additionalProperties": false,
       "properties": {
         "backup_floor": {
-          "description": "Whose word the trim takes for what is backed up: engine (default) or operator.",
-          "enum": [
-            "engine",
-            "operator"
+          "anyOf": [
+            {
+              "enum": [
+                "engine",
+                "operator",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
           ],
-          "type": "string"
+          "description": "Whose word the trim takes for what is backed up: engine (default) or operator."
         },
         "backup_max_age": {
           "description": "How stale the newest backup may be before the trim stops (default 24h, 1h..30d).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "min_age": {
           "description": "Age floor no trim may cross (default 7d, 24h..90d).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "rejoin_window": {
           "description": "Budget for a node to become a complete replica (default 30m, 5m..24h).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "snapshot_interval": {
           "description": "How stale a node's newest snapshot may be before it takes another (default 24h, 1h..7d).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     }
   },
   "$id": "https://docs.crewlet.ai/schema/bootstrap.schema.json",
@@ -487,17 +1054,27 @@
             "coordination": {
               "properties": {
                 "type": {
-                  "const": "embedded-kv"
+                  "anyOf": [
+                    {
+                      "const": "embedded-kv"
+                    },
+                    {
+                      "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+                      "type": "string"
+                    }
+                  ]
                 }
               },
               "required": [
                 "type"
-              ]
+              ],
+              "type": "object"
             }
           },
           "required": [
             "coordination"
-          ]
+          ],
+          "type": "object"
         }
       },
       "then": {
@@ -512,7 +1089,9 @@
                 }
               },
               "type": {
-                "const": "embedded"
+                "not": {
+                  "const": "nats"
+                }
               }
             }
           }
@@ -531,12 +1110,14 @@
             },
             "required": [
               "type"
-            ]
+            ],
+            "type": "object"
           }
         },
         "required": [
           "coordination"
-        ]
+        ],
+        "type": "object"
       },
       "then": {
         "not": {
@@ -547,43 +1128,86 @@
                   "properties": {
                     "peers": {
                       "maxItems": 1,
-                      "minItems": 1
+                      "minItems": 1,
+                      "type": "array"
                     }
                   },
                   "required": [
                     "peers"
-                  ]
+                  ],
+                  "type": "object"
                 }
               },
               "required": [
                 "cluster"
-              ]
+              ],
+              "type": "object"
             }
           },
           "required": [
             "stream"
-          ]
+          ],
+          "type": "object"
         }
       }
     },
     {
-      "$comment": "stream.replicas \u003e 1 needs peers to replicate to.",
+      "$comment": "stream.replicas \u003e 1 on an embedded stream that joins no fleet needs peers to replicate to.",
       "if": {
         "properties": {
           "stream": {
             "properties": {
+              "leaf": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "properties": {
+                      "urls": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "maxItems": 0,
+                            "type": "array"
+                          }
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
               "replicas": {
-                "minimum": 2
+                "minimum": 2,
+                "type": "integer"
+              },
+              "type": {
+                "anyOf": [
+                  {
+                    "const": "embedded"
+                  },
+                  {
+                    "const": ""
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
               "replicas"
-            ]
+            ],
+            "type": "object"
           }
         },
         "required": [
           "stream"
-        ]
+        ],
+        "type": "object"
       },
       "then": {
         "properties": {
@@ -597,17 +1221,20 @@
                 },
                 "required": [
                   "peers"
-                ]
+                ],
+                "type": "object"
               }
             },
             "required": [
               "cluster"
-            ]
+            ],
+            "type": "object"
           }
         },
         "required": [
           "stream"
-        ]
+        ],
+        "type": "object"
       }
     },
     {
@@ -617,19 +1244,19 @@
           "stream": {
             "properties": {
               "type": {
-                "enum": [
-                  "nats"
-                ]
+                "const": "nats"
               }
             },
             "required": [
               "type"
-            ]
+            ],
+            "type": "object"
           }
         },
         "required": [
           "stream"
-        ]
+        ],
+        "type": "object"
       },
       "then": {
         "properties": {
@@ -641,12 +1268,14 @@
             },
             "required": [
               "url"
-            ]
+            ],
+            "type": "object"
           }
         },
         "required": [
           "stream"
-        ]
+        ],
+        "type": "object"
       }
     }
   ],
@@ -677,5 +1306,8 @@
     }
   },
   "title": "Crewlet bootstrap config (Tier A)",
-  "type": "object"
+  "type": [
+    "object",
+    "null"
+  ]
 }

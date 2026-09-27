@@ -266,8 +266,8 @@ Per role, under `integrations.mattermost`:
 
 | Field | Meaning |
 |---|---|
-| `bot_token` | The bot's personal access token. `${VAR}` ⇒ provisionable. |
-| `username` | Bot username. Defaults to the handle (with the prefix applied). |
+| `bot_token` | The bot's personal access token. `${VAR}` ⇒ provisionable. One whole reference or the token itself — a reference inside other text is refused, since the transport would send it as written. |
+| `username` | Bot username, or one whole `${VAR}` naming it (resolved where the transport is built, like the token). Defaults to the handle (with the prefix applied). |
 | `channel` | Optional channel name this seat's bot is added to at provisioning, on top of `provisioning.channels`. It aims nothing: the engine's transport posts no message. |
 
 There is deliberately **no `status_phrases`** here: Mattermost's indicator

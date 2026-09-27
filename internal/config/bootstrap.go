@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/url"
 	"regexp"
@@ -508,9 +509,17 @@ func (b *Bootstrap) validateTopology() error {
 	// one-peer external config as a two-node fleet: an error naming a
 	// quorum that is not this file's, whose only remedy was to delete a
 	// line that was already doing nothing.
+	//
+	// And counted as the OTHER members the list names, which is what it is
+	// for: an entry recognisably this node's own route, or a repeat of one
+	// already counted, is not another member ([StreamCluster.members]), and
+	// counting it passed a two-node fleet as three and let replicas 3 onto
+	// two members. [Bootstrap.Warnings] names every entry discounted here.
 	peers := 0
+	var members clusterMembers
 	if b.Stream.Type != StreamNATS {
-		peers = len(b.Stream.Cluster.Peers)
+		members = b.Stream.Cluster.members()
+		peers = len(members.Others)
 	}
 	// A LEAF IS IN A FLEET by definition — it holds nothing of its own, so
 	// the broker it reaches is always somebody else's members. And so is a
@@ -540,17 +549,35 @@ func (b *Bootstrap) validateTopology() error {
 	// live: the coordination store rides the stream's own connection on
 	// every topology, so the KV's quorum is the stream cluster's quorum.
 	if b.Coordination.Type == CoordinationEmbeddedKV {
-		if members := peers + 1; members == 2 {
+		if nodes := peers + 1; nodes == 2 {
 			p.add(field("stream.cluster.peers"), ErrConflict,
 				"a two-node fleet has no coordination quorum: run one node "+
-					"or three or more (this config names %d peer, so %d nodes)",
-				peers, members)
+					"or three or more (this config names %d other member, so %d "+
+					"nodes%s)", peers, nodes, members.discountedClause())
 		}
 	}
 
+	// A LIST THAT NAMES ONLY THIS NODE names no other member at all. It is
+	// refused rather than read as a solo seed, which is what it would count
+	// as: a member that seeds a cluster lists no peers, so an operator who
+	// wrote a list meant somebody to be in it — and it is the one shape the
+	// published schema's two-node rule, which counts entries because it
+	// cannot compare them with this node's address, would otherwise flag in
+	// an editor while the engine accepted it.
+	if b.Stream.Type != StreamNATS && len(b.Stream.Cluster.Peers) > 0 && peers == 0 {
+		p.add(field("stream.cluster.peers"), ErrConflict,
+			"names no member but this one: %s. A member that seeds a cluster "+
+				"lists no peers, and one that joins lists the members it joins — "+
+				"remove the list, or name the other members",
+			members.discountedList())
+	}
+
 	// Only an EMBEDDED stream is refused for this. Its members are the
-	// peers named right here, so a replica count above their number is a
-	// statement this file contradicts on its own.
+	// peers named right here, so a replica count above their number — this
+	// node and its peers — is a statement this file contradicts on its own:
+	// JetStream keeps at most one copy per member, so every stream and
+	// bucket this node provisions would be refused at boot, after the
+	// broker had started and before a single seat had.
 	//
 	// An external cluster's membership is not in this file and cannot be:
 	// `stream.url` names an address, and how many servers answer behind it
@@ -564,12 +591,193 @@ func (b *Bootstrap) validateTopology() error {
 	// NOR A LEAF: it provisions the fleet's streams on the members it
 	// reaches, so its replica count is the fleet's, and this file names none
 	// of those members.
-	if b.Stream.Type != StreamNATS && !leaf && b.Stream.Replicas > 1 && peers == 0 {
-		p.add(field("stream.replicas"), ErrConflict,
-			"replicas > 1 needs peers to replicate to; a solo node keeps 1")
+	if b.Stream.Type != StreamNATS && !leaf && b.Stream.Replicas > peers+1 {
+		if peers == 0 {
+			p.add(field("stream.replicas"), ErrConflict,
+				"replicas > 1 needs peers to replicate to; a solo node keeps 1")
+		} else {
+			p.add(field("stream.replicas"), ErrConflict,
+				"%d copies need %d members, and this cluster names %d (this node "+
+					"and the other members in stream.cluster.peers%s): a stream "+
+					"keeps at most one copy per member. Lower replicas to %d, or "+
+					"name the other members",
+				b.Stream.Replicas, b.Stream.Replicas, peers+1,
+				members.discountedClause(), peers+1)
+		}
 	}
 	return p.err()
 }
+
+// clusterMembers is what an embedded member's peer list says about the
+// cluster it is in: the entries naming OTHER members, and every entry that
+// does not.
+type clusterMembers struct {
+	// Others are the entries counted as another member, as written, in
+	// list order: each is neither this node's own route nor a repeat.
+	Others []string
+
+	// Discounted are the entries that are not another member, in list
+	// order.
+	Discounted []discountedPeer
+}
+
+// discountedPeer is a peer entry not counted as another member, and why.
+type discountedPeer struct {
+	// Index is the entry's position in stream.cluster.peers, and Raw what
+	// it says.
+	Index int
+	Raw   string
+
+	// Self is set when the entry is this node's own route, and Matches
+	// names the setting it matched ("cluster.host and cluster.port" or
+	// "cluster.advertise"). Otherwise it repeats the entry at RepeatOf.
+	Self     bool
+	Matches  string
+	RepeatOf int
+}
+
+// members is who this peer list names besides this node.
+//
+// An entry is DISCOUNTED when it is recognisably this node's own route — its
+// host and port, with the scheme dropped, the host lower-cased and an IP
+// literal read in canonical form, equal to this member's route listener
+// (cluster.host and cluster.port, when the listener is bound to one address)
+// or to the address it advertises (cluster.advertise, whose bare host keeps
+// cluster.port) — or when it names the same address as an entry before it.
+//
+// RECOGNISABLY, and only that. An entry that reaches this node under another
+// name — a DNS alias of this host, `localhost` for an advertised
+// `10.0.0.11`, the listener of a node bound to every interface — cannot be
+// told apart from another member in this file, and is COUNTED as one. The
+// broker is not misled, since nats-server drops a route to itself however it
+// was named; what is misled is every rule here that counts members, which is
+// why the list's documented shape is the OTHER members and never this one.
+//
+// An entry that is not a route URL at all is counted, as written: it is
+// refused on its own by [Stream.validate], and discounting what cannot be
+// read would change a count the refusal is about to make moot.
+func (c StreamCluster) members() clusterMembers {
+	own := c.ownRoutes()
+	var out clusterMembers
+	seen := map[string]int{}
+	for i, raw := range c.Peers {
+		addr, ok := routeAddress(raw)
+		if !ok {
+			out.Others = append(out.Others, raw)
+			continue
+		}
+		if setting, self := own[addr]; self {
+			out.Discounted = append(out.Discounted, discountedPeer{
+				Index: i, Raw: raw, Self: true, Matches: setting,
+			})
+			continue
+		}
+		if first, repeat := seen[addr]; repeat {
+			out.Discounted = append(out.Discounted, discountedPeer{
+				Index: i, Raw: raw, RepeatOf: first,
+			})
+			continue
+		}
+		seen[addr] = i
+		out.Others = append(out.Others, raw)
+	}
+	return out
+}
+
+// ownRoutes is every address this member's own route is recognisably
+// reached at, keyed by the normalised address and naming the setting that
+// says so.
+//
+// THE LISTENER ONLY WHEN IT IS BOUND TO ONE ADDRESS: an unset host, or an
+// unspecified one, binds every interface, and which of them a peer entry
+// names is not something this file can say. And no port is no listener — a
+// member with cluster.port unset opens none, so nothing can dial it.
+func (c StreamCluster) ownRoutes() map[string]string {
+	own := map[string]string{}
+	if c.Advertise != "" {
+		host, port := c.Advertise, c.Port
+		if h, p, err := net.SplitHostPort(c.Advertise); err == nil {
+			host = h
+			port, _ = strconv.Atoi(p)
+		}
+		if host != "" && port > 0 && port <= 65535 {
+			own[joinRoute(host, port)] = "cluster.advertise"
+		}
+	}
+	if host := strings.Trim(c.Host, "[]"); host != "" && c.Port > 0 {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsUnspecified() {
+			own[joinRoute(host, c.Port)] = "cluster.host and cluster.port"
+		}
+	}
+	return own
+}
+
+// routeAddress is a peer entry as the address a dial reaches — host:port,
+// the scheme dropped, the host lower-cased and an IP literal in canonical
+// form — and false for an entry the embedded server could never dial: one
+// that is not a URL, names no host, or carries no port in 1..65535.
+//
+// A PORT IS REQUIRED because nats-server requires one: it splits each route
+// URL's host and port before it dials, and an entry without a port fails that
+// on every attempt, for ever, while the member it was meant to reach is never
+// routed to.
+func routeAddress(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return "", false
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return "", false
+	}
+	return joinRoute(u.Hostname(), port), true
+}
+
+// joinRoute is the one normal form both sides of the comparison are put in.
+func joinRoute(host string, port int) string {
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// discountedClause is the discounted entries as a clause a count's message
+// can end on — ", not counting peers[0], which is this node's own route" —
+// and empty when there are none.
+func (m clusterMembers) discountedClause() string {
+	if len(m.Discounted) == 0 {
+		return ""
+	}
+	return ", not counting " + m.discountedList()
+}
+
+// discountedList names every discounted entry and why.
+func (m clusterMembers) discountedList() string {
+	parts := make([]string, 0, len(m.Discounted))
+	for _, d := range m.Discounted {
+		parts = append(parts, d.describe())
+	}
+	return strings.Join(parts, "; ")
+}
+
+// describe is one discounted entry, named by its place in the list.
+func (d discountedPeer) describe() string {
+	if d.Self {
+		return fmt.Sprintf("peers[%d] %q, which is this node's own route (%s)",
+			d.Index, d.Raw, d.Matches)
+	}
+	return fmt.Sprintf("peers[%d] %q, which repeats peers[%d]", d.Index, d.Raw, d.RepeatOf)
+}
+
+// MaxStreamReplicas is the most copies a stream may keep.
+//
+// FIVE, JetStream's own ceiling — the broker refuses a stream or a KV bucket
+// with more — so a larger number is a boot that fails at its first create
+// rather than a fleet that keeps more copies. Five copies survive two members
+// lost at once with a quorum left; beyond that a fleet adds members, not
+// replicas.
+const MaxStreamReplicas = 5
 
 // ---- node ------------------------------------------------------------ //
 
@@ -696,9 +904,20 @@ func (n *Node) validate(path Path) error {
 			err, strings.Join(nodeRoleNames, ", "))
 	}
 
-	for key := range n.Labels {
-		if key == "" {
+	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: the
+	// object store's failure domain names one of these keys, and a key this
+	// accepted and the placement map refused would be a domain nobody can
+	// spread copies across.
+	//
+	// Sorted, so a file with several bad keys reports them in the same order
+	// on every run rather than in map order — as role.placement's selector
+	// does, the other half of the same match.
+	for _, key := range slices.Sorted(maps.Keys(n.Labels)) {
+		switch err := placement.CheckLabelKey(key); {
+		case key == "":
 			p.add(at(path, "labels"), ErrMissing, "label keys must not be empty")
+		case err != nil:
+			p.add(entry(at(path, "labels"), key), ErrUnknownValue, "%v", err)
 		}
 	}
 	return p.err()
@@ -1032,8 +1251,16 @@ type Stream struct {
 	Leaf StreamLeaf `yaml:"leaf,omitempty" json:"leaf,omitzero"`
 
 	// Replicas is the stream replica count: 1 solo, 3 in a fleet, where it
-	// is what makes a publish quorum-durable before it returns.
-	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0" desc:"Stream replica count: 1 solo, 3 in a fleet."`
+	// is what makes a publish quorum-durable before it returns. It is the
+	// copies of every stream AND of every coordination bucket, which ride
+	// the same broker.
+	//
+	// AT MOST [MaxStreamReplicas], JetStream's own ceiling, and on an
+	// embedded cluster at most the members it names. It is NOT how many
+	// copies the object store keeps of a file: that is the company's
+	// `objects.replicas`, because a count read off whichever node held the
+	// placement map's duty was a count that changed with the lease.
+	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0;max=5" desc:"Copies of every stream and coordination bucket, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members. Not the object store's copies; those are objects.replicas in the company."`
 
 	// EventRetentionHours bounds the event stream. 0 takes the queue's own
 	// default. Unbounded is deliberately not expressible: an event table
@@ -1294,8 +1521,16 @@ type StreamCluster struct {
 	Name string `yaml:"name,omitempty" json:"name,omitempty" desc:"Cluster name shared by every member."`
 	// Port is the route port this member listens on.
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Route port for cluster traffic."`
-	// Peers are the other members' route URLs.
-	Peers []string `yaml:"peers,omitempty" json:"peers,omitempty" desc:"Route URLs of the other members."`
+	// Peers are the OTHER members' route URLs, each host:port under a
+	// scheme (nats://node-b.internal:6222).
+	//
+	// THE OTHER MEMBERS, because this list is what every rule that counts
+	// the cluster counts: one node or three, and at most one copy per
+	// member. An entry recognisably this node's own route, or a repeat, is
+	// discounted with a warning ([StreamCluster.members]); one that reaches
+	// this node under a name this file cannot recognise is counted as a
+	// member it is not.
+	Peers []string `yaml:"peers,omitempty" json:"peers,omitempty" desc:"Route URLs of the OTHER members, e.g. nats://node-b.internal:6222. An entry that is this node's own route (cluster.host and port, or cluster.advertise) or a repeat is not counted as a member."`
 
 	// Host is the interface the route listener binds. Empty binds every
 	// one of them, which on a host with a public interface publishes
@@ -1478,8 +1713,11 @@ func (s *Stream) validate(path Path) error {
 				"cluster logs wherever its operator configured it to. Remove "+
 				"it, or set type to %q", StreamEmbedded)
 	}
-	if s.Replicas < 0 {
-		p.add(at(path, "replicas"), ErrOutOfRange, "must not be negative, got %d", s.Replicas)
+	if s.Replicas < 0 || s.Replicas > MaxStreamReplicas {
+		p.add(at(path, "replicas"), ErrOutOfRange,
+			"must be 0 (one copy) or 1..%d, got %d: JetStream refuses a stream "+
+				"with more replicas than that, so every stream and bucket this "+
+				"node provisions would fail at boot", MaxStreamReplicas, s.Replicas)
 	}
 	if err := s.validateSync(path, external); err != nil {
 		p.wrap(err)
@@ -1541,6 +1779,25 @@ func (s *Stream) validate(path Path) error {
 				"host or advertise): the embedded server takes all of them only "+
 				"from a NAMED cluster, so this node would start solo and form no "+
 				"cluster at all")
+	}
+	// EVERY PEER IS A ROUTE THE SERVER CAN DIAL. nats-server takes a peer
+	// list as URLs and dials each one's host and port, and nothing it does
+	// with an entry it cannot is loud: one that does not parse is dropped
+	// from the list, and one with no host or no port — `b:6222` without its
+	// scheme parses as a scheme `b` and no host — fails its dial on every
+	// attempt, for ever, at debug. Either way the member it was meant to
+	// reach is never routed to, and the only symptom is a cluster short of
+	// a member. Not asked of an external stream, whose cluster block is
+	// refused whole above.
+	if !external {
+		for i, raw := range s.Cluster.Peers {
+			if _, ok := routeAddress(raw); !ok {
+				p.add(idx(at(path, "cluster.peers"), i), ErrUnknownValue,
+					"%q is not a member's route URL: want nats://host:port — "+
+						"the embedded server dials each entry's host and port, "+
+						"and one it cannot dial is never routed to", raw)
+			}
+		}
 	}
 	p.wrap(s.Leaf.validate(at(path, "leaf"), s, external))
 	bytesInRange(&p, path, "tracker_log_max_bytes", s.TrackerLogMaxBytes,
@@ -2097,9 +2354,14 @@ func (s *Stream) validateSync(path Path, external bool) error {
 	// (3) A SAME-HOST CLUSTER IS ONE FAILURE DOMAIN. Peers that resolve to
 	// this host share its power, its kernel and its page cache, so the
 	// majority the window is traded for dies with the member that has it.
-	if sameHostCluster(s.Cluster.Peers) {
+	//
+	// Asked of the OTHER members ([StreamCluster.members]): this node's own
+	// route listed among them is on this host by definition, and read as a
+	// member it hid a cluster whose other members were all local behind
+	// an entry spelled with the host's own address.
+	if sameHostCluster(s.Cluster.members().Others) {
 		p.add(at(path, "sync"), ErrConflict,
-			"every peer in stream.cluster.peers is on this host, so the quorum "+
+			"every other member in stream.cluster.peers is on this host, so the quorum "+
 				"this window trades for shares one power supply and one page "+
 				"cache: %q would be recorded and not honoured", s.Sync)
 	}

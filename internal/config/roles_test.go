@@ -1,7 +1,10 @@
 package config
 
 import (
+	"maps"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -361,5 +364,212 @@ func TestToggleKeepsItsThirdState(t *testing.T) {
 	off := mustCompany(t, "name: Acme\nroles:\n  - {name: CEO, learning_enabled: false}\n").Roles[0]
 	if !off.LearningEnabled.IsSet() || off.LearningEnabled.Or(true) {
 		t.Fatal("an explicit false must be distinguishable from unset")
+	}
+}
+
+// A PLACEMENT NO NODE COULD SATISFY IS REFUSED, AT ITS OWN FIELD.
+//
+// Every part of a selector is compared exactly against what a node
+// advertises, and a node advertises only what Tier A let through: an id in
+// the node-id grammar, label keys in the shared label-key grammar, label
+// values trimmed of the whitespace around them. A selector outside those
+// shapes is accepted by nothing downstream — the seat is simply served by
+// nobody, reported as seats_unplaceable on a running fleet long after the
+// document validated clean. Each case is one way to write such a selector,
+// and each must come back as exactly one problem at the path an operator
+// searches their file for.
+func TestAPlacementNoNodeCouldSatisfyIsRefused(t *testing.T) {
+	t.Parallel()
+	seat := func(placement string) string {
+		return "name: Acme\nroles:\n  - name: Builder\n    placement:\n" + placement
+	}
+	cases := []struct {
+		name string
+		yaml string
+		path string
+		kind string
+	}{
+		{
+			"an empty label key",
+			seat("      labels: {\"\": eu}\n"),
+			"roles[0].placement.labels", "missing",
+		},
+		{
+			"a label key with a space inside it",
+			seat("      labels: {\"my zone\": eu}\n"),
+			"roles[0].placement.labels.my zone", "unknown_value",
+		},
+		// Tier A trims a node's keys; Tier B keeps what its author wrote,
+		// so this is the key a node's `zone` never equals.
+		{
+			"a label key with whitespace around it",
+			seat("      labels: {\"zone \": eu}\n"),
+			"roles[0].placement.labels.zone ", "unknown_value",
+		},
+		{
+			"a label key past 63 bytes",
+			seat("      labels: {" + strings.Repeat("k", 64) + ": eu}\n"),
+			"roles[0].placement.labels." + strings.Repeat("k", 64), "unknown_value",
+		},
+		{
+			"a label key holding an unprintable character",
+			seat("      labels: {\"zo\\ane\": eu}\n"),
+			"roles[0].placement.labels.zo\ane", "unknown_value",
+		},
+		{
+			"a label value with whitespace around it",
+			seat("      labels: {zone: \" eu\"}\n"),
+			"roles[0].placement.labels.zone", "unknown_value",
+		},
+		{
+			"a node pin no node id could equal",
+			seat("      node: \"builder 1\"\n"),
+			"roles[0].placement.node", "unknown_value",
+		},
+		// Tier B resolves a reference only where a provider or transport
+		// is built, so this pin would be compared as the literal text.
+		{
+			"a node pin written as a reference",
+			seat("      node: \"${BUILDER_NODE}\"\n"),
+			"roles[0].placement.node", "unknown_value",
+		},
+		// The same rule through a unit, so the refusal is located at the
+		// seat's real place in the tree rather than at a root-level path.
+		{
+			"a label key on a seat inside a unit",
+			"name: Acme\nunits:\n  - name: Eng\n    roles:\n      - name: Builder\n" +
+				"        placement:\n          labels: {\"my zone\": eu}\n",
+			"units[0].roles[0].placement.labels.my zone", "unknown_value",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseCompany([]byte(tc.yaml))
+			if err == nil {
+				t.Fatalf("a selector no node could satisfy was accepted:\n%s", tc.yaml)
+			}
+			got := Problems(err)
+			if len(got) != 1 || got[0].Path != tc.path || got[0].Kind != tc.kind {
+				t.Fatalf("want one %s problem at %q, got %+v", tc.kind, tc.path, got)
+			}
+		})
+	}
+}
+
+// A REFERENCE IN A PIN IS TOLD WHY IT IS REFUSED. `${VAR}` is how every
+// credential in the same document is written, so an operator reaching for it
+// here needs to hear that a pin is compared as written — "not a node id"
+// alone reads as a complaint about a value they never typed.
+func TestAReferenceInANodePinSaysItIsNotResolved(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\nroles:\n  - name: Builder\n    placement:\n"+
+		"      node: \"${BUILDER_NODE}\"\n", "roles[0].placement.node")
+	if !strings.Contains(err.Error(), "not resolved") {
+		t.Fatalf("the refusal does not say the reference is not resolved: %v", err)
+	}
+}
+
+// EVERY BAD KEY IS REPORTED, IN THE SAME ORDER ON EVERY RUN. A document with
+// several is reported in full rather than one fix at a time, and a problem
+// list that reshuffled with map order would make a CLI's output and a
+// dashboard's marker list differ between two validations of one file.
+func TestEveryBadPlacementKeyIsReportedInOneStableOrder(t *testing.T) {
+	t.Parallel()
+	keys := []string{"a a", "b b", "c c", "d d", "e e", "f f"}
+	var doc strings.Builder
+	doc.WriteString("name: Acme\nroles:\n  - name: Builder\n    placement:\n      labels:\n")
+	for _, k := range slices.Backward(keys) {
+		doc.WriteString("        \"" + k + "\": x\n")
+	}
+	want := make([]string, len(keys))
+	for i, k := range keys {
+		want[i] = "roles[0].placement.labels." + k
+	}
+	// Repeated because map order is random per iteration: an unsorted walk
+	// matches the sorted one by chance on some runs, never on twenty.
+	for range 20 {
+		_, err := ParseCompany([]byte(doc.String()))
+		var got []string
+		for _, p := range Problems(err) {
+			got = append(got, p.Path)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("problems at %q, want %q", got, want)
+		}
+	}
+}
+
+// A SELECTOR A NODE CAN SATISFY IS ACCEPTED, AND ARRIVES UNCHANGED. The
+// refusals above are the edge of the grammar, not a narrowing of it: a key
+// may carry dots, slashes and non-ASCII letters, may be exactly 63 bytes, and
+// a value may hold interior spaces or be empty — every one of which a node
+// can advertise.
+func TestAPlacementANodeCanSatisfyIsAccepted(t *testing.T) {
+	t.Parallel()
+	longest := strings.Repeat("k", 63)
+	cfg := mustCompany(t, `
+name: Acme
+roles:
+  - name: Builder
+    placement:
+      node: builder-1.eu_west
+      labels:
+        zone: eu
+        topology.example.com/rack: r1
+        région: "us east"
+        gpu: ""
+        `+longest+`: "yes"
+`)
+	got := cfg.Roles[0].Seat().Placement
+	want := map[string]string{
+		"zone": "eu", "topology.example.com/rack": "r1", "région": "us east",
+		"gpu": "", longest: "yes",
+	}
+	if got.Node != "builder-1.eu_west" || !maps.Equal(got.Labels, want) {
+		t.Fatalf("placement = %+v, want node builder-1.eu_west and labels %v", got, want)
+	}
+}
+
+// THE TWO TIERS AGREE ON WHAT A LABEL KEY AND A NODE ID ARE. A selector is
+// the Tier B half of a match whose Tier A half is node.labels and node.id,
+// and a key or id one tier accepted and the other refused would be either a
+// label nothing can select or a selector nothing can match — both silent.
+// Whitespace AROUND a key is left out on purpose: Tier A trims it away before
+// it validates, which is the one deliberate difference between the tiers and
+// is covered above.
+func TestPlacementAndTheNodeBlockAgreeOnEveryShape(t *testing.T) {
+	t.Parallel()
+	agree := func(t *testing.T, what, quoted string, accepted bool, nodeErr, seatErr error) {
+		t.Helper()
+		// Against a stated answer as well as each other, so two tiers that
+		// both started refusing everything do not pass by agreeing.
+		if (nodeErr == nil) != accepted || (seatErr == nil) != accepted {
+			t.Errorf("%s %s: want accepted=%v; the node block says %v, the "+
+				"placement says %v", what, quoted, accepted, nodeErr, seatErr)
+		}
+	}
+	for key, accepted := range map[string]bool{
+		"zone": true, "topology.example.com/rack": true, "région": true,
+		strings.Repeat("k", 63): true,
+		strings.Repeat("k", 64): false, "my zone": false, "zo\ane": false,
+		"zo\u00a0ne": false, "": false,
+	} {
+		quoted := strconv.Quote(key)
+		_, nodeErr := ParseBootstrap([]byte("node:\n  labels:\n    "+quoted+": v\n"), EnvOnly())
+		_, seatErr := ParseCompany([]byte("name: Acme\nroles:\n  - name: Builder\n" +
+			"    placement:\n      labels:\n        " + quoted + ": v\n"))
+		agree(t, "label key", quoted, accepted, nodeErr, seatErr)
+	}
+	for id, accepted := range map[string]bool{
+		"builder-1": true, "a.b_c-d": true, "B2": true, strings.Repeat("n", 64): true,
+		strings.Repeat("n", 65): false, "builder 1": false, "-lead": false,
+		".hidden": false, "node/1": false,
+	} {
+		quoted := strconv.Quote(id)
+		_, nodeErr := ParseBootstrap([]byte("node:\n  id: "+quoted+"\n"), EnvOnly())
+		_, seatErr := ParseCompany([]byte("name: Acme\nroles:\n  - name: Builder\n" +
+			"    placement:\n      node: " + quoted + "\n"))
+		agree(t, "node id", quoted, accepted, nodeErr, seatErr)
 	}
 }

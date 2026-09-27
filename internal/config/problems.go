@@ -629,6 +629,31 @@ func (b *Bootstrap) Warnings() []Warning {
 				"broker's memory allowance. Name a `store_dir`, or drop the limit"))
 	}
 
+	// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is not counted as one by any
+	// rule that counts members ([StreamCluster.members]) — and that is a
+	// decision the operator should see, because it is the difference between
+	// the count they wrote and the count the quorum and replica rules used.
+	// An alias of this host this file cannot recognise is the case the
+	// warning cannot catch, so it says so.
+	if b.Stream.Type != StreamNATS {
+		for _, d := range b.Stream.Cluster.members().Discounted {
+			where := idx(field("stream.cluster.peers"), d.Index)
+			if d.Self {
+				out = append(out, advisory(where, fmt.Sprintf(
+					"%q is this node's own route (it matches %s), so it is not "+
+						"counted as a member: stream.cluster.peers names the OTHER "+
+						"members, and the quorum and replica rules count this node "+
+						"once. Remove it. Another name for this host that this file "+
+						"cannot recognise — a DNS alias, `localhost` — would be "+
+						"counted as a member it is not", d.Raw, d.Matches)))
+				continue
+			}
+			out = append(out, advisory(where, fmt.Sprintf(
+				"%q repeats peers[%d], and one member listed twice is counted "+
+					"once. Remove it", d.Raw, d.RepeatOf)))
+		}
+	}
+
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
 	// nothing at all. `stream.debug` unlocks nats-server's own Debugf
 	// population, but those are still DEBUG records and every destination

@@ -75,6 +75,20 @@ import (
 //     keyring's base64 and [sameHostCluster]'s per-peer host. What they
 //     cut is inside the value, not around it.
 //
+// # An empty TYPE is the default one, decided here once
+//
+// `stream.type` and `coordination.type` have defaults that are not empty —
+// embedded and local — and an explicit `type: ""` (or a `${VAR}` that resolved
+// to nothing) overwrote the default with the empty string, which every
+// reader then had to interpret for itself. They did not agree. The topology
+// rule read an empty stream type as CLUSTERED (anything not embedded) while
+// every other reader and the engine took it as embedded, so a single node
+// saying `stream.type: ""` was refused as a fleet on local coordination; and
+// an empty coordination type escaped the rule that refuses a fleet on local
+// coordination while the engine ran it as local — every node of that fleet
+// claiming every seat. An empty value is how a file says "unset", so both
+// are set to their defaults here, before any rule or runtime reads them.
+//
 // # The one thing it refuses rather than decides
 //
 // Two map keys that are the same key once trimmed. Collapsing them would
@@ -91,6 +105,13 @@ func (b *Bootstrap) normalize() error {
 			"two keys here are the same key once the whitespace around them is "+
 				"removed, and which one survived would be decided by map order. "+
 				"Write the one you meant")
+	}
+	defaults := DefaultBootstrap()
+	if b.Stream.Type == "" {
+		b.Stream.Type = defaults.Stream.Type
+	}
+	if b.Coordination.Type == "" {
+		b.Coordination.Type = defaults.Coordination.Type
 	}
 	return p.err()
 }

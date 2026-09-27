@@ -31,6 +31,33 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			},
 			"stream.sync", "30s behind the disk",
 		},
+		// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is left out of every
+		// count of the cluster, and the operator is told which one and why
+		// — the count they wrote is not the count the rules used.
+		"this node's own route in its peer list is not counted": {
+			func(b *config.Bootstrap) {
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+				b.Stream.Replicas = 3
+				b.Stream.Cluster = config.StreamCluster{
+					Name: "crewlet", Port: 6222, Host: "10.0.0.11",
+					Peers: []string{"nats://10.0.0.11:6222", "nats://node-b.internal:6222",
+						"nats://node-c.internal:6222"},
+				}
+			},
+			"stream.cluster.peers[0]", "this node's own route (it matches cluster.host and cluster.port)",
+		},
+		"a member listed twice is counted once": {
+			func(b *config.Bootstrap) {
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+				b.Stream.Replicas = 3
+				b.Stream.Cluster = config.StreamCluster{
+					Name: "crewlet", Port: 6222,
+					Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222",
+						"nats://node-c.internal:6222"},
+				}
+			},
+			"stream.cluster.peers[2]", "repeats peers[1]",
+		},
 		"an operator floor never trims until it is told": {
 			func(b *config.Bootstrap) {
 				b.Stream.TrackerRetention.BackupFloor = config.BackupFloorOperator
@@ -120,6 +147,28 @@ func TestAFullyStatedDeploymentWarnsAboutNothing(t *testing.T) {
 	}
 	if got := b.Warnings(); len(got) != 0 {
 		t.Errorf("a fully stated deployment warned: %v", got)
+	}
+}
+
+// AND A PEER LIST OF THE OTHER MEMBERS SAYS NOTHING ABOUT ITS PEERS — with
+// this node's own listener and advertised address both stated, so the quiet
+// is the comparison finding no match rather than having nothing to compare.
+func TestAPeerListOfOtherMembersWarnsAboutNothing(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Stream.StoreDir = "/var/lib/crewlet/stream"
+	b.Retention.BackupOwner = "platform-oncall"
+	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+	b.Stream.Replicas = 3
+	b.Stream.Cluster = config.StreamCluster{
+		Name: "crewlet", Port: 6222, Host: "10.0.0.11", Advertise: "node-a.internal",
+		Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
+	}
+	if got := b.Warnings(); len(got) != 0 {
+		t.Errorf("a peer list of the other members warned: %v", got)
 	}
 }
 

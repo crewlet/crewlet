@@ -338,6 +338,29 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"${T}\"\n        username: Agent CEO\n",
 			"roles[0].integrations.mattermost.username", ErrUnknownValue,
 		},
+		// The transports resolve a bot's username and token only when the
+		// WHOLE value is one ${VAR}: a reference inside other text was let
+		// through here and reached the server as written, braces and all.
+		{
+			"a Mattermost username with a reference inside it",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"${T}\"\n        username: \"bot-${SUFFIX}\"\n",
+			"roles[0].integrations.mattermost.username", ErrShape,
+		},
+		{
+			"space around a Mattermost username's reference",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"${T}\"\n        username: \"${NAME} \"\n",
+			"roles[0].integrations.mattermost.username", ErrUnknownValue,
+		},
+		{
+			"a Mattermost bot token with a reference inside it",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"tok-${T}\"\n",
+			"roles[0].integrations.mattermost.bot_token", ErrShape,
+		},
+		{
+			"a Slack bot token with a reference inside it",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"xoxb-${T}\"\n        signing_secret: \"${S}\"\n",
+			"roles[0].integrations.slack.bot_token", ErrShape,
+		},
 		{
 			"a sandbox block that is never enabled",
 			"name: Acme\nroles:\n  - name: CEO\n    sandbox:\n      env: {GITHUB_TOKEN: \"${T}\"}\n",

@@ -1096,6 +1096,34 @@ invariant is one-directional and tested: everything the schema rejects,
 the validator also rejects. An editor that red-underlines a config the
 engine would happily run teaches authors to ignore it.
 
+So it accepts what the decoder reads, not merely what a field's type
+suggests, and a test offers every field of both tiers each such value to
+hold the two to the same verdict:
+
+- **An empty value** — `~` or `""` — anywhere the engine reads it as unset,
+  which is everywhere but the company document's root.
+- **A number or a boolean in a text field**, read as the text it was
+  written as (`name: 2024`, `org_webhook: false`).
+- **YAML 1.1's switch words** in a boolean field — `yes`, `no`, `on`, `off`,
+  `y` and `n`, each in YAML's three casings (`yes`, `Yes`, `YES`) — because
+  the decoder reads them there. A quoted `"true"` is not one of them: it is
+  text, and a boolean field refuses it.
+- **A `${VAR}` reference in Tier A** wherever the engine resolves one into
+  a value the field can take: anywhere in any text field, a patterned or
+  closed-set one included, since the value is judged only once it has
+  resolved; and as the **whole** value of a number or a boolean field, whose
+  resolved text is read as if it were written there. A reference with other
+  text around it in a number or a boolean is refused, by the schema and the
+  engine alike.
+- **A Tier B reference as the literal text it is.** The company keeps a
+  reference verbatim and resolves it only where a provider or transport is
+  built, so a field with a pattern or a closed set — an enum, a handle, a unit
+  id — refuses one as it would any other text that is not a value of it. The
+  exception is a field whose consumer resolves a **whole** reference, which
+  takes exactly one beside its own rule: today that is a Mattermost seat's
+  `username`. See
+  [Environment Variable References](../getting-started/configuration.md#environment-variable-references).
+
 Both documents are checked into [`schema/`](../../schema/); a test
 regenerates and compares them, so a config field added without a schema
 entry fails the build rather than leaving a stale file nobody opens.

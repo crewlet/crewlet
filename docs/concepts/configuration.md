@@ -61,8 +61,11 @@ config apply failed on `node-2`" the moment more than one process is
 running, and the only way a caller behind a load balancer can tell which
 process answered.
 
-Resolution order: `node.id` (`${VAR}` references work here like anywhere
-in Tier A) → the `CREWLET_NODE_ID` environment variable → `node-0`. You do
+Resolution order: `node.id` (a `${VAR}` reference works here, as in any
+Tier A text field, and the id it resolves to is judged by the rules below —
+see [Environment Variable References](../getting-started/configuration.md#environment-variable-references)
+for how one reads in a number or a boolean field) → the `CREWLET_NODE_ID` environment
+variable → `node-0`. You do
 not need to set it to run a single engine. It starts with a letter or a digit
 and holds only letters, digits, `.`, `_` and `-`, at most 64 characters,
 because it ends up in broker consumer names and subjects — and an operator
@@ -117,8 +120,13 @@ Free-form facts about where this process runs, matched by a seat's
 [`role.placement`](../guides/fleet.md#placement) selector. Values are
 strings and are compared exactly — so both the key and the value are
 trimmed of the whitespace around them before anything reads them, and two
-keys that are one key once trimmed are refused rather than collapsed. They are advertised to peers on this
-node's presence lease, so a label change takes effect one heartbeat after
+keys that are one key once trimmed are refused rather than collapsed. A
+key is at most 63 bytes — Kubernetes' limit on a label name — and holds no
+whitespace or unprintable character anywhere, because it is matched
+exactly wherever it is named: a key with a space inside it is refused
+rather than accepted as a label nothing could name. Labels are advertised
+to peers on this node's presence lease — and, on a data node, on its object
+store's membership lease — so a label change takes effect one heartbeat after
 the restart that made it — not at the next config activation.
 
 Nothing here means anything to the engine on its own: the org decides

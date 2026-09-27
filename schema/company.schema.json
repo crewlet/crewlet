@@ -5,18 +5,36 @@
       "properties": {
         "api_key": {
           "description": "Unscoped organization API key. A scoped key is refused by the account-management API.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "deployment": {
           "description": "Which Atlassian this company runs: cloud or data_center. Default cloud.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "org_id": {
           "description": "Atlassian organization id, from admin.atlassian.com.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "CLIAgent": {
       "additionalProperties": false,
@@ -36,141 +54,232 @@
             "kimi-code",
             "hermes",
             "pi",
-            "custom"
-          ],
-          "type": "string"
+            "custom",
+            "",
+            null
+          ]
         },
         "auth": {
           "$ref": "#/$defs/CLIAgentAuth"
         },
         "env": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Extra environment for the CLI child process.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "max_concurrent": {
           "description": "Concurrent CLI processes; each costs 200-400 MB.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "mode": {
           "description": "text (a model behind the engine's tool loop) or agent (the CLI runs the executor).",
           "enum": [
             "text",
-            "agent"
-          ],
-          "type": "string"
+            "agent",
+            "",
+            null
+          ]
         },
         "overrides": {
           "additionalProperties": {},
           "description": "Field-wise overrides of the built-in CLI profile.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "run_in": {
           "description": "Where an agent-mode run happens. Empty = providers.sandbox.default_run_in.",
           "enum": [
             "direct",
             "container",
-            "e2b"
-          ],
-          "type": "string"
+            "e2b",
+            "",
+            null
+          ]
         },
         "state_dir": {
           "description": "Credential + per-seat home directory. Entries sharing one share a login.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "timeout_seconds": {
           "description": "Wall-clock cap on one CLI invocation.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "CLIAgentAuth": {
       "additionalProperties": false,
       "properties": {
         "credential_bundle": {
           "description": "${VAR} holding a bundle exported by crewlet llm export.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "mode": {
           "description": "subscription (default), api-key, or inherit-env.",
           "enum": [
             "subscription",
             "api-key",
-            "inherit-env"
-          ],
-          "type": "string"
+            "inherit-env",
+            "",
+            null
+          ]
         },
         "token": {
           "description": "${VAR} holding a long-lived subscription token.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Confluence": {
       "additionalProperties": false,
       "properties": {
         "cloud_id": {
           "description": "Atlassian Cloud id. Give this or url, not both.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "email": {
           "description": "Set for Cloud Basic auth; omit for bearer-token auth.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "site_url": {
           "description": "Human-readable base for shareable links; needed with cloud_id.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "token": {
           "description": "Admin API token or PAT; ${VAR} supported.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "url": {
           "description": "Instance URL. Give this or cloud_id, not both.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_secret": {
           "description": "HMAC secret for Data Center webhooks.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_token": {
           "description": "Shared token for Confluence Cloud webhooks, carried in the registered URL; minted by crewlet confluence provision.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
         "token"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "ConversationSession": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "description": "Record and replay per-conversation history (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "max_entries": {
           "description": "Entries kept per conversation.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "retention_days": {
           "description": "How long a conversation is remembered.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Counterparty": {
       "additionalProperties": false,
@@ -178,17 +287,25 @@
         "budget_tokens": {
           "description": "Soft token cap on the profiler call.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "enabled": {
           "description": "Observe counterparties (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "CredentialCooldowns": {
       "additionalProperties": false,
@@ -197,27 +314,46 @@
           "description": "Cooldown after an auth error (60..86400s).",
           "maximum": 86400,
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "rate_limit_seconds": {
           "description": "Cooldown after a rate-limit error (60..86400s).",
           "maximum": 86400,
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Datadog": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "description": "Turn the integration on.",
-          "type": "boolean"
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "handle_tag": {
           "description": "Monitor tag key naming the seat an alert wakes (default crewlet).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "provisioning": {
           "$ref": "#/$defs/DatadogProvisioning",
@@ -225,44 +361,90 @@
         },
         "route_to": {
           "description": "Handle of the seat an alert naming no owner wakes; required when enabled.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_name": {
           "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-\u003cname\u003e (default crewlet).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_token": {
           "description": "Shared token compared against X-Crewlet-Token; required when enabled.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "DatadogProvisioning": {
       "additionalProperties": false,
       "properties": {
         "api_key": {
           "description": "Datadog API key; says which organization.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "app_key": {
           "description": "Datadog application key; says which user acts.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "email_domain": {
           "description": "Domain agent service-account addresses are built under.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "role": {
           "description": "Role each agent's service account holds (default Datadog Read Only Role).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "site": {
           "description": "Datadog region hostname, e.g. datadoghq.com.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Delegation": {
       "additionalProperties": false,
@@ -271,95 +453,162 @@
           "description": "Share of the parent's remaining budget one delegate call may spend.",
           "maximum": 1,
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "call_timeout_seconds": {
           "description": "Wall-clock cap on a whole delegate call, waves included.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "max_parallel": {
           "description": "Workers running at once within one delegate call.",
           "minimum": 1,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_tasks_per_call": {
           "description": "Tasks one delegate call may contain.",
           "minimum": 1,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_turns": {
           "description": "Tool rounds one worker may run.",
           "minimum": 1,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_turns_ceiling": {
           "description": "Highest max_turns a worker template may declare.",
           "minimum": 1,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "min_tokens_per_task": {
           "description": "Floor on one worker's token share; below it the call is refused.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "task_timeout_seconds": {
           "description": "Wall-clock cap on one worker.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "E2BSandbox": {
       "additionalProperties": false,
       "properties": {
         "api_key": {
           "description": "Remote sandbox API key; required. ${VAR} supported.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "domain": {
           "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "template": {
           "description": "Box template. This is where vCPU/RAM/disk are set: at template build time.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "EmbeddingProvider": {
       "additionalProperties": false,
       "properties": {
         "api_key": {
           "description": "API key or ${VAR} reference.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "base_url": {
           "description": "Endpoint for an openai-compatible embedding service.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "dimensions": {
           "description": "Vector width; 0 takes the named model's own width. 64..4096 to override, and it must match what the model produces.",
           "maximum": 4096,
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "model": {
           "description": "Embedding model id.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "type": {
           "description": "openai (default) or openai-compatible.",
           "enum": [
             "openai",
-            "openai-compatible"
-          ],
-          "type": "string"
+            "openai-compatible",
+            "",
+            null
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "EpisodeLifecycle": {
       "additionalProperties": false,
@@ -367,61 +616,97 @@
         "compacted_max_age_days": {
           "description": "Age at which compacted summaries are dropped; 0 = never.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "compaction_batch_size": {
           "description": "Raw episodes pulled into one pass.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "compaction_budget_tokens": {
           "description": "Soft token cap on summarising one cluster.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "compaction_jaccard_threshold": {
           "description": "Similarity that pools two episodes into one cluster.",
           "maximum": 1,
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "compaction_min_age_days": {
           "description": "Only compact rows older than this.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "compaction_min_cluster_size": {
           "description": "Smallest cluster worth compacting.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "consolidated_grace_days": {
           "description": "Audit grace before a consolidated raw row is dropped.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "exemplar_count": {
           "description": "Originals kept raw after a cluster is compacted.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_raw_episodes_per_agent": {
           "description": "Raw episodes per seat that trigger a lifecycle pass.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "non_terminal_max_age_days": {
           "description": "Age at which mid-state episodes are dropped.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "tool_free_max_age_days": {
           "description": "Age at which raw turns that called no tools are dropped.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Episodic": {
       "additionalProperties": false,
@@ -430,17 +715,28 @@
           "description": "Episode-query hits returned (1..20).",
           "maximum": 20,
           "minimum": 1,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "GitHub": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "description": "Turn the integration on.",
-          "type": "boolean"
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "provisioning": {
           "$ref": "#/$defs/GitHubProvisioning",
@@ -448,51 +744,93 @@
         },
         "token": {
           "description": "Organization token with admin:org_hook, for one organization-wide hook. Empty means each agent's own app carries its own.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "url": {
           "description": "Enterprise Server base URL, e.g. https://github.example.com. Empty = github.com.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_secret": {
           "description": "HMAC secret for inbound deliveries; required when enabled.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "GitHubProvisioning": {
       "additionalProperties": false,
       "properties": {
         "org": {
           "description": "GitHub organization holding the repositories.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "org_webhook": {
           "description": "auto (one org hook where the credential may), true, or false.",
           "enum": [
             "auto",
             "true",
-            "false"
-          ],
-          "type": "string"
+            "false",
+            true,
+            false,
+            "",
+            null
+          ]
         },
         "repos": {
           "description": "owner/repo entries to hook individually.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "GitLab": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "description": "Turn the integration on.",
-          "type": "boolean"
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "provisioning": {
           "$ref": "#/$defs/GitLabProvisioning",
@@ -500,22 +838,45 @@
         },
         "signing_secret": {
           "description": "Standard-Webhooks signing token; required when enabled.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "token": {
           "description": "Read PAT for participants-based routing; empty degrades routing.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "url": {
           "description": "Instance base URL, e.g. https://gitlab.com.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_name": {
           "description": "Name every hook the engine registers on this instance carries; give two deployments watching one instance two names (default crewlet).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "GitLabProvisioning": {
       "additionalProperties": false,
@@ -524,86 +885,166 @@
           "description": "Default membership level.",
           "enum": [
             "developer",
-            "maintainer"
-          ],
-          "type": "string"
+            "maintainer",
+            "",
+            null
+          ]
         },
         "access_levels": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Per-handle membership overrides.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "admin_token": {
           "description": "Personal access token with the full api scope, belonging to a group owner. Creates and removes the service accounts.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "group": {
           "description": "Top-level group the service accounts join.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "group_webhook": {
           "description": "auto (one group hook if the plan allows), true, or false.",
           "enum": [
             "auto",
             "true",
-            "false"
-          ],
-          "type": "string"
+            "false",
+            true,
+            false,
+            "",
+            null
+          ]
         },
         "mode": {
           "description": "Where service accounts are owned: group (default, and all GitLab.com offers) or instance (self-managed only; needs an instance-administrator token).",
           "enum": [
             "group",
-            "instance"
-          ],
-          "type": "string"
+            "instance",
+            "",
+            null
+          ]
         },
         "projects": {
           "description": "Extra projects to join and hook.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "token_scopes": {
           "description": "Scopes minted on each service-account token.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "username_prefix": {
           "description": "Prefix on each service-account username.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "HumanContact": {
       "additionalProperties": false,
       "properties": {
         "atlassian_account_id": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "crewlet_operator_id": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "github_login": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "gitlab_username": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "mattermost_user_id": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "slack_user_id": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Integrations": {
       "additionalProperties": false,
@@ -614,7 +1055,10 @@
         },
         "check_interval_seconds": {
           "description": "How often a converged integration is read back, in seconds. 0 takes the default of 600; the floor is 60.",
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "confluence": {
           "$ref": "#/$defs/Confluence",
@@ -626,7 +1070,12 @@
         },
         "forge_app_id": {
           "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "github": {
           "$ref": "#/$defs/GitHub",
@@ -646,51 +1095,97 @@
         },
         "public_base_url": {
           "description": "HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "slack": {
           "$ref": "#/$defs/Slack",
           "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Jira": {
       "additionalProperties": false,
       "properties": {
         "cloud_id": {
           "description": "Atlassian Cloud id. Give this or url, not both.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "email": {
           "description": "Set for Cloud Basic auth; omit for bearer-token auth.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "site_url": {
           "description": "Human-readable base for shareable links; needed with cloud_id.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "token": {
           "description": "Admin API token or PAT; ${VAR} supported.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "url": {
           "description": "Instance URL. Give this or cloud_id, not both.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_name": {
           "description": "Name the engine's own Jira webhook is registered under; give two deployments watching one instance two names (default crewlet).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_secret": {
           "description": "HMAC secret for inbound webhooks.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
         "token"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Knowledge": {
       "additionalProperties": false,
@@ -700,31 +1195,58 @@
           "enum": [
             "native",
             "confluence",
-            "none"
-          ],
-          "type": "string"
+            "none",
+            "",
+            null
+          ]
         },
         "root_space": {
           "description": "Container for org-level pages such as the root Onboarding. Absent takes the default.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "scope": {
           "description": "Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "skills_container": {
           "description": "Container holding tool-skill pages. Absent takes the default; \"\" turns tool skills off.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "vectors": {
           "description": "Fuse semantic recall into knowledge search. Unset derives from providers.embeddings.",
-          "type": "boolean"
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "LLMProvider": {
       "additionalProperties": false,
@@ -732,13 +1254,26 @@
         "api_keys": {
           "description": "API keys, ${VAR} supported. Several rotate on rate-limit/auth errors.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "base_url": {
           "description": "Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "cli": {
           "$ref": "#/$defs/CLIAgent",
@@ -749,16 +1284,29 @@
         },
         "model": {
           "description": "Model id this provider serves.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "reasoning": {
           "description": "Enable extended thinking (openai and anthropic only).",
-          "type": "boolean"
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "reasoning_budget_tokens": {
           "description": "Anthropic thinking budget in tokens when reasoning is on. Not accepted on a cli-agent provider.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "reasoning_effort": {
           "description": "OpenAI reasoning effort when reasoning is on. Not accepted on a cli-agent provider.",
@@ -766,14 +1314,18 @@
             "low",
             "medium",
             "high",
-            "max"
-          ],
-          "type": "string"
+            "max",
+            "",
+            null
+          ]
         },
         "timeout_seconds": {
           "description": "Per-request HTTP timeout in seconds.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "type": {
           "description": "Which implementation to construct.",
@@ -781,12 +1333,16 @@
             "openai",
             "anthropic",
             "openai-compatible",
-            "cli-agent"
-          ],
-          "type": "string"
+            "cli-agent",
+            "",
+            null
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Learning": {
       "additionalProperties": false,
@@ -796,8 +1352,10 @@
         },
         "enabled": {
           "description": "Master switch for agent learning (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
@@ -826,41 +1384,71 @@
           "$ref": "#/$defs/SkillSynthesis"
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "LocalSandbox": {
       "additionalProperties": false,
       "properties": {
         "image": {
           "description": "Container image with the coding-agent CLI installed. Required for run_in: container.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "network": {
           "description": "Container network; setting it to none also cuts off the coding agent's LLM.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "run_args": {
           "description": "Extra container run arguments. This is where a local box is sized.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "runtime": {
           "description": "Container CLI to drive.",
           "enum": [
             "auto",
             "docker",
-            "podman"
-          ],
-          "type": "string"
+            "podman",
+            "",
+            null
+          ]
         },
         "state_dir": {
           "description": "Parent directory for box directories; used by both local placements.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "MCPServer": {
       "additionalProperties": false,
@@ -868,135 +1456,218 @@
         "args": {
           "description": "Arguments for the executable (stdio).",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "command": {
           "description": "Executable to launch (stdio).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "env": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Environment for the subprocess (stdio); ${VAR} supported.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "headers": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Headers sent with each request (http); ${VAR} supported.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "name": {
           "description": "Server name; the key seats declare credentials under.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "request_timeout_seconds": {
           "description": "Cap on one tool call.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "shared": {
           "description": "One shared instance (default), or false for one per seat.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "startup_timeout_seconds": {
           "description": "Connect, handshake and first tool listing budget.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "tool_annotations": {
           "additionalProperties": {
             "additionalProperties": false,
             "properties": {
               "destructive": {
+                "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
                 "type": [
                   "boolean",
+                  "string",
                   "null"
                 ]
               },
               "destructiveHint": {
+                "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
                 "type": [
                   "boolean",
+                  "string",
                   "null"
                 ]
               },
               "idempotent": {
+                "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
                 "type": [
                   "boolean",
+                  "string",
                   "null"
                 ]
               },
               "idempotentHint": {
+                "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
                 "type": [
                   "boolean",
+                  "string",
                   "null"
                 ]
               },
               "openWorldHint": {
+                "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
                 "type": [
                   "boolean",
+                  "string",
                   "null"
                 ]
               },
               "open_world": {
+                "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
                 "type": [
                   "boolean",
+                  "string",
                   "null"
                 ]
               },
               "readOnlyHint": {
+                "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
                 "type": [
                   "boolean",
+                  "string",
                   "null"
                 ]
               },
               "read_only": {
+                "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
                 "type": [
                   "boolean",
+                  "string",
                   "null"
                 ]
               }
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "description": "Per-tool behavioural-hint overrides, keyed by bare tool name.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "tool_prefix": {
           "description": "Prefix applied to this server's tool names.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "transport": {
           "description": "stdio (default) or http.",
           "enum": [
             "stdio",
-            "http"
-          ],
-          "type": "string"
+            "http",
+            "",
+            null
+          ]
         },
         "url": {
           "description": "Endpoint of the remote server (http).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
         "name"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Mattermost": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "description": "Turn the integration on.",
-          "type": "boolean"
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "provisioning": {
           "$ref": "#/$defs/MattermostProvisioning",
@@ -1004,47 +1675,87 @@
         },
         "team": {
           "description": "Team slug the agent bots belong to.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "typing_status": {
           "description": "When to show the typing indicator (default always); it costs a request every few seconds per thinking seat.",
           "enum": [
             "always",
-            "addressed"
-          ],
-          "type": "string"
+            "addressed",
+            "",
+            null
+          ]
         },
         "url": {
           "description": "Instance base URL, e.g. https://chat.example.com.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "MattermostProvisioning": {
       "additionalProperties": false,
       "properties": {
         "admin_token": {
           "description": "System-admin token used to create and to disable the bots.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "channels": {
           "description": "Channels every bot joins.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "display_name_suffix": {
           "description": "Suffix on each bot display name, e.g. \" (AI)\".",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "username_prefix": {
           "description": "Prefix on each bot username, e.g. agent-.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "PersonalMemory": {
       "additionalProperties": false,
@@ -1052,10 +1763,16 @@
         "max_refreshes_per_turn": {
           "description": "Distinct memory refreshes one turn may make.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Providers": {
       "additionalProperties": false,
@@ -1069,21 +1786,35 @@
             "$ref": "#/$defs/LLMProvider"
           },
           "description": "Named LLM providers; seats select one by key.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "llm_order": {
           "description": "Provider precedence; normally derived from the order they are written in.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "sandbox": {
           "$ref": "#/$defs/SandboxProvider",
           "description": "Code sandbox backend. Absent = no seat runs code."
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Reflect": {
       "additionalProperties": false,
@@ -1091,54 +1822,87 @@
         "budget_tokens": {
           "description": "Soft token cap on the reflection call; 0 = uncapped.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "enabled": {
           "description": "Run reflection after each turn (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "persist_decider": {
           "description": "Run the persist decision after each turn (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "summarize_episodes": {
           "description": "Summarise episode hits through the auxiliary model (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "summarize_max_tokens": {
           "description": "Soft cap on a per-hit summary.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Role": {
       "additionalProperties": false,
       "properties": {
         "availability": {
           "description": "Human seats: free-text availability shown in rosters.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "backstory": {
           "description": "Who this seat is; reaches its prompt.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "behavioral_guidelines": {
           "description": "How this seat should work; reaches its prompt.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "contact": {
           "$ref": "#/$defs/HumanContact",
@@ -1146,16 +1910,38 @@
         },
         "email": {
           "description": "Seat email; plus-addressing derives from the handle.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "goal": {
           "description": "What this seat is for; reaches its prompt.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "handle": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            {
+              "const": ""
+            }
+          ],
           "description": "Canonical slug. Effectively permanent: it derives the seat's durable id.",
-          "pattern": "^[a-z0-9][a-z0-9-]*$",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "integrations": {
           "$ref": "#/$defs/RoleIntegrations"
@@ -1164,26 +1950,38 @@
           "description": "agent (default) or human.",
           "enum": [
             "agent",
-            "human"
-          ],
-          "type": "string"
+            "human",
+            "",
+            null
+          ]
         },
         "learning_enabled": {
           "description": "Override company learning for this seat.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "llm": {
-          "description": "Provider key, chain, or per-phase mapping.",
-          "oneOf": [
+          "anyOf": [
             {
-              "type": "string"
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
             },
             {
               "items": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
               },
               "type": "array"
             },
@@ -1191,78 +1989,138 @@
               "additionalProperties": false,
               "properties": {
                 "auxiliary": {
-                  "oneOf": [
+                  "anyOf": [
                     {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
                     },
                     {
                       "items": {
-                        "type": "string"
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
                       },
                       "type": "array"
                     }
                   ]
                 },
                 "default": {
-                  "oneOf": [
+                  "anyOf": [
                     {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
                     },
                     {
                       "items": {
-                        "type": "string"
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
                       },
                       "type": "array"
                     }
                   ]
                 },
                 "judge": {
-                  "oneOf": [
+                  "anyOf": [
                     {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
                     },
                     {
                       "items": {
-                        "type": "string"
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
                       },
                       "type": "array"
                     }
                   ]
                 },
                 "review": {
-                  "oneOf": [
+                  "anyOf": [
                     {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
                     },
                     {
                       "items": {
-                        "type": "string"
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
                       },
                       "type": "array"
                     }
                   ]
                 },
                 "sandbox": {
-                  "oneOf": [
+                  "anyOf": [
                     {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
                     },
                     {
                       "items": {
-                        "type": "string"
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
                       },
                       "type": "array"
                     }
                   ]
                 },
                 "subagent": {
-                  "oneOf": [
+                  "anyOf": [
                     {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
                     },
                     {
                       "items": {
-                        "type": "string"
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
                       },
                       "type": "array"
                     }
@@ -1271,98 +2129,173 @@
               },
               "type": "object"
             }
-          ]
+          ],
+          "description": "Provider key, chain, or per-phase mapping."
         },
         "llm_auxiliary": {
-          "description": "Cheap model for reflection and summaries.",
-          "oneOf": [
+          "anyOf": [
             {
-              "type": "string"
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
             },
             {
               "items": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
               },
               "type": "array"
             }
-          ]
+          ],
+          "description": "Cheap model for reflection and summaries."
         },
         "llm_judge": {
-          "description": "Cheap model for the round-cap extension judge.",
-          "oneOf": [
+          "anyOf": [
             {
-              "type": "string"
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
             },
             {
               "items": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
               },
               "type": "array"
             }
-          ]
+          ],
+          "description": "Cheap model for the round-cap extension judge."
         },
         "llm_review": {
-          "description": "Provider chain for the reviewer.",
-          "oneOf": [
+          "anyOf": [
             {
-              "type": "string"
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
             },
             {
               "items": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
               },
               "type": "array"
             }
-          ]
+          ],
+          "description": "Provider chain for the reviewer."
         },
         "llm_sandbox": {
-          "description": "Model the sandboxed coding agent runs on.",
-          "oneOf": [
+          "anyOf": [
             {
-              "type": "string"
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
             },
             {
               "items": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
               },
               "type": "array"
             }
-          ]
+          ],
+          "description": "Model the sandboxed coding agent runs on."
         },
         "llm_subagent": {
-          "description": "Provider chain for spawned sub-agents.",
-          "oneOf": [
+          "anyOf": [
             {
-              "type": "string"
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
             },
             {
               "items": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
               },
               "type": "array"
             }
-          ]
+          ],
+          "description": "Provider chain for spawned sub-agents."
         },
         "manages": {
           "description": "Seats or units this seat manages; a unit expands to its seats.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "mcp_env": {
           "additionalProperties": {
             "additionalProperties": {
-              "type": "string"
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "description": "Per-seat MCP credentials: env vars (stdio) or headers (http).",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "name": {
           "description": "Unique seat name; also the source of the auto-derived handle.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "placement": {
           "$ref": "#/$defs/RolePlacement",
@@ -1370,14 +2303,27 @@
         },
         "project": {
           "description": "Tracker project this seat owns. Root-level seats; a unit member takes its unit's.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "responsibilities": {
           "description": "What this seat owns.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "sandbox": {
           "$ref": "#/$defs/RoleSandbox",
@@ -1388,70 +2334,134 @@
           "items": {
             "$ref": "#/$defs/Schedule"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "space": {
           "description": "Knowledge container this seat owns. Root-level seats; a unit member takes its unit's.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "token_budget": {
           "description": "Per-seat token ceiling; 0 = unlimited.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "unit": {
           "description": "Home unit for a root-level seat; the seat is moved into it.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "workers": {
           "description": "Delegate templates this seat may use; empty = every one.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
         "name"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "RoleGitHub": {
       "additionalProperties": false,
       "properties": {
         "app_id": {
           "description": "Numeric id of this seat's GitHub App. Written by the engine.",
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "app_slug": {
           "description": "Slug of this seat's GitHub App; the bot login derives from it.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "installation_id": {
           "description": "Installation of this seat's app on the organization. Written by the engine.",
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "private_key": {
           "description": "Reference to this seat's sealed GitHub App key. Returned by GitHub once.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "repos": {
           "description": "Repositories this seat works in, as owner/name. Empty means all the installation covers.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "tier": {
           "description": "read_only, review or full_access. Empty means read_only.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "webhook_secret": {
           "description": "Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "RoleIntegrations": {
       "additionalProperties": false,
@@ -1469,43 +2479,98 @@
           "description": "This seat's own Slack app: bot token and signing secret."
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "RoleMattermost": {
       "additionalProperties": false,
       "properties": {
         "bot_token": {
           "description": "Bot personal access token; one credential covers everything.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "channel": {
           "description": "Channel this seat's bot is added to at provisioning, on top of provisioning.channels.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "username": {
-          "description": "Bot username; defaults to the seat handle.",
-          "pattern": "^[a-z0-9][a-z0-9._-]*$",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            {
+              "const": ""
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
+          "description": "Bot username, or one whole ${VAR} naming it; defaults to the seat handle.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "RolePlacement": {
       "additionalProperties": false,
       "properties": {
         "labels": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Node labels that must all match.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "node": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+            },
+            {
+              "const": ""
+            }
+          ],
           "description": "Exact node id to pin this seat to.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "RoleSandbox": {
       "additionalProperties": false,
@@ -1514,32 +2579,52 @@
           "description": "Override the provider default for this seat.",
           "enum": [
             "claude-code",
-            "opencode"
-          ],
-          "type": "string"
+            "opencode",
+            "",
+            null
+          ]
         },
         "enabled": {
           "description": "Offer this seat the sandbox tool.",
-          "type": "boolean"
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "env": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Env for this seat's sandbox run; declare external tokens here.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "max_turns": {
           "description": "Agentic-round cap for this seat's coding runs. Unset = provider default; 0 = uncapped.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "mcp": {
           "$ref": "#/$defs/RoleSandboxMCP"
         },
         "pause_ttl_seconds": {
           "description": "Paused-box TTL. Unset (or negative) = provider default; 0 = never pause.",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "run_in": {
           "description": "Where this seat's code work runs; self = inside its own agent-mode executor run. Empty inherits providers.sandbox.default_run_in.",
@@ -1547,19 +2632,26 @@
             "direct",
             "container",
             "e2b",
-            "self"
-          ],
-          "type": "string"
+            "self",
+            "",
+            null
+          ]
         },
         "setup": {
           "description": "Per-seat provisioning steps, applied after the engine-wide ones.",
           "items": {
             "$ref": "#/$defs/SandboxSetupStep"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "RoleSandboxMCP": {
       "additionalProperties": false,
@@ -1567,26 +2659,50 @@
         "servers": {
           "description": "MCP server names the coding agent may use.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "RoleSlack": {
       "additionalProperties": false,
       "properties": {
         "bot_token": {
           "description": "Bot token for outbound Web API calls.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "signing_secret": {
           "description": "Verifies inbound webhooks for this seat's app.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "SandboxProvider": {
       "additionalProperties": false,
@@ -1595,33 +2711,44 @@
           "description": "Coding agent for seats that name none.",
           "enum": [
             "claude-code",
-            "opencode"
-          ],
-          "type": "string"
+            "opencode",
+            "",
+            null
+          ]
         },
         "default_max_turns": {
           "description": "Agentic-round cap for coding runs on seats that name none. 0 = uncapped.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "default_pause_ttl_seconds": {
           "description": "Paused-box TTL before reap and re-seed. Unset = 1800s; 0 = never pause.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "default_run_in": {
           "description": "Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell, or every sandbox-enabled seat and agent-mode entry names its own run_in.",
           "enum": [
             "direct",
             "container",
-            "e2b"
-          ],
-          "type": "string"
+            "e2b",
+            "",
+            null
+          ]
         },
         "default_timeout_seconds": {
           "description": "Box TTL/keepalive. Not a run cap: the orphan-reclaim grace.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "e2b": {
           "$ref": "#/$defs/E2BSandbox",
@@ -1629,7 +2756,12 @@
         },
         "fake": {
           "description": "Use the in-process double for every placement. Demonstrations only.",
-          "type": "boolean"
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "local": {
           "$ref": "#/$defs/LocalSandbox",
@@ -1640,89 +2772,170 @@
           "items": {
             "$ref": "#/$defs/SandboxSetupStep"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "SandboxSetupStep": {
       "additionalProperties": false,
       "properties": {
         "brief": {
           "description": "What this step made true about the box, told to the coding agent.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "commands": {
           "description": "Shell commands run in order; a non-zero exit fails the box.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "env": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Env merged into the run; resolved once at launch, not at load.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "files": {
           "additionalProperties": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
           "description": "Files written into the box before commands run.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "name": {
           "description": "Short identifier used in logs and failure messages.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "timeout_seconds": {
           "description": "Per-command wall-clock cap for this step.",
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "required": [
         "name"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Schedule": {
       "additionalProperties": false,
       "properties": {
         "catchup": {
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "cron": {
-          "type": "string"
-        },
-        "enabled": {
           "type": [
+            "string",
+            "number",
             "boolean",
             "null"
           ]
         },
+        "enabled": {
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "name": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "target": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "task": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "timeout_seconds": {
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "timezone": {
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Scheduling": {
       "additionalProperties": false,
@@ -1730,36 +2943,58 @@
         "catchup_max_seconds": {
           "description": "Upper clamp on the missed-tick catchup window.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "catchup_min_seconds": {
           "description": "Lower clamp on the missed-tick catchup window.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "default_timezone": {
           "description": "IANA zone for schedules that name none.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "enabled": {
           "description": "Master switch for the scheduler (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "jitter_seconds": {
           "description": "Deterministic per-schedule jitter to spread a popular minute.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "tick_seconds": {
           "description": "Scheduler poll interval; under 60s catches every cron minute.",
           "minimum": 1,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "SkillCurator": {
       "additionalProperties": false,
@@ -1767,27 +3002,41 @@
         "archive_after_days": {
           "description": "Unused days before a skill is archived.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "enabled": {
           "description": "Age unused skills out (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "interval_hours": {
           "description": "How often the curator walks the skill table.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "stale_after_days": {
           "description": "Unused days before a skill goes stale.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "SkillPromotion": {
       "additionalProperties": false,
@@ -1795,12 +3044,17 @@
         "budget_tokens": {
           "description": "Soft token cap per promotion draft.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "enabled": {
           "description": "Promote sibling skills to unit scope (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
@@ -1808,57 +3062,84 @@
           "description": "Similarity that pools two seats' skills.",
           "maximum": 1,
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "min_sibling_count": {
           "description": "Distinct seats a cluster needs before promotion.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "SkillRefinement": {
       "additionalProperties": false,
       "properties": {
         "auto_refine_on_failure": {
           "description": "Append a counter-example when it failed (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "auto_refine_on_success": {
           "description": "Append an observation when a skill's turn succeeded (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "budget_tokens": {
           "description": "Soft token cap per refinement.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "enabled": {
           "description": "Refine skills after use (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "max_body_chars": {
           "description": "Ceiling on a refined skill's body.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_versions_kept": {
           "description": "Archived versions kept for rollback.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "SkillSynthesis": {
       "additionalProperties": false,
@@ -1866,66 +3147,100 @@
         "budget_tokens": {
           "description": "Soft token cap per draft attempt.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "cluster_jaccard_threshold": {
           "description": "Similarity that pools two turns into one cluster.",
           "maximum": 1,
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "cluster_min_size": {
           "description": "Turns a cluster needs before it earns a skill.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "cluster_window_hours": {
           "description": "How far back the clustering pass looks.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "duplicate_jaccard_threshold": {
           "description": "Reject a draft this similar to an existing skill.",
           "maximum": 1,
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "enabled": {
           "description": "Draft skills from turns (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "episode_fetch_limit": {
           "description": "Episodes pulled into one clustering pass.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_skills_per_agent": {
           "description": "Hard per-seat skill cap.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "min_tool_calls": {
           "description": "Tool calls a turn needs before an inline draft.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "scheduler_enabled": {
           "description": "Background clustering pass (default off).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "scheduler_interval_seconds": {
           "description": "How often the clustering pass runs.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Slack": {
       "additionalProperties": false,
@@ -1937,12 +3252,16 @@
           "description": "When to show the working indicator (default always).",
           "enum": [
             "always",
-            "addressed"
-          ],
-          "type": "string"
+            "addressed",
+            "",
+            null
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "StatusPhrases": {
       "additionalProperties": false,
@@ -1950,33 +3269,68 @@
         "default": {
           "description": "Lines for any phase with no pool of its own.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "execute": {
           "description": "Lines shown while the agent works.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "onboarding": {
           "description": "Lines shown during the first-turn onboarding pass.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "review": {
           "description": "Lines shown while the reviewer judges the work.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Tracker": {
       "additionalProperties": false,
@@ -1986,15 +3340,19 @@
           "enum": [
             "native",
             "jira",
-            "none"
-          ],
-          "type": "string"
+            "none",
+            "",
+            null
+          ]
         },
         "native": {
           "$ref": "#/$defs/TrackerNativeConfig"
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "TrackerNativeConfig": {
       "additionalProperties": false,
@@ -2003,14 +3361,25 @@
           "description": "How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched.",
           "maximum": 3650,
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "timezone": {
           "description": "IANA timezone for authored dates (default UTC).",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "TurnEngine": {
       "additionalProperties": false,
@@ -2024,178 +3393,325 @@
         "delegation_depth_limit": {
           "description": "Maximum depth of agent-to-agent delegation chains.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "execute_max_tool_rounds_ceiling": {
           "description": "Hard ceiling for executor rounds across extensions.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "extension_enabled": {
           "description": "Round-cap extension judge (default on).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
+            "string",
             "null"
           ]
         },
         "extension_round_step": {
           "description": "Maximum rounds one extension call may grant.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_iterations": {
           "description": "Execute/review iterations per turn.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "max_tool_rounds": {
           "description": "Tool rounds within one executor run.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "onboarding_max_tool_rounds": {
           "description": "Rounds for the first-turn onboarding pass; 0 disables it.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "onboarding_max_tool_rounds_ceiling": {
           "description": "Hard ceiling for onboarding rounds across extensions.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "sandbox_min_budget_tokens": {
           "description": "Refuse a coding run below this remaining budget.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Unit": {
       "additionalProperties": false,
       "properties": {
         "channel": {
           "description": "Unit channel on the company's chat surface; inherited by child units.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "children": {
           "description": "Child units.",
           "items": {
             "$ref": "#/$defs/Unit"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "goals": {
           "description": "What this unit is working toward.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+            },
+            {
+              "const": ""
+            }
+          ],
           "description": "Stable identity for this unit, so a rename does not move what is keyed on it. Lowercase, starts with a letter.",
-          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "knowledge": {
           "description": "Free-text knowledge references. Not a read scope.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "lead": {
           "description": "Seat leading this unit; inherited from the parent when empty.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "mcp_env": {
           "additionalProperties": {
             "additionalProperties": {
-              "type": "string"
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "description": "Credentials inherited by this unit's direct agent members.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "name": {
           "description": "Unit name; also what a manages entry can reference.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "project": {
           "description": "Tracker project this unit owns. Not a credential, not a read scope.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "purpose": {
           "description": "What this unit is for.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "roles": {
           "description": "Seats belonging to this unit.",
           "items": {
             "$ref": "#/$defs/Role"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "schedules": {
           "description": "Recurring work owned by this unit.",
           "items": {
             "$ref": "#/$defs/Schedule"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "space": {
           "description": "Knowledge container this unit owns. Not a credential, not a read scope.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "type": {
           "description": "Informational label: team (default), department, squad, ...",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
         "name"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "Worker": {
       "additionalProperties": false,
       "properties": {
         "description": {
           "description": "What this worker is for, written for the executor choosing one.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "max_turns": {
           "description": "Tool rounds this worker may run; 0 takes the runtime cap.",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "model": {
           "description": "providers.llm key for this worker; empty takes the seat's llm_subagent chain.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "output": {
           "additionalProperties": {},
           "description": "JSON Schema for this worker's structured answer. Absent takes the default shape.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "system_prompt": {
           "description": "The worker's persona and standing instructions. The runtime preamble is appended.",
-          "type": "string"
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         },
         "tools": {
           "description": "Tools this worker asks for. Still filtered against the caller's own tools at spawn.",
           "items": {
-            "type": "string"
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
         "description",
         "system_prompt"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     }
   },
   "$id": "https://docs.crewlet.ai/schema/company.schema.json",
@@ -2216,39 +3732,69 @@
       "items": {
         "$ref": "#/$defs/MCPServer"
       },
-      "type": "array"
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "mission": {
       "description": "One line on what the company is for; reaches every seat's prompt.",
-      "type": "string"
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
     },
     "name": {
       "description": "Company name. Half of every seat's derived id: effectively permanent.",
-      "type": "string"
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
     },
     "notification_coalesce_max_batch": {
       "description": "Events drained into one batch before partitioning by conversation, 1..100. Bounds a digest too, since a digest cannot exceed a drain.",
       "maximum": 100,
       "minimum": 1,
-      "type": "integer"
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "notification_coalesce_window_seconds": {
       "description": "Inbox linger before dispatch, 0..60s. 0 adds no latency.",
       "maximum": 60,
       "minimum": 0,
-      "type": "number"
+      "type": [
+        "number",
+        "null"
+      ]
     },
     "notification_rate_limit": {
       "description": "Inbound notifications one seat may be woken by per second; 0 (default) = unlimited.",
       "minimum": 0,
-      "type": "integer"
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "policies": {
       "description": "Company-wide rules injected into every seat's prompt.",
       "items": {
-        "type": "string"
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
       },
-      "type": "array"
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "providers": {
       "$ref": "#/$defs/Providers"
@@ -2258,22 +3804,36 @@
       "items": {
         "$ref": "#/$defs/Role"
       },
-      "type": "array"
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "scheduling": {
       "$ref": "#/$defs/Scheduling"
     },
     "skill_variables": {
       "additionalProperties": {
-        "type": "string"
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
       },
       "description": "name -\u003e value facts substituted into tool-skill text. Keys must be identifiers.",
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "token_budget": {
       "description": "Org-wide token ceiling across all seats; 0 = unlimited.",
       "minimum": 0,
-      "type": "integer"
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "tracker": {
       "$ref": "#/$defs/Tracker"
@@ -2286,18 +3846,29 @@
       "items": {
         "$ref": "#/$defs/Unit"
       },
-      "type": "array"
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "vision": {
       "description": "Longer statement of where the company is going.",
-      "type": "string"
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
     },
     "workers": {
       "additionalProperties": {
         "$ref": "#/$defs/Worker"
       },
       "description": "Reusable delegate templates, keyed by the name an executor calls them by.",
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     }
   },
   "required": [

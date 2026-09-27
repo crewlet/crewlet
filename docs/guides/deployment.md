@@ -213,12 +213,19 @@ same precedence as everything else that identifies this node — `node.id` in
 the file, then `CREWLET_NODE_ID`, then the default — so an orchestrator
 injecting a pod name needs no `node:` block at all. Writing
 `node.id: "${CREWLET_NODE_ID}"` (or `"${HOSTNAME}"`) works too, and means the
-same thing: Tier A expands `${VAR}` references before it decodes.
+same thing: Tier A expands `${VAR}` references before it decodes. Into a text
+field like this one a reference expands anywhere in the value; into a number or
+a boolean — a port, `stream.replicas` — it must be the whole value, and what it
+resolves to is read as if it were written there (see [Environment Variable References](../getting-started/configuration.md#environment-variable-references)).
 
 **One node or three, never two.** Two embedded-KV members have no quorum
 without each other, so the fleet stops serving the moment either restarts —
 and a rolling upgrade restarts them one at a time, which makes the outage
-certain rather than unlucky. Tier A refuses a two-member config by name.
+certain rather than unlucky. Tier A refuses a two-member config by name,
+counting this node and the **other** members its `stream.cluster.peers`
+names: an entry recognisably this node's own route, or a repeat, is left out
+of the count with a warning, and an alias of this host it cannot recognise
+is counted as a member — see [Running a Fleet](fleet.md#what-a-fleet-needs).
 
 **A fresh cluster takes seconds to form, and the engine waits it out rather
 than hanging.** Accepting connections is not the same as being able to serve

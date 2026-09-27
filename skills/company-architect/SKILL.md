@@ -73,8 +73,12 @@ Whichever rung you used, then walk the residual checklist below.
 
 None of this needs **credentials, a database, or a network** (beyond
 fetching the schema once): Tier B stores `${VAR}` references verbatim
-and resolves them at engine start, so a complete config validates before
-a single secret exists.
+and resolves each only when the engine builds the provider or transport
+that uses it, so a complete config validates before a single secret
+exists. That is also why a reference is judged as the literal text it is:
+write one only where a value is free text or a credential, never in an
+enum, a handle or a unit id (the Mattermost `username` is the one
+patterned field that takes one whole reference).
 
 **Say which rung you used.** If you validated by reading rather than
 running a validator, tell the founder that plainly — never imply a check
@@ -90,6 +94,12 @@ config — rungs 2 and 3 especially:
   `crewlet validate`, because roles can be added incrementally).
 - **Every `manages` entry names a real role or unit.** Same class of
   silent miss.
+- **Every human seat has at least one `contact` identity** — it is how
+  an inbound message finds the person, and the schema cannot say "at
+  least one of these keys".
+- **Every `knowledge.*` scope list names a backend the config actually
+  configures.** A scope for a backend with no integration block narrows
+  nothing, and `crewlet validate` refuses it.
 - **Timezones are real IANA names** (`Europe/Amsterdam`, not `CET` or
   `Mars/Olympus`).
 - **Cron expressions are valid.** The schema takes a cron as plain text,

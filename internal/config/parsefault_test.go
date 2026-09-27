@@ -75,6 +75,15 @@ func TestAParserFailureIsReportedWhereItWasWritten(t *testing.T) {
 			want: []found{{"roles[0].token_budget", 3, "shape"}},
 		},
 		{
+			// The decoder quotes the refused value in its message, so a
+			// value holding a line break puts one INSIDE the message — and a
+			// failure read one line at a time lost its path and its line
+			// both, leaving `crewlet validate` nothing to point at.
+			name: "a value of the wrong type that holds a line break",
+			doc:  "name: Acme\nroles:\n  - name: Dev\n    token_budget: \"1\\n2\"\n",
+			want: []found{{"roles[0].token_budget", 4, "shape"}},
+		},
+		{
 			name: "an llm field that is neither a key nor a list",
 			doc:  "name: Acme\nroles:\n  - name: Dev\n    llm_review: {a: b}\n",
 			want: []found{{"roles[0].llm_review", 4, "shape"}},

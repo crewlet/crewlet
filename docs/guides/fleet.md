@@ -102,6 +102,27 @@ the outage certain rather than unlucky. Tier A refuses a two-member
 config by name, counting the **stream's** members: the KV rides the
 stream's connection, so the coordination quorum *is* the stream cluster's.
 
+**`stream.cluster.peers` lists the *other* members**, because it is what
+that rule — and the one that allows at most one copy per member — counts:
+the members are this node plus the entries in its list. Each entry is a
+route URL with a host and a port (`nats://node-b.internal:6222`); one the
+embedded server could not dial is refused, since it would never be routed
+to. It is common to paste one list of every member into every node's file,
+so an entry that is **recognisably this node's own route** is not counted
+as a member: same host and port as this node's route listener
+(`cluster.host` with `cluster.port`, when the listener is bound to one
+address) or as its `cluster.advertise` address (whose bare host keeps
+`cluster.port`), with the scheme ignored, the host compared without regard
+to case and an IP address compared in its canonical form. An entry that
+repeats one already listed is not counted twice either. `crewlet validate`
+names every entry it discounted, as a warning. What it **cannot** recognise
+is another name for this host — a DNS alias, `localhost` for an advertised
+`10.0.0.11`, or any entry at all when the route listener binds every
+interface and advertises nothing — and such an entry is counted as a member
+it is not, so a two-node fleet written that way passes as three. Leave this
+node out of its own list. A list naming *only* this node names no other
+member and is refused: a member that seeds a cluster lists no peers.
+
 **A distinct, stable id per node.** `node.id` in the Tier A file, or
 `CREWLET_NODE_ID`, which is how an orchestrator injects a pod name
 without templating the config. Two nodes sharing an id miscount the fleet
