@@ -404,7 +404,7 @@ func unreachable(role *org.Role) bool {
 
 // danglingFinding renders one reference that resolves to nothing.
 func danglingFinding(ref org.DanglingRef) Finding {
-	object, detail := ref.From, ""
+	var detail string
 	switch ref.Kind {
 	case org.RefUnit:
 		detail = fmt.Sprintf("%s says it sits in unit %q and this company has "+
@@ -422,7 +422,7 @@ func danglingFinding(ref org.DanglingRef) Finding {
 	}
 	return Finding{
 		Kind: KindReferenceDangling, Severity: SeverityWarning,
-		Object: object, Names: ref.To, Detail: detail,
+		Object: ref.From, Names: ref.To, Detail: detail,
 		Remedy: "correct the reference, or create what it names — a retired " +
 			"address goes on resolving, so this one names nothing at all",
 	}

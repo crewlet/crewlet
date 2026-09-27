@@ -237,7 +237,7 @@ func retryAfter(err error) int {
 // viewOfUnit renders one unit at the posture this request gets.
 func viewOfUnit(u chart.Unit, runtime bool) unitView {
 	out := unitView{
-		Key: u.Key, Name: u.Name, Type: string(u.Type), Purpose: u.Purpose,
+		Key: u.Key, Name: u.Name, Type: u.Type, Purpose: u.Purpose,
 		Goals: u.Goals, Parent: u.ParentKey, Lead: u.Lead,
 		Channel: u.Channel, Project: u.Project, Space: u.Space,
 		FormerKeys: u.FormerKeys,
