@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -347,6 +348,33 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 			t.Errorf("run_in %q built no provider and no error, so a "+
 				"sandbox-enabled seat plans around a box it never gets", placement)
 		}
+	}
+}
+
+// THE RUNTIME'S DECLARED ENVIRONMENT REACHES IT RESOLVED. Tier B stores a
+// `${VAR}` verbatim, so a runtime_env passed through as written would put the
+// literal "${REGISTRY_ROLE}" into every docker call's environment: a credential
+// helper assuming a role called "${…}" and an agent socket at that path. It
+// resolves the way an MCP server's `env:` does — the store first, the
+// process environment behind it — and a literal stays a literal.
+func TestTheRuntimesDeclaredEnvironmentIsResolvedAtTheEdge(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.sock")
+	env := config.WithStore(config.MapSource{"REGISTRY_ROLE": "arn:aws:iam::123456789012:role/pull"})
+	got := localOptions(&config.LocalSandbox{
+		Image: "example.invalid/box:1",
+		RuntimeEnv: map[string]string{
+			"SSH_AUTH_SOCK": "${SSH_AUTH_SOCK}",
+			"AWS_ROLE_ARN":  "${REGISTRY_ROLE}",
+			"AWS_PROFILE":   "registry-pull",
+		},
+	}, env, config.PlacementContainer).RuntimeEnv
+	want := map[string]string{
+		"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
+		"AWS_ROLE_ARN":  "arn:aws:iam::123456789012:role/pull",
+		"AWS_PROFILE":   "registry-pull",
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("RuntimeEnv = %v, want %v", got, want)
 	}
 }
 

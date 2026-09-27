@@ -1,9 +1,12 @@
 package config
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -508,6 +511,25 @@ type LocalSandbox struct {
 	// --memory, extra mounts, --user). This is where a container box is
 	// SIZED, mirroring how a remote box is sized by its template.
 	RunArgs []string `yaml:"run_args,omitempty" json:"run_args,omitempty" desc:"Extra container run arguments. This is where a local box is sized."`
+
+	// RuntimeEnv is the environment DECLARED for the container runtime's
+	// own CLI — every `docker`/`podman` call the backend makes — over the
+	// fixed rule it always gets (hostbox.ContainerRuntime: the host
+	// allowlist, the engine user's locations and the runtime's own
+	// DOCKER_/CONTAINER_/CONTAINERS_/PODMAN_ settings).
+	//
+	// The channel the fixed rule cannot be: what a runtime's HELPERS read
+	// is open-ended — the cloud role, profile or key file a registry
+	// credential helper pulls a private image with — and with no
+	// way to add a name, a runtime that needed one simply stopped working
+	// when the engine stopped handing the CLI its whole environment. It is
+	// the MCP server's `env:` for the runtime, resolved the same way at the
+	// edge, and it never reaches a box: what a box needs is
+	// `role.sandbox.env`.
+	//
+	// A credential field, for the reason an MCP server's `env:` is one: a
+	// helper's cloud credentials are exactly what gets declared here.
+	RuntimeEnv map[string]string `secret:"true" yaml:"runtime_env,omitempty" json:"runtime_env,omitempty" desc:"Environment for the container runtime's own CLI (not the box); ${VAR} supported."`
 }
 
 // containerOnly are the fields no direct box reads, named as an operator
@@ -515,22 +537,83 @@ type LocalSandbox struct {
 // this package spends most of its rules on, and the check that reports it
 // needs the SEATS — see (*Company).validateSandboxPlacement.
 func (l *LocalSandbox) containerOnly() []struct{ field, value string } {
-	args := ""
-	if len(l.RunArgs) > 0 {
-		args = "set"
+	set := func(n int) string {
+		if n > 0 {
+			return "set"
+		}
+		return ""
 	}
 	return []struct{ field, value string }{
 		{"image", l.Image},
 		{"runtime", string(l.Runtime)},
 		{"network", l.Network},
-		{"run_args", args},
+		{"run_args", set(len(l.RunArgs))},
+		{"runtime_env", set(len(l.RuntimeEnv))},
 	}
+}
+
+// unsuppliedEnvArgs is every bare `-e NAME` in run_args — the index it was
+// written at and the name — that the runtime's CLI has nothing for.
+//
+// A bare `-e NAME` (`--env NAME`, `--env=NAME`, `-eNAME`) COPIES NAME FROM
+// THE RUNTIME CLI'S OWN ENVIRONMENT, and that environment is the fixed rule
+// plus runtime_env — never the engine's. So a name neither carries arrives in
+// the box as nothing at all, silently: the container starts, and whatever
+// read the variable finds it unset. `-e NAME=value` names its own value and
+// is not this question.
+func (l *LocalSandbox) unsuppliedEnvArgs() []struct {
+	at   int
+	name string
+} {
+	var out []struct {
+		at   int
+		name string
+	}
+	for i := 0; i < len(l.RunArgs); i++ {
+		arg, at := l.RunArgs[i], i
+		var value string
+		switch {
+		case arg == "-e" || arg == "--env":
+			if i+1 >= len(l.RunArgs) {
+				continue
+			}
+			i++
+			value, at = l.RunArgs[i], i
+		case strings.HasPrefix(arg, "--env="):
+			value = strings.TrimPrefix(arg, "--env=")
+		case strings.HasPrefix(arg, "-e") && !strings.HasPrefix(arg, "--"):
+			value = strings.TrimPrefix(strings.TrimPrefix(arg, "-e"), "=")
+		default:
+			continue
+		}
+		if value == "" || strings.Contains(value, "=") {
+			continue
+		}
+		if _, declared := l.RuntimeEnv[value]; declared || hostbox.ContainerRuntimeCarries(value) {
+			continue
+		}
+		out = append(out, struct {
+			at   int
+			name string
+		}{at, value})
+	}
+	return out
 }
 
 func (l *LocalSandbox) validate(path Path) error {
 	var p problems
 	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
 		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
+	}
+	// A NAME OUTSIDE THE ENVIRONMENT'S OWN GRAMMAR is refused rather than
+	// handed on: `A=B` as a key would set a variable called A to `B=…`, and
+	// a name with a space in it is one no process can read back.
+	for _, name := range slices.Sorted(maps.Keys(l.RuntimeEnv)) {
+		if !envref.ValidName(name) {
+			p.add(entry(at(path, "runtime_env"), name), ErrShape,
+				"%q is not an environment variable name (letters, digits and "+
+					"underscores, not starting with a digit)", name)
+		}
 	}
 	return p.err()
 }

@@ -161,15 +161,7 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 			Template: e2b.Template,
 		})
 	case config.PlacementDirect, config.PlacementContainer:
-		local := spec.Local
-		return sandbox.NewLocal(sandbox.LocalOptions{
-			Placement: sandbox.Placement(placement),
-			StateDir:  local.StateDir,
-			Image:     local.Image,
-			Runtime:   string(local.Runtime),
-			Network:   local.Network,
-			RunArgs:   local.RunArgs,
-		})
+		return sandbox.NewLocal(localOptions(spec.Local, env, placement))
 	default:
 		// UNREACHABLE THROUGH A PARSED CONFIG, because the closed set and
 		// this switch are the same list.
@@ -178,6 +170,25 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 		// hand is a caller, not an operator to be crashed at.
 		return nil, fmt.Errorf("providers.sandbox: %q is not one of %v",
 			placement, config.Placements)
+	}
+}
+
+// localOptions maps the local block onto the backend's options for one cell.
+//
+// runtime_env IS RESOLVED HERE, at the edge, exactly as an MCP server's `env:`
+// is ([serverSpec]): Tier B stores its references verbatim, so a backend handed
+// the block's map would put the literal "${SSH_AUTH_SOCK}" into the runtime's
+// environment, and the sandbox package must not be able to read the secret
+// store to do better.
+func localOptions(local *config.LocalSandbox, env *config.Resolver, placement config.Placement) sandbox.LocalOptions {
+	return sandbox.LocalOptions{
+		Placement:  sandbox.Placement(placement),
+		StateDir:   local.StateDir,
+		Image:      local.Image,
+		Runtime:    string(local.Runtime),
+		Network:    local.Network,
+		RunArgs:    local.RunArgs,
+		RuntimeEnv: resolveMap(env, local.RuntimeEnv),
 	}
 }
 

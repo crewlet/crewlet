@@ -67,8 +67,8 @@ const containerProbeTimeout = 10 * time.Second
 // against a rootless runtime fails the mount proof at creation with a message
 // that names the cause, while the opposite mistake is silent until an
 // operator wonders why the engine host is full of undeletable box directories.
-func containerUserArgs(ctx context.Context, runtime string) []string {
-	if runtimeIsRootless(ctx, runtime) {
+func containerUserArgs(ctx context.Context, cli containerCLI) []string {
+	if runtimeIsRootless(ctx, cli) {
 		return nil
 	}
 	return []string{"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())}
@@ -86,16 +86,16 @@ func containerUserArgs(ctx context.Context, runtime string) []string {
 //
 // Anything else — a daemon that is down, an answer this build does not
 // recognise — is not an answer, and the caller's default covers it.
-func runtimeIsRootless(ctx context.Context, runtime string) bool {
+func runtimeIsRootless(ctx context.Context, cli containerCLI) bool {
 	var format string
-	switch filepath.Base(runtime) {
+	switch filepath.Base(cli.path) {
 	case "podman":
 		format = "{{.Host.Security.Rootless}}"
 	default:
 		format = "{{.SecurityOptions}}"
 	}
-	result, err := runHost(ctx, runtimeCommand(containerProbeTimeout,
-		runtime, "info", "--format", format))
+	result, err := runHost(ctx, cli.command(containerProbeTimeout,
+		"info", "--format", format))
 	if err != nil || result.ExitCode != 0 {
 		// THE ERROR TRAVELS, and it is not decoration: "could not start
 		// the binary" and "the daemon answered nothing" are different
@@ -104,7 +104,7 @@ func runtimeIsRootless(ctx context.Context, runtime string) bool {
 		// --user against a rootless runtime. Stderr too, because a
 		// runtime that refuses says why there and nowhere else.
 		localLog.Debug("local_sandbox_rootless_probe_unanswered",
-			"runtime", runtime, "exit", result.ExitCode,
+			"runtime", cli.path, "exit", result.ExitCode,
 			"error", err, "stderr", strings.TrimSpace(result.Stderr))
 		return false
 	}

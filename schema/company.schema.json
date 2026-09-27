@@ -848,6 +848,13 @@
           ],
           "type": "string"
         },
+        "runtime_env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment for the container runtime's own CLI (not the box); ${VAR} supported.",
+          "type": "object"
+        },
         "state_dir": {
           "description": "Parent directory for box directories; used by both local placements.",
           "type": "string"

@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ import (
 // refuses a nil one, because os/exec reads a nil Cmd.Env as "inherit the
 // engine's" — the keyring, the Tier A tokens and every credential the engine
 // was started with. A box's own command carries [directBox.childEnv]; a
-// command for the container runtime's CLI is built by [runtimeCommand].
+// command for the container runtime's CLI is built by [containerCLI.command].
 type hostCommand struct {
 	argv    []string
 	cwd     string
@@ -60,27 +61,49 @@ func (c *capture) String() string {
 	return string(c.buf)
 }
 
-// runtimeCommand is a control command for the container runtime's own CLI —
-// `run`, `exec`, `pause`, `rm`, `ps`, `info` — carrying [runtimeEnv].
+// containerCLI is the container runtime's own CLI as this backend drives it:
+// the binary [ResolveContainerRuntime] picked, and the variables an operator
+// DECLARED for it in providers.sandbox.local.runtime_env, already resolved.
 //
-// A CONSTRUCTOR rather than a field each call site remembers: every one of
-// these was a hostCommand with no environment at all, which os/exec filled with
-// the engine's, so the runtime's CLI — and every plugin and credential helper
-// it runs — was handed the keyring and the Tier A tokens.
-func runtimeCommand(timeout time.Duration, argv ...string) hostCommand {
-	return hostCommand{argv: argv, env: runtimeEnv(), timeout: timeout}
+// A VALUE every runtime call is built from rather than a binary path each call
+// site pairs with an environment it remembers: every one of these was a
+// hostCommand with no environment at all, which os/exec filled with the
+// engine's, so the runtime's CLI — and every plugin and credential helper it
+// runs — was handed the keyring and the Tier A tokens.
+type containerCLI struct {
+	path     string
+	declared map[string]string
 }
 
-// runtimeEnv is the environment a container runtime's CLI runs with:
-// [hostbox.ContainerRuntime], the one rule for every caller that starts one —
-// this backend, and a stdio MCP server declared as `command: docker`.
+// command is one control command for the runtime's CLI — `run`, `exec`,
+// `pause`, `rm`, `ps`, `info` — its arguments following the binary.
 //
-// NOT THE ENGINE'S, for the reason no child gets that (see [hostbox]). The run
-// environment a coding agent gets is not here either: it travels as an
-// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds is
-// what the runtime needs and nothing a box does. A `-e NAME` in
-// `local.run_args` therefore copies only a name this environment carries.
-func runtimeEnv() map[string]string { return hostbox.ContainerRuntime() }
+// ITS ENVIRONMENT IS [hostbox.ContainerRuntime] WITH THE DECLARED VARIABLES
+// OVER IT. Not the engine's, for the reason no child gets that (see
+// [hostbox]); and not the fixed rule alone either, because what a runtime's
+// helpers legitimately read is not a list anybody can close — the credential
+// helper that pulls the image from a private registry wants its cloud's role,
+// profile or key file (docker-credential-ecr-login, docker-credential-gcr),
+// and a plugin its own settings — and a fixed list with no
+// way to add to it leaves an operator whose runtime needs one of those with
+// no way to say so. The declared layer wins over the fixed one, because a
+// value an operator wrote down for this CLI is a decision and the host's is a
+// default.
+//
+// The run environment a coding agent gets is NOT here: it travels as an
+// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds
+// is what the runtime needs and nothing a box does. A bare `-e NAME` in
+// `local.run_args` therefore copies only a name this environment carries,
+// which is what the configuration's advisory about one says.
+func (c containerCLI) command(timeout time.Duration, args ...string) hostCommand {
+	env := hostbox.ContainerRuntime()
+	maps.Copy(env, c.declared)
+	return hostCommand{
+		argv:    append([]string{c.path}, args...),
+		env:     env,
+		timeout: timeout,
+	}
+}
 
 // ---------------------------------------------------------------------
 // direct
@@ -404,7 +427,7 @@ func (b *directBox) Close(ctx context.Context) error {
 // side of the mount — no copy round trip through the runtime.
 type containerBox struct {
 	layout      boxLayout
-	runtime     string
+	cli         containerCLI
 	container   string
 	env         map[string]string
 	credentials map[string]string
@@ -499,22 +522,22 @@ func (b *containerBox) execArgv(cmd string, opts ExecOptions) ([]string, error) 
 	if cwd == "" {
 		cwd = b.workdir()
 	}
-	argv := []string{b.runtime, "exec", "-w", cwd}
+	args := []string{"exec", "-w", cwd}
 	envArgs, err := b.envArgs(opts.Env)
 	if err != nil {
 		return nil, err
 	}
-	argv = append(argv, envArgs...)
-	return append(argv, b.container, "/bin/sh", "-c", cmd), nil
+	args = append(args, envArgs...)
+	return append(args, b.container, "/bin/sh", "-c", cmd), nil
 }
 
 func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
-	argv, err := b.execArgv(cmd, opts)
+	args, err := b.execArgv(cmd, opts)
 	if err != nil {
 		return ExecResult{}, err
 	}
-	return runHost(ctx, runtimeCommand(
-		time.Duration(opts.TimeoutSec*float64(time.Second)), argv...))
+	return runHost(ctx, b.cli.command(
+		time.Duration(opts.TimeoutSec*float64(time.Second)), args...))
 }
 
 // StartBackground backgrounds the job inside the container and echoes its pid.
@@ -529,11 +552,11 @@ func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (
 // Direct mode does not need this: it spawns the job itself with its own
 // session, which gets both properties without a shell trick.
 func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error) {
-	argv, err := b.execArgv(cmd+" & echo $!", opts)
+	args, err := b.execArgv(cmd+" & echo $!", opts)
 	if err != nil {
 		return "", err
 	}
-	result, err := runHost(ctx, runtimeCommand(0, argv...))
+	result, err := runHost(ctx, b.cli.command(0, args...))
 	if err != nil {
 		return "", err
 	}
@@ -609,7 +632,7 @@ func (b *containerBox) SetTimeout(ctx context.Context, seconds float64) error {
 }
 
 func (b *containerBox) Pause(ctx context.Context) error {
-	result, err := runHost(ctx, runtimeCommand(0, b.runtime, "pause", b.container))
+	result, err := runHost(ctx, b.cli.command(0, "pause", b.container))
 	if err != nil || result.ExitCode != 0 {
 		detail := strings.TrimSpace(result.Stderr)
 		if err != nil {
@@ -624,14 +647,14 @@ func (b *containerBox) Pause(ctx context.Context) error {
 // container reports an error we ignore, which keeps Connect a single
 // unconditional call.
 func (b *containerBox) unpause(ctx context.Context) {
-	_, _ = runHost(ctx, runtimeCommand(0, b.runtime, "unpause", b.container))
+	_, _ = runHost(ctx, b.cli.command(0, "unpause", b.container))
 }
 
 func (b *containerBox) Close(ctx context.Context) error {
 	// A removal that failed LEAKS a container on the engine host, which is
 	// the one outcome here an operator has to be able to see: nothing else
 	// in the teardown path will mention it again.
-	if res, err := runHost(ctx, runtimeCommand(0, b.runtime, "rm", "-f", b.container)); err != nil ||
+	if res, err := runHost(ctx, b.cli.command(0, "rm", "-f", b.container)); err != nil ||
 		res.ExitCode != 0 {
 		localLog.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
 			"container", b.container, "exit", res.ExitCode,
