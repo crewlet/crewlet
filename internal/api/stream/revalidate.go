@@ -162,6 +162,10 @@ func revalidate(ctx context.Context, conn *websocket.Conn, client *Client,
 		if ctx.Err() != nil {
 			return
 		}
+		// THE CHECK'S REQUEST CARRIES ctx: [checkerFor] clones the
+		// handshake onto it before resolving. contextcheck follows a
+		// context through a returned request no further than the call.
+		//nolint:contextcheck // derived from ctx; see the paragraph above
 		principal, how := iam.From(r.Context())
 		switch {
 		case refusal != nil:

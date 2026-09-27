@@ -206,6 +206,11 @@ type request struct {
 func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r, refusal := resolved(guard, w, r)
+		// THE RESOLVED REQUEST'S CONTEXT IS THIS HANDLER'S OWN, carrying
+		// the guard's answer: see [auth.Guard.Middleware], which reads it
+		// the same way and says why contextcheck cannot see that. The
+		// socket's lifetime below is that same context.
+		//nolint:contextcheck // derived from r.Context(); see the paragraph above
 		principal, how := iam.From(r.Context())
 		if refusal == nil && how == iam.Unknown {
 			// 503 AND NEVER 401, for the guard's own reason: a browser
@@ -281,6 +286,7 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			log.Debug("stream_accept_failed", "error", err)
 			return
 		}
+		//nolint:contextcheck // the resolved request's; see where it is resolved
 		serveSocket(r.Context(), conn, svc, query, budgetKey, who, check)
 	})
 }

@@ -121,27 +121,6 @@ func next(t *testing.T, conn *websocket.Conn) map[string]any {
 	return got
 }
 
-// closeCode reads until the socket closes and reports the code it closed with.
-//
-// Frames that arrive first are discarded: a close is the END of a
-// conversation, and a test that read exactly one frame would be asserting
-// about whatever the engine happened to have queued rather than about the
-// close.
-func closeCode(t *testing.T, conn *websocket.Conn) websocket.StatusCode {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	for {
-		if _, _, err := conn.Read(ctx); err != nil {
-			status := websocket.CloseStatus(err)
-			if status == -1 {
-				t.Fatalf("the socket ended without a close frame: %v", err)
-			}
-			return status
-		}
-	}
-}
-
 // waitFor polls until cond holds, or fails with why.
 //
 // The engine's own goroutine acts on a frame this test wrote, so there is no

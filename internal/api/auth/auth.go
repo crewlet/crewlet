@@ -488,6 +488,12 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// distinction is only worth anything if the resolver actually
 		// runs everywhere.
 		r, refusal := g.Resolve(w, r)
+		// THE RESOLVED REQUEST'S CONTEXT IS THIS HANDLER'S OWN, carrying
+		// the answer: Resolve returns r.WithContext of a context derived
+		// from r.Context(). contextcheck follows a request only when it is
+		// the handler's parameter, never one a call returned, so it reads
+		// both uses below as new contexts.
+		//nolint:contextcheck // derived from r.Context(); see the paragraph above
 		principal, how := iam.From(r.Context())
 		if Unguarded(path) {
 			// THE REFUSAL IS DISCARDED HERE ON PURPOSE. It is only
@@ -563,6 +569,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		actor := iam.ActorFor(principal)
 		log.Debug("api_auth_ok", "actor", actor.Name, "operator_id",
 			actor.OperatorID, "route", path)
+		//nolint:contextcheck // the resolved request's; see where Resolve is called
 		entry, tierA := TierA(r.Context())
 		if !tierA {
 			next.ServeHTTP(w, r)
