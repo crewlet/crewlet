@@ -489,13 +489,16 @@ func TestAProofIsDatedByTheProvider(t *testing.T) {
 		{"a step-up inside its window", time.Hour, at.Add(-time.Minute),
 			at.Add(-time.Minute), false},
 		{"a step-up with no auth_time", time.Hour, time.Time{}, time.Time{}, true},
-		// THE WINDOW IS JUDGED WITHIN THE SKEW, because `auth_time` is the
-		// provider's clock: one running thirty seconds behind reports an
-		// authentication at the window's edge that far older.
+		// THE WINDOW IS JUDGED EXACTLY: the instant answered here is what
+		// the replacement session's deadline is stamped from, so a proof
+		// at the window's edge or past it — by any amount, the clock skew
+		// included — opens nothing that is still open.
+		{"a step-up a second inside its window", time.Hour,
+			at.Add(-time.Hour + time.Second), at.Add(-time.Hour + time.Second), false},
+		{"a step-up at its window's edge", time.Hour,
+			at.Add(-time.Hour), time.Time{}, true},
 		{"a step-up past its window by less than the skew", time.Hour,
-			at.Add(-time.Hour - 30*time.Second), at.Add(-time.Hour - 30*time.Second), false},
-		{"a step-up outside its window and the skew", time.Hour,
-			at.Add(-time.Hour - oidc.ClockSkew - time.Second), time.Time{}, true},
+			at.Add(-time.Hour - 30*time.Second), time.Time{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -511,6 +514,39 @@ func TestAProofIsDatedByTheProvider(t *testing.T) {
 				t.Errorf("answered (%s, %v), want %s", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// A STEP-UP THE PROVIDER CONFIRMED IS FRESH FOR THE WINDOW IT ASKED FOR.
+//
+// The instant [oidc.Flight.ProvedAt] answers is the proof the replacement
+// session is stamped with, and the guard gives it the window's deadline — the
+// proof plus the same window the flight asked the provider for. So accepting a
+// proof and that proof being fresh must be ONE judgement: accepted inside a
+// minute's clock skew past the window and dated unadjusted, the replacement was
+// already stale when it opened, and the gesture that asked for it refused it
+// again. Every age around the window's edge is asked here, and each proof that
+// is accepted must leave the window open at the instant it was accepted.
+//
+// Mutation: judge the window within the skew and the ages just past it are
+// accepted stale; judge it with `>` and the edge itself is.
+func TestAStepUpTheProviderConfirmedIsFreshForTheWindowItAskedFor(t *testing.T) {
+	t.Parallel()
+	for _, window := range []time.Duration{15 * time.Minute, time.Hour} {
+		for age := window - 2*time.Second; age <= window+2*oidc.ClockSkew; age += time.Second {
+			proved, err := oidc.Flight{MaxAge: window}.ProvedAt(
+				oidc.Claims{AuthTime: at.Add(-age)}, at)
+			if err != nil {
+				continue
+			}
+			// THE GUARD'S OWN ARITHMETIC: fresh while now is before the
+			// proof plus the window (iam.Principal.Fresh).
+			if !at.Before(proved.Add(window)) {
+				t.Errorf("a %s step-up proved %s ago was accepted, and the "+
+					"session it opens is stale for that window already",
+					window, age)
+			}
+		}
 	}
 }
 

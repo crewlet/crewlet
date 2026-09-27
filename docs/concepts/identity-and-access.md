@@ -1383,13 +1383,21 @@ removed, is a different way to sign in as somebody else.
 | The **expiry**, required rather than honoured-when-present | A token with no `exp` is valid for ever, so one captured off the wire replays until the provider rotates its key |
 
 Every **time claim** — `exp`, `iat` and `nbf` — is judged within **60
-seconds** of the node's clock, and so is a step-up's `auth_time` against the
-window it asked for. Each was written by the *provider's* clock, and two hosts'
-clocks are never exactly one: a provider running a few seconds ahead issues
-every token "in the future", and judged to the second, each sign-in on a node
-that is behind would be refused for a reason nobody can see. A minute is room
-for two imperfect clocks and nothing more; what it costs is a minute on a token
-lifetime a provider sets in hours.
+seconds** of the node's clock. Each was written by the *provider's* clock, and
+two hosts' clocks are never exactly one: a provider running a few seconds ahead
+issues every token "in the future", and judged to the second, each sign-in on a
+node that is behind would be refused for a reason nobody can see. A minute is
+room for two imperfect clocks and nothing more; what it costs is a minute on a
+token lifetime a provider sets in hours.
+
+A step-up's `auth_time` is **not** given that minute. It becomes the proof the
+replacement session is stamped with, and that session's deadline is the proof
+plus the same window the confirmation asked for — so an `auth_time` is accepted
+only while the window it opens is still open. Judged within the skew, a proof
+up to a minute past the window was accepted, the old session ended and a
+replacement opened already stale, and the gesture that asked for it refused
+it again. A provider whose clock runs behind reads older by its lag, which
+costs the person that much of their window and never admits a stale proof.
 
 Beyond those, a token naming more than one audience must name this client as
 its `azp`, and when the company sets `oidc.require_acr` the asserted

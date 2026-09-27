@@ -263,6 +263,12 @@ func TestAProviderStepUpConfirmsAtTheProviderAndReplacesTheSession(t *testing.T)
 				t.Errorf("the replacement was proved at %s, want the provider's %s",
 					starts[0].ProvedAt, r.idp.authTime)
 			}
+			// AND THAT PROOF LEAVES THE WINDOW IT CONFIRMED OPEN, by the
+			// guard's own arithmetic — the gesture that asked is admitted.
+			if !clock.Before(starts[0].ProvedAt.Add(maxAge)) {
+				t.Errorf("the replacement was proved at %s, already outside "+
+					"the %s window it confirmed", starts[0].ProvedAt, maxAge)
+			}
 			if !starts[0].AbsoluteExpiresAt.Equal(r.absolute) {
 				t.Errorf("the replacement ends at %s, want the replaced session's %s",
 					starts[0].AbsoluteExpiresAt, r.absolute)
@@ -294,7 +300,8 @@ func TestAProviderStepUpConfirmsAtTheProviderAndReplacesTheSession(t *testing.T)
 // accepted here and then refused by the sensitive gesture it was for.
 //
 // Mutation: seal the ordinary window whatever the start named, and the
-// half-hour-old authentication is accepted.
+// half-hour-old authentication is accepted; judge the window within the clock
+// skew, and the cases just past it end the session and open a stale one.
 func TestAProviderStepUpTheProviderDidNotConfirmChangesNothing(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -303,15 +310,18 @@ func TestAProviderStepUpTheProviderDidNotConfirmChangesNothing(t *testing.T) {
 	}{
 		"no auth_time":       {iam.RecencyStepUp, time.Time{}},
 		"outside the window": {iam.RecencyStepUp, clock.Add(-2 * time.Hour)},
-		// JUST OUTSIDE is outside the window AND the provider's clock
-		// skew, which `auth_time` is judged within as every instant the
-		// provider wrote is.
-		"just outside the window": {iam.RecencyStepUp,
-			clock.Add(-config.DefaultSessionStepUp - oidc.ClockSkew - time.Second)},
+		// AT THE EDGE and JUST PAST IT — by less than a minute's clock
+		// skew — are outside: the replacement's deadline is stamped from
+		// this instant by the same window, so a proof accepted there opens
+		// a session already stale for the gesture that asked for it.
+		"at the window's edge": {iam.RecencyStepUp,
+			clock.Add(-config.DefaultSessionStepUp)},
+		"just past the window, inside the clock skew": {iam.RecencyStepUp,
+			clock.Add(-config.DefaultSessionStepUp - oidc.ClockSkew/2)},
 		"half an hour old, asked for the sensitive window": {iam.RecencySensitive,
 			clock.Add(-30 * time.Minute)},
-		"just outside the sensitive window": {iam.RecencySensitive,
-			clock.Add(-config.DefaultSessionStepUpSensitive - oidc.ClockSkew - time.Second)},
+		"just past the sensitive window, inside the clock skew": {iam.RecencySensitive,
+			clock.Add(-config.DefaultSessionStepUpSensitive - oidc.ClockSkew/2)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -250,9 +250,23 @@ func Open(cipher secrets.Cipher, sealed string, now time.Time) (Flight, error) {
 // A flight with a [Flight.MaxAge] asked for a fresh authentication, and one
 // the provider did not give — no `auth_time`, which `max_age` makes required,
 // or one outside the window — is [ErrRefused]: the person asked to confirm who
-// they are, and nothing confirmed it. The window is judged within
-// [ClockSkew], as every other instant the provider's clock wrote is: an
-// `auth_time` from a provider running behind reads older by exactly its lag.
+// they are, and nothing confirmed it.
+//
+// # The window is judged exactly, with no skew
+//
+// What this answers is the instant the replacement session is PROVED at, and
+// the guard stamps that session's deadlines from it by the same window the
+// flight asked for (`ReauthAt` is the proof plus `step_up`, the sensitive one
+// plus `step_up_sensitive`) — so "accepted here" and "fresh for the gesture
+// that asked" are one comparison, and an `auth_time` is accepted only while the
+// window it opens is still open now. It was judged within [ClockSkew] and the
+// unadjusted instant returned, so a proof up to a minute past the window was
+// accepted, the session it came from ended, a replacement opened and
+// announced as a step-up — already stale, and the gesture refused
+// `step_up_required` again. The skew is for `exp`, `iat` and `nbf`, which the
+// token's own verification judges within it; a provider whose clock runs
+// behind this one's reads older here by its lag, which costs its person that
+// much of their window and never admits a proof that is not fresh.
 func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
 	at := c.AuthTime
 	if at.After(now) {
@@ -269,7 +283,7 @@ func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("%w: the provider asserted no "+
 			"auth_time, which it must when max_age is asked, so nothing says "+
 			"the person authenticated at all", ErrRefused)
-	case now.Sub(at) > f.MaxAge+ClockSkew:
+	case now.Sub(at) >= f.MaxAge:
 		return time.Time{}, fmt.Errorf("%w: the provider says the person "+
 			"authenticated %s ago, outside the %s window this confirmation "+
 			"asked for", ErrRefused, now.Sub(at).Round(time.Second), f.MaxAge)
