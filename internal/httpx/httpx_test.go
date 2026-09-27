@@ -147,3 +147,45 @@ func TestClosingIdleConnectionsIsProcessWide(t *testing.T) {
 			"saying it is has become wrong", got)
 	}
 }
+
+// THE IDENTITY PROVIDER HAS ONE TRANSPORT OF ITS OWN, AND IT IS CAPPED.
+//
+// Everything this engine sends the provider goes through one client, so the
+// shared pool has no other member at that host, and what a transport of its
+// own buys is a ceiling on the sockets held to it — which the shared transport
+// cannot carry without capping every host in the process. So it is a clone
+// (keeping the process's proxy and HTTP/2 settings, as the shared one does),
+// one per party rather than per client, and capped at IdentityProviderConns.
+//
+// Mutation: build it from the shared transport and every host is capped; build
+// one per call and the cap is per client, bounding nothing.
+func TestTheIdentityProviderHasOneCappedTransport(t *testing.T) {
+	t.Parallel()
+	a := httpx.IdentityProviderClient(time.Second)
+	b := httpx.IdentityProviderClient(10 * time.Second)
+	if a.Transport != b.Transport {
+		t.Fatal("two identity provider clients got two transports, so the cap " +
+			"bounds each client rather than this node's sockets to the provider")
+	}
+	if a.Transport == httpx.Transport() {
+		t.Fatal("the identity provider shares the process's transport, so its " +
+			"cap would bound every host this process reaches")
+	}
+	transport, ok := a.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport = %T, want an *http.Transport", a.Transport)
+	}
+	if transport.MaxConnsPerHost != httpx.IdentityProviderConns ||
+		transport.MaxIdleConnsPerHost != httpx.IdentityProviderConns {
+		t.Errorf("MaxConnsPerHost = %d and MaxIdleConnsPerHost = %d, want %d",
+			transport.MaxConnsPerHost, transport.MaxIdleConnsPerHost,
+			httpx.IdentityProviderConns)
+	}
+	if transport.Proxy == nil {
+		t.Error("the identity provider's transport dropped the process's proxy " +
+			"setting, so a deployment behind a proxy never reaches its provider")
+	}
+	if shared, ok := httpx.Transport().(*http.Transport); ok && shared.MaxConnsPerHost != 0 {
+		t.Errorf("the shared transport caps every host at %d", shared.MaxConnsPerHost)
+	}
+}

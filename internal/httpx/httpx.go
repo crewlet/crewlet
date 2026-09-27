@@ -32,6 +32,16 @@
 // be, not http.DefaultTransport. internal/mcp's per-server identity tripper
 // is the one in this tree.
 //
+// ONE PARTY HAS A TRANSPORT OF ITS OWN, and the reason is a CAP rather than a
+// pool: the identity provider a company signs in through
+// ([IdentityProviderClient]). Everything this engine sends that host goes
+// through the one client internal/iam/oidc holds — the discovery document,
+// the key set, every code exchange and every probe — and nothing else reaches
+// it, so the pool the shared transport exists to share has no other member
+// there; what a transport of its own buys is MaxConnsPerHost, which the shared
+// one cannot carry without capping every host in the process. It is still one
+// transport for that party, never one per client.
+//
 // IN A TEST the base is neither of those: it is the httptest.Server's own
 // transport, and [github.com/crewlet/crewlet/internal/httpx/httpxtest] is
 // where that rule and its reason live. The reason is not performance —
@@ -97,4 +107,42 @@ var Transport = sync.OnceValue(func() http.RoundTripper {
 // stream whose own idle timeout is the real bound.
 func Client(timeout time.Duration) *http.Client {
 	return &http.Client{Transport: Transport(), Timeout: timeout}
+}
+
+// IdentityProviderConns is how many connections the identity provider's
+// transport may hold to its host at once, dialling, busy and idle together.
+//
+// TEN, and it is derived rather than chosen: the eight token-endpoint requests
+// internal/iam/oidc admits to a provider at once (its ExchangeSlots) and the
+// two fetches beside them, each single-flighted — the discovery document and
+// the key set. So an admitted request never waits here for a socket, where the
+// wait would count against the client's own timeout and fail a sign-in the
+// semaphore had let through; what the cap does is hold this node's sockets to
+// that host at ten whatever path asks, including one a later change adds
+// without passing through the semaphore. A test in internal/iam/oidc holds the
+// two numbers together.
+const IdentityProviderConns = 10
+
+// identityProviderTransport is the identity provider's own transport: a clone
+// of the process's, for [Transport]'s reason, capped at
+// [IdentityProviderConns].
+var identityProviderTransport = sync.OnceValue(func() http.RoundTripper {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		// See [Transport]: a replaced default is still the process's,
+		// and a cap it cannot carry is a tuning knob lost, not a
+		// correctness property.
+		return http.DefaultTransport
+	}
+	t := base.Clone()
+	t.MaxIdleConnsPerHost = IdentityProviderConns
+	t.MaxConnsPerHost = IdentityProviderConns
+	return t
+})
+
+// IdentityProviderClient builds a client for the identity provider a company
+// signs in through, on that party's own capped transport — see the package
+// doc. The timeout is per caller, as [Client]'s is.
+func IdentityProviderClient(timeout time.Duration) *http.Client {
+	return &http.Client{Transport: identityProviderTransport(), Timeout: timeout}
 }
