@@ -325,7 +325,7 @@ func TestADecoyTakesTheSameTurnAndHoldsItAsLong(t *testing.T) {
 		return make([]byte, cheapParams.KeyLen)
 	}
 	var holds []time.Duration
-	h.hold = func(_ context.Context, d time.Duration) {
+	h.hold = func(d time.Duration) {
 		mu.Lock()
 		defer mu.Unlock()
 		holds = append(holds, d)
@@ -372,5 +372,88 @@ func TestADecoyTakesTheSameTurnAndHoldsItAsLong(t *testing.T) {
 	}
 	if err := <-decoyed; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A GRANTED TURN RUNS TO ITS END WHATEVER ITS REQUEST DOES — A DECOY'S AS WELL
+// AS A DERIVATION'S.
+//
+// What the next attempt in a lane sees is when the turn ahead of it ended.
+// argon2 cannot be interrupted, so a verification abandoned mid-derivation
+// holds its slot to the end; a decoy's hold ended with its request, so an
+// address that queued attempts behind a candidate and then hung up on it saw
+// them start at once behind a name nobody holds and a derivation later behind
+// a real one — the roster, read off its own lane. Both arms are abandoned
+// mid-turn here, and in both the next waiter in the lane starts only once the
+// turn has run its length.
+//
+// Mutation: hold a decoy's slot on its request's context and the waiter behind
+// the abandoned decoy starts the moment it is abandoned.
+func TestAGrantedTurnRunsToItsEndWhateverItsRequestDoes(t *testing.T) {
+	t.Parallel()
+	const source = "198.51.100.23"
+
+	t.Run("a verification", func(t *testing.T) {
+		t.Parallel()
+		g := newGated(t, 4)
+		gone, abandon := context.WithCancel(t.Context())
+		abandoned := g.verifyIn(gone, source, "a-real-name")
+		g.begun(t)
+		next := g.verifyIn(t.Context(), source, "next")
+		abandon()
+		g.idle(t, "the attempt queued behind an abandoned verification")
+		g.finish <- struct{}{} // THE DERIVATION ENDS, and only then the turn
+		if got := g.begun(t); got != "next" {
+			t.Fatalf("the derivation that started was %q", got)
+		}
+		g.finish <- struct{}{}
+		for _, done := range []<-chan error{abandoned, next} {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+
+	t.Run("a decoy", func(t *testing.T) {
+		t.Parallel()
+		// A SECOND, so the window [gated.idle] watches — a fifth of it
+		// — ends long before the hold does however slowly this runner
+		// gets from the grant to the abandonment.
+		const measure = time.Second
+		g := newGated(t, 4)
+		g.took.Store(int64(measure))
+		gone, abandon := context.WithCancel(t.Context())
+		decoyed := make(chan error, 1)
+		go func() { decoyed <- g.Decoy(gone, source, "a-fake-name") }()
+		heldBy(t, g.turns, 1)
+		next := g.verifyIn(t.Context(), source, "next")
+		abandon()
+		g.idle(t, "the attempt queued behind an abandoned decoy")
+		if got := g.begun(t); got != "next" {
+			t.Fatalf("the derivation that started was %q", got)
+		}
+		g.finish <- struct{}{}
+		if err := <-next; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-decoyed; err != nil {
+			t.Fatalf("a decoy abandoned after its turn was granted answered %v, "+
+				"want nil: it held the turn it was given", err)
+		}
+	})
+}
+
+// heldBy waits until slots of t's cap are held, or fails.
+func heldBy(tb testing.TB, t *turns, slots int) {
+	tb.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if held, _ := t.held(); held == slots {
+			return
+		}
+		if time.Now().After(deadline) {
+			tb.Fatalf("the cap never came to hold %d slots", slots)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

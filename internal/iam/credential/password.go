@@ -114,8 +114,17 @@ type Hasher struct {
 	// hasher's own suite replaces them, to decide from outside when a
 	// derivation ends and to see what a decoy was asked to hold; nothing
 	// else ever does.
+	//
+	// HOLD TAKES NO CONTEXT, and that is the point of its signature: a
+	// turn once granted runs to its end whatever its request does, which
+	// argon2 gives a derivation for free and a hold has to be given. A hold
+	// that ended with its request freed its source's lane the moment a
+	// client hung up, while a derivation freed it only once it was done —
+	// so the next attempt queued in that lane started at once behind a
+	// name nobody holds and a whole derivation later behind a real one,
+	// and one address read the roster off when its own queue moved.
 	work func(password string, salt []byte, params Params) []byte
-	hold func(ctx context.Context, d time.Duration)
+	hold func(d time.Duration)
 }
 
 // Params are one hasher's cost settings.
@@ -146,7 +155,7 @@ func NewHasher(params Params, cap int) *Hasher {
 		cap = VerifyCap()
 	}
 	return &Hasher{params: params, turns: newTurns(cap),
-		work: argon2id, hold: sleepUntil}
+		work: argon2id, hold: time.Sleep}
 }
 
 // Params is this hasher's cost, for a caller that has to report it.
@@ -249,6 +258,16 @@ func (h *Hasher) Verify(ctx context.Context, source, verifier, password string) 
 // measured derivation time, and an address's answers come back in the same
 // rhythm whichever of its names exist.
 //
+// # Once its turn is granted, it holds it to the end
+//
+// Whatever its request does. A derivation cannot be interrupted, so a real
+// name holds its slot for the whole derivation even when the client hangs up
+// half-way; a decoy that let go with its request freed the lane at once, and
+// one address learned which of its names existed from nothing but when the
+// attempts it had queued behind one started — at once behind a fake, a
+// derivation later behind a real one — by hanging up mid-turn. Only the WAIT
+// for the turn gives up with the request, exactly as a verification's does.
+//
 // # It derives nothing, once it knows how long deriving takes
 //
 // Holding the slot costs no memory and no CPU. Until this hasher has run a
@@ -260,7 +279,8 @@ func (h *Hasher) Verify(ctx context.Context, source, verifier, password string) 
 // ITS RESULT IS DISCARDED BY CONSTRUCTION — it returns nothing a caller could
 // branch on, because a decoy whose answer could be read would be a second
 // oracle. What it produces is TIME. The error is ctx's when the request went
-// away before its turn came.
+// away before its turn came, and nil once the turn was granted, whatever the
+// request did after.
 func (h *Hasher) Decoy(ctx context.Context, source, presented string) error {
 	release, err := h.turns.take(ctx, sourceKeyOf(source))
 	if err != nil {
@@ -268,7 +288,7 @@ func (h *Hasher) Decoy(ctx context.Context, source, presented string) error {
 	}
 	defer release()
 	if took := time.Duration(h.took.Load()); took > 0 {
-		h.hold(ctx, took)
+		h.hold(took)
 		return nil
 	}
 	salt := make([]byte, SaltLen)

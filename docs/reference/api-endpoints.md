@@ -316,7 +316,9 @@ verification takes, because otherwise the *absence* of that cost is the answer.
 Every verification and decoy waits for its own address's turn — one at a time
 per address, served in turn — so one address's flood queues behind itself
 rather than in front of everybody, and a request that goes away while it waits
-is answered `503` and counts as no attempt at all.
+is answered `503` and counts as no attempt at all. A turn that has begun is
+held to its end whether or not its request is still there — a decoy's as much
+as a verification's — so hanging up says nothing about which one it was.
 
 What that buys is that this surface is not a roster: a caller cannot learn who
 works here, nor test a list of addresses against it.

@@ -45,7 +45,11 @@ import (
 //   - A WAIT GIVES UP ITS PLACE WITH ITS REQUEST: a waiter whose context ends
 //     leaves the lane, and nothing is derived for a caller who is not there.
 //     A turn once granted runs to its end, because argon2 is not
-//     interruptible and a derivation abandoned half-way has spent its cost.
+//     interruptible and a derivation abandoned half-way has spent its cost —
+//     and a decoy's turn runs to its end too, for that reason's consequence:
+//     what the next waiter in the lane sees is when the turn ahead of it
+//     ended, so a turn that ended with its request would say whether a
+//     derivation was running in it.
 //
 // # Not work-conserving, deliberately
 //
@@ -63,10 +67,11 @@ import (
 //
 // A verification for a subject that does not exist is a decoy
 // ([Hasher.Decoy]), and it takes the same turn in the same lane and holds its
-// slot for as long as a derivation takes. Without that, one address firing a
-// handful of attempts at once learns which names are real from nothing but the
-// order they come back in: the real ones queue behind each other in its lane
-// and answer past the pad, and the decoys, queueing for nothing, answer at it.
+// slot for as long as a derivation takes, whether or not its request is still
+// there. Without that, one address firing a handful of attempts at once learns
+// which names are real from nothing but the order they come back in: the real
+// ones queue behind each other in its lane and answer past the pad, and the
+// decoys, queueing for nothing, answer at it.
 
 // turns is the cap, shared out between sources in turn. SAFE FOR CONCURRENT
 // USE.

@@ -972,7 +972,11 @@ elsewhere wait behind its queue, and cannot push anybody's verification past
 the deadline. Nor can it separate the arms by queueing its own real names
 behind each other, because its decoys queue in the same line for the same
 time. A request that goes away while it waits gives up its place: nothing is
-derived for it, it is answered `503`, and it counts as no attempt. What still
+derived for it, it is answered `503`, and it counts as no attempt. One that
+goes away once its turn has begun holds that turn to its end, a decoy's as much
+as a real verification's, because when a turn ends is what the address's next
+attempt sees — a decoy that let go when its client hung up would free the line
+at once where a real name held it for a whole derivation. What still
 separates the arms is a load spike from at least as many addresses as the
 node has cores, and then both arms queue alike and differ only by how far a
 derivation is from the node's measure of one. The cost falls on the address
