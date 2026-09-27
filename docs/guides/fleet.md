@@ -137,10 +137,15 @@ node:
 Roles decide one more thing, and it is not in the table because it is not a
 job somebody does: which
 [state-log domains this node applies](satellite-nodes.md#which-state-log-domains-the-node-runs).
-All three domains this engine ships are needed by every role, so today every
-node applies all three whatever its roles — but the answer is *derived* from
-the roles rather than configured beside them, which is what `/health` reports
-and what decides whose snapshot this node can adopt.
+Four of the five run on every node whatever its roles — the tracker, the
+vectors, the knowledge base and the org chart, which every role reads. The
+**identity estate runs only where `ingress` or `workers` is declared**: a
+seats-only node authenticates nobody, so it does not replicate your people,
+their credentials or their sessions. The set is *derived* from the roles
+rather than configured beside them — `crewlet validate` prints it before a
+node boots, `/health` reports it on a running one (and a node that serves no
+HTTP logs it as `statelog_started`), and it decides whose snapshot this node
+can adopt; see [Who can donate to whom](#who-can-donate-to-whom).
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -468,11 +473,14 @@ snapshots work at all in a mixed fleet:
 
 ```mermaid
 flowchart LR
-    D1["<b>core node</b><br/>runs tracker · vectors · pages"]
-    D2["<b>narrow node</b><br/>runs tracker only"]
-    R["<b>joining node</b><br/>runs tracker · pages"]
-    D1 -->|"adopted, then<br/>vectors stripped"| R
-    D2 -->|"refused: names no<br/>position for pages"| R
+    F["<b>full node</b> · ingress, seats, workers<br/>runs tracker · vectors · pages · chart · iam"]
+    S["<b>satellite</b> · seats<br/>runs tracker · vectors · pages · chart"]
+    JS["<b>joining satellite</b> · seats"]
+    JI["<b>joining ingress node</b> · ingress"]
+    F -->|"adopted, then<br/>iam stripped"| JS
+    F -->|"adopted"| JI
+    S -->|"adopted"| JS
+    S -->|"refused: names no<br/>position for iam"| JI
 ```
 
 The practical consequence for an operator: **keep at least one node that runs
