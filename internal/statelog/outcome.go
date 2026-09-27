@@ -3,6 +3,7 @@ package statelog
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -173,11 +174,41 @@ const (
 	// ceiling or unblocks the trim.
 	ReasonLogFull Reason = "log_full"
 
+	// ReasonRecordTooLarge — the record is larger than the broker takes in
+	// one message, which is the server's max_payload and nothing about
+	// the log. No node can place it and no wait changes it: the writer
+	// splits the change, or an operator raises max_payload on an
+	// external server.
+	//
+	// ITS OWN REASON RATHER THAN [ReasonLogFull], which it used to be:
+	// that one tells an operator to raise a ceiling or unblock the trim,
+	// and a record too large is refused by a log with room to spare.
+	ReasonRecordTooLarge Reason = "record_too_large"
+
+	// ReasonBrokerRefused — the broker refused to store the record, named
+	// a reason, and it is none this framework has a remedy for: a sealed
+	// stream, a JetStream store with no resources left, a limit nobody
+	// declared on a state log. The detail carries the broker's own code
+	// and words, which are the remedy. Nothing about waiting changes it.
+	ReasonBrokerRefused Reason = "broker_refused"
+
 	// ReasonSkew — the broker answered a last sequence BELOW an
 	// expectation this node formed, which cannot happen on a healthy
 	// stream and means a store or stream was restored out of step.
 	ReasonSkew Reason = "skew"
 )
+
+// Reasons are every reason, so a surface can enumerate them and a reason off
+// the wire can be told from a value this build does not know.
+var Reasons = []Reason{
+	ReasonEvicted, ReasonEvictionUnknown, ReasonDeferred, ReasonBehind,
+	ReasonBelowFloor, ReasonFloorUnknown, ReasonDeleted, ReasonGated,
+	ReasonRetired, ReasonLogFull, ReasonRecordTooLarge, ReasonBrokerRefused,
+	ReasonSkew,
+}
+
+// Valid reports whether a reason off the wire is one this build knows.
+func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
 // Retryable reports whether this refusal clears on THIS node without anybody
 // doing anything — the write-side twin of [ReadRefusal.Retryable], and for its

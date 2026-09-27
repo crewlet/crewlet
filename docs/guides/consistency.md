@@ -247,13 +247,32 @@ Six of them are worth coming back to **this** node for — `behind`,
 than in a retry loop's guesswork: a caller that retried `deferred` would loop
 forever.
 
+### A write's refusals
+
 A **write** refused by the log names a reason from the same vocabulary, and a
-reason spelled like one of these codes agrees with it about waiting — the two
-describe one state of one node. One write reason has no read twin:
-`eviction_unknown`, a node that could not read its own eviction state, which
-blocks the write (publishing under an eviction nobody can see produces records
-every node drops) and clears the moment the state reads again. It is
-deliberately not `evicted`, which no wait clears.
+reason spelled like one of the codes above agrees with it about waiting — the
+two describe one state of one node. A surface answers every one of them `503`,
+with a `Retry-After` only for the four that clear on their own.
+
+| Reason | What happened | What to do |
+|---|---|---|
+| `behind` | This node has not yet applied your own previous write, so a decision here would read a state you have already moved. | Wait — it clears on its own. |
+| `below_floor` | This node is below the trim floor, where the retry-at-zero a trimmed anchor needs could overwrite a peer's committed write. | Wait — it catches up or adopts a snapshot on its own. |
+| `floor_unknown` | The trim floor could not be read, and the third value blocks: failing open here is a lost update. | Wait — it clears the next time the floor is read. |
+| `eviction_unknown` | This node could not read its own eviction state, and publishing under an eviction nobody can see produces records every node drops. | Wait — it clears the moment the state reads again. Deliberately not `evicted`, which no wait clears. |
+| `evicted` | This node has been removed from the fleet; nothing it publishes is applied anywhere. | Readmit it, or write through another node. |
+| `deferred` | This node holds a record it cannot decode whose scope covers this object, so its rows are stale. | Write through another node, or upgrade this one. |
+| `deleted` | The object carries a permanent deletion marker. | It stays deleted. |
+| `gated` | The record is durable and a gate dropped it on every node, so it produced no rows anywhere. | Nothing to retry: republishing writes another record nothing applies. |
+| `retired` | The record names a kind this domain once published and no longer applies. | Upgrade the writer. |
+| `log_full` | The log is at its byte ceiling and refuses appends rather than dropping records. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. |
+| `record_too_large` | The record is larger than the broker takes in one message — the NATS server's `max_payload` — whatever room the log has. The detail names the record's size and the server's limit. | Split the change into smaller writes, or raise `max_payload` on an external NATS server; the embedded broker's is 8 MiB. No ceiling or trim changes it. |
+| `broker_refused` | The broker refused to store the record for a reason it named and this build has no remedy for — a sealed stream, a JetStream store with no resources left. The detail carries the broker's code and words. | Act on the broker's words; asking again changes nothing. |
+| `skew` | The broker answered a last sequence below an expectation this node formed, which a healthy stream never does. | A store or stream was restored out of step; see [Retention](retention.md#re-anchoring-a-recreated-stream). |
+
+Two write reasons have no read twin. `eviction_unknown` is one; the other is
+`record_too_large`, because the one record a read appends — a barrier — is a
+few hundred bytes.
 
 ## Completeness is a different fact from freshness
 

@@ -71,11 +71,16 @@ one JSON object, and it always has the same three parts in the same places:
   changes what the node runs: the header's absence is the answer, and the
   `hint` names what to do instead. So does a refusal from the state log
   that waiting cannot clear on THIS node — a node evicted from the fleet, one
-  holding a record it cannot decode, a log at its byte ceiling, a deleted
-  object — on every surface that answers one with a `503` (`/chart`, `/work`,
-  `/pages`): the same request is refused however often it is sent, so the
-  answer is to ask another node, or for an operator to readmit, upgrade or
-  resize, never to poll this one.
+  holding a record it cannot decode, a log at its byte ceiling
+  (`log_full`), a record larger than the broker takes in one message
+  (`record_too_large`), one the broker refused for a reason of its own
+  (`broker_refused`), a deleted object — on every surface that answers one
+  with a `503` (`/chart`, `/work`, `/pages`): the same request is
+  refused however often it is sent, so the answer is to ask another node, to
+  split the change, or for an operator to readmit, upgrade or resize, never to
+  poll this one. The reason is in the detail; [Read
+  consistency](../guides/consistency.md#a-writes-refusals) says what each one
+  asks of whom.
 
 `error` and `message` are RESERVED: a route's own detail can never displace
 them, so a client that branches on the code cannot find it missing because a

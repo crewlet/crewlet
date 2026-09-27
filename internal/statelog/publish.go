@@ -498,7 +498,8 @@ const (
 // attempt publishes once and reads the answer.
 func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64, gen uint32, round int) (Result, disposition, error) {
 	seq, _, err := p.append(ctx, req, snap, expect)
-	switch f, detail := classify(err); f {
+	f, detail := classify(err)
+	switch f {
 	case faultNone:
 		at := Position{Stream: p.stream, Generation: gen, Seq: seq}
 		if err := at.Valid(); err != nil {
@@ -525,6 +526,32 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 			OpID: req.OpID,
 		}
 
+	case faultTooLarge:
+		return Result{Rounds: round}, dispDone, &Unavailable{
+			Reason: ReasonRecordTooLarge,
+			// THE RECORD'S OWN SIZE, which the publisher alone knows
+			// before the signature is added, beside the broker's words —
+			// the appender names the bytes it sent and the server's
+			// max_payload. Nothing about the log's ceiling is involved,
+			// so neither the ceiling nor the trim is named: that remedy
+			// was what this refusal used to carry.
+			Detail: fmt.Sprintf("the record is %d bytes before its signature and "+
+				"the broker takes no message that large: %s — no retry places "+
+				"it, here or on any node, so split the change into smaller "+
+				"writes, or raise max_payload on the NATS server this fleet "+
+				"dials", len(snap.Decision.Payload), detail),
+			OpID: req.OpID,
+		}
+
+	case faultRefused:
+		return Result{Rounds: round}, dispDone, &Unavailable{
+			Reason: ReasonBrokerRefused,
+			Detail: fmt.Sprintf("the broker refused to store the record (%s) — a "+
+				"refusal this build has no remedy for, so the broker's own words "+
+				"are the one to act on, and asking again changes nothing", detail),
+			OpID: req.OpID,
+		}
+
 	case faultUnknown:
 		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
 		res.Rounds = round
@@ -535,12 +562,19 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		// there is no rejection to discriminate: take a fresh snapshot.
 		return Result{Rounds: round}, dispRetake, nil
 
-	default:
+	case faultRejected:
 		p.count(metrics.StatelogPublishRejections, metrics.Attrs{
 			"domain": p.domain.Name(), "subject_kind": req.Subject.Kind,
 		})
 		return Result{Rounds: round}, dispRejected, nil
 	}
+	// UNREACHABLE while every fault has an arm above, and refused rather
+	// than defaulted when a new one does not: a default arm here was the
+	// rejection path, so a fault added without one would have been sent
+	// to the discriminator as a lost race and retried for every round.
+	return Result{Rounds: round}, dispDone, fmt.Errorf("statelog: a publish to %s "+
+		"ended in fault %d, which this build does not classify: %s", req.Subject,
+		f, detail)
 }
 
 // refuseFromSnapshot is every refusal a committed snapshot settles on its

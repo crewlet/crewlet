@@ -375,6 +375,11 @@ the retention block. It does not silently delete old records to make room:
 shedding a record no node has applied is exactly the loss the whole gate
 exists to prevent.
 
+A single record larger than the broker takes in one message is a different
+refusal, `record_too_large`: it is the NATS server's `max_payload` that refuses
+it, on a log with room to spare, and no ceiling or trim changes it. See
+[Read consistency](consistency.md#a-writes-refusals).
+
 A full log costs `linearizable` reads, because those append a barrier — which
 is every seat tool read. `stale` keeps answering, so the dashboard and the read
 API are unaffected. See [Read consistency](consistency.md).

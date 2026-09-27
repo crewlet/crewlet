@@ -3,6 +3,7 @@ package statelog
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -42,8 +43,16 @@ type Appender interface {
 	LastSeq(ctx context.Context, subject string) (seq uint64, found bool, err error)
 }
 
-// fault is what a publish attempt actually was, which is three facts and not
-// two.
+// fault is what a publish attempt actually was.
+//
+// THREE FACTS AT THE CORE — on the stream, refused as stale, or no answer —
+// and the refusals that are neither a stale expectation nor an unanswered
+// append split three ways further, because each sends a different person to a
+// different knob: a log at its ceiling is the operator's retention, a record
+// too large for the broker is the writer's change or the server's
+// max_payload, and anything else the broker refused is the broker's own words.
+// Folded into one, a record too large was told to raise a ceiling it was
+// nowhere near.
 type fault int
 
 const (
@@ -54,15 +63,27 @@ const (
 	// stale. Somebody wrote first, or the anchor was trimmed.
 	faultRejected
 
-	// faultFull is the stream refusing to store the record at all.
+	// faultFull is the log at its byte ceiling, refusing the append
+	// rather than dropping a record to make room.
 	faultFull
+
+	// faultTooLarge is a record larger than the broker takes in one
+	// message. Nothing about the log's size is involved, and nothing a
+	// retry does makes the record smaller.
+	faultTooLarge
+
+	// faultRefused is any other refusal the broker made and named: a
+	// decision, so not ambiguous, and one this framework has no remedy
+	// for — so it is reported with the broker's words rather than
+	// retried, and rather than dressed as one of the refusals above.
+	faultRefused
 
 	// faultUnknown is no answer: the append may or may not have landed,
 	// and nothing here can tell which.
 	faultUnknown
 )
 
-// classify decides which of the three a publish error was.
+// classify decides which fault a publish error was.
 //
 // # Why BOTH rejection codes, and why this is one function
 //
@@ -76,13 +97,26 @@ const (
 // revision-mismatch mapping for free: that wrapper lives inside the key-value
 // layer. So the raw APIError is classified here, once, against both codes.
 //
-// # And why the description is never parsed
+// # And why a rejection's description is never parsed
 //
 // The server interpolates the sequence it actually found into the rejection's
 // description string and exposes it nowhere structured. Reading it back out
 // would be a parser against a message that is free to be reworded, for a
 // number the discriminator answers authoritatively — so the rejection is
 // treated as "stale, cause unknown" and LastSeq is asked.
+//
+// # Why a store failure's description IS compared, whole
+//
+// 10077 is the server's one code for "the stream would not store this", and
+// it covers a log at its ceiling and a message too large for the file store
+// alike — the reason travels only as the text of the server's own store
+// error. The two have opposite remedies, so they are told apart by comparing
+// that text WHOLE against the server's declared errors ([storeFailedMaxBytes],
+// [storeFailedTooLarge]), which a test pins to the vendored server's own
+// values: never a substring, never a parse. A wording this build does not
+// know is [faultRefused] carrying the words verbatim, so a reworded server
+// costs a less specific remedy and never a wrong one — which is what reading
+// every 10077 as a full log was.
 func classify(err error) (fault, string) {
 	if err == nil {
 		return faultNone, ""
@@ -94,20 +128,25 @@ func classify(err error) (fault, string) {
 			jetstream.JSErrCodeStreamWrongLastSequenceConstant:
 			return faultRejected, apiErr.Description
 		case codeStreamStoreFailed:
-			// THE ONE PLACE THE DESCRIPTION TRAVELS RATHER THAN BEING
-			// PARSED. This code covers both "maximum bytes exceeded"
-			// and "message too large", the server carries the reason
-			// only in its own words, and both are an operator's
-			// problem with different remedies — so the words are
-			// handed on verbatim instead of being turned into a
-			// second enum this build would have to keep matching.
-			return faultFull, apiErr.Description
+			switch apiErr.Description {
+			case storeFailedMaxBytes:
+				return faultFull, apiErr.Description
+			case storeFailedTooLarge:
+				return faultTooLarge, apiErr.Description
+			}
+		case codeStreamMessageExceedsMaximum:
+			// THE STREAM'S OWN PER-MESSAGE LIMIT, a structured code of
+			// its own. No state log declares one, so reaching it means
+			// the stream was reconfigured under the engine — and it is
+			// still a record too large, not a log that is full.
+			return faultTooLarge, apiErr.Description
 		}
-		// Any other API error is a decision the server made and named,
+		// ANY OTHER API ERROR is a decision the server made and named,
 		// so it is not ambiguous — but it is not one this framework
-		// knows how to act on either, so it is reported rather than
-		// retried.
-		return faultFull, apiErr.Description
+		// knows how to act on, so it is reported with its code and its
+		// words rather than retried or passed off as a full log.
+		return faultRefused, fmt.Sprintf("code %d: %s", apiErr.ErrorCode,
+			apiErr.Description)
 	}
 	// TOO LARGE IS A DECISION THE CLIENT MADE, before the append ever
 	// reached the broker, so it is not ambiguous and it must not be
@@ -118,8 +157,7 @@ func classify(err error) (fault, string) {
 	// a peer that is not there. Nothing about the record changes between
 	// rounds; it is too big now and it will be too big in a millisecond.
 	if errors.Is(err, nats.ErrMaxPayload) {
-		return faultFull, "the record is larger than the broker's maximum payload, " +
-			"so no retry can place it: " + err.Error()
+		return faultTooLarge, err.Error()
 	}
 	// NO ANSWER IS THE THIRD VALUE. The client retries a no-responder
 	// twice on its own before giving up, so reaching here means the
@@ -129,6 +167,21 @@ func classify(err error) (fault, string) {
 }
 
 // codeStreamStoreFailed is the server's "the stream would not store this"
-// code. It is not exported by the client, so it is written down here with
-// what it covers rather than left as a literal at the switch.
-const codeStreamStoreFailed jetstream.ErrorCode = 10077
+// code, and codeStreamMessageExceedsMaximum its "larger than this stream's
+// own per-message limit". Neither is exported by the client, so each is
+// written down here with what it covers rather than left as a literal at the
+// switch.
+const (
+	codeStreamStoreFailed           jetstream.ErrorCode = 10077
+	codeStreamMessageExceedsMaximum jetstream.ErrorCode = 10054
+)
+
+// storeFailedMaxBytes and storeFailedTooLarge are the two store errors a
+// 10077 carries that this framework has a remedy for, spelled exactly as the
+// server declares them (ErrMaxBytes and ErrMsgTooLarge in its store). A test
+// holds both against the vendored server, so a bump that rewords one fails
+// the build instead of turning a full log into an unnamed refusal.
+const (
+	storeFailedMaxBytes = "maximum bytes exceeded"
+	storeFailedTooLarge = "message too large"
+)

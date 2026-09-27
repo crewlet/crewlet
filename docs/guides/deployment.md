@@ -517,8 +517,9 @@ the engine promises to carry — an event, a webhook delivery, a state-log recor
 — and the embedded broker is configured at exactly that; nats-server's own
 default is 1 MiB. A server below it refuses a message between its limit and
 8 MiB that the default topology would have carried, permanently, and the
-refusal names the message's size and the server's `max_payload`. Set
-`max_payload: 8MB` in the server's configuration.
+refusal names the message's size and the server's `max_payload` — a
+state-log write answers `record_too_large`. Set `max_payload: 8MB` in the
+server's configuration.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it

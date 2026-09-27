@@ -410,6 +410,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		t.Errorf("a retryable read refusal with no hint says %s, want %s",
 			got, otherwise)
 	}
+	covered := map[statelog.Reason]bool{}
 	for _, c := range []struct {
 		reason    statelog.Reason
 		retryable bool
@@ -424,8 +425,11 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		{statelog.ReasonGated, false},
 		{statelog.ReasonRetired, false},
 		{statelog.ReasonLogFull, false},
+		{statelog.ReasonRecordTooLarge, false},
+		{statelog.ReasonBrokerRefused, false},
 		{statelog.ReasonSkew, false},
 	} {
+		covered[c.reason] = true
 		want := time.Duration(0)
 		if c.retryable {
 			want = otherwise
@@ -440,6 +444,20 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 			t.Errorf("%q reports retryable = %v, want %v", c.reason,
 				c.reason.Retryable(), c.retryable)
 		}
+	}
+	// EVERY REASON HAS A ROW, so a reason added without deciding whether
+	// waiting clears it fails here rather than defaulting to "no".
+	for _, reason := range statelog.Reasons {
+		if !reason.Valid() {
+			t.Errorf("%q is listed and does not report itself valid", reason)
+		}
+		if !covered[reason] {
+			t.Errorf("write refusal %q has no row above, so nothing decided "+
+				"whether waiting clears it", reason)
+		}
+	}
+	if statelog.Reason("log_fool").Valid() {
+		t.Error("a reason this build never declared reports itself valid")
 	}
 	// AND AN ERROR THIS PACKAGE DID NOT MAKE is the caller's to judge.
 	if got := statelog.RetryAfter(errors.New("a store blip"), otherwise); got != otherwise {

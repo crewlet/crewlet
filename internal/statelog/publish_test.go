@@ -809,3 +809,98 @@ func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
 		})
 	}
 }
+
+// A RECORD TOO LARGE FOR THE BROKER AND A LOG AT ITS CEILING ARE TWO
+// REFUSALS, with two remedies — and both are decided at round one.
+//
+// The broker cannot store either, and neither changes between rounds, so
+// neither may be retried. But the remedies are different people's: a full
+// log is the operator's retention (raise the ceiling, unblock the trim), and a
+// record too large is the writer's change or the NATS server's max_payload,
+// with a log that has room to spare. Both were `log_full`, so a record too
+// large told whoever read it to raise a ceiling nothing was near.
+//
+// Both are staged on a REAL broker, so what is classified is what a broker
+// actually answers: the embedded one takes no message past eight mebibytes,
+// and a log created at a few kilobytes fills after a handful of records.
+func TestATooLargeRecordAndAFullLogAreRefusedApart(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a record too large", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		body := strings.Repeat("x", 8<<20+1)
+		res, err := h.write(probeSubject("big"), "op-big", body)
+		var refusal *statelog.Unavailable
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonRecordTooLarge {
+			t.Fatalf("an oversized record = %v, want a %s refusal", err,
+				statelog.ReasonRecordTooLarge)
+		}
+		if res.Rounds != 1 || h.appends.appends.Load() != 1 {
+			t.Errorf("an oversized record took %d round(s) and %d append(s), want "+
+				"one of each — nothing a retry does makes it smaller",
+				res.Rounds, h.appends.appends.Load())
+		}
+		// WHAT TO CHANGE: the record's own size, the server's limit, and
+		// the two knobs that move either. Never the ceiling or the trim,
+		// which is the remedy this refusal used to carry.
+		limit := fmt.Sprintf("%d-byte limit", h.q.Conn().MaxPayload())
+		for _, want := range []string{fmt.Sprintf("%d bytes", len(body)), limit,
+			"max_payload", "split the change"} {
+			if !strings.Contains(refusal.Detail, want) {
+				t.Errorf("the refusal does not say %q: %s", want, refusal.Detail)
+			}
+		}
+		for _, wrong := range []string{"byte ceiling", "trim"} {
+			if strings.Contains(refusal.Detail, wrong) {
+				t.Errorf("the refusal of a record too large names %q, a full "+
+					"log's remedy: %s", wrong, refusal.Detail)
+			}
+		}
+		if got := statelog.RetryAfter(err, 2*time.Second); got != 0 {
+			t.Errorf("a record too large says come back in %s — it is refused "+
+				"the same on every attempt and every node", got)
+		}
+	})
+
+	t.Run("a log at its byte ceiling", func(t *testing.T) {
+		t.Parallel()
+		h := newHarnessFor(t, tinyLogDomain{})
+		body := strings.Repeat("x", 4<<10)
+		var (
+			res statelog.Result
+			err error
+		)
+		for i := range 64 {
+			res, err = h.write(probeSubject(fmt.Sprintf("o%d", i)),
+				fmt.Sprintf("op-%d", i), body)
+			if err != nil {
+				break
+			}
+		}
+		var refusal *statelog.Unavailable
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonLogFull {
+			t.Fatalf("a write to a log at its ceiling = %v, want a %s refusal", err,
+				statelog.ReasonLogFull)
+		}
+		if res.Rounds != 1 {
+			t.Errorf("a full log's refusal took %d rounds, want one", res.Rounds)
+		}
+		for _, want := range []string{"maximum bytes exceeded", "byte ceiling",
+			"crewlet retention status"} {
+			if !strings.Contains(refusal.Detail, want) {
+				t.Errorf("the refusal does not say %q: %s", want, refusal.Detail)
+			}
+		}
+	})
+}
+
+// tinyLogDomain is the probe domain on a log whose ceiling a handful of
+// records fills.
+type tinyLogDomain struct{ probeDomain }
+
+func (tinyLogDomain) Stream() statelog.StreamSpec {
+	spec := probeDomain{}.Stream()
+	spec.MaxBytes = 32 << 10
+	return spec
+}
