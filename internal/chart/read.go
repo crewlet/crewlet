@@ -303,7 +303,7 @@ func (r *Reader) Seat(ctx context.Context, handle string, fresh statelog.Freshne
 // ADR-0020 — because a handle is an address a rename moves, and a binding that
 // followed an address came to name a stranger's seat, or two people's one. The
 // identity is what no rename moves and no creation re-issues: see
-// [identityHolder], and the tombstone a removal leaves on it.
+// [refuseCreate], and the tombstone a removal leaves on it.
 //
 // THE ROW ALONE, without the seats it manages and the history [Reader.Seat]
 // reads beside it: neither per-request caller renders a `manages:` list or up
@@ -382,7 +382,7 @@ var ErrNotFound = errors.New("chart: no such object")
 // directory holds (ADR-0020) — while the alias list is capped at
 // [MaxFormerKeys]. An object renamed once too often used to stop answering to
 // the address it was created under, which is the one address nothing else may
-// ever take; resolving it for ever is what lets [addressHolder] refuse a
+// ever take; resolving it for ever is what lets [refuseCreate] refuse a
 // rename onto it however long ago it was retired.
 func resolveUnit(ctx context.Context, tx *sql.Tx, key string) (Unit, bool, error) {
 	unit, found, err := readUnit(ctx, tx, key)
@@ -392,68 +392,6 @@ func resolveUnit(ctx context.Context, tx *sql.Tx, key string) (Unit, bool, error
 	unit, match, err := byRetiredAddress(ctx, tx, "chart_units", key,
 		DecodeUnit, Unit.Origin)
 	return unit, match != retiredNone, err
-}
-
-// addressHolder is the object that ALREADY answers to this address — as its
-// key, as one it used to hold, or as the one it was created under — named as
-// it is addressed now, or empty when nothing does.
-//
-// TWO CALLERS THAT MUST AGREE: the claim's decide, which refuses an address
-// somebody else holds, and the apply, which declines one. Written twice they
-// would eventually differ about whether a RETIRED address counts, and the two
-// answers are a refused rename and a stalled domain.
-//
-// It answers with the holder's CURRENT address rather than a boolean, because
-// the one claim that must still be allowed is a rename BACK: an object moving
-// onto an address it used to answer to is claiming something that already
-// resolves to it, and a bare "held" could not tell that from a collision.
-func addressHolder(ctx context.Context, tx *sql.Tx, kind ObjectKind,
-	address string) (string, bool, error) {
-
-	switch kind {
-	case KindUnit:
-		unit, found, err := resolveUnit(ctx, tx, address)
-		return unit.Key, found, err
-	case KindSeat:
-		seat, found, err := resolveSeat(ctx, tx, address)
-		return seat.Handle, found, err
-	}
-	return "", false, nil
-}
-
-// identityHolder names the OTHER object this address is the identity of — the
-// key it was created under and has since been renamed away from — for a
-// caller that has already found nothing holding the address as its live key.
-//
-// # Why a creation asks this and not [addressHolder]
-//
-// A CREATION MAY TAKE A RETIRED ALIAS and may never take a retired IDENTITY,
-// and the difference is what a creation's own identity is. A new object's
-// identity is the address it is created under, so creating onto another
-// object's identity makes two objects with one: one mailbox, one lease, one
-// diary and one schedule ledger between two seats (ADR-0019), and every person
-// the identity directory bound to the first seat bound to the second as well
-// (ADR-0020). A retired alias carries none of that — a creation onto one only
-// re-points the references somebody wrote with it, which is the claimant-wins
-// rule [resolveUnit] states.
-//
-// A REMOVED object's identity is not answered here: a removal tombstones it
-// ([Applier.applyRemoval]), and every creation path already refuses or skips a
-// tombstoned address.
-func identityHolder(ctx context.Context, tx *sql.Tx, kind ObjectKind,
-	address string) (string, bool, error) {
-
-	switch kind {
-	case KindUnit:
-		unit, match, err := byRetiredAddress(ctx, tx, "chart_units", address,
-			DecodeUnit, Unit.Origin)
-		return unit.Key, match == retiredOrigin, err
-	case KindSeat:
-		seat, match, err := byRetiredAddress(ctx, tx, "chart_seats", address,
-			DecodeSeat, Seat.Origin)
-		return seat.Handle, match == retiredOrigin, err
-	}
-	return "", false, nil
 }
 
 // resolveSeat is [resolveUnit] for a seat.
@@ -473,7 +411,7 @@ func resolveSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, er
 // renamed answers to the handle it was created under, and so does one renamed
 // back. It is CHECKED rather than trusted, because a live handle is not
 // necessarily anybody's identity — a seat could be renamed onto another's
-// retired identity before [addressHolder] counted one — and a lookup that
+// retired identity before [refuseCreate] counted one — and a lookup that
 // trusted it would hand a binding to whichever seat now wears the name.
 func seatByIdentity(ctx context.Context, tx *sql.Tx, identity string) (Seat, bool, error) {
 	seat, found, err := readSeat(ctx, tx, identity)
@@ -521,7 +459,7 @@ const (
 // another's retired alias names the first, because the identity is what the
 // object IS and the alias only what somebody once called it — and nothing
 // this build writes can produce the pair any more, since a rename onto an
-// address that resolves is refused ([addressHolder]).
+// address that resolves is refused ([refuseCreate]).
 func byRetiredAddress[T any](ctx context.Context, tx *sql.Tx, table, key string,
 	decode func([]byte) (T, error), origin func(T) string) (T, retiredMatch, error) {
 

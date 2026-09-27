@@ -564,61 +564,24 @@ func (w *Writer) WriteRekey(ctx context.Context, opID string, object ObjectRef,
 					"chart answers to %q, so there is no object to move the "+
 					"key %q onto: %w", was, key, ErrRefused)
 			}
-			// AND THE ADDRESS HAS TO BE FREE, which is the half the broker
-			// cannot arbitrate for us. A create files under the STRUCTURE's
-			// subject and a claim under the ADDRESS's, so the two never
-			// contend: the log will order a create of `infra` after a claim
-			// on `infra` was decided, quite legally. Unchecked, the apply
-			// then reached `UNIQUE constraint failed: chart_units.key` — on
-			// every node, identically, on a record none of them can ever get
-			// past, which stalls the whole domain rather than losing one
-			// rename. ([Applier.rekeyUnit] declines the same case for the
-			// same reason; this is where an operator is TOLD.)
-			//
-			// A RETIRED ADDRESS COUNTS AS HELD. It still resolves
-			// ([resolveUnit]), so letting a second object take it would
-			// silently re-point every reference written before the first
-			// one moved. The object's OWN retired address does not count:
-			// renaming back is a claim on something that already answers to
-			// this object.
-			holder, held, err := addressHolder(ctx, tx, object.Kind, key)
+			// AND THE ADDRESS HAS TO BE ONE IT MAY TAKE, which is the half
+			// the broker cannot arbitrate for us: a create files under the
+			// STRUCTURE's subject and a claim under the ADDRESS's, so the two
+			// never contend, and the log will order a create of `infra` after
+			// a claim on `infra` was decided, quite legally. The rules are
+			// every creation's ([refuseCreate]) — a reserved word or a value
+			// outside the kind's grammar, a removed address, one somebody
+			// else answers to as a key, an identity or a retired alias — and
+			// the apply declines what this decide cannot see
+			// ([Applier.rekeyRefused]); this is where an operator is TOLD.
+			refused, err := refuseCreate(ctx, txBook{tx: tx}, object.Kind, key, was)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if held && holder != was {
-				// TWO SENTENCES, because the two cases send a reader to
-				// different places: one names an object they can see at
-				// that address, the other an object that is NOT there and
-				// answers anyway, which is the whole of what a retired
-				// address does and the last thing somebody staring at the
-				// chart would work out for themselves.
-				because := fmt.Sprintf("%q already holds it", holder)
-				if holder != key {
-					because = fmt.Sprintf("%q still answers to it, having "+
-						"been created under it or renamed from it", holder)
-				}
+			if refused != nil {
 				return statelog.Decision{}, fmt.Errorf("chart: %q cannot take "+
-					"the address %q: %s — rename or remove %s first, or pick "+
-					"another address: %w", was, key, because, holder, ErrRefused)
-			}
-			// AND A REMOVED ADDRESS COUNTS AS HELD FOR EVER. The
-			// tombstone that stops a removed object's old records
-			// applying is keyed on the address, so an object renamed
-			// onto it would have every later record on its own subject
-			// dropped as the removed one's — a seat nobody could edit
-			// again, refused by nothing and reported by nothing.
-			// ([Applier.rekeySeat] declines the same case at the apply.)
-			gone, err := objectRemoved(ctx, tx, ObjectRef{Kind: object.Kind, ID: key})
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			if gone {
-				return statelog.Decision{}, fmt.Errorf("chart: %q cannot take "+
-					"the address %q: a %s was removed from it, and a removed "+
-					"address never resolves again — its tombstone would drop "+
-					"every later change to %q as a change to the removed one. "+
-					"Pick another address: %w", was, key, object.Kind, was,
-					ErrRefused)
+					"the address %q — %s: %s: %w", was, key, refused.Rule,
+					refused.Detail, ErrRefused)
 			}
 			return w.record(subject, OpRekey, opID, at, scope, RekeyPayload{
 				V: DocumentVersion, Key: key, FormerKey: was,

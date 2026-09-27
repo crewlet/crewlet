@@ -60,28 +60,20 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 
 	rows := 0
 	for _, edge := range edges {
-		// A REMOVED OBJECT IS SKIPPED RATHER THAN PLACED. The envelope
-		// gate cannot answer for a structural record — it names its
-		// objects inside a payload a gate may not be able to decode — so
-		// the refusal is per object, here, where the payload is in hand.
-		removed, err := objectRemoved(ctx, tx, edge.Object)
+		// AN OBJECT THE CHART DOES NOT HOLD IS CREATED BY ITS PLACEMENT,
+		// and a creation is held to every creation's rules here, where
+		// the payload is in hand. The envelope gate cannot answer for a
+		// structural record — it names its objects inside a payload a
+		// gate may not be able to decode — and an import decides nothing
+		// at its decide (the ledger is read here), so this is the one
+		// place every placement passes. Declined rather than raised: see
+		// [Applier.declineChange].
+		refused, err := placementRefused(ctx, tx, edge.Object)
 		if err != nil {
 			return 0, err
 		}
-		if removed {
-			continue
-		}
-		// AND A NEW OBJECT ONTO ANOTHER'S IDENTITY IS SKIPPED TOO. A
-		// batch's decide refuses it ([working.checkCreate]), but an
-		// import decides nothing at its decide — the ledger is read here
-		// — so this is the one place every placement passes. Placed, it
-		// would be a second object with the first one's identity: see
-		// [identityHolder].
-		taken, err := placementTakesIdentity(ctx, tx, edge.Object)
-		if err != nil {
-			return 0, err
-		}
-		if taken {
+		if refused != nil {
+			a.declineChange(at, "place", edge.Object, refused)
 			continue
 		}
 		n, err := a.placeOne(ctx, tx, at, edge, kind)
@@ -100,19 +92,21 @@ func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContex
 	return rows, nil
 }
 
-// placementTakesIdentity reports a placement that would CREATE an object on
-// an address that is another object's identity.
+// placementRefused reports why a placement may not CREATE its object, or nil
+// where it may — including where it creates nothing, because the object is
+// already there and placing it is a move.
 //
-// ONLY A CREATION CAN: placing an object that is already there is a move, and
-// its own identity is not in question.
-func placementTakesIdentity(ctx context.Context, tx *sql.Tx, ref ObjectRef) (bool, error) {
+// A REMOVED OBJECT IS AMONG THE REFUSED: the row went with the removal, so a
+// placement naming it is a creation on a tombstoned address, and a redelivery
+// of an old one would otherwise write the dissolved unit straight back — on
+// one node, in a table that claims identity.
+func placementRefused(ctx context.Context, tx *sql.Tx, ref ObjectRef) (*addressRefusal, error) {
 	id := NormalizeKey(ref.ID)
 	present, err := objectPresent(ctx, tx, ObjectRef{Kind: ref.Kind, ID: id})
 	if err != nil || present {
-		return false, err
+		return nil, err
 	}
-	_, taken, err := identityHolder(ctx, tx, ref.Kind, id)
-	return taken, err
+	return refuseCreate(ctx, txBook{tx: tx}, ref.Kind, id, "")
 }
 
 // placeOne writes one object's placement.
@@ -416,8 +410,8 @@ func (a *Applier) applyRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 // exception — the record that wrote the tombstone — covers both.
 //
 // NOT WHILE SOMETHING LIVE ANSWERS TO IT AS ITS KEY. Nothing this build writes
-// can put another object on a retired identity ([addressHolder] and
-// [identityHolder] refuse it), but a tombstone on a live object's key would
+// can put another object on a retired identity ([refuseCreate] refuses it on
+// every path), but a tombstone on a live object's key would
 // drop every later record on that object's own subject for ever, so the guard
 // is the difference between a residue and an object nobody can edit. Every
 // node reaches the same answer from the same rows, and a removal is a gate

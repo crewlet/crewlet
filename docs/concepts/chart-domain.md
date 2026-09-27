@@ -244,10 +244,18 @@ alias has fallen off the capped list — and nothing else may take it:
 - **No creation onto it**, through any of the three paths that create an object:
   a structural batch refuses it at its decide (`the key is taken`, naming the
   seat that holds it), a lone content write refuses it at its decide, and an
-  import — which decides nothing at its decide — has the placement skipped at
-  the apply. A new object's identity is the address it is created under, so a
-  seat created on another's identity would be a second seat sharing the first
-  one's mailbox, lease and diary.
+  import — which decides nothing at its decide — has the placement **declined**
+  at the apply (`chart_apply_declined`, counted on
+  `crewlet.chart.apply.declined`). A new object's identity is the address it is
+  created under, so a seat created on another's identity would be a second seat
+  sharing the first one's mailbox, lease and diary.
+
+Every one of those paths — and a rename — asks **one** set of rules, so none of
+them can forget one: a reserved word (`root`, `tree`, `barrier`, and `none` for
+a seat), a seat handle outside the handle grammar (a `.` or a `:` is a login's
+shape, which every name lookup sends to the identity directory), a removed
+address, an address somebody answers to as a key, or somebody's identity. A
+rename also may not take another object's retired alias; a creation may.
 - **A removal tombstones it** beside the address the object held, under the same
   record. A removed seat's identity therefore stays unavailable exactly as its
   last address does, rather than becoming free the moment the seat is gone.

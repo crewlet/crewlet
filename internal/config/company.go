@@ -209,10 +209,10 @@ func (c *Company) ValidateRunnable() error {
 // duplicate unit keys and a unit reference on a seat declared inside a unit
 // of a different key (see [org.Organization.ValidateAdmission]), a unit with
 // no id, duplicate sandbox setup step names within one list, a GitHub App
-// on a human seat, and the three WHOLE-DOCUMENT rules in
+// on a human seat, and the four WHOLE-DOCUMENT rules in
 // [Company.validateFileRules] — an `mcp_env` key naming no server, two seats
-// declaring one email, and a reference that is shaped like neither a handle
-// nor a key.
+// declaring one email, a reference that is shaped like neither a handle nor a
+// key, and a unit key or a seat handle the org chart reserves.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -368,16 +368,12 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.add(field("name"), ErrMissing, "the company needs a name: it is half of every seat's derived id")
 	}
 
-	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
+	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED, and that is refused
+	// by the file rule every reserved chart name is ([validateReservedNames]),
+	// not here: a second list of the words the chart reserves is the one
+	// that drifts.
 	//
-	// Datadog's fallback takes a seat handle or DatadogIgnore, and a company
-	// with a seat of that name would have it silenced by its own name: every
-	// alert meant for it dismissed, on a screen reporting the configuration
-	// exactly as written. Refusing the name is the only place this can be
-	// caught, because by the time the parser reads a fallback the two are
-	// the same string.
-	//
-	// AND THE FALLBACK MUST NAME SOMEBODY WHO CAN BE WOKEN. `route_to` is
+	// THE FALLBACK MUST NAME SOMEBODY WHO CAN BE WOKEN. `route_to` is
 	// the only routing floor in this file, and the two ways it silently
 	// fails are a handle no seat has — resolving to nothing, one
 	// `notification_undeliverable` warning per untagged alert, for ever —
@@ -393,15 +389,8 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 	agents, handles := 0, make([]string, 0, 8)
 	routed := false
-	for role, path := range c.eachRole() {
+	for role := range c.eachRole() {
 		seat := role.Seat()
-		if seat.Handle() == DatadogIgnore {
-			p.add(at(path, "handle"), ErrUnknownValue,
-				"a seat cannot be called %q: it is what integrations.datadog.route_to "+
-					"means by nobody, so a seat of that name would be silenced by "+
-					"its own handle. %q derives that handle from its name",
-				DatadogIgnore, role.Name)
-		}
 		if !seat.IsAgent() {
 			continue
 		}

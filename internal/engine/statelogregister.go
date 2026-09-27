@@ -252,30 +252,25 @@ func register() []registration {
 		{
 			Domain: chart.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
-				// NO REBUILD LISTENER YET, and nil is what the applier
-				// documents as "nobody is listening" rather than a wire
-				// somebody forgot. The company view a turn reads is
-				// derived from these rows and is what will take this
-				// seam; until the engine holds one, the applier's own
-				// change set is drained and dropped, which is precisely
-				// what an unobserved domain should cost.
+				// THE VIEW'S TRIGGER. Every committed batch nudges the
+				// rebuild — on this node, which is the only node whose
+				// view these rows are. The object list is not read: a
+				// rebuild derives the whole tree, because lead
+				// inheritance and manages expansion make one seat's move
+				// a fact about its descendants.
 				//
 				// It cannot be the change feed instead: a feed relays a
 				// record to ONE node, and a derived view is held by
 				// every node — so the rest would go on serving a chart
 				// they had already applied and could not see they had.
-				// THE VIEW'S TRIGGER. Every committed batch
-				// nudges the rebuild — on this node, which is
-				// the only node whose view these rows are.
-				// The object list is not read: a rebuild
-				// derives the whole tree, because lead
-				// inheritance and manages expansion make one
-				// seat's move a fact about its descendants.
+				//
+				// AND THE RECORDER, so a change the apply declines
+				// rather than writes is counted as well as logged.
 				return chart.NewApplier(s.nodeID, func([]chart.ObjectRef) {
 					if s.nudgeChart != nil {
 						s.nudgeChart()
 					}
-				}), nil
+				}).WithMetrics(s.metrics), nil
 			},
 			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
 				rows, err := chart.NewRows(s.db)

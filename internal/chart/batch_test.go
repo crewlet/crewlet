@@ -270,15 +270,21 @@ func TestAReservedKeyIsRefused(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
-	for _, key := range chart.ReservedKeys {
-		_, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
-			op(chart.OpCreateUnit, chart.KindUnit, key, ""),
-		}})
-		if ref := refusal(t, err); ref.Rule != chart.RuleReservedKey {
-			t.Errorf("%q: rule = %q, want %q — it names the org root or one of "+
-				"this log's own subject kinds, and a company object keyed on "+
-				"it would collide with them in every scope path",
-				key, ref.Rule, chart.RuleReservedKey)
+	for _, kind := range []chart.ObjectKind{chart.KindUnit, chart.KindSeat} {
+		create := chart.OpCreateUnit
+		if kind == chart.KindSeat {
+			create = chart.OpCreateSeat
+		}
+		for _, key := range chart.ReservedKeys(kind) {
+			_, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+				op(create, kind, key, ""),
+			}})
+			if ref := refusal(t, err); ref.Rule != chart.RuleReservedKey {
+				t.Errorf("%s %q: rule = %q, want %q — it names the org root, one "+
+					"of this log's own subject kinds or, for a seat, the word "+
+					"Datadog's routing uses for nobody",
+					kind, key, ref.Rule, chart.RuleReservedKey)
+			}
 		}
 	}
 }

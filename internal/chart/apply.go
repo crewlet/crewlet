@@ -1,15 +1,23 @@
 package chart
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 )
+
+// applyLog is where the apply says what it declined.
+var applyLog = logging.Get("chart.apply")
 
 // The applier, and the four rules that make it a PURE FUNCTION of the log.
 //
@@ -83,6 +91,34 @@ type Applier struct {
 	// seats should not re-derive every one of them because one goal was
 	// reworded.
 	changed []ObjectRef
+
+	// declined is every change this batch's records asked for and the apply
+	// did not write, drained by [Applier.Committed] into a log line and a
+	// counter.
+	//
+	// A MAP KEYED ON THE RECORD AND THE OBJECT, because the store re-runs
+	// the body of an attempt that failed transiently: a slice would report
+	// one decline once per attempt, and a counter that a transient disk
+	// error doubles is one an operator stops believing.
+	declined map[declineKey]decline
+
+	// metrics is the process's recorder, or nil on a node with none — a
+	// test, the validate engine — where a decline is logged and not
+	// counted.
+	metrics *metrics.Recorder
+}
+
+// declineKey is one declined change: which record, about which object.
+type declineKey struct {
+	opID string
+	ref  ObjectRef
+}
+
+// decline is one change the apply dropped rather than wrote.
+type decline struct {
+	op       string
+	refused  *addressRefusal
+	position statelog.Position
 }
 
 // NewApplier builds the chart's applier for one node.
@@ -96,13 +132,44 @@ func NewApplier(nodeID string, onChange func([]ObjectRef)) *Applier {
 	return &Applier{NodeID: nodeID, touched: onChange}
 }
 
+// WithMetrics has this applier count what it declines, and returns it for
+// chaining. Called once, at wiring time, before the first record.
+func (a *Applier) WithMetrics(r *metrics.Recorder) *Applier {
+	a.metrics = r
+	return a
+}
+
+// declineChange records that the apply dropped a change rather than writing it.
+//
+// # Why a decline and not an error
+//
+// Every node reads the same record and reaches the same verdict from the same
+// rows, so a rule the apply holds is one the whole fleet holds identically —
+// and an apply that RAISED on it would stall the domain on every node, on a
+// record none of them can ever get past. So the change is dropped and the
+// log goes on. What the drop costs is that its writer was told it landed,
+// which is why each one is said at WARN and counted: see [Applier.Committed].
+//
+// OP is what was declined, from the closed set the counter declares.
+func (a *Applier) declineChange(at applyContext, op string, ref ObjectRef,
+	refused *addressRefusal) {
+
+	if a.declined == nil {
+		a.declined = map[declineKey]decline{}
+	}
+	a.declined[declineKey{opID: at.record.OpID, ref: ref}] = decline{
+		op: op, refused: refused, position: at.position,
+	}
+}
+
 // Committed is the post-commit half.
 //
 // The one consequence of a chart record that is not a row: the derived company
 // view is stale, and whoever holds one has to rebuild it. Every OTHER
 // consequence is a row, and a wake is derived by the change feed — something
 // that outlives this process — rather than published here as a courtesy.
-func (a *Applier) Committed(context.Context) {
+func (a *Applier) Committed(ctx context.Context) {
+	a.reportDeclines(ctx)
 	if len(a.changed) == 0 {
 		return
 	}
@@ -113,6 +180,39 @@ func (a *Applier) Committed(context.Context) {
 	a.changed = nil
 	if a.touched != nil {
 		a.touched(changed)
+	}
+}
+
+// reportDeclines says, once per committed batch, what its records asked for
+// and did not get.
+//
+// AFTER THE COMMIT, for the reason the rebuild nudge is: a decline noted
+// inside an attempt that then rolled back describes a write that never
+// happened. IN A FIXED ORDER, so two nodes' logs of one batch read alike.
+func (a *Applier) reportDeclines(ctx context.Context) {
+	if len(a.declined) == 0 {
+		return
+	}
+	declined := a.declined
+	a.declined = nil
+	keys := slices.SortedFunc(maps.Keys(declined), func(x, y declineKey) int {
+		return cmp.Or(cmp.Compare(declined[x].position.Packed(),
+			declined[y].position.Packed()),
+			cmp.Compare(x.opID, y.opID),
+			cmp.Compare(x.ref.Kind, y.ref.Kind),
+			cmp.Compare(x.ref.ID, y.ref.ID))
+	})
+	for _, key := range keys {
+		one := declined[key]
+		applyLog.WarnContext(ctx, "chart_apply_declined",
+			"op", one.op, "object", key.ref.String(), "reason", one.refused.Reason,
+			"record", key.opID, "position", one.position.String(),
+			"node", a.NodeID, "detail", one.refused.Detail)
+		if a.metrics != nil {
+			a.metrics.Add(metrics.ChartApplyDeclined, 1, metrics.Attrs{
+				"op": one.op, "reason": one.refused.Reason,
+			})
+		}
 	}
 }
 

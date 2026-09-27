@@ -151,7 +151,7 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 				if err = w.mayReplace(prior.Runtime); err != nil {
 					return statelog.Decision{}, err
 				}
-			} else if err = refuseIdentity(ctx, tx, object); err != nil {
+			} else if err = refuseContentCreate(ctx, tx, object); err != nil {
 				return statelog.Decision{}, err
 			}
 			payload := UnitPayload{
@@ -227,7 +227,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 				if err = w.mayReplace(prior.Runtime); err != nil {
 					return statelog.Decision{}, err
 				}
-			} else if err = refuseIdentity(ctx, tx, object); err != nil {
+			} else if err = refuseContentCreate(ctx, tx, object); err != nil {
 				return statelog.Decision{}, err
 			}
 			if found && prior.UnitKey != unit {
@@ -261,25 +261,20 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 	return WriteResult{Result: result, Objects: []ObjectRef{object}}, err
 }
 
-// refuseIdentity refuses a content write that would CREATE an object on an
-// address that is another object's identity — the key it was created under.
+// refuseContentCreate refuses a content write that would CREATE an object on
+// an address it may not take.
 //
-// ASKED ONLY WHEN THE ROW IS ABSENT, because only then is the write a creation:
-// a content write can create an object, and a new object's identity is its
-// address, so this one would be a second object with the first one's identity
-// (see [identityHolder]). The apply declines the same case; this is where the
-// caller is told which object holds it.
-func refuseIdentity(ctx context.Context, tx *sql.Tx, object ObjectRef) error {
-	holder, taken, err := identityHolder(ctx, tx, object.Kind, object.ID)
+// ASKED ONLY WHEN THE ROW IS ABSENT, because only then is the write a creation,
+// and a creation is held to every creation's rules ([refuseCreate]). The apply
+// declines the same case; this is where the caller is told.
+func refuseContentCreate(ctx context.Context, tx *sql.Tx, object ObjectRef) error {
+	refused, err := refuseCreate(ctx, txBook{tx: tx}, object.Kind, object.ID, "")
 	if err != nil {
 		return err
 	}
-	if taken {
-		return fmt.Errorf("chart: %q is the address %s %q was created under — "+
-			"its identity, which it keeps however often it is renamed, and "+
-			"which is never issued to a second object. Write %q to change "+
-			"that one, or pick another address: %w", object.ID, object.Kind,
-			holder, holder, ErrRefused)
+	if refused != nil {
+		return fmt.Errorf("chart: %s cannot be created by a content write — %s: "+
+			"%s: %w", object, refused.Rule, refused.Detail, ErrRefused)
 	}
 	return nil
 }

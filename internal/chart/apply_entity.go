@@ -68,11 +68,17 @@ func (a *Applier) applyUnit(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	if !found {
 		// A CONTENT RECORD CAN CREATE A ROW — an import's content follows
 		// its structure, and a lone content write is legal — so it is
-		// held to the rule every creation is: never onto another object's
-		// identity. Declined rather than raised, for [Applier.rekeyUnit]'s
-		// reason; [Writer.WriteUnit] is where an operator is told.
-		if _, taken, holderErr := identityHolder(ctx, tx, KindUnit, key); holderErr != nil || taken {
-			return 0, holderErr
+		// held to every creation's rules ([refuseCreate]). Declined rather
+		// than raised: see [Applier.declineChange]. [Writer.WriteUnit] is
+		// where an operator is told.
+		ref := ObjectRef{Kind: KindUnit, ID: key}
+		refused, refuseErr := refuseCreate(ctx, txBook{tx: tx}, KindUnit, key, "")
+		if refuseErr != nil {
+			return 0, refuseErr
+		}
+		if refused != nil {
+			a.declineChange(at, "content", ref, refused)
+			return 0, nil
 		}
 		unit = Unit{V: DocumentVersion, Key: key, CreatedAt: at.brokerAt}
 	}
@@ -129,9 +135,15 @@ func (a *Applier) applySeat(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return 0, err
 	}
 	if !found {
-		// Held to every creation's rule, for [Applier.applyUnit]'s reason.
-		if _, taken, holderErr := identityHolder(ctx, tx, KindSeat, handle); holderErr != nil || taken {
-			return 0, holderErr
+		// Held to every creation's rules, for [Applier.applyUnit]'s reason.
+		ref := ObjectRef{Kind: KindSeat, ID: handle}
+		refused, refuseErr := refuseCreate(ctx, txBook{tx: tx}, KindSeat, handle, "")
+		if refuseErr != nil {
+			return 0, refuseErr
+		}
+		if refused != nil {
+			a.declineChange(at, "content", ref, refused)
+			return 0, nil
 		}
 		seat = Seat{V: DocumentVersion, Handle: handle, CreatedAt: at.brokerAt}
 	}
@@ -251,7 +263,7 @@ func (a *Applier) rekeyUnit(ctx context.Context, tx *sql.Tx, at applyContext,
 	// Every node reaches the same verdict from the same rows, which is what
 	// keeps the copies identical — the same reason [Applier.rekeyUnit]'s
 	// absent-object case above returns nothing rather than raising.
-	if taken, takenErr := rekeyTaken(ctx, tx, KindUnit, key, former); takenErr != nil || taken {
+	if refused, takenErr := a.rekeyRefused(ctx, tx, at, KindUnit, key, former); takenErr != nil || refused {
 		return 0, takenErr
 	}
 	// THE ORIGIN IS FROZEN BY THE FIRST REKEY AND NEVER AGAIN, which is the
@@ -467,7 +479,7 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	// reason [Applier.rekeyUnit] gives at the same point: `handle` is this
 	// table's PRIMARY KEY, and an apply that raises is a record every node
 	// fails on identically and for ever.
-	if taken, takenErr := rekeyTaken(ctx, tx, KindSeat, handle, former); takenErr != nil || taken {
+	if refused, takenErr := a.rekeyRefused(ctx, tx, at, KindSeat, handle, former); takenErr != nil || refused {
 		return 0, takenErr
 	}
 	// FROZEN BY THE FIRST REKEY, for the reason [Applier.rekeyUnit] gives —
@@ -537,29 +549,24 @@ func (a *Applier) rekeySeat(ctx context.Context, tx *sql.Tx, at applyContext,
 	return int(n+m+l) + units + rows, nil
 }
 
-// rekeyTaken is whether a rekey's apply must DECLINE its new address, which is
-// [Writer.WriteRekey]'s two refusals asked again at the apply: somebody else
-// answers to it — as a key, a retired key or the key they were created under —
-// or an object was REMOVED from it.
+// rekeyRefused is whether a rekey's apply must DECLINE its new address, which
+// is [refuseCreate] asked again at the apply for the object being renamed.
 //
 // ASKED AGAIN because the decide cannot refuse all of it: a create files under
 // the tree's subject, a removal too, and a claim under the address's own, so
 // the log may legally order either after the claim was decided. Declined
-// rather than raised for [Applier.rekeyUnit]'s reason — every node reaches the
-// same verdict from the same rows — and a removed address is declined because
-// its tombstone would drop every later record on the object's own subject as a
-// record about the removed one.
-func rekeyTaken(ctx context.Context, tx *sql.Tx, kind ObjectKind, key,
-	former string) (bool, error) {
+// rather than raised — see [Applier.declineChange] — and a removed address is
+// declined because its tombstone would drop every later record on the object's
+// own subject as a record about the removed one.
+func (a *Applier) rekeyRefused(ctx context.Context, tx *sql.Tx, at applyContext,
+	kind ObjectKind, key, former string) (bool, error) {
 
-	holder, held, err := addressHolder(ctx, tx, kind, key)
-	if err != nil {
+	refused, err := refuseCreate(ctx, txBook{tx: tx}, kind, key, former)
+	if err != nil || refused == nil {
 		return false, err
 	}
-	if held && holder != former {
-		return true, nil
-	}
-	return objectRemoved(ctx, tx, ObjectRef{Kind: kind, ID: key})
+	a.declineChange(at, "rename", ObjectRef{Kind: kind, ID: former}, refused)
+	return true, nil
 }
 
 // retire puts a former key at the FRONT of the list and caps it.

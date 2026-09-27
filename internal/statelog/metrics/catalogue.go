@@ -474,6 +474,22 @@ func Catalogue() []Instrument {
 				"unreadable corpus is neither covered nor uncovered.",
 		},
 
+		// ---- the org chart --------------------------------------------
+		{
+			Name: ChartApplyDeclined, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"op", "reason"},
+			Shows: "Chart changes an apply declined to write, by what was " +
+				"declined (`place`, `create`, `move`, `rename`, `content`) " +
+				"and why (`reserved`, `shape`, `removed`, `taken`, " +
+				"`identity`, `alias`, `present`, `absent`). A decline is how " +
+				"a rule the write path could not see is held at the apply " +
+				"without stalling the log — every node reaches it " +
+				"identically — and the change it drops is one its writer was " +
+				"told had landed, so a rise here is a write somebody believes " +
+				"in that nothing holds. The log line beside it names the " +
+				"object and the record.",
+		},
+
 		// ---- the change feed ------------------------------------------
 		{
 			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitCount,

@@ -228,17 +228,6 @@ const (
 	RuleDirectoryUnreadable = "this node cannot read the directory"
 )
 
-// ReservedKeys are the unit keys and seat handles this engine will not let a
-// company take.
-//
-// THREE, and each is reserved because something already means it. `root` is the
-// unit a seat names when it sits at the org root ([RootUnit]), and a real unit
-// keyed on it would make "at the root" and "in the root team" the same string
-// in every scope path and every routing decision. `tree` and `barrier` are
-// SUBJECT KINDS on this log, and a key that collided with one would produce a
-// subject an applier dispatches to the wrong case.
-var ReservedKeys = []string{RootUnit, string(KindTree), string(KindBarrier)}
-
 // Scope is every object this batch may write, stated BEFORE the replay.
 //
 // THE FRAMEWORK NEEDS IT UP FRONT, because the deferral probe runs before the
@@ -297,14 +286,15 @@ type working struct {
 	// carries the lead it has rather than the one the operation named.
 	leads map[string]string
 
-	// removed is what this batch has taken out, so a later operation on it
-	// is refused rather than applied against a row the applier will delete.
-	removed map[string]bool
+	// removedKeys is what this batch has taken out, and every address the
+	// log's removals tombstoned, so a later operation on one is refused
+	// rather than applied against a row the applier will delete.
+	removedKeys map[string]bool
 
 	// identities maps the composed reference of every address that is a
 	// RENAMED object's identity — the key it was created under — to the
 	// object's current key, so a create onto one is refused. See
-	// [identityHolder] for why a create may take a retired alias and never
+	// [refuseCreate] for why a create may take a retired alias and never
 	// a retired identity.
 	identities map[string]string
 }
@@ -514,7 +504,7 @@ func (w *working) apply(index int, op Operation) *RefusalError {
 
 	switch op.Kind {
 	case OpCreateUnit, OpCreateSeat:
-		if err := w.checkCreate(refuse, op, id, key); err != nil {
+		if err := w.checkCreate(refuse, op, id); err != nil {
 			return err
 		}
 		if err := w.checkParent(refuse, op); err != nil {
@@ -561,7 +551,7 @@ func (w *working) apply(index int, op Operation) *RefusalError {
 		}
 		delete(w.parents, key)
 		delete(w.leads, key)
-		w.removed[key] = true
+		w.removedKeys[key] = true
 		return nil
 	}
 	return refuse(RuleUnknownKind, "%q is not one of %v", op.Kind, OperationKinds)
@@ -569,46 +559,51 @@ func (w *working) apply(index int, op Operation) *RefusalError {
 
 type refuseFunc func(rule, detail string, args ...any) *RefusalError
 
-// checkCreate refuses a create onto an address something already holds.
-func (w *working) checkCreate(refuse refuseFunc, op Operation, id, key string) *RefusalError {
-	if slices.Contains(ReservedKeys, id) {
-		return refuse(RuleReservedKey, "%q is reserved: %v name the org root "+
-			"and this log's own subject kinds, so a company object keyed on "+
-			"one would collide with them in every scope path and every "+
-			"routing decision", id, ReservedKeys)
+// checkCreate refuses a create onto an address it may not take.
+//
+// THE RULES ARE [refuseCreate]'s, asked of this working copy — so the batch
+// refuses exactly what the apply declines for an import and what a rename is
+// refused, each against the state it can see. What the copy adds is the
+// batch's own earlier operations: an address removed two operations ago is
+// removed here, and one created two operations ago is taken.
+//
+// A UNIT AND A SEAT MAY SHARE A SPELLING. They are different namespaces and
+// neither reserves a prefix, so the copy is asked about the operation's own
+// kind alone — stated so the next reader does not "fix" it into a cross-kind
+// check that would refuse a legal chart.
+func (w *working) checkCreate(refuse refuseFunc, op Operation, id string) *RefusalError {
+	// THE COPY ANSWERS FROM MEMORY, so it has no error to return and no
+	// context to honour.
+	refused, _ := refuseCreate(context.Background(), w, op.Object.Kind, id, "")
+	if refused != nil {
+		return refuse(refused.Rule, "%s", refused.Detail)
 	}
-	if len(id) > MaxKey {
-		return refuse(RuleBadKey, "%q is %d bytes and the cap is %d",
-			id, len(id), MaxKey)
-	}
-	if w.removed[key] {
-		return refuse(RuleKeyRemoved, "%q was removed from the chart, and a "+
-			"removed address never resolves again — its history, its "+
-			"references and the tombstone that stops its old records "+
-			"applying are all keyed on it", id)
-	}
-	if _, held := w.parents[key]; held {
-		return refuse(RuleKeyTaken, "%s %q is already in the chart",
-			op.Object.Kind, id)
-	}
-	if holder, held := w.identities[key]; held {
-		return refuse(RuleKeyTaken, "%q is the address %s %q was created "+
-			"under — its identity, which everything durable it owns and every "+
-			"person bound to it is keyed on, and which it keeps however often "+
-			"it is renamed. An identity is never issued twice; pick another "+
-			"address", id, op.Object.Kind, holder)
-	}
-	// AND THE OTHER NAMESPACE'S CREATE IN THIS BATCH. Two operations
-	// creating one address in two kinds are legal — a unit and a seat may
-	// share a spelling — so this checks only the kind's own map, which the
-	// composed key already does. Stated so the next reader does not "fix"
-	// it into a cross-kind check that would refuse a legal chart.
 	return nil
+}
+
+// removed is [addressBook]'s tombstone question, answered by the copy: a
+// removal already on the log, or one earlier in this batch.
+func (w *working) removed(_ context.Context, kind ObjectKind, key string) (bool, error) {
+	return w.removedKeys[refKey(ObjectRef{Kind: kind, ID: key})], nil
+}
+
+// holder is [addressBook]'s who-answers question, answered by the copy.
+func (w *working) holder(_ context.Context, kind ObjectKind, key string) (
+	string, holding, error) {
+
+	ref := refKey(ObjectRef{Kind: kind, ID: key})
+	if _, live := w.parents[ref]; live {
+		return key, heldAsKey, nil
+	}
+	if current, held := w.identities[ref]; held {
+		return current, heldAsIdentity, nil
+	}
+	return "", heldByNothing, nil
 }
 
 // checkPresent refuses an operation on an object the chart does not hold.
 func (w *working) checkPresent(refuse refuseFunc, key, id string) *RefusalError {
-	if w.removed[key] {
+	if w.removedKeys[key] {
 		return refuse(RuleNoSuchObject, "%q was removed earlier in this batch",
 			id)
 	}
@@ -628,7 +623,7 @@ func (w *working) checkParent(refuse refuseFunc, op Operation) *RefusalError {
 		return nil
 	}
 	key := refKey(ObjectRef{Kind: KindUnit, ID: parent})
-	if w.removed[key] {
+	if w.removedKeys[key] {
 		return refuse(RuleNoSuchParent, "%q was removed earlier in this batch",
 			parent)
 	}
@@ -690,7 +685,7 @@ func (w *working) checkCycle(refuse refuseFunc, op Operation, key string) *Refus
 func (w *working) holders(unit string) []string {
 	var out []string
 	for key, parent := range w.parents {
-		if parent != unit || w.removed[key] {
+		if parent != unit || w.removedKeys[key] {
 			continue
 		}
 		out = append(out, key)
@@ -708,11 +703,11 @@ func (w *working) holders(unit string) []string {
 // this store's only writer — and the cycle check is a walk by construction.
 func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
 	state := &working{
-		parents:    map[string]string{},
-		kinds:      map[string]ObjectKind{},
-		leads:      map[string]string{},
-		removed:    map[string]bool{},
-		identities: map[string]string{},
+		parents:     map[string]string{},
+		kinds:       map[string]ObjectKind{},
+		leads:       map[string]string{},
+		removedKeys: map[string]bool{},
+		identities:  map[string]string{},
 	}
 	if err := scanInto(ctx, tx,
 		`SELECT key, parent_key, lead FROM chart_units`, KindUnit, state); err != nil {
@@ -747,7 +742,7 @@ func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
 		if err := rows.Scan(&kind, &id); err != nil {
 			return nil, fmt.Errorf("chart: read a removed object: %w", err)
 		}
-		state.removed[refKey(ObjectRef{Kind: ObjectKind(kind), ID: id})] = true
+		state.removedKeys[refKey(ObjectRef{Kind: ObjectKind(kind), ID: id})] = true
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("chart: read the removed objects: %w", err)

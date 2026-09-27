@@ -78,7 +78,7 @@
 //     keyed on the id derived from it (ADR-0019) and every binding the
 //     identity directory holds names a seat by it (ADR-0020), so a second
 //     object created under it would share the first one's mailbox, diary and
-//     people. See [identityHolder].
+//     people. See [refuseCreate].
 //   - NOT THAT THE CHART IS THE ORGANISATION. [internal/org] builds the
 //     runtime tree a turn reads — normalised, with lead inheritance and
 //     manages-expansion applied. This package holds what was AUTHORED. Every
@@ -175,6 +175,11 @@ type ObjectRef struct {
 	Kind ObjectKind `json:"k"`
 	ID   string     `json:"i"`
 }
+
+// String renders a reference the way a person reads one — `seat sarah-chen` —
+// for a log line and a refusal, where the struct's own rendering was
+// `{seat sarah-chen}`.
+func (r ObjectRef) String() string { return string(r.Kind) + " " + r.ID }
 
 // SeatKind is what holds a seat.
 //

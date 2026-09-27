@@ -90,8 +90,17 @@ The rest of the rules:
 | A create onto a key a removal **retired** | A removed address never resolves again — its history, its references and the tombstone that stops its old records applying are all keyed on it. Its own rule, because the remedy differs: a taken key needs a different name, a removed one can never be used at all |
 | A placement under a unit nothing creates | A reference to a parent that is not there, and will not be |
 | Removing a unit that still holds children or seats | An orphaned subtree is reachable from nothing and removable by nothing |
-| A reserved key (`root`, `tree`, `barrier`) | Each already means something: the org root, and two of this log's own subject kinds |
+| A reserved key — `root`, `tree` and `barrier` for any object, and `none` for a seat | Each already means something: the org root, two of this log's own subject kinds, and the word `integrations.datadog.route_to` uses for nobody |
+| A seat handle outside the handle grammar — one run of lowercase letters, digits and hyphens, at most 64 bytes | A `.` is how a person's login is spelled (`jane.doe`) and a `:` a machine's (`ci:release`, `token:ops`), and every name lookup sends a name of either shape to the identity directory rather than to the chart — so a seat called that could never be reached by name |
 | More than 500 operations | One batch is one record, and a record past the broker's maximum payload is refused **permanently** with no retry that can place it. Submit several batches; each is arbitrated on its own |
+
+**Every path that gives an object an address asks the same rules** — a
+batch's create, a rename, an import and a content write alike — so a name
+refused here is refused on each of them. An import decides nothing up front,
+so the chart holds it at the apply instead: an object it names on an address
+it may not take is **declined** there, logged as `chart_apply_declined` and
+counted on `crewlet.chart.apply.declined`, and the rest of the import lands.
+`crewlet validate` refuses the same names in a file first.
 
 A **removal is its own record** and cannot ride with a placement, because a
 removal installs a gate and that has to be answerable without reading the
