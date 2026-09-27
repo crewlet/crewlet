@@ -935,7 +935,10 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// cookie is on this response, so the page it lands on is signed
 		// in; a JSON body here was what the provider's callback answered,
 		// which a browser renders as text and goes nowhere.
-		http.Redirect(w, r, how.redirect, http.StatusFound)
+		//
+		// JUDGED AGAIN HERE, where it leaves: the value came out of a
+		// flight another node may have sealed — see [returnPath].
+		http.Redirect(w, r, returnPath(how.redirect), http.StatusFound)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, answer)

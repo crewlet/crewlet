@@ -269,6 +269,26 @@ func signInThroughProvider(t *testing.T, idp *provider, b config.Bootstrap,
 	options func(*authapi.Options)) *httptest.ResponseRecorder {
 
 	t.Helper()
+	rig := newProviderRig(t, idp, b, options)
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	return rig.callback(t, started.Result().Cookies(), code, state)
+}
+
+// providerRig is one sign-in surface over one provider, and the keyring its
+// flights are sealed under — so a case can seal a flight of its own.
+type providerRig struct {
+	mux    *http.ServeMux
+	cipher secrets.Cipher
+	config oidc.Config
+}
+
+// newProviderRig builds the surface a provider sign-in runs through, linked
+// to [linkedPerson] by the subject the provider asserts.
+func newProviderRig(t *testing.T, idp *provider, b config.Bootstrap,
+	options func(*authapi.Options)) providerRig {
+
+	t.Helper()
 	// THE LINK IS KEYED ON THE SUBJECT'S BLIND under the surface's own
 	// blinder, so the directory answers only for the subject this provider
 	// asserts.
@@ -289,38 +309,94 @@ func signInThroughProvider(t *testing.T, idp *provider, b config.Bootstrap,
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := buildWith(t, b, oidc.NewProvider(oidc.Config{
+	cfg := oidc.Config{
 		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
 		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
 		// THE CLAIM THE DEPLOYMENT NAMES, as the engine's own wiring
 		// hands it over.
 		GroupsClaim: b.API.Auth.OIDC.GroupsClaim,
-	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
+	}
+	svc := buildWith(t, b, oidc.NewProvider(cfg, idp.Client(),
+		func() time.Time { return clock }), func(o *authapi.Options) {
 		o.Directory = linkedDirectory{blind: subjectBlind, person: linkedPerson}
 		o.Cipher = cipher
 		options(o)
 	})
 	mux := http.NewServeMux()
 	svc.Routes(mux)
+	return providerRig{mux: mux, cipher: cipher, config: cfg}
+}
 
-	start := httptest.NewRequest(http.MethodGet,
-		auth.PathAuthOIDCStart+"?return_to=/work", nil)
+// start begins a sign-in that returns to the given path.
+func (rig providerRig) start(t *testing.T, returnTo string) *httptest.ResponseRecorder {
+	t.Helper()
 	started := httptest.NewRecorder()
-	mux.ServeHTTP(started, start)
+	rig.mux.ServeHTTP(started, httptest.NewRequest(http.MethodGet,
+		auth.PathAuthOIDCStart+"?return_to="+url.QueryEscape(returnTo), nil))
 	if started.Code != http.StatusFound {
 		t.Fatalf("the start answered %d: %s", started.Code, started.Body)
 	}
-	code, state := idp.authorize(t, started.Header().Get("Location"))
+	return started
+}
 
+// callback is the browser coming back from the provider carrying cookies.
+func (rig providerRig) callback(t *testing.T, cookies []*http.Cookie, code,
+	state string) *httptest.ResponseRecorder {
+
+	t.Helper()
 	callback := httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCCallback+
 		"?state="+url.QueryEscape(state)+"&code="+url.QueryEscape(code), nil)
 	callback.RemoteAddr = "198.51.100.7:5100"
-	for _, c := range started.Result().Cookies() {
+	for _, c := range cookies {
 		callback.AddCookie(c)
 	}
 	finished := httptest.NewRecorder()
-	mux.ServeHTTP(finished, callback)
+	rig.mux.ServeHTTP(finished, callback)
 	return finished
+}
+
+// A SIGN-IN LANDS ON THIS DEPLOYMENT WHATEVER THE FLIGHT CARRIES.
+//
+// The return path is judged where it arrives, and a flight this surface
+// started can carry nothing else — but a flight is opened by whichever node
+// the callback reaches, and during a rolling upgrade the node that SEALED it
+// may be a build that judged by a looser rule. So the callback judges the path
+// again where it leaves, as the redirect: a flight sealed carrying
+// `/\evil.example.com` — another host, to a browser — lands on the dashboard.
+//
+// Mutation: redirect to the flight's path as it came and this lands off-site.
+func TestASignInLandsOnThisDeploymentWhateverTheFlightCarries(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	rig := newProviderRig(t, idp, b, func(*authapi.Options) {})
+
+	// THE COOKIE'S NAME is this surface's, so a real start supplies it.
+	started := rig.start(t, "/work")
+	cookies := started.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("the start set %d cookies, want the flight alone", len(cookies))
+	}
+	// A FLIGHT ANOTHER BUILD SEALED, under the fleet's own keyring.
+	redirect, sealed, err := rig.config.Start(rig.cipher, idp.URL+"/authorize",
+		oidc.Flight{Return: `/\evil.example.com`}, clock)
+	if err != nil {
+		t.Fatalf("seal a flight: %v", err)
+	}
+	cookies[0].Value = sealed
+	code, state := idp.authorize(t, redirect)
+
+	finished := rig.callback(t, cookies, code, state)
+	if finished.Code != http.StatusFound {
+		t.Fatalf("the callback answered %d (%s), want a redirect", finished.Code,
+			finished.Body)
+	}
+	if got := finished.Header().Get("Location"); got != auth.PathDashboard {
+		t.Errorf("the sign-in redirected to %q, which a browser follows off "+
+			"this deployment; want %s", got, auth.PathDashboard)
+	}
 }
 
 // A PROVIDER SUBJECT TWO PEOPLE HOLD IS A CONFLICT, NOT AN OUTAGE.

@@ -398,33 +398,78 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 }
 
 // returnPath is where the browser goes once the login completes, from the
-// value the caller asked for.
+// value the caller asked for: the value itself when it is a path on this
+// deployment, and the dashboard otherwise.
 //
 // # An open redirect is the ordinary way a sign-in flow leaks a credential
 //
 // The value is the caller's — a query parameter on the sign-in start, a form
-// field on a redemption's — so it is refused unless it is a PATH on this
-// deployment: no scheme, no host, and a leading single slash.
-// `//evil.example.com` is a protocol-relative URL that browsers follow
-// off-site, which is exactly the shape a naive "starts with /" check admits.
+// field on a redemption's — so it is kept only if it is a PATH ON THIS
+// DEPLOYMENT, and the question that decides that is how a BROWSER reads the
+// `Location` it becomes, never how Go's parser reads it. The two disagree, and
+// every disagreement is an address off-site:
+//
+//   - `//evil.example.com` is a protocol-relative URL, which a browser
+//     follows to another host — the shape a naive "starts with /" admits.
+//   - `/\evil.example.com` is the SAME URL to a browser, which reads a
+//     backslash as a slash in an http(s) address (the WHATWG URL standard's
+//     special-scheme rule), while Go's parser reads it as a path — so the
+//     check this replaced admitted it, and `http.Redirect` emitted it
+//     verbatim.
+//   - `/<TAB>/evil.example.com` is that URL again, because a browser strips
+//     every tab and newline from an address before it parses one.
+//
+// So a backslash and every control character are refused anywhere in the
+// value, and the path is judged a second time DECODED — `/%2F/evil` and
+// `/%5Cevil` are paths a browser keeps, and refused anyway, because they are
+// never a screen this deployment serves and a page that decoded one before
+// navigating would be the open redirect again.
 //
 // AND IT IS BOUNDED at [maxReturnPath], a longer one taking the default as any
 // other path this deployment will not honour does: the value rides in the
 // flight cookie, and one too long for it is a sign-in that fails a whole
 // provider round trip later with nothing to say why.
+//
+// IT IS ASKED TWICE: where the value arrives, so nothing else is sealed into a
+// flight, and where it LEAVES, as the redirect a sign-in answers — because a
+// flight is opened by whichever node the callback reaches, and during a
+// rolling upgrade that may be a build that sealed a value by a looser rule.
 func returnPath(raw string) string {
 	want := strings.TrimSpace(raw)
-	if want == "" || len(want) > maxReturnPath {
-		return auth.PathDashboard
-	}
-	if !strings.HasPrefix(want, "/") || strings.HasPrefix(want, "//") {
-		return auth.PathDashboard
-	}
-	parsed, err := url.Parse(want)
-	if err != nil || parsed.Scheme != "" || parsed.Host != "" {
+	if !localPath(want) {
 		return auth.PathDashboard
 	}
 	return want
+}
+
+// localPath reports whether a value is one [returnPath] keeps — see there.
+func localPath(want string) bool {
+	if want == "" || len(want) > maxReturnPath || !offSiteFree(want) {
+		return false
+	}
+	parsed, err := url.Parse(want)
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" ||
+		parsed.User != nil || parsed.Opaque != "" {
+		return false
+	}
+	// THE DECODED PATH, which `%2F` and `%5C` spell a second way.
+	return offSiteFree(parsed.Path)
+}
+
+// offSiteFree reports whether a path starts with exactly one slash and holds
+// nothing a browser would read as the start of another address: no second
+// leading slash, no backslash, and no control character — the bytes the WHATWG
+// URL parser strips before it parses, tab and newline among them.
+func offSiteFree(path string) bool {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return false
+	}
+	for i := 0; i < len(path); i++ {
+		if b := path[i]; b == '\\' || b < 0x20 || b == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // maxReturnPath bounds a return path, in bytes as the caller sent it.
