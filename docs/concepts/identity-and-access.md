@@ -194,6 +194,26 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 | `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company |
 | `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
 
+**`config:write` is running code on every engine host**, and that is what
+it confers rather than a side effect of it. A stdio `mcp_servers` entry is a
+`command` the engine starts as its own user on every node that runs seats; a
+`cli-agent` provider names a binary the engine runs; a `run_in: direct`
+sandbox cell runs a coding agent, and every setup step, as that user; and a
+seat's runtime half on the org chart — its model chain, its credentials, its
+sandbox cell and its `mcp_env` — takes the same grant through `/chart`. So a
+holder can read whatever the engine's user can: the Tier A file, the keyring
+every session cookie is signed under, and every credential the store holds. It
+is one grant on purpose; hand it out as you would a shell on those hosts. Every
+write that can start a process — the company document, the chart's runtime
+half, connecting an integration — asks for a
+[recent step-up](#some-gestures-ask-how-recently-you-proved-who-you-are), which
+is what keeps a stolen week-old cookie from reaching it, and every child the
+engine starts is handed
+an [allowlisted environment](../guides/tools-and-mcp.md#what-a-stdio-servers-environment-is)
+rather than the engine's own — which stops the engine *handing* its secrets to
+a tool server, and does nothing about a holder of this grant, who chose that
+server.
+
 **Connecting an integration has no grant of its own.** `/setup` performs no
 write of its own — a credential goes through the store `/secrets` serves, and
 the `${VAR}` pointer through the merge and compare-and-set `/config` performs —

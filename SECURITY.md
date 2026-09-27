@@ -93,6 +93,31 @@ A few things worth knowing when deploying Crewlet:
   and both transports are decided by the same registry, so a question cannot be
   reached by choosing a channel. A route registered with no grant is a build
   failure rather than a route that answers to anyone.
+- **`config:write` is running code on every engine host.** A stdio
+  `mcp_servers` entry is a `command` the engine starts as its own user on every
+  node that runs seats; a `cli-agent` provider names a binary it runs; a
+  `run_in: direct` sandbox cell runs a coding agent, and its setup steps, as
+  that same user; and a seat's runtime half — its model chain, credentials,
+  sandbox cell and `mcp_env`, written through `/chart` — takes the same grant.
+  Whoever holds it can therefore read whatever the engine's user can: the
+  Tier A file, the keyring that signs every session, and every credential the
+  store holds. It is deliberately one grant, and this is what it confers: give
+  it as you would give a shell on those hosts. Every write under it that can
+  start a process — the company document, the chart's runtime half, connecting
+  an integration — asks for a recent step-up, so a stolen session cookie alone
+  does not reach it.
+- **A child process is handed an allowlisted environment, never the
+  engine's.** The engine's environment is where Tier A's `${VAR}` references
+  resolve from — the keyring, every `api.auth.tokens` value, the identity
+  provider's client secret, the database DSN — so no process the engine starts
+  inherits it: a stdio MCP server, a coding CLI, a local sandbox's coding agent
+  and the container runtime's own CLI each get `PATH`, locale, TLS trust and
+  proxy settings, the host user's home and temporary directories where they run
+  in no box of their own, and what their configuration declares. That keeps the
+  engine from *handing* its secrets to code that never asked for them. It is
+  not isolation: a child runs as the engine's user and can read what that user
+  can, `/proc/<engine pid>/environ` included. A tool server you do not trust
+  needs a different user or a container around it.
 - **A cross-site write is refused by its `Origin`.** CORS decides who may
   *read* an answer; on a state change that is the part an attacker does not
   need, so a separate check refuses a non-read whose `Origin` is not an address
@@ -126,6 +151,19 @@ A few things worth knowing when deploying Crewlet:
   alone. The keyring is the root of trust: keep it out of the store's backup
   domain. See
   [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
+- **Removing a person destroys their key, not only their row.** Each person's
+  name and address are sealed under a data key that is theirs alone, and
+  removing them destroys it — so those values become unrecoverable at once
+  from every copy that already exists: the identity log, donated snapshots,
+  backups and every node. What outlives the removal is deliberate: their id,
+  the tombstone (who removed them, when, and which claims they held — an
+  address as its blind, never its value), and the audit trail's rows naming
+  them, because a history whose authors evaporate is not an audit trail. The
+  rows commit before the key is destroyed; a key deletion that fails — a
+  coordination outage — is retried by the identity key duty, and `crewlet iam
+  check` (`GET /iam/check`) names every removed person whose key still lives
+  as `removal_key_live` until it is gone. See
+  [Removing somebody destroys a key, not a row](docs/concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row).
 - **Personal data in configuration revisions written before this release.**
   Every node keeps its own copy of every company-config revision it has ever
   met, in an append-only table that nothing deleted from and that is in every
