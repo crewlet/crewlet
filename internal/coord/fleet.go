@@ -321,12 +321,15 @@ type SetupClaims interface {
 // A guessing run reaches whichever ingress node a load balancer picks, so a
 // per-process counter is one the attacker divides by the number of nodes
 // without knowing it. The throttle shares each (subject, source) pair's curve
-// through here — writing every failure, and reading a climbing pair's window
-// before each attempt its curve admits — so every step of a run is decided on
-// what the whole fleet has seen, whichever node it lands on. The store is
-// never on the path of every attempt: an attempt a node already knows is owed
-// a long wait is refused with no round trip, so what reaches here is bounded
-// by what the curve lets through.
+// through here — reading a climbing pair's window before each attempt its
+// curve admits and writing each failure — so every step of a run at one
+// account is decided on what the whole fleet has seen, whichever node it lands
+// on; and each person's second-factor curve the same way, under a subject of
+// its own. The one pair it does not share is a name a source tries past its
+// allowance of fresh pairs, whose failure the node keeps — that pair's next
+// attempt is shared as ever. The store is never on the path of every attempt:
+// an attempt a node already knows is owed a long wait is refused with no round
+// trip, so what reaches here is bounded by what the curve lets through.
 //
 // # Neither bound is a sweep
 //
