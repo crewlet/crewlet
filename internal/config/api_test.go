@@ -797,6 +797,29 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 		}
 		named(t, b, "group_grants")
 	})
+	// THE GRANT THAT CAN GRANT, through a group: whoever administers the
+	// provider then decides who may invite, suspend, re-grant and remove
+	// every person here, which is authority over who holds everything
+	// else. The path names the grant and the sentence names what it hands
+	// over, because the secret store's sentence would say the wrong thing.
+	t.Run("a group that confers people:manage", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.Auth.Backend = AuthBackendOIDC
+		b.API.Auth.OIDC = &APIOIDC{
+			Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+			Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
+			GroupsClaim: "groups",
+			GroupGrants: map[string][]iam.Grant{"hr": {iam.GrantPeopleManage}},
+		}
+		named(t, b, "group_grants.hr.people:manage")
+		for _, w := range b.Warnings() {
+			if strings.HasSuffix(w.Path, "people:manage") &&
+				!strings.Contains(w.Message, "invite, suspend, re-grant and remove") {
+				t.Errorf("the warning does not say what the grant hands over: %s", w.Message)
+			}
+		}
+	})
 }
 
 // THE GROUP WARNINGS COME OUT IN ONE ORDER, run after run.

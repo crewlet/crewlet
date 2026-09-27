@@ -819,7 +819,7 @@ bind time:
 
 ### What `crewlet validate` warns about
 
-Four API postures are **valid** and worth reading before a deployment runs on
+Five API postures are **valid** and worth reading before a deployment runs on
 them. None can be a refusal, because each is a configuration that works exactly
 as written with its consequence somewhere else:
 
@@ -829,6 +829,7 @@ as written with its consequence somewhere else:
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, a password backend with an optional second factor, already is one |
 | An OIDC `scopes` list written without `offline_access` (an unset list asks for it) | Nothing notices a deactivation. An identity provider tells this engine nothing when somebody is disabled, so the session it already minted works until its absolute deadline — and the deactivation probe, which is what would end it early, is a refresh-token exchange with nothing to exchange |
 | A group mapping conferring `secrets:read` or `secrets:write` | Adding somebody to a directory group is an ordinary act performed by whoever administers the identity provider, and those two grants read and write this company's credentials. Declaring them on the person's own record puts the decision where it is reviewed |
+| A group mapping conferring `people:manage` | Membership of that group lets whoever administers the identity provider make somebody able to invite, suspend, re-grant and remove every person here — the grant that decides who holds every other one — and nobody here reviews a membership change. Declaring it on the person's own record puts the decision where it is reviewed |
 
 `api.trusted_proxies` is a **CIDR list, never a bool**, because the question a
 forwarded header poses is not "does this deployment sit behind a proxy" but "is

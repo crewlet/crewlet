@@ -1330,6 +1330,17 @@ func checkOrigin(path Path, origin string) error {
 	return p.err()
 }
 
+// groupGrantConsequence is what conferring each grant through an identity
+// provider's group hands the provider's administrator, for the grants a
+// mapping is warned about — and only those: the rest are authority a company
+// can reasonably leave to a directory's own teams.
+var groupGrantConsequence = map[iam.Grant]string{
+	iam.GrantSecretRead:  "hands them this company's credentials",
+	iam.GrantSecretWrite: "hands them this company's credentials",
+	iam.GrantPeopleManage: "makes them able to invite, suspend, re-grant and " +
+		"remove every person here",
+}
+
 // warnings are the API postures that are VALID and worth reading before this
 // deployment runs on them.
 //
@@ -1397,10 +1408,14 @@ func (a API) warnings() []Warning {
 		}
 		// A GROUP MAPPING IS AUTHORITY WRITTEN SOMEWHERE ELSE. Adding
 		// somebody to a directory group is an ordinary act performed by
-		// whoever administers the identity provider, and these two
-		// grants read and write the company's own credentials — so a
-		// mapping that confers them hands the secret store to a
-		// membership change nobody here reviews.
+		// whoever administers the identity provider, and three grants make
+		// that act one this company should hear about: the two that read
+		// and write its own credentials hand the secret store to a
+		// membership change nobody here reviews, and `people:manage` hands
+		// over every person — invite, suspend, re-grant, remove — which is
+		// authority over who holds everything else. Each gets its own
+		// sentence, because what the provider's administrator would then be
+		// deciding differs.
 		//
 		// IN THE GROUPS' OWN ORDER, sorted, and never the map's: ranging
 		// over the map printed these in a different order on every run of
@@ -1409,16 +1424,16 @@ func (a API) warnings() []Warning {
 		for _, group := range slices.Sorted(maps.Keys(oidc.GroupGrants)) {
 			grants := oidc.GroupGrants[group]
 			for _, g := range grants {
-				if g != iam.GrantSecretRead && g != iam.GrantSecretWrite {
+				consequence, warned := groupGrantConsequence[g]
+				if !warned {
 					continue
 				}
 				out = append(out, advisory(
 					at(at(field("api.auth.oidc.group_grants"), group), string(g)),
 					"membership of `"+group+"` confers "+string(g)+
 						", so adding somebody to that group at the identity "+
-						"provider hands them this company's credentials — an "+
-						"act nobody here reviews. Declare it on the person's "+
-						"own record instead"))
+						"provider "+consequence+" — an act nobody here "+
+						"reviews. Declare it on the person's own record instead"))
 			}
 		}
 	}
