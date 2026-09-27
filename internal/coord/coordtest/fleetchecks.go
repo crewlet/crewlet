@@ -2,6 +2,7 @@ package coordtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -44,7 +45,7 @@ func CheckClaimExpiresWithItsBucket(ctx context.Context, f coord.Fleet,
 	var errs []error
 	first, err := f.Claim(ctx, key, at)
 	if err != nil {
-		return append(errs, fmt.Errorf("Claim: %w", err))
+		return append(errs, fmt.Errorf("the first claim: %w", err))
 	}
 	if !first {
 		return append(errs, fmt.Errorf("the first claim of %q was refused", key))
@@ -52,7 +53,7 @@ func CheckClaimExpiresWithItsBucket(ctx context.Context, f coord.Fleet,
 	// STILL HELD before the age runs out, which is what stops this
 	// passing against a backend that claims nothing at all.
 	if again, err := f.Claim(ctx, key, at); err != nil {
-		errs = append(errs, fmt.Errorf("Claim while the first was live: %w", err))
+		errs = append(errs, fmt.Errorf("a claim while the first was live: %w", err))
 	} else if again {
 		errs = append(errs, fmt.Errorf("a second caller claimed %q while the first "+
 			"claim was inside the bucket's %v age", key, age))
@@ -130,26 +131,28 @@ func reclaimed(claim func(time.Time) (bool, error), verb, key string,
 func CheckUnnamedRecordsAreRefused(ctx context.Context, f coord.Fleet, at time.Time) []error {
 	var errs []error
 	if ok, err := f.Claim(ctx, "", at); err == nil {
-		errs = append(errs, fmt.Errorf("Claim accepted an empty key and answered %t: a "+
-			"caller that named nothing has not lost a race to anybody, and false "+
-			"reads as a delivery a peer already took", ok))
+		errs = append(errs, fmt.Errorf("an empty key reached Claim, which answered "+
+			"%t rather than an error: a caller that named nothing has not lost a "+
+			"race to anybody, and false reads as a delivery a peer already took", ok))
 	}
 	if ok, err := f.ClaimSetup(ctx, "", at); err == nil {
-		errs = append(errs, fmt.Errorf("ClaimSetup accepted an empty key and answered %t: "+
-			"false there refuses a callback nobody has spent", ok))
+		errs = append(errs, fmt.Errorf("an empty key reached ClaimSetup, which "+
+			"answered %t rather than an error: false there refuses a callback "+
+			"nobody has spent", ok))
 	}
 	if n, err := f.Fail(ctx, "", at); err == nil {
-		errs = append(errs, fmt.Errorf("Fail accepted an empty subject and answered %d: an "+
-			"attempt nobody can be throttled by reads as a caller with a clean "+
-			"record", n))
+		errs = append(errs, fmt.Errorf("an empty subject reached Fail, which "+
+			"answered %d rather than an error: an attempt nobody can be throttled "+
+			"by reads as a caller with a clean record", n))
 	}
 	if n, err := f.Failures(ctx, "", at); err == nil {
-		errs = append(errs, fmt.Errorf("Failures accepted an empty subject and answered %d, "+
-			"which is the answer a throttle lets through", n))
+		errs = append(errs, fmt.Errorf("an empty subject reached Failures, which "+
+			"answered %d rather than an error — the answer a throttle lets "+
+			"through", n))
 	}
 	if err := f.Flush(ctx, ""); err == nil {
-		errs = append(errs, fmt.Errorf("Flush accepted an empty subject: a flush that "+
-			"forgot nothing reported success"))
+		errs = append(errs, errors.New("an empty subject reached Flush, which "+
+			"answered no error: a flush that forgot nothing reported success"))
 	}
 	return errs
 }

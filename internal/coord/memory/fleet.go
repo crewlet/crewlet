@@ -239,15 +239,15 @@ func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) (int, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	kept := append(f.attempts[subject], now)
+	f.attempts[subject] = append(f.attempts[subject], now)
 	// DISCARD THE OLDEST, which is what the KV bucket's per-record history
 	// does when it overflows. The other direction — refusing the newest —
 	// would leave the record frozen at attempts that then age out, and the
-	// caller un-throttled under the flood that filled it.
-	if over := len(kept) - coord.AttemptCap; over > 0 {
-		kept = append(kept[:0], kept[over:]...)
+	// caller un-throttled under the flood that filled it. Deleted in place,
+	// so the backing array stays the cap's size under a flood.
+	if over := len(f.attempts[subject]) - coord.AttemptCap; over > 0 {
+		f.attempts[subject] = slices.Delete(f.attempts[subject], 0, over)
 	}
-	f.attempts[subject] = kept
 	return f.live(subject, now), nil
 }
 

@@ -109,8 +109,8 @@ func TestTheSuiteCatchesARegistryThatRefusesInsteadOfErroring(t *testing.T) {
 			"a caller that named nothing has not lost a race to anybody, and every " +
 			"caller of these verbs reads false as somebody else having the record")
 	}
-	if !containing(errs, "Claim accepted an empty key") ||
-		!containing(errs, "ClaimSetup accepted an empty key") {
+	if !containing(errs, "an empty key reached Claim,") ||
+		!containing(errs, "an empty key reached ClaimSetup,") {
 		t.Errorf("the check objected, but not about both registries: %v", errs)
 	}
 }

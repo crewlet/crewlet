@@ -2724,7 +2724,7 @@ var secretCases = []fleetCase{{
 		}
 		// AND A DELETED ROW IS ABSENT AGAIN: a create is not refused over
 		// the history of a key somebody destroyed.
-		if _, err := h.f.DeleteSecret(h.ctx, "iam/person/p1/dek"); err != nil {
+		if _, err = h.f.DeleteSecret(h.ctx, "iam/person/p1/dek"); err != nil {
 			h.t.Fatalf("DeleteSecret: %v", err)
 		}
 		created, err = h.f.CreateSecret(h.ctx, coord.SecretRecord{
@@ -2794,7 +2794,7 @@ var secretCases = []fleetCase{{
 		}
 		// GONE IS NOT A VERSION.
 		gone, _ := h.secret("GITLAB_TOKEN")
-		if _, err := h.f.DeleteSecret(h.ctx, "GITLAB_TOKEN"); err != nil {
+		if _, err = h.f.DeleteSecret(h.ctx, "GITLAB_TOKEN"); err != nil {
 			h.t.Fatalf("DeleteSecret: %v", err)
 		}
 		wrote, err = h.f.UpdateSecret(h.ctx, coord.SecretRecord{
@@ -2838,7 +2838,7 @@ var secretCases = []fleetCase{{
 		if _, found := h.secret("iam/person/p2/dek"); !found {
 			h.t.Fatal("a refused conditional delete removed the row")
 		}
-		if removed, err := h.f.DeleteSecretAt(h.ctx, "iam/person/p2/dek", 0); err != nil || removed {
+		if removed, err = h.f.DeleteSecretAt(h.ctx, "iam/person/p2/dek", 0); err != nil || removed {
 			h.t.Fatalf("a delete at version zero = (%v, %v), want nothing removed",
 				removed, err)
 		}
