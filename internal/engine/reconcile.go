@@ -123,9 +123,15 @@ type ReconcilerOptions struct {
 	// dozen nodes should be.
 	NodeID string
 
-	// Cipher opens a sealed revision. Nil reads plaintext payloads and
-	// refuses sealed ones — a deployment that lost its keyring must say so
-	// rather than boot onto an empty company.
+	// Cipher opens a sealed revision, and it is also what AUTHENTICATES
+	// one: with a keyring, a revision that is not sealed is refused
+	// ([secrets.ErrUnsealedWithKey]) rather than applied, because a peer's
+	// revision arrives through the coordination store and anything that
+	// reaches the broker can write a plaintext body there. `crewlet run`
+	// passes the node's own keyring, which every node holds. Nil is a
+	// caller holding none — a unit that seals nothing — which reads
+	// plaintext and refuses a sealed revision rather than boot onto an
+	// empty company.
 	Cipher secrets.Cipher
 
 	// OnApply observes every outcome.
@@ -643,6 +649,16 @@ func violations(warnings []config.Warning) []violation {
 // The local write is best effort for the same reason the apply status is —
 // the revision is applied either way, and a node that could not write its copy
 // re-fetches on its next miss.
+//
+// AUTHENTICATED BEFORE IT IS KEPT. The payload is whatever the coordination
+// bucket holds, and anything that can reach the broker can write it; the seal
+// under the fleet's keyring is what says a node of this fleet wrote it. So it
+// is opened here, at the boundary where a peer's bytes would enter this node's
+// own history, and a body that does not open — unsealed, or sealed under a key
+// this keyring does not hold — is refused before [store.Configs.Adopt] rather
+// than kept as a revision this node's operator surface would then show and
+// offer to revert to. [Reconciler.applyRevision] opens it again to use it,
+// which is one more decrypt of a small document per fetch.
 func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation) (store.Revision, error) {
 	payload, found, err := r.plane.Payload(ctx, target.RevisionID)
 	if err != nil {
@@ -656,6 +672,11 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 		// pointer converges on nothing while reporting convergence.
 		return store.Revision{}, fmt.Errorf("engine: %w: %s",
 			store.ErrNoRevision, target.RevisionID)
+	}
+	if _, err = secrets.Open(r.cipher, payload); err != nil {
+		return store.Revision{}, fmt.Errorf("engine: the fleet's revision %s does "+
+			"not open under this node's keyring, so it is neither applied nor "+
+			"kept: %w", target.RevisionID, err)
 	}
 	// THE AUTHOR IS THE POINTER'S, which carries the three the writing
 	// node recorded. This said `peer`, so a revision named whoever wrote it

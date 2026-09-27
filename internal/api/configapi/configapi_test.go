@@ -731,6 +731,38 @@ func TestRevertingToAnUnreadableRevisionIsRefused(t *testing.T) {
 	}
 }
 
+// A REVISION STORED WITHOUT A SEAL IS REFUSED TOO, AND SAYS SO.
+//
+// A node holding a keyring reads only sealed revisions — a plaintext one could
+// have been written by anything that reached the store — so an older build's
+// plaintext revision is no revert target. The hint is the point: the keyring's
+// hint would send an operator looking for a key that was never involved.
+//
+// Mutation: drop the unsealed arm of the hint and the key hint is answered.
+func TestRevertingToAnUnsealedRevisionIsRefusedNamingTheSeal(t *testing.T) {
+	t.Parallel()
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": key(t)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newSurface(t, cipher)
+	plainID := s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodPost, "/config/revisions/"+plainID+"/revert", "", nil)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("got %d, want 409", res.Code)
+	}
+	body := decode(t, res)
+	if body["error"] != "unreadable_revision" {
+		t.Errorf("body = %s", res.Body)
+	}
+	if hint, _ := body["hint"].(string); !strings.Contains(hint, "without a seal") {
+		t.Errorf("hint = %q, want it to say the revision was stored without a seal", hint)
+	}
+}
+
 func TestASealedStoreRoundTripsThroughTheSurface(t *testing.T) {
 	t.Parallel()
 	cipher, err := secrets.NewCipher(secrets.Keyring{

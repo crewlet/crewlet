@@ -36,7 +36,7 @@ subcommand below is served by it.
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
 | `crewlet config diff <UUID> [-against <UUID\|active>]` | Structural diff of two revisions — paths and values, always redacted on both sides |
 | `crewlet config activate <UUID>` | Re-point the fleet at a revision; re-activating the current one mints a new epoch, which is how a rotated secret takes effect |
-| `crewlet config seal` | Encrypt the active revision as one document under the Tier A keyring (one-time migration off plaintext-at-rest) — see [Secrets](../concepts/configuration.md#secrets) |
+| `crewlet config seal` | Encrypt a plaintext active revision an older build left as one document under the Tier A keyring — every other reader refuses it — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [-dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
 | `crewlet config scrub [<UUID>] [-dry-run]` | Erase personal data from superseded revisions — the one-time cleanup of an archive written before the org chart left the document |
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
@@ -396,7 +396,7 @@ Re-points the fleet at a revision. Every node applies it on its next reconcile.
 crewlet config seal [-config PATH]
 ```
 
-Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest. `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already sealed. Requires a keyring in `crewlet.yaml` (`crewlet secrets keygen`), and says so if there is none.
+Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest for a store an older build wrote before the keyring was required. It is the **one** reader of a plaintext revision: every other refuses one, naming this command, because an unsealed document is one anything that reaches the store could have written, and the seal is what authenticates a revision a node fetches from its peers. `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already sealed.
 
 Like `import`, this writes the revision to **this node's** store; the note it prints says what publishes it to a running fleet.
 

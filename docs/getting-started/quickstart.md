@@ -656,10 +656,10 @@ each), then wire them in:
   surface you connect (`mattermost_user_id`, `atlassian_account_id`,
   `gitlab_username`, …) so escalations land in your DMs and agents recognise
   your activity
-- Encrypt your config at rest — you already have the keyring, so this is one
-  command: run `crewlet config seal` and the **entire** company config is stored
-  encrypted in the DB as one opaque blob. See
-  [Configuration § Secrets](../concepts/configuration.md#secrets)
+- Your config is already encrypted at rest — the keyring every node holds seals
+  the **entire** company document into the DB as one opaque blob on every
+  write, and that seal is also what lets a peer trust a revision it fetches.
+  See [Configuration § Secrets](../concepts/configuration.md#secrets)
 - Stop exporting a variable per credential — with that keyring in place,
   `crewlet secrets set LLM_API_KEY` puts the value in the encrypted
   [secret store](../concepts/secret-store.md), which the engine consults ahead

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -38,9 +39,16 @@ func activateStored(t *testing.T, cfg, payload string) string {
 		t.Fatalf("open the store: %v", err)
 	}
 	defer closeStore()
+	// SEALED, as every revision a node holding a keyring keeps is: the node
+	// this stands in for fetched it from its peers, and a plaintext one would
+	// have been refused before it was ever adopted.
+	sealed, err := secrets.Seal(cs.cipher, []byte(payload))
+	if err != nil {
+		t.Fatalf("seal the revision: %v", err)
+	}
 	id, err := cs.configs.InsertActive(t.Context(), store.Revision{
 		Source: "fleet", CreatedBy: "peer", Summary: "from a peer",
-		Payload: []byte(payload), CreatedAt: time.Now().UTC(),
+		Payload: sealed, CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)

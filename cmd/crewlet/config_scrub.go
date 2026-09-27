@@ -67,10 +67,14 @@ func scrubConfig(ctx context.Context, cs *configStore, revisionID string,
 
 	scrubbed, fields := 0, 0
 	for _, rev := range revisions {
-		// OPENED THROUGH THE SAME PATH every other reader uses, so a
-		// payload this build cannot make sense of stops the run rather
-		// than being rewritten into a shape no node can apply.
-		document, err := secrets.Open(cs.cipher, rev.Payload)
+		// OPENED TO BE RE-SEALED, which is the one read that takes a
+		// plaintext revision with a keyring in hand: a store written before
+		// the keyring was required holds superseded revisions in the clear,
+		// and an erasure that refused them would leave exactly the personal
+		// data it was run for. What it writes back is sealed. A payload
+		// sealed under a key this keyring does not hold still stops the run
+		// rather than being rewritten into a shape no node can apply.
+		document, err := secrets.OpenToReseal(cs.cipher, rev.Payload)
 		if err != nil {
 			return fmt.Errorf("open revision %s: %w", rev.ID, err)
 		}

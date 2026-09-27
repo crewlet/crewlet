@@ -630,6 +630,89 @@ func TestASealedRevisionNeedsItsKeyring(t *testing.T) {
 	}
 }
 
+// A PEER'S REVISION THAT IS NOT SEALED IS NEITHER APPLIED NOR KEPT.
+//
+// The payload a peer converges on is read off the coordination store, and
+// anything that can reach the broker can write that bucket — so the seal under
+// the fleet's keyring is what says a node of this fleet wrote it. A plaintext
+// body used to be applied by a node holding a keyring exactly as its own
+// would have been: a forged company document, running on every node, with
+// nothing in the log saying where it came from. Now the apply is recorded as
+// an error, the epoch is not reached, and the body never lands in this node's
+// own config history — where it would have been shown, diffed and offered as a
+// revert target.
+//
+// The control is the same document sealed under the ring: applied and kept.
+//
+// Mutation: let secrets.Open hand back a plaintext payload with a keyring in
+// hand, and the forged revision applies; drop the open in fetchRevision and it
+// is kept although it is refused.
+func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
+	t.Parallel()
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": testKey(t)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// THE FORGERY: a plaintext body published straight onto the fleet's
+	// coordination store, as anything reaching the broker could.
+	forger := newPlane(t)
+	epoch := forger.activate(t.Context(), t, grownCompanyDoc)
+	target, found, err := forger.fleet.Target(t.Context())
+	if err != nil || !found {
+		t.Fatalf("Target: found=%v err=%v", found, err)
+	}
+	node := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Fleet, o.Cipher = forger.fleet, cipher
+	})
+	err = node.recon.Tick(t.Context())
+	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
+	}
+	if got := node.recon.Applied(); got == epoch {
+		t.Error("the node applied the epoch an unsealed revision was published at")
+	}
+	if got := node.engine.Company().Config.TokenBudget; got == 4242 {
+		t.Error("the node runs the forged document's settings")
+	}
+	// THE FLEET VIEW the node reports into is the one it reads, the
+	// forger's: the forger itself never ticked, so the one row is the
+	// node's.
+	if row := forger.fleetRow(t); configplane.ApplyStatus(row.Status) != configplane.StatusError ||
+		row.Epoch != epoch {
+		t.Errorf("the node recorded %+v, want an error against epoch %d", row, epoch)
+	}
+	if _, held, err := node.store.Configs().Get(t.Context(), target.RevisionID); err != nil || held {
+		t.Errorf("the forged revision is in the node's own history (held=%v err=%v)", held, err)
+	}
+
+	// THE CONTROL: the same document sealed under the ring.
+	sealed, err := secrets.Seal(cipher, yamlToJSON(t, grownCompanyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	author := newPlane(t)
+	sealedEpoch := author.activatePayload(t, "sealed", sealed)
+	sealedTarget, _, err := author.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	peer := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Fleet, o.Cipher = author.fleet, cipher
+	})
+	if err := peer.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("a sealed revision from the peers: %v", err)
+	}
+	if got := peer.recon.Applied(); got != sealedEpoch {
+		t.Errorf("the peer applied epoch %d, want the sealed revision's %d", got, sealedEpoch)
+	}
+	if _, held, err := peer.store.Configs().Get(t.Context(), sealedTarget.RevisionID); err != nil || !held {
+		t.Errorf("the sealed revision was not kept (held=%v err=%v)", held, err)
+	}
+}
+
 func testKey(t *testing.T) []byte {
 	t.Helper()
 	key, err := secrets.GenerateKey()

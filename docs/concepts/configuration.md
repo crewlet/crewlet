@@ -874,17 +874,15 @@ See the [API endpoints reference](../reference/api-endpoints.md#config--live-con
 
 ## Secrets
 
-Crewlet has two secret-handling behaviours for Tier B. Which one is in effect depends solely on whether a **Tier A encryption keyring** is configured.
+Every node holds a **Tier A keyring** — `crewlet validate` refuses a `crewlet.yaml` without one and a node refuses to start (see [What Tier A must state on every node](#what-tier-a-must-state-on-every-node)) — so there is one secret-handling behaviour for Tier B, not two.
 
-### Default: `${VAR}` references (no keyring)
+### `${VAR}` references
 
-With no `secrets:` block in `crewlet.yaml`, the DB stores `${ENV_VAR}` reference strings verbatim and resolution happens at provider / transport / integration construction time (`internal/engine`). The `company_config` table never holds a real secret; the environment is the source of truth. Safe to back up / export, but every deployment must re-provision the referenced env vars, and rotating a key means editing the env + restarting.
+A credential in the company document is normally a `${ENV_VAR}` reference, stored verbatim and resolved where a provider, transport or integration is constructed (`internal/engine`). It resolves from the encrypted [secret store](secret-store.md) first and the process environment behind it — which is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. A reference the store does not answer resolves from the environment, so a deployment that keeps its credentials in its platform's own secret mechanism needs nothing else.
 
-A configured keyring also unlocks a second, independent place a `${VAR}` can resolve from: the encrypted [secret store](secret-store.md), consulted ahead of the environment. That is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. It is opt-in and inert until a secret is actually stored.
+### Encrypted at rest, and authenticated
 
-### Encrypted at rest (Tier A keyring configured)
-
-Add a keyring to `crewlet.yaml` and Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) before it reaches the DB:
+Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) under the keyring before it reaches the DB:
 
 ```yaml
 # crewlet.yaml (Tier A) — the keyring is the sole root of trust
@@ -899,24 +897,23 @@ The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` 
 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine and the API it serves, migrations, and the CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
-- **Fail closed.** If an activated revision is stored encrypted but no keyring is configured (or the key is missing), the engine refuses to boot rather than run with an opaque blob it can't read.
+- **Fail closed.** A revision sealed under a key this node's keyring does not hold is refused rather than run as an opaque blob it can't read.
+- **Authenticated, not only hidden.** The document a node fetches from its peers comes through the coordination store, which anything reaching the broker can write, so the seal is also what proves a node of this fleet wrote it. A revision stored **unsealed** is refused — never applied, adopted, shown or reverted to — with an error naming `crewlet config seal`. See [Control Plane § The design](control-plane.md#the-design).
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
 
 Because the key gates every read, keep it as available as the database itself: the API, dashboard, migrations, and CLI all fail closed without it.
 
 **Threat model.** Encryption at rest defends against *data-at-rest* exposure: a leaked backup, a copied store file, a stolen volume snapshot, a coordination-store dump on a laptop — the attacker gets one opaque ciphertext blob per revision, no structure and no credentials. It also keeps config egress clean (`GET /config`, dashboard views, and revision diffs are decrypt-then-redact — no plaintext secrets) and absorbs accidental plaintext (a raw key pasted into `company.yaml` is encrypted on write, so it never lands in the DB in the clear). It does **not** defend against a compromised engine host that holds both the DB and the Tier A key (that host can decrypt — it must, to run; keep the key out of the store's backup domain — that separation is the point), a malicious operator with a valid key and API access, or in-memory extraction from the live process. The property: plaintext config exists only transiently in the encrypt/decrypt path and in the live engine's memory — never in durable storage.
 
-### Migrating from `${VAR}` to encrypted
+### A revision stored before the keyring was required
 
-Encryption is opt-in and backward-compatible — a plaintext config boots with or without a keyring. To migrate an existing deployment:
+Every write path seals, so the only plaintext revision a store can hold is one a build older than the mandatory keyring wrote. A node refuses to read it, naming the command that fixes it:
 
 ```bash
-crewlet secrets keygen --key-id 2026-01     # prints a key + the Tier A snippet
-# add the secrets: block to crewlet.yaml, export CREWLET_SECRET_KEY_2026_01
-crewlet config seal                          # encrypts the active revision as one document
+crewlet config seal                          # re-stores the active revision sealed
 ```
 
-`crewlet config seal` writes a new revision holding the encrypted document; afterwards the per-secret env vars are no longer needed at runtime (only the Tier A key). It's idempotent — a second run on an already-sealed revision is a no-op.
+`crewlet config seal` writes a new revision holding the encrypted document — the one read of a plaintext revision the engine allows, because it is the operator vouching for the revision their own node was running. It's idempotent: a second run on an already-sealed revision is a no-op. Superseded plaintext revisions stay unreadable to every other reader; `crewlet config scrub` still reaches them, and writes back sealed what it erases.
 
 ### Rotation
 

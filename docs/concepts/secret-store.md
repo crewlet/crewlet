@@ -120,7 +120,7 @@ When a name exists in both with **different** values, boot logs `secret_shadowed
 
 ### A keyring is required
 
-Unlike `company_config` — which supports a plaintext mode so pre-encryption deployments keep working — the secret store has **no plaintext mode**. There is no legacy corpus to stay compatible with, and a store whose whole purpose is holding secrets should not be able to hold them in the clear. A node with no keyring is still a supported deployment; it simply does not use the store, and resolves from the environment.
+The secret store has **no plaintext mode**, and neither does anything else any more: every node's Tier A carries a keyring (`crewlet validate` refuses a file without one, and a node refuses to start), and a company document stored unsealed is refused by every reader but `crewlet config seal`. A store whose whole purpose is holding secrets should not be able to hold them in the clear. The one place a command runs with no keyring is a provisioning run given no Tier A file at all, which opens no store and resolves from the environment alone — and says so.
 
 Each value is sealed with AES-256-GCM and the record's own `name` bound in as associated data, so a ciphertext moved to another name fails to decrypt rather than silently impersonating a different secret. That is also what makes a **read fail closed**: a snapshot that skipped a record it could not open would let the environment answer for it, which is exactly the stale-`.env` shadowing the store exists to prevent — so an unopenable record refuses the whole snapshot, loudly, and the previous one keeps serving.
 
@@ -202,7 +202,8 @@ crewlet secrets rekey                            # after a keyring rotation
 
 A deployment has one keyring, and everything that has to be authenticated
 across a fleet derives from it. It **seals** the company config and the secret
-store's rows. It **signs** the two per-run tokens a sandbox carries. And it
+store's rows — and a sealed company document is an authenticated one, so a
+node refuses one its peers published unsealed. It **signs** the two per-run tokens a sandbox carries. And it
 **signs every record on every state log** — the tracker's, the knowledge
 base's, and any domain a later build registers.
 
@@ -400,12 +401,12 @@ Resolution order on any node, for any `${VAR}`:
 3. **Tier B** (the company document) resolves **store first, environment
    second**.
 
-So a node with an empty store — or no keyring at all — resolves everything
-from the environment and runs normally. That is not a degraded mode: *"no
-keyring is a supported deployment; secrets come from the environment and the
-store is simply not in use"* is the engine's own comment at the point it
-decides. **A brand-new node always starts from the environment.** Nothing has
-to be copied to it, and there is no first-boot step that reads a peer.
+So a node with an empty store resolves everything from the environment and
+runs normally. That is not a degraded mode. **A brand-new node always starts
+from the environment.** Nothing has to be copied to it, and there is no
+first-boot step that reads a peer. (What a node cannot do is start with no
+keyring at all: every node needs one — see [the three jobs
+above](#the-keyring-is-not-optional-and-it-does-three-jobs).)
 
 ### Which one to use
 
@@ -416,7 +417,7 @@ to be copied to it, and there is no first-boot step that reads a peer.
 
 **The two columns are the same, and that is the point.** A credential is company-wide state, so it lives where the company config lives: one sealed copy on the coordination KV, written through any node's authenticated API, read by all of them.
 
-The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node with no keyring, or an empty store, resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
+The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node whose store is empty resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
 
 > **Provisioner-minted credentials work fleet-wide too.** `crewlet gitlab
 > provision`, `crewlet slack provision` and the rest MINT credentials, and

@@ -38,6 +38,24 @@ const EnvelopeKey = "__encrypted__"
 // document that does not belong to the key it was offered.
 var ErrSealedWithoutKey = errors.New("secrets: document is sealed and no keyring is configured")
 
+// ErrUnsealedWithKey reports a payload that is NOT sealed, read by a caller
+// that holds a keyring.
+//
+// THE SEAL IS WHAT AUTHENTICATES A DOCUMENT, not only what hides it: the
+// company document a peer applies arrives through the coordination store,
+// and anything that can write to the broker can write that bucket. Sealed
+// under the fleet's keyring (AES-GCM), a forged body fails to open; a
+// plaintext one would open as whatever its author wrote. So a node holding a
+// keyring — which is every node — reads only sealed payloads, and a plaintext
+// one is refused rather than applied, adopted or shown. The one that can
+// legitimately exist is a revision an older build wrote into a node's own
+// store before the keyring was required, and `crewlet config seal` is how it
+// is sealed.
+var ErrUnsealedWithKey = errors.New("secrets: this document is stored unsealed, " +
+	"and a node holding a keyring reads only sealed ones — a plaintext payload is " +
+	"one anything that can write the store or the coordination bucket could have " +
+	"authored. Seal it with `crewlet config seal`")
+
 // Sealed reports whether a stored payload is a sealed envelope.
 //
 // Structural rather than a guess at the content: the envelope is a
@@ -84,10 +102,11 @@ func EnvelopeKeyIDOf(payload []byte) (string, bool) {
 
 // Seal wraps a document as a sealed envelope.
 //
-// A nil cipher stores the document as it is. That is the documented opt-out —
-// a deployment with no keyring in Tier A stores plaintext — and it is not the
-// same as a failure: refusing here would make the first run of an
-// unconfigured-keyring deployment impossible rather than merely unsealed.
+// A nil cipher stores the document as it is, for a caller holding no keyring
+// at all — which no node is: every node's Tier A carries one and the engine
+// refuses to start without it, so a nil reaches here only from a caller built
+// by hand around a store it seals nothing into. A caller holding a keyring
+// always seals, and [Open] with that keyring refuses anything it did not.
 func Seal(cipher Cipher, document []byte) ([]byte, error) {
 	if cipher == nil {
 		return document, nil
@@ -111,18 +130,59 @@ func Seal(cipher Cipher, document []byte) ([]byte, error) {
 
 // Open unwraps a stored payload, returning the document.
 //
-// A payload that is not sealed comes back verbatim, so a store written before
-// a keyring was configured keeps reading. A payload that IS sealed with no
-// cipher to open it is an error rather than an empty document: silently
-// returning nothing would boot the node onto an empty company, which reads on
-// every surface as an operator who has configured nothing.
+// WITH A KEYRING, ONLY A SEALED PAYLOAD OPENS. A payload that is not sealed is
+// refused with [ErrUnsealedWithKey]: the seal is what authenticates a
+// document a peer published, and one without it could have been written by
+// anything that reaches the coordination store. It used to come back
+// verbatim, so a node holding a keyring applied a forged plaintext document as
+// readily as its own.
+//
+// WITHOUT ONE, a plaintext payload comes back verbatim and a sealed one is
+// [ErrSealedWithoutKey] rather than an empty document: silently returning
+// nothing would boot onto an empty company, which reads on every surface as
+// an operator who has configured nothing. No node holds no keyring; see
+// [Seal] for who does.
+//
+// The one reader that must take a plaintext payload with a keyring in hand is
+// the migration that seals it, and it says so by calling [OpenToReseal].
 func Open(cipher Cipher, payload []byte) ([]byte, error) {
 	if !Sealed(payload) {
+		if cipher != nil {
+			return nil, ErrUnsealedWithKey
+		}
 		return payload, nil
 	}
 	if cipher == nil {
 		return nil, ErrSealedWithoutKey
 	}
+	return openSealed(cipher, payload)
+}
+
+// OpenToReseal opens a payload a caller is about to write back SEALED —
+// sealed or not.
+//
+// THE MIGRATION'S READ, and nothing else's. A store written before the
+// keyring was required can hold plaintext revisions, and the commands that
+// rewrite them sealed (`crewlet config seal`, and `crewlet config scrub`,
+// whose erasure must reach a plaintext revision as surely as a sealed one)
+// have to be able to read what they are replacing. Every other reader goes
+// through [Open], which refuses a plaintext payload; a caller that used this
+// to READ a document would be accepting exactly the unauthenticated body
+// [ErrUnsealedWithKey] exists to refuse, which is why it takes the keyring it
+// will seal with and refuses to run without one.
+func OpenToReseal(cipher Cipher, payload []byte) ([]byte, error) {
+	if cipher == nil {
+		return nil, fmt.Errorf("secrets: a payload is opened to be re-sealed "+
+			"only by a caller holding the keyring it will seal under: %w", ErrNoKeyring)
+	}
+	if !Sealed(payload) {
+		return payload, nil
+	}
+	return openSealed(cipher, payload)
+}
+
+// openSealed decrypts an envelope [Sealed] has already recognised.
+func openSealed(cipher Cipher, payload []byte) ([]byte, error) {
 	var envelope map[string]string
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return nil, fmt.Errorf("secrets: open document: %w", err)

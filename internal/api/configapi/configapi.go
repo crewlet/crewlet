@@ -822,10 +822,21 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	// activating a document every node will fail to read.
 	document, company, err := s.openDocument(target)
 	if err != nil {
+		hint := "the target revision is sealed under a key that is no longer " +
+			"in the keyring; restore it to the node's secrets.keys first"
+		if errors.Is(err, secrets.ErrUnsealedWithKey) {
+			// NOT A KEY PROBLEM, and the key hint would send somebody
+			// looking for one: the revision was stored without a seal
+			// by a build older than the mandatory keyring, and a node
+			// holding one never applies a document it cannot
+			// authenticate.
+			hint = "the target revision was stored without a seal, which a " +
+				"node holding a keyring never applies; revert to a revision " +
+				"this deployment sealed, or write the document again"
+		}
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeUnreadableRevision, map[string]string{
 			"detail": err.Error(),
-			"hint": "the target revision is sealed under a key that is no longer " +
-				"in the keyring; restore it to the node's secrets.keys first",
+			"hint":   hint,
 		})
 		return
 	}

@@ -46,10 +46,13 @@ func sealConfig(ctx context.Context, cs *configStore, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "revision %s is already sealed; nothing to do\n", rev.ID)
 		return nil
 	}
-	// OPENED THROUGH THE SAME PATH every other reader uses, so a payload
-	// this build cannot make sense of is refused here rather than stored
-	// again in a shape no node can apply.
-	document, err := secrets.Open(cs.cipher, rev.Payload)
+	// THE MIGRATION'S READ, and the one place a plaintext revision is read
+	// with a keyring in hand: every other reader refuses it
+	// ([secrets.ErrUnsealedWithKey] names this command), because an
+	// unsealed payload is one anything that reaches the store could have
+	// written. Sealing it is the operator vouching for the revision their
+	// own node has been running.
+	document, err := secrets.OpenToReseal(cs.cipher, rev.Payload)
 	if err != nil {
 		return fmt.Errorf("open revision %s: %w", rev.ID, err)
 	}

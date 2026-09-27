@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,7 +24,14 @@ import (
 // structural write in the company serialises behind.
 func TestAStagedChartIsPublishedOnceAndThenGone(t *testing.T) {
 	t.Parallel()
-	e := newEngine(t, engine.Options{})
+	boot := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+	e := newEngine(t, engine.Options{Bootstrap: boot})
 	staged := e.Backends().Store.StagedCharts()
 
 	// A CHART THIS COMPANY DOES NOT HOLD, so the case is about the
@@ -39,9 +47,10 @@ func TestAStagedChartIsPublishedOnceAndThenGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// SEALED WITH NOTHING, which is a real configuration: company_config
-	// supports a plaintext mode, and Open answers the bytes back.
-	payload, err := secrets.Seal(nil, body)
+	// SEALED UNDER THE NODE'S KEYRING, as the offline command seals what it
+	// stages: every node holds one, and a stage stored in the clear is one
+	// the boot refuses to open.
+	payload, err := secrets.Seal(cipher, body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,11 +133,15 @@ func TestTheStagedPayloadRoundTripsAsAnAuthoredChart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := secrets.Seal(nil, body)
+	cipher, err := bootstrap(t, nil).Secrets.Cipher()
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+	payload, err := secrets.Seal(cipher, body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := secrets.Open(nil, payload)
+	opened, err := secrets.Open(cipher, payload)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

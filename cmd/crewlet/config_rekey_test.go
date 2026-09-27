@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -147,20 +148,30 @@ func plantPlaintextRevision(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatalf("encode the fixture company: %v", err)
 	}
+	plantPlaintext(t, dir, document)
+}
+
+// plantPlaintext stores document UNSEALED as the active revision of the store
+// dir holds, and returns its id. See [plantPlaintextRevision] for why a test
+// has to plant one.
+func plantPlaintext(t *testing.T, dir string, document []byte) string {
+	t.Helper()
+	if secrets.Sealed(document) {
+		t.Fatal("the planted revision is sealed, so no case using it is about plaintext")
+	}
 	db, err := store.Open(t.Context(), filepath.Join(dir, "index.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open the store: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
 		Source: "file", CreatedBy: "an-older-build", CreatedByKind: "system",
 		Summary: "written before the keyring was required", Payload: document,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("plant the plaintext revision: %v", err)
 	}
-	if secrets.Sealed(document) {
-		t.Fatal("the planted revision is sealed, so no case below is about plaintext")
-	}
+	return id
 }
 
 // A PLAINTEXT DOCUMENT IS NOT SILENTLY SEALED BY A REKEY.
@@ -191,6 +202,16 @@ func TestConfigSealEncryptsAPlaintextRevision(t *testing.T) {
 	keyed := bootstrapWithKeys(t, dir, "k1")
 	if _, sealed := activeKeyOf(t, keyed); sealed {
 		t.Fatal("the planted revision reads as sealed")
+	}
+	// UNTIL IT IS SEALED EVERY OTHER READER REFUSES IT, naming this
+	// command: a node holding a keyring reads only sealed revisions, and
+	// `show` is the ordinary way an operator would find that out.
+	_, _, err := configCmd(t, keyed, "show")
+	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("show of a plaintext revision = %v, want ErrUnsealedWithKey", err)
+	}
+	if !strings.Contains(err.Error(), "crewlet config seal") {
+		t.Errorf("the refusal does not name the command that fixes it: %v", err)
 	}
 
 	if _, errs, err := configCmd(t, keyed, "seal"); err != nil {
