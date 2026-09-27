@@ -678,10 +678,10 @@ func (p *Promoter) draft(ctx context.Context, writer PromotionWriter, unit Promo
 	// ([collisionTitle]). A record whose page could never be made would be
 	// offered to the knowledge base on every tick.
 	for _, candidate := range []string{title, collisionTitle(title, unit.ID, fingerprint, now)} {
-		if err := writer.CheckDraft(candidate, body); err != nil {
+		if refused := writer.CheckDraft(candidate, body); refused != nil {
 			return nil, fmt.Errorf("the model's draft %q for %s cannot be made "+
 				"in this knowledge base, so nothing is recorded and the next "+
-				"pass asks again: %w", draft.Name, unit.ID, err)
+				"pass asks again: %w", draft.Name, unit.ID, refused)
 		}
 	}
 	drafting := promotionEntry{V: promotionEntryVersion, State: promotionDrafting,

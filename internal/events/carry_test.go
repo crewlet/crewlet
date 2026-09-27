@@ -333,3 +333,22 @@ func TestANumberInThePayloadBagSurvivesARoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// A NUMBER A FLOAT64 CANNOT HOLD IS REFUSED AT ENCODE, at any depth of the
+// bag: a build that reads the bag's numbers as float64s would fail its decode
+// of the whole event, so publishing it would lose it on every such node.
+//
+// Mutation: drop the float check in payloadBag.MarshalJSON and both encode.
+func TestAPayloadNumberAFloat64CannotHoldIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, bag := range map[string]map[string]any{
+		"top":    {"n": json.Number("1e1000")},
+		"nested": {"list": []any{map[string]any{"n": json.Number("-1e400")}}},
+	} {
+		event := filledEvent()
+		event.Payload = bag
+		if out, err := json.Marshal(event); err == nil {
+			t.Errorf("%s: an event whose bag holds a number past a float64 encoded as %s", name, out)
+		}
+	}
+}

@@ -295,9 +295,8 @@ func checklistAssignees(before, after Task) []string {
 // THOSE FOUR AND NO OTHER MEMBER. Where the item sits — its order, and the
 // item it is nested under — is a drag, which is news to nobody. And a member
 // a newer build wrote that this one carries ([ChecklistItem.Extra]) is one
-// this build cannot read, so it cannot say whether the change is one somebody
-// would care about; the newer build that can is the one that wrote it, and
-// that writer named its own recipients on its own record.
+// this build cannot read, so it cannot say that a change to it is news to
+// anybody.
 func itemNews(was, now ChecklistItem) bool {
 	promotedAlike := (was.PromotedTo == nil) == (now.PromotedTo == nil) &&
 		(was.PromotedTo == nil || *was.PromotedTo == *now.PromotedTo)
