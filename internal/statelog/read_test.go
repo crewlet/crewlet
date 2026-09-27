@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -191,11 +193,52 @@ func (c *countingAppends) LastSeq(ctx context.Context, subject string) (uint64, 
 // linearizable read rests on cannot be written — but a level that takes no
 // broker call at all is unaffected. That asymmetry is worth stating, because
 // the tempting reading is that a full log stops reads.
+//
+// THE REFUSAL IS WHAT A BROKER SENDS. This case used to hand the read index an
+// appender that returned a ready-made `log_full`, which no broker does — a
+// real one answers its own store failure — and the read index passed that
+// answer up unclassified, so on a real full log the read was refused
+// `no_quorum`: retryable, with an election's four-second hint, from a node
+// that refuses the next barrier identically. So the fake now answers what the
+// broker answers, and a second case fills a REAL log to its ceiling.
 func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, refusingAppender{}, testSigner(t, probeDomain{}), probeEncode,
-		h.gen.Load, nil)
+
+	t.Run("the broker's own answer", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		assertFullLogRead(t, h, refusingAppender{err: &jetstream.APIError{
+			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}})
+	})
+
+	t.Run("a real log at its ceiling", func(t *testing.T) {
+		t.Parallel()
+		h := newHarnessFor(t, tinyLogDomain{})
+		// FILLED TO THE BYTE, in shrinking records: a barrier is a few
+		// hundred bytes, so a log refused one large record can still take
+		// one, and it is the room a barrier needs that has to be gone.
+		written := 0
+		for _, size := range []int{4 << 10, 256, 16} {
+			for {
+				_, err := h.write(probeSubject(fmt.Sprintf("o%d", written)),
+					fmt.Sprintf("op-%d", written), strings.Repeat("x", size))
+				if err != nil {
+					break
+				}
+				written++
+			}
+		}
+		assertFullLogRead(t, h, h.log)
+	})
+}
+
+// assertFullLogRead reads at every level through a read index appending to
+// log, which is full: the levels that append are refused `log_full` with no
+// hint, and the ones that do not are served.
+func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender) {
+	t.Helper()
+	index, err := statelog.NewReadIndex(probeDomain{}, log, testSigner(t, probeDomain{}),
+		probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -208,11 +251,15 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 		t.Fatalf("a linearizable read on a full log = %v, want a Refused", err)
 	}
 	if refusal.Code != statelog.RefuseLogFull {
-		t.Fatalf("code = %q, want %q", refusal.Code, statelog.RefuseLogFull)
+		t.Fatalf("code = %q (%s), want %q", refusal.Code, refusal.Detail,
+			statelog.RefuseLogFull)
 	}
 	if refusal.RetryAfter != 0 {
 		t.Errorf("a full log carries a retry hint of %s — waiting does not empty "+
 			"a log, an operator does", refusal.RetryAfter)
+	}
+	if !strings.Contains(refusal.Detail, "byte ceiling") {
+		t.Errorf("the refusal does not name the ceiling to raise: %s", refusal.Detail)
 	}
 
 	// AND THE LEVELS THAT TAKE NO BROKER CALL KEEP ANSWERING.
@@ -223,14 +270,52 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	}
 }
 
-// refusingAppender is a broker whose log is at its ceiling.
-type refusingAppender struct{}
-
-func (refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
-	return 0, false, &statelog.Unavailable{
-		Reason: statelog.ReasonLogFull,
-		Detail: "maximum bytes exceeded",
+// A BARRIER THE BROKER REFUSED FOR A REASON OF ITS OWN IS NOT A MISSED QUORUM.
+//
+// A sealed stream, a JetStream store out of resources: the broker answered,
+// and it will answer the same to the next barrier. Read as `no_quorum` — which
+// is where every refusal the read index did not recognise went — it carried an
+// election's retry hint to a caller the node will refuse identically. And a
+// barrier nobody answered IS the missed quorum, which the control holds.
+func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		err  error
+		want statelog.ReadRefusal
+	}{
+		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
+			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused},
+		{"nobody answered", errors.New("nats: timeout"), statelog.RefuseNoQuorum},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			index, err := statelog.NewReadIndex(probeDomain{}, refusingAppender{err: c.err},
+				testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
+			if err != nil {
+				t.Fatalf("NewReadIndex: %v", err)
+			}
+			r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, index)
+			_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
+				func(*sql.Tx) error { return nil })
+			var refusal *statelog.Refused
+			if !errors.As(err, &refusal) || refusal.Code != c.want {
+				t.Fatalf("a barrier the broker answered %v was refused as %v, want %q",
+					c.err, err, c.want)
+			}
+			if got, want := refusal.RetryAfter > 0, c.want.Retryable(); got != want {
+				t.Errorf("%q carries a hint of %s", c.want, refusal.RetryAfter)
+			}
+		})
 	}
+}
+
+// refusingAppender is a broker that answers every append with err.
+type refusingAppender struct{ err error }
+
+func (a refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
+	return 0, false, a.err
 }
 
 func (refusingAppender) LastSeq(context.Context, string) (uint64, bool, error) {
@@ -469,7 +554,8 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 //
 // A [statelog.Reason] spelled like a [statelog.ReadRefusal] names the same
 // state of the same node — behind, below the floor, a floor nobody could read,
-// evicted, a record it cannot decode, a full log — so the two answers are one
+// evicted, a record it cannot decode, a full log, a broker's own refusal — so
+// the two answers are one
 // fact said twice. They disagreed: `floor_unknown` and `below_floor` told a
 // writer to come back and a reader, on the same node at the same instant, that
 // waiting could not clear it. Both clear on their own — the floor is read
@@ -482,7 +568,8 @@ func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 		switch write {
 		case statelog.ReasonBehind, statelog.ReasonDeferred,
 			statelog.ReasonBelowFloor, statelog.ReasonFloorUnknown,
-			statelog.ReasonEvicted, statelog.ReasonLogFull:
+			statelog.ReasonEvicted, statelog.ReasonLogFull,
+			statelog.ReasonBrokerRefused:
 		default:
 			continue
 		}
@@ -493,10 +580,10 @@ func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 				read.Retryable())
 		}
 	}
-	// THE SIX, so a twin renamed on one side stops being compared rather
+	// THE SEVEN, so a twin renamed on one side stops being compared rather
 	// than silently passing.
-	if twins != 6 {
-		t.Errorf("compared %d twins, want 6 — a reason and a refusal spelled "+
+	if twins != 7 {
+		t.Errorf("compared %d twins, want 7 — a reason and a refusal spelled "+
 			"alike went missing from one side", twins)
 	}
 }

@@ -106,6 +106,13 @@ const (
 	// levels that append; the ones that do not keep answering.
 	RefuseLogFull ReadRefusal = "log_full"
 
+	// RefuseBrokerRefused — the broker refused to store the barrier and
+	// named a reason this framework has no remedy for: a sealed stream, a
+	// JetStream store with no resources left. The levels that append are
+	// refused until somebody acts on the broker's words, and the ones that
+	// do not keep answering. Not a missed quorum: the broker answered.
+	RefuseBrokerRefused ReadRefusal = "broker_refused"
+
 	// RefuseWrongStream — the position this read was asked to reach is on
 	// another stream, which is a caller bug rather than a state.
 	RefuseWrongStream ReadRefusal = "wrong_stream"
@@ -121,7 +128,8 @@ const (
 var ReadRefusals = []ReadRefusal{
 	RefuseBehind, RefuseDeferred, RefuseDeferredScopeUnknown, RefuseStalled,
 	RefuseBelowFloor, RefuseFloorUnknown, RefuseEvicted, RefuseBrokerUnreachable,
-	RefuseNoQuorum, RefuseLogFull, RefuseWrongStream, RefuseTooStale,
+	RefuseNoQuorum, RefuseLogFull, RefuseBrokerRefused, RefuseWrongStream,
+	RefuseTooStale,
 }
 
 // Valid reports whether a refusal code off the wire is one this build knows.
@@ -707,9 +715,11 @@ func (r *Reader) pastBound(q Query, h Health) *Refused {
 
 // barrierRefusal maps the read index's own failures onto refusal codes.
 //
-// The three are genuinely different: a broker that did not answer, a majority
-// that did not agree, and a log that is full. Only the first two are worth
-// coming back for, and only the third names a field an operator has to change.
+// The four are genuinely different: a majority that did not agree, a log that
+// is full, a broker that refused the barrier for a reason of its own, and a
+// duplicate answer that proves nothing. Only the first is worth coming back
+// for; a full log names a field an operator has to change, and a broker's
+// refusal names what the broker wants changed.
 func barrierRefusal(level ReadLevel, err error) error {
 	var unavailable *Unavailable
 	if errors.As(err, &unavailable) {
@@ -719,6 +729,13 @@ func barrierRefusal(level ReadLevel, err error) error {
 				Code: RefuseLogFull, Level: level,
 				Detail: unavailable.Detail + " — a full log costs every level " +
 					"that appends, while `stale` and `session` keep answering",
+			}
+		case ReasonBrokerRefused:
+			return &Refused{
+				Code: RefuseBrokerRefused, Level: level,
+				Detail: unavailable.Detail + " — every level that appends is " +
+					"refused until it is acted on, while `stale` and `session` " +
+					"keep answering",
 			}
 		case ReasonSkew:
 			return &Refused{Code: RefuseNoQuorum, Level: level, Detail: unavailable.Detail}

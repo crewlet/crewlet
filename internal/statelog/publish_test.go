@@ -766,7 +766,7 @@ func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
 		a := newApplier()
 		return statelog.Deps{
 			Domain:     probeDomain{},
-			Log:        refusingAppender{},
+			Log:        refusingAppender{err: errors.New("never asked")},
 			Signer:     testSigner(t, probeDomain{}),
 			Rows:       &fakeRows{applier: a},
 			Fence:      &fakeFence{},

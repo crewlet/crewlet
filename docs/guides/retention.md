@@ -1019,8 +1019,8 @@ which:
 
 - **[Replication](replication.md)** — the two regimes, the write outcomes and
   what the design does not promise.
-- **[Read consistency](consistency.md)** — what a full log costs, and the
-  twelve refusals.
+- **[Read consistency](consistency.md)** — what a full log costs, the
+  thirteen read refusals and every write refusal.
 - **[Backups & restore](backup.md)** — the artefact and the runbook.
 - **[CLI reference](../reference/cli.md#crewlet-retention)** — every verb's
   flags and refusals.
