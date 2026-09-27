@@ -452,6 +452,104 @@ func TestAFailedFetchIsRetriedByTheNextCaller(t *testing.T) {
 	}
 }
 
+// failingAfterFirst serves the test key once and answers 502 to every request
+// after it, counting them all: a source that was up and then went down.
+func failingAfterFirst(t *testing.T) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var served atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if served.Add(1) > 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"keys":[{"kid":"k0","kty":"RSA","n":"` +
+			base64.RawURLEncoding.EncodeToString(testKey.PublicKey.N.Bytes()) +
+			`","e":"AQAB"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	return server, &served
+}
+
+// THE REFRESH FLOOR HOLDS THROUGH AN OUTAGE AT THE SOURCE.
+//
+// The floor that keeps a forged kid from being a fetch per token was measured
+// from the last SUCCESS, so once the source went down and the set aged past
+// the floor, every token naming a kid nobody published — on the Forge webhook,
+// one the sender picks — was a fetch again, one after another, each at a host
+// that had just failed. It is measured from the last ATTEMPT: inside it an
+// unknown kid is refused and nothing is asked, and once it passes one caller
+// asks again.
+//
+// Mutation: measure the floor from the last success and the ten forged kids
+// are ten fetches.
+func TestTheRefreshFloorHoldsThroughAnOutage(t *testing.T) {
+	t.Parallel()
+	server, served := failingAfterFirst(t)
+	clock := pinned
+	source := jwks.New(jwks.Options{URL: server.URL, Now: func() time.Time { return clock }})
+	if _, err := source.Key(t.Context(), "k0"); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	// THE SOURCE IS DOWN, and the set is past its TTL.
+	clock = clock.Add(2 * time.Hour)
+	if _, err := source.Key(t.Context(), "made-up"); err == nil {
+		t.Fatal("a kid nobody published resolved")
+	}
+	if got := served.Load(); got != 2 {
+		t.Fatalf("the source was asked %d times, want the warm fetch and the "+
+			"one the first forged kid made", got)
+	}
+	for range 10 {
+		if _, err := source.Key(t.Context(), "made-up"); err == nil {
+			t.Fatal("a kid nobody published resolved")
+		}
+	}
+	if got := served.Load(); got != 2 {
+		t.Errorf("ten forged kids inside the floor of a failed attempt made %d "+
+			"fetches at a failing source, want none", got-2)
+	}
+
+	// PAST THE FLOOR, one caller asks again.
+	clock = clock.Add(jwks.RefreshFloor)
+	_, _ = source.Key(t.Context(), "made-up")
+	if got := served.Load(); got != 3 {
+		t.Errorf("past the floor the source was asked %d more times, want one", got-2)
+	}
+}
+
+// A STALE KEY IS SERVED AT ONCE INSIDE THE FLOOR OF A FAILED ATTEMPT.
+//
+// Past its TTL a key the set names is re-read, and with the source down the
+// stale key is served anyway. But every such token used to ask the failing
+// source again first — waiting out the fetch, up to its timeout against a host
+// that hangs, before being handed the key it could have had at once. Inside the
+// floor of a failed attempt the stale key is served without asking.
+//
+// Mutation: drop the stale arm from the cache's own answer and every lookup
+// below is a fetch.
+func TestAStaleKeyIsServedAtOnceInsideTheFloorOfAFailure(t *testing.T) {
+	t.Parallel()
+	server, served := failingAfterFirst(t)
+	clock := pinned
+	source := jwks.New(jwks.Options{URL: server.URL, Now: func() time.Time { return clock }})
+	if _, err := source.Key(t.Context(), "k0"); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	clock = clock.Add(2 * time.Hour)
+	for i := range 6 {
+		key, err := source.Key(t.Context(), "k0")
+		if err != nil || key == nil {
+			t.Fatalf("lookup %d of a stale key with the source down: %v", i, err)
+		}
+	}
+	if got := served.Load(); got != 2 {
+		t.Errorf("six lookups of a stale key made %d fetches at a failing "+
+			"source, want the one that failed", got-1)
+	}
+}
+
 // A KEY THE ISSUER PUBLISHED FOR ENCRYPTION NEVER VERIFIES A SIGNATURE.
 //
 // `use` is optional, so requiring "sig" would discard every set that omits it.

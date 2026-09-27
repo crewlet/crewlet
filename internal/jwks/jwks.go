@@ -39,6 +39,19 @@
 // forgery attempt — an amplifier an unauthenticated caller aims wherever the
 // key set is hosted. So an unknown id refetches at most once per
 // [RefreshFloor], and inside that window it is simply refused.
+//
+// THE FLOOR IS MEASURED FROM THE LAST ATTEMPT, WHETHER OR NOT IT SUCCEEDED.
+// It was measured from the last success, so a minute into an outage at the
+// source every token naming an unknown kid — on the Forge webhook, a kid the
+// sender chooses — was a fetch again, one after another, each against a host
+// that had just failed. And the same floor holds for a key the set DOES name
+// once the set is past its TTL: inside a floor of a failed attempt the stale
+// key is served without asking again, where every such token used to wait out
+// a fresh attempt at a failing host before being handed that same stale key.
+// A COLD cache is the exception, and deliberately: it has nothing to answer
+// from, so it asks again — one request in flight at a time, however many
+// callers — because refusing from a recorded failure would turn a blip at
+// boot into a minute of refusals.
 package jwks
 
 import (
@@ -122,6 +135,12 @@ type Set struct {
 	keys      map[string]any
 	fetchedAt time.Time
 	flight    *flight
+
+	// attemptedAt is when the last fetch ENDED, whether or not it
+	// succeeded, and failed says whether it did not — what the refresh
+	// floor is measured from. See the package doc.
+	attemptedAt time.Time
+	failed      bool
 }
 
 // flight is one in-progress fetch, waited on by everybody who asked while it
@@ -177,7 +196,8 @@ func New(opts Options) *Set {
 }
 
 // Key returns the key with this id, fetching the set when the cache is cold,
-// stale, or does not name it.
+// stale, or does not name it — at most once per [RefreshFloor] unless the
+// cache is cold.
 func (s *Set) Key(ctx context.Context, keyID string) (any, error) {
 	cached, known, refuse := s.cached(keyID)
 	switch {
@@ -208,20 +228,29 @@ func (s *Set) Key(ctx context.Context, keyID string) (any, error) {
 	return nil, fmt.Errorf("%w %q", ErrUnknownKey, keyID)
 }
 
-// cached answers from the map alone: the key when it is fresh, and whether an
-// unknown id is inside the refresh floor and must simply be refused.
+// cached answers from the map alone when it can: the key when it is fresh, or
+// stale inside the refresh floor of a failed attempt, and whether an unknown
+// id is inside the floor and must simply be refused.
 func (s *Set) cached(keyID string) (key any, known, refuse bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	age := s.now().Sub(s.fetchedAt)
+	now := s.now()
 	key, held := s.keys[keyID]
+	floored := s.keys != nil && now.Sub(s.attemptedAt) < RefreshFloor
 	switch {
-	case held && age < TTL:
+	case held && now.Sub(s.fetchedAt) < TTL:
 		return key, true, false
-	case !held && s.keys != nil && age < RefreshFloor:
+	case held && floored && s.failed:
+		// STALE, AND THE SOURCE FAILED MOMENTS AGO: served as the fetch
+		// that failed served it, without asking a failing host again.
+		// The failure was reported when it happened, once.
+		return key, true, false
+	case !held && floored:
 		// A key id this set does not name, asked for again inside the
-		// floor. Answering from the cache is what keeps a forged kid
-		// from becoming an outbound request per attempt.
+		// floor of the last attempt — a success or a failure. Answering
+		// from the cache is what keeps a forged kid from becoming an
+		// outbound request per attempt, an outage at the source
+		// included.
 		return nil, false, true
 	}
 	return nil, false, false
@@ -278,15 +307,18 @@ func (s *Set) fly(ctx context.Context, inflight *flight) {
 	defer cancel()
 	keys, err := s.read(ctx)
 	s.mu.Lock()
+	now := s.now()
 	if err == nil {
-		s.keys, s.fetchedAt = keys, s.now()
+		s.keys, s.fetchedAt = keys, now
 	}
-	// THE FLIGHT IS CLEARED WHETHER OR NOT IT SUCCEEDED, so a failure is
-	// retried by the next caller rather than latching. What keeps that
-	// from being a request per attempt is the refresh floor above, which
-	// only applies once there IS a cache — a cold cache retrying is a
-	// deployment that has never reached its provider, and hiding that
-	// would be worse.
+	// THE ATTEMPT IS RECORDED WHETHER OR NOT IT SUCCEEDED, and the flight
+	// is cleared either way, so a failure is never latched: once the
+	// refresh floor has passed the next caller asks again. What keeps an
+	// outage from being a request per attempt is that floor, measured
+	// from THIS instant — see [Set.cached] — which holds wherever there is
+	// a cache to answer from. A cold cache retries at once, one flight at
+	// a time: it has nothing else to say.
+	s.attemptedAt, s.failed = now, err != nil
 	inflight.keys, inflight.err = keys, err
 	s.flight = nil
 	s.mu.Unlock()
@@ -370,11 +402,12 @@ func (s *Set) read(ctx context.Context) (map[string]any, error) {
 	}
 	if len(keys) == 0 {
 		// AN ERROR RATHER THAN AN EMPTY SET, so the cache is not
-		// updated. Storing the empty result would poison it: every
-		// subsequent lookup finds an unknown id against a non-nil map,
-		// which the refresh floor then holds for a minute — so a
-		// momentarily broken document would keep refusing tokens well
-		// after the source recovered.
+		// updated. Storing the empty result would poison it: every key
+		// the set held before would be gone, and on a cold cache every
+		// lookup would find an unknown id against a non-nil map, which
+		// the refresh floor then holds for a minute — so a momentarily
+		// broken document would keep refusing tokens well after the
+		// source recovered.
 		return nil, fmt.Errorf("jwks: %s carried no usable signing key", s.url)
 	}
 	return keys, nil

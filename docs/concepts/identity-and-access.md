@@ -1349,7 +1349,12 @@ eight exchanges and the two fetches beside them. The discovery document and
 the key set are each fetched **once however many sign-ins ask**, on a request
 no single browser owns, so a node restarted in the middle of the morning's
 wave asks the provider for its metadata once rather than once per person, and
-one person closing their tab fails nobody else's sign-in.
+one person closing their tab fails nobody else's sign-in. The key set is
+re-read at most **once a minute** for a key id it does not name — a forged
+token's — and that minute is counted from the last attempt, a failed one
+included, so an outage at the provider does not turn every such token into a
+request at a host that just failed; inside it a key the set does name is
+served from the copy already held, however old.
 
 And a flight is exchanged **once**. Whoever started a flight holds its cookie
 and its `state`, and a made-up code is free, so the same cookie presented over
