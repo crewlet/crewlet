@@ -1,6 +1,7 @@
 package oidc_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -580,5 +582,76 @@ func TestDiscoveryRefusesADocumentMissingAnEndpoint(t *testing.T) {
 				t.Errorf("a document with no %s was accepted", drop)
 			}
 		})
+	}
+}
+
+// DISCOVERY IS ONE FETCH HOWEVER MANY ASK, AND NOBODY'S HANG-UP FAILS IT.
+//
+// The document is cold at boot and stale once a day, and both land under load
+// — a node restarted in the morning's sign-in wave — where every start and
+// callback in flight used to fetch it for itself: a herd at the provider's
+// metadata host from one node. And the fetch belongs to none of the callers,
+// so the first one leaving — a browser tab closed mid sign-in — fails nobody
+// still waiting.
+//
+// Mutation: fetch per caller and the host counts every one; fetch on the first
+// caller's context and the rest are answered its cancellation.
+func TestDiscoveryIsOneFetchHoweverManyAsk(t *testing.T) {
+	t.Parallel()
+	gate, reached := make(chan struct{}), make(chan struct{})
+	var served atomic.Int64
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if served.Add(1) == 1 {
+			close(reached)
+		}
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                 server.URL,
+			"authorization_endpoint": server.URL + "/authorize",
+			"token_endpoint":         server.URL + "/token",
+			"jwks_uri":               server.URL + "/jwks",
+		})
+	}))
+	t.Cleanup(server.Close)
+	config := testConfig()
+	config.Issuer = server.URL
+	provider := oidc.NewProvider(config, server.Client(), func() time.Time { return at })
+
+	first, hangUp := context.WithCancel(t.Context())
+	firstDone := make(chan error, 1)
+	go func() { _, err := provider.Metadata(first); firstDone <- err }()
+	// THE FIRST CALLER STARTS THE FETCH, and only then do the rest arrive.
+	<-reached
+	const callers = 24
+	var wg sync.WaitGroup
+	errs := make([]error, callers)
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = provider.Metadata(t.Context())
+		}()
+	}
+	// Let them all reach the wait before anything answers.
+	time.Sleep(50 * time.Millisecond)
+	hangUp()
+	if err := <-firstDone; err == nil {
+		t.Error("the caller that hung up was answered a document")
+	}
+	close(gate)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("caller %d was failed: %v", i, err)
+		}
+	}
+	if n := served.Load(); n != 1 {
+		t.Errorf("%d callers fetched the document %d times, want one", callers+1, n)
 	}
 }

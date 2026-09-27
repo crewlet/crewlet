@@ -97,6 +97,18 @@ type Provider struct {
 	metadata  Metadata
 	fetchedAt time.Time
 	keys      *jwks.Set
+
+	// discovering is the discovery fetch in progress, which every caller
+	// that finds the document cold or stale waits on — see
+	// [Provider.Metadata].
+	discovering *discovery
+}
+
+// discovery is one fetch of the document, answered to everybody waiting on it.
+type discovery struct {
+	done     chan struct{}
+	metadata Metadata
+	err      error
 }
 
 // NewProvider builds one. A nil client takes one from [httpx].
@@ -128,34 +140,70 @@ func (p *Provider) Exchange(ctx context.Context, tokenEndpoint, code, verifier s
 
 // Metadata returns the discovery document, fetching it when the cache is cold
 // or stale.
+//
+// # ONE FETCH HOWEVER MANY ASK, and it belongs to none of them
+//
+// The document is read from somebody else's host, so the lock is held to read
+// the cache and to join or start a fetch, and never across the request —
+// internal/jwks' rule one layer up. What that opens, every caller finding the
+// cache cold at once, is closed by a SINGLE FLIGHT: the cache is cold at boot
+// and stale every [MetadataTTL], and both land under load — a node restarted
+// in the morning's sign-in wave, a day's expiry in the middle of one — where
+// every start and callback in flight fetched the document for itself, a herd
+// at the provider's metadata host from one node. The fetch runs on a context
+// no caller can cancel, bounded by [ExchangeTimeout], and each caller waits on
+// its own: run on the first caller's, one browser leaving mid sign-in would
+// fail everybody waiting beside it.
 func (p *Provider) Metadata(ctx context.Context) (Metadata, error) {
 	p.mu.Lock()
-	cached, age := p.metadata, p.now().Sub(p.fetchedAt)
-	p.mu.Unlock()
-	if cached.Issuer != "" && age < MetadataTTL {
+	if cached, age := p.metadata, p.now().Sub(p.fetchedAt); cached.Issuer != "" &&
+		age < MetadataTTL {
+
+		p.mu.Unlock()
 		return cached, nil
 	}
+	inflight := p.discovering
+	if inflight == nil {
+		inflight = &discovery{done: make(chan struct{})}
+		p.discovering = inflight
+		go p.discover(context.WithoutCancel(ctx), inflight)
+	}
+	p.mu.Unlock()
 
-	// THE FETCH IS OFF THE LOCK, for internal/jwks' reason one layer up:
-	// this is a request to somebody else's host, and holding a mutex
-	// across it serialises every sign-in behind one slow provider. Two
-	// nodes racing here cost one extra request and write the same
-	// document, which is a cost worth paying to keep the lock short —
-	// unlike the key set, where a rotation can make the race a herd.
+	select {
+	case <-inflight.done:
+		return inflight.metadata, inflight.err
+	case <-ctx.Done():
+		return Metadata{}, ctx.Err()
+	}
+}
+
+// discover performs one flight's fetch and answers everybody waiting on it.
+func (p *Provider) discover(ctx context.Context, inflight *discovery) {
+	ctx, cancel := context.WithTimeout(ctx, ExchangeTimeout)
+	defer cancel()
 	fetched, err := p.fetch(ctx)
+
+	p.mu.Lock()
+	defer func() {
+		p.discovering = nil
+		p.mu.Unlock()
+		close(inflight.done)
+	}()
 	if err != nil {
-		if cached.Issuer != "" {
+		inflight.err = err
+		if p.metadata.Issuer != "" {
 			// STALE METADATA BEATS REFUSING EVERY LOGIN. The endpoints
 			// in it change on the order of never; the provider's
 			// metadata host being briefly down is not a reason nobody
 			// can sign in.
-			return cached, nil
+			inflight.metadata, inflight.err = p.metadata, nil
 		}
-		return Metadata{}, err
+		return
 	}
-	p.mu.Lock()
+	previous := p.metadata.JWKSURI
 	p.metadata, p.fetchedAt = fetched, p.now()
-	if p.keys == nil || fetched.JWKSURI != cached.JWKSURI {
+	if p.keys == nil || fetched.JWKSURI != previous {
 		// THE KEY SET IS FETCHED WITH THIS PROVIDER'S OWN CLIENT, not
 		// one of its own: the two requests go to the same party over
 		// the same transport, and a key source with a client of its
@@ -165,8 +213,7 @@ func (p *Provider) Metadata(ctx context.Context) (Metadata, error) {
 			URL: fetched.JWKSURI, Now: p.now, Client: p.client,
 		})
 	}
-	p.mu.Unlock()
-	return fetched, nil
+	inflight.metadata = fetched
 }
 
 // Keys is the provider's cached key set, discovering first if it has to.
