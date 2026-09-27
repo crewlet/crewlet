@@ -566,3 +566,106 @@ func TestMovingAUnitKeepsItsLead(t *testing.T) {
 		t.Errorf("after the move the unit's lead edge is %v, want [sarah-chen]", got)
 	}
 }
+
+// A CREATED UNIT IS LED BY THE LEAD ITS CREATE NAMES.
+//
+// "Add the platform team, led by the SRE" is one gesture, and the create_unit
+// that states both was published with the lead dropped: the edge was built from
+// a working copy that recorded a create's parent and never its lead, so the team
+// landed unled and inherited its parent's lead instead, with a 200 in hand.
+func TestACreatedUnitIsLedByTheLeadItNames(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	edges, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		{Kind: chart.OpCreateUnit, Object: chart.ObjectRef{Kind: chart.KindUnit,
+			ID: "platform"}, Lead: "sre"},
+	}})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if len(edges) != 1 || edges[0].Lead != "sre" {
+		t.Fatalf("the create published %+v, want platform led by sre", edges)
+	}
+	h.must(place("op-batch", edges...))
+	if got := h.column(`SELECT handle FROM chart_leads WHERE unit_key = 'platform'`); !slices.Equal(
+		got, []string{"sre"}) {
+		t.Errorf("the created unit's lead edge is %v, want [sre]", got)
+	}
+}
+
+// A FIELD AN OPERATION DOES NOT TAKE IS REFUSED, NOT DROPPED.
+//
+// Dropped, the batch answered as though it asked for less than it said: a
+// caller who sent a set_lead with a parent believed they had moved the unit
+// too, and was told it landed.
+func TestAFieldAnOperationDoesNotTakeIsRefused(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.must(place("op-seed",
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"}},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sre"}}))
+
+	for _, c := range []struct {
+		name string
+		op   chart.Operation
+	}{
+		{"a parent on a set_lead", chart.Operation{Kind: chart.OpSetLead,
+			Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"},
+			Parent: "product", Lead: "sre"}},
+		{"a lead on a move", chart.Operation{Kind: chart.OpMove,
+			Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"},
+			Lead:   "sre"}},
+		{"a lead on a create_seat", chart.Operation{Kind: chart.OpCreateSeat,
+			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ana"},
+			Lead:   "sre"}},
+		{"a parent on a remove", chart.Operation{Kind: chart.OpRemoveObject,
+			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sre"},
+			Parent: "engineering"}},
+	} {
+		_, _, err := h.validate(chart.Batch{Operations: []chart.Operation{c.op}})
+		if ref := refusal(t, err); ref.Rule != chart.RuleUnusedField {
+			t.Errorf("%s: rule = %q, want %q", c.name, ref.Rule, chart.RuleUnusedField)
+		}
+	}
+
+	// THE CONTROL: the same operations carrying only what they take are
+	// accepted, so the refusals above are about the extra field.
+	if _, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		{Kind: chart.OpSetLead, Object: chart.ObjectRef{Kind: chart.KindUnit,
+			ID: "engineering"}, Lead: "sre"},
+		op(chart.OpMove, chart.KindSeat, "sre", "engineering"),
+	}}); err != nil {
+		t.Errorf("a well-formed batch was refused: %v", err)
+	}
+}
+
+// A CREATE NAMES THE KIND IT MAKES, AND AN OBJECT OF THE OTHER KIND IS
+// REFUSED.
+//
+// The replay used to take the object's kind and ignore the operation's, so a
+// `create_unit` naming a seat created a seat: a batch whose two halves
+// disagreed about what it was making landed as whichever half the replay
+// happened to read.
+func TestACreateNamingTheOtherKindIsRefused(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	for _, o := range []chart.Operation{
+		op(chart.OpCreateUnit, chart.KindSeat, "sre", ""),
+		op(chart.OpCreateSeat, chart.KindUnit, "platform", ""),
+	} {
+		_, _, err := h.validate(chart.Batch{Operations: []chart.Operation{o}})
+		if ref := refusal(t, err); ref.Rule != chart.RuleUnknownKind {
+			t.Errorf("%s of a %s: rule = %q, want %q", o.Kind, o.Object.Kind,
+				ref.Rule, chart.RuleUnknownKind)
+		}
+	}
+	// THE CONTROL: each create naming its own kind is accepted.
+	if _, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		op(chart.OpCreateUnit, chart.KindUnit, "platform", ""),
+		op(chart.OpCreateSeat, chart.KindSeat, "sre", "platform"),
+	}}); err != nil {
+		t.Errorf("a well-formed create was refused: %v", err)
+	}
+}

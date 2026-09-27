@@ -1,0 +1,512 @@
+package chart
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+)
+
+// THE REPLAY: the chart as a batch's decide sees it, operation by operation.
+//
+// A COPY THAT IS DISCARDED. What gets published is the record; the applier is
+// what writes rows. This exists so each operation is checked against the state
+// the ones before it produced, which is the only reading under which a batch
+// that creates a unit and then places a seat in it is valid — and so what the
+// record carries is the state the WHOLE batch produced, per object, rather than
+// whatever each operation happened to name.
+//
+// # One node per object, and why not maps keyed by address
+//
+// The copy used to be maps keyed by an object's address, and an edge was
+// assembled from the operation that touched it — which is how a move published
+// an empty lead (the operation named none) and took the unit's authored lead
+// away. A NODE holds one object's whole structural state; the batch edits the
+// node, and each edge is read off the node at the end. An edge is FULL
+// POST-STATE, so it has to come from the one place the post-state is.
+
+// working is the replay's state.
+type working struct {
+	// live is every object the chart holds as of the operations so far,
+	// keyed by its address.
+	live map[string]*wnode
+
+	// removedKeys is every address a removal tombstoned — on the log, or
+	// earlier in this batch — so a later operation on one is refused rather
+	// than applied against a row the applier will delete.
+	removedKeys map[string]bool
+
+	// identities maps every address that is a RENAMED object's identity —
+	// the key it was created under — to that object, so a creation onto one
+	// is refused (see [refuseCreate]).
+	identities map[string]*wnode
+
+	// aliases maps every retired address to the object still answering to
+	// it.
+	aliases map[string]*wnode
+
+	// touched is every object an operation named, in the order it was first
+	// named, which is the order the record states their edges in.
+	touched []*wnode
+}
+
+// wnode is one object in the replay.
+type wnode struct {
+	kind ObjectKind
+
+	// key is the address the object answers to as of the operations so far.
+	key string
+
+	// parent is the unit key it sits under, "" the org root.
+	parent string
+
+	// lead is a unit's AUTHORED lead, "" where it inherits one.
+	lead string
+
+	// named marks an object an operation in this batch named, so its edge
+	// is published.
+	named bool
+
+	// removed marks an object an operation in this batch took out.
+	removed bool
+}
+
+// named records that an operation named this object.
+func (w *working) named(n *wnode) {
+	if !n.named {
+		n.named = true
+		w.touched = append(w.touched, n)
+	}
+}
+
+// refKey composes an object reference into the replay's own key.
+//
+// THE KIND IS PART OF IT, because a unit key and a seat handle are different
+// namespaces: `NormalizeKey` folds both and neither reserves a prefix, so a
+// company may legitimately hold a unit and a seat that answer to one spelling.
+func refKey(ref ObjectRef) string {
+	return string(ref.Kind) + "/" + NormalizeKey(ref.ID)
+}
+
+// apply checks one operation against the replay and advances it.
+func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalError {
+	refuse := func(rule, detail string, args ...any) *RefusalError {
+		return &RefusalError{Index: index, Operation: op, Rule: rule,
+			Detail: fmt.Sprintf(detail, args...)}
+	}
+	if !op.Kind.Valid() {
+		return refuse(RuleUnknownKind, "%q is not one of %v", op.Kind, OperationKinds)
+	}
+	id := NormalizeKey(op.Object.ID)
+	if id == "" {
+		return refuse(RuleBadKey, "an operation names no object")
+	}
+	if op.Object.Kind != KindUnit && op.Object.Kind != KindSeat {
+		return refuse(RuleUnknownKind, "%s is not an object in the chart — "+
+			"only a unit and a seat have a place in the tree", op.Object.Kind)
+	}
+	if refused := unusedField(refuse, op); refused != nil {
+		return refused
+	}
+	ref := ObjectRef{Kind: op.Object.Kind, ID: id}
+
+	switch op.Kind {
+	case OpCreateUnit, OpCreateSeat:
+		if want := createFor(op.Object.Kind); op.Kind != want {
+			return refuse(RuleUnknownKind, "%s creates a %s, and this operation "+
+				"names a %s — use %s", op.Kind, kindOfCreate(op.Kind),
+				op.Object.Kind, want)
+		}
+		if refused := w.checkCreate(ctx, refuse, ref); refused != nil {
+			return refused
+		}
+		parent := NormalizeKey(op.Parent)
+		if refused := w.checkParent(refuse, parent); refused != nil {
+			return refused
+		}
+		n := &wnode{kind: ref.Kind, key: id, parent: parent}
+		if ref.Kind == KindUnit {
+			// A UNIT MAY BE CREATED LED, which is one gesture — "add the
+			// platform team, led by the SRE" — and the lead a set_lead
+			// would otherwise have to state a second time.
+			n.lead = NormalizeKey(op.Lead)
+		}
+		w.live[refKey(ref)] = n
+		w.named(n)
+		return nil
+
+	case OpMove:
+		n, refused := w.checkPresent(refuse, ref)
+		if refused != nil {
+			return refused
+		}
+		parent := NormalizeKey(op.Parent)
+		if refused := w.checkParent(refuse, parent); refused != nil {
+			return refused
+		}
+		if refused := w.checkCycle(refuse, n, parent); refused != nil {
+			return refused
+		}
+		n.parent = parent
+		w.named(n)
+		return nil
+
+	case OpSetLead:
+		if ref.Kind != KindUnit {
+			return refuse(RuleUnknownKind, "only a unit has a lead")
+		}
+		n, refused := w.checkPresent(refuse, ref)
+		if refused != nil {
+			return refused
+		}
+		n.lead = NormalizeKey(op.Lead)
+		w.named(n)
+		return nil
+
+	case OpRemoveObject:
+		n, refused := w.checkPresent(refuse, ref)
+		if refused != nil {
+			return refused
+		}
+		if ref.Kind == KindUnit {
+			if held := w.holders(id); len(held) > 0 {
+				return refuse(RuleUnitNotEmpty, "%s still holds %s — an "+
+					"orphaned subtree is reachable from nothing and "+
+					"removable by nothing, so its contents move or go first",
+					id, strings.Join(held, ", "))
+			}
+		}
+		delete(w.live, refKey(ref))
+		w.removedKeys[refKey(ref)] = true
+		// AND ITS IDENTITY, which the apply tombstones beside the address
+		// it held ([Applier.tombstoneIdentity]) — so the replay refuses a
+		// later creation onto it exactly as the log will.
+		for key, holder := range w.identities {
+			if holder == n {
+				w.removedKeys[key] = true
+			}
+		}
+		n.removed = true
+		return nil
+	}
+	return refuse(RuleUnknownKind, "%q is not one of %v", op.Kind, OperationKinds)
+}
+
+// unusedField refuses an operation carrying a field its kind does not take.
+//
+// A FIELD NOTHING READS IS A REFUSAL, not a silence. A parent stated on a
+// set_lead or a lead stated on a move was dropped, so the batch answered as
+// though it asked for less than it said — a caller who believed they had moved
+// a unit while naming its lead was told it landed, and it had not moved.
+//
+// An empty value is not a field supplied: the org root is the empty parent and
+// "clear the lead" is the empty lead, so neither can be told from an omitted
+// one, and neither is refused.
+func unusedField(refuse refuseFunc, op Operation) *RefusalError {
+	takes := map[OperationKind][]string{
+		OpCreateUnit:   {"parent", "lead"},
+		OpCreateSeat:   {"parent"},
+		OpMove:         {"parent"},
+		OpSetLead:      {"lead"},
+		OpRemoveObject: nil,
+	}[op.Kind]
+	for field, value := range map[string]string{"parent": op.Parent, "lead": op.Lead} {
+		if value != "" && !slices.Contains(takes, field) {
+			return refuse(RuleUnusedField, "%s takes %s and no %q — nothing "+
+				"would read it, and a batch that dropped it would answer as "+
+				"though it asked for less than it said", op.Kind,
+				fieldList(takes), field)
+		}
+	}
+	return nil
+}
+
+// fieldList renders the fields an operation takes, for a refusal.
+func fieldList(fields []string) string {
+	if len(fields) == 0 {
+		return "no field beside its object"
+	}
+	return "`" + strings.Join(fields, "` and `") + "`"
+}
+
+// createFor is the create operation for an object of kind.
+func createFor(kind ObjectKind) OperationKind {
+	if kind == KindUnit {
+		return OpCreateUnit
+	}
+	return OpCreateSeat
+}
+
+// kindOfCreate is the object kind a create operation makes.
+func kindOfCreate(op OperationKind) ObjectKind {
+	if op == OpCreateUnit {
+		return KindUnit
+	}
+	return KindSeat
+}
+
+type refuseFunc func(rule, detail string, args ...any) *RefusalError
+
+// checkCreate refuses a create onto an address it may not take.
+//
+// THE RULES ARE [refuseCreate]'s, asked of this replay — so the batch refuses
+// exactly what the apply declines for an import and what a rename is refused,
+// each against the state it can see. What the replay adds is the batch's own
+// earlier operations: an address removed two operations ago is removed here,
+// and one created two operations ago is taken.
+//
+// A UNIT AND A SEAT MAY SHARE A SPELLING. They are different namespaces and
+// neither reserves a prefix, so the replay is asked about the operation's own
+// kind alone — stated so the next reader does not "fix" it into a cross-kind
+// check that would refuse a legal chart.
+func (w *working) checkCreate(ctx context.Context, refuse refuseFunc,
+	ref ObjectRef) *RefusalError {
+
+	// THE REPLAY ANSWERS FROM MEMORY, so the book never fails and the
+	// only error [refuseCreate] could return is one it has no source for.
+	refused, _ := refuseCreate(ctx, w, ref.Kind, ref.ID, "")
+	if refused != nil {
+		return refuse(refused.Rule, "%s", refused.Detail)
+	}
+	return nil
+}
+
+// removed is [addressBook]'s tombstone question, answered by the replay: a
+// removal already on the log, or one earlier in this batch.
+func (w *working) removed(_ context.Context, kind ObjectKind, key string) (bool, error) {
+	return w.removedKeys[refKey(ObjectRef{Kind: kind, ID: key})], nil
+}
+
+// holder is [addressBook]'s who-answers question, answered by the replay in
+// the order the rows answer it: a live key, then an identity, then an alias.
+func (w *working) holder(_ context.Context, kind ObjectKind, key string) (
+	string, holding, error) {
+
+	ref := refKey(ObjectRef{Kind: kind, ID: key})
+	if n, live := w.live[ref]; live {
+		return n.key, heldAsKey, nil
+	}
+	if n, held := w.identities[ref]; held && !n.removed {
+		return n.key, heldAsIdentity, nil
+	}
+	if n, held := w.aliases[ref]; held && !n.removed {
+		return n.key, heldAsAlias, nil
+	}
+	return "", heldByNothing, nil
+}
+
+// checkPresent refuses an operation on an object the chart does not hold.
+func (w *working) checkPresent(refuse refuseFunc, ref ObjectRef) (*wnode, *RefusalError) {
+	key := refKey(ref)
+	if w.removedKeys[key] {
+		return nil, refuse(RuleNoSuchObject, "%q was removed", ref.ID)
+	}
+	n, held := w.live[key]
+	if !held {
+		return nil, refuse(RuleNoSuchObject, "%q is not in the chart", ref.ID)
+	}
+	return n, nil
+}
+
+// checkParent refuses a placement under a unit that is not there.
+//
+// THE ORG ROOT IS A REAL PARENT and is never checked: an empty parent is where
+// a top-level department and an org-wide seat both sit.
+func (w *working) checkParent(refuse refuseFunc, parent string) *RefusalError {
+	if parent == "" {
+		return nil
+	}
+	key := refKey(ObjectRef{Kind: KindUnit, ID: parent})
+	if w.removedKeys[key] {
+		return refuse(RuleNoSuchParent, "%q was removed", parent)
+	}
+	if _, held := w.live[key]; !held {
+		return refuse(RuleNoSuchParent, "%q is not a unit in the chart — a "+
+			"parent may be created by an earlier operation in this batch, and "+
+			"nothing in this one creates it", parent)
+	}
+	return nil
+}
+
+// checkCycle refuses a move that would make an object its own ancestor.
+//
+// THE WALK IS OVER THE REPLAY, which is the whole reason this validation is a
+// replay: two moves that are each locally valid can jointly close a cycle, and
+// neither writer's own subject would ever have shown it to them. Walking the
+// stored rows instead would accept exactly that pair.
+//
+// A SEAT CANNOT CLOSE A CYCLE — nothing sits under a seat — so the walk runs
+// for a unit alone. It is still called for both, because "this kind cannot" is
+// a fact worth stating once here rather than in every caller.
+func (w *working) checkCycle(refuse refuseFunc, n *wnode, parent string) *RefusalError {
+	if n.kind != KindUnit || parent == "" {
+		return nil
+	}
+	// WALK UP FROM THE NEW PARENT. If the object being moved is on that
+	// path, the move puts the object under itself.
+	seen := map[*wnode]bool{}
+	at := w.live[refKey(ObjectRef{Kind: KindUnit, ID: parent})]
+	for at != nil {
+		if at == n {
+			return refuse(RuleCycle, "moving %q under %q would put it under "+
+				"itself — %q is already somewhere beneath it", n.key, parent, parent)
+		}
+		if seen[at] {
+			// A CYCLE ALREADY IN THE ROWS, which this move did not
+			// make. It is still refused, because a walk that returned
+			// here would loop for ever and a chart holding one cannot
+			// answer "who leads this team" at all. Naming it as a
+			// cycle is the honest report.
+			return refuse(RuleCycle, "the chart already holds a cycle through "+
+				"%q, so this move cannot be checked against it", parent)
+		}
+		seen[at] = true
+		if at.parent == "" {
+			return nil
+		}
+		at = w.live[refKey(ObjectRef{Kind: KindUnit, ID: at.parent})]
+	}
+	return nil
+}
+
+// holders is what a unit still contains: its child units and the seats in it.
+func (w *working) holders(unit string) []string {
+	var out []string
+	for key, n := range w.live {
+		if n.parent == unit {
+			out = append(out, key)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// edges is what the record states: one edge per object an operation named and
+// did not remove, in the order each was first named, read off its node.
+func (w *working) edges() []Edge {
+	out := make([]Edge, 0, len(w.touched))
+	for _, n := range w.touched {
+		if n.removed {
+			// A BATCH THAT CREATES A UNIT AND THEN REMOVES IT PUBLISHES
+			// NO PLACEMENT: it would create the row the removal's
+			// tombstone then has to delete, a record whose only effect
+			// is on itself.
+			continue
+		}
+		edge := Edge{
+			Object: ObjectRef{Kind: n.kind, ID: n.key},
+			Parent: n.parent,
+		}
+		if n.kind == KindUnit {
+			edge.Lead = n.lead
+		}
+		out = append(out, edge)
+	}
+	return out
+}
+
+// readWorking reads the whole chart's structure out of one transaction.
+//
+// THE WHOLE CHART, and that is affordable precisely here: a company has
+// hundreds of units and seats, not the hundreds of thousands of rows the
+// tracker holds, so the structure is a map a page of memory fits. A walk that
+// queried per ancestor would be N round trips inside the transaction that holds
+// this store's only writer — and the cycle check is a walk by construction.
+//
+// THE STRUCTURE FROM THE COLUMNS, the identity from the document. The columns
+// are what a structural record wrote and what the rest of the decide compares
+// against; the identity lives only in a renamed row's document, so only those
+// rows are decoded.
+func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
+	state := &working{
+		live:        map[string]*wnode{},
+		removedKeys: map[string]bool{},
+		identities:  map[string]*wnode{},
+		aliases:     map[string]*wnode{},
+	}
+	if err := state.scan(ctx, tx, KindUnit,
+		`SELECT key, parent_key, lead, former_keys_json, document FROM chart_units`,
+		func(doc []byte) (string, error) {
+			unit, err := DecodeUnit(doc)
+			return unit.Origin(), err
+		}); err != nil {
+		return nil, err
+	}
+	if err := state.scan(ctx, tx, KindSeat,
+		`SELECT handle, unit_key, '', former_keys_json, document FROM chart_seats`,
+		func(doc []byte) (string, error) {
+			seat, err := DecodeSeat(doc)
+			return seat.Origin(), err
+		}); err != nil {
+		return nil, err
+	}
+	// THE TOMBSTONES TOO, because a removed address never resolves again
+	// and a create onto one must be refused rather than silently writing a
+	// row the gate then drops on every node.
+	rows, err := tx.QueryContext(ctx,
+		`SELECT object_kind, object_id FROM chart_removed`)
+	if err != nil {
+		return nil, fmt.Errorf("chart: read the removed objects: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var kind, id string
+		if err := rows.Scan(&kind, &id); err != nil {
+			return nil, fmt.Errorf("chart: read a removed object: %w", err)
+		}
+		state.removedKeys[refKey(ObjectRef{Kind: ObjectKind(kind), ID: id})] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chart: read the removed objects: %w", err)
+	}
+	return state, nil
+}
+
+// scan reads one object table into the replay.
+//
+// A RENAMED ROW WHOSE DOCUMENT WILL NOT DECODE FAILS THE BATCH rather than
+// being stepped over: a batch validated without its identity could create a
+// second object with it, and a refusal naming an unreadable row is one somebody
+// can act on.
+func (w *working) scan(ctx context.Context, tx *sql.Tx, kind ObjectKind,
+	query string, origin func([]byte) (string, error)) error {
+
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("chart: read the %s structure: %w", kind, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var key, parent, lead, formerJSON string
+		var document []byte
+		if err := rows.Scan(&key, &parent, &lead, &formerJSON, &document); err != nil {
+			return fmt.Errorf("chart: read a %s row: %w", kind, err)
+		}
+		n := &wnode{kind: kind, key: key, parent: parent, lead: lead}
+		w.live[refKey(ObjectRef{Kind: kind, ID: key})] = n
+		if formerJSON == "" || formerJSON == "[]" {
+			continue
+		}
+		var former []string
+		if err := json.Unmarshal([]byte(formerJSON), &former); err != nil {
+			return fmt.Errorf("chart: read the retired addresses of %s %s: %w",
+				kind, key, err)
+		}
+		for _, alias := range former {
+			w.aliases[refKey(ObjectRef{Kind: kind, ID: alias})] = n
+		}
+		identity, err := origin(document)
+		if err != nil {
+			return fmt.Errorf("chart: decode the renamed %s %s: %w", kind, key, err)
+		}
+		if identity != key {
+			w.identities[refKey(ObjectRef{Kind: kind, ID: identity})] = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("chart: read the %s structure: %w", kind, err)
+	}
+	return nil
+}

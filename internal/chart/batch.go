@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 )
 
 // THE BATCH: what a structural change is, and why it is validated WHOLE.
@@ -115,8 +114,9 @@ type Operation struct {
 	// a batch that meant to leave a parent alone does not state a move.
 	Parent string `json:"parent,omitempty"`
 
-	// Lead is the handle for a set_lead. Empty CLEARS it, which is the
-	// ordinary state of a unit that inherits its lead from an ancestor.
+	// Lead is the handle for a set_lead, and the lead a create_unit makes
+	// the new unit with. Empty CLEARS it, which is the ordinary state of a
+	// unit that inherits its lead from an ancestor.
 	Lead string `json:"lead,omitempty"`
 }
 
@@ -207,6 +207,11 @@ const (
 	// RuleTooManyOperations is a batch past [MaxBatchOperations].
 	RuleTooManyOperations = "the batch is too large"
 
+	// RuleUnusedField is an operation carrying a field its kind does not
+	// take — a parent on a set_lead, a lead on a move — which nothing would
+	// read, so the batch would answer as though it asked for less.
+	RuleUnusedField = "the operation does not take the field"
+
 	// RuleSeatHeld is a removal of a seat somebody in the identity
 	// directory is bound to.
 	//
@@ -265,54 +270,16 @@ func (b Batch) Scope() ScopeSet {
 	return BatchScope(terms)
 }
 
-// working is the chart as a batch's replay sees it: the rows read in the
-// decide's transaction, plus every change the operations before this one made.
-//
-// A COPY THAT IS DISCARDED. What gets published is the record; the applier is
-// what writes rows. This exists so each operation is checked against the state
-// the ones before it produced, which is the only reading under which a batch
-// that creates a unit and then places a seat in it is valid.
-type working struct {
-	// parents maps an object's composed reference to its parent unit key.
-	// Absent means the object is not in the chart.
-	parents map[string]string
-
-	// kinds maps the same reference to what the object is, so the cycle
-	// walk can tell a unit's parent from a seat's.
-	kinds map[string]ObjectKind
-
-	// leads maps a unit's composed reference to its AUTHORED lead, empty
-	// where it inherits one, so an edge the batch publishes for a unit
-	// carries the lead it has rather than the one the operation named.
-	leads map[string]string
-
-	// removedKeys is what this batch has taken out, and every address the
-	// log's removals tombstoned, so a later operation on one is refused
-	// rather than applied against a row the applier will delete.
-	removedKeys map[string]bool
-
-	// identities maps the composed reference of every address that is a
-	// RENAMED object's identity — the key it was created under — to the
-	// object's current key, so a create onto one is refused. See
-	// [refuseCreate] for why a create may take a retired alias and never
-	// a retired identity.
-	identities map[string]string
-}
-
-// refKey composes an object reference into the working copy's own key.
-//
-// THE KIND IS PART OF IT, because a unit key and a seat handle are different
-// namespaces: `NormalizeKey` folds both and neither reserves a prefix, so a
-// company may legitimately hold a unit and a seat that answer to one spelling.
-func refKey(ref ObjectRef) string {
-	return string(ref.Kind) + "/" + NormalizeKey(ref.ID)
-}
-
 // Validate replays a batch over the rows in tx and refuses it whole.
 //
 // It returns the EDGES the batch produces and the objects it removes, which is
 // exactly what the records published for it carry — so the validation and the
 // record are one pass rather than two that can disagree.
+//
+// EACH EDGE IS ONE OBJECT'S WHOLE STRUCTURAL POST-STATE, read off the replay
+// once every operation has run. A batch that moves one seat twice publishes its
+// final placement, a move publishes the lead the unit has, and a create_unit
+// the lead it named.
 func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 	edges []Edge, removed []ObjectRef, err error) {
 
@@ -330,65 +297,20 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 	if err != nil {
 		return nil, nil, err
 	}
-	// EDGES ARE KEYED BY OBJECT AND OVERWRITTEN, because a batch that moves
-	// one seat twice publishes its FINAL placement: the record is full
-	// post-state, so two edges for one object would leave the applier's
-	// result dependent on which it wrote last.
-	byObject := map[string]Edge{}
-	order := []string{}
 	var gone []ObjectRef
-
 	for i, op := range b.Operations {
-		refused := state.apply(i, op)
-		if refused != nil {
+		if refused := state.apply(ctx, i, op); refused != nil {
 			return nil, nil, refused
 		}
-		switch op.Kind {
-		case OpRemoveObject:
+		if op.Kind == OpRemoveObject {
 			if err := checkHeld(ctx, tx, i, op, holders); err != nil {
 				return nil, nil, err
 			}
 			gone = append(gone, ObjectRef{
 				Kind: op.Object.Kind, ID: NormalizeKey(op.Object.ID)})
-			// AND ANY EDGE THIS BATCH ALREADY STATED FOR IT GOES TOO.
-			// A batch that creates a unit and then removes it must
-			// publish neither — the placement would create the row
-			// the removal's tombstone then has to delete, which is a
-			// record whose only effect is on itself.
-			key := refKey(op.Object)
-			if _, held := byObject[key]; held {
-				delete(byObject, key)
-				order = slices.DeleteFunc(order, func(k string) bool {
-					return k == key
-				})
-			}
-		default:
-			key := refKey(op.Object)
-			edge := byObject[key]
-			edge.Object = ObjectRef{
-				Kind: op.Object.Kind, ID: NormalizeKey(op.Object.ID)}
-			// BOTH HALVES OF A UNIT'S PLACEMENT COME FROM THE WORKING
-			// COPY, whichever one the operation named: an edge is FULL
-			// POST-STATE, so a set_lead publishing the zero parent
-			// would move the unit to the org root as a side effect of
-			// naming its lead, and a move publishing the zero lead
-			// would take its authored lead away as a side effect of
-			// moving it. [working.apply] has already written what this
-			// operation changed into the copy.
-			edge.Parent = state.parents[key]
-			if op.Object.Kind == KindUnit {
-				edge.Lead = state.leads[key]
-			}
-			if _, held := byObject[key]; !held {
-				order = append(order, key)
-			}
-			byObject[key] = edge
 		}
 	}
-	for _, key := range order {
-		edges = append(edges, byObject[key])
-	}
-	return edges, gone, nil
+	return state.edges(), gone, nil
 }
 
 // Holders reads WHO, IN THE IDENTITY DIRECTORY, IS BOUND TO A SEAT — from
@@ -479,335 +401,6 @@ func checkHeld(ctx context.Context, tx *sql.Tx, index int, op Operation,
 				"authority rule asking what they lead falls through. Unbind "+
 				"them first, or remove the person", handle, holder),
 		}
-	}
-	return nil
-}
-
-// apply checks one operation against the working copy and advances it.
-func (w *working) apply(index int, op Operation) *RefusalError {
-	refuse := func(rule, detail string, args ...any) *RefusalError {
-		return &RefusalError{Index: index, Operation: op, Rule: rule,
-			Detail: fmt.Sprintf(detail, args...)}
-	}
-	if !op.Kind.Valid() {
-		return refuse(RuleUnknownKind, "%q is not one of %v", op.Kind, OperationKinds)
-	}
-	id := NormalizeKey(op.Object.ID)
-	if id == "" {
-		return refuse(RuleBadKey, "an operation names no object")
-	}
-	if op.Object.Kind != KindUnit && op.Object.Kind != KindSeat {
-		return refuse(RuleUnknownKind, "%s is not an object in the chart — "+
-			"only a unit and a seat have a place in the tree", op.Object.Kind)
-	}
-	key := refKey(op.Object)
-
-	switch op.Kind {
-	case OpCreateUnit, OpCreateSeat:
-		if err := w.checkCreate(refuse, op, id); err != nil {
-			return err
-		}
-		if err := w.checkParent(refuse, op); err != nil {
-			return err
-		}
-		w.parents[key] = NormalizeKey(op.Parent)
-		w.kinds[key] = op.Object.Kind
-		return nil
-
-	case OpMove:
-		if err := w.checkPresent(refuse, key, id); err != nil {
-			return err
-		}
-		if err := w.checkParent(refuse, op); err != nil {
-			return err
-		}
-		if err := w.checkCycle(refuse, op, key); err != nil {
-			return err
-		}
-		w.parents[key] = NormalizeKey(op.Parent)
-		return nil
-
-	case OpSetLead:
-		if op.Object.Kind != KindUnit {
-			return refuse(RuleUnknownKind, "only a unit has a lead")
-		}
-		if err := w.checkPresent(refuse, key, id); err != nil {
-			return err
-		}
-		w.leads[key] = NormalizeKey(op.Lead)
-		return nil
-
-	case OpRemoveObject:
-		if err := w.checkPresent(refuse, key, id); err != nil {
-			return err
-		}
-		if op.Object.Kind == KindUnit {
-			if held := w.holders(id); len(held) > 0 {
-				return refuse(RuleUnitNotEmpty, "%s still holds %s — an "+
-					"orphaned subtree is reachable from nothing and "+
-					"removable by nothing, so its contents move or go first",
-					id, strings.Join(held, ", "))
-			}
-		}
-		delete(w.parents, key)
-		delete(w.leads, key)
-		w.removedKeys[key] = true
-		return nil
-	}
-	return refuse(RuleUnknownKind, "%q is not one of %v", op.Kind, OperationKinds)
-}
-
-type refuseFunc func(rule, detail string, args ...any) *RefusalError
-
-// checkCreate refuses a create onto an address it may not take.
-//
-// THE RULES ARE [refuseCreate]'s, asked of this working copy — so the batch
-// refuses exactly what the apply declines for an import and what a rename is
-// refused, each against the state it can see. What the copy adds is the
-// batch's own earlier operations: an address removed two operations ago is
-// removed here, and one created two operations ago is taken.
-//
-// A UNIT AND A SEAT MAY SHARE A SPELLING. They are different namespaces and
-// neither reserves a prefix, so the copy is asked about the operation's own
-// kind alone — stated so the next reader does not "fix" it into a cross-kind
-// check that would refuse a legal chart.
-func (w *working) checkCreate(refuse refuseFunc, op Operation, id string) *RefusalError {
-	// THE COPY ANSWERS FROM MEMORY, so it has no error to return and no
-	// context to honour.
-	refused, _ := refuseCreate(context.Background(), w, op.Object.Kind, id, "")
-	if refused != nil {
-		return refuse(refused.Rule, "%s", refused.Detail)
-	}
-	return nil
-}
-
-// removed is [addressBook]'s tombstone question, answered by the copy: a
-// removal already on the log, or one earlier in this batch.
-func (w *working) removed(_ context.Context, kind ObjectKind, key string) (bool, error) {
-	return w.removedKeys[refKey(ObjectRef{Kind: kind, ID: key})], nil
-}
-
-// holder is [addressBook]'s who-answers question, answered by the copy.
-func (w *working) holder(_ context.Context, kind ObjectKind, key string) (
-	string, holding, error) {
-
-	ref := refKey(ObjectRef{Kind: kind, ID: key})
-	if _, live := w.parents[ref]; live {
-		return key, heldAsKey, nil
-	}
-	if current, held := w.identities[ref]; held {
-		return current, heldAsIdentity, nil
-	}
-	return "", heldByNothing, nil
-}
-
-// checkPresent refuses an operation on an object the chart does not hold.
-func (w *working) checkPresent(refuse refuseFunc, key, id string) *RefusalError {
-	if w.removedKeys[key] {
-		return refuse(RuleNoSuchObject, "%q was removed earlier in this batch",
-			id)
-	}
-	if _, held := w.parents[key]; !held {
-		return refuse(RuleNoSuchObject, "%q is not in the chart", id)
-	}
-	return nil
-}
-
-// checkParent refuses a placement under a unit that is not there.
-//
-// THE ORG ROOT IS A REAL PARENT and is never checked: an empty parent is where
-// a top-level department and an org-wide seat both sit.
-func (w *working) checkParent(refuse refuseFunc, op Operation) *RefusalError {
-	parent := NormalizeKey(op.Parent)
-	if parent == "" {
-		return nil
-	}
-	key := refKey(ObjectRef{Kind: KindUnit, ID: parent})
-	if w.removedKeys[key] {
-		return refuse(RuleNoSuchParent, "%q was removed earlier in this batch",
-			parent)
-	}
-	if _, held := w.parents[key]; !held {
-		return refuse(RuleNoSuchParent, "%q is not a unit in the chart — a "+
-			"parent may be created by an earlier operation in this batch, and "+
-			"nothing in this one creates it", parent)
-	}
-	return nil
-}
-
-// checkCycle refuses a move that would make an object its own ancestor.
-//
-// THE WALK IS OVER THE WORKING COPY, which is the whole reason this validation
-// is a replay: two moves that are each locally valid can jointly close a cycle,
-// and neither writer's own subject would ever have shown it to them. Walking
-// the stored rows instead would accept exactly that pair.
-//
-// A SEAT CANNOT CLOSE A CYCLE — nothing sits under a seat — so the walk runs
-// for a unit alone. It is still called for both, because "this kind cannot" is
-// a fact worth stating once here rather than in every caller.
-func (w *working) checkCycle(refuse refuseFunc, op Operation, key string) *RefusalError {
-	if op.Object.Kind != KindUnit {
-		return nil
-	}
-	parent := NormalizeKey(op.Parent)
-	if parent == "" {
-		return nil
-	}
-	// WALK UP FROM THE NEW PARENT. If the object being moved is on that
-	// path, the move puts the object under itself.
-	seen := map[string]bool{}
-	at := refKey(ObjectRef{Kind: KindUnit, ID: parent})
-	for at != "" {
-		if at == key {
-			return refuse(RuleCycle, "moving %q under %q would put it under "+
-				"itself — %q is already somewhere beneath it",
-				NormalizeKey(op.Object.ID), parent, parent)
-		}
-		if seen[at] {
-			// A CYCLE ALREADY IN THE ROWS, which this move did not
-			// make. It is still refused, because a walk that returned
-			// here would loop for ever and a chart holding one cannot
-			// answer "who leads this team" at all. Naming it as a
-			// cycle is the honest report.
-			return refuse(RuleCycle, "the chart already holds a cycle through "+
-				"%q, so this move cannot be checked against it", parent)
-		}
-		seen[at] = true
-		at = w.parents[at]
-		if at != "" {
-			at = refKey(ObjectRef{Kind: KindUnit, ID: at})
-		}
-	}
-	return nil
-}
-
-// holders is what a unit still contains: its child units and the seats in it.
-func (w *working) holders(unit string) []string {
-	var out []string
-	for key, parent := range w.parents {
-		if parent != unit || w.removedKeys[key] {
-			continue
-		}
-		out = append(out, key)
-	}
-	slices.Sort(out)
-	return out
-}
-
-// readWorking reads the whole chart's structure out of one transaction.
-//
-// THE WHOLE CHART, and that is affordable precisely here: a company has
-// hundreds of units and seats, not the hundreds of thousands of rows the
-// tracker holds, so the structure is a map a page of memory fits. A walk that
-// queried per ancestor would be N round trips inside the transaction that holds
-// this store's only writer — and the cycle check is a walk by construction.
-func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
-	state := &working{
-		parents:     map[string]string{},
-		kinds:       map[string]ObjectKind{},
-		leads:       map[string]string{},
-		removedKeys: map[string]bool{},
-		identities:  map[string]string{},
-	}
-	if err := scanInto(ctx, tx,
-		`SELECT key, parent_key, lead FROM chart_units`, KindUnit, state); err != nil {
-		return nil, err
-	}
-	if err := scanInto(ctx, tx,
-		`SELECT handle, unit_key, '' FROM chart_seats`, KindSeat, state); err != nil {
-		return nil, err
-	}
-	// THE RENAMED OBJECTS' IDENTITIES, because a create onto one would be a
-	// second object with the first one's identity. Only a renamed row has an
-	// identity other than its key, so this decodes those rows and no other.
-	if err := scanIdentities(ctx, tx, "chart_units", KindUnit, DecodeUnit,
-		Unit.Origin, func(u Unit) string { return u.Key }, state); err != nil {
-		return nil, err
-	}
-	if err := scanIdentities(ctx, tx, "chart_seats", KindSeat, DecodeSeat,
-		Seat.Origin, func(s Seat) string { return s.Handle }, state); err != nil {
-		return nil, err
-	}
-	// THE TOMBSTONES TOO, because a removed address never resolves again
-	// and a create onto one must be refused rather than silently writing a
-	// row the gate then drops on every node.
-	rows, err := tx.QueryContext(ctx,
-		`SELECT object_kind, object_id FROM chart_removed`)
-	if err != nil {
-		return nil, fmt.Errorf("chart: read the removed objects: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var kind, id string
-		if err := rows.Scan(&kind, &id); err != nil {
-			return nil, fmt.Errorf("chart: read a removed object: %w", err)
-		}
-		state.removedKeys[refKey(ObjectRef{Kind: ObjectKind(kind), ID: id})] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("chart: read the removed objects: %w", err)
-	}
-	return state, nil
-}
-
-// scanIdentities reads every renamed object's identity into the working copy.
-//
-// A ROW WHOSE DOCUMENT WILL NOT DECODE FAILS THE BATCH rather than being
-// stepped over: a batch validated without it could create a second object with
-// that row's identity, and a refusal naming an unreadable row is one somebody
-// can act on.
-func scanIdentities[T any](ctx context.Context, tx *sql.Tx, table string,
-	kind ObjectKind, decode func([]byte) (T, error), origin, key func(T) string,
-	state *working) error {
-
-	rows, err := tx.QueryContext(ctx,
-		`SELECT document FROM `+table+` WHERE former_keys_json <> '[]'`)
-	if err != nil {
-		return fmt.Errorf("chart: read the renamed %ss: %w", kind, err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var document []byte
-		if err := rows.Scan(&document); err != nil {
-			return fmt.Errorf("chart: read a renamed %s: %w", kind, err)
-		}
-		object, err := decode(document)
-		if err != nil {
-			return fmt.Errorf("chart: decode a renamed %s: %w", kind, err)
-		}
-		if identity, current := origin(object), key(object); identity != current {
-			state.identities[refKey(ObjectRef{Kind: kind, ID: identity})] = current
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("chart: read the renamed %ss: %w", kind, err)
-	}
-	return nil
-}
-
-// scanInto reads one object table's structure into the working copy.
-func scanInto(ctx context.Context, tx *sql.Tx, query string, kind ObjectKind,
-	state *working) error {
-
-	rows, err := tx.QueryContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("chart: read the %s structure: %w", kind, err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var id, parent, lead string
-		if err := rows.Scan(&id, &parent, &lead); err != nil {
-			return fmt.Errorf("chart: read a %s row: %w", kind, err)
-		}
-		key := refKey(ObjectRef{Kind: kind, ID: id})
-		state.parents[key] = parent
-		state.kinds[key] = kind
-		if kind == KindUnit && lead != "" {
-			state.leads[key] = lead
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("chart: read the %s structure: %w", kind, err)
 	}
 	return nil
 }

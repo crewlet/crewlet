@@ -64,7 +64,16 @@ produce half a reorganisation with no record of which half — and which half
 would depend on the order you happened to write them in.
 
 The operations are `create_unit`, `create_seat`, `move`, `set_lead` and
-`remove`. Each is checked against the state the ones **before it** produced,
+`remove`. Each takes its object and only the fields its kind reads —
+`create_unit` a `parent` and a `lead` (so "add the platform team, led by the
+SRE" is one operation), `create_seat` and `move` a `parent`, `set_lead` a
+`lead`, and `remove` nothing — and one carrying a field its kind does not take
+is refused rather than having the field dropped, because a batch that dropped it
+would answer as though it asked for less than it said. An empty `parent` is the
+org root and an empty `lead` clears the unit's own lead, so neither counts as a
+field supplied.
+
+Each operation is checked against the state the ones **before it** produced,
 which is the only reading under which the ordinary ways of editing a chart
 work:
 
@@ -92,6 +101,8 @@ The rest of the rules:
 | Removing a unit that still holds children or seats | An orphaned subtree is reachable from nothing and removable by nothing |
 | A reserved key — `root`, `tree` and `barrier` for any object, and `none` for a seat | Each already means something: the org root, two of this log's own subject kinds, and the word `integrations.datadog.route_to` uses for nobody |
 | A seat handle outside the handle grammar — one run of lowercase letters, digits and hyphens, at most 64 bytes | A `.` is how a person's login is spelled (`jane.doe`) and a `:` a machine's (`ci:release`, `token:ops`), and every name lookup sends a name of either shape to the identity directory rather than to the chart — so a seat called that could never be reached by name |
+| An operation carrying a field its kind does not take — a `parent` on a `set_lead`, a `lead` on a `move` | Nothing would read it, so the batch would land having done less than it said |
+| A create whose object is the other kind — a `create_unit` naming a seat | The operation and its object disagree about what is being made, and applying either reading makes something the other half did not ask for |
 | More than 500 operations | One batch is one record, and a record past the broker's maximum payload is refused **permanently** with no retry that can place it. Submit several batches; each is arbitrated on its own |
 
 **Every path that gives an object an address asks the same rules** — a

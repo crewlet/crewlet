@@ -601,6 +601,22 @@ curl -X POST localhost:8000/chart/batch \
       ]}'
 ```
 
+Each operation names its `kind` and its `object`, and carries only the fields
+that kind reads:
+
+| `kind` | Takes | Notes |
+|---|---|---|
+| `create_unit` | `parent`, `lead` | The new unit's place and its own lead, so a team is created led in one operation |
+| `create_seat` | `parent` | The unit the seat sits in |
+| `move` | `parent` | A unit's lead stays with it |
+| `set_lead` | `lead` | The unit stays where it is |
+| `remove` | nothing | |
+
+An empty `parent` is the org root and an empty `lead` clears the unit's own
+lead. A field the kind does not take is refused `400` (`the operation does not
+take the field`) rather than dropped, because a batch that dropped it would
+answer as though it asked for less than it said.
+
 A batch whose operations are **all removals** is published as a removal record
 instead; one that mixes the two is refused, because a removal installs a gate
 and a record that installed one for some of its objects and not others would
