@@ -1,7 +1,6 @@
 package credential
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -177,38 +176,47 @@ func (h *Hasher) Verify(verifier, password string) (ok bool, rehash bool) {
 }
 
 // Rehash produces a verifier for a password at this hasher's cost, as [Hash]
-// does, and gives up if ctx ends before the concurrency cap admits it.
+// does — but only if a slot of the concurrency cap is free NOW, and answers
+// [ErrSaturated] without deriving anything when none is.
 //
 // # It exists for the ONE hash nobody is waiting on
 //
 // Raising the cost is carried out by the sign-in that presents the password
-// ([Hasher.Verify]'s rehash flag), and that sign-in's person is waiting for a
-// session, not for a stronger digest: the rewrite is an opportunity, and one
-// that queued behind the cap — which is full exactly when the endpoint is
-// under the load the cap exists for — would make an attack on somebody else a
-// slow sign-in for everybody whose verifier is stale. So it waits for a slot
-// only as long as its caller can spare, and a miss is harmless: the verifier
+// ([Hasher.Verify]'s rehash flag), after that sign-in has answered: the
+// rewrite is an opportunity, and nobody's request waits on it. So it never
+// QUEUES for the cap, which is full exactly when the endpoint is under the
+// load the cap exists for — a rewrite waiting in that queue would take a slot
+// ahead of the sign-ins arriving behind it, and turn an attack on somebody
+// else into a slow sign-in for everybody. A miss is harmless: the verifier
 // stays verifiable at its own cost, and the next sign-in asks again.
 //
-// A SLOT ONCE TAKEN RUNS TO THE END. argon2 is not interruptible, and
-// abandoning the result of a derivation already paid for would spend the cost
-// and keep nothing.
-func (h *Hasher) Rehash(ctx context.Context, password string) (string, error) {
+// NO CONTEXT, because there is nothing to wait for: a slot is taken at once or
+// not at all, and a slot once taken runs to the end — argon2 is not
+// interruptible, and abandoning a derivation already paid for would spend the
+// cost and keep nothing.
+func (h *Hasher) Rehash(password string) (string, error) {
+	select {
+	case h.admit <- struct{}{}:
+	default:
+		return "", ErrSaturated
+	}
+	defer func() { <-h.admit }()
 	salt := make([]byte, SaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("credential: read a salt: %w", err)
 	}
-	digest, err := h.deriveWithin(ctx, password, salt, h.params)
-	if err != nil {
-		return "", err
-	}
-	return h.encode(salt, digest), nil
+	return h.encode(salt, argon2id(password, salt, h.params)), nil
 }
+
+// ErrSaturated reports a [Hasher.Rehash] that found every slot of the
+// concurrency cap taken and derived nothing.
+var ErrSaturated = errors.New("credential: every derivation slot is taken, " +
+	"and a rewrite nobody is waiting on does not queue for one")
 
 // derive runs the cost at params, under the concurrency cap: this hasher's own
 // for a new verifier, the stored verifier's for a verification — and, with
-// [Hasher.deriveWithin], the only two callers of [argon2id], so no derivation
-// this package runs can skip the cap.
+// [Hasher.Rehash], the only two callers of [argon2id], so no derivation this
+// package runs can skip the cap.
 //
 // IT WAITS FOR A SLOT FOR AS LONG AS THAT TAKES: a sign-in VERIFYING is the
 // caller the cap queues rather than refuses, and one given up on would answer
@@ -223,29 +231,8 @@ func (h *Hasher) derive(password string, salt []byte, params Params) []byte {
 	return argon2id(password, salt, params)
 }
 
-// deriveWithin is [Hasher.derive] for a caller that may stop waiting for the
-// cap: it answers ctx's error if ctx ends first, and never runs the cost
-// outside the cap.
-//
-// A SECOND FUNCTION rather than derive over a context that never ends, because
-// derive's callers each hold their request's context: handing them one they
-// did not pass would be a context nobody can cancel standing in for theirs,
-// which is the shape the linter's contextcheck exists to catch.
-func (h *Hasher) deriveWithin(ctx context.Context, password string, salt []byte,
-	params Params) ([]byte, error) {
-
-	select {
-	case h.admit <- struct{}{}:
-	case <-ctx.Done():
-		return nil, fmt.Errorf("credential: no derivation slot was free "+
-			"before the caller's deadline: %w", ctx.Err())
-	}
-	defer func() { <-h.admit }()
-	return argon2id(password, salt, params), nil
-}
-
 // argon2id is the one derivation, and it is called only with a slot of the
-// cap held — by [Hasher.derive] and [Hasher.deriveWithin].
+// cap held — by [Hasher.derive] and [Hasher.Rehash].
 func argon2id(password string, salt []byte, params Params) []byte {
 	return argon2.IDKey([]byte(password), salt, params.Time, params.Memory,
 		params.Threads, params.KeyLen)

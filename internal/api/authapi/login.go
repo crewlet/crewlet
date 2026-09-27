@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -219,8 +220,10 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	// THE SIGN-IN HAS SUCCEEDED, so this is the one instant a verifier
 	// written under an older cost can be rewritten: the plaintext is in hand.
+	// DEFERRED, so it starts once this has answered — see
+	// [Service.rehashPassword].
 	if stale {
-		s.rehashPassword(r, arrived, held.ID, verifier, in.Password)
+		defer s.rehashPassword(r, held.ID, verifier, in.Password)
 	}
 
 	s.throttle.Flush(r.Context(), source)
@@ -230,7 +233,8 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 // rehashPassword rewrites a password verifier written under an older cost at
-// this hasher's current one, for a sign-in that has just proved the password.
+// this hasher's current one, for a sign-in that has just proved the password —
+// in the BACKGROUND, owned by this surface, once the answer is on its way.
 //
 // # The only instant a cost raise can be carried out
 //
@@ -241,15 +245,24 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 // changed new passwords and left every existing verifier at the old one for
 // the life of the deployment.
 //
-// # Best effort, and never at the sign-in's expense
+// # Never on the request, and never at a sign-in's expense
 //
-// The person is waiting for a session, not for a stronger digest. So the
-// rewrite has the time left before the refusal pad's deadline and no more — a
-// sign-in that succeeds never takes longer than one that fails would — and
-// anything short of success is LOGGED and changes nothing about the answer: a
-// hash that found no free slot, a write refused or unconfirmed. The old
-// verifier still verifies at its own cost, so the next sign-in simply asks
-// again.
+// The person is waiting for a session, not for a stronger digest, so nothing
+// they wait on includes it: callers DEFER this, so it starts once the handler
+// has answered, whatever it answered. It was inline once, given the time left
+// before the refusal pad's deadline — and a 64 MiB derivation after a 64 MiB
+// verification had all but used that up, so the write that followed ran on an
+// expired context, failed, and the verifier was never rewritten on any real
+// hardware while every such sign-in paid for a second derivation.
+//
+// SO IT HAS BUDGETS OF ITS OWN, and neither is the pad: the derivation takes a
+// slot of the cap only if one is free at once ([credential.Hasher.Rehash]) —
+// a rewrite nobody waits on must not queue ahead of the sign-ins behind it —
+// and the write has [rehashBudget]. One rewrite per person runs at a time,
+// because a person signing in twice while the first is in flight would pay a
+// second derivation the operation id would then discard. Anything short of a
+// confirmed write is LOGGED and changes nothing: the old verifier still
+// verifies at its own cost, and the next sign-in asks again.
 //
 // # Idempotent, and never over somebody else's change
 //
@@ -259,20 +272,45 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 // credential that was verified, still holding the verifier that was verified,
 // is rewritten — a password changed in between keeps its change — and it keeps
 // its id, because a re-hash is the same credential at a different cost.
-func (s *Service) rehashPassword(r *http.Request, arrived time.Time, person string,
+func (s *Service) rehashPassword(r *http.Request, person string,
 	stale iamdomain.Credential, password string) {
 
-	budget := s.throttle.Deadline() - s.now().Sub(arrived)
-	if budget <= 0 {
-		log.DebugContext(r.Context(), "api_password_rehash_skipped",
-			"person", person, "reason", "the sign-in has used its time")
+	// WITHOUT CANCEL, because the request is answered and its context about
+	// to end — a rewrite that inherited it would do nothing at all — and
+	// bounded, because what it waits on is a broker that may not answer.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()),
+		rehashBudget)
+	if !s.rehashes.start(person, cancel) {
+		cancel()
+		log.DebugContext(ctx, "api_password_rehash_skipped", "person", person,
+			"reason", "a rewrite for this person is in flight, or this "+
+				"surface is stopping")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), budget)
-	defer cancel()
-	fresh, err := s.hasher.Rehash(ctx, password)
+	go func() {
+		defer s.rehashes.finish(person)
+		s.rewriteVerifier(ctx, person, stale, password)
+	}()
+}
+
+// rehashBudget bounds a background rewrite's write.
+//
+// THE PUBLISHER'S OWN RESOLVE BUDGET ([statelog.DefaultResolveBudget]): the
+// write waits that long for this node's applier and then answers `pending`,
+// which is durable, so bounding the whole write at it caps only what the
+// publisher does not bound itself — an append the broker never acknowledges —
+// without cutting short a write that would have landed. A second number here
+// would be a second opinion about how long an identity write takes.
+const rehashBudget = statelog.DefaultResolveBudget
+
+// rewriteVerifier is one background rewrite: derive at the current cost, and
+// swap the verifier in the write's own snapshot.
+func (s *Service) rewriteVerifier(ctx context.Context, person string,
+	stale iamdomain.Credential, password string) {
+
+	fresh, err := s.hasher.Rehash(password)
 	if err != nil {
-		log.InfoContext(r.Context(), "api_password_rehash_skipped",
+		log.InfoContext(ctx, "api_password_rehash_skipped",
 			"person", person, "error", err)
 		return
 	}
@@ -293,13 +331,86 @@ func (s *Service) rehashPassword(r *http.Request, arrived time.Time, person stri
 		Reason: "re-hashed the password at the current cost",
 	})
 	if err != nil || !landed(result) {
-		log.WarnContext(r.Context(), "api_password_rehash_unrecorded",
+		log.WarnContext(ctx, "api_password_rehash_unrecorded",
 			"person", person, "error", errText(err), "op_id", result.OpID,
 			"outcome", string(result.Outcome))
 		return
 	}
-	log.InfoContext(r.Context(), "api_password_rehashed", "person", person,
+	log.InfoContext(ctx, "api_password_rehashed", "person", person,
 		"position", result.Position.String())
+}
+
+// rehashes is the background rewrites a surface owns: which person each is
+// for, how to cancel it, and a way to wait for them all.
+//
+// ITS LIFETIME IS THE SURFACE'S, and [Service.Stop] ends it — none starts
+// after, those in flight are waited for as long as the stop allows and then
+// cancelled — because a goroutine nobody can stop would go on writing to a
+// broker the engine is tearing down.
+type rehashes struct {
+	mu       sync.Mutex
+	stopped  bool
+	inFlight map[string]context.CancelFunc
+	running  sync.WaitGroup
+}
+
+// start claims the one rewrite a person may have in flight, reporting false
+// when theirs is already running or the surface is stopping.
+func (h *rehashes) start(person string, cancel context.CancelFunc) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stopped {
+		return false
+	}
+	if _, running := h.inFlight[person]; running {
+		return false
+	}
+	if h.inFlight == nil {
+		h.inFlight = map[string]context.CancelFunc{}
+	}
+	h.inFlight[person] = cancel
+	h.running.Add(1)
+	return true
+}
+
+// finish releases a person's rewrite once it has returned.
+func (h *rehashes) finish(person string) {
+	h.mu.Lock()
+	cancel := h.inFlight[person]
+	delete(h.inFlight, person)
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	h.running.Done()
+}
+
+// stop refuses every rewrite from now on, waits for those in flight until ctx
+// ends, then cancels whatever is left and waits for it to return.
+//
+// GRACEFUL AND THEN CUT, which is [http.Server.Shutdown]'s shape and for its
+// reason: a rewrite a moment from landing is worth the moment, and one waiting
+// on a broker that has stopped answering is not worth the shutdown.
+func (h *rehashes) stop(ctx context.Context) {
+	h.mu.Lock()
+	h.stopped = true
+	h.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		h.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	h.mu.Lock()
+	for _, cancel := range h.inFlight {
+		cancel()
+	}
+	h.mu.Unlock()
+	<-done
 }
 
 // resolve finds the person a sign-in names, by login or by address.

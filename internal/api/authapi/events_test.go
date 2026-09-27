@@ -178,9 +178,15 @@ func (e *estate) OpenSession(_ context.Context, in iamdomain.SessionStart) (iamd
 	return opened, nil
 }
 
-func (e *estate) SetCredentials(_ context.Context, in iamdomain.CredentialSet) (
+func (e *estate) SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (
 	statelog.Result, error) {
 
+	// A WRITE ON A CONTEXT THAT HAS ENDED LANDS NOTHING, as the domain's
+	// publisher refuses one — or a write handed no time at all would read
+	// here as one that landed.
+	if err := ctx.Err(); err != nil {
+		return statelog.Result{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.credentialOps = append(e.credentialOps, in.OpID)

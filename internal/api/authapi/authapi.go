@@ -476,7 +476,21 @@ type Service struct {
 	// two re-issues arriving at once cannot each withdraw, each write and
 	// each mint, leaving two live codes and a file holding only one.
 	codeMu sync.Mutex
+
+	// rehashes are the password rewrites this surface runs after a
+	// sign-in has answered — see [Service.rehashPassword] — and what
+	// [Service.Stop] ends.
+	rehashes rehashes
 }
+
+// Stop ends the work this surface runs after its answers: no password rewrite
+// starts from now on, and those in flight are waited for until ctx ends and
+// then cancelled — returning only once every one has.
+//
+// CALLED ONCE THE LISTENER HAS STOPPED, so no request can start another, and
+// before the engine the writes go to is torn down. Safe to call more than
+// once.
+func (s *Service) Stop(ctx context.Context) { s.rehashes.stop(ctx) }
 
 // New builds the surface, or refuses a missing dependency by name.
 //

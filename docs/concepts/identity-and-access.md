@@ -809,15 +809,19 @@ rewrites it at the current cost — the same credential, its id kept, one write 
 the person's own credentials decided in the write's snapshot, so a password
 changed in the meantime keeps its change.
 
-It is **best effort and never at the sign-in's expense**: the person is waiting
-for a session, not a stronger digest, so the rewrite has only the time left
-before the refusal pad's deadline (a successful sign-in never takes longer than
-a failed one would), waits for a free derivation slot no longer than that, and
-anything short of a confirmed write is logged (`api_password_rehash_skipped`,
-`api_password_rehash_unrecorded`) and changes nothing about the answer. The old
-verifier still verifies, so the next sign-in asks again — and every attempt to
-retire one verifier is one operation, its id derived from the person and the
-verifier it replaces.
+It is **best effort and never on the sign-in's time**: the person is waiting
+for a session, not a stronger digest, so the rewrite starts only once the
+sign-in has answered, in the background, and nothing in the answer waits on it.
+It takes a derivation slot only if one is free at that moment — under the load
+the cap exists for it skips rather than queueing ahead of the sign-ins behind
+it — one rewrite per person runs at a time, and its write has the identity
+log's own resolve budget (five seconds). Anything short of a confirmed write is
+logged (`api_password_rehash_skipped`, `api_password_rehash_unrecorded`) and
+changes nothing: the old verifier still verifies, so the next sign-in asks
+again — and every attempt to retire one verifier is one operation, its id
+derived from the person and the verifier it replaces. A node shutting down
+waits for a rewrite in flight within the listener's shutdown grace and cuts it
+after.
 
 ### A required second factor is enrolled before anything else
 

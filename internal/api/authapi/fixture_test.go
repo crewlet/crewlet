@@ -113,6 +113,14 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 	if err != nil {
 		t.Fatalf("authapi.New: %v", err)
 	}
+	// THE WORK A SURFACE RUNS AFTER ITS ANSWERS ENDS WITH THE CASE, as it
+	// ends with the listener on a node: cut at once, since a case that
+	// needs a rewrite to land waits for it itself.
+	t.Cleanup(func() {
+		cut, cancel := context.WithCancel(context.Background())
+		cancel()
+		svc.Stop(cut)
+	})
 	return svc
 }
 

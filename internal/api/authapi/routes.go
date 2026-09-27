@@ -349,9 +349,9 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	}
 	// A STEP-UP PRESENTS THE PASSWORD TOO, and a person who only ever
 	// confirms on a long-lived session would otherwise keep the old cost
-	// for as long as that session lasts.
+	// for as long as that session lasts. Deferred, like the sign-in's.
 	if stale {
-		s.rehashPassword(r, arrived, held.ID, verifier, in.Password)
+		defer s.rehashPassword(r, held.ID, verifier, in.Password)
 	}
 
 	replaced, ok := s.replacedSession(w, r, held)
