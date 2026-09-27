@@ -749,7 +749,13 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
 		client.Reply(queryError(req, CodeBadParams))
 	case errors.Is(err, ErrUnavailable):
-		client.Reply(queryError(req, CodeUnavailable))
+		// THE REFUSAL AND ITS HINT RIDE THE FRAME, because a node
+		// catching up and a node that will refuse this read until an
+		// operator acts are both `unavailable` — see [Unavailable].
+		env := queryError(req, CodeUnavailable)
+		u := UnavailableOf(err)
+		env.Unavailable = &u
+		client.Reply(env)
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and holding the

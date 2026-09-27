@@ -282,6 +282,15 @@ type Envelope struct {
 	// channel this is — could not tell a missing grant from a missing
 	// relation. Nil on every other frame, which omits both keys.
 	*Refused
+
+	// *Unavailable is an `unavailable` query error frame's refusal and
+	// hint — the state log's code, its words, and how long to wait before
+	// asking this node again, zero when waiting changes nothing —
+	// FLATTENED beside `error` exactly as a REST 503 carries them. Without
+	// it a client had one code for a node catching up and a node that will
+	// refuse the same read until an operator acts, and could only poll
+	// both. Nil on every other frame, which omits all three keys.
+	*Unavailable
 }
 
 // Refused is the reason and the grants an `unauthorized` frame carries.

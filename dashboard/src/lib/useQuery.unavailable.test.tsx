@@ -12,7 +12,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ClientContext } from "./store-hooks.ts";
 import { useQuery } from "./useQuery.ts";
-import { LiveSocket, Store, UNAVAILABLE_RETRY_MS } from "~/protocol/index.ts";
+import { LiveSocket, QueryRefusedError, Store, UNAVAILABLE_RETRY_MS } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -95,3 +95,50 @@ test.each(["bad_params", "unknown_query", "query_failed", "unauthorized"])(
     expect(asked).toHaveBeenCalledTimes(1);
   },
 );
+
+// AN `unavailable` THE ENGINE SAID WAITING WILL NOT CLEAR IS NOT ASKED AGAIN
+// SOON. A full log, a record the node cannot decode, a barrier its broker
+// refused: each answers the same read the same until an operator acts, and a
+// five-second re-ask of it is a loop rather than a retry. The engine says so
+// with a zero hint; one it says will clear keeps coming back, which is the
+// control — and so does a frame from a node too old to carry a hint.
+test.each([
+  ["a refusal no wait clears", 0, 1],
+  ["a refusal that clears, the control", 5, 2],
+])("%s", async (_, retryAfter, asks) => {
+  const refused = () =>
+    Promise.reject(
+      new QueryRefusedError("unavailable", {
+        code: retryAfter === 0 ? "log_full" : "behind",
+        detail: "what the refusal is about",
+        retryAfter,
+      }),
+    );
+  const { asked, text } = mount([refused, answer]);
+  await act(async () => {});
+  expect(text()).toBe("unavailable");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(UNAVAILABLE_RETRY_MS * 4);
+  });
+  expect(asked).toHaveBeenCalledTimes(asks);
+});
+
+// A SCREEN THAT POLLS STILL POLLS: only the five-second re-ask is withheld, so
+// a refusal an operator then clears is noticed on the screen's own cadence.
+test("a refusal no wait clears is still asked again at the screen's own poll", async () => {
+  const refused = () =>
+    Promise.reject(
+      new QueryRefusedError("unavailable", { code: "log_full", detail: null, retryAfter: 0 }),
+    );
+  const { asked, text } = mount([refused, answer], 30_000);
+  await act(async () => {});
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(UNAVAILABLE_RETRY_MS);
+  });
+  expect(asked).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(asked).toHaveBeenCalledTimes(2);
+  expect(text()).toBe("answered");
+});

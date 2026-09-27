@@ -20,11 +20,20 @@
 import { api } from "./api.ts";
 import { apiToken } from "./authToken.ts";
 import type { Store } from "./store.ts";
-import type { Frame, QueryErrorCode, QueryMap, QueryName, QueryRefusal } from "./types.ts";
+import type {
+  Frame,
+  LogRefusal,
+  QueryErrorCode,
+  QueryMap,
+  QueryName,
+  QueryRefusal,
+} from "./types.ts";
 
 /**
  * A rejected question, carrying — when the engine refused it on AUTHORITY —
- * the reason and the grants its error frame named.
+ * the reason and the grants its error frame named, or — when it answered
+ * `unavailable` — the state log's refusal behind that and whether asking again
+ * can change it ({@link LogRefusal}).
  *
  * `message` IS STILL THE CODE, which every existing reader tests with
  * {@link queryErrorCode}; the refusal rides beside it rather than replacing it,
@@ -34,11 +43,20 @@ import type { Frame, QueryErrorCode, QueryMap, QueryName, QueryRefusal } from ".
 export class QueryRefusedError extends Error {
   constructor(
     code: string,
-    readonly refusal: QueryRefusal | null,
+    readonly refusal: QueryRefusal | LogRefusal | null,
   ) {
     super(code);
     this.name = "QueryRefusedError";
   }
+}
+
+/**
+ * Whether a refusal is the state log's, carried by an `unavailable` answer,
+ * rather than one on authority. The two ride the same field of an answer
+ * because a screen hands both to `QueryState` the same way.
+ */
+export function isLogRefusal(refusal: QueryRefusal | LogRefusal): refusal is LogRefusal {
+  return "retryAfter" in refusal;
 }
 
 const PATH = "/ws/stream";
@@ -130,10 +148,23 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
 };
 
 /**
- * The refusal an error frame carries, or null — for a frame that is not a
- * refusal on authority, or a node too old to say why.
+ * The refusal an error frame carries, or null — for a frame that is neither a
+ * refusal on authority nor an `unavailable` answer, or a node too old to say
+ * why.
  */
-function refusalOf(msg: Frame): QueryRefusal | null {
+function refusalOf(msg: Frame): QueryRefusal | LogRefusal | null {
+  // AN `unavailable` ANSWER'S REFUSAL AND HINT, where the engine sent them:
+  // the state log's code and words, and whether asking this node again can
+  // change the answer. A frame with no `retry_after` is a node too old to say,
+  // which reads as it always did — ask again soon.
+  if (msg.error === "unavailable") {
+    if (typeof msg.retry_after !== "number") return null;
+    return {
+      code: typeof msg.refusal === "string" ? msg.refusal : null,
+      detail: typeof msg.detail === "string" ? msg.detail : null,
+      retryAfter: msg.retry_after,
+    };
+  }
   if (msg.error !== "unauthorized" || typeof msg.reason !== "string") return null;
   return {
     reason: msg.reason,
@@ -609,7 +640,7 @@ export class LiveSocket {
     id: number | undefined,
     error: string | null,
     data: unknown,
-    refusal: QueryRefusal | null = null,
+    refusal: QueryRefusal | LogRefusal | null = null,
   ): void {
     if (id === undefined) return;
     const entry = this.inflight.get(id);

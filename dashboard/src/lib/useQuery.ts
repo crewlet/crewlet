@@ -18,8 +18,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
 import {
   queryErrorCode,
+  isLogRefusal,
   QueryRefusedError,
   UNAVAILABLE_RETRY_MS,
+  type LogRefusal,
   type QueryErrorCode,
   type QueryMap,
   type QueryName,
@@ -39,11 +41,13 @@ export interface QueryResult<T> {
   error: QueryErrorCode | null;
   /**
    * Why an `unauthorized` answer was refused — the rule, and the grants any
-   * one of which would have admitted the reader — or null. Pass it to
-   * `QueryState` beside `error`, which is what lets the refusal banner say what
-   * would change the answer rather than only that there was one.
+   * one of which would have admitted the reader — or, for an `unavailable`
+   * one, the state log's refusal behind it and whether asking this node again
+   * can change it; null otherwise. Pass it to `QueryState` beside `error`,
+   * which is what lets the banner say what would change the answer rather than
+   * only that there was one.
    */
-  refusal: QueryRefusal | null;
+  refusal: QueryRefusal | LogRefusal | null;
   /**
    * Ask again now.
    *
@@ -132,7 +136,7 @@ export function useQuery<K extends QueryName>(
     data: QueryMap[K] | null;
     loading: boolean;
     error: QueryErrorCode | null;
-    refusal: QueryRefusal | null;
+    refusal: QueryRefusal | LogRefusal | null;
   }>({ data: null, loading: enabled, error: null, refusal: null });
 
   // The params object is a fresh literal on every render, so it cannot be a
@@ -169,7 +173,15 @@ export function useQuery<K extends QueryName>(
         // A socket rejection always carries a code; anything else that
         // threw is a failure nobody explained, which is `query_failed`.
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
-        retrySoon = code === "unavailable";
+        const refusal = err instanceof QueryRefusedError ? err.refusal : null;
+        // NOT SOON when the engine said waiting changes nothing — a full
+        // log, a record this node cannot decode, a barrier its broker
+        // refused. Asked every five seconds, each of those is refused the
+        // same until an operator acts, which is a loop rather than a retry;
+        // the screen's own poll, where it has one, still asks again.
+        retrySoon =
+          code === "unavailable" &&
+          !(refusal !== null && isLogRefusal(refusal) && refusal.retryAfter === 0);
         setState((prev) => ({
           // KEEP the last good answer. A screen that blanks on one failed poll
           // tells the reader less than one that shows the last reading and
@@ -177,7 +189,7 @@ export function useQuery<K extends QueryName>(
           data: prev.data,
           loading: false,
           error: code,
-          refusal: err instanceof QueryRefusedError ? err.refusal : null,
+          refusal,
         }));
       } finally {
         // THE SOONER OF THE TWO. A poll keeps its own cadence; an

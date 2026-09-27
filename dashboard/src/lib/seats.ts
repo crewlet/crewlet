@@ -41,6 +41,7 @@
  */
 
 import { plural } from "./format.ts";
+import { isLogRefusal } from "~/protocol/index.ts";
 import type {
   AgentRow,
   CompanyDocument,
@@ -52,6 +53,7 @@ import type {
   OrgUnit,
   PhaseLLM,
   ProviderKeys,
+  LogRefusal,
   QueryErrorCode,
   QueryRefusal,
   SandboxEntry,
@@ -655,9 +657,11 @@ export type SeatReading =
 export function seatReading(
   settings: SeatSettings | null | undefined,
   error?: QueryErrorCode | null,
-  refusal?: QueryRefusal | null,
+  refusal?: QueryRefusal | LogRefusal | null,
 ): SeatReading {
-  if (error === "unauthorized") return { state: "refused", grants: refusal?.grants ?? [] };
+  if (error === "unauthorized") {
+    return { state: "refused", grants: refusal && !isLogRefusal(refusal) ? refusal.grants : [] };
+  }
   if (error) return { state: "failed" };
   if (!settings) return { state: "unread" };
   if (settings.state === "found") {

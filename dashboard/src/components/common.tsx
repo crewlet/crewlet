@@ -29,7 +29,7 @@ import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { requestToken } from "~/protocol/index.ts";
+import { isLogRefusal, requestToken } from "~/protocol/index.ts";
 import {
   roundLabel,
   runState,
@@ -43,6 +43,7 @@ import {
 import type {
   AgentRow,
   FeedRow,
+  LogRefusal,
   QueryErrorCode,
   QueryRefusal,
   SandboxEntry,
@@ -460,6 +461,37 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
 }
 
 /**
+ * A refusal by this node's STATE LOG that waiting will not clear — its log at
+ * the byte ceiling, a record it cannot decode, a barrier its broker refused —
+ * said as what it is rather than as the node catching up.
+ *
+ * `unavailable` covers both, and the generic banner promises "this screen asks
+ * again on its own", which for these would be a promise of a loop: the same
+ * read is refused until an operator acts or another node is asked. So the
+ * banner names the refusal and its own words, the remedy, and says the screen
+ * is NOT asking again soon. FROM THE ANSWER, NEVER WRITTEN HERE, for the reason
+ * `RefusedOnAuthority` gives.
+ */
+function RefusedByTheLog({ refusal }: { refusal: LogRefusal }) {
+  return (
+    <Callout variant="warning" icon={<WarningGlyph size="md" />}>
+      This node refused the read, and asking it again will not change that
+      {refusal.detail ? <>: {refusal.detail}</> : null}. Another node can answer it, or an operator
+      has to act on this one; the screen does not keep asking it.
+      <strong> This is not an empty company.</strong>
+      {refusal.code ? (
+        <>
+          {" "}
+          <span className="t-caption">
+            Refused as <code className="inline">{refusal.code}</code>.
+          </span>
+        </>
+      ) : null}
+    </Callout>
+  );
+}
+
+/**
  * What an empty or failed answer means, said precisely.
  *
  * `unauthorized` and a company with no seats are the same empty list and
@@ -476,11 +508,13 @@ export function QueryState({
 }: {
   error: string | null;
   /**
-   * Why an `unauthorized` answer was refused — `useQuery`'s own `refusal`.
-   * The banner then says which grant would have admitted the reader, or that
-   * none would, rather than only that the answer was refused.
+   * Why the answer was refused — `useQuery`'s own `refusal`. For an
+   * `unauthorized` answer the banner then says which grant would have
+   * admitted the reader, or that none would; for an `unavailable` one the
+   * state log refused and waiting will not change, it says so and what the
+   * refusal names, rather than that the node is catching up.
    */
-  refusal?: QueryRefusal | null;
+  refusal?: QueryRefusal | LogRefusal | null;
   loading: boolean;
   /**
    * `hint` IS REQUIRED, which is uilet's `EmptyState` rule and the reason this
@@ -494,7 +528,12 @@ export function QueryState({
   empty?: { title: ReactNode; hint: ReactNode };
   children?: ReactNode;
 }) {
-  if (error === "unauthorized" && refusal) return <RefusedOnAuthority refusal={refusal} />;
+  if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
+    return <RefusedOnAuthority refusal={refusal} />;
+  }
+  if (error === "unavailable" && refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
+    return <RefusedByTheLog refusal={refusal} />;
+  }
   const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
   if (banner) return <>{banner}</>;
   // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire

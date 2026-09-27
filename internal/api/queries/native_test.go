@@ -543,30 +543,50 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	}
 }
 
-// AND A REFUSAL WAITING CANNOT CLEAR IS STILL A FAILURE.
+// AND A REFUSAL WAITING CANNOT CLEAR IS UNAVAILABLE TOO — WITH NO HINT.
 //
 // A node holding a record it cannot decode will not catch up however long the
-// caller waits, so a Retry-After there sends a client round a loop that cannot
-// terminate. The classification is the state log's own rather than a second
-// list on this side.
-func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
+// caller waits, and a log at its ceiling or a barrier its broker refused will
+// not either. None of them is a fault: they were one, a 500 `query_failed`
+// whose remedy went only to the log, and a linearizable read on a full log
+// became one the moment its barrier stopped reading as a missed quorum. So
+// every state-log refusal is [queries.ErrUnavailable], and what keeps a
+// client out of a loop is the hint, which is the state log's own rule and
+// ZERO for these — a surface answers it with no Retry-After. A behind node
+// is the control: it keeps its derived hint.
+func TestARefusalWaitingCannotClearIsUnavailableWithNoHint(t *testing.T) {
 	t.Parallel()
-	work := &stubWork{err: &statelog.Refused{
-		Code:   statelog.RefuseDeferred,
-		Level:  statelog.ReadSession,
-		Detail: "this node holds a record at a version it cannot decode",
-	}}
-	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Work: work})
+	for _, tc := range []struct {
+		name string
+		code statelog.ReadRefusal
+		want time.Duration
+	}{
+		{"a record this node cannot decode", statelog.RefuseDeferred, 0},
+		{"a log at its byte ceiling", statelog.RefuseLogFull, 0},
+		{"a barrier the broker refused", statelog.RefuseBrokerRefused, 0},
+		{"a node that is behind, the control", statelog.RefuseBehind, 12 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			refused := &statelog.Refused{Code: tc.code, Level: statelog.ReadLinearizable,
+				Detail: "what the refusal is about"}
+			if tc.code.Retryable() {
+				refused.RetryAfter = 12 * time.Second
+			}
+			r := queries.NewRegistry()
+			queries.Register(r, queries.Sources{Work: &stubWork{err: refused}})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{})
-	if err == nil {
-		t.Fatal("a refused read answered successfully")
-	}
-	if errors.Is(err, queries.ErrUnavailable) {
-		t.Fatalf("a refusal waiting cannot clear was reported as %v — a client "+
-			"told to come back goes round a loop that cannot terminate",
-			queries.ErrUnavailable)
+			_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items",
+				map[string]any{})
+			if !errors.Is(err, queries.ErrUnavailable) {
+				t.Fatalf("a read refused %s answered %v, want %v — it is this "+
+					"node's refusal, not a fault", tc.code, err, queries.ErrUnavailable)
+			}
+			if got := statelog.RetryAfter(err, 5*time.Second); got != tc.want {
+				t.Errorf("a read refused %s carries a hint of %s, want %s",
+					tc.code, got, tc.want)
+			}
+		})
 	}
 }
 

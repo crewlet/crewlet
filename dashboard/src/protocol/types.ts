@@ -3058,6 +3058,14 @@ export interface Frame {
   /** On an `unauthorized` error frame: the grants any one of which would have
    *  admitted the caller. An EMPTY list is an answer — no grant would. */
   grants?: string[];
+  /** On an `unavailable` error frame: the state log's own refusal code, when
+   *  one is behind the answer — see {@link LogRefusal}. */
+  refusal?: string;
+  /** On an `unavailable` error frame: that refusal's own words. */
+  detail?: string;
+  /** On an `unavailable` error frame: seconds before asking this node again,
+   *  and ZERO when waiting will not change the answer. Never omitted there. */
+  retry_after?: number;
 }
 
 /**
@@ -3073,6 +3081,30 @@ export interface Frame {
 export interface QueryRefusal {
   reason: string;
   grants: string[];
+}
+
+/**
+ * What an `unavailable` answer says beyond its code — the machine-readable half
+ * the socket's error frame carries under the keys a REST 503 does
+ * (`refusal`, `detail`, and the `Retry-After` header as `retry_after`).
+ *
+ * `unavailable` covers two opposite facts. A node that is catching up, or whose
+ * coordination store blinked, answers the same question a few seconds later;
+ * a node whose state log is full, that holds a record it cannot decode or whose
+ * broker refused the read's barrier answers it the same however often it is
+ * asked. `retryAfter` is what tells them apart, and its ZERO is the answer:
+ * asking this node again changes nothing, so a screen stops asking soon and
+ * says what would.
+ */
+export interface LogRefusal {
+  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or null
+   *  where no state-log refusal is behind the answer. */
+  code: string | null;
+  /** The refusal's own words: what it is about and what changes it. */
+  detail: string | null;
+  /** Seconds before asking THIS node again; zero when waiting will not
+   *  change the answer. */
+  retryAfter: number;
 }
 
 /**

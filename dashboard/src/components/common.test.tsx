@@ -149,3 +149,35 @@ test("a refusal no grant would change says so rather than naming one", () => {
   expect(screen.getByText(/no grant would change that/)).toBeTruthy();
   expect(screen.getByText("not_lead")).toBeTruthy();
 });
+
+// A REFUSAL BY THE STATE LOG THAT WAITING WILL NOT CLEAR IS NOT "CATCHING UP".
+// The `unavailable` banner promises the screen asks again on its own, which for
+// a full log or a record the node cannot decode is a promise of a loop: the
+// read is refused the same until an operator acts or another node is asked. So
+// the banner says that, with the refusal's own words and code. A refusal that
+// clears is the control and keeps the catching-up banner.
+test("a log refusal no wait clears says so and names it", () => {
+  render(
+    <QueryState
+      error="unavailable"
+      refusal={{ code: "log_full", detail: "raise the stream's byte ceiling", retryAfter: 0 }}
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(/asking it again will not change that/)).toBeTruthy();
+  expect(screen.getByText(/raise the stream's byte ceiling/)).toBeTruthy();
+  expect(screen.getByText("log_full")).toBeTruthy();
+  expect(screen.queryByText(/asks again on its own/)).toBeNull();
+});
+
+test("a log refusal that clears keeps the catching-up banner", () => {
+  render(
+    <QueryState
+      error="unavailable"
+      refusal={{ code: "behind", detail: "40 000 records behind", retryAfter: 12 }}
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(/asks again on its own/)).toBeTruthy();
+  expect(screen.queryByText(/asking it again will not change that/)).toBeNull();
+});

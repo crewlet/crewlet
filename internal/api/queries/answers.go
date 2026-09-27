@@ -308,18 +308,23 @@ func (s Sources) clock() time.Time {
 	return s.Now()
 }
 
-// ErrUnavailable is a question this node understood and cannot answer YET: its
-// copy of the company's records is still catching up, or the coordination store
-// it reads could not be reached.
+// ErrUnavailable is a question this node understood and cannot answer HERE:
+// its copy of the company's records is still catching up, the coordination
+// store it reads could not be reached, or its state log refused the read — at
+// the level asked, or at all while it holds a record it cannot decode, is
+// evicted or its log is full.
 //
 // Distinct from an empty answer, and the distinction is the point: a dashboard
 // that drew "there is no work" for "this node cannot read the work right now"
 // would report a quiet company during an outage. Distinct from [ErrUnknown]
-// too, which is the answer for a source this node does not have at all: that
-// one never clears by waiting, so it must not carry a Retry-After.
+// too, which is the answer for a source this node does not have at all. Some
+// of it clears by waiting and some does not, and that is said by
+// [statelog.RetryAfter] on what it wraps — zero, and so no Retry-After, for a
+// refusal no wait changes — rather than by leaving those out of this error and
+// reporting them as a fault.
 //
 // Answers do not return it themselves. The registry classifies at one boundary
-// (see unavailableIfTransient), so an answer that reads a store which can be
+// (see unavailableOnThisNode), so an answer that reads a store which can be
 // briefly unreachable cannot forget to.
 var ErrUnavailable = errors.New("queries: not available on this node")
 

@@ -25,7 +25,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/static"
@@ -1137,7 +1136,13 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any) (a
 		// can carry a database path, and none of them has a reader.
 		return nil, fmt.Errorf("%w: %s: %w", stream.ErrBadParams, what, err)
 	case errors.Is(err, queries.ErrUnavailable):
-		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
+		// THE CAUSE IS KEPT, and only its STRUCTURE reaches the frame:
+		// [stream.UnavailableOf] reads the state log's refusal and its
+		// hint off it and never renders the error's text. Reduced to the
+		// question's name, a node that will refuse this read until an
+		// operator acts and one catching up were the same `unavailable`,
+		// and the dashboard polled both.
+		return nil, fmt.Errorf("%w: %s: %w", stream.ErrUnavailable, what, err)
 	default:
 		return nil, err
 	}
@@ -1220,25 +1225,33 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 	case errors.Is(err, queries.ErrUnavailable):
-		// 503 AND RETRY-AFTER, because this is the one failure here that
-		// is expected to pass: this node is behind the log and is
-		// draining, or its coordination store was briefly unreachable. A
-		// 500 would tell a client to give up on a screen that will work in
-		// a few seconds, and an empty 200 would tell a person the company
-		// has no work.
+		// 503, because this node could not serve the question and nothing
+		// about the request was wrong: it is behind the log and draining,
+		// its coordination store was briefly unreachable, or its state log
+		// refused the read. A 500 would tell a client the server broke —
+		// which is what a refusal waiting cannot clear used to be answered
+		// with, its remedy sent only to the log — and an empty 200 would
+		// tell a person the company has no work.
 		//
 		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
 		// how far behind this node is over how fast it is actually
-		// draining — and five seconds otherwise, by [statelog.RetryAfter]'s
-		// rule, which every surface answering a refusal reads. A flat hint
-		// is wrong in both directions on one fleet. The fallback is what an
-		// unreachable coordination store gets, since there is no drain to
-		// derive from, and it is the shared health tick's own cadence
-		// ([stream.HealthInterval]): a client that waits it out asks again
-		// having seen at most one newer health frame, which is the soonest
-		// it could learn the store is back.
-		httpjson.Unavailable(w, httpjson.CodeUnavailable,
-			httpjson.RetrySeconds(statelog.RetryAfter(err, stream.HealthInterval)))
+		// draining — ZERO, and so no Retry-After, for a refusal waiting
+		// cannot clear (a full log, a record this node cannot decode, a
+		// refusal the broker named), and five seconds otherwise, by
+		// [statelog.RetryAfter]'s rule, which every surface answering a
+		// refusal reads. A flat hint is wrong in both directions on one
+		// fleet. The fallback is what an unreachable coordination store
+		// gets, since there is no drain to derive from, and it is the
+		// shared health tick's own cadence ([stream.HealthInterval]): a
+		// client that waits it out asks again having seen at most one
+		// newer health frame, which is the soonest it could learn the
+		// store is back.
+		//
+		// AND THE REFUSAL SAYS WHAT IT IS — its code and its words, the
+		// remedy — through [stream.UnavailableOf], the same reading the
+		// socket's error frame is built from.
+		u := stream.UnavailableOf(err)
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and nothing about
