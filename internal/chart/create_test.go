@@ -55,11 +55,20 @@ func (h *harness) placement(key string) (parent, lead string, leads []string) {
 // A CREATE WHOSE ADDRESS IS HELD WHEN IT APPLIES IS DECLINED, AND THE OBJECT
 // HOLDING IT STAYS WHERE IT IS.
 //
-// The create below was decided against a snapshot in which platform did not
-// exist — a batch behind on the log, or an import, which decides nothing about
-// which objects exist. Applied as a placement it would move platform under
-// product and take sarah-chen's lead away, which is a reorganisation nobody
-// asked for, written by a record that meant to add a team.
+// The create below is a BATCH's, decided against a snapshot in which platform
+// did not exist, and a record the log ordered before it put platform there — a
+// version-1 claim or content write from a build mid-upgrade, on a subject of
+// its own that the batch never contended with. Applied as a placement it would
+// move platform under product and take sarah-chen's lead away, which is a
+// reorganisation nobody asked for, written by a record that meant to add a
+// team.
+//
+// NOT AN IMPORT'S. An import's edge states no verb — it states a revision's
+// whole structure and decides nothing about which of its objects exist — so an
+// import's edge meeting a live object places it, as an import always has. What
+// an import's CREATION of an absent object is held to is the same rules as
+// every other path's: [TestEveryPathThatGivesAnAddressRefusesTheSameNames] and
+// [TestACreationNeverTakesAnotherSeatsIdentity].
 func TestACreateWhoseAddressIsHeldIsDeclinedAndMovesNothing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
