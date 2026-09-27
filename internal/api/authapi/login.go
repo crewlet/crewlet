@@ -667,11 +667,22 @@ type signIn struct {
 	// see [Service.keep].
 	refresh string
 
-	// provedAt is when a PROVIDER sign-in's person authenticated at the
+	// provedAt is when this sign-in's person proved who they are, where
+	// that was NOT here and now — and nil for every way in that was: a
+	// password, a second factor, an invitation, the bootstrap code.
+	//
+	// TWO WAYS IN SET IT. A PROVIDER sign-in's person authenticated at the
 	// provider ([oidc.Flight.ProvedAt]) — possibly long ago, and the zero
-	// time when the provider did not say. Every other way in was proved
-	// HERE, at this instant, and ignores it.
-	provedAt time.Time
+	// time when the provider did not say, which is kept as zero: nothing
+	// datable was proved. And an ENROLMENT's replacement session inherits
+	// the proof of the enrolment-only session it replaces, because the
+	// code the enrolment checked proves possession of a seed that same
+	// session was handed moments earlier — which says nothing about who is
+	// holding it. Dated now, it restarted both step-up windows and handed
+	// whoever held the restricted cookie a sensitive window its password
+	// never earned. A POINTER, so "proved nothing datable" (a zero time)
+	// and "proved here" (nil) stay two answers.
+	provedAt *time.Time
 
 	// because is what the replaced session's close records as its reason,
 	// and empty for a step-up's own ("replaced by a step-up").
@@ -717,11 +728,12 @@ func (s *Service) secondFactorRequired() bool {
 }
 
 // proofOf is the instant a sign-in proved who somebody is: the provider's own
-// for a provider sign-in, and this one for everything this surface verified
-// itself.
+// for a provider sign-in, the replaced session's for an enrolment's
+// replacement, and this one for everything this surface verified itself — see
+// [signIn.provedAt].
 func (s *Service) proofOf(how signIn) time.Time {
-	if how.method == types.SignInOIDC {
-		return how.provedAt
+	if how.provedAt != nil {
+		return *how.provedAt
 	}
 	return s.now()
 }

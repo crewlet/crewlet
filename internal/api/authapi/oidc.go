@@ -237,7 +237,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// so it is not the caller's to change now.
 	how := signIn{
 		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
-		refresh: tokens.Refresh, provedAt: provedAt,
+		refresh: tokens.Refresh, provedAt: &provedAt,
 		// THE GROUP MAPPING RIDES INSIDE THE SESSION, never onto the
 		// person's own row: what a provider's groups confer is true for
 		// as long as that assertion is, and writing it to the estate

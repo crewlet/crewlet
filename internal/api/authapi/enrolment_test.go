@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,10 +148,16 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 // session ended, the new cookie on the enrolment's answer — and the whole one
 // reaches both routes, while the restricted cookie reaches nothing again.
 //
+// And the replacement keeps the restricted session's PROOF: the enrolment's
+// code proves possession of a seed that session was handed a moment earlier,
+// not who holds it, so dating the replacement at the enrolment handed whoever
+// held the restricted cookie a fresh sensitive window.
+//
 // The CONTROL is the same person under `totp: optional`, whose sign-in is a
 // whole session from the start. Mutation: drop the mark at the sign-in, or the
 // guard's check, and the restricted cookie reaches /iam; replace nothing at
-// the enrolment and the old cookie still works.
+// the enrolment and the old cookie still works; date the replacement at the
+// enrolment and its proof is five minutes younger than the password's.
 func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -163,11 +170,16 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			// THE SURFACE'S CLOCK MOVES between the sign-in and the
+			// enrolment, so a replacement dated at either instant says
+			// which.
+			wall := &ticking{at: clock}
 			r := newSignInRigWith(t, func(o *authapi.Options) {
 				requiring(o, tc.factor)
 				// THE SURFACE READS THE SAME ROWS THE GUARD DOES, as a
 				// node's two readers of one estate do.
 				o.Sessions = o.Writer.(*estate)
+				o.Now = wall.now
 			})
 			passwordOnly(r.estate)
 			h := guarded(t, r)
@@ -208,14 +220,17 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 				return
 			}
 
-			// THE ENROLMENT, both legs, through the restricted session.
+			// THE ENROLMENT, both legs, through the restricted session —
+			// five minutes on, well inside the sensitive window the
+			// password's proof opened.
+			wall.advance(5 * time.Minute)
 			offered, _ := send(t, h, http.MethodPost, auth.PathAuthTOTP, "{}", first)
 			var seed struct{ Secret string }
 			if err := json.Unmarshal(offered.Body.Bytes(), &seed); err != nil ||
 				offered.Code != http.StatusOK || seed.Secret == "" {
 				t.Fatalf("the first leg answered %d (%s)", offered.Code, offered.Body)
 			}
-			code, err := credential.TOTPCode(seed.Secret, credential.TOTPStep(clock))
+			code, err := credential.TOTPCode(seed.Secret, credential.TOTPStep(wall.now()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -234,6 +249,18 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 			if answer.Status != "enrolled" || answer.Session.Status != "signed_in" {
 				t.Errorf("the enrolment answered %s, want enrolled with a signed-in "+
 					"session beside it", enrolled.Body)
+			}
+			r.estate.mu.Lock()
+			starts := slices.Clone(r.estate.starts)
+			r.estate.mu.Unlock()
+			if len(starts) != 2 {
+				t.Fatalf("opened %d sessions, want the sign-in's and its replacement",
+					len(starts))
+			}
+			if !starts[1].ProvedAt.Equal(starts[0].ProvedAt) {
+				t.Errorf("the replacement was proved at %s, want the restricted "+
+					"session's %s — the enrolment's code proves a seed, not a person",
+					starts[1].ProvedAt, starts[0].ProvedAt)
 			}
 			for _, route := range [][2]string{
 				{http.MethodGet, "/iam/people"}, {http.MethodPost, "/work/items"},
@@ -500,4 +527,22 @@ func TestAPasswordNeverEnrolsOverASecondFactor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ticking is a clock a case moves.
+type ticking struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *ticking) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *ticking) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
 }

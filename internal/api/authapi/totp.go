@@ -313,15 +313,25 @@ func (s *Service) enrolmentSession(w http.ResponseWriter, r *http.Request,
 // # Why the session is replaced rather than lifted
 //
 // What restricted it is what its SIGN-IN proved — a password alone — and that
-// is a fact about the session, recorded once when it opened. Enrolling proves
-// the factor now: the code that proved the seed was typed at this request. So
-// the gesture opens the session that proof earns, and ENDS the restricted one
-// first, exactly as a step-up does — the same deadline, the same carried
-// grants, one live session and not two. A restriction lifted in place would be
-// a session that proved one thing and is trusted for another.
+// is a fact about the session, recorded once when it opened. The enrolment
+// satisfies the rule the restriction stood for: the person now holds a second
+// factor. So the gesture opens the session that earns, and ENDS the
+// restricted one first, exactly as a step-up does — the same deadline, the
+// same carried grants, one live session and not two. A restriction lifted in
+// place would be a session that proved one thing and is trusted for another.
+//
+// # And it keeps the restricted session's PROOF
+//
+// The code the enrolment checked proves possession of a seed this same
+// session was handed moments earlier, which says nothing about who is holding
+// it — so the replacement is proved when the password was, and never now.
+// Dated now, it restarted both step-up windows: whoever held the restricted
+// cookie was handed a fresh sensitive window — recovery codes, reveals — that
+// the password sign-in never earned.
 func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
 	principal iam.Principal, replaced session.Validation) {
 
+	proved := replaced.Session.ProvedAt
 	answer, ok := s.openSignIn(w, r, iamdomain.Sighting{
 		ID: principal.ID.String(), Kind: principal.Kind, Stage: principal.Stage,
 		Login: principal.Login, Seat: principal.Seat,
@@ -330,6 +340,7 @@ func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
 		stepUp: true, replaces: replaced.Bearer.Lineage.String(),
 		absolute:    replaced.Bearer.AbsoluteExpiresAt,
 		groupGrants: replaced.Session.GroupGrants,
+		provedAt:    &proved,
 		because:     "replaced by a second factor's enrolment",
 	})
 	if !ok {

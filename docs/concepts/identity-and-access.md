@@ -844,8 +844,13 @@ enrol one**:
   whole one, as a step-up does: the restricted session is ended first, the new
   one keeps its absolute deadline and carried grants, and the enrolment's
   answer carries the new session beside `"status": "enrolled"`, its cookie on
-  the response. The code that proved the seed is the second factor the new
-  session was proved with. Recovery codes come after, from the whole session.
+  the response. It also keeps the restricted session's **proof instant** —
+  when the password was proved — and is never dated at the enrolment: the code
+  the enrolment checks proves possession of a seed that same session was
+  handed a moment earlier, not who is holding it, so it earns no fresh
+  step-up window. Recovery codes come after, from the whole session, while the
+  password's proof is still inside `step_up_sensitive` — or after a step-up
+  that presents the new factor.
 - A restricted session enrols **only while its person holds no second
   factor**, decided in the snapshot the factor would land on. Its proof is a
   password alone, and fresh enough for the enrolment's window, so without this

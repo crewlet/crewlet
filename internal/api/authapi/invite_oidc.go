@@ -290,7 +290,7 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 	}, signIn{
 		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
 		refresh: refresh, groupGrants: s.boot.API.Auth.OIDC.GrantsFor(claims.Groups),
-		provedAt: provedAt,
+		provedAt: &provedAt,
 	})
 }
 
