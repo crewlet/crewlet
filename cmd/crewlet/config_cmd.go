@@ -775,7 +775,7 @@ func settingsHalfOf(path string) ([]byte, error) {
 		return nil, fmt.Errorf("company config %s: %w", path, err)
 	}
 	var doc yaml.Node
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
+	if err = yaml.Unmarshal(raw, &doc); err != nil {
 		// THE PARSE FAILURE IS THE LOADER'S TO REPORT, with its own line
 		// numbers: the caller has already read this file into a company,
 		// so reaching here at all means something changed underneath.

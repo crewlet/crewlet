@@ -210,9 +210,9 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		// YOUR OWN TOKEN, which only your own session may mint: this
 		// signs in for the one request and never reads
 		// CREWLET_API_TOKEN. See iamself.go.
-		body, err := iamTokenBody(*grants, *colleague, *label, *days)
-		if err != nil {
-			return err
+		body, bodyErr := iamTokenBody(*grants, *colleague, *label, *days)
+		if bodyErr != nil {
+			return bodyErr
 		}
 		return out.token(mintOwnToken(ctx, boot, *apiURL,
 			strings.TrimSpace(*login), body, stdin, stderr))

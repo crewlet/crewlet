@@ -98,7 +98,7 @@ func (c *chartClient) WriteUnit(ctx context.Context, unit chart.AuthoredUnit) er
 		"goals": unit.Goals, "channel": unit.Channel,
 		"project": unit.Project, "space": unit.Space,
 		"knowledge_refs": unit.KnowledgeRefs,
-		"runtime":        json.RawMessage(unit.Runtime),
+		"runtime":        unit.Runtime,
 	})
 	if err != nil {
 		return err
@@ -121,7 +121,7 @@ func (c *chartClient) WriteSeat(ctx context.Context, seat chart.AuthoredSeat) er
 		"behavioral_guidelines": seat.BehavioralGuidelines,
 		"manages":               seat.Manages,
 		"project":               seat.Project, "space": seat.Space,
-		"runtime": json.RawMessage(seat.Runtime),
+		"runtime": seat.Runtime,
 	})
 	if err != nil {
 		return err

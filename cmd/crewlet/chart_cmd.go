@@ -221,10 +221,10 @@ func chartExport(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	var got json.RawMessage
-	if err := client.get(context.Background(), "/company/export", &got); err != nil {
+	if err = client.get(context.Background(), "/company/export", &got); err != nil {
 		return err
 	}
-	pretty, err := json.MarshalIndent(json.RawMessage(got), "", "  ")
+	pretty, err := json.MarshalIndent(got, "", "  ")
 	if err != nil {
 		return err
 	}

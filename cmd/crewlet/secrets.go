@@ -414,7 +414,7 @@ func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error 
 				r.UpdatedAt.Format(time.RFC3339),
 				describeAuthor(r.UpdatedBy, r.OperatorID), r.Source)
 		}
-		if err := w.Flush(); err != nil {
+		if err = w.Flush(); err != nil {
 			return err
 		}
 	}

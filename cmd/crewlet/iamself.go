@@ -86,7 +86,7 @@ func (m selfMint) mint(ctx context.Context, warn io.Writer) (map[string]any, err
 		return nil, err
 	}
 	defer func() {
-		if err := m.signOut(context.WithoutCancel(ctx), cookie); err != nil {
+		if endErr := m.signOut(context.WithoutCancel(ctx), cookie); endErr != nil {
 			// NOT `crewlet iam revoke`, nor POST /auth/logout/all: both
 			// move the owner's revocation epoch, which withdraws the
 			// token this command just minted along with the session.
@@ -95,7 +95,7 @@ func (m selfMint) mint(ctx context.Context, warn io.Writer) (map[string]any, err
 				"by name with POST /auth/logout/<lineage> (`crewlet iam "+
 				"sessions <your id>` lists it) — not with `crewlet iam "+
 				"revoke`, which would withdraw the new token too\n",
-				err, session.Idle)
+				endErr, session.Idle)
 		}
 	}()
 	answer, status, raw, err := m.send(ctx, http.MethodPost, "/iam/credentials",
@@ -315,7 +315,10 @@ func readSecret(stdin io.Reader, lines *bufio.Reader, prompt io.Writer,
 // may end with none.
 func readPiped(lines *bufio.Reader) (string, error) {
 	line, err := lines.ReadString('\n')
-	if err != nil && !(errors.Is(err, io.EOF) && line != "") {
+	// A LAST LINE WITH NO ENDING arrives together with io.EOF, and it is
+	// still the line that was typed.
+	unterminated := errors.Is(err, io.EOF) && line != ""
+	if err != nil && !unterminated {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
