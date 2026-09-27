@@ -334,7 +334,7 @@ func TestAnInvitationWithNoExternalURLIsAFault(t *testing.T) {
 // every site asks auth.RetryIdentity with the 503's cause, so a refusal no
 // wait clears carries no Retry-After here as it carries none on /chart and
 // /work.
-func TestEveryUnavailableAnswerHereCarriesARetryAfter(t *testing.T) {
+func TestEveryUnavailableAnswerHereSaysWhetherToComeBack(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
 	if err != nil {

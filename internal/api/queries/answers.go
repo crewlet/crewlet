@@ -46,9 +46,11 @@ const (
 // Every field is optional, and an absent one leaves its questions UNREGISTERED,
 // so they come back as [ErrUnknown] (`unknown_query`, 404) rather than answered
 // emptily: "there is no tracker here" and "the tracker is empty" are answers a
-// screen must be able to tell apart, and "not here" is permanent in a way
-// [ErrUnavailable]'s "not yet" is not, so a Retry-After for a source this node
-// will never have would send a client round a loop.
+// screen must be able to tell apart, and "not here" is permanent: no wait and
+// no other node's answer gives this node a source it was not configured with,
+// so it is a question this node does not have rather than [ErrUnavailable]'s
+// question it cannot answer here — whose `retry_after` says whether coming
+// back helps, and a Retry-After here would send a client round a loop.
 //
 // Only a few are absent on a real node: Work and Pages on a company that runs
 // the vendor tracker and wiki, Knowledge where no knowledge backend is

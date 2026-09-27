@@ -111,9 +111,15 @@ const (
 	CodeBadParams = "bad_params"
 
 	// CodeUnavailable is a question this node understood and cannot answer
-	// YET: a projection still catching up, or a coordination store that
-	// could not be reached. A surface this process does not have at all is
-	// CodeUnknownQuery instead, because waiting never changes that answer.
+	// HERE: a projection still catching up, a coordination store that could
+	// not be reached, or a refusal by its state log — a node behind its log,
+	// and also one holding a record it cannot decode or whose log is full,
+	// which no wait clears. WHETHER WAITING HELPS is not this code's to say:
+	// the frame's `retry_after` carries it ([Unavailable], by
+	// [statelog.RetryAfter]'s rule), and its zero sends a client to another
+	// node or an operator rather than back here. A surface this process does
+	// not have at all is CodeUnknownQuery instead: that is this node's
+	// configuration rather than its state, and no wait changes it.
 	//
 	// It is the code that must never be flattened into an empty result.
 	// "This company has no work" is an answer a person acts on: they file
@@ -130,7 +136,7 @@ var (
 	ErrUnauthorized = errors.New("stream: this caller may not ask that")
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
-	ErrUnavailable  = errors.New("stream: not available on this node yet")
+	ErrUnavailable  = errors.New("stream: not available on this node")
 )
 
 // RefusedError is [ErrUnauthorized] carrying WHY: the rule's reason and the

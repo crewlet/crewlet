@@ -28,14 +28,16 @@ import (
 // EVERY 503 THIS SURFACE ANSWERS SAYS WHETHER TO COME BACK, BECAUSE NOTHING
 // HERE SPELLS ONE ITSELF OR PICKS ITS HINT WITHOUT ITS CAUSE.
 //
-// A 503 with no Retry-After is indistinguishable to a client from a node that
-// is down for good, and the sign-in surface is where a client most needs to
-// tell them apart: a browser that cannot, gives up on the one page that would
-// have let the person back in. Ten sites answered a bare 503. The rule is held
-// structurally — no file in this package names the status, so the one writer
-// that pairs it with the header, httpjson.Unavailable, is the only way to
-// answer one — because a behavioural case per site would have to provoke ten
-// different failures and would still say nothing about the eleventh.
+// A 503 that does not say whether to come back is indistinguishable to a
+// client from a node that is down for good, and the sign-in surface is where a
+// client most needs to tell them apart: a browser that cannot, gives up on the
+// one page that would have let the person back in. Ten sites answered a bare
+// 503. The rule is held structurally — no file in this package names the
+// status, so the one writer that decides the header with it,
+// httpjson.Unavailable, is the only way to answer one: a Retry-After where
+// waiting clears the cause, and none, deliberately, where it cannot — because
+// a behavioural case per site would have to provoke ten different failures and
+// would still say nothing about the eleventh.
 //
 // AND NO FILE NAMES THE BARE HINT, auth.RetryIdentitySeconds: every site asks
 // auth.RetryIdentity with what caused the 503, nil where nothing did. Every
@@ -43,7 +45,7 @@ import (
 // large, a full log, an evicted node — told a client to come back in two
 // seconds; the refusal's own rule answers those with no header, which is the
 // answer.
-func TestEveryUnavailableAnswerHereCarriesARetryAfter(t *testing.T) {
+func TestEveryUnavailableAnswerHereSaysWhetherToComeBack(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
 	if err != nil {
