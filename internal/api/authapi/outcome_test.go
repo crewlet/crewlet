@@ -179,7 +179,7 @@ func TestAnEnrolmentNobodyCanConfirmBuildsNothing(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 			"/auth/invite/"+invitationID, strings.NewReader(
-				`{"login":"dana.sre","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
+				`{"secret":"`+invitationSecret+`","login":"dana.sre","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 		check(t, rec, writer, "invite:"+invitationID)
 	})
 

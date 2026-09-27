@@ -233,12 +233,13 @@ snapshot the grants land from:
 | Enrolment | Its authority | What the record refuses |
 |---|---|---|
 | Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before the first claim is taken |
-| Redeeming an invitation | The invitation, as its issuer wrote it | A grant or a reach the invitation did not carry, an address it was not issued to, and a link already spent or aged out |
+| Redeeming an invitation | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a grant or a reach the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or bound to somebody else — and a link already spent or aged out |
 | The first person | The one-time code, **taken** on the company's one bootstrap subject | A code that is not on the log, is withdrawn, aged out or ended — any founding while another code's is in progress — and any enrolment once somebody else exists |
 
-An enrolment is a sequence — the address, then the login, then the person — and
-the authority in that table is checked **twice**: once before the first claim,
-and again in the person record's own snapshot, which is the one that counts.
+An enrolment is a sequence — the seat when it binds one, the address, then the
+login, then the person — and the authority in that table is checked **twice**:
+once before the first claim, and again in the person record's own snapshot,
+which is the one that counts.
 For an invitation the early check is a read. For the first person it is a
 **write** — the founding *takes* the exemption on one subject, below — because
 two founders who each pass a read both land. The early check is what keeps a
@@ -543,6 +544,25 @@ record refuses anything the invitation does not cover — and a link that was
 spent or aged out between opening the form and posting it answers
 `410 invite_spent`, the same as one that was already spent.
 
+**The link is an id and a secret, and it opens the dashboard.** An invitation
+link reads
+
+```text
+https://crewlet.example.com/dashboard#/invite/<id>.<secret>
+```
+
+— the dashboard's invitation screen, built from `api.external_url`, with the
+credential after the `#`. A browser never sends a URL's fragment to any server,
+so neither half reaches a proxy's access log on the way to the page. The screen
+then asks `/auth/invite/{id}` itself, with the id in the path and the secret
+**beside** it and never in a URL: in the `X-Crewlet-Invite-Secret` header to
+render, in the JSON body to redeem, and in the form to redeem through the
+identity provider. The id alone opens nothing — it is the row's key, in every
+snapshot, backup and access log — and what the estate keeps of the secret is
+its SHA-256. A missing or wrong secret is answered exactly as an id nobody
+issued is: the same `410`, counted against the caller's source, because told
+apart it would say which ids exist.
+
 **The GET renders and never spends.** A link is followed by things that are not
 the person it was sent to: a mail client prefetching, a security scanner opening
 every URL in a message, a chat app building a preview card. Every one of those
@@ -551,6 +571,24 @@ never saw it — or, far more often, a person told their link was already used b
 whoever scanned their mailbox. So the GET answers what the form needs to render
 and changes nothing; the POST is the person, having typed a password.
 
+**An invitation may bind a seat.** `crewlet iam invite -seat <handle>` and `seat`
+on `POST /iam/invitations` name a **human seat nobody holds**, and redeeming the
+link then binds the person it creates to that seat — onboarding somebody into
+their seat with one link rather than an invitation and a bind afterwards. A seat
+the chart does not hold, an agent's seat and a seat somebody is already bound to
+are refused when the invitation is issued, naming the seat. The invitation
+records the seat's **identity** — the handle it was created under — so a rename
+before the redemption binds the same seat, and the invitation's page shows it
+as the chart calls it then. The redemption claims the seat **first**, before the
+address and the login: a seat is the one thing the chart can move in the week a
+link is open, and a refusal at the first claim leaves nothing behind, where one
+after the address would hold that address against the next invitation to the
+same person. A seat that was removed, made an agent's or bound to a colleague
+since the issue is refused as the link's own refusal — `410`, ask whoever sent
+it for a new one — before anything is written; the rare redemption that races a
+colleague's bind to the seat is `409`, saying the seat is taken and naming
+nobody.
+
 What the form needs includes **a login to propose**. Every person enrols with
 one, and somebody following a link has typed nothing yet, so the GET answers
 `login` derived from the address in the person grammar. The POST carries
@@ -558,9 +596,9 @@ whatever login the person settled on — the proposal or their own — and an
 absent one is refused `400`, as a login somebody else holds is refused `409`
 without saying who.
 
-**A redemption can be retried until it lands.** It is a sequence — the address
-claim, the login claim, the person — so one refused halfway leaves the address
-claimed. The person it creates is therefore **derived from the invitation**
+**A redemption can be retried until it lands.** It is a sequence — the seat
+claim where there is one, the address claim, the login claim, the person — so
+one refused halfway leaves the address claimed. The person it creates is therefore **derived from the invitation**
 (a uuid7 at the invitation's own instant) rather than minted per request:
 every attempt names the same person, a claim the first attempt took is one the
 retry already holds, and somebody told their login was taken simply chooses
@@ -569,16 +607,28 @@ expired invitation is refused before anything is written, and so is one whose
 address somebody is already enrolled under (if that is the person this link
 created and its spend never landed, the spend is published then).
 
-Absent, redeemed and expired are **one refusal**, because the remedy is the same
-and telling them apart would say "this was already used" to somebody whose link
-merely aged out, and send them looking for who used it.
+Absent, redeemed, expired and a secret that is not the link's are **one
+refusal**, because the remedy is the same and telling them apart would say
+"this was already used" to somebody whose link merely aged out, and send them
+looking for who used it.
 
 **The link is shown once and nothing can read it back.** What the estate holds
-is the invitation's id, which *is* the verifier: holding the link is holding
-the id. An invitation an administrator lost is re-issued with one more call
-rather than recovered — and the address it was for is sealed under the
-invitation's own key, minted for it and shredded when it is collected, so an
-address somebody typed and never sent leaves no cleartext anywhere.
+is the invitation's id and the SHA-256 of the secret its link carries — the
+record that issued it carries the same hash and never the secret, and the
+redemption's own record checks the secret against it again where the grants
+land. An invitation an administrator lost is re-issued with one more call
+rather than recovered; the one answer that carries a link again is a **retry of
+the issue itself** under the same key, because the id is derived from the key
+and the secret from the id, both under the company's own key. And the address it
+was for is sealed under the invitation's own key, minted for it and shredded
+when it is collected, so an address somebody typed and never sent leaves no
+cleartext anywhere.
+
+An invitation issued before links carried a secret has no verifier and is
+**redeemable by nobody**: admitting it on its id would admit exactly what the
+secret closes. Issue it again. Its record also travels at the identity log's
+newest record version, so a node running an older build defers it and answers
+the link `410` rather than redeeming it without checking the secret.
 
 **The engine never sends mail.** `crewlet iam invite` and `POST
 /iam/invitations` hand the inviter the URL; getting it to the person is
@@ -1062,10 +1112,11 @@ subject is **linked** to a person in exactly two ways:
 
 - **An invitation redeemed through the provider.** The invitation's page
   offers the provider (`provider_start`), and its form **posts** to
-  `POST /auth/invite/{id}/provider`, which sends the browser to the provider
-  with the invitation sealed beside the PKCE verifier. When the person comes
-  back, the callback enrols the person the invitation creates — its grants,
-  its reach, its address, the login they chose, no password — and links the
+  `POST /auth/invite/{id}/provider` with the link's secret beside the login,
+  which sends the browser to the provider with the invitation and that secret
+  sealed beside the PKCE verifier. When the person comes back, the callback
+  enrols the person the invitation creates — its grants, its reach, its
+  address, its seat, the login they chose, no password — and links the
   account the provider came back with to them, then signs them in. The
   invitation is the authority; the provider says only who arrived. **It is a
   POST from the invitation's own page and never a link**, because the account

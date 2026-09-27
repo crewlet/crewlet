@@ -399,14 +399,14 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 func returnPath(raw string) string {
 	want := strings.TrimSpace(raw)
 	if want == "" || len(want) > maxReturnPath {
-		return "/dashboard"
+		return auth.PathDashboard
 	}
 	if !strings.HasPrefix(want, "/") || strings.HasPrefix(want, "//") {
-		return "/dashboard"
+		return auth.PathDashboard
 	}
 	parsed, err := url.Parse(want)
 	if err != nil || parsed.Scheme != "" || parsed.Host != "" {
-		return "/dashboard"
+		return auth.PathDashboard
 	}
 	return want
 }

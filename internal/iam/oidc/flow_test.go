@@ -371,18 +371,25 @@ func TestAFlightIsNotRedeemableAfterItsWindow(t *testing.T) {
 // A FLIGHT CARRIES THE REDEMPTION IT IS FINISHING, AND MINTS ITS OWN SECRETS.
 //
 // An invitation redeemed through the provider is decided at the CALLBACK, so
-// the invitation and the login the redeemer chose must survive the round trip
-// sealed — a query parameter on the way back could be swapped for somebody
-// else's invitation. And whatever the caller hands in, the state, the nonce
-// and the verifier are this package's own: a caller able to choose them would
-// be able to predict them.
+// the invitation, its link's secret and the login the redeemer chose must
+// survive the round trip sealed — a query parameter on the way back could be
+// swapped for somebody else's invitation. And whatever the caller hands in, the
+// state, the nonce and the verifier are this package's own: a caller able to
+// choose them would be able to predict them.
+//
+// AN INVITATION WITHOUT ITS SECRET, or a secret without an invitation, is
+// refused at the start: the callback could never finish the first, and the
+// second is a secret carried for nothing. Mutation: drop the secret from the
+// copy and the round trip loses it; drop the refusal and a half-redemption
+// starts.
 func TestAFlightCarriesTheRedemptionAndMintsItsOwnSecrets(t *testing.T) {
 	t.Parallel()
 	idp := newIssuer(t)
 	cipher := testCipher(t)
 	_, sealed, err := idp.config().Start(cipher, idp.Server.URL+"/authorize",
-		oidc.Flight{Return: "/welcome", Invite: "inv-1", Login: "jane.doe",
-			State: "chosen", Nonce: "chosen", Verifier: "chosen"}, at)
+		oidc.Flight{Return: "/welcome", Invite: "inv-1", InviteSecret: "s3cr3t",
+			Login: "jane.doe", State: "chosen", Nonce: "chosen",
+			Verifier: "chosen"}, at)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -390,10 +397,21 @@ func TestAFlightCarriesTheRedemptionAndMintsItsOwnSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if flight.Invite != "inv-1" || flight.Login != "jane.doe" ||
-		flight.Return != "/welcome" {
-		t.Errorf("the flight carries (%q, %q, %q), want the redemption it "+
-			"was started for", flight.Invite, flight.Login, flight.Return)
+	if flight.Invite != "inv-1" || flight.InviteSecret != "s3cr3t" ||
+		flight.Login != "jane.doe" || flight.Return != "/welcome" {
+		t.Errorf("the flight carries (%q, %q, %q, %q), want the redemption it "+
+			"was started for", flight.Invite, flight.InviteSecret, flight.Login,
+			flight.Return)
+	}
+	for _, half := range []oidc.Flight{
+		{Invite: "inv-1"},
+		{InviteSecret: "s3cr3t"},
+	} {
+		if _, _, err := idp.config().Start(cipher, idp.Server.URL+"/authorize",
+			half, at); err == nil {
+			t.Errorf("a flight carrying invitation %q with secret %q started",
+				half.Invite, half.InviteSecret)
+		}
 	}
 	for name, value := range map[string]string{
 		"state": flight.State, "nonce": flight.Nonce, "verifier": flight.Verifier,

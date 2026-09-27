@@ -44,7 +44,7 @@ const iamUsage = `crewlet iam — the company's people, credentials and sessions
 Usage:
   crewlet iam people [-q TERM] [-stage S] [-limit N]   The directory
   crewlet iam show ID                                  One person, in full
-  crewlet iam invite EMAIL [-grants G,...] [-colleague L]
+  crewlet iam invite EMAIL [-grants G,...] [-colleague L] [-seat SEAT]
                                                        Issue a link, shown ONCE
   crewlet iam create -login L [-email E] [-kind K]     Create somebody directly
   crewlet iam bind ID SEAT                             Bind a person to a chart seat
@@ -79,6 +79,8 @@ Flags:
   -reason TEXT   Recorded on the change, and read by whoever audits it
   -idempotency-key OP
                  Retry a write whose outcome was unknown, as the SAME operation
+  -seat SEAT     On invite: the chart seat redeeming the link binds them to — a
+                 human seat nobody holds
 
 Every write prints its outcome: "applied" means this node has the change,
 "pending" that it is durable and this node has not applied it yet. A write
@@ -157,6 +159,8 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	at := fs.String("at", "", "an RFC 3339 instant, resolved to a position once")
 	key := fs.String("idempotency-key", "",
 		"retry a write whose outcome was unknown: the op id its answer named")
+	seat := fs.String("seat", "",
+		"the chart seat an invitation binds the person it creates to (invite only)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -172,6 +176,15 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if strings.TrimSpace(*key) != "" && !iamKeyed[sub] {
 		return iamUnkeyed(sub)
+	}
+	// -seat IS invite's, and refused anywhere else rather than ignored:
+	// `iam create -seat lead` read as accepted would leave somebody
+	// created and bound to nothing, which is the one outcome the flag was
+	// typed to prevent. A person who already exists is bound with `bind`.
+	if strings.TrimSpace(*seat) != "" && sub != "invite" {
+		return fmt.Errorf("-seat is invite's: it names the seat an "+
+			"invitation binds — bind somebody who already exists with "+
+			"`crewlet iam bind ID SEAT`, not with `iam %s -seat`", sub)
 	}
 	// A CREATE NAMES ITS LOGIN, and is told so here rather than by the
 	// node: every principal enrols with one — it is the name their changes
@@ -240,6 +253,7 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 		body["email"] = subject
+		body["seat"] = strings.TrimSpace(*seat)
 		body["reason"] = *reason
 		return out.invite(client.post(ctx, "/iam/invitations", body))
 	case "create":
@@ -886,8 +900,9 @@ func (p *iamPrinter) invite(answer map[string]any, err error) error {
 	fmt.Fprintf(p.w, "invitation %s\n%s\n\n", str(answer["id"]),
 		str(answer["url"]))
 	fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
-	fmt.Fprintln(p.w, "This link is shown once and cannot be read back. Send "+
-		"it to them yourself — this engine never sends mail.")
+	fmt.Fprintln(p.w, "This link is shown once and cannot be read back: what "+
+		"the estate keeps is a hash of the secret after the id. Send it to "+
+		"them yourself — this engine never sends mail.")
 	return nil
 }
 

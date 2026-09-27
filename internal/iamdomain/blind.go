@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -193,12 +194,14 @@ func (b *Blinder) Subject(issuer, subject string) (string, error) {
 // establish names the invitation its first attempt issued, and hands back the
 // link to it rather than a second invitation the address then refuses.
 //
-// # Under the company's key, because the id is the verifier
+// # Under the company's key, although the id is no longer the credential
 //
-// Holding an invitation's link is holding its id, so the id is a bearer
-// credential for whatever the invitation confers, and its entropy must not be
-// the caller's to choose: a key somebody typed, or minted from a weak source,
-// derived under a plain hash would be a link anybody could compute. Under the
+// The id opens nothing on its own — the link's SECRET does, and the estate
+// keeps only its verifier ([Blinder.InvitationSecret]) — but the id is what the
+// secret is derived from and what a redemption's person is derived from
+// ([InvitedPersonID]), so its entropy is still not the caller's to choose: a
+// key somebody typed, derived under a plain hash, would let anybody who saw the
+// key compute the invitation it names and the person it creates. Under the
 // company's key it is unguessable without that key whatever the operation key
 // was — and in a MAC domain of its own ([invitationIDDomain]), so no blind of
 // any address or subject is ever an invitation id.
@@ -223,6 +226,61 @@ func (b *Blinder) InvitationID(key string) (string, error) {
 // invitationIDDomain separates an invitation id's MAC from every blind the same
 // key derives, for [blindDomain]'s reason.
 const invitationIDDomain = "crewlet/iam/invitation-id/v1"
+
+// InvitationSecret is the secret an invitation's LINK carries beside its id —
+// the half that is the credential.
+//
+// # Why the id is no longer enough
+//
+// The id is stored in the clear, as it must be: it is the row's primary key,
+// in the record that issued it, in every snapshot and backup, readable off the
+// cluster port, and in the access log of every proxy a link's GET passed
+// through. When the link was the id alone, every one of those places held a
+// working invitation — the one credential in this estate kept as itself rather
+// than as a verifier, where a bootstrap code, a token and a recovery code all
+// keep a hash. So the link now carries `<id>.<secret>`, and what the estate
+// keeps is [InvitationVerifier] of the secret and never the secret.
+//
+// # Derived, not minted, and still unguessable
+//
+// It is a MAC of the invitation's id under the company's key, in a domain of
+// its own ([invitationSecretDomain]), so the RETRY an unknown answer asks an
+// issuer for — the same operation key, deriving the same id — hands back the
+// same link rather than one whose secret the estate never recorded. Nobody
+// without the company's key can compute it from an id, and a node that holds
+// the key can already read every sealed address in the company.
+//
+// Thirty-two bytes, URL-safe base64 without padding: the value rides in a URL
+// fragment and a form field, and nothing in either has to be escaped.
+func (b *Blinder) InvitationSecret(id string) (string, error) {
+	if b == nil || len(b.key) == 0 {
+		return "", ErrNoBlindKey
+	}
+	if id == "" {
+		return "", errors.New("iamdomain: an invitation's secret is derived " +
+			"from its id, and this one names none")
+	}
+	mac := hmac.New(sha256.New, b.key)
+	_, _ = mac.Write([]byte(invitationSecretDomain))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write([]byte(id))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+// invitationSecretDomain separates an invitation's link secret from its id and
+// from every blind the same key derives.
+const invitationSecretDomain = "crewlet/iam/invitation-secret/v1"
+
+// InvitationVerifier is what the estate keeps of an invitation's link secret:
+// its SHA-256, hex.
+//
+// A HASH AND NOT argon2, for the rule internal/iam/credential states: spend
+// cost where an attacker has a shortcut, and a secret this engine derived from
+// thirty-two bytes of MAC has no dictionary to grind.
+func InvitationVerifier(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
 
 // derive is the one HMAC, and the one encoding.
 //

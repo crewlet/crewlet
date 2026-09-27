@@ -85,8 +85,8 @@ func TestTheDeploymentsPasswordFloorIsTheOneEnforcedAndReported(t *testing.T) {
 				o.Sealer = stubSealer{address: "dana@example.com"}
 			}).Routes(mux)
 			redeemed := postJSON(t, mux, "/auth/invite/"+invitationID,
-				map[string]string{"login": "dana.sre", "name": "Dana",
-					"password": fifteen})
+				map[string]string{"secret": invitationSecret,
+					"login": "dana.sre", "name": "Dana", "password": fifteen})
 			assertFloorAnswer(t, "the redemption", redeemed, tc.status, tc.floor)
 			if got := reportedFloor(t, mux, "/auth/invite/"+invitationID); got != tc.report {
 				t.Errorf("the invitation's view reports a floor of %d, want %d",
@@ -135,10 +135,15 @@ func assertFloorAnswer(t *testing.T, what string, rec *httptest.ResponseRecorder
 }
 
 // reportedFloor is the `min_password_length` a GET answers.
+//
+// THE INVITATION'S SECRET RIDES ON EVERY ASK, which the view reads and the
+// posture read ignores: one helper for both surfaces the floor is reported on.
 func reportedFloor(t *testing.T, mux *http.ServeMux, path string) int {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	r := httptest.NewRequest(http.MethodGet, path, nil)
+	r.Header.Set(secretHeader, invitationSecret)
+	mux.ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET %s answered %d (body %s)", path, rec.Code, rec.Body.String())
 	}

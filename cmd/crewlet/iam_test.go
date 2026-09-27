@@ -523,3 +523,54 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 		t.Errorf("a refused key still reached the node: %q", keys)
 	}
 }
+
+// AN INVITATION BINDS THE SEAT THE OPERATOR NAMED, and only an invitation
+// takes the flag.
+//
+// `-seat` is what onboards somebody into a seat with one link rather than an
+// invitation and a bind afterwards, so it has to reach the body the node
+// reads. And on any other command it is refused rather than ignored: `iam
+// create -seat lead` read as accepted would leave somebody created and bound to
+// nothing. Mutation: drop the body field and the node sees no seat; drop the
+// refusal and the create is sent.
+func TestAnIamInviteBindsTheSeatTheOperatorNamed(t *testing.T) {
+	var body map[string]any
+	var paths []string
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"inv-1","outcome":"applied",` +
+			`"url":"https://crewlet.example.com/dashboard#/invite/inv-1.s3cr3t",` +
+			`"expires_at":"2026-06-21T12:00:00Z"}`))
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	if err := run([]string{"iam", "invite", "lead@example.com", "-seat",
+		"platform-lead", "-config", cfg, "-api", node.URL}, &out, &errs); err != nil {
+		t.Fatalf("iam invite: %v\n%s", err, errs.String())
+	}
+	if len(paths) != 1 || paths[0] != "POST /iam/invitations" {
+		t.Fatalf("the node saw %v, want one POST /iam/invitations", paths)
+	}
+	if body["seat"] != "platform-lead" || body["email"] != "lead@example.com" {
+		t.Errorf("the invitation carried %v, want the address and seat platform-lead", body)
+	}
+	if !strings.Contains(out.String(), "#/invite/inv-1.s3cr3t") {
+		t.Errorf("the link was not printed:\n%s", out.String())
+	}
+
+	err := run([]string{"iam", "create", "-login", "jane.doe", "-email",
+		"jane@example.com", "-seat", "platform-lead", "-config", cfg, "-api",
+		node.URL}, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), "iam bind") {
+		t.Errorf("a create given -seat answered %v, want a refusal naming `iam bind`", err)
+	}
+	if len(paths) != 1 {
+		t.Errorf("the refused create was sent anyway: %v", paths)
+	}
+}

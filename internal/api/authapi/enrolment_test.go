@@ -293,7 +293,7 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 				o.Writer = writer
 			}).Routes(mux)
 			postJSON(t, mux, "/auth/invite/"+invitationID, map[string]string{
-				"login": "dana.sre", "name": "Dana",
+				"secret": invitationSecret, "login": "dana.sre", "name": "Dana",
 				"password": "a-perfectly-fine-passphrase"})
 			return writer.opened()
 		}, true},

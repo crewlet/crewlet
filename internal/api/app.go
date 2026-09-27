@@ -641,8 +641,8 @@ func New(opts Options) (*App, error) {
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
 	// authenticated fetch.
-	mux.Handle("GET /{$}", http.RedirectHandler("/dashboard", http.StatusFound))
-	mux.Handle("GET /dashboard", http.HandlerFunc(files.serveIndex))
+	mux.Handle("GET /{$}", http.RedirectHandler(auth.PathDashboard, http.StatusFound))
+	mux.Handle("GET "+auth.PathDashboard, http.HandlerFunc(files.serveIndex))
 	mux.Handle("GET /favicon.ico", http.HandlerFunc(files.serveFavicon))
 	mux.Handle("GET /static/", http.HandlerFunc(files.serveStatic))
 	// The inbound edge. Exempt from the guard by prefix (see the auth

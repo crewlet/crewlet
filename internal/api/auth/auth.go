@@ -85,7 +85,8 @@ var log = logging.Get("api.auth")
 //     OIDC legs are how somebody OBTAINS a credential, so requiring one is a
 //     deployment nobody can enter. What stands in for the guard on each is the
 //     per-source throttle and the origin check, which they are NOT exempt
-//     from. Plus /auth/invite/, whose own id is the credential.
+//     from. Plus /auth/invite/, whose link is the credential — the id in
+//     the path and the secret beside it, never in a URL.
 //
 // NOT A /auth/ PREFIX, and that is the whole care in this entry. The same
 // surface serves the logout routes, the second-factor enrolment and the
@@ -100,7 +101,7 @@ var log = logging.Get("api.auth")
 // any future route merely starting with those letters — a /health-admin, a
 // /readyz-reset — on the day it was added.
 var unguardedExact = map[string]struct{}{
-	"/": {}, "/dashboard": {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
+	"/": {}, PathDashboard: {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
 	PathAuthConfig: {}, PathAuthLogin: {}, PathAuthBootstrap: {},
 	PathAuthOIDCStart: {}, PathAuthOIDCCallback: {},
 }
@@ -138,8 +139,17 @@ const (
 	PathAuthOIDCCallback = "/auth/oidc/callback"
 
 	// AuthInvitePrefix is the invitation pair, and a PREFIX because the
-	// id is a path segment. Holding the link is the credential.
+	// id is a path segment. Holding the link is the credential — its
+	// secret, which travels beside the id in a header, a body or a form
+	// and never in a path.
 	AuthInvitePrefix = "/auth/invite/"
+
+	// PathDashboard is the dashboard's shell: the page every screen is a
+	// fragment route of, and so the page a link a person follows points
+	// at — an invitation's is `PathDashboard + "#/invite/<id>.<secret>"`.
+	// Exempt for the shell's reason above, and named here because the
+	// exemption, the mount and every link to it must be one spelling.
+	PathDashboard = "/dashboard"
 
 	// PathAuthPrefix is the whole sign-in surface.
 	//

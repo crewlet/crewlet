@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -469,7 +470,11 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 	if derr != nil {
 		return iamdomain.InviteIssued{}, derr
 	}
-	return iamdomain.InviteIssued{Result: result, ID: id,
+	secret, serr := blinder.InvitationSecret(id)
+	if serr != nil {
+		return iamdomain.InviteIssued{}, serr
+	}
+	return iamdomain.InviteIssued{Result: result, ID: id, Secret: secret,
 		ExpiresAt: in.ExpiresAt}, err
 }
 
@@ -782,27 +787,56 @@ func TestACreateNamingASeatBindsItAsItsOwnRecord(t *testing.T) {
 	}
 }
 
-// THE INVITE URL IS RETURNED EXACTLY ONCE.
+// THE INVITE URL IS RETURNED EXACTLY ONCE, AND IT IS THE DASHBOARD'S SCREEN.
 //
-// The estate holds the invitation's id, which IS the verifier — holding the
-// link is holding the id — so nothing stores the URL and no route reads one
-// back. What the answer must carry is the whole link, built from
-// api.external_url rather than from the request.
+// The estate holds the invitation's id and a VERIFIER of the secret its link
+// carries beside it, so nothing stores the URL and no route reads one back.
+// What the answer must carry is the whole link, built from api.external_url
+// rather than from the request — and it is the dashboard's invitation screen,
+// `/dashboard#/invite/<id>.<secret>`, where it used to be the JSON route a
+// person clicking it in their mail was shown as a JSON document. The
+// credential rides in the FRAGMENT, which a browser never sends: the path
+// every access log records carries neither half.
+//
+// Mutation: build the link from the API route again and the shape fails;
+// drop the secret and the link opens nothing.
 func TestTheInviteUrlIsReturnedExactlyOnce(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPost, "/iam/invitations",
-		map[string]any{"email": "sarah@example.com"})
+		map[string]any{"email": "sarah@example.com", "seat": " platform-lead "})
 	if got.status != http.StatusCreated {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
 	}
 	link, _ := got.body["url"].(string)
 	id, _ := got.body["id"].(string)
-	if !strings.HasPrefix(link, "https://crewlet.example.com/auth/invite/") {
-		t.Errorf("the link is %q, which is not built from api.external_url", link)
+	blinder, err := iamdomain.NewBlinder([]byte(strings.Repeat("k",
+		iamdomain.MinBlindKeyBytes)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.HasSuffix(link, id) {
-		t.Errorf("the link %q does not carry the invitation id %q", link, id)
+	secret, err := blinder.InvitationSecret(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://crewlet.example.com/dashboard#/invite/" + id + "." +
+		secret; link != want {
+		t.Errorf("the link is %q, want the dashboard's invitation screen "+
+			"built from api.external_url, %q", link, want)
+	}
+	parsed, err := url.Parse(link)
+	if err != nil {
+		t.Fatalf("the link does not parse: %v", err)
+	}
+	if strings.Contains(parsed.Path+parsed.RawQuery, secret) ||
+		strings.Contains(parsed.Path+parsed.RawQuery, id) {
+		t.Errorf("the link carries its credential where a request would send "+
+			"it (path %q, query %q) rather than in the fragment",
+			parsed.Path, parsed.RawQuery)
+	}
+	if r.writer.invited.Seat != "platform-lead" {
+		t.Errorf("the invitation binds seat %q, want the one named, trimmed",
+			r.writer.invited.Seat)
 	}
 	if r.writer.invited.ExpiresAt != at.Add(iamapi.InviteWindow) {
 		t.Errorf("the invitation expires at %s, want %s",

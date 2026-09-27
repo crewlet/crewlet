@@ -98,6 +98,9 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	offered := []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}
+	// THE LINK'S SECRET, per invitation: a redemption presents it beside
+	// the id, and these cases are about what the invitation confers.
+	secrets := map[string]string{}
 	issue := func(address string) string {
 		t.Helper()
 		var id string
@@ -109,6 +112,7 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 				OpID:      operationKey(), Reason: "onboarding",
 			})
 			id = issued.ID
+			secrets[id] = issued.Secret
 			return err
 		}); err != nil {
 			t.Fatalf("invite %s: %v", address, err)
@@ -126,7 +130,8 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 				Name: "A joiner", Email: address, Login: iam.LoginFromAddress(address),
 				Grants:    grants,
 				Colleague: colleague, Invitation: invitation,
-				OpID: "op-redeem-" + person, Reason: "redeemed an invitation",
+				InvitationSecret: secrets[invitation],
+				OpID:             "op-redeem-" + person, Reason: "redeemed an invitation",
 			})
 			return err
 		})

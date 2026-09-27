@@ -42,6 +42,9 @@ type offeredInvitation struct {
 	// ambiguous answers every subject as linked to two people, which only
 	// a restore produces.
 	ambiguous bool
+
+	// seat is the identity of a seat the invitation binds, or empty.
+	seat string
 }
 
 func (d offeredInvitation) InvitationByID(_ context.Context, id string) (
@@ -55,6 +58,8 @@ func (d offeredInvitation) InvitationByID(_ context.Context, id string) (
 		InvitedBy: "founder", ExpiresAt: clock.Add(time.Hour),
 		Grants:    []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
 		Colleague: iam.ColleagueRead,
+		Verifier:  iamdomain.InvitationVerifier(invitationSecret),
+		Seat:      d.seat,
 	}, nil
 }
 
@@ -122,8 +127,15 @@ func roundTrip(t *testing.T, idp *provider, directory authapi.Directory,
 }
 
 // redemptionStart is an invitation's page posting its form to the provider
-// redemption, as a browser encodes one.
+// redemption, as a browser encodes one — carrying the link's secret, as the
+// page's form does, unless the case says which secret it presents.
 func redemptionStart(id string, form url.Values) *http.Request {
+	if form == nil {
+		form = url.Values{}
+	}
+	if !form.Has("secret") {
+		form.Set("secret", invitationSecret)
+	}
 	r := httptest.NewRequest(http.MethodPost, auth.AuthInvitePrefix+id+"/provider",
 		strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -153,7 +165,8 @@ func TestAnInvitationRedeemedThroughTheProviderLinksItsSubject(t *testing.T) {
 	idp := newProvider(t)
 	writer := &redemptionWriter{}
 	audit := &recordingAudit{}
-	started, finished := roundTrip(t, idp, offeredInvitation{id: invitationID},
+	started, finished := roundTrip(t, idp,
+		offeredInvitation{id: invitationID, seat: "platform-lead"},
 		writer, audit, redemptionStart(invitationID, url.Values{
 			"login": {"dana.ops"}, "return_to": {"/welcome"},
 		}), "")
@@ -184,6 +197,13 @@ func TestAnInvitationRedeemedThroughTheProviderLinksItsSubject(t *testing.T) {
 			in.PersonID, person)
 	case in.Invitation != invitationID:
 		t.Errorf("the enrolment names invitation %q as its authority", in.Invitation)
+	case in.InvitationSecret != invitationSecret:
+		// THE SECRET CROSSED THE ROUND TRIP SEALED, and the record asks
+		// it again: a callback that dropped it would be refused there.
+		t.Errorf("the enrolment presents secret %q, want the link's own",
+			in.InvitationSecret)
+	case in.Seat != "platform-lead":
+		t.Errorf("the enrolment binds seat %q, want the invitation's", in.Seat)
 	case in.Email != invitedAddress:
 		t.Errorf("enrolled address %q, want the invitation's", in.Email)
 	case in.Login != "dana.ops":
@@ -522,8 +542,7 @@ func TestTheInvitationOffersTheProviderOnlyWhereThereIsOne(t *testing.T) {
 				o.Sealer = stubSealer{address: invitedAddress}
 			}).Routes(mux)
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-				"/auth/invite/"+invitationID, nil))
+			mux.ServeHTTP(rec, viewInvite(invitationID))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status %d (%s)", rec.Code, rec.Body)
 			}

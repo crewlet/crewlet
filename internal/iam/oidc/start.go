@@ -50,11 +50,18 @@ type Flight struct {
 	// enrols the person it was issued for and pins the subject the
 	// provider comes back with to them. Empty for an ordinary sign-in.
 	//
-	// SEALED HERE for Return's reason: an invitation id is the credential
-	// its link carries, and one a caller could swap on the way back from
-	// the provider would let any provider account finish somebody else's
+	// SEALED HERE for Return's reason: an invitation is the credential its
+	// link carries, and one a caller could swap on the way back from the
+	// provider would let any provider account finish somebody else's
 	// invitation that the caller merely started.
 	Invite string `json:"invite,omitempty"`
+
+	// InviteSecret is the secret the invitation's link carries beside its
+	// id, which the start checked and the callback presents again to the
+	// redemption. SEALED for Verifier's reason above: it is a secret,
+	// and the envelope's AEAD is the only thing keeping it one on its way
+	// through the browser. Empty exactly when Invite is.
+	InviteSecret string `json:"invite_secret,omitempty"`
 
 	// Login is the login the redeemer chose on the invitation's page, in
 	// the person grammar — or the one that page proposed from the
@@ -111,12 +118,21 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
 	if err = c.Validate(); err != nil {
 		return "", "", fmt.Errorf("%w: %w", ErrNotConfigured, err)
 	}
-	flight := Flight{Return: want.Return, Invite: want.Invite, Login: want.Login,
+	flight := Flight{Return: want.Return, Invite: want.Invite,
+		InviteSecret: want.InviteSecret, Login: want.Login,
 		MaxAge: want.MaxAge, ExpiresAt: now.Add(FlightTTL)}
-	if flight.MaxAge > 0 && flight.Invite != "" {
+	switch {
+	case flight.MaxAge > 0 && flight.Invite != "":
 		return "", "", fmt.Errorf("oidc: a round trip either confirms a " +
 			"signed-in person or redeems an invitation for somebody new, " +
 			"never both")
+	case (flight.Invite == "") != (flight.InviteSecret == ""):
+		// ONE WITHOUT THE OTHER is a redemption the callback could never
+		// finish — the id opens nothing without its link's secret — or a
+		// secret carried for no invitation at all, so it is refused here
+		// rather than a round trip later.
+		return "", "", fmt.Errorf("oidc: a redemption carries an invitation " +
+			"AND its link's secret, or neither")
 	}
 	for _, into := range []*string{&flight.State, &flight.Nonce, &flight.Verifier} {
 		if *into, err = randomValue(); err != nil {

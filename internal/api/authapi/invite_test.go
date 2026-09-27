@@ -25,6 +25,23 @@ import (
 // creates is derived from.
 const invitationID = "018f3a9c-4d2e-7000-8000-0000000001d1"
 
+// invitationSecret is the secret that invitation's link carries beside its id:
+// what every view presents in its header, every redemption in its body and a
+// provider redemption in its form.
+const invitationSecret = "the-links-own-secret-beside-its-id"
+
+// secretHeader is the header an invitation's view reads the secret from — the
+// dashboard's own spelling of it, which a case holds the surface to.
+const secretHeader = "X-Crewlet-Invite-Secret"
+
+// viewInvite is a GET of an invitation's view presenting its link's secret, as
+// the dashboard's screen asks it.
+func viewInvite(id string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/auth/invite/"+id, nil)
+	r.Header.Set(secretHeader, invitationSecret)
+	return r
+}
+
 // liveInvitation is a directory holding one invitation that can still be
 // redeemed.
 type liveInvitation struct{ stubDirectory }
@@ -33,6 +50,7 @@ func (liveInvitation) InvitationByID(context.Context, string) (iamdomain.Invitat
 	return iamdomain.InvitationRow{
 		ID: invitationID, Blind: "email:dana@example.com", InvitedBy: "founder",
 		ExpiresAt: clock.Add(time.Hour),
+		Verifier:  iamdomain.InvitationVerifier(invitationSecret),
 	}, nil
 }
 
@@ -63,7 +81,7 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 		o.Sealer = stubSealer{address: "Dana.SRE+invites@example.com"}
 	}).Routes(mux)
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/invite/"+invitationID, nil))
+	mux.ServeHTTP(rec, viewInvite(invitationID))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
 	}
@@ -194,7 +212,7 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 				"/auth/invite/"+invitationID, strings.NewReader(
-					`{"login":"token:ops","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
+					`{"secret":"`+invitationSecret+`","login":"token:ops","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 			if rec.Code != tc.status {
 				t.Fatalf("status %d, want %d (body %s)", rec.Code, tc.status,
 					rec.Body.String())
@@ -276,7 +294,7 @@ func redeem(t *testing.T, mux *http.ServeMux, login string) int {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/auth/invite/"+invitationID, strings.NewReader(
-			`{"login":"`+login+`","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
+			`{"secret":"`+invitationSecret+`","login":"`+login+`","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 	return rec.Code
 }
 

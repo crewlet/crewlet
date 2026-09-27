@@ -57,7 +57,7 @@ func TestARedemptionNamesItsInvitationAsTheAuthority(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/auth/invite/"+invitationID, strings.NewReader(
-			`{"login":"dana.sre","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
+			`{"secret":"`+invitationSecret+`","login":"dana.sre","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}

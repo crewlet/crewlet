@@ -511,7 +511,7 @@ variable at all.
 |---|---|
 | `people` | The directory, paged. `-q` narrows on the login and the seat; `-stage` on the enrolment stage; `-limit` on the page |
 | `show ID` | One person, in full, with their name and address opened, and the identity provider they are linked to — never the account's subject, which the estate holds only as a keyed blind |
-| `invite EMAIL` | Issue an invitation. Prints the link **once** — nothing stores it and no route reads one back |
+| `invite EMAIL` | Issue an invitation. Prints the link **once** — nothing stores it and no route reads one back. The link is the dashboard's invitation screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`. `-seat SEAT` binds the person it creates to a chart seat when they redeem it: a **human** seat nobody holds, by any handle it answers to — see [An invitation may bind a seat](../concepts/identity-and-access.md#everybody-after-the-first-arrives-by-invitation) |
 | `create` | Create somebody directly, with `-login` (required), `-email`, `-name` and `-kind` (`person` or `machine`). **Every principal enrols with a login** — it is the name their changes are recorded under while they hold no seat — and it follows the kind: a person's is dotted (`jane.doe`) and a machine's coloned (`ci:release`, or `token:<id>` to bind a Tier A token), at most 64 characters either way, and anything else is refused. A person also needs `-email`, which is how they sign in; a machine needs none. No password: a person arrives with one by redeeming an invitation, and a machine gets a token from `iam token` |
 | `bind ID SEAT` | Bind a person to a chart seat, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is any handle the seat answers to, and the binding records the one it was *created* under, so it follows the seat through every rename. A Tier A token acts under the login `token:<id>`, so binding one is `create -kind machine -login token:<id>` and then `bind` on the id it prints. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take the binding back |
@@ -549,6 +549,7 @@ variable at all.
 | `-stage S` | every stage | `invited`, `enrolling`, `active`, `suspended` or `retired` |
 | `-since POSITION` / `-at TIME` | — | Where the trail starts. `-since` is a log position; `-at` is an RFC 3339 instant the route resolves to one |
 | `-limit N` | 50 (100 for the trail) | How many rows |
+| `-seat SEAT` | — | On `invite` only: the chart seat redeeming the link binds the person to. Refused on every other command rather than ignored — somebody who already exists is bound with `bind` |
 | `-idempotency-key OP` | a new operation | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named. Refused on a read, on `token` (a mint's retry would hand back a record whose value was shown to nobody, so an unknown mint is minted again) and on `bootstrap-code` (a re-issue is its own retry) |
 
 **`-grants none` strips and an omitted `-grants` leaves alone.** They are
@@ -556,8 +557,8 @@ opposite intentions and an empty flag value cannot carry both, so the word is
 explicit — and it is the one spelling that could never be a grant.
 
 **A value shown once is shown once.** `invite` and `token` print something
-nothing can read back: what the estate holds is the invitation's id (which
-*is* the verifier — holding the link is holding the id) and a SHA-256 of the
+nothing can read back: what the estate holds is the invitation's id and a
+SHA-256 of the secret its link carries after the id, and a SHA-256 of the
 token. Lost one is re-issued rather than recovered.
 
 **Every write prints its outcome rather than "done".** `applied` means this

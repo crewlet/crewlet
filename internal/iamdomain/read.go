@@ -2,12 +2,14 @@ package iamdomain
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -911,6 +913,9 @@ func (r *Reader) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 // NO ADDRESS IN THE CLEAR. What comes back is the SEALED bytes and the blind,
 // because this read runs for an unauthenticated caller holding a link — and
 // what they present is the link, not a claim about whose address it is.
+//
+// AND NO SECRET: the row carries the link secret's VERIFIER, and the one
+// question anybody may ask of it is [InvitationRow.Admits].
 type InvitationRow struct {
 	ID         string
 	Blind      string
@@ -921,6 +926,44 @@ type InvitationRow struct {
 	ExpiresAt  time.Time
 	RedeemedAt time.Time
 	Person     string
+
+	// Verifier is [Invitation.Verifier]: what the link's secret is checked
+	// against, and empty for an invitation nothing can redeem.
+	Verifier string
+
+	// Seat is the IDENTITY of the seat redeeming this binds, or empty —
+	// [Invitation.Seat]. SeatHandle and SeatName are that seat as THIS
+	// node's chart holds it now, read in the same snapshot, for the page a
+	// redeemer is shown: the identity is a handle the seat may have been
+	// renamed away from, and the person should see the seat they are
+	// joining as the company calls it today. Both are empty for a seat
+	// this node's chart no longer holds, which the redemption then refuses
+	// ([Writer.Enrol]).
+	Seat       string
+	SeatHandle string
+	SeatName   string
+}
+
+// Admits reports whether a secret presented with this invitation's id is the
+// one its link carries.
+//
+// CONSTANT-TIME, over the verifiers, so how far a guess matched is not a
+// timing — and FALSE for an invitation with no verifier, which was issued
+// before links carried a secret and is redeemable by nobody: admitting it on
+// its id alone would be admitting exactly what the secret exists to close.
+func (i InvitationRow) Admits(secret string) bool {
+	return invitationAdmits(i.Verifier, secret)
+}
+
+// invitationAdmits is [InvitationRow.Admits]' comparison, and the one the
+// redemption's own record asks ([Writer.Enrol]) — one function, so the route
+// and the record cannot come to disagree about what a secret is.
+func invitationAdmits(verifier, secret string) bool {
+	if verifier == "" || secret == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(InvitationVerifier(secret)),
+		[]byte(verifier)) == 1
 }
 
 // Spent reports whether this invitation can still be redeemed, at now.
@@ -967,8 +1010,25 @@ func (r *Reader) InvitationByID(ctx context.Context, id string) (InvitationRow, 
 		out.InvitedBy = doc.InvitedBy
 		out.Grants = doc.Grants
 		out.Colleague = doc.Colleague
+		out.Verifier = doc.Verifier
+		out.Seat = doc.Seat
 		out.ExpiresAt = fromMillis(expires)
 		out.RedeemedAt = fromMillis(redeemed)
+		if doc.Seat == "" {
+			return nil
+		}
+		// THE SEAT AS THE CHART CALLS IT NOW, in this snapshot. An
+		// unreadable chart is this read's unknown arm like any other:
+		// a page that showed no seat would read as an invitation that
+		// binds none.
+		seat, found, err := chart.SeatByIdentityIn(ctx, tx, doc.Seat)
+		switch {
+		case err != nil:
+			return fmt.Errorf("iamdomain: read the seat invitation %q "+
+				"binds: %w", id, err)
+		case found:
+			out.SeatHandle, out.SeatName = seat.Handle, seat.Name
+		}
 		return nil
 	})
 	if err != nil {

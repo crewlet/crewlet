@@ -193,6 +193,23 @@ type Invitation struct {
 	// two-hats split the person's own carries. See [Person.Colleague].
 	Colleague iam.Colleague `json:"colleague,omitempty"`
 
+	// Verifier is [InvitationVerifier] of the secret the link carries
+	// beside the id ([Blinder.InvitationSecret]) — what a redemption's
+	// presented secret is checked against, and never the secret, because
+	// the id alone is in every snapshot, backup and proxy log.
+	//
+	// AN INVITATION WITHOUT ONE IS REDEEMABLE BY NOBODY: it was issued
+	// before links carried a secret, and admitting it on its id would be
+	// admitting exactly what this field exists to close.
+	Verifier string `json:"verifier,omitempty"`
+
+	// Seat is the IDENTITY of the seat redeeming this BINDS — the handle
+	// the seat was created under (ADR-0020) — or empty for an invitation
+	// that binds none. Decided once by whoever issued it, on a seat the
+	// chart held as a human seat nobody was bound to, and claimed as one
+	// more step of the redemption's own sequence.
+	Seat string `json:"seat,omitempty"`
+
 	// ExpiresAt is when it stops being redeemable. THE WRITER'S CLOCK is
 	// not what enforces it: the applier stores the instant and the
 	// redemption compares against the BROKER's, so two nodes reach the
