@@ -217,8 +217,8 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 		// INTO A LOCAL, never straight onto the answer. This is the
 		// window's CEILING, which the rows below are read against, and
 		// it becomes the REPORTED position only if they accounted for
-		// all of it. The two were ONE VARIABLE, and that is exactly how
-		// a cut set of rows came to advance a whole window's horizon.
+		// all of it. Held in one variable, a cut set of rows would advance
+		// a whole window's horizon.
 		var horizon uint64
 		if err := tx.QueryRowContext(ctx, `
 			SELECT COALESCE(MAX(log_seq), ?) FROM tracker_history

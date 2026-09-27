@@ -332,6 +332,8 @@ type ScopeTerm struct {
 	// ID is the object's uuid, the key's name, the container's key or the
 	// family's name. Empty for TermDomain, which names everything.
 	ID string `json:"i,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Path renders the term as a scope path the framework can order.
@@ -958,6 +960,8 @@ const MaxExcerpt = 600
 type Delta struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // TaskParty is one task and who is on it, for the two lists that name

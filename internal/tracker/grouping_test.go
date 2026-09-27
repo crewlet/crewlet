@@ -831,8 +831,9 @@ func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
 		lanes += len(group.Subgroups)
 		// THE FLAG AND THE CAP AGREE. A column that reports itself cut
 		// must actually be at the bound, and one at the bound with more
-		// behind it must report itself cut — the count this replaced
-		// could only ever read 1, so nothing here could check it.
+		// behind it must report itself cut — a count in its place could
+		// only ever read 1, since the read takes one row past the bound as
+		// its evidence, so the FLAG is what this checks.
 		if group.SubgroupsTruncated && len(group.Subgroups) != tracker.MaxSubgroups {
 			t.Errorf("column %s says its lanes were cut but carries %d of %d",
 				group.Key, len(group.Subgroups), tracker.MaxSubgroups)

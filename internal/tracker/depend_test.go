@@ -11,13 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// A DEPENDENCY IS WRITTEN AT BOTH ENDS, and until this existed neither end
-// could be written at all.
+// A DEPENDENCY IS WRITTEN AT BOTH ENDS, by the one gesture that authors it.
 //
-// `waiting_on` had no producer in the whole tree: `maintainDeps` derived the
-// dependency table from it, the unblock duty scanned that table, `blocked`
-// filtered on it and `Snapshot.Unblocked` routed off it — an entire subsystem
-// over a relation kind nothing could author.
+// `waiting_on` is what an entire subsystem reads: `maintainDeps` derives the
+// dependency table from it, the unblock duty scans that table, `blocked`
+// filters on it and `Snapshot.Unblocked` routes off it — all of it over
+// nothing unless a writer can author the relation.
 func TestADependencyIsWrittenAtBothEnds(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -63,11 +62,11 @@ func TestADependencyIsWrittenAtBothEnds(t *testing.T) {
 	}
 }
 
-// THE BLOCKER'S ASSIGNEE IS TOLD, and this is the wake that had no producer.
+// THE BLOCKER'S ASSIGNEE IS TOLD, by the mirror commit and by nothing else.
 //
 // `Snapshot.Dependents` is the sole input of the `blocking` arm, and the
-// authored commit routes to the DEPENDENT's parties — so "the wake went out
-// with the other commit" was never true for the person who now owes somebody
+// authored commit routes to the DEPENDENT's parties — so "the wake goes out
+// with the other commit" is not true for the person who now owes somebody
 // their work.
 func TestTheBlockersAssigneeIsToldSomebodyWaits(t *testing.T) {
 	t.Parallel()
@@ -707,12 +706,11 @@ func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 //
 // A relation gesture is an ADD against the task's own rows, resolved inside
 // the writer's snapshot. The alternative — stating the one edge as the whole
-// collection, which is how both callers of this used to do it — deletes every
-// other relation the item had, and the dependency edges are the expensive
-// half: their mirrors on the blockers survive, so those tasks go on listing a
-// dependent whose own side is gone. That is the one-sided state INVERTED, and
-// nothing scans for it: the repair selects on the AUTHORED edge, which is
-// exactly the row that was deleted.
+// collection — deletes every other relation the item had, and the dependency
+// edges are the expensive half: their mirrors on the blockers survive, so
+// those tasks go on listing a dependent whose own side is gone. That is the
+// one-sided state INVERTED, and nothing scans for it: the repair selects on
+// the AUTHORED edge, which is exactly the row that would be deleted.
 func TestMarkingADuplicateKeepsTheEdgesTheItemAlreadyHad(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -766,18 +764,18 @@ func TestMarkingADuplicateKeepsTheEdgesTheItemAlreadyHad(t *testing.T) {
 	}
 }
 
-// A BLOCKER CAN STILL BE EDITED — and until this existed, it could not be.
+// A BLOCKER TAKES ANY EDIT WHILE SOMEBODY WAITS ON IT.
 //
 // The apply rewrites `blocker_open` and `cleared_at` on every row naming this
 // task as a blocker, on EVERY task apply: `maintainDeps` runs out of
-// `explodeTask`, which nothing gates on what the patch changed. The writer
-// widened its scope to those dependents only when the patch carried a STATUS,
-// so a patch to anything else claimed a scope short of what its own apply
-// writes — and [ScopeSet.covers] inside the decide refused it.
+// `explodeTask`, which nothing gates on what the patch changed. So the writer
+// widens its scope to those dependents on every patch, not only one carrying
+// a STATUS: a patch claiming a scope short of what its own apply writes is
+// refused by [ScopeSet.covers] inside the decide.
 //
-// The refusal was PERMANENT while reading as transient: it wraps
-// `statelog.ErrConflict` and tells the caller to re-run, and the re-run took
-// the same gate and came up short again. So a task somebody waited on could
+// That refusal would be PERMANENT while reading as transient: it wraps
+// `statelog.ErrConflict` and tells the caller to re-run, and the re-run takes
+// the same gate and comes up short again. So a task somebody waited on could
 // never be retitled, re-assigned, re-pointed, given a due date or moved into
 // a size, for as long as the edge existed.
 func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
@@ -793,10 +791,10 @@ func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
 	}
 	r.drain()
 
-	// NOT A STATUS PATCH — that one always worked, and asserting it would
-	// be asserting the half that was never broken. An ordinary field edit
-	// is what this case is about: a task somebody waits on takes one like
-	// any other.
+	// NOT A STATUS PATCH — a scope widened only for a status would still
+	// name the dependents on one, so it cannot tell the two rules apart. An
+	// ordinary field edit is what this case is about: a task somebody waits
+	// on takes one like any other.
 	points := 8.0
 	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "blk", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{

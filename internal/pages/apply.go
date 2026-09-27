@@ -389,10 +389,21 @@ func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, at applyContex
 		return 0, fmt.Errorf("pages: the container record at %s carries a %T",
 			at.position, payload)
 	}
-	document, err := EncodeContainer(Container{
-		V: DocumentVersion, Key: c.Key, Name: c.Name, Purpose: c.Purpose,
-		CreatedAt: at.brokerAt,
-	})
+	// THE STORED DOCUMENT WITH ITS SETTINGS REPLACED, rather than one built
+	// from the payload alone: what a newer build wrote on the document,
+	// which this build carries ([Container.Extra]), is kept, and so is the
+	// instant the space was created — the one the created_at column below
+	// keeps too, which a document stamped at every settings change would
+	// contradict.
+	post, held, err := storedContainer(ctx, tx, c.Key)
+	if err != nil {
+		return 0, fmt.Errorf("pages: apply the container %s at %s: %w", c.Key, at.position, err)
+	}
+	if !held {
+		post = Container{CreatedAt: at.brokerAt}
+	}
+	post.V, post.Key, post.Name, post.Purpose = DocumentVersion, c.Key, c.Name, c.Purpose
+	document, err := EncodeContainer(post)
 	if err != nil {
 		return 0, err
 	}
@@ -412,6 +423,25 @@ func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, at applyContex
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// storedContainer is a space's document as this node holds it, and false for a
+// space it holds none of.
+func storedContainer(ctx context.Context, tx *sql.Tx, key string) (Container, bool, error) {
+	var document []byte
+	err := tx.QueryRowContext(ctx,
+		`SELECT document FROM pages_containers WHERE key = ?`, key).Scan(&document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Container{}, false, nil
+	case err != nil:
+		return Container{}, false, err
+	}
+	stored, err := DecodeContainer(document)
+	if err != nil {
+		return Container{}, false, err
+	}
+	return stored, true, nil
 }
 
 // purgeContainer removes an empty space.

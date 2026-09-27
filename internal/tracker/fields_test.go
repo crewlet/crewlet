@@ -56,13 +56,13 @@ func seedWithFields(t *testing.T, r *roundTrip, id string, values map[string]any
 	r.drain()
 }
 
-// A CUSTOM-FIELD FILTER REACHES THE ROWS, and it never did.
+// A CUSTOM-FIELD FILTER REACHES THE ROWS.
 //
 // `tracker_field_values` has four partial indexes, each named in the DDL for a
-// different column, the plan test has always registered an `f.impact` query,
-// and the applier wrote no row into the table at all: every one of those
-// indexes was an index over nothing, and every f.<slug> filter in the grammar
-// was parsed, validated and silently dropped.
+// different column, and the plan test registers an `f.impact` query against
+// them — none of which says a row is ever written. With no row, every one of
+// those indexes would be an index over nothing, and every f.<slug> filter in
+// the grammar parsed, validated and answered empty.
 func TestACustomFieldFilterReachesTheRows(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -148,8 +148,8 @@ func TestACustomFieldFilterReachesTheRows(t *testing.T) {
 // A FIELD FILTER NOTHING RESOLVES IS REFUSED, never dropped.
 //
 // A filter nobody parsed is a board showing more than the person asked for,
-// silently — which is the finding the unknown-key refusal came from, and a ref
-// that resolved to nothing is the same failure one level down.
+// silently — which is why an unknown key is refused, and a ref that resolved
+// to nothing is the same failure one level down.
 func TestAnUnresolvedFieldFilterIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -292,12 +292,12 @@ func assertIDs(t *testing.T, got, want []string) {
 	}
 }
 
-// A SORT ON A CUSTOM FIELD ORDERS BY IT, and it never did.
+// A SORT ON A CUSTOM FIELD ORDERS BY IT.
 //
-// `parseSort` accepts `f.<slug>` and `sortTerms` silently dropped it, so a
-// caller's own ordering was answered in the DEFAULT order with nothing
-// anywhere saying it had been ignored — the same silence an unparsed filter
-// has, one step further along.
+// `parseSort` accepts `f.<slug>`, so a `sortTerms` that dropped it would
+// answer a caller's own ordering in the DEFAULT order with nothing anywhere
+// saying it had been ignored — the same silence an unparsed filter has, one
+// step further along.
 func TestASortOnACustomFieldOrdersByIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -716,8 +716,7 @@ func TestAnOptionResolvesToItsIDOnTheWriteAsWellAsTheRead(t *testing.T) {
 // so `eq` against it is a question with no useful answer — it matches a task
 // whose set contains that option while looking like it asked whether the set
 // IS it. `any`, `all`, `not_any` and `not_all` are the four questions there
-// are, and until they existed only the first was reachable and only by
-// accident.
+// are, and each is asked here by its own name.
 func TestTheSetOperatorsOverALabelField(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -821,9 +820,9 @@ func TestRangeAndStartsWithAndIn(t *testing.T) {
 
 // A URL IS A VALUE, NOT AN OPERATOR CALL.
 //
-// Cutting on the first colon read the SCHEME of every URL as an operator, so
-// a `url` field could not be filtered by its value at all — and the refusal
-// named `https` as though the caller had typed a comparison.
+// Cutting on the first colon would read the SCHEME of every URL as an
+// operator, so a `url` field could not be filtered by its value at all — and
+// the refusal would name `https` as though the caller had typed a comparison.
 func TestAUrlValueIsNotReadAsAnOperator(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -94,6 +95,25 @@ type ScopeTerm struct {
 	// ID is the page's uuid, the normalised title or the container's key.
 	// Empty for TermDomain, which names everything.
 	ID string `json:"i,omitempty"`
+
+	// Extra carries the members of a term a newer build wrote that this
+	// one has no field for, so a record relayed by this build keeps them
+	// ([github.com/crewlet/crewlet/internal/jsoncarry]).
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// MarshalJSON writes [ScopeTerm.Extra] back beside the members this build
+// knows.
+func (t ScopeTerm) MarshalJSON() ([]byte, error) {
+	type fields ScopeTerm
+	return jsoncarry.Marshal(fields(t), t.Extra)
+}
+
+// UnmarshalJSON keeps every member of the term this build does not know in
+// [ScopeTerm.Extra].
+func (t *ScopeTerm) UnmarshalJSON(b []byte) error {
+	type fields ScopeTerm
+	return jsoncarry.Unmarshal(b, (*fields)(t), &t.Extra)
 }
 
 // Path renders the term as a scope path the framework can order.

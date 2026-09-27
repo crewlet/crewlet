@@ -22,6 +22,7 @@ type walkRoot struct {
 	Skipped  walkSkipped            `json:"-"`
 	Named    walkPlainEmbeddedNamed `json:"named"`
 	Half     walkHalfCarrier        `json:"half"`
+	Scope    walkEncodedScope       `json:"scope"`
 	unwalked walkUnexported
 	walkPromoted
 
@@ -65,7 +66,16 @@ func (c walkHalfCarrier) MarshalJSON() ([]byte, error) {
 	return jsoncarry.Marshal(fields(c), c.Extra)
 }
 
+// walkEncodedScope is written by a method of its own — as its terms, a bare
+// list — and so is no object itself; the terms it writes are.
+type walkEncodedScope struct {
+	Terms []walkTermBehindMethod
+}
+
+func (s walkEncodedScope) MarshalJSON() ([]byte, error) { return json.Marshal(s.Terms) }
+
 type (
+	walkTermBehindMethod   struct{ K string }
 	walkPlainInList        struct{ A string }
 	walkInMap              struct{ B string }
 	walkAddress            struct{ Kind, ID string }
@@ -82,12 +92,13 @@ type (
 
 // THE WALK FINDS EVERY OBJECT THAT DOES NOT CARRY, AND ONLY THOSE.
 //
-// It reaches objects in lists, in map values, inside an object that carries
-// and under a struct embedded in the root, and one with half a carry — whose own fields are the root's,
-// so it is not an object in its own right. It passes over a time (a value its
-// method writes), a member the encoder skips, an unexported field, and a type
-// the caller exempts; and it names an exempt type it never reached, so the
-// exemption cannot outlive what it names.
+// It reaches objects in lists, in map values, inside an object that carries,
+// under a struct embedded in the root (whose own fields are the root's, so it
+// is not an object in its own right), behind a struct written by a method of
+// its own, and one with half a carry. It passes over a time and the scope
+// itself (values their methods write), a member the encoder skips, an
+// unexported field, and a type the caller exempts; and it names an exempt type
+// it never reached, so the exemption cannot outlive what it names.
 func TestTheWalkFindsEveryObjectThatDoesNotCarry(t *testing.T) {
 	t.Parallel()
 	got := jsoncarrytest.Uncarried(map[reflect.Type]string{
@@ -96,14 +107,17 @@ func TestTheWalkFindsEveryObjectThatDoesNotCarry(t *testing.T) {
 	}, reflect.TypeFor[walkRoot]())
 	want := []string{
 		"walkPlainEmbeddedNamed", "walkPlainInList", "walkInMap", "walkPlainInsideCarrier",
-		"walkUnderPromoted", "walkNeverReached is exempt", "walkHalfCarrier",
+		"walkUnderPromoted", "walkNeverReached is exempt", "walkHalfCarrier", "walkTermBehindMethod",
 	}
 	for _, name := range want {
 		if !slices.ContainsFunc(got, func(line string) bool { return strings.Contains(line, name) }) {
 			t.Errorf("the walk did not report %s: %q", name, got)
 		}
 	}
-	for _, name := range []string{"walkRoot ", "walkCarrier ", "Time", "walkSkipped", "walkUnexported", "walkPromoted ", "walkAddress"} {
+	for _, name := range []string{
+		"walkRoot ", "walkCarrier ", "Time", "walkSkipped", "walkUnexported", "walkPromoted ", "walkAddress",
+		"walkEncodedScope ",
+	} {
 		if slices.ContainsFunc(got, func(line string) bool { return strings.Contains(line, name) }) {
 			t.Errorf("the walk reported %s, which is not an object missing its carry: %q", name, got)
 		}
@@ -169,6 +183,12 @@ func TestAFilledValueWritesEveryMember(t *testing.T) {
 	}
 	if !filled.T.Equal(jsoncarrytest.FilledAt) {
 		t.Errorf("the time was filled as %v", filled.T)
+	}
+	// AND A TYPE KNOWN ONLY AT RUN TIME fills to the same value.
+	byType := jsoncarrytest.FilledOf(reflect.TypeFor[everyShape]()).Interface().(*everyShape)
+	again, err := json.Marshal(byType)
+	if err != nil || string(again) != string(body) {
+		t.Errorf("filled by type it writes %s (%v), want %s", again, err, body)
 	}
 }
 

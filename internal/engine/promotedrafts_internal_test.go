@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -345,5 +348,137 @@ func TestTheNativeWriterNamesItsKnowledgeBaseAsItsSearcherDoes(t *testing.T) {
 	var searcher *pages.Searcher
 	if got, want := (&nativeDrafts{}).Backend(), searcher.Backend(); got != want {
 		t.Fatalf("the native writer calls its knowledge base %q, its searcher %q", got, want)
+	}
+}
+
+// scriptedReads answers the writer's read by the freshness it is asked at, so
+// a case can hold a page the log has and this node has not applied.
+type scriptedReads struct {
+	stale, linearizable func() (pages.Detail, error)
+}
+
+func (s scriptedReads) Get(_ context.Context, _ string, fresh statelog.Freshness) (pages.Detail, error) {
+	if fresh.Level == statelog.ReadStale {
+		return s.stale()
+	}
+	return s.linearizable()
+}
+
+// A DRAFT THIS NODE HAS NOT APPLIED IS NOT A PURGED ONE, and a read that
+// failed is not a verdict. The draft may have been made on another node, so a
+// miss in this node's own rows is asked of the log before it is called gone —
+// and an error from either read is never a rejection, which the pass would
+// record for good.
+func TestANativeDraftThisNodeHasNotAppliedIsNotReadAsPurged(t *testing.T) {
+	t.Parallel()
+	missing := func() (pages.Detail, error) { return pages.Detail{}, pages.ErrNotFound }
+	standing := func() (pages.Detail, error) {
+		return pages.Detail{Page: pages.Page{ID: "p-1", Status: pages.StatusPublished}}, nil
+	}
+	outage := func() (pages.Detail, error) {
+		return pages.Detail{}, errors.New("the log's barrier timed out")
+	}
+	for _, tc := range []struct {
+		name    string
+		reads   scriptedReads
+		want    string
+		wantErr bool
+	}{
+		{"applied elsewhere, standing in the log",
+			scriptedReads{stale: missing, linearizable: standing}, "", false},
+		{"missing here, the log unreachable",
+			scriptedReads{stale: missing, linearizable: outage}, "", true},
+		{"this node's rows unreadable", scriptedReads{stale: outage, linearizable: standing}, "", true},
+		// THE CONTROL: missing from both is the one read that is a purge,
+		// so the cases above are measuring the barrier and nothing else.
+		{"missing from the log too",
+			scriptedReads{stale: missing, linearizable: missing}, "it was purged", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			writer := &nativeDrafts{reader: tc.reads}
+			how, err := writer.Rejected(t.Context(), "ENG", "p-1")
+			if (err != nil) != tc.wantErr || how != tc.want {
+				t.Fatalf("Rejected = %q, %v, want %q with an error %v", how, err,
+					tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
+// THE NATIVE WRITER REFUSES WHAT THE PAGES STORE WOULD, BEFORE ANYTHING IS
+// RECORDED. The pass files a record before it makes the page, so a title or a
+// body the store refuses would be a record offered to it on every tick — and
+// a check that drifted from the store's own rule would pass a draft the store
+// refuses. So the edge is measured against the store itself.
+func TestTheNativeWriterRefusesWhatThePagesStoreWould(t *testing.T) {
+	t.Parallel()
+	e, _, _ := promotingEngine(t)
+	writer := e.native.drafts
+	for _, tc := range []struct {
+		name, title, body string
+		ok                bool
+	}{
+		{"a title at the cap", strings.Repeat("t", pages.MaxTitle), "b", true},
+		{"a title past the cap", strings.Repeat("t", pages.MaxTitle+1), "b", false},
+		{"a blank title", "   ", "b", false},
+		{"a body at the cap", "at the body cap", strings.Repeat("b", pages.MaxBody), true},
+		{"a body past the cap", "past the body cap", strings.Repeat("b", pages.MaxBody+1), false},
+	} {
+		checked := writer.CheckDraft(tc.title, tc.body)
+		if (checked == nil) != tc.ok {
+			t.Errorf("%s: CheckDraft = %v, want accepted %v", tc.name, checked, tc.ok)
+		}
+		_, created := e.PagesStore().Create(t.Context(), draftAuthor, pages.NewPage{
+			Container: "CHECK", Title: tc.title, Body: tc.body, Quiet: true,
+		})
+		if (created == nil) != (checked == nil) {
+			t.Errorf("%s: the store answered %v where CheckDraft answered %v",
+				tc.name, created, checked)
+		}
+	}
+}
+
+// AN OPERATOR'S PAGE IS WATCHED BY NO SEAT, AND NAMES NO SEAT AS ITS AUTHOR.
+//
+// A seat's handle on a create becomes the page's watcher and its recorded
+// author, and the change feed wakes nobody whose handle equals the author. A
+// token named like a seat — `dev` here, which the company's seat holds — must
+// therefore reach the store with no handle at all, from the operator's own
+// assistant and from the engine's own operator gestures alike.
+func TestAnOperatorsPageIsWatchedByNoSeat(t *testing.T) {
+	t.Parallel()
+	e, _, _ := promotingEngine(t)
+	ctx := t.Context()
+	surface, err := opsmcp.PageActor(auth.WithOperator(ctx, "dev"), nil)
+	if err != nil {
+		t.Fatalf("PageActor: %v", err)
+	}
+	for name, actor := range map[string]pages.Actor{
+		"the operator's assistant": surface,
+		"an operator gesture":      operatorPageActor("dev"),
+	} {
+		written, err := e.PagesStore().Create(ctx, actor, pages.NewPage{
+			Container: "ENG", Title: "Written by " + name, Body: "b",
+		})
+		if err != nil {
+			t.Fatalf("%s: Create: %v", name, err)
+		}
+		if err := e.WaitCommitted(ctx, written.Outcome.Position); err != nil {
+			t.Fatalf("%s: wait for the create to apply: %v", name, err)
+		}
+		detail, err := e.Pages().Get(ctx, written.Page.ID,
+			statelog.Freshness{Level: statelog.ReadLinearizable})
+		if err != nil {
+			t.Fatalf("%s: read the page: %v", name, err)
+		}
+		if slices.Contains(detail.Page.Watchers, "dev") {
+			t.Errorf("%s: the seat dev watches a page it never touched: %v",
+				name, detail.Page.Watchers)
+		}
+		if detail.Page.Author != "operator:dev" {
+			t.Errorf("%s: the page is authored by %q, want operator:dev", name,
+				detail.Page.Author)
+		}
 	}
 }

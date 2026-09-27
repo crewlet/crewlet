@@ -73,9 +73,13 @@ func skillUsed(turn *turnctx.Turn, name, skillID, file string,
 
 // Recaller is the turn-start prefetch's own semantic search, reachable as a tool.
 //
-// Satisfied by *prefetch.Fetcher, and declared here as the two methods this
-// package needs rather than imported as that type: a builtin that could reach
-// the whole prefetch could render a block, and the seam is the search.
+// What production passes is the engine's recaller (internal/engine), which
+// answers every recall through the prefetch's own *prefetch.Fetcher and also
+// implements [AttributingRecaller], so the auxiliary calls a recall makes are
+// recorded under the turn it serves. Declared here as the two methods this
+// package needs rather than imported as the prefetch's type: a builtin that
+// could reach the whole prefetch could render a block, and the seam is the
+// search.
 //
 // THE SAME implementation the push side uses, deliberately. A second answer to
 // "which of this seat's memories bear on this text" would drift from the block

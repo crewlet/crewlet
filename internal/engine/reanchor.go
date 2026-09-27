@@ -224,7 +224,7 @@ func (e *Engine) reanchorDeps(running *runningDomain, by string) (
 		if err != nil {
 			return deps, err
 		}
-		actor := pages.Actor{Handle: by, Kind: pages.AuthorOperator, OperatorID: by}
+		actor := operatorPageActor(by)
 		deps.PublishGeneration = func(ctx context.Context, gen uint32,
 			in statelog.ReanchorInputs) error {
 			return kb.PublishGeneration(ctx, actor, s.nodeID, gen, in)

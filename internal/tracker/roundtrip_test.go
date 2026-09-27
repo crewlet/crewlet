@@ -169,8 +169,8 @@ func newRoundTripOver(t *testing.T,
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: publisher, DB: db, NodeID: "node-a",
 		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
-		// without one and a harness that could not run them left the
-		// cross-project move — and everything it reads, including the
+		// without one, and a harness that could not run them would leave
+		// the cross-project move — and everything it reads, including the
 		// subtree walk the trash shares — with no test at all. In-memory
 		// is the whole of what a single-node harness needs: its leases
 		// exclude a SECOND node, which [roundTrip.peer] stands in for.
@@ -479,16 +479,13 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 			// gets from returning now: the write did not resolve, so it is
 			// reported pending, and the case drains it afterwards.
 			//
-			// It cost more than every other thing this package does. Measured:
-			// newRoundTrip was 2.26s, of which 1.97s was the single seeded
-			// project waiting out a 2s ResolveBudget here — about 2000 sleeps
-			// achieving nothing. Across 241 callers that is most of the 869s
-			// this package took under -race, and eight representative cases
-			// went from 22.5s to 4.2s with this returning early.
+			// Waiting it out would cost every harness a whole resolve budget
+			// for its seeded project alone — a sleep per millisecond of it,
+			// achieving nothing — on every case that builds one.
 			//
 			// DeadlineExceeded rather than a sentinel of its own, so the
-			// publisher takes the identical path it took before: this is the
-			// same outcome, reached without the wait.
+			// publisher takes the identical path a spent budget takes: this is
+			// the same outcome, reached without the wait.
 			// THE CALLER'S OWN ERROR FIRST. A context already cancelled is
 			// a cancellation, not a timeout, and reporting DeadlineExceeded
 			// for one would hand the publisher the wrong reason — the
@@ -642,10 +639,10 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 //
 // A rejected append means a peer wrote in this generation and this node has not
 // applied it, so re-deciding needs the subject's true last position. The wait
-// for it used to run on the caller's own context with no budget of its own —
-// and the state producing it is an applier that has not caught up, which is
-// unbounded by construction. A request with no deadline waited FOR EVER, and
-// one with a deadline got a cancellation where it needed the reason.
+// for it runs under a budget of its own, because the state producing it is an
+// applier that has not caught up, which is unbounded by construction: on the
+// caller's own context alone, a request with no deadline would wait FOR EVER,
+// and one with a deadline would get a cancellation where it needed the reason.
 //
 // Two creates back to back mint from one counter, so the second is exactly that
 // case. It must come back refused, under a budget, naming the position it was

@@ -249,8 +249,7 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 // renamed constantly and a positional diff would report the whole list as
 // changed the first time somebody dragged a line. An item counts as touched
 // when it appeared, disappeared, or changed in any way its assignee would care
-// about — its text, its done flag, its owner, or the subtask it was promoted
-// into.
+// about ([itemNews]).
 //
 // The set is SORTED and deduped, because two nodes read the record rather than
 // re-deriving it and a slice in map order would put two spellings of one
@@ -270,7 +269,7 @@ func checklistAssignees(before, after Task) []string {
 		switch {
 		case !held:
 			mark(item)
-		case previous != item:
+		case itemNews(previous, item):
 			// BOTH OWNERS, because a reassigned item is news to the
 			// person who had it as much as to the person who has it.
 			mark(item)
@@ -288,6 +287,21 @@ func checklistAssignees(before, after Task) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// itemNews is whether an item changed in a way its assignee would care about:
+// its text, its done flag, its owner, or the subtask it was promoted into.
+//
+// THOSE FOUR AND NO OTHER MEMBER. Where the item sits — its order, and the
+// item it is nested under — is a drag, which is news to nobody. And a member
+// a newer build wrote that this one carries ([ChecklistItem.Extra]) is one
+// this build cannot read, so it cannot say whether the change is one somebody
+// would care about; the newer build that can is the one that wrote it, and
+// that writer named its own recipients on its own record.
+func itemNews(was, now ChecklistItem) bool {
+	promotedAlike := (was.PromotedTo == nil) == (now.PromotedTo == nil) &&
+		(was.PromotedTo == nil || *was.PromotedTo == *now.PromotedTo)
+	return was.Name != now.Name || was.Done != now.Done || was.Assignee != now.Assignee || !promotedAlike
 }
 
 // itemsByID flattens a task's checklists to their items.

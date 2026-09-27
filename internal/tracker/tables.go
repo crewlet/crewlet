@@ -5,18 +5,19 @@ import "slices"
 // The two exported lists a durable-schema test drives.
 //
 // Both exist for the same reason: a fact about the schema that is written
-// twice drifts, and both of these were written three times in the design this
-// replaces — the struct, the DDL and the applier's statement for the first,
-// and the migration, the snapshot's scrub list and the identity claim for the
-// second.
+// twice drifts. Each is ONE spelling the schema test holds the migrations to
+// in both directions, and the second is also what [Domain.Tables] derives the
+// snapshot's scrub list and the identity claim from.
 
 // SpendColumns are the seven counters and the derived sort key, in the order
 // the applier writes them.
 //
-// ONE LIST, read by the struct, the DDL and the applier's own statement. Eight
-// column names typed out three times is three chances to add the ninth to two
-// of them — and the failure is silent: a counter nothing increments reads zero
-// for ever, which looks exactly like a task nobody has worked on.
+// ONE LIST the schema test holds `tracker_tasks`' DDL to, both ways, because
+// the failure it catches is silent: a counter the schema carries and nothing
+// increments reads zero for ever, which looks exactly like a task nobody has
+// worked on. The applier's statements spell the columns out themselves, and
+// the list does not reach them — a counter added here and to the DDL is
+// written only once the applier names it too.
 //
 // `spend_tokens` is DERIVED — input plus output — rather than transmitted,
 // because it is the sort key and a sort key that can disagree with the columns
@@ -31,9 +32,8 @@ var SpendColumns = []string{
 // THE COMPLETENESS AUDIT AS A LIST, so a table added later without a payload
 // field to fill it goes red rather than shipping. It is what a replay from
 // zero into an empty database has to end up with — and the failure it exists
-// to prevent is precise: the design this replaces would have ended a replay
-// with a history table, a notification table and NO TASKS, because every one
-// of its record's caps was a routing cap.
+// to prevent is precise: a record whose caps were routing caps alone would
+// replay into a history table, a notification table and NO TASKS.
 //
 // FIVE TABLES ARE DELIBERATELY ABSENT, and they are the log's own machinery
 // rather than state a record reproduces: the framework's checkpoint, the

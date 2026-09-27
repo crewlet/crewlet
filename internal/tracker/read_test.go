@@ -404,13 +404,14 @@ func TestTheTagModesAreThreeDifferentQuestions(t *testing.T) {
 //
 // # The failure this exists to catch
 //
-// The cursor used to carry only the last row's id and the predicate was
-// `id > ?` — while the order is `<sort column>, id`. On a board ordered by
-// rank, every task with a later rank and a smaller id SORTS AFTER the boundary
-// and FAILS the predicate, so it is never returned; every task with an earlier
+// A cursor carrying only the last row's id, with the predicate `id > ?`,
+// disagrees with an order of `<sort column>, id`. On a board ordered by rank,
+// every task with a later rank and a smaller id SORTS AFTER the boundary and
+// FAILS the predicate, so it is never returned; every task with an earlier
 // rank and a larger id passes it on every page, so it is returned again and
 // again. Both at once, silently: a caller paging its own board would see some
-// of its tasks twice and never see others, and nothing in the answer said so.
+// of its tasks twice and never see others, and nothing in the answer would say
+// so.
 //
 // The fixture is the shape that catches it — ranks and ids in OPPOSITE orders
 // — because any fixture where they agree passes with either implementation.

@@ -120,6 +120,8 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and when each scope's cap last refused a charge (see [below](#get-budgets)) |
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
+| `GET` | `/learning/promotions` | The fleet's skill-promotion ledger: every convergence the promotion pass acted on, each unit's, or `?unit=`'s alone (see [below](#the-skill-promotion-ledger)) |
+| `POST` | `/learning/promotions/clear` | Delete one ledger record, named by `?unit=` and `?fingerprint=`, so the next promotion pass drafts that convergence again. **Always needs a token** (see [below](#the-skill-promotion-ledger)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
@@ -1387,9 +1389,9 @@ stream-only and never persisted to the event store.
 
 The **spend rollup** is maintained by the projection too. It HOLDS the
 spend records — each phase's, and each auxiliary call's — for its own 24-hour
-window (the newest 8 000 of them, so a company past that many in a day sees a
-rollup covering slightly less than a day rather than a wrong total — and
-headed with what it covers: once
+window (the newest 10 000 of them, phase and auxiliary records together, so a
+company past that many in a day sees a rollup covering less than a day rather
+than a wrong total — and headed with what it covers: once
 the cap has dropped a record, or the startup seed's read reports that the
 window held more records than it kept, the rollup's `since` is the earliest
 record it kept rather than the start of the window; a seed that exactly fills
@@ -1408,10 +1410,12 @@ its own.
 **The projection is seeded from the event store when the process starts**,
 after the broadcast subscription is attached and before the HTTP listener
 binds. Two bounded reads, each bound the projection's own: the newest 400
-persisted events for the feed, and the newest 8 000 spend records — phase
+persisted events for the feed, and the newest 10 000 spend records — phase
 records and auxiliary completions together — inside the 24-hour spend window,
 read one record past the cap, so the store says whether the window held more
-rather than the seed guessing it from a page that filled.
+rather than the seed guessing it from a page that filled. The spend read finds
+where those records start from each type's keys alone, and then reads only
+the records it keeps.
 Without it every one of these surfaces started at this
 process's boot, so a restart, a deploy or a node joining a fleet showed an
 operator a company that had apparently done nothing beside a store that
@@ -1893,7 +1897,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `events` | `{limit, type, source, category, trace_id, actor, agent, turn_id, work_key, since, until, before_id, before_time}` | `GET /events`. `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered. Rows written before migration `0029` carry the work key in `turn_id`, and that migration backfills it into the COLUMN, so history answers both. Every row answers with its own `work_key` read off that column rather than out of its `tags`, which is the one promoted value that is not a copy of a tag: the backfill deliberately does not rewrite a stored tags blob, since those record what the writer extracted from an event whose JSON carried no such field |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, actor, turn_id, work_key}` | `GET /events/series`. THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
 | `trace` | `{trace_id}` | `GET /events/trace/{trace_id}`. Answers `{trace_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-trace cap (500) rather than at the end of the trace, which the caller must say — a trace shown short with no note reads as a complete causal chain that simply ends. It is **counted, not inferred** from the row count: a trace of exactly the cap holds every row it has, and `len(rows) == cap` would put a truncation warning on a complete one. The rows past the cap are the trace's newest, and `events` with `trace_id` lists them — see [Paging the event history](#paging-the-event-history) |
-| `turns` | `{days, role, agent_id, model, work_key, failed, before_time, before_id, limit}` | `GET /turns`. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the task come from the completion record's own payload, read from the one row per turn that carries it. `complete` says whether a completion record exists — a turn with none is running or died mid-flight — and `duration_ms` is the turn's OWN measurement, which is not the span of its events: the span covers the reflection pass that publishes afterwards. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list. Answers `{turns, truncated, next}`. The cursor is on the turn's START, which is what the listing is ordered by — a keyset on any one event pages a turn twice — AND on its `turn_id`, because a start is not unique and a cursor on it alone steps over every other turn that began at the same instant: `next` is `{before_time, before_id}`, sent back as those two parameters, and half of one is `400`. `truncated` says the window holds turns past this page, read as one turn past it rather than inferred from a page that filled, and `next` is offered exactly when it is set — so anything drawn from the page (a count, a histogram) describes the newest `limit` turns when it is `true`, and the rest is the next page (`limit` defaults to 50, at most 200) |
+| `turns` | `{days, role, agent_id, model, work_key, failed, before_time, before_id, limit}` | `GET /turns`. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the task come from the completion record's own payload, read from the one row per turn that carries it. A row's `input_tokens`, `output_tokens` and `total_tokens` sum the turn's spend records — its phase records, a coding run's own spend among them, and the auxiliary calls made for it — which is the set the [breakdown's](#get-tokensbreakdown) `by_turn` row sums for it, while `phases` counts the phase records alone. `models` lists the model each of those records names — the one a phase began on, and each auxiliary call's — so `model=` finds a turn by an auxiliary call's model too; a model only a record's per-model split holds, a fallback's or a coding run's, is counted in `by_model` and not listed here. `complete` says whether a completion record exists — a turn with none is running or died mid-flight — and `duration_ms` is the turn's OWN measurement, which is not the span of its events: the span covers the reflection pass that publishes afterwards. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list. Answers `{turns, truncated, next}`. The cursor is on the turn's START, which is what the listing is ordered by — a keyset on any one event pages a turn twice — AND on its `turn_id`, because a start is not unique and a cursor on it alone steps over every other turn that began at the same instant: `next` is `{before_time, before_id}`, sent back as those two parameters, and half of one is `400`. `truncated` says the window holds turns past this page, read as one turn past it rather than inferred from a page that filled, and `next` is offered exactly when it is set — so anything drawn from the page (a count, a histogram) describes the newest `limit` turns when it is `true`, and the rest is the next page (`limit` defaults to 50, at most 200) |
 | `turn` | `{turn_id}` | Every event of ONE RUN of a turn, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 20 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus twenty ends up whole on the page and must not carry a truncation warning. It also answers `work_key` and `attempts`: the unit of work this run was an attempt at, and every run of it the store holds, OLDEST FIRST — over the SAME thirty-day horizon the events above come from, not the turns list's own default week, so a turn between eight and thirty days old names its attempts rather than reporting none while displaying one — so the screen a deep link lands on can say "attempt 2 of 2" and link the other, rather than leaving a reader to conclude the company did the work twice. One element is the ordinary case; an empty `work_key` means the trigger had none to collapse on, and `attempts` is then empty too. `attempts` holds at most 200 runs; `attempts_truncated` is `true` when the store holds more, and `attempts` is then the NEWEST 200, oldest first — so its first element is not the first attempt. Every run is `turns` with `work_key=` **and `days=30`**, paged by its `next` cursor: the runs left out are the OLDEST, and `turns` without `days` reads only the last week. A phase record published cut is here as the row it was published as, with `whole_bytes` set; its whole is `phase_record` |
 | `phases` | `{role, limit, before_time, before_id}` | `GET /phases`. The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged (30 by default, at most 60). Answers `{phases, next, exhausted}`: `next` is `{before_time, before_id}` when older phases exist — read as one record past the page, never inferred from a page that filled — and empty with `exhausted: true` at the end of the record. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision. A record published cut is listed as it was published, with `whole_bytes` set, and `phase_record` answers it whole |
 | `phase_record` | `{id}` | `GET /phases/{id}`. ONE phase record WHOLE. A record too large for one event was published cut, and its whole — the record exactly as it would have been stored — was published first as parts under ids derived from the record's own; this reassembles them, verified contiguous from the first byte to the whole's length. Any other record is answered with its own row, so a reader asks for the whole of a phase record without first working out whether it was cut. Answers `{id, whole, whole_bytes, found_bytes, parts, payload}`: `payload` is the record's event as the event store holds a record published whole (the shape an `event` answer's `payload` has), and `parts` is how many it was reassembled from — zero for a record that is its own row. A WHOLE NOT ALL HERE IS ANSWERED, NOT FAILED: `whole` is `false`, `payload` is absent in favour of `note`, `found_bytes` says how much of `whole_bytes` this node holds contiguous from the start, and `note` says why the rest is not here, as far as this node can tell — the record says every part was published, so the rest is not in this node's store (a part write that failed here, logged as `event_write_failed`, or the retention sweep, which removes parts on the same horizon as every row); or the record says its whole was not kept, and its own `notes` say why; or this node holds no row for the record, and nothing says which of those it was, so the note names both (a part that failed to publish is logged as `phase_record_whole_not_kept`). Parts that do not continue the whole — out of order, overlapping, past its end or naming another record — fail the read as an error rather than being answered, because assembled bytes that are not the whole would read as it; so does a record stating its whole in parts under an id that is not a UUID, since a part's id is derived from its record's. Like every event read it answers from THIS node's event store, where the node that published the record wrote its parts. An id nothing here holds is `not_found` |
@@ -1981,7 +1985,7 @@ that renders `read_level` and swallows `complete` looks confidently right.
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, after, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything. TWO KINDS OF INCOMPLETE, and they mean different things: `complete` is false when a deferred record's scope met the read (pages may be missing, or may not have left yet), and `truncated` is true when more pages match than the answer carries — read as one row past `limit`, so a filter matching exactly `limit` is not truncated. A caller checking only the first was told the answer was whole while half the container was missing. A truncated answer carries `next_cursor`, and `after=` with it answers the pages strictly after the last one, in the listing's own order (container, title, id), so a page renamed or trashed between the two reads moves itself and nothing else; an `after` that is not such a cursor is `bad_params`. `offset` skips that many matching pages, counted from `after` when both are given: it shows a window at a numbered position, and walking by it misses a page whenever one ahead of it leaves the listing and repeats one whenever one enters. `limit` is 50 by default, and one above 500 is lowered to it |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title`. `children` are the page's PUBLISHED children, the first 50 in a listing's order: published only, because a detail read is served to seats as well as to people, and a seat would act on a draft or on a page somebody put in the trash. A detail read takes no paging parameter, so when there are more, `children_truncated` says so and `children_cursor` is where they resume: `pages` with `parent=` this page, `status=published` and `after=` that cursor answers the children after the last one here, neither repeating nor skipping one that stayed where it was |
 | `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
-| `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | `GET /pages/activity`. What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
+| `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | `GET /pages/activity`. What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the four author kinds (`agent`, `human`, `operator`, and `system` — the engine's own writes, such as a container the company's configuration names and a skill-promotion draft), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
 | `page_revision` | `{page, version}` | `GET /pages/{id}/revisions/{version}`, the path's `{id}` being `page`. One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
 | `stream` | `{}` | The [health envelope](#the-health-envelope), from the builder `GET /health` answers with. Named `stream` rather than `health` so a query never shares a name with a push kind: the `health` push carries three of those fields, and a reader of the protocol should not have to know which direction a frame travelled to know what it holds |
 | `config` | `{}` | `GET /config` *(operator token required)* |
@@ -2958,6 +2962,62 @@ by default and opens the whole read surface; a reset is a write, so it is never
 eligible. There is no "no counter here" refusal beside it, because every node
 opens the fleet's coordination store that holds the counter.
 
+### The skill-promotion ledger
+
+The [promotion pass](../concepts/agent-learning.md#5-synthesizer-skill-induction)
+keeps one record per convergence it acted on — drafted, rejected by a lead,
+declined by the model, or refused by the knowledge base — and keeps each for
+good, because a record is what stops it drafting again what a lead said no to.
+So a record it got wrong holds for good too: a Confluence draft a page
+restriction hides from the org token answers exactly as a deleted one, and is
+recorded as rejected. These two routes are how an operator sees and undoes
+one. `crewlet promotions list` and `crewlet promotions clear` are their
+clients.
+
+`GET /learning/promotions` answers every unit's records — including a unit the
+company has since renamed, whose records still stand — or `?unit=`'s alone:
+
+```json
+{"promotions": [{
+  "unit": "Platform", "fingerprint": "5d41402abc4b2a76b9719d911017c592",
+  "version": 42, "state": "rejected",
+  "tools": ["build", "tag"], "agents": 3,
+  "backend": "confluence", "name": "cut-a-release", "container": "ENG",
+  "title": "[Auto-draft] cut-a-release", "page_id": "123456",
+  "at": "2026-03-01T09:00:00Z", "rejection": "it was deleted"
+}]}
+```
+
+`state` is `drafting` (the page is being made from the record, which holds its
+`body` until then), `drafted`, `rejected` (`rejection` says how it was seen),
+`declined` (the model answered `{}`) or `refused` (`refused` is what the
+knowledge base said about the unit's container; the record keeps its `body`).
+A record this build cannot act on carries `unreadable` saying why — and, when
+its value does not decode at all, `raw` with the value whole: such a record
+stops the pass for its whole unit, and one a newer build wrote stands for its
+convergence, until somebody clears it.
+
+`POST /learning/promotions/clear?unit=<unit>&fingerprint=<fingerprint>` deletes
+that record at the version it reads, and answers with the record as it was
+cleared, in the listing's shape:
+
+```json
+{"cleared": {"unit": "Platform", "fingerprint": "5d41402abc4b2a76b9719d911017c592", "state": "rejected", "...": "..."}}
+```
+
+The next pass then drafts the convergence as though it had never been drafted,
+if its seats still converge. Nothing is undone at the knowledge base: a page
+the record named stays where it is, and a new draft under the same title is
+made beside it under a title of its own.
+
+Refusals: **401 without a token** (a clear is a write, whatever
+`allow_anonymous_read` opens; the listing reads as the rest of the read surface
+does), `400 promotion_address_required` without both parameters,
+`404 promotion_not_found` for an address holding no record,
+`409 promotion_changed` when the record moved between the route's read and its
+delete — to a lead's rejection, say — and nothing was deleted, and
+`503 promotions_unavailable` when the coordination store could not be reached.
+
 ### `POST /backup`
 
 Copies this node's durable state — both of its store files, and every
@@ -3345,11 +3405,14 @@ Notes:
   [`GET /budgets`](#get-budgets)' counter.
 - **A [coding run's](../concepts/code-sandbox.md#budgets) own spend is on
   the Execute phase's record** that its resume re-enters: its tokens join the
-  phase's own, under the models its agent named, and its price is that
+  phase's own, under the models its agent named, and its price is in that
   record's `cost_usd`. A run that stopped to ask a question has its spend on
-  the record the answer resumes. A run whose agent gave no complete account
-  of its spend marks the record `run_spend_unreported`, and its tokens there
-  are what was reported — a floor.
+  the record the answer resumes. A resumed phase that launches another run
+  suspends again and publishes no record, so the record it finally publishes
+  counts every run it collected — their tokens, and their prices summed in
+  `cost_usd`. A run whose agent gave no complete account of its spend marks
+  the record `run_spend_unreported`, and its tokens there are what was
+  reported — a floor.
 - `by_worker` covers the rows that name one: a `subagent` row's worker is
   the `workers:` template it ran — empty on a delegation that wrote its
   prompt inline, which therefore counts toward `by_phase` but toward no

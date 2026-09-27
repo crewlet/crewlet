@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -784,6 +785,44 @@ type ContainerListing struct {
 	// rail cannot show a count from one instant beside a list from
 	// another — the same rule the tracker's own listings follow.
 	Pages int `json:"pages"`
+}
+
+// containerListingFields is [ContainerListing] as encoding/json lays it out —
+// the container's members promoted, then the count — with no method of either.
+type containerListingFields struct {
+	containerFields
+
+	Pages int `json:"pages"`
+}
+
+// containerFields is [Container] without its methods.
+type containerFields Container
+
+// MarshalJSON writes the listing as the container's members, every member the
+// container carries ([Container.Extra]), and the page count.
+//
+// THE LISTING'S OWN METHOD, because the container's would otherwise be
+// promoted onto it and write the listing as the bare container, its count
+// gone. A member the container carries under a name the listing decodes is the
+// listing's, and is written once, as the listing's.
+func (l ContainerListing) MarshalJSON() ([]byte, error) {
+	return jsoncarry.Marshal(containerListingFields{
+		containerFields: containerFields(l.Container), Pages: l.Pages,
+	}, l.Extra)
+}
+
+// UnmarshalJSON reads a listing back, keeping every member neither the
+// container nor the listing decodes in the container's [Container.Extra] — for
+// the reason [ContainerListing.MarshalJSON] gives.
+func (l *ContainerListing) UnmarshalJSON(b []byte) error {
+	fields := containerListingFields{containerFields: containerFields(l.Container), Pages: l.Pages}
+	extra := l.Extra
+	if err := jsoncarry.Unmarshal(b, &fields, &extra); err != nil {
+		return err
+	}
+	l.Container, l.Pages = Container(fields.containerFields), fields.Pages
+	l.Container.Extra = extra
+	return nil
 }
 
 // Containers is every container this node knows about.

@@ -14,6 +14,8 @@ subcommand below is served by it.
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node, because the counter is the fleet's and not this file's. A scope is out when `USED` is at or past `CAP`; `LAST REFUSED` says when its cap last turned a round away |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
+| `crewlet promotions list [config]` | Print the fleet's skill-promotion ledger from a running node: every convergence the promotion pass drafted, saw rejected, was declined or was refused, each field whole. `-unit` narrows it to one unit, `-json` prints the node's answer |
+| `crewlet promotions clear -unit U -fingerprint F [config]` | Delete one ledger record on a running node, so the next promotion pass drafts that convergence again. The report names what it cleared |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
@@ -592,6 +594,43 @@ silently re-arm a company somebody had stopped on purpose. It **names the
 scopes it cleared**, because a count alone leaves you unable to tell "reset
 the seat I meant" from "reset a scope that was already empty", and a scoped
 reset names only its own scope.
+
+---
+
+## `crewlet promotions`
+
+The [skill-promotion pass](../concepts/agent-learning.md#5-synthesizer-skill-induction)
+records every convergence it acts on in a fleet-wide ledger, and keeps each
+record for good: a record is what stops it drafting again a procedure a lead
+rejected. A record it got wrong is kept for good too — a Confluence draft a
+page restriction hides from the org token reads exactly as a deleted one — so
+these two commands show the ledger and clear one record of it. Like
+[`budgets`](#crewlet-budgets) they talk to a **running node**, because the
+ledger lives in the coordination store; they are the clients of
+[`GET /learning/promotions` and `POST /learning/promotions/clear`](api-endpoints.md#the-skill-promotion-ledger).
+
+```bash
+crewlet promotions list                                  # every unit's records
+crewlet promotions list -unit Platform                   # one unit's
+crewlet promotions list -json                            # the node's answer, draft bodies included
+crewlet promotions clear -unit Platform -fingerprint 5d41402abc4b2a76b9719d911017c592
+```
+
+`list` prints each record's unit, fingerprint, state and when it entered it on
+one line, then each field it carries on a line of its own — title, page,
+tools, how a rejection was seen, why a container was refused, and, for a
+record this build cannot act on, why and the stored value — whole, never cut
+to a column. `-url` and `-token` are `budgets`' own; `clear` is a write and
+always needs a token.
+
+`clear` deletes the record at the version the node reads, and prints the
+record as it was cleared. The next pass drafts that convergence again if its
+seats still converge. Nothing is undone at the knowledge base: a page the
+record named stays where it is, and a new draft that the model names the same
+is made beside it under a title of its own. A record that moved while it was
+being cleared — to a lead's rejection, say — is refused with
+`promotion_changed` rather than deleted unseen; list again and decide on what
+it says now.
 
 ---
 

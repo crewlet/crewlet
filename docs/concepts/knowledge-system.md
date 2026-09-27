@@ -28,7 +28,10 @@ knowledge:
 
 There is a local copy, and being honest about it is the whole design. Every
 page change is one record on an ordered log, every node applies it into its own
-database, and a lexical index is built behind those rows asynchronously —
+database — keeping, at every depth of a record and of a stored page, space or
+comment, what a newer build wrote there and this one has no field for, so a
+rolling upgrade leaves no node's copy short of it — and a lexical index is
+built behind those rows asynchronously —
 tokenising a large wiki takes minutes, and doing it inline would put the whole
 index build inside the apply transaction that holds the node's only writer.
 

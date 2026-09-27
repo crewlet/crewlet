@@ -156,7 +156,9 @@ var excluded = map[string]string{
 		"the spend the counter is charged with, recorded in the rows " +
 		"internal/tokens aggregates — agent_phase_completed per phase, a " +
 		"coding run's own spend on the record of the phase its resume " +
-		"re-enters, and auxiliary_call_completed per auxiliary completion " +
+		"re-enters (or, where that phase launches another run, on the " +
+		"record it finally publishes, beside every run it collected), and " +
+		"auxiliary_call_completed per auxiliary completion " +
 		"— so \"what did " +
 		"we spend last month\" is answerable and \"what was the counter " +
 		"reading at 14:03:15\" is not a question anybody asks",

@@ -4,17 +4,17 @@ import "testing"
 
 // THE COMPATIBILITY RUNG ANSWERS ONLY IN THIS BUILD'S OWN VOCABULARY.
 //
-// [fallbackKind] is reached for one record class: one an older build wrote
-// QUIETLY, before [MutationRecord.Kind] existed, which a rolling upgrade makes
+// [fallbackKind] is reached for one record class: one written QUIETLY by a
+// build that predates [MutationRecord.Kind], which a rolling upgrade makes
 // ordinary traffic for as long as one takes. Nothing this build publishes
 // reaches it, which is exactly why it needs a test of its own — a round-trip
-// case would exercise the record's stated kind and leave this untouched, and
-// the bug it is being fixed for would survive the suite.
+// case would exercise the record's stated kind and leave this untouched, and a
+// fallback answering outside the vocabulary would survive the suite.
 //
-// The bug: it ended at `ChangeKind(op)` — the OPERATION, cast. Four of the
-// nine [OpKind]s are not [ChangeKind]s, and three are NEAR-MISSES of one:
-// `tombstone` against `removed`, `restore` against `restored`, `purge` against
-// `purged`. A value one letter from the right one is the worst possible
+// The failure it guards: a fallback ending at `ChangeKind(op)` — the
+// OPERATION, cast. Several [OpKind]s are not [ChangeKind]s, and three are
+// NEAR-MISSES of one: `tombstone` against `removed`, `restore` against
+// `restored`, `purge` against `purged`. A value one letter from the right one is the worst possible
 // answer here, because it reads correct in a database dump and matches no
 // filter anybody will ever write.
 //

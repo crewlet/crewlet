@@ -524,11 +524,11 @@ func TestAFullGoalRefusesAnUpdateAndDropsNone(t *testing.T) {
 // A GOAL ALREADY PAST THE CAP STILL TAKES EVERY SAVE THAT ADDS NO UPDATE.
 //
 // The cap is enforced where an update is ADDED, and the applier takes a goal
-// whole from its record — so a goal written under a larger cap, by an earlier
-// build or by an older peer mid-upgrade, lands holding more updates than this
-// build stores. Refusing every save to it refused the health change, the rename
-// and the archive the refusal itself names as the way forward, and the goal
-// could never be edited again.
+// whole from its record — so a goal written under a larger cap, by a build
+// with a larger one or by such a peer mid-upgrade, lands holding more updates
+// than this build stores. Refusing every save to it would refuse the health
+// change, the rename and the archive the refusal itself names as the way
+// forward, and the goal could never be edited again.
 func TestAGoalPastTheCapStillTakesEverySaveThatAddsNoUpdate(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

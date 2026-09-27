@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -92,6 +93,8 @@ type BudgetMeter struct {
 	// all. While it reads at or past the cap, the next round the seat asks
 	// for is refused before it is sent.
 	RefusedAt string `json:"refused_at"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // BudgetReported is a snapshot of every live token meter, for the dashboard.

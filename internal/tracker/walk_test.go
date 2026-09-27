@@ -830,11 +830,11 @@ func TestAWalkYieldsABoardSomebodyIsArrangingAndTheSweepWalksTheRest(t *testing.
 // ARRANGING THE BOARD.
 //
 // A walk plans again for two causes: a batch refused because the order moved,
-// and a batch whose outcome the broker could not establish. The sweep reported
-// both as the first — an informational "somebody is arranging this board" —
-// so a broker that had stopped answering looked like a colleague at work. The
-// second is counted apart, logged as a warning, and fails the job once the
-// other flagged projects have had their walk.
+// and a batch whose outcome the broker could not establish. Reported as the
+// first — an informational "somebody is arranging this board" — a broker that
+// had stopped answering would look like a colleague at work. So the second is
+// counted apart, logged as a warning, and fails the job once the other
+// flagged projects have had their walk.
 func TestAWalkTheBrokerCannotConfirmIsReportedAsAFault(t *testing.T) {
 	t.Parallel()
 	broker := &unansweringAppender{silent: tracker.RankOrderSubject("ENG").Wire()}

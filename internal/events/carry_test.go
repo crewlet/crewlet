@@ -2,6 +2,8 @@ package events_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
+	"github.com/crewlet/crewlet/internal/jsoncarry/jsoncarrytest"
 )
 
 // wireShape is a payload with a member of every shape a payload has.
@@ -233,5 +236,100 @@ func TestAnEventHeldByValueIsWrittenWithItsBody(t *testing.T) {
 	}
 	if want := `{"e":` + knownEventGolden + `}`; string(byValue) != want {
 		t.Errorf("an event held by value is written as\n  %s\nnot\n  %s", byValue, want)
+	}
+}
+
+// A MEMBER THE ENVELOPE DECODES IS NEVER WRITTEN FROM EXTRA, however a caller
+// spelled it there: encoding/json matches a member to a field ignoring case,
+// so an "ID" or a "Type" in Extra is the envelope's id and type, and writing
+// it beside them would publish an event with two of each.
+//
+// Mutation: compare Extra's names exactly in MarshalJSON and both are written.
+func TestAnEnvelopeMemberSpelledAnotherWayIsNeverWrittenFromExtra(t *testing.T) {
+	t.Parallel()
+	event := filledEvent()
+	event.Extra = map[string]json.RawMessage{
+		"ID": json.RawMessage(`"not-the-id"`), "Type": json.RawMessage(`"not_the_type"`),
+		"later": json.RawMessage(`1`),
+	}
+	out, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, stale := range []string{"not-the-id", "not_the_type", `"ID"`, `"Type"`} {
+		if strings.Contains(string(out), stale) {
+			t.Errorf("%s was written from Extra: %s", stale, out)
+		}
+	}
+	if !strings.Contains(string(out), `"later":1`) {
+		t.Errorf("the member nothing decodes was not written: %s", out)
+	}
+}
+
+// AN EVENT CARRIES WHAT IT DOES NOT KNOW, and so does every object it holds
+// that the walk reaches — its body is an interface the walk cannot see into,
+// and every registered payload's objects are walked in internal/events/types.
+func TestEveryObjectOnAnEventCarries(t *testing.T) {
+	t.Parallel()
+	for _, missing := range jsoncarrytest.Uncarried(nil, reflect.TypeFor[events.Event]()) {
+		t.Error(missing)
+	}
+}
+
+// A MEMBER A NEWER BUILD ADDED SURVIVES A RE-PUBLISH, byte for byte — at the
+// top of the event through its Extra, and inside a body's object through that
+// object's carry.
+func TestAMemberANewerBuildAddedSurvivesARepublish(t *testing.T) {
+	t.Parallel()
+	raw, err := json.Marshal(events.NewFrom(&carriedShape{Inner: carriedInner{Depth: 1}},
+		events.TraceContext{TraceID: "t"}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	jsoncarrytest.Survives(t, reflect.TypeFor[carriedShape](), raw, func(in []byte) ([]byte, error) {
+		var event events.Event
+		if err := json.Unmarshal(in, &event); err != nil {
+			return nil, err
+		}
+		if event.Data == nil {
+			return nil, fmt.Errorf("the body did not decode, so it was carried whole")
+		}
+		return json.Marshal(&event)
+	})
+}
+
+// A NUMBER IN THE FREE-FORM BAG SURVIVES A ROUND TRIP AS ITS DIGITS, at every
+// depth — an integer past 2^53 included, which as a float64 would come back a
+// different integer — and decodes as a json.Number, the one type its reader
+// asserts.
+//
+// Mutation: decode the bag without UseNumber and both integers are rounded.
+func TestANumberInThePayloadBagSurvivesARoundTrip(t *testing.T) {
+	t.Parallel()
+	event := filledEvent()
+	event.Payload = map[string]any{
+		"big":    int64(9007199254740993),
+		"nested": map[string]any{"big": uint64(1<<60 + 1)},
+		"ratio":  0.5,
+	}
+	out, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back events.Event
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, ok := back.Payload["big"].(json.Number); !ok || got.String() != "9007199254740993" {
+		t.Errorf("the bag's integer read back as %#v", back.Payload["big"])
+	}
+	again, err := json.Marshal(&back)
+	if err != nil {
+		t.Fatalf("marshal again: %v", err)
+	}
+	for _, exact := range []string{`"big":9007199254740993`, `"big":1152921504606846977`, `"ratio":0.5`} {
+		if !strings.Contains(string(again), exact) {
+			t.Errorf("the bag lost %s: %s", exact, again)
+		}
 	}
 }

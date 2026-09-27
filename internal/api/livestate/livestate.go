@@ -77,14 +77,34 @@ const (
 	// records — phase records and auxiliary completions alike, one cap for
 	// both. The real bound is the window above; this only binds for an org
 	// emitting more than this in a day. Truncation drops the OLDEST records,
-	// so an org past the cap sees a rollup covering slightly less than a day
-	// rather than a wrong total.
+	// so an org past the cap sees a rollup covering less than a day, headed
+	// with what it covers, rather than a wrong total.
 	//
 	// Exported so a caller seeding [History.Spend] from a store can bound
 	// its read by the same number: a record past it is dropped on arrival.
 	// A seed is headed as cut when the store says the window held more than
 	// the read kept — see [History.SpendTruncated].
-	SpendRecordLimit = 8000
+	//
+	// TEN THOUSAND, SET BY THE SEED, which is the one read of this many
+	// records that has a deadline: internal/observe gives it at least half
+	// of the five seconds cmd/crewlet gives the whole seed, and a read that
+	// runs out of it seeds no spend at all. Measured on a development
+	// container over a day of phase records carrying 32 KiB payloads, read
+	// by the store's two-pass tail (internal/store's PhaseTokenTail), whose
+	// cost is per record KEPT: about 48 µs a record where each phase record
+	// sits beside three auxiliary completions — a turn's prefetch and its
+	// reflection workers — and about 95 µs where there are none, since a
+	// phase record's payload is parsed for the three spend values no
+	// column holds. So a busy day's seed reads its 10 000 in about 0.5 s,
+	// a fifth of that half, and a day of phase records alone in about
+	// 0.95 s, under half of it. The rest of what this costs is small at
+	// this size: the rollup re-folds every held record on the 5-second tick
+	// after a record arrives, about 1–2.5 µs a record (under 25 ms here),
+	// and a held record is about half a kilobyte. Auxiliary completions
+	// share the cap, so it covers fewer turns than the same number of phase
+	// records alone; what would let it cover more at the same seed cost is
+	// a cheaper record to read, since the payload parse is most of it.
+	SpendRecordLimit = 10000
 
 	// sandboxEntryMaxAge is how long an in-flight sandbox entry survives
 	// without a completion.

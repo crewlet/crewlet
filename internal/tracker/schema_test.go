@@ -229,12 +229,14 @@ func TestEveryTrackerTableIsAccountedFor(t *testing.T) {
 	}
 }
 
-// THE SPEND COLUMNS ARE ONE LIST, AND THE DDL IS DRIVEN FROM IT.
+// THE SPEND COLUMNS ARE ONE LIST, AND THE DDL IS HELD TO IT BOTH WAYS.
 //
-// Eight column names written out in the struct, the DDL and the applier's
-// statement is three chances to add the ninth to two of them — and the failure
-// is silent: a counter nothing increments reads zero for ever, which looks
-// exactly like a task nobody has worked on.
+// The list is where the set of spend counters is written down once, so it and
+// the schema must name the same columns: one the list names and the schema
+// lacks is a column nothing created, and one the schema carries that the list
+// omits is a counter nobody declared — the silent failure, because a counter
+// nothing increments reads zero for ever, which looks exactly like a task
+// nobody has worked on.
 func TestTheSpendColumnsMatchTheSchema(t *testing.T) {
 	t.Parallel()
 	statement := ddl(t)["table:tracker_tasks"]

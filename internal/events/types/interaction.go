@@ -1,5 +1,7 @@
 package types
 
+import "encoding/json"
+
 // The canonical, platform-agnostic boundary type for inbound messages. It
 // rides on TurnCompleted, which is why it lives here rather than in the
 // learning package that reads it: an event's wire shape cannot be described
@@ -42,6 +44,8 @@ type CanonicalIdentity struct {
 	ExternalID  string `json:"external_id"`
 	Platform    string `json:"platform"`
 	DisplayName string `json:"display_name"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // InboundInteraction is one inbound message that triggered a turn.
@@ -69,4 +73,6 @@ type InboundInteraction struct {
 	// field workers MAY branch on, because it is a normalized platform-agnostic
 	// property rather than an event-type check.
 	RequiresRecon bool `json:"requires_recon"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }

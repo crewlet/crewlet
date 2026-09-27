@@ -870,13 +870,17 @@ func TestAnEvictionLandsOnEveryGatedLog(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read the pages log's evictions: %v", err)
 		}
-		gone := func(node string, back bool, by string) bool {
-			return node == "node-gone" && !back && by == "ops"
+		// EACH LOG NAMES THE OPERATOR ITS OWN WAY: the tracker's writer
+		// records the token's name as the author, and the knowledge base
+		// records an operator with no seat handle as `operator:` and the
+		// token's name, which no seat can hold.
+		gone := func(node string, back bool, by, want string) bool {
+			return node == "node-gone" && !back && by == want
 		}
 		return slices.ContainsFunc(trackerRows, func(r tracker.EvictionRow) bool {
-				return gone(r.NodeID, r.IsBack, r.By)
+				return gone(r.NodeID, r.IsBack, r.By, "ops")
 			}), slices.ContainsFunc(pagesRows, func(r pages.EvictionRow) bool {
-				return gone(r.NodeID, r.IsBack, r.By)
+				return gone(r.NodeID, r.IsBack, r.By, "operator:ops")
 			})
 	}
 	waitUntil(t, 20*time.Second, "both logs to apply the eviction", func() bool {
@@ -1028,4 +1032,24 @@ func firedKind(alarms []statelog.Alarm, want statelog.Kind) bool {
 		}
 	}
 	return false
+}
+
+// AN OPERATOR GESTURE'S PAGE RECORD NAMES THE TOKEN, NEVER A SEAT. A page
+// actor's handle is a seat's: the record would name that seat as the author,
+// and the change feed wakes nobody whose handle equals it. Both gestures that
+// write a page record as an operator — the eviction gate and a reanchor's
+// generation — build their actor here.
+func TestAnOperatorGesturesPageActorNamesTheTokenAndNoSeat(t *testing.T) {
+	t.Parallel()
+	actor := operatorPageActor("dev")
+	if actor.Handle != "" {
+		t.Fatalf("the operator acts under the handle %q, which a seat holds", actor.Handle)
+	}
+	if actor.Kind != pages.AuthorOperator || actor.OperatorID != "dev" {
+		t.Errorf("the operator is %+v, want the operator kind and the token's name", actor)
+	}
+	if got := actor.Name(); got != "operator:dev" {
+		t.Errorf("the record names %q, want operator:dev — a name the seat dev "+
+			"cannot hold", got)
+	}
 }

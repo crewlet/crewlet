@@ -12,25 +12,19 @@ import (
 //
 // # Why this case exists
 //
-// The column had no test at all, and it is the one thing that survived the
-// table it used to be written beside. `recomputeSpans` rebuilt
-// `tracker_status_spans` and stamped this column in the same pass; migration
-// 0014 dropped the table, and the pass shrank to the stamp alone
-// ([Applier.stampStatusEntered]).
-//
-// Deleting the function along with its table would have been the obvious move
-// and is the one this guards against. `upsertTask` binds a literal 0 for this
-// column on insert and OMITS it from the conflict update — so with no writer
-// the column would read 0 on every task in the company, `sort=status_entered`
-// would order by nothing, the `status_entered` date filter would match every
-// task or none, and NOTHING in the tree would have failed.
+// The column is written by one pass whose only output it is
+// ([Applier.stampStatusEntered]), and nothing else in the tree fails without
+// it. `upsertTask` binds a literal 0 for this column on insert and OMITS it
+// from the conflict update — so with no writer the column would read 0 on
+// every task in the company, `sort=status_entered` would order by nothing, and
+// the `status_entered` date filter would match every task or none.
 //
 // # What is asserted
 //
 // THE INSTANT, not merely that something was written. A stamp that named the
-// FIRST status change rather than the newest is the shape the old code could
-// have degraded into — it walked every status row and took the last — and a
-// non-zero check passes on it happily.
+// FIRST status change rather than the newest is the shape a walk over every
+// status row degrades into when it takes the wrong end, and a non-zero check
+// passes on it happily.
 func TestTheEnteredInstantNamesTheNewestStatusChange(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

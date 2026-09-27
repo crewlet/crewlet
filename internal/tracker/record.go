@@ -360,6 +360,8 @@ type Relation struct {
 	// subject — and a field no writer can honestly fill leaves the repair
 	// duty it is declared for nothing to select.
 	OneSidedFinal bool `json:"one_sided_final,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // ChecklistItem is one line of a checklist.
@@ -374,6 +376,8 @@ type ChecklistItem struct {
 	// PromotedTo names the subtask this item became, which is what renders
 	// it struck through with the new key rather than deleting it.
 	PromotedTo *string `json:"promoted_to,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Checklist is a group of items. It mints no object and appears on no board.
@@ -1122,6 +1126,31 @@ type FieldDef struct {
 	CreatedAt time.Time `json:"created_at,omitzero"`
 
 	Extra map[string]json.RawMessage `json:"-"`
+
+	// Unstated names the members a WRITE of this declaration leaves to the
+	// stored declaration with the same id, because its caller has no way to
+	// state them ([mergeFields]). The zero value states every member, which
+	// is the whole post-state a declaring write carries.
+	//
+	// NEVER ON THE WIRE and never stored: the writer resolves it inside its
+	// decide, and the record carries the declaration it resolved to.
+	Unstated Unstated `json:"-"`
+}
+
+// Unstated is which members of a [FieldDef] a write does not state.
+//
+// A TOOL'S SCHEMA IS NARROWER THAN THE DECLARATION: a model declares a field's
+// name, type, flags and options, and has no argument for which types it
+// applies to, its default or the rest of its configuration. A write that
+// cleared what its caller could not say would erase those members from every
+// field the caller named, and "unchanged" measured on them would publish a
+// no-op edit.
+type Unstated struct {
+	AppliesTo bool
+	Default   bool
+
+	// Config is every member of [FieldDef.Config] but its options.
+	Config bool
 }
 
 // Ident and Label make a field resolvable by the shared three-tier rule.
@@ -1361,6 +1390,8 @@ type GoalTarget struct {
 	Tasks    []string `json:"tasks,omitempty"`
 	Projects []string `json:"projects,omitempty"`
 	Done     bool     `json:"done,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Goal is an outcome with targets, carried as full post-state.

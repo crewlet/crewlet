@@ -36,6 +36,14 @@ func Filled[T any]() T {
 	return v
 }
 
+// FilledOf is [Filled] for a type known only at run time — a registry's
+// entries, say — as a pointer to the filled value.
+func FilledOf(typ reflect.Type) reflect.Value {
+	v := reflect.New(typ)
+	fill(v.Elem(), "", map[reflect.Type]bool{})
+	return v
+}
+
 var (
 	rawType  = reflect.TypeFor[json.RawMessage]()
 	timeType = reflect.TypeFor[time.Time]()

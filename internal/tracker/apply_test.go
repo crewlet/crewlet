@@ -444,14 +444,14 @@ func TestAPurgeTakesTheMirrorOfADependencyWithIt(t *testing.T) {
 
 // A RANK ORDER IS APPLIED AS THE VERSION IT WAS WRITTEN AT SAYS.
 //
-// A placement that moved only the `rank` column was undone by the task's next
-// commit, which rewrites the column from the document; the fix writes the key
-// into the document too. But a record is applied by every node on whatever
-// build it runs, and again by any node that replays the log — so the fix cannot
-// change what an existing record does. A record at the first version keeps the
-// column-only placement it was first applied with, and the document placement
-// belongs to the version writers now stamp, which an older build retains
-// rather than applies the old way.
+// A placement that moved only the `rank` column would be undone by the task's
+// next commit, which rewrites the column from the document, so a placement
+// writes the key into the document too. But a record is applied by every node
+// on whatever build it runs, and again by any node that replays the log — so
+// what a version means is fixed once a record carries it. A record at the
+// first version keeps the column-only placement it was first applied with, and
+// the document placement belongs to the version writers stamp, which a build
+// that cannot read it retains rather than applies as the first.
 func TestARankOrderIsAppliedAsTheVersionItWasWrittenAtSays(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -934,10 +934,11 @@ func TestABlockersCapCountsTheDependentsThatAreStillThere(t *testing.T) {
 
 // A PURGE DESTROYS ONE TASK, NOT A SUBTREE — AND LEAVES NO DANGLING PARENT.
 //
-// The purge deleted the row and everything naming it and left each child's
-// `parent_id` pointing at an id that resolves to nothing. No reader can tell
-// that from a parent merely held on another node, and the next edit to such a
-// child derives its depth and root from a chain that stops at nothing.
+// A purge that deleted the row and everything naming it and left each child
+// alone would leave its `parent_id` pointing at an id that resolves to
+// nothing. No reader can tell that from a parent merely held on another node,
+// and the next edit to such a child would derive its depth and root from a
+// chain that stops at nothing.
 //
 // Destroying the children instead would be worse: a purge has no inverse, and
 // "it was under the thing you purged" is not a confirmation anybody gave. So
@@ -1459,18 +1460,18 @@ func ptr[T any](v T) *T { return &v }
 
 // A RE-PARENT REBUILDS THE WHOLE SUBTREE, not the first thousand of it.
 //
-// `descendantsOf` carried a `LIMIT MaxDescendants` on the claim that the cap
-// bounded the subtree, and nothing enforces that cap where a subtree GROWS:
-// only a move and a removal check it, and a create under a parent never does.
-// So a subtree grown one task at a time past the cap hit that limit INSIDE THE
-// APPLIER, and the tail it cut kept its old root_id, depth and too_deep — for
+// `descendantsOf` reads the whole subtree, with no `LIMIT MaxDescendants`,
+// because nothing enforces that cap where a subtree GROWS: only a move and a
+// removal check it, and a create under a parent never does. So a subtree grown
+// one task at a time past the cap would hit such a limit INSIDE THE APPLIER,
+// and the tail it cut would keep its old root_id, depth and too_deep — for
 // ever, since nothing revisits a task whose own record did not change.
 //
-// Every node computed the same wrong answer identically, so nothing could
-// notice it: a board's `too_deep` flag was derived from a depth that was never
-// updated, and a re-parent left half a subtree filed under the root it came
-// from. A short read in an applier is not a short answer, it is durable wrong
-// state replicated to the fleet.
+// Every node would compute the same wrong answer identically, so nothing could
+// notice it: a board's `too_deep` flag derived from a depth never updated, and
+// half a subtree left filed under the root it came from. A short read in an
+// applier is not a short answer, it is durable wrong state replicated to the
+// fleet.
 func TestAReParentRebuildsEveryDescendantAndNotJustTheFirstThousand(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)

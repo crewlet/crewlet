@@ -44,14 +44,12 @@ func seedProject(t *testing.T, r *roundTrip, p tracker.Project) {
 	r.drain()
 }
 
-// THE PROJECT COUNTS ARE READ, NOT AGGREGATED — and until this reader existed
-// nothing read them at all.
+// THE PROJECT COUNTS ARE READ, NOT AGGREGATED.
 //
 // `tracker_projects.open_count/done_count/closed_count` are maintained by the
 // task apply on every status-group change and on every arrival and departure,
-// precisely so a sixty-second dashboard poll is three column reads rather than
-// an aggregate over every task in the company. They were maintained and read
-// by nothing: the whole point of the column was unrealised.
+// precisely so a listing is three column reads rather than an aggregate over
+// every task in the company — which holds only if the listing reads them.
 func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

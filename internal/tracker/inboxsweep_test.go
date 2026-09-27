@@ -8,13 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// TestTheInboxSweepDeletesWhatAgedOutAndNothingElse is the finding. The table
-// shipped `tracker_notifications_swept_idx ON (created_at)` for "the per-node
-// inbox retention sweep, which is a range delete", the horizon is a validated
-// company setting with a default and bounds, and its own doc calls it "the one
-// horizon here that deletes anything" — and nothing deleted anything. Every
-// routed change wrote a row per recipient and kept it for the life of the
-// deployment, on every node.
+// TestTheInboxSweepDeletesWhatAgedOutAndNothingElse holds the sweep to its
+// horizon. The table carries `tracker_notifications_swept_idx ON (created_at)`
+// for "the per-node inbox retention sweep, which is a range delete", and the
+// horizon is a validated company setting with a default and bounds — without
+// the sweep, every routed change would keep a row per recipient for the life
+// of the deployment, on every node.
 func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -15,11 +15,10 @@ import (
 
 // FOLDING ONE ITEM INTO ANOTHER IS THREE COMMITS AND ALL OF THEM LAND.
 //
-// The sequence had no caller and no test at all, which is why the shape of its
-// second append — the duplicate's own subject, written again after the mark —
-// was never exercised. What it has to leave behind is one state: the duplicate
-// cancelled and linked to the survivor, its children under the survivor, and
-// nothing under a closed parent.
+// The shape this exercises is the sequence's second append — the duplicate's
+// own subject, written again after the mark. What it has to leave behind is
+// one state: the duplicate cancelled and linked to the survivor, its children
+// under the survivor, and nothing under a closed parent.
 func TestAMergeClosesTheDuplicateAndMovesItsChildren(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -654,10 +653,10 @@ func TestASubtaskMovedElsewhereDuringAMergeStaysMoved(t *testing.T) {
 // A SUBTASK IN THE TRASH STAYS WHERE IT IS, AND THE MERGE STILL FINISHES.
 //
 // A tombstone is a freeze: every patch on a removed task is refused. The walk
-// reads a removed subtask like any other child, so moving it was refused on
-// every attempt — a merge that could never close, and a sweep failing on it at
-// every tick. It is passed over; restored later, it comes back where it was
-// removed from.
+// reads a removed subtask like any other child, so moving it would be refused
+// on every attempt — a merge that could never close, and a sweep failing on it
+// at every tick. So it is passed over; restored later, it comes back where it
+// was removed from.
 func TestASubtaskInTheTrashDoesNotStopAMerge(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -343,18 +343,64 @@ type skillDraft struct {
 	Content     string `json:"content"`
 }
 
-// parseSkillDraft reads the model's answer, reporting whether it drafted one.
+// skillAnswer is what a model's answer to a drafting prompt amounts to.
+//
+// THREE VALUES, because two of them look alike and must not be treated alike.
+// A model that answered exactly `{}` looked at the evidence and DECIDED there
+// is no procedure; an answer that is absent, empty, undecodable or a draft
+// missing a part decided nothing. A caller that remembers a decline — the
+// promotion pass does, until more seats converge — must remember only the
+// first.
+type skillAnswer string
+
+const (
+	// skillDrafted is a draft with all three parts.
+	skillDrafted skillAnswer = "drafted"
+
+	// skillDeclined is an answer that is, as sent or inside one outer code
+	// fence, exactly an empty JSON object — the answer every drafting
+	// prompt names for "there is no procedure here".
+	skillDeclined skillAnswer = "declined"
+
+	// skillUnusable is every other answer: no completion, an empty one,
+	// one that does not decode, or a draft missing a part.
+	skillUnusable skillAnswer = "unusable"
+)
+
+// parseSkillDraft reads the model's answer, reporting whether it drafted one:
+// [readSkillDraft] for a caller that treats a decline and an unusable answer
+// alike, because it records neither.
+func parseSkillDraft(ctx context.Context, c *llm.Completion) (skillDraft, bool) {
+	draft, answer := readSkillDraft(ctx, c)
+	return draft, answer == skillDrafted
+}
+
+// readSkillDraft reads the model's answer and says what it amounts to.
 //
 // A draft missing any of its three parts is DROPPED rather than written with
 // the gap: a skill with no body is a catalogue entry that costs prompt budget
 // and teaches nothing, and one with no name cannot be addressed by `use_skill`.
-func parseSkillDraft(ctx context.Context, c *llm.Completion) (skillDraft, bool) {
+//
+// EVERY UNUSABLE ANSWER IS LOGGED AT WARN, the decline never is: a drafting
+// worker that has stopped producing usable answers is indistinguishable, in
+// every count it reports, from a model with nothing to draft, and only the
+// first needs somebody. Both lines, because the answer has no other copy
+// anywhere — see [answerLogFields].
+func readSkillDraft(ctx context.Context, c *llm.Completion) (skillDraft, skillAnswer) {
 	if c == nil {
-		return skillDraft{}, false
+		log.WarnContext(ctx, "skill_draft_missing",
+			"detail", "the provider answered with no completion and no error")
+		return skillDraft{}, skillUnusable
 	}
 	body := strings.TrimSpace(c.Content)
-	if body == "" || body == "{}" {
-		return skillDraft{}, false
+	if body == "" {
+		log.WarnContext(ctx, "skill_draft_empty",
+			"detail", "the model answered with no text at all, which is not the "+
+				"{} that declines")
+		return skillDraft{}, skillUnusable
+	}
+	if emptyObject(body) {
+		return skillDraft{}, skillDeclined
 	}
 
 	var draft skillDraft
@@ -366,21 +412,35 @@ func parseSkillDraft(ctx context.Context, c *llm.Completion) (skillDraft, bool) 
 		}
 	}
 	if !decoded {
-		// WARN, not debug: a synthesizer that has stopped decoding is
-		// indistinguishable from a model with nothing to draft, and the
-		// second needs no attention while the first does. Both lines,
-		// because this answer has no other copy anywhere — see
-		// [answerLogFields].
 		logUnusableAnswer(ctx, "skill_draft_undecodable", body)
-		return skillDraft{}, false
+		return skillDraft{}, skillUnusable
 	}
 	draft.Name = strings.TrimSpace(draft.Name)
 	draft.Description = strings.TrimSpace(draft.Description)
 	draft.Content = strings.TrimSpace(draft.Content)
 	if draft.Name == "" || draft.Content == "" || draft.Description == "" {
-		return skillDraft{}, false
+		logUnusableAnswer(ctx, "skill_draft_incomplete", body)
+		return skillDraft{}, skillUnusable
 	}
-	return draft, true
+	return draft, skillDrafted
+}
+
+// emptyObject reports whether an answer is, as sent or inside one outer code
+// fence, a JSON object with no members.
+//
+// NOT [modelJSONCandidates]' last rung, which carves the span from the first
+// brace to the last out of prose: a decline is remembered, so it has to be
+// the answer the model gave rather than a pair of braces found inside some
+// other answer.
+func emptyObject(body string) bool {
+	for _, candidate := range []string{body, stripFence(body)} {
+		var members map[string]json.RawMessage
+		if json.Unmarshal([]byte(candidate), &members) == nil &&
+			members != nil && len(members) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // mostSimilar reports the closest existing sequence past the threshold.

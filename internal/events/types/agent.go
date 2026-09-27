@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -99,6 +100,8 @@ const PlanDecisionSkip PlanDecision = "skip"
 type PromptMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // ToolExecution records one tool call a phase made: name, arguments (a JSON
@@ -864,6 +867,8 @@ type SubagentNode struct {
 	Wave int `json:"wave"`
 	// After is what this task waited for, as the parent wrote it.
 	After []string `json:"after,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // EventType is the "subagent_batched" wire type.
@@ -900,6 +905,8 @@ type ModelSpend struct {
 	// CostUSD is this model's part of the record's price, where whoever
 	// priced the record priced each model separately; zero where it did not.
 	CostUSD float64 `json:"cost_usd,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // RunSpend is what a detached coding run's agent reported about the run's own

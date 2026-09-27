@@ -186,23 +186,12 @@ func (e ErrUnknownVersion) Error() string {
 // a newer one added.
 
 // EncodeContainer renders a container.
-//
-// THROUGH THE CARRY DIRECTLY rather than a MarshalJSON of its own, which every
-// other document here has: [ContainerListing] embeds a container, and a method
-// on it would be promoted onto the listing and write it as the bare container,
-// without the page count beside it.
-func EncodeContainer(c Container) ([]byte, error) {
-	data, err := jsoncarry.Marshal(c, c.Extra)
-	if err != nil {
-		return nil, fmt.Errorf("pages: encode: %w", err)
-	}
-	return data, nil
-}
+func EncodeContainer(c Container) ([]byte, error) { return encode(c) }
 
 // DecodeContainer reads a container.
 func DecodeContainer(data []byte) (Container, error) {
 	var c Container
-	if err := jsoncarry.Unmarshal(data, &c, &c.Extra); err != nil {
+	if err := json.Unmarshal(data, &c); err != nil {
 		return Container{}, fmt.Errorf("pages: decode container: %w", err)
 	}
 	if err := checkVersion(c.V); err != nil {
@@ -299,6 +288,21 @@ func checkVersion(got int) error {
 		return ErrUnknownVersion{Got: got, Want: DocumentVersion}
 	}
 	return nil
+}
+
+// MarshalJSON writes [Container.Extra] back beside the members this build
+// knows. [ContainerListing] embeds a container and has methods of its own
+// (read.go), so these are not promoted onto it.
+func (c Container) MarshalJSON() ([]byte, error) {
+	type fields Container
+	return jsoncarry.Marshal(fields(c), c.Extra)
+}
+
+// UnmarshalJSON keeps every member of the container this build does not know
+// in [Container.Extra].
+func (c *Container) UnmarshalJSON(b []byte) error {
+	type fields Container
+	return jsoncarry.Unmarshal(b, (*fields)(c), &c.Extra)
 }
 
 // MarshalJSON writes [Page.Extra] back beside the members this build knows.

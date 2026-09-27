@@ -171,12 +171,11 @@ func isFallback(reason Reason) bool { return reason == ReasonLeadFallback }
 // this, and — for the reasons that are ABOUT something somebody said — the
 // text itself.
 //
-// ONE SWITCH, and the shape is deliberate. Split into functions chosen by
-// [Reason.Primary], an arm can sit where its own reason never reaches it —
-// `blocking` in a "following" half while Primary sends it to the "owned" one,
-// so a blocker's assignee reads "a task you are named on changed" — and each
-// arm looks right beside the others in its own function, so nothing can see
-// the pairing is wrong.
+// ONE SWITCH, and the shape is deliberate. Split into functions chosen by a
+// classification of the reasons, an arm can sit in a function its own reason
+// is never sent to — so a blocker's assignee reads "a task you are named on
+// changed" — and each arm looks right beside the others in its own function,
+// so nothing can see the pairing is wrong.
 //
 // EVERY REASON HAS AN ARM, and the default is the honest sentence for one a
 // newer build routed that this one does not know: a rolling upgrade puts such

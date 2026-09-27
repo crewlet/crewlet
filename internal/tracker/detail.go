@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,7 +36,9 @@ import (
 // ITS OWN SENTINEL, because the caller's answer differs: a tool says "no such
 // task" to a model, an API says 404, and neither should say either when what
 // actually happened is that this node has not applied the record that creates
-// it. The detail read distinguishes those — see [TaskDetail.Complete].
+// it. The detail read distinguishes those: a read level that waits covers a
+// record this node has not reached yet, and a record it retains and cannot
+// apply is refused as deferred rather than answered with this ([Reader.Task]).
 var ErrNoTask = errors.New("tracker: no such task")
 
 // ErrNoProject reports a project this node has no row for.
@@ -157,12 +160,11 @@ type TaskDetail struct {
 	// The coverage half, in a board's shape — see [Answer] — with the one
 	// difference a point read makes: a task a retained record covers is
 	// refused rather than answered with a gap ([Reader.Task]), so an answer
-	// carries Complete true and no Incomplete.
+	// that is served always carries Complete true and has no gap to name.
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
 	AppliedThrough uint64             `json:"applied_through"`
 	Complete       bool               `json:"complete"`
-	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
 
 // DetailLink is one relation as a reader sees it.
@@ -231,7 +233,8 @@ type HistoryEntry struct {
 // from.
 //
 // A TASK A RETAINED RECORD COVERS IS REFUSED, as [statelog.RefuseDeferred],
-// rather than answered with a gap the way a listing is — see the scope below.
+// rather than answered with a gap the way a listing is, and so is an absent
+// task a retained record could be the create of ([refuseUnaccounted]).
 func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	fresh statelog.Freshness) (TaskDetail, error) {
 
@@ -245,128 +248,18 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	// record this node cannot decode covering it means the rows it is
 	// about to read may already be wrong.
 	//
-	// THE SCOPE IS THE TASK UNDER ITS OWN PROJECT, and both are resolved
-	// from this node's rows BEFORE the framework read, because a scope
-	// path nests the object under its container: a record deferred on the
-	// task, or on its project, is filed under that project's path, and a
-	// term naming the reference alone resolves to the workspace's, which
-	// meets neither — the framework's refusal would never fire on the one
-	// task it is about.
-	//
-	// A TASK THIS NODE DOES NOT HOLD YET is scoped by the reference alone,
-	// because a linearizable read may be about to wait for it and nothing
-	// here can name its project until then. The probe inside the
-	// transaction is what covers that, and any reference whose resolution
-	// moved between the two reads: it is the same scope, formed from the
-	// rows the answer is read from, and it refuses the same way.
-	//
 	// THE WHOLE FRESHNESS, not the level alone: a staleness bound is
 	// about this node's lag rather than about a set, so one row's read
 	// is exactly as far behind as a listing's, and a floor the caller
 	// named is the position its own write landed at.
-	term := ScopeTerm{Kind: TermObject, ID: idOrKey}
-	if id, project, held, err := r.locate(ctx, idOrKey); err != nil {
+	term, err := r.pointTerm(ctx, idOrKey)
+	if err != nil {
 		return TaskDetail{}, err
-	} else if held {
-		term = taskTerm(id, project)
 	}
 	served, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{
 		Paths: []string{term.Path()},
 	}.Normalised(), false), func(tx *sql.Tx) error {
-		id, err := resolveTaskID(ctx, tx, idOrKey)
-		if err != nil {
-			return err
-		}
-		task, err := readTaskDocument(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		out.Task = task
-		switch {
-		case want.Comment != "":
-			// READ WHETHER OR NOT `comments` WAS ASKED FOR: naming one
-			// comment IS asking for comments, and a caller that had to
-			// pass both would meet a silently empty thread when it
-			// forgot.
-			if out.Comments, err = readComment(ctx, tx, id, want.Comment); err != nil {
-				return err
-			}
-		case want.Comments:
-			out.Comments, out.CommentsCursor, err = readComments(ctx, tx, id,
-				want.CommentCursor)
-			if err != nil {
-				return err
-			}
-		}
-		if want.History {
-			limit := want.HistoryLimit
-			if limit <= 0 {
-				limit = DetailHistoryDefault
-			}
-			out.History, out.HistoryTruncated, err = readHistory(ctx, tx, id, limit)
-			if err != nil {
-				return err
-			}
-		}
-		if want.Links {
-			if out.Links, err = readLinks(ctx, tx, id); err != nil {
-				return err
-			}
-		}
-		if want.Fields {
-			if out.Fields, err = readFieldValues(ctx, tx, task); err != nil {
-				return err
-			}
-		}
-		// THE SAME EXISTS THE BOARD ROW USES, in this same transaction,
-		// so the badge on the item and the badge on its row cannot
-		// disagree about one task at one instant.
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
-			 WHERE d.task_id = ? AND d.blocker_open = 1)`,
-			id).Scan(&out.Blocked); err != nil {
-			return fmt.Errorf("tracker: read %s's open blockers: %w", id, err)
-		}
-
-		// THE COVERAGE, IN THE SAME TRANSACTION as the rows. A detail
-		// read that reported it from a second one would be answering
-		// "is this complete" about a state the rows were not read from
-		// — and the whole value of the number is that it describes THIS
-		// answer.
-		position, applied, err := readCheckpoint(ctx, tx)
-		if err != nil {
-			return err
-		}
-		out.LogSeq, out.AppliedThrough = position, applied
-
-		// SCOPED TO THE TASK, not to the company. A deferred record
-		// somewhere else in the tracker makes a BOARD incomplete and
-		// says nothing about this task — refusing here would refuse
-		// every task in a company holding one undecodable record about
-		// one other task.
-		//
-		// AND A REFUSAL, returned for the framework to answer with, for
-		// the point read's reason above: this probe meets what the scope
-		// formed before the read could not — a task this node did not
-		// hold then, or a reference that resolves differently now.
-		incomplete, err := coverageOf(ctx, tx, statelog.ScopeSet{
-			Paths: []string{taskTerm(id, out.Task.Project).Path()},
-		}.Normalised())
-		if err != nil {
-			return err
-		}
-		if incomplete != nil {
-			return &statelog.Refused{
-				Code: statelog.RefuseDeferred, Level: fresh.Level,
-				Detail: fmt.Sprintf("this node retains %d record(s) covering "+
-					"task %s that it has not applied — the lowest at %s, "+
-					"written at version %d — so its rows for the task may "+
-					"already be wrong", incomplete.Records, id,
-					incomplete.From, incomplete.Version),
-			}
-		}
-		return nil
+		return readTaskDetail(ctx, tx, fresh.Level, idOrKey, want, &out)
 	})
 	if err != nil {
 		return TaskDetail{}, err
@@ -378,47 +271,287 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	return out, nil
 }
 
+// readTaskDetail is one detail read's answer, from the rows tx reads: the
+// coverage, the task and the parts asked for.
+func readTaskDetail(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
+	idOrKey string, want DetailWants, out *TaskDetail) error {
+
+	// THE COVERAGE FIRST, in the same transaction as the rows. A
+	// detail read that reported it from a second one would be
+	// answering "is this complete" about a state the rows were not
+	// read from — and it comes before the parts, because a refused
+	// answer has no use for them.
+	id, err := refuseUnaccounted(ctx, tx, level, idOrKey)
+	if err != nil {
+		return err
+	}
+	task, err := readTaskDocument(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	out.Task = task
+	switch {
+	case want.Comment != "":
+		// READ WHETHER OR NOT `comments` WAS ASKED FOR: naming one
+		// comment IS asking for comments, and a caller that had to
+		// pass both would meet a silently empty thread when it
+		// forgot.
+		if out.Comments, err = readComment(ctx, tx, id, want.Comment); err != nil {
+			return err
+		}
+	case want.Comments:
+		out.Comments, out.CommentsCursor, err = readComments(ctx, tx, id,
+			want.CommentCursor)
+		if err != nil {
+			return err
+		}
+	}
+	if want.History {
+		limit := want.HistoryLimit
+		if limit <= 0 {
+			limit = DetailHistoryDefault
+		}
+		out.History, out.HistoryTruncated, err = readHistory(ctx, tx, id, limit)
+		if err != nil {
+			return err
+		}
+	}
+	if want.Links {
+		if out.Links, err = readLinks(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	if want.Fields {
+		if out.Fields, err = readFieldValues(ctx, tx, task); err != nil {
+			return err
+		}
+	}
+	// THE SAME EXISTS THE BOARD ROW USES, in this same transaction,
+	// so the badge on the item and the badge on its row cannot
+	// disagree about one task at one instant.
+	if err = tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
+		 WHERE d.task_id = ? AND d.blocker_open = 1)`,
+		id).Scan(&out.Blocked); err != nil {
+		return fmt.Errorf("tracker: read %s's open blockers: %w", id, err)
+	}
+
+	// THE POSITION, IN THE SAME TRANSACTION as the rows, because the
+	// whole value of the number is that it describes THIS answer.
+	position, applied, err := readCheckpoint(ctx, tx)
+	if err != nil {
+		return err
+	}
+	out.LogSeq, out.AppliedThrough = position, applied
+	return nil
+}
+
 // taskTerm is one task's own scope term, under the project that holds it.
 func taskTerm(id, project string) ScopeTerm {
 	return ScopeTerm{Kind: TermObject, ID: id, Container: project}
 }
 
-// locate resolves a reference to a task's id and project from this node's own
-// rows, reporting whether this node holds the task at all.
+// pointTerm is the scope a point read about one task hands the framework,
+// formed from this node's rows BEFORE the read.
 //
-// IT FORMS A SCOPE AND ANSWERS NOTHING: it is read outside the framework, so
-// the refusals and the wait a read is owed have not happened yet, and nothing
-// it returns reaches a caller except as the scope [Reader.Task] asks about.
-func (r *Reader) locate(ctx context.Context, idOrKey string) (string, string, bool, error) {
-	var id, project string
-	var held bool
+// THE TASK UNDER ITS OWN PROJECT when this node holds it, because a scope path
+// nests the object under its container: a record deferred on the task, or on
+// its project, is filed under that project's path, and a term naming the
+// reference alone resolves to the workspace's, which meets neither — the
+// framework's probe, which runs before any wait, would never fire on the one
+// task the read is about.
+//
+// THE REFERENCE ALONE when it does not, which resolves under the workspace and
+// so meets a record scoped to the whole domain or to the workspace, and none
+// filed under a project. A task this node does not hold YET may be one a
+// session or linearizable read is about to wait for, and a wider term here —
+// the project a key names — would refuse that read over an unrelated record in
+// the same project before the wait could bring the task in. What covers an
+// absent task is [refuseUnaccounted], after the wait, in the transaction the
+// answer is read from.
+func (r *Reader) pointTerm(ctx context.Context, idOrKey string) (ScopeTerm, error) {
+	var term ScopeTerm
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		resolved, err := resolveTaskID(ctx, tx, idOrKey)
+		id, project, held, err := locateTask(ctx, tx, idOrKey)
 		switch {
-		case errors.Is(err, ErrNoTask):
-			return nil
 		case err != nil:
 			return err
+		case held:
+			term = taskTerm(id, project)
+		default:
+			term = ScopeTerm{Kind: TermObject, ID: idOrKey}
 		}
-		err = tx.QueryRowContext(ctx,
-			`SELECT project_key FROM tracker_tasks WHERE id = ?`, resolved).
-			Scan(&project)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			// A FORMER KEY NAMING A TASK WHOSE ROW IS GONE, which is a
-			// task this node does not hold.
-			return nil
-		case err != nil:
-			return fmt.Errorf("tracker: read %s's project: %w", resolved, err)
-		}
-		id, held = resolved, true
 		return nil
 	})
 	if err != nil {
-		return "", "", false, fmt.Errorf("tracker: locate %q: %w", idOrKey, err)
+		return ScopeTerm{}, fmt.Errorf("tracker: locate %q: %w", idOrKey, err)
 	}
-	return id, project, held, nil
+	return term, nil
 }
+
+// locateTask resolves a reference to a task's id and project from the rows tx
+// reads, reporting whether those rows hold the task at all.
+func locateTask(ctx context.Context, tx *sql.Tx, idOrKey string) (string, string, bool, error) {
+	id, err := resolveTaskID(ctx, tx, idOrKey)
+	switch {
+	case errors.Is(err, ErrNoTask):
+		return "", "", false, nil
+	case err != nil:
+		return "", "", false, err
+	}
+	var project string
+	err = tx.QueryRowContext(ctx,
+		`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&project)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// A FORMER KEY NAMING A TASK WHOSE ROW IS GONE, which is a task
+		// these rows do not hold.
+		return "", "", false, nil
+	case err != nil:
+		return "", "", false, fmt.Errorf("tracker: read %s's project: %w", id, err)
+	}
+	return id, project, true, nil
+}
+
+// refuseUnaccounted is a point read's own coverage probe about ONE task, run
+// in the transaction the answer is read from: the task's id when this node can
+// answer for it, [ErrNoTask] when it can say there is no such task, and a
+// [statelog.RefuseDeferred] refusal for the framework to answer with when it
+// can say neither.
+//
+// # A held task is probed under its own project
+//
+// SCOPED TO THE TASK, not to the company. A deferred record somewhere else in
+// the tracker makes a BOARD incomplete and says nothing about this task —
+// refusing here would refuse every task in a company holding one undecodable
+// record about one other task. It meets what the framework's own probe could
+// not: a task this node did not hold when [Reader.pointTerm] ran, or a
+// reference that resolves differently now.
+//
+// # An absent task is probed where its create would be filed
+//
+// "There is no such task" is an answer a caller acts on — a seat files the
+// duplicate, a screen shows a dead link — so it is given only when no record
+// this node retains could be the one that creates it. A create is scoped to
+// its task under its project ([Writer.CreateTask]), so the probe is the
+// project a KEY names ([absentScope]), or every project for an id, whose
+// project nothing here can name.
+//
+// A PURGED TASK IS ANSWERED ABSENT WHATEVER IS RETAINED, because the deletion
+// gate drops every later record about it on every node ([Applier.Gated]):
+// nothing this node could apply would bring it back.
+func refuseUnaccounted(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
+	idOrKey string) (string, error) {
+
+	id, project, held, err := locateTask(ctx, tx, idOrKey)
+	switch {
+	case err != nil:
+		return "", err
+	case held:
+		return id, refuseCovered(ctx, tx, level, id, project)
+	}
+	return "", refuseAbsent(ctx, tx, level, idOrKey)
+}
+
+// refuseCovered is [refuseUnaccounted] for a task this node holds.
+func refuseCovered(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
+	id, project string) error {
+
+	incomplete, err := coverageOf(ctx, tx, statelog.ScopeSet{
+		Paths: []string{taskTerm(id, project).Path()},
+	}.Normalised())
+	switch {
+	case err != nil:
+		return err
+	case incomplete != nil:
+		return &statelog.Refused{
+			Code: statelog.RefuseDeferred, Level: level,
+			Detail: fmt.Sprintf("this node retains %d record(s) covering "+
+				"task %s that it has not applied — the lowest at %s, "+
+				"written at version %d — so its rows for the task may "+
+				"already be wrong", incomplete.Records, id,
+				incomplete.From, incomplete.Version),
+		}
+	}
+	return nil
+}
+
+// refuseAbsent is [refuseUnaccounted] for a task this node does not hold:
+// [ErrNoTask] when nothing it retains could create the task, and a refusal
+// when something could.
+func refuseAbsent(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
+	idOrKey string) error {
+
+	absent := fmt.Errorf("%w: %s", ErrNoTask, idOrKey)
+	purged, err := wasPurged(ctx, tx, idOrKey)
+	switch {
+	case err != nil:
+		return err
+	case purged:
+		return absent
+	}
+	scope, where := absentScope(idOrKey)
+	incomplete, err := coverageOf(ctx, tx, scope)
+	switch {
+	case err != nil:
+		return err
+	case incomplete != nil:
+		return &statelog.Refused{
+			Code: statelog.RefuseDeferred, Level: level,
+			Detail: fmt.Sprintf("this node holds no task %s and retains %d "+
+				"record(s) it has not applied %s — the lowest at %s, written "+
+				"at version %d — any of which may be the one that creates it, "+
+				"so it cannot answer that there is no such task",
+				idOrKey, incomplete.Records, where, incomplete.From,
+				incomplete.Version),
+		}
+	}
+	return absent
+}
+
+// wasPurged reports whether a reference names a task a purge destroyed, by the
+// id or the key its deletion marker recorded.
+func wasPurged(ctx context.Context, tx *sql.Tx, idOrKey string) (bool, error) {
+	var purged bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM tracker_deletions WHERE task_id = ?)
+		    OR EXISTS (SELECT 1 FROM tracker_deletions WHERE task_key = ?)`,
+		idOrKey, strings.ToUpper(idOrKey)).Scan(&purged); err != nil {
+		return false, fmt.Errorf("tracker: read whether %q was purged: %w", idOrKey, err)
+	}
+	return purged, nil
+}
+
+// absentScope is where a record creating a task this node does not hold could
+// be filed.
+//
+// THE PROJECT A KEY NAMES, because a key is minted as the project's key and a
+// number and a project key carries no hyphen — so the prefix is the container
+// the create was scoped under. The container term meets every record filed
+// beneath it, which is the price of not knowing the task's id: an unrelated
+// record in the same project refuses the read too, and one in another project
+// does not.
+//
+// EVERY PROJECT FOR ANYTHING ELSE, because an id names no container, and a
+// narrower guess would be the workspace's path — which no task is filed under.
+//
+// The second return says which of the two, in the words a refusal uses.
+func absentScope(idOrKey string) (statelog.ScopeSet, string) {
+	ref := strings.ToUpper(strings.TrimSpace(idOrKey))
+	if taskKeyRef.MatchString(ref) {
+		project, _, _ := strings.Cut(ref, "-")
+		return statelog.ScopeSet{Paths: []string{
+			ScopeTerm{Kind: TermContainer, ID: project}.Path(),
+		}}.Normalised(), "in project " + project
+	}
+	return statelog.ScopeSet{Paths: []string{
+		join(pathDomain, pathContainer),
+	}}.Normalised(), "in any project"
+}
+
+// taskKeyRef is a reference that is a task key and nothing else — the
+// scanner's pattern, anchored, so the two cannot disagree about what a key is.
+var taskKeyRef = regexp.MustCompile(`^(?:` + taskKeyPattern.String() + `)$`)
 
 // resolveTaskID turns an id or a key — current or former — into an id.
 //

@@ -122,9 +122,10 @@ func TestTagArchiveIsOneWayForNewWork(t *testing.T) {
 	}
 }
 
-// TestUndeclaredTagIsRefused is the rule that did not exist: any string a
-// model invented became a tag row, which is how `Bug`, `bugfix` and `BUG` came
-// to sit beside `bug` in the TYPE catalogue before its own check existed.
+// TestUndeclaredTagIsRefused holds the rule that a tag is declared before a
+// task carries it: otherwise any string a model invented would become a tag
+// row — `Bug`, `bugfix` and `BUG` beside `bug`, the failure the TYPE
+// catalogue's own check refuses.
 func TestUndeclaredTagIsRefused(t *testing.T) {
 	r := newRoundTrip(t)
 	r.declareTags("regression")

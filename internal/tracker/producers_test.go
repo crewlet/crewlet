@@ -11,14 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// EVERY SNAPSHOT FIELD `Candidates` READS HAS A PRODUCER, and this is the
-// guard the tree did not have.
+// EVERY SNAPSHOT FIELD `Candidates` READS HAS A PRODUCER.
 //
-// Six of them did not: `ParentAssignee`, `Dependents`, `ChecklistAssignees`,
-// `CommentAsk`, `AnsweredAuthor`, `ThreadParticipants` and `RoutedTo` were
-// declared, documented, read by a routing arm and written by NOTHING. Every
-// one of those arms called `add("")`, which the candidate builder's own guard
-// drops in silence — so seven reasons could never fire and no test, no log
+// A field that is declared, documented and read by a routing arm but written
+// by NOTHING makes that arm call `add("")`, which the candidate builder's own
+// guard drops in silence — so its reason could never fire, and no test, no log
 // line and no screen could tell that apart from a company where nothing
 // happened.
 //
@@ -384,14 +381,13 @@ func TestAChecklistReplacedWholeWakesEveryOwnerOnBothSides(t *testing.T) {
 	}
 }
 
-// EVERY REASON HAS ITS OWN SENTENCE, and this is what the three-function
-// dispatch could not promise.
+// EVERY REASON HAS ITS OWN SENTENCE.
 //
-// The opener was chosen by [Reason.Primary] across three functions, and six
-// arms sat in the half their own reason could never reach: a blocker's
-// assignee read "a task you are named on changed", and somebody whose work had
-// just become startable read "a task you are watching changed". Each arm
-// looked right beside the others in its own function.
+// An opener split across functions by a classification of the reasons can
+// leave an arm in a half its own reason is never sent to: a blocker's assignee
+// would read "a task you are named on changed", and somebody whose work had
+// just become startable "a task you are watching changed" — each arm looking
+// right beside the others in its own function.
 func TestEveryReasonHasItsOwnOpener(t *testing.T) {
 	t.Parallel()
 	seen := map[string][]tracker.Reason{}
@@ -415,20 +411,18 @@ func TestEveryReasonHasItsOwnOpener(t *testing.T) {
 
 func ref(s string) *string { return &s }
 
-// NO REASON IS SHADOWED BY AN EARLIER ARM, which is the failure mode the
-// six dead routing fields turned out to share with three live ones.
+// NO REASON IS SHADOWED BY AN EARLIER ARM.
 //
 // `Candidates` dedupes on the HANDLE — the first reason that names somebody is
 // the one they hear under — so an arm whose handle an earlier arm also names
-// is an arm that never fires for that person. `blocking` was the pure case:
-// the only handle it ever adds is the blocker's own assignee, and the generic
-// assignee arm ran first, so the reason could not name anybody on any commit.
-// `asked` and `answered` were the subtle case — they worked for a colleague
-// and fell silent for the assignee, which is the person most likely to be
-// asked.
+// is an arm that never fires for that person. `blocking` is the pure case: the
+// only handle it ever adds is the blocker's own assignee, so behind the generic
+// assignee arm it could not name anybody on any commit. `asked` and `answered`
+// are the subtle case — behind it they would work for a colleague and fall
+// silent for the assignee, which is the person most likely to be asked.
 //
-// Nothing in the build could see any of it. The field was set, the arm was
-// written, the constant was in the precedence list and the parity test agreed
+// Nothing else in the build would see it. The field would be set, the arm
+// written, the constant in the precedence list and the parity test agreeing
 // with the applier — about the wrong answer.
 func TestNoReasonIsShadowedByAnEarlierArm(t *testing.T) {
 	t.Parallel()

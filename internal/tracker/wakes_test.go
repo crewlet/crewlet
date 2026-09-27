@@ -120,7 +120,7 @@ func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
 // It is the one Addressed wake of the three — the spec's "a seat starts it, or
 // says why not" — and Addressed is ENFORCED: the turn is sent back for more
 // rounds until a tool call delivered. A seat obliged to deliver on a task it
-// was never told the identity of is the worst shape this change could take.
+// was never told the identity of is the worst shape this wake could take.
 func TestThePrioritisedWakeIsActionable(t *testing.T) {
 	t.Parallel()
 	wake := objectWake(tracker.KindPerson, tracker.ChangePrioritised)
@@ -432,8 +432,8 @@ func candidateHandles(wake *tracker.Notify) []string {
 // `set_priorities` is registered on the operator MCP alone, and an operator's
 // actor is an API TOKEN's name — never a handle in the chart — so no ancestor
 // walk can match it and `Lead` is false for every operator by construction.
-// With the gate reading `own || Lead`, the only shipped surface for this verb
-// refused every cross-person write, and omitting the handle silently wrote a
+// A gate reading `own || Lead` would refuse every cross-person write on the
+// only surface this verb has, and omitting the handle would silently write a
 // person record for the token instead.
 func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 	r := newRoundTrip(t)
@@ -477,9 +477,9 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 // A GOAL SAVE DOES NOT DESTROY ITS HEALTH HISTORY.
 //
 // A save is a whole post-state replace and `write_work_goal` builds its Goal
-// from the tool's own arguments, which carry no updates — so every save
-// through the only shipped surface wiped the entire history, silently, and
-// reported `outcome: applied`. The updates are the one part of a goal somebody
+// from the tool's own arguments, which carry no updates — so a save that
+// replaced the updates too would wipe the entire history through the only
+// surface there is, silently, and report `outcome: applied`. The updates are the one part of a goal somebody
 // wrote in their own words, and the part the wake is about.
 func TestAGoalSaveKeepsItsUpdateHistory(t *testing.T) {
 	r := newRoundTrip(t)
@@ -667,7 +667,10 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 		// scale somebody chose.
 		"points": {From: "3", To: "5.5"},
 	} {
-		if got := moved[field]; got != want {
+		// EVERY MEMBER, the carried ones included: a delta is formed
+		// from the two tasks alone, so one holding anything more is one
+		// this build made up.
+		if got := moved[field]; !reflect.DeepEqual(got, want) {
 			t.Errorf("%s = %+v, want %+v", field, got, want)
 		}
 	}
@@ -692,10 +695,10 @@ func TestClearingASizeIsAChange(t *testing.T) {
 	sized := tracker.Task{ID: "t-1", Points: 8, EstimateMinutes: 45}
 	cleared := tracker.Task{ID: "t-1"}
 	moved := tracker.TaskDeltas(sized, cleared)
-	if got := moved["points"]; got != (tracker.Delta{From: "8", To: ""}) {
+	if got := moved["points"]; !reflect.DeepEqual(got, tracker.Delta{From: "8", To: ""}) {
 		t.Errorf("points = %+v, want 8 → nothing", got)
 	}
-	if got := moved["estimate"]; got != (tracker.Delta{From: "45m", To: ""}) {
+	if got := moved["estimate"]; !reflect.DeepEqual(got, tracker.Delta{From: "45m", To: ""}) {
 		t.Errorf("estimate = %+v, want 45m → nothing", got)
 	}
 	// And a task that never had either reports no change at all, rather
@@ -740,7 +743,7 @@ func TestASameDayScheduleMoveIsRecorded(t *testing.T) {
 			From: "2031-04-16T09:00:00Z",
 			To:   "2031-04-16T17:00:00Z",
 		}
-		if got != want {
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s = %+v, want %+v", field, got, want)
 		}
 	}

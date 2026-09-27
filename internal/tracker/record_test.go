@@ -102,17 +102,16 @@ func TestTheSubjectSentinelIsOneByteOnTheWire(t *testing.T) {
 //
 // A task's scope path sits under its project's, and the project is a column on
 // the row rather than anything in the subject — so it has to travel ON THE
-// RECORD. It used to be an argument to Resolve, which meant the writer passed
-// the project and the envelope decoder, which has no row to read it from,
-// passed nothing.
+// RECORD. As an argument to Resolve, the writer would pass the project and the
+// envelope decoder, which has no row to read it from, would pass nothing.
 //
-// Nothing raised. The publisher probed the deferral index over t/c/ENG/o/<id>
-// while the applier filed every deferral under t/c/workspace/o/<id>, so the
-// two-clause containment probe — the one piece of SQL in this design where a
-// wrong clause is data loss rather than a wrong answer — simply never matched.
-// A writer would be told its task was clean while a record it could not decode
-// sat deferred against it, take the retry-at-zero branch, and overwrite a
-// mutation no reprocess recovers.
+// Nothing would raise. The publisher would probe the deferral index over
+// t/c/ENG/o/<id> while the applier filed every deferral under
+// t/c/workspace/o/<id>, so the two-clause containment probe — the one piece of
+// SQL in this design where a wrong clause is data loss rather than a wrong
+// answer — would simply never match. A writer would be told its task was clean
+// while a record it could not decode sat deferred against it, take the
+// retry-at-zero branch, and overwrite a mutation no reprocess recovers.
 //
 // So: encode, decode, resolve, and compare against the writer's own path.
 func TestAScopesContainerSurvivesTheWire(t *testing.T) {
@@ -465,14 +464,13 @@ func TestARecordFromANewerBuildReEncodesWithItsUnknownFields(t *testing.T) {
 // The emptiness answer decides whether a write happens at all, so a field it
 // does not see is a write the caller is told succeeded and that changed
 // nothing — no error, no warning, no history row, and no way to tell it apart
-// from a write that landed. That is not hypothetical: the hand-written
-// version of this check listed fourteen of the struct's fields, so
-// `update_work_item` given a custom-field value as its only argument reported
-// success and wrote nothing at all.
+// from a write that landed: a check that missed the custom fields would let
+// `update_work_item` given a custom-field value as its only argument report
+// success and write nothing at all.
 //
 // DRIVEN BY REFLECTION over the struct rather than by a list here, for the
 // reason the check itself is: a list in the test drifts exactly as fast as a
-// list in the code, and the field that broke this was the one nobody added to
+// list in the code, and the field that escapes both is the one nobody adds to
 // either.
 func TestEveryFieldOfAPatchIsAChange(t *testing.T) {
 	t.Parallel()

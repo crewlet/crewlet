@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -51,6 +52,8 @@ type CoalescedMessage struct {
 	// without this copy a worker reasoning per message could not tell the
 	// one direct mention in a burst from the four broadcasts around it.
 	Addressed bool `json:"addressed,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // ExternalNotification is an inbound notification from an external system, and

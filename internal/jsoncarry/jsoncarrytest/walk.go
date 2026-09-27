@@ -27,12 +27,18 @@ import (
 // with the field and not both methods is reported as well, since its one
 // method would otherwise pass it off as a value with an encoding of its own.
 //
-// Two kinds of struct it passes over. One that encodes through a method of
-// its own and has no Extra — a time, a scope written as a bare string — is a
-// value its method writes, with no members beside it to carry. And one the
-// caller names in exempt, each with the reason it does not carry; an exempt
-// type the walk reaches from none of the roots is reported, so the list
-// cannot outlive what it names.
+// A struct that encodes through a method of its own and has no Extra — a
+// time, a scope written as a bare string or as a list — is not reported
+// itself, since its method and not its members decides what it writes. Its
+// EXPORTED FIELDS ARE WALKED ALL THE SAME, whatever their tags say: the method
+// writes what it chooses of them, a list of objects among them, and an object
+// behind such a method is one a newer build can add a member to like any
+// other. So every nested object is reached, and a field the method never
+// writes is one to exempt by name, with that as the reason.
+//
+// The one kind of struct it passes over is one the caller names in exempt,
+// each with the reason it does not carry; an exempt type the walk reaches from
+// none of the roots is reported, so the list cannot outlive what it names.
 func Uncarried(exempt map[reflect.Type]string, roots ...reflect.Type) []string {
 	w := walker{exempt: exempt, seen: map[reflect.Type]bool{}, reached: map[reflect.Type]bool{}}
 	for _, root := range roots {
@@ -86,11 +92,24 @@ func (w *walker) walk(typ reflect.Type, at string) {
 		w.found = append(w.found, fmt.Sprintf("%v (at %s) holds an Extra it does not both keep "+
 			"and write back", typ, at))
 	case ownEncoding(typ):
+		w.encodedFields(typ, at)
 		return
 	default:
 		w.found = append(w.found, fmt.Sprintf("%v (at %s) does not carry what it does not know", typ, at))
 	}
 	w.fields(typ, at)
+}
+
+// encodedFields walks every exported field of a struct its own method writes.
+// The tags are not read: they are encoding/json's, and the method is what
+// decides which fields reach the wire and in what shape.
+func (w *walker) encodedFields(typ reflect.Type, at string) {
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		if field.IsExported() {
+			w.walk(field.Type, at+"."+field.Name)
+		}
+	}
 }
 
 // fields walks the members a struct writes, an untagged embedded struct's

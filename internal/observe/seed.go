@@ -32,9 +32,12 @@ type Seeded interface {
 //   - the feed: the newest [livestate.EventFeedLimit] persisted events, inside
 //     the store's own read floor ([store.EventHistory]). Payload-free, because
 //     a feed row carries none;
-//   - the spend: the newest [livestate.SpendRecordLimit] phase records inside
-//     [livestate.LiveSpendWindow], read from the promoted token columns rather
-//     than the payloads. The count is the projection's record cap, applied
+//   - the spend: the newest [livestate.SpendRecordLimit] spend records inside
+//     [livestate.LiveSpendWindow] — phase records and auxiliary-call records
+//     together, newest first across both — read from the promoted token
+//     columns plus the three payload members no column holds (the price, the
+//     per-model split and `run_spend_unreported`), rather than from whole
+//     payloads. The count is the projection's record cap, applied
 //     at the READ: a busy day past it was otherwise read in full inside the
 //     seed's time budget, only to be cut to the cap on arrival, and a read
 //     that ran out of budget seeded no spend at all. The store reads one

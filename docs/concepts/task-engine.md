@@ -86,6 +86,10 @@ consumes that log in order and applies the same records into its own SQL
 tables, committing **the rows and its position on the log in one
 transaction**. There is no node whose copy is the real one and no leader, and
 every node arrives at the same rows because they all replay the same order.
+A record keeps what a newer build wrote at every depth, and so does a task, a
+project or a catalogue a node on an older build writes back — inside a task's
+checklists and relations or a field's options as much as at the top — so a
+rolling upgrade does not leave that node's copy short of what the others hold.
 
 What that shape buys is that a copy can say exactly how far along it is, which
 a cache cannot:
@@ -111,10 +115,16 @@ a cache cannot:
   names **your own** write and the position to retry against — a different
   situation from a colleague editing the same item, and it reads differently.
 - **An answer that could not account for everything says so.** A node holding
-  a record a newer build wrote — one this build cannot decode — reports the
-  answer as incomplete, names how many records and which objects, and the
-  board renders that above the rows. It is a different fact from staleness,
-  and a screen that showed only staleness would look confidently right.
+  a record a newer build wrote — one this build cannot decode — reports a
+  list or a board as incomplete, names how many records and which objects, and
+  the board renders that above the rows. It is a different fact from
+  staleness, and a screen that showed only staleness would look confidently
+  right. A read of **one item** such a record covers is refused instead
+  (`deferred`) rather than answered incomplete, because that item's own rows
+  may already be wrong — and so is a read of an item this node does not hold
+  when such a record could be the one that creates it, because "there is no
+  such item" is an answer somebody acts on. Waiting on the same node does not
+  clear either; a node running a build that can read the record answers.
 - **A node claims no new seats until every domain that gates admission is
   established.** A seat whose tools read incomplete tables would answer "there
   is no such task" and act on it, by filing the duplicate or telling a person

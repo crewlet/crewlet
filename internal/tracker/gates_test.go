@@ -106,14 +106,22 @@ func TestAWriteOnAPurgedTaskIsRefusedAsDeleted(t *testing.T) {
 	}
 }
 
-// THE GATE COUNTS WHAT IT DROPS.
+// A RECORD THE DELETION GATE DROPS WRITES NOTHING, ITS MARKER INCLUDED.
 //
-// The residual producers are replay-shaped — a deferred record reprocessed
-// after an upgrade, a snapshot adopter replaying forward — and those are hits
-// worth counting rather than writes worth attributing. A counter is the
-// strictest form of the envelope-only rule: it stores neither envelope nor
-// payload.
-func TestTheDeletionGateCountsItsHits(t *testing.T) {
+// A gate is a rule under which an accepted record produces rows on no node,
+// and the framework asks it inside the apply transaction so the answer comes
+// from committed state. A gate that wrote — a tally on the marker — would make
+// a dropped record produce a row after all, one nothing reads: what a person
+// sees of the drop is the framework's own log line, counter and alarm, the
+// same for every gate.
+//
+// The shape is a redelivery of a patch after the purge, which is what a
+// reprocess after an upgrade or a snapshot adopter replaying forward looks
+// like.
+//
+// Mutation: make the deletion gate UPDATE the marker when it drops a record,
+// and the marker row changes.
+func TestARecordTheDeletionGateDropsWritesNothing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
@@ -130,26 +138,54 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 		t.Fatalf("PurgeTask: %v", err)
 	}
 	r.drain()
+	before := markerRow(t, r, "t-1")
 
-	// THE PATCH AGAIN, after the marker exists. That is the replay shape
-	// the counter is for: a redelivery, a reprocess after an upgrade, or
-	// a snapshot adopter replaying forward past a purge it never saw.
 	r.redeliver(patch.Position.Seq)
 
-	var rejects int
+	if after := markerRow(t, r, "t-1"); after != before {
+		t.Fatalf("the gate dropped a record and wrote the marker:\n before %s\n after  %s",
+			before, after)
+	}
+	if rows := r.strings(`SELECT id FROM tracker_tasks WHERE id = 't-1'`); len(rows) != 0 {
+		t.Fatalf("the dropped patch wrote the purged task back: %v", rows)
+	}
+}
+
+// markerRow is a task's deletion marker, every column of it, as one string —
+// by `*` rather than by name, so the comparison covers whatever the table
+// carries.
+func markerRow(t *testing.T, r *roundTrip, id string) string {
+	t.Helper()
+	var row string
 	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(),
-			`SELECT rejects FROM tracker_deletions WHERE task_id = ?`,
-			"t-1").Scan(&rejects)
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT * FROM tracker_deletions WHERE task_id = ?`, id)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		columns, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		if !rows.Next() {
+			return fmt.Errorf("task %s has no deletion marker", id)
+		}
+		values := make([]any, len(columns))
+		for i := range values {
+			values[i] = new(any)
+		}
+		if err := rows.Scan(values...); err != nil {
+			return err
+		}
+		for i, v := range values {
+			row += fmt.Sprintf("%s=%v ", columns[i], *(v.(*any)))
+		}
+		return rows.Err()
 	}); err != nil {
 		t.Fatalf("read the marker: %v", err)
 	}
-	if rejects == 0 {
-		t.Fatal("the gate dropped a record and counted nothing — the count is " +
-			"the only trace a dropped record leaves, and an operator reading " +
-			"the purge report sees zero for a task the fleet is still " +
-			"rejecting writes on")
-	}
+	return row
 }
 
 // EVERY GATE-INSTALLING RECORD IS DECLARED, AND PINNED.

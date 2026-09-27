@@ -23,8 +23,8 @@ import (
 // declaration this build has never seen, and a rename never re-points a stored
 // value. What it cannot do is be FILTERED. `tracker_field_values` exists for
 // that, with four partial indexes each named in the DDL for a different
-// column, and until this the applier wrote no row into it: every `f.<slug>`
-// filter in the grammar had an index, a plan-test entry, and no data.
+// column, and this file is what writes its rows: without them every `f.<slug>`
+// filter in the grammar would have an index, a plan-test entry, and no data.
 //
 // # Why the column depends on the DECLARATION and not on the JSON
 //
@@ -343,12 +343,12 @@ func fieldRows(field FieldDef, raw json.RawMessage) ([]fieldValueRow, error) {
 		// exactly one.
 		members = []json.RawMessage{raw}
 	}
-	// THE OPTION SPELLINGS, resolved HERE and not at the query: a stored
-	// ref holds the option's ID, so a value written as the slug or the
-	// name has to become that id before it is stored. It did not, and the
-	// query resolved anyway — so a task set to the slug a person types was
+	// THE OPTION SPELLINGS, resolved HERE as well as at the query: a
+	// stored ref holds the option's ID, so a value written as the slug or
+	// the name has to become that id before it is stored — resolved only
+	// at the query, a task set to the slug a person types would be
 	// invisible to every filter, grouping and total on the field it had
-	// just set. [OptionIDs] is the one spelling of the rule both sides now
+	// just set. [OptionIDs] is the one spelling of the rule both sides
 	// read.
 	//
 	// A FIELD WITH NO OPTION LIST resolves nothing, which is the honest

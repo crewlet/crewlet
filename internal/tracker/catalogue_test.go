@@ -94,11 +94,11 @@ func TestACompanysTypesAddToTheBuiltins(t *testing.T) {
 	}
 }
 
-// A TASK NAMES A TYPE THE COMPANY DECLARES, and the tool has always said so.
+// A TASK NAMES A TYPE THE COMPANY DECLARES, which is what the tool asks for.
 //
-// Nothing checked it, so any string a model invented became a type — `Bug`,
-// `bugfix` and `BUG` filed three different types beside `bug`, and every board
-// grouped and filtered on them as if they were real.
+// Unchecked, any string a model invented would become a type — `Bug`, `bugfix`
+// and `BUG` filed as three different types beside `bug`, with every board
+// grouping and filtering on them as if they were real.
 func TestATaskCannotInventItsOwnType(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -124,8 +124,8 @@ func TestATaskCannotInventItsOwnType(t *testing.T) {
 	}
 	r.drain()
 
-	// AND SO DOES NAMING NONE. `create_work_item` has always told a model
-	// "`task` if you are unsure", so a create that names no type files
+	// AND SO DOES NAMING NONE. `create_work_item` tells a model "`task` if
+	// you are unsure", so a create that names no type files
 	// under it rather than being refused for a type it did not choose.
 	bare := newTask("t-bare")
 	bare.Type = ""

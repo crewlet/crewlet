@@ -1041,10 +1041,14 @@ type bridgeCallCut struct{ outputBytes, argsBytes int }
 // bridgeCallCutMarker is what [textcut.Within] ends a cut output with.
 const bridgeCallCutMarker = "…"
 
+// encodeBridgeCall is a call's bytes as the store holds them, and the bytes
+// its record's size is measured on against [MaxBridgeCallBytes]: those of
+// [BridgeCall.MarshalJSON], which writes through encoding/json with <, > and &
+// escaped as \u003c, \u003e and \u0026. An encoder's own escaping setting does
+// not reach inside what a MarshalJSON returns, so it has no say in these bytes.
 func encodeBridgeCall(call BridgeCall) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
 	if err := enc.Encode(call); err != nil {
 		return nil, fmt.Errorf("encode the call: %w", err)
 	}

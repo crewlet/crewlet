@@ -32,8 +32,8 @@ func seedTree(t *testing.T, r *roundTrip, root, sub string,
 //
 // [SubtaskMode]'s own contract: collapsed and expanded filter ROOT tasks and
 // let their subtrees ride along unfiltered; separate filters every task on its
-// own. It was parsed, defaulted and compiled by nothing, so every query in the
-// engine has always behaved as `separate` while the grammar said otherwise.
+// own. A mode parsed and defaulted but compiled by nothing would make every
+// query behave as `separate` while the grammar said otherwise.
 func TestASubtreeRidesAlongWithItsRoot(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

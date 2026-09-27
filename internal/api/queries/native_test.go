@@ -547,9 +547,7 @@ func TestTheBoardCarriesItsOwnTotalAndReadLevel(t *testing.T) {
 //
 // This is a difference a client acts on: a 503 with a hint refreshes the
 // screen in a few seconds, where a 500 tells it to give up on a screen that
-// would have worked. The API reference has documented the 503 since the
-// surface existed, and nothing produced it — every read refusal reached the
-// caller as a plain failure once the tracker moved onto the log.
+// would have worked.
 func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{err: &statelog.Refused{
@@ -573,12 +571,18 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	}
 }
 
-// AND A REFUSAL WAITING CANNOT CLEAR IS STILL A FAILURE.
+// AND A REFUSAL WAITING CANNOT CLEAR IS NOT "COME BACK" — IT IS "NOT HERE".
 //
 // A node holding a record it cannot decode will not catch up however long the
 // caller waits, so a Retry-After there sends a client round a loop that cannot
-// terminate. The classification is the state log's own rather than a second
+// terminate. Nor is it a plain failure: nothing on the node is broken, the
+// record exists, and a node running a build that can read the change answers
+// the same question — so it is its own answer, which a transport maps to its
+// own code. The classification is the state log's own rather than a second
 // list on this side.
+//
+// Mutation: drop the RefuseDeferred arm from unavailableIfTransient and the
+// refusal comes back unclassified.
 func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{err: &statelog.Refused{
@@ -597,6 +601,15 @@ func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
 		t.Fatalf("a refusal waiting cannot clear was reported as %v — a client "+
 			"told to come back goes round a loop that cannot terminate",
 			queries.ErrUnavailable)
+	}
+	if !errors.Is(err, queries.ErrDeferred) {
+		t.Fatalf("a deferred refusal answered %v, want %v — unclassified, it "+
+			"reaches a person as a broken query about a record that exists",
+			err, queries.ErrDeferred)
+	}
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+		t.Errorf("the classification lost the refusal it wraps: %v", err)
 	}
 }
 

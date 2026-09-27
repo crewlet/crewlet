@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // seedTurn writes one turn's worth of events: two phases and a completion.
@@ -177,7 +180,7 @@ func TestATurnSumsItsTokensAndNamesEveryModel(t *testing.T) {
 	// and naming one makes a cost reader attribute the whole turn to it.
 	//
 	// THE WHOLE LIST, not `Contains` over it: `model` is NOT NULL with an
-	// empty default and only a phase record carries one, so the turn's own
+	// empty default and only a spend record carries one, so the turn's own
 	// `turn_completed` row folded into the join as a nameless element and
 	// every `Contains` assertion passed straight over it.
 	want := []string{"claude-haiku-4-5", "claude-opus-5"}
@@ -186,6 +189,67 @@ func TestATurnSumsItsTokensAndNamesEveryModel(t *testing.T) {
 	if !slices.Equal(named, want) {
 		t.Errorf("models = %q, which splits to %q, want exactly %q",
 			one.Models, named, want)
+	}
+}
+
+// A TURN'S ROW COUNTS THE AUXILIARY CALLS MADE FOR IT, as the spend rollup's
+// per-turn row does. An auxiliary completion that names the turn is a spend
+// record of that turn — its turn-start prefetch, a learning worker reflecting
+// on it — so its tokens are in the turn's, its model is among the turn's, and
+// "turns on that model" finds it. It is not a phase: the phase count is the
+// turn's phase records alone.
+func TestATurnRowCountsTheAuxiliaryCallsMadeForIt(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	storeEvent(t, log, stamped(events.New(types.AgentPhaseCompleted{
+		RoleName: "PM", TurnID: "run-1", WorkKey: "wk-1", Phase: types.PhaseExecute,
+		Model: "sonnet", InputTokens: 90, OutputTokens: 10, TotalTokens: 100,
+	}, events.TraceContext{}), base))
+	storeEvent(t, log, stamped(events.New(types.AuxiliaryCallCompleted{
+		RoleName: "PM", TurnID: "run-1", WorkKey: "wk-1", Phase: types.PhaseAuxiliary,
+		Worker: "prefetch", Model: "haiku", ProviderKey: "aux",
+		InputTokens: 30, OutputTokens: 5, TotalTokens: 35,
+	}, events.TraceContext{}), base.Add(time.Minute)))
+
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("%d turns, want the one both records name: %+v", len(got), got)
+	}
+	one := got[0]
+	if one.TotalTokens != 135 || one.InputTokens != 120 || one.OutputTokens != 15 {
+		t.Errorf("tokens = %d in, %d out, %d total; want the phase's and the auxiliary call's",
+			one.InputTokens, one.OutputTokens, one.TotalTokens)
+	}
+	if one.Phases != 1 {
+		t.Errorf("phases = %d, want the one phase record: an auxiliary call is not a phase", one.Phases)
+	}
+	named := splitModels(one.Models)
+	slices.Sort(named)
+	if !slices.Equal(named, []string{"haiku", "sonnet"}) {
+		t.Errorf("models = %q, want the phase's and the auxiliary call's", one.Models)
+	}
+
+	// THE SAME TOTAL THE ROLLUP'S PER-TURN ROW REPORTS, so a turn's cost reads
+	// the same on the list and on the breakdown.
+	records, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("PhaseTokens: %v", err)
+	}
+	rollup := tokens.Aggregate(records, tokens.Options{})
+	if len(rollup.ByTurn) != 1 || rollup.ByTurn[0].TotalTokens != one.TotalTokens {
+		t.Errorf("by_turn = %+v, want one row at the list's %d", rollup.ByTurn, one.TotalTokens)
+	}
+
+	byModel, _, err := log.Turns(t.Context(), store.TurnQuery{Model: "haiku"})
+	if err != nil {
+		t.Fatalf("Turns(model=haiku): %v", err)
+	}
+	if len(byModel) != 1 || byModel[0].TurnID != "run-1" {
+		t.Errorf("turns on haiku = %+v, want the turn its auxiliary call served", byModel)
 	}
 }
 

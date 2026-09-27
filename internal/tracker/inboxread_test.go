@@ -61,12 +61,11 @@ func routeAs(t *testing.T, r *roundTrip, w *tracker.Writer, id, key,
 	r.drain()
 }
 
-// TestAnInboxIsReadableAtAll is the finding this reader answers. The applier
-// has written `tracker_notifications` since the domain landed — one row per
-// (commit, recipient), with the reason, the subject and the excerpt — and the
-// table shipped two indexes naming a reader that was never written. A company
-// routed every change to the people it concerned, wrote them all down,
-// replicated them, and offered no way to ask what was in them.
+// TestAnInboxIsReadableAtAll holds the reader to the rows the applier writes:
+// `tracker_notifications` carries one row per (commit, recipient), with the
+// reason, the subject and the excerpt, and a company that routed every change
+// to the people it concerned and offered no way to ask what was in them would
+// have written them all down, and replicated them, for nobody.
 func TestAnInboxIsReadableAtAll(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -407,13 +406,13 @@ func TestReasonsFilterRatherThanClassify(t *testing.T) {
 // could have put it there.
 //
 // The key is MINTED BY THE WRITE — `ENG-1` comes from the project's own
-// counter — so a record's notification snapshot cannot state it, and for as
-// long as the inbox row took that snapshot every creation in every company
-// wrote a notice whose subject was a uuid. `SubjectKey`'s own doc says what
+// counter — so a record's notification snapshot cannot state it, and an inbox
+// row taken from that snapshot would give every creation in every company a
+// notice whose subject was a uuid. `SubjectKey`'s own doc says what
 // that costs: "an inbox of uuids is an inbox nobody reads."
 //
-// The existing cases could not see it, because the harness states the key on
-// the snapshot itself. This one deliberately does not.
+// The other cases here state the key on the snapshot itself, so they cannot
+// see it; this one deliberately does not.
 func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

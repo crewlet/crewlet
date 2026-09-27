@@ -6,7 +6,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsoncarry/jsoncarrytest"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // filledRecord is a vector record with every member on the wire, and an
@@ -51,15 +50,14 @@ func TestAVectorRecordEncodesAsItAlwaysHas(t *testing.T) {
 	}
 }
 
-// EVERY OBJECT ON A VECTOR RECORD CARRIES WHAT IT DOES NOT KNOW, bar two. The
-// subject is an address: every member of it is the log subject the record is
-// published on ([search.Subject.String]). And the scope is the framework's own
-// type, which does not carry.
+// EVERY OBJECT ON A VECTOR RECORD CARRIES WHAT IT DOES NOT KNOW — the scope,
+// the framework's own type, among them — bar the subject, an address: every
+// member of it is the log subject the record is published on
+// ([search.Subject.String]).
 func TestEveryObjectOnAVectorRecordCarries(t *testing.T) {
 	t.Parallel()
 	for _, missing := range jsoncarrytest.Uncarried(map[reflect.Type]string{
-		reflect.TypeFor[search.Subject]():    "an address: the log subject",
-		reflect.TypeFor[statelog.ScopeSet](): "the framework's own type, which does not carry",
+		reflect.TypeFor[search.Subject](): "an address: the log subject",
 	}, reflect.TypeFor[search.VectorRecord]()) {
 		t.Error(missing)
 	}

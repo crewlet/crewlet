@@ -59,11 +59,13 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
 // FailureEventTypes are the events that ARE a failure by their very type,
@@ -138,6 +140,11 @@ type Trigger struct {
 	Integration     string
 	Sender          string
 	SourceEventType string
+
+	// Extra carries the members of a descriptor a newer build wrote that
+	// this one has no field for, so a trigger decoded and published again
+	// by this build keeps them ([Trigger.MarshalJSON]).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // DescribeTrigger builds the descriptor for the event that woke an agent.
@@ -167,17 +174,38 @@ func DescribeTrigger(e *events.Event) Trigger {
 	return t
 }
 
-// IsZero reports whether this descriptor names no trigger at all.
-func (t Trigger) IsZero() bool { return t == Trigger{} }
+// IsZero reports whether this descriptor names no trigger at all: none of its
+// own members is set, and it carries nothing a newer build wrote.
+func (t Trigger) IsZero() bool {
+	return t.namesNothing() && len(t.Extra) == 0
+}
 
-// Map renders the descriptor in the loose form the wire and the dashboard use.
+// namesNothing is whether none of the members this build knows is set.
+func (t Trigger) namesNothing() bool {
+	return t.ID == "" && t.Type == "" && t.Summary == "" && t.Actor == "" &&
+		t.Timestamp.IsZero() && t.Integration == "" && t.Sender == "" &&
+		t.SourceEventType == ""
+}
+
+// triggerMembers are the members a descriptor's decode reads into a field,
+// decided as encoding/json decides it — so a member it reads is never carried
+// as well, whatever its spelling, and never written twice.
+var triggerMembers = jsoncarry.MembersOf(reflect.TypeFor[triggerWire]())
+
+// Map renders the descriptor in the loose form the wire uses: the members this
+// build knows, and every member it carries ([Trigger.Extra]) as the bytes it
+// was read as.
 //
-// One definition of the wire shape, which MarshalJSON also goes through, so the
-// key set cannot drift between the JSON a Go node publishes and the map an API
-// handler assembles by hand.
+// The one definition of the wire shape, which MarshalJSON goes through.
 func (t Trigger) Map() map[string]any {
-	if t.IsZero() {
-		return map[string]any{}
+	descriptor := map[string]any{}
+	for name, value := range t.Extra {
+		if !triggerMembers.Decodes(name) {
+			descriptor[name] = value
+		}
+	}
+	if t.namesNothing() {
+		return descriptor
 	}
 	timestamp := ""
 	if !t.Timestamp.IsZero() {
@@ -185,13 +213,11 @@ func (t Trigger) Map() map[string]any {
 		// serializes to — so a reader that parses one parses the other.
 		timestamp = t.Timestamp.Format(time.RFC3339Nano)
 	}
-	descriptor := map[string]any{
-		"id":        t.ID,
-		"type":      t.Type,
-		"summary":   t.Summary,
-		"actor":     t.Actor,
-		"timestamp": timestamp,
-	}
+	descriptor["id"] = t.ID
+	descriptor["type"] = t.Type
+	descriptor["summary"] = t.Summary
+	descriptor["actor"] = t.Actor
+	descriptor["timestamp"] = timestamp
 	if t.Integration != "" {
 		descriptor["integration"] = t.Integration
 		if t.Sender != "" {
@@ -204,8 +230,9 @@ func (t Trigger) Map() map[string]any {
 	return descriptor
 }
 
-// MarshalJSON writes the descriptor through Map, so the JSON a node publishes
-// and the map an API handler hands the dashboard cannot drift apart.
+// MarshalJSON writes the descriptor through Map: in key order, the members this
+// build knows beside every member it carries. A descriptor carrying nothing is
+// the bytes it always was.
 func (t Trigger) MarshalJSON() ([]byte, error) { return json.Marshal(t.Map()) }
 
 // triggerWire mirrors the map form for decoding. Every key is optional: a
@@ -227,15 +254,21 @@ type triggerWire struct {
 // Tolerating it is the point: the envelope drops the WHOLE typed body when a
 // payload fails to decode, so an unreadable timestamp on a descriptor would
 // cost a dashboard every other field of the event carrying it.
+//
+// A MEMBER IT HAS NO FIELD FOR IS KEPT in [Trigger.Extra], through
+// [github.com/crewlet/crewlet/internal/jsoncarry], whose package doc is the
+// contract — so a trigger on an event this build relays leaves with what a
+// newer build wrote in it.
 func (t *Trigger) UnmarshalJSON(data []byte) error {
 	var wire triggerWire
-	if err := json.Unmarshal(data, &wire); err != nil {
+	var extra map[string]json.RawMessage
+	if err := jsoncarry.Unmarshal(data, &wire, &extra); err != nil {
 		return fmt.Errorf("unmarshal trigger: %w", err)
 	}
 	*t = Trigger{
 		ID: wire.ID, Type: wire.Type, Summary: wire.Summary, Actor: wire.Actor,
 		Integration: wire.Integration, Sender: wire.Sender,
-		SourceEventType: wire.SourceEventType,
+		SourceEventType: wire.SourceEventType, Extra: extra,
 	}
 	if wire.Timestamp != "" {
 		if parsed, err := time.Parse(time.RFC3339, wire.Timestamp); err == nil {

@@ -311,17 +311,16 @@ func TestProjectEditNamesAnUnknownProject(t *testing.T) {
 	}
 }
 
-// AN OPERATOR IS NOT A SEAT, and the gate that admitted only the lead refused
-// the one actor the whole operator surface exists for.
+// AN OPERATOR IS NOT A SEAT, and a gate that admitted only the lead would
+// refuse the one actor the whole operator surface exists for.
 //
-// It was reachable rather than theoretical: `/operator/mcp` resolves the lead
-// from the ORG CHART by handle and an operator token carries its own name
-// rather than a seat's, so the lookup answered false and `write_project` was
-// refused for every operator in every company — including the founder
-// declaring the fields a project files work under. The archive gate below it
-// already expected an operator, which is what made the hole visible: a person
-// could take a project out of circulation and could not say how its work was
-// filed.
+// `/operator/mcp` resolves the lead from the ORG CHART by handle and an
+// operator token carries its own name rather than a seat's, so that lookup
+// answers false for every operator — and such a gate would refuse
+// `write_project` to every operator in every company, the founder declaring
+// the fields a project files work under included, while the archive gate
+// beside it admits them: a person could take a project out of circulation and
+// could not say how its work was filed.
 func TestAPersonsOwnCredentialIsAuthorityOverAProjectsPolicy(t *testing.T) {
 	r := newRoundTrip(t)
 	who := "alice"

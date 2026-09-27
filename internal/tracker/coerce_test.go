@@ -470,24 +470,24 @@ func TestAPeopleFieldWithoutARosterPassesThrough(t *testing.T) {
 // A REFUSAL QUOTES THE WHOLE VALUE, AND THE URL RULE PRESCRIBES A REAL ONE.
 //
 // The quote is the caller's OWN value handed back so it can see what failed to
-// match, and internal/agent/builtin already states the rule for the same
-// gesture: "a shortened echo names a query the model never sent — which is
-// worse than a long line, because the model then retries against the wrong
-// string." At sixty-four bytes that fired on an ordinary URL.
+// match, and internal/agent/builtin states the rule for the same gesture: "a
+// shortened echo names a query the model never sent — which is worse than a
+// long line, because the model then retries against the wrong string." A
+// quote cut to a line's length would cut an ordinary URL.
 //
-// coerceURL is where it stopped being merely unhelpful. Its refusal composes
-// the CORRECTION out of the same quote — "write https://<value>" — so a URL
-// past the cap was answered with an instruction to store a truncated address
-// with an ellipsis inside it. That value parses, and lands on the board as a
-// dead link nobody typed. This asserts the whole round trip: take what the
+// coerceURL is where a cut quote stops being merely unhelpful. Its refusal
+// composes the CORRECTION out of the same quote — "write https://<value>" — so
+// a cut quote would instruct the caller to store a truncated address with an
+// ellipsis inside it. That value parses, and lands on the board as a dead link
+// nobody typed. This asserts the whole round trip: take what the
 // refusal told the caller to write, put it back through the same rule, and it
 // has to be accepted as exactly itself.
 func TestAURLRefusalPrescribesAValueThatIsAccepted(t *testing.T) {
 	t.Parallel()
 	field := FieldDef{Slug: "runbook", Type: FieldURL}
-	// Comfortably past the old sixty-four-byte quote and well inside what
-	// the field itself accepts, which is the size that makes a cut here a
-	// bug rather than a guard.
+	// Well past a hundred bytes and well inside what the field itself
+	// accepts, which is the size that makes a cut here a bug rather than a
+	// guard.
 	bare := "example.com/runbooks/incident-response/" +
 		strings.Repeat("section-", 12) + "final?revision=7&highlight=rollback"
 

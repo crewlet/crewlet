@@ -12,22 +12,22 @@ import (
 
 // A CHANGE NOBODY IS TOLD ABOUT STILL NAMES WHAT IT WAS.
 //
-// This is the whole finding as one case. `tracker_history.kind` is what the
-// activity feed's `kinds=` filter, every report window and the unblocked
-// repair's own scan select on — and it used to be read off the NOTIFICATION,
-// so a record that carried none had its kind guessed from the OPERATION
-// instead. The file that writes the row opens by stating the principle that
-// breaks: the feed is "a complete account of what HAPPENED rather than an
-// account of what was ANNOUNCED, and `notified` is how a reader tells
-// 'nothing was announced' from 'nothing happened'".
+// `tracker_history.kind` is what the activity feed's `kinds=` filter, every
+// report window and the unblocked repair's own scan select on — so it is read
+// off the record's own stated kind, never off the NOTIFICATION a quiet record
+// does not carry. Guessed from the OPERATION instead, it would break the
+// principle the file that writes the row opens with: the feed is "a complete
+// account of what happened rather than an account of what was announced, and
+// `notified` is how a reader tells "nothing was announced" from "nothing
+// happened"".
 //
 // A CATALOGUE EDIT AND A VIEW SAVE ARE THE SHARPEST INSTANCES, because they
 // are quiet BY DESIGN and on every path: a wake per catalogue edit would page
 // the whole company for a renamed dropdown, and a saved view is read from its
-// own strip rather than woken into anybody's inbox. Both therefore reached the
-// feed as `patch` — which is an [tracker.OpKind], not a [tracker.ChangeKind],
-// so `kinds=catalogue_updated` and `kinds=view_saved` found nothing at all
-// while the rows sat there.
+// own strip rather than woken into anybody's inbox. Guessed from the
+// operation, both would reach the feed as `patch` — which is an
+// [tracker.OpKind], not a [tracker.ChangeKind] — so `kinds=catalogue_updated`
+// and `kinds=view_saved` would find nothing at all while the rows sat there.
 func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -67,13 +67,13 @@ func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 
 // EVERY HISTORY ROW NAMES A KIND THIS BUILD KNOWS.
 //
-// The fallback used to end at `ChangeKind(op)` — the OPERATION, cast — and
-// four of the nine [tracker.OpKind]s are not [tracker.ChangeKind]s at all.
-// Three are near-misses of one: a quiet removal filed as `tombstone` while the
-// filter spells it `removed`, a restore as `restore` against `restored`, a
-// purge as `purge` against `purged`. A word one letter from the right one is
-// the worst possible value here, because it reads correct in a database dump
-// and matches nothing.
+// A fallback ending at `ChangeKind(op)` — the OPERATION, cast — would file
+// operations that are not [tracker.ChangeKind]s at all, and three of them are
+// near-misses of one: a quiet removal filed as `tombstone` while the filter
+// spells it `removed`, a restore as `restore` against `restored`, a purge as
+// `purge` against `purged`. A word one letter from the right one is the worst
+// possible value here, because it reads correct in a database dump and matches
+// nothing.
 func TestEveryHistoryRowNamesAKindThisBuildKnows(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -109,7 +109,7 @@ func TestEveryHistoryRowNamesAKindThisBuildKnows(t *testing.T) {
 				"can ever find", got)
 		}
 	}
-	// AND THE TWO THAT USED TO BE NEAR-MISSES ARE THE RIGHT WORDS.
+	// AND THE TWO WHOSE OPERATIONS ARE NEAR-MISSES ARE THE RIGHT WORDS.
 	for _, want := range []tracker.ChangeKind{
 		tracker.ChangeRemoved, tracker.ChangeRestored,
 	} {

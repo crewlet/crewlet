@@ -1,9 +1,13 @@
 package tracker
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -109,9 +113,21 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			post := TypeCatalogue{
-				V: DocumentVersion, Types: clean, UpdatedAt: at,
+			current, held, err := readTypeCatalogue(ctx, tx)
+			if err != nil {
+				return statelog.Decision{}, err
 			}
+			types := mergeTypes(current.Types, clean)
+			if held && sameDeclarations(types, current.Types) {
+				// NOTHING TO SAY, on [applyProjectEdit]'s rule: a form
+				// that submits every control restates the list as it
+				// is, and an empty decision publishes nothing.
+				return statelog.Decision{}, nil
+			}
+			// THE STORED DOCUMENT WITH ITS TYPES REPLACED, so a member a
+			// newer build wrote on the catalogue itself is kept.
+			post := current
+			post.V, post.Version, post.Types, post.UpdatedAt = DocumentVersion, 0, types, at
 			// THE CATALOGUE IS EDITED QUIETLY AND STILL NAMES ITSELF: a
 			// wake per catalogue edit would page the whole company for a
 			// renamed dropdown, and the feed still has to be able to say
@@ -149,15 +165,23 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 					return statelog.Decision{}, err
 				}
 			}
-			post := FieldCatalogue{
-				V: DocumentVersion, Fields: fields, UpdatedAt: at,
-				// THE POLICY VERSION MOVES ON EVERY FIELDS EDIT, and it
-				// is what a task's policy stamp records having validated
-				// against. Derived from the stored one inside this
-				// snapshot rather than sent by the caller: a version a
-				// writer chose is one two writers can choose alike.
-				PolicyVersion: current.PolicyVersion + 1,
+			merged := mergeFields(current.Fields, fields)
+			if held && sameDeclarations(merged, current.Fields) {
+				// NOTHING TO SAY, and the policy version does not
+				// move: a task's policy stamp records the declarations
+				// it was validated against, and these are those.
+				return statelog.Decision{}, nil
 			}
+			// THE STORED DOCUMENT WITH ITS FIELDS REPLACED, so a member a
+			// newer build wrote on the catalogue itself is kept.
+			post := current
+			post.V, post.Version, post.Fields, post.UpdatedAt = DocumentVersion, 0, merged, at
+			// THE POLICY VERSION MOVES ON EVERY FIELDS EDIT, and it is
+			// what a task's policy stamp records having validated
+			// against. Derived from the stored one inside this snapshot
+			// rather than sent by the caller: a version a writer chose is
+			// one two writers can choose alike.
+			post.PolicyVersion = current.PolicyVersion + 1
 			// THE CATALOGUE IS EDITED QUIETLY AND STILL NAMES ITSELF: a
 			// wake per catalogue edit would page the whole company for a
 			// renamed dropdown, and the feed still has to be able to say
@@ -399,6 +423,143 @@ func checkOptions(f *FieldDef) error {
 		}
 	}
 	return nil
+}
+
+// mergeFields lays each declaration a caller states onto the stored one with
+// the same id, and is the post-state a fields write publishes.
+//
+// THE CALLER'S LIST IS THE WHOLE SET — a stored declaration it leaves out is
+// gone, and the order is the caller's — but an element is not the whole of a
+// declaration. Three things are kept from the stored one it names, because
+// the caller cannot state them and a write that cleared them would erase them
+// from every node's row:
+//
+//   - what a newer build wrote that this build carries, on the declaration,
+//     its configuration, its rollup and each option it names by id
+//     ([FieldDef.Extra] and the Extra of each) — a caller that carries a
+//     member of its own overlays the stored one;
+//   - what the caller leaves [FieldDef.Unstated];
+//   - who declared it and when, which a later edit does not change.
+//
+// Everything else is the caller's. The result shares nothing the caller or
+// the stored list can see, since a decide that runs again must find both as
+// it left them.
+func mergeFields(stored, stated []FieldDef) []FieldDef {
+	prior := make(map[string]FieldDef, len(stored))
+	for _, f := range stored {
+		prior[f.ID] = f
+	}
+	out := make([]FieldDef, 0, len(stated))
+	for _, f := range stated {
+		unstated := f.Unstated
+		f.Unstated = Unstated{}
+		f.AppliesTo = slices.Clone(f.AppliesTo)
+		f.Config.Options = slices.Clone(f.Config.Options)
+		was, held := prior[f.ID]
+		if !held {
+			out = append(out, f)
+			continue
+		}
+		if unstated.AppliesTo {
+			f.AppliesTo = slices.Clone(was.AppliesTo)
+		}
+		if unstated.Default {
+			f.Default = slices.Clone(was.Default)
+		}
+		if unstated.Config {
+			options := f.Config.Options
+			f.Config = was.Config
+			f.Config.Options = options
+		}
+		f.CreatedBy, f.CreatedAt = was.CreatedBy, was.CreatedAt
+		f.Extra = carriedOnto(was.Extra, f.Extra)
+		f.Config.Extra = carriedOnto(was.Config.Extra, f.Config.Extra)
+		if f.Config.Rollup != nil && was.Config.Rollup != nil {
+			rollup := *f.Config.Rollup
+			rollup.Extra = carriedOnto(was.Config.Rollup.Extra, rollup.Extra)
+			f.Config.Rollup = &rollup
+		}
+		options := make(map[string]Option, len(was.Config.Options))
+		for _, o := range was.Config.Options {
+			options[o.ID] = o
+		}
+		for i, o := range f.Config.Options {
+			if before, named := options[o.ID]; named {
+				f.Config.Options[i].Extra = carriedOnto(before.Extra, o.Extra)
+			}
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// mergeTypes lays each type a caller states onto the stored declaration with
+// the same slug, on [mergeFields]' rule: the list is the caller's, and what a
+// newer build wrote on a type it names is kept ([TaskType.Extra]).
+func mergeTypes(stored, stated []TaskType) []TaskType {
+	prior := make(map[string]TaskType, len(stored))
+	for _, t := range stored {
+		prior[t.Slug] = t
+	}
+	out := make([]TaskType, 0, len(stated))
+	for _, t := range stated {
+		if was, held := prior[t.Slug]; held {
+			t.Extra = carriedOnto(was.Extra, t.Extra)
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// carriedOnto is the members a stored object carries with the ones a caller's
+// copy carries laid over them, as a new map.
+func carriedOnto(stored, stated map[string]json.RawMessage) map[string]json.RawMessage {
+	if len(stored) == 0 && len(stated) == 0 {
+		return stated
+	}
+	out := maps.Clone(stored)
+	if out == nil {
+		out = make(map[string]json.RawMessage, len(stated))
+	}
+	maps.Copy(out, stated)
+	return out
+}
+
+// sameDeclarations reports a list that would be written back as what is
+// stored, element by element and in order.
+//
+// ON THE STORED FORM rather than on the Go values: each element encoded,
+// decoded and encoded again, which is the declaration a node holding it reads
+// back. That is total over every member, carried ones included, with no list
+// of the members that matter to fall out of date — and it is what makes a
+// list a caller built empty and one decoded from an absent member the same
+// declaration, which they are on every node, where an equality over the
+// values would call the difference a change and publish it.
+func sameDeclarations[T any](a, b []T) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, errX := storedForm(a[i])
+		y, errY := storedForm(b[i])
+		if errX != nil || errY != nil || !bytes.Equal(x, y) {
+			return false
+		}
+	}
+	return true
+}
+
+// storedForm is a value's bytes as a node that stored it writes them again.
+func storedForm[T any](v T) ([]byte, error) {
+	first, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var back T
+	if err := json.Unmarshal(first, &back); err != nil {
+		return nil, err
+	}
+	return json.Marshal(back)
 }
 
 // archiveIsOneWay refuses a declaration that un-archives a field.
