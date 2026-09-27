@@ -42,8 +42,10 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 		return nil, syntaxFault(err)
 	}
 	if empty(&doc) {
-		// An empty Tier A file is legitimate: every field defaults, and a
-		// company can run on nothing but the defaults.
+		// An empty Tier A file takes every default — and the keyring has
+		// none, deliberately, since a default key would be one every
+		// deployment shares. So it decodes, and Validate refuses it
+		// naming secrets.keys, as it refuses any file without one.
 		cfg := DefaultBootstrap()
 		return &cfg, cfg.Validate()
 	}
