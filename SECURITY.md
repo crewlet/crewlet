@@ -60,7 +60,11 @@ A few things worth knowing when deploying Crewlet:
   credential after the wait always succeeds — a lockout is something an
   outsider can cause, against any login they can type. A success clears only
   its own (subject, source) pair, so holding one account never wipes the
-  record of guesses at another. No address is ever refused on its own: a
+  record of guesses at another. A second-factor code is also decided on a
+  curve keyed on the person, reached only past their password, so somebody
+  holding it cannot spread their guesses at the code across addresses; its
+  ceiling is announced as `iam_second_factor_throttled`, which means the
+  password is known and should be rotated. No address is ever refused on its own: a
   curve on the source alone let any stranger at an office's or a proxy's
   address hold every sign-in from it at `429`, so one password tried across
   many names from one address is bounded by the password floor, the argon2id

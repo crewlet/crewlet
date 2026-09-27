@@ -56,7 +56,10 @@
 // verification and decoy it causes waits for its one turn at the verify cap,
 // served in turn with every other address (turns.go), and the fleet is asked
 // about its fresh pairs only as fast as its allowance refills
-// ([FreshPairBurst]).
+// ([FreshPairBurst]). A second factor is the one curve keyed on the PERSON
+// ([Throttle.AdmitSecondFactor]), because only somebody holding the password
+// can reach it, and without it they divide the pair's curve by every address
+// they own.
 //
 // # No new modules
 //

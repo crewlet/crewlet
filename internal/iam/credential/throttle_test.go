@@ -908,6 +908,115 @@ func TestANodesClockNeverStretchesTheCurve(t *testing.T) {
 	})
 }
 
+// A SECOND FACTOR CLIMBS THE PERSON'S CURVE, WHEREVER THE CODES COME FROM.
+//
+// Somebody holding a password and a block of addresses met a fresh pair on
+// every address, so each guess at the six digits was the first on its curve and
+// the verify cap was all that bounded them. A code is decided on the person's
+// own curve too, shared across the fleet: three wrong codes on two nodes, and
+// the fourth, on the other node, waits the four seconds three failures earn. The person's curve is its own key — the
+// same person's password pair is untouched by it — and reports its ceiling, and
+// a success lifts it everywhere.
+//
+// Mutations: decide a code on this node's count alone and the fourth, on the
+// other node, waits a second; report the ceiling at any count and the first
+// failure reports it; lift the curve only on the node that saw the success and
+// the other still makes the person wait.
+func TestASecondFactorClimbsThePersonsCurveWhereverItComesFrom(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
+	a, b := onTime(t, store, clock), onTime(t, store, clock)
+	const person = "0192f00d-0000-7000-8000-00000000000a"
+
+	// Spend the addresses' allowances, as a guesser typing names would:
+	// the person's curve is never charged to one.
+	for i := range credential.FreshPairBurst {
+		for _, node := range []*credential.Throttle{a, b} {
+			if err := failOnce(t, node, credential.Attempt{Source: "2001:db8:1:1::1",
+				Subject: fmt.Sprintf("name.%d", i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	for i, node := range []*credential.Throttle{a, b, a} {
+		ticket, err := node.AdmitSecondFactor(t.Context(), person)
+		if err != nil {
+			t.Fatalf("wrong code %d was refused: %v", i+1, err)
+		}
+		if ceiling := ticket.Fail(t.Context()); ceiling {
+			t.Errorf("wrong code %d reported the ceiling", i+1)
+		}
+	}
+	// THE FOURTH, from another node, waits the four seconds three wrong
+	// codes earn — served inside the request, which on this rig moves the
+	// clock by what it waited.
+	before := clock.now()
+	fourth, err := b.AdmitSecondFactor(t.Context(), person)
+	if err != nil {
+		t.Fatalf("the fourth code was refused: %v", err)
+	}
+	if waited := clock.now().Sub(before); waited != 4*time.Second {
+		t.Fatalf("the fourth code, on another node, waited %s, want the 4s "+
+			"three wrong codes earn on the person's curve", waited)
+	}
+	if fourth.Fail(t.Context()) {
+		t.Error("the fourth wrong code reported the ceiling")
+	}
+	// THE PASSWORD'S PAIR IS ANOTHER KEY: a person's code failures owe
+	// their next password attempt from a new address nothing.
+	before = clock.now()
+	if ticket, err := a.Admit(t.Context(), credential.Attempt{
+		Source: "198.51.100.77", Subject: person}); err != nil ||
+		clock.now() != before {
+		t.Errorf("the person's second-factor failures reached a pair: waited "+
+			"%s (%v)", clock.now().Sub(before), err)
+	} else {
+		ticket.Release()
+	}
+
+	// ON TO THE CEILING, and it says so.
+	var reported []int
+	for i := 5; i <= credential.CurveSteps; i++ {
+		clock.advance(credential.DelayCeiling)
+		ticket, err := a.AdmitSecondFactor(t.Context(), person)
+		if err != nil {
+			t.Fatalf("wrong code %d after the wait was refused: %v", i, err)
+		}
+		if ticket.Fail(t.Context()) {
+			reported = append(reported, i)
+		}
+	}
+	if len(reported) != 1 || reported[0] != credential.CurveSteps {
+		t.Errorf("the ceiling was reported at failures %v, want only at the %dth",
+			reported, credential.CurveSteps)
+	}
+
+	// A SUCCESS LIFTS IT on every node: the next wrong code on the other
+	// node is the curve's first step again, not its seventh.
+	clock.advance(credential.DelayCeiling)
+	ticket, err := b.AdmitSecondFactor(t.Context(), person)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket.Succeed(t.Context())
+	ticket, err = a.AdmitSecondFactor(t.Context(), person)
+	if err != nil {
+		t.Fatalf("after the right code the other node refused: %v", err)
+	}
+	ticket.Fail(t.Context())
+	before = clock.now()
+	if ticket, err := a.AdmitSecondFactor(t.Context(), person); err != nil ||
+		clock.now().Sub(before) != credential.DelayFloor {
+		t.Errorf("one wrong code after the right one owes %s (%v), want the "+
+			"curve's first step of %s — the success was not lifted everywhere",
+			clock.now().Sub(before), err, credential.DelayFloor)
+	} else {
+		ticket.Release()
+	}
+}
+
 // A STORE THAT DOES NOT ANSWER IS LEFT ALONE FOR A WHILE — AND A CALLER HANGING
 // UP IS NOT ONE.
 //

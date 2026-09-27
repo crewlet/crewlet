@@ -31,9 +31,9 @@ type armsDirectory struct {
 	stubDirectory
 	verifier string
 
-	// factors are the second factors "tess.factor" holds beside her
-	// password.
-	factors []iamdomain.Credential
+	// factors are the second factors each person who holds any holds
+	// beside their password, by person id.
+	factors map[string][]iamdomain.Credential
 }
 
 // rightPassword is the one password the arms' people hold.
@@ -60,17 +60,27 @@ func (d armsDirectory) PersonByLogin(_ context.Context, login string) (
 	case "dana.sre":
 		return iamdomain.Sighting{ID: "p-dana", Kind: iam.KindPerson,
 			Stage: iam.StageActive, Login: login, Credentials: password}, nil
-	case "tess.factor":
-		return iamdomain.Sighting{ID: factorPerson, Kind: iam.KindPerson,
+	case "tess.factor", "tris.factor":
+		id := factorPerson
+		if login == "tris.factor" {
+			id = recoveryPerson
+		}
+		return iamdomain.Sighting{ID: id, Kind: iam.KindPerson,
 			Stage: iam.StageActive, Login: login,
-			Credentials: append(password, d.factors...)}, nil
+			Credentials: append(password, d.factors[id]...)}, nil
 	}
 	return iamdomain.Sighting{}, nil
 }
 
 // factorPerson is the id of the arms' person who holds a second factor — the
-// id her seed is sealed to.
-const factorPerson = "p-tess"
+// id her seed is sealed to — and recoveryPerson another who holds the same
+// kinds: two people, because a second factor's failures climb a curve keyed on
+// the PERSON, and two arms at one person would be one arm's refusal and the
+// next one's wait.
+const (
+	factorPerson   = "p-tess"
+	recoveryPerson = "p-tris"
+)
 
 // wrongAppCode is six digits that are not the app code for totpSeed at clock,
 // nor at either step the drift tolerance also accepts.
@@ -158,11 +168,14 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 	}
 	spentRecovery := codes[0]
 	remaining, _ := json.Marshal(verifiers[1:])
-	factors := []iamdomain.Credential{
-		{V: iamdomain.DocumentVersion, ID: "tess-app", Method: iamdomain.MethodTOTP,
-			Verifier: sealedSeed(t, factorPerson, "tess-app", totpSeed)},
-		{V: iamdomain.DocumentVersion, ID: "tess-codes", Method: iamdomain.MethodRecovery,
-			Extra: map[string]json.RawMessage{"verifiers": remaining}},
+	factors := map[string][]iamdomain.Credential{}
+	for _, person := range []string{factorPerson, recoveryPerson} {
+		factors[person] = []iamdomain.Credential{
+			{V: iamdomain.DocumentVersion, ID: person + "-app", Method: iamdomain.MethodTOTP,
+				Verifier: sealedSeed(t, person, person+"-app", totpSeed)},
+			{V: iamdomain.DocumentVersion, ID: person + "-codes", Method: iamdomain.MethodRecovery,
+				Extra: map[string]json.RawMessage{"verifiers": remaining}},
+		}
 	}
 	pads := &padRecorder{}
 	audit := &recordingAudit{}
@@ -188,9 +201,9 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 		})
 		r := httptest.NewRequest(http.MethodPost, "/auth/login",
 			strings.NewReader(string(body)))
-		// A SOURCE PER ARM, so no two arms share a pair on the curve —
-		// the two second-factor arms type one login — and none is the
-		// one the curve turned away: that refusal is deliberately
+		// A SOURCE PER ARM, and a person per second-factor arm, so no
+		// two arms share a curve — a pair's or a person's — and none is
+		// the one a curve turned away: that refusal is deliberately
 		// specific, and it is not what this case is about.
 		r.RemoteAddr = "198.51.100." + strconv.Itoa(source) + ":5100"
 		rec := httptest.NewRecorder()
@@ -211,7 +224,7 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 		// same bytes at the same deadline as every arm above.
 		{"the right password and a wrong app code", "tess.factor", rightPassword,
 			wrongAppCode(t)},
-		{"the right password and a spent recovery code", "tess.factor", rightPassword,
+		{"the right password and a spent recovery code", "tris.factor", rightPassword,
 			spentRecovery},
 	}
 	var first *httptest.ResponseRecorder

@@ -48,12 +48,16 @@ const (
 	// session was exchanged from changing — keyed on its lineage, for the
 	// life of the process.
 	OnceSessionEnded OnceClass = "session_ended"
+
+	// OnceSecondFactorCeiling is a person's second-factor curve reaching
+	// its ceiling, keyed on the person's id, for the throttle's window.
+	OnceSecondFactorCeiling OnceClass = "second_factor_ceiling"
 )
 
 // OnceClasses is every class, for validation and for a walk that holds
 // [OnceBound] to them.
 var OnceClasses = []OnceClass{
-	OnceTokenUse, OnceTokenOverreach, OnceSessionEnded,
+	OnceTokenUse, OnceTokenOverreach, OnceSessionEnded, OnceSecondFactorCeiling,
 }
 
 // Valid reports whether c is a class this build keeps a set for.
@@ -85,6 +89,14 @@ var onceBounds = map[OnceClass]int{
 	// presented again AND its rows still read live — which the retention
 	// sweep ends.
 	OnceSessionEnded: 8192,
+
+	// 1024 people whose second factor is being guessed at, for fifteen
+	// minutes each. A key reaches here only past a person's password, so
+	// the bound is the number of people whose passwords are known to
+	// somebody guessing at once, which a company past it has a problem no
+	// row can describe; past it the person claimed longest ago is
+	// forgotten, which costs one extra row for them.
+	OnceSecondFactorCeiling: 1024,
 }
 
 // forever is the expiry a window of zero remembers a key until: past any

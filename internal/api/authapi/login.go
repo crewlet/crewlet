@@ -715,9 +715,40 @@ func withExtra(c iamdomain.Credential, key string, value any) iamdomain.Credenti
 // factor is presented, so the check, the spend and the refusal are decided
 // once. A recovery code spent here is ALSO its own event, because a person
 // down to their last one is one lost phone away from needing an administrator.
+//
+// # On the person's own curve, before the code is looked at
+//
+// The attempt's pair — the login as typed, from its address — is one curve,
+// and a caller holding the password divides it by every address and spelling
+// they have: a /48 of IPv6 is sixty-five thousand fresh pairs, and six digits
+// fall to that in about an hour. So a code is ALSO decided on a curve keyed
+// on the PERSON the login resolved to ([credential.Throttle.AdmitSecondFactor]),
+// shared across the fleet, before it is checked: every address's guesses at
+// one person climb it together, a wait past five seconds is `429` with the
+// time left, a wrong code or a code already spent is a failure on it, and the
+// code that completes the sign-in lifts it. Keyed on the resolved person here
+// and nowhere else, because this is reached only past the password: it tells
+// nobody anything about who exists that the password did not. And a curve
+// that reaches its ceiling is announced ([types.IAMSecondFactorThrottled]),
+// because it means somebody holding this person's password is guessing at
+// their code.
 func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
 	code string) (factorUse, bool) {
+
+	curve, err := s.throttle.AdmitSecondFactor(r.Context(), held.ID)
+	switch {
+	case errors.Is(err, credential.ErrThrottled):
+		throttled := attempt
+		throttled.Throttled = true
+		s.audit.Failed(r.Context(), throttled)
+		httpjson.Throttled(w, credential.RetryAfter(err))
+		return factorUse{}, false
+	case err != nil:
+		abandoned(w, r, adm.source, err)
+		return factorUse{}, false
+	}
+	defer curve.Release()
 
 	use, ok, err := s.checkSecondFactor(r.Context(), held, code)
 	if err != nil {
@@ -733,13 +764,14 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		// STILL THE GENERIC REFUSAL, because a wrong CODE and a wrong
 		// password must not be distinguishable to somebody who has
 		// stolen one of the two.
-		s.refuseSignIn(w, r, adm, attempt, "second factor mismatch")
+		s.refuseSecondFactor(w, r, adm, attempt, held, curve, "second factor mismatch")
 		return factorUse{}, false
 	}
 	use, spend, err := s.spendSecondFactor(r.Context(), held.ID, use)
 	switch {
 	case errors.Is(err, errFactorSpent):
-		s.refuseSignIn(w, r, adm, attempt, "second factor already spent")
+		s.refuseSecondFactor(w, r, adm, attempt, held, curve,
+			"second factor already spent")
 		return factorUse{}, false
 	case err != nil:
 		// NOT A REFUSAL: the code was right, and this node could not
@@ -758,6 +790,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		unresolved(w, r, "api_second_factor_unresolved", spend)
 		return factorUse{}, false
 	}
+	curve.Succeed(r.Context())
 	if use.factor == types.FactorRecovery {
 		s.audit.Emit(r.Context(), types.IAMRecoveryCodeUsed{
 			Person: held.ID, Login: held.Login, Remaining: use.remaining,
@@ -765,6 +798,23 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		})
 	}
 	return use, true
+}
+
+// refuseSecondFactor is a second factor that did not prove itself: a failure
+// on the person's curve — announced, once per person per window, when it takes
+// that curve to its ceiling — and then the same generic refusal every failed
+// sign-in answers.
+func (s *Service) refuseSecondFactor(w http.ResponseWriter, r *http.Request,
+	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
+	curve *credential.Ticket, why string) {
+
+	if curve.Fail(r.Context()) {
+		s.audit.EmitOnce(r.Context(), authevents.OnceSecondFactorCeiling,
+			held.ID, credential.Window, types.IAMSecondFactorThrottled{
+				Person: held.ID, Login: held.Login, Remote: attempt.Client,
+			})
+	}
+	s.refuseSignIn(w, r, adm, attempt, why)
 }
 
 // signIn is how a completed sign-in was proved, for the event it announces.

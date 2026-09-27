@@ -326,7 +326,7 @@ already have:
 
 | Code | Why it is safe to be specific |
 |---|---|
-| `throttled` | `429` with a `Retry-After`: the seconds until this attempt is admitted. Keyed on the subject **as typed** from the caller's source — never on the source alone, and never on what it resolved to — a name nobody holds climbs the curve exactly as a real one does, so a stranger learns only that they failed recently from where they are, which they already knew. Keyed on the resolved person it would be an oracle — "this account exists and I can slow it down" |
+| `throttled` | `429` with a `Retry-After`: the seconds until this attempt is admitted. Keyed on the subject **as typed** from the caller's source — never on the source alone, and never on what it resolved to — a name nobody holds climbs the curve exactly as a real one does, so a stranger learns only that they failed recently from where they are, which they already knew. Keyed on the resolved person it would be an oracle — "this account exists and I can slow it down" — which is why the one curve that is, a second factor's, is reached only past the password |
 | `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens. It is also the `403` a session that may only enrol a second factor meets at `POST /auth/totp` once its person holds one — enrolled since, from another session: a password alone never enrols over a factor, and the remedy is to sign in again with it |
 | `second_factor_enrolment_required` | A `status` on a successful sign-in, and a `403` from every route but four for the session it opened — reached only by somebody who proved the password, so it says nothing to a stranger. The deployment requires a second factor and this person holds none: the session may read `GET /auth/session`, enrol one at `POST /auth/totp`, re-confirm the password at `POST /auth/step-up` and sign out at `POST /auth/logout`, and enrolling replaces it with a whole one. Its own code rather than `step_up_required`, because no fresher password changes the answer |
 | `bootstrap_closed` | Says this company has started, which whoever can reach an unstarted one would find out by trying |
@@ -356,6 +356,20 @@ guesses at somebody else's and wipe the record of every one. An attempt still
 being checked counts as a failure against its pair until it resolves, so a
 burst of concurrent guesses at one account is served one after another along
 the curve rather than all at once.
+
+**A second factor also climbs the person's own curve.** Somebody holding a
+person's password could otherwise guess at the six digits from every address
+they have, each a fresh pair — a `/48` of IPv6 is sixty-five thousand of them,
+enough to find a code in about an hour. So once the password has proved
+itself, the code is also decided on a curve keyed on the person the login
+resolved to, shared across the fleet, the same 1-to-30-second doubling: every
+address's wrong codes climb it together, and a wait past five seconds is
+`429 throttled`. Keyed on the resolved person here and nowhere else, because
+it is reached only past the password, so it tells nobody anything the password
+did not. The code that completes the sign-in lifts it, and a curve that reaches
+its ceiling is announced as `iam_second_factor_throttled` — somebody holding
+that person's password is guessing at their code, and the password is what to
+rotate.
 
 **No address is ever refused on its own.** A curve on the source alone —
 which this surface had, ten failures free and then the same doubling wait — is

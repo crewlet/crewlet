@@ -1013,6 +1013,19 @@ second. **A success clears this pair and nothing else**, so somebody holding an
 account cannot sign in as themselves between guesses at somebody else's and
 wipe the record of every one.
 
+**A second factor also climbs the person's own curve.** Past the password,
+the code is decided on the pair's curve *and* on one keyed on the person the
+login resolved to, shared across the fleet the same way, because the pair alone
+lets somebody holding the password divide the curve by every address they have
+— a `/48` of IPv6 is sixty-five thousand fresh pairs, and six digits fall to
+that in about an hour. Every address's wrong codes climb the one curve, a wait
+past five seconds is `429`, and the code that completes the sign-in lifts it. It
+is keyed on the resolved person here and nowhere else, because only somebody
+holding the password can reach it, so it tells nobody who exists. A person's
+curve reaching its ceiling is announced as `iam_second_factor_throttled`:
+somebody holding their password is guessing at their code, and the password is
+what to rotate.
+
 **There is no curve on the source alone.** There was one — ten failures from an
 address free, then the same doubling wait — and it was a lockout by another
 name: a refusal decided on an address is one anybody sharing it holds shut for
@@ -2043,6 +2056,7 @@ Identity has **two trails**, and they answer different questions.
 | `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), the deactivation probe (`idp_revoked`), or the request guard noticing a deadline (`idle`, `absolute`) or a token's exchanged session whose value changed or whose entry was removed (`credential_changed`) | Once per ending, from the fact that ended it: a deadline or a changed credential once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute`, and a token's session past its deadline by the time it is presented after a rotation is announced by the deadline |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
+| `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | Once per person per fifteen-minute window per node, naming the address the failure that took it there came from |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
 | `iam_identity_linked` | The identity writer, when a provider subject is pinned to a person — `via: invite` for an invitation redeemed through the provider, `via: admin` for an administrator, with the credential they acted through as `operator_id` | Once per link, and only once the person it names exists |

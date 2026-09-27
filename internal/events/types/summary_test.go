@@ -215,6 +215,14 @@ func TestSummaries(t *testing.T) {
 		payload: IAMRecoveryCodeUsed{Login: "jane.doe", Remaining: 0},
 		want:    "jane.doe used a recovery code (0 left)",
 	}, {
+		// WHAT IT MEANS, because the reader acts on the password.
+		name: "a second factor at its ceiling says the password is known",
+		payload: IAMSecondFactorThrottled{Person: "p-1", Login: "jane.doe",
+			Remote: "203.0.113.9"},
+		want: "Second factor of jane.doe reached the throttle's ceiling, the last " +
+			"wrong code from 203.0.113.9: somebody holding the password is " +
+			"guessing at the code",
+	}, {
 		// NO SUBJECT ANYWHERE ON THE LINE: it identifies a person at a
 		// third party, and an event row outlives every crypto-shred.
 		name: "a link through an invitation says so",

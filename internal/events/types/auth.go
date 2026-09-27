@@ -62,6 +62,7 @@ func init() {
 	events.Register[IAMTokenFirstUse]()
 	events.Register[IAMTokenOverreach]()
 	events.Register[IAMRecoveryCodeUsed]()
+	events.Register[IAMSecondFactorThrottled]()
 	events.Register[IAMMFAReset]()
 	events.Register[IAMIdentityLinked]()
 	events.Register[IAMIdentityUnlinked]()
@@ -688,6 +689,32 @@ func (e IAMRecoveryCodeUsed) Actor() string { return e.Login }
 func (e IAMRecoveryCodeUsed) Summary() string {
 	return lead(orSomebody(e.Login, e.Person),
 		fmt.Sprintf("used a recovery code (%d left)", e.Remaining))
+}
+
+// IAMSecondFactorThrottled is a person's second-factor curve reaching its
+// ceiling: the most wrong codes the sign-in throttle counts inside its window,
+// from wherever they came. A code is asked for only once the password has
+// proved itself, so this is SOMEBODY HOLDING THAT PERSON'S PASSWORD GUESSING
+// AT THEIR SECOND FACTOR — the password is the thing to rotate.
+//
+// Once per person per window on the node that saw the failure take it there;
+// Remote is the address that failure came from, and one of possibly many.
+type IAMSecondFactorThrottled struct {
+	Person string `json:"person"`
+	Login  string `json:"login"`
+	Remote string `json:"remote"`
+}
+
+// EventType is the "iam_second_factor_throttled" wire type.
+func (IAMSecondFactorThrottled) EventType() string { return "iam_second_factor_throttled" }
+
+// Summary says what it means, because the row's reader has to act on the
+// password rather than on the code.
+func (e IAMSecondFactorThrottled) Summary() string {
+	return fmt.Sprintf("Second factor of %s reached the throttle's ceiling, the "+
+		"last wrong code from %s: somebody holding the password is guessing "+
+		"at the code", orSomebody(e.Login, e.Person),
+		orSomebody(e.Remote, "an unknown address"))
 }
 
 // IAMMFAReset is an administrator clearing a person's second factor, which also

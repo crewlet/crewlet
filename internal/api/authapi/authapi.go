@@ -337,8 +337,15 @@ type Blinds interface {
 // factor — is published as it happens, and a FAILED attempt is only ever
 // COUNTED, because whoever failed decides how many of those there are. See
 // internal/iam/authevents, whose Trail is what a running node hands in.
+//
+// EmitOnce is the first door for a fact worth one row per window rather than
+// one per occurrence — a person's second factor at its ceiling, which every
+// further wrong code would otherwise announce again — decided by the node's
+// one dedupe rather than a second copy of it here.
 type Audit interface {
 	Emit(ctx context.Context, payload events.Payload)
+	EmitOnce(ctx context.Context, class authevents.OnceClass, key string,
+		window time.Duration, payload events.Payload) bool
 	Failed(ctx context.Context, f authevents.Failure)
 }
 

@@ -388,11 +388,15 @@ const (
 	// the time left in `Retry-After`, and [Throttled] is its one writer.
 	//
 	// THE ONE SPECIFIC REFUSAL ON A SIGN-IN SURFACE, and it is safe
-	// precisely because the curve is keyed on the SOURCE and on what was
-	// TYPED, never on what it resolved to: a stranger learns they have
-	// failed recently from where they are, which they already knew, and a
-	// name nobody holds is throttled exactly as a real one is. Keyed on a
-	// resolved login it would be an oracle — "this account exists".
+	// precisely because the curve a stranger can reach is keyed on the
+	// SOURCE and on what was TYPED, never on what it resolved to: they learn
+	// they have failed recently from where they are, which they already
+	// knew, and a name nobody holds is throttled exactly as a real one is.
+	// Keyed on a resolved login it would be an oracle — "this account
+	// exists". The one curve that IS keyed on the resolved person, a second
+	// factor's, is reached only past the password, so it tells its caller
+	// nothing the password did not — and its sentence cannot say "from
+	// here", because it counts every address.
 	CodeThrottled Code = "throttled"
 
 	// CodeSecondFactorRequired is a first factor that checked out where a
@@ -654,8 +658,8 @@ var codes = map[Code]string{
 	// oracle the single code exists to close, written out in the body.
 	CodeSignInRefused: "Those sign-in details were not accepted. Check them " +
 		"and try again.",
-	CodeThrottled: "There have been too many failed attempts from here. " +
-		"Wait for the time this answer names, then try again.",
+	CodeThrottled: "There have been too many failed attempts. Wait for the " +
+		"time this answer names, then try again.",
 	CodeSecondFactorRequired: "Enter the code from your authenticator app, or " +
 		"one of your recovery codes.",
 	CodeStepUpRequired: "This action needs you to have confirmed who you are " +

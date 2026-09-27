@@ -118,6 +118,19 @@ import (
 // makes it seen is the audit trail's per-client, per-minute failure tally,
 // which counts the distinct names a client tried.
 //
+// # And a second factor on the person, whatever the address
+//
+// A code is decided on the pair's curve AND on one keyed on the person the
+// login resolved to ([Throttle.AdmitSecondFactor]). The pair alone lets
+// somebody holding the password divide the curve by every address they own —
+// sixty-five thousand in a /48 — and a six-digit code falls to that in about
+// an hour. Keying on the resolved person is what the first rule above forbids,
+// and it is safe here for the one reason it is safe anywhere: it is reached
+// only past the password, so only a caller who already knows who this is can
+// drive it. It lifts on the success that completes a sign-in, and reaching its
+// ceiling is announced, because it means somebody holding a person's password
+// is guessing at their second factor.
+//
 // AN ATTEMPT THAT NAMES NOBODY IS NOT COUNTED — an invitation link, a
 // founder's one-time code, a provider's round trip. There is no subject to key
 // a pair on, and each of those credentials is minted with 256 bits of
@@ -191,6 +204,12 @@ import (
 // request, which is the leak the pad exists to close, silently, with every
 // test still passing.
 const PadDeadline = 400 * time.Millisecond
+
+// Window is how long a failure counts against its key: the fleet's attempts
+// window, which every node counts a curve over, so a caller that has to say
+// "once per curve" — one row per person whose second factor reached its
+// ceiling — says it over the same span.
+const Window = coord.AttemptWindow
 
 // DegradeInterval is how often an unreachable attempts store is reported.
 //
@@ -481,8 +500,45 @@ func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
 		return nil, nil
 	}
 	source := sourceKeyOf(a.Source)
-	pair := t.pairOf(a.Subject, source)
+	return t.admit(ctx, t.pairOf(a.Subject, source), source)
+}
 
+// AdmitSecondFactor decides whether a second factor may be checked for
+// person, and when — on the PERSON'S OWN CURVE, whatever address the code
+// arrives from.
+//
+// # Why this one key is the resolved person
+//
+// A second factor exists to stop somebody who already has the password, and
+// on the pair's curve alone that somebody is barely slowed: each address and
+// each spelling of the login is a fresh pair, so a /48 of IPv6 addresses is
+// sixty-five thousand of them, each allowed a handful of guesses a minute, and
+// what is left to bound six digits is the verify cap. So a code is ALSO
+// decided on a curve keyed on the person, shared across the fleet like every
+// pair, and every address's guesses climb it together.
+//
+// It is keyed on who the login RESOLVED to, which is exactly what the pair's
+// curve must never be (this file's head), and the difference is who can reach
+// it: this is asked only once the password has proved itself, so the only
+// caller who can drive it holds the password, and it tells them nothing about
+// who exists that the password did not. Its digest is taken in a domain of its
+// own, so no typed subject can ever name it.
+//
+// NOT ON THE SOURCE'S ALLOWANCE ([FreshPairBurst]): a person's curve is met
+// only past their password, so what it costs the fleet is bounded by the
+// people whose passwords are known to somebody guessing, not by what a stranger
+// can type. An empty person is admitted uncounted.
+func (t *Throttle) AdmitSecondFactor(ctx context.Context, person string) (*Ticket, error) {
+	if person == "" {
+		return nil, nil
+	}
+	return t.admit(ctx, t.factorOf(person), "")
+}
+
+// admit is [Throttle.Admit] and [Throttle.AdmitSecondFactor] past the key: the
+// curve on key, whose fresh-pair reads are charged to source's allowance, or
+// to none where source is empty.
+func (t *Throttle) admit(ctx context.Context, pair, source string) (*Ticket, error) {
 	// ON THIS NODE'S OWN COUNT FIRST, before anything is read from
 	// anywhere: a pair this node already refuses costs the fleet nothing.
 	t.mu.Lock()
@@ -550,9 +606,13 @@ type Ticket struct {
 // fleet says until a read could have seen it — and so does one on a FRESH
 // pair its source's allowance could not pay to ask about ([FreshPairBurst]):
 // the read it went without would have been paid for with this write.
-func (k *Ticket) Fail(ctx context.Context) {
+//
+// It reports whether the key's curve is now AT ITS CEILING — [CurveSteps]
+// failures inside the window, as this node counts them — which a caller whose
+// key is a person reads as somebody guessing at them ([Throttle.AdmitSecondFactor]).
+func (k *Ticket) Fail(ctx context.Context) (ceiling bool) {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
-		return
+		return false
 	}
 	t := k.t
 	t.mu.Lock()
@@ -563,20 +623,23 @@ func (k *Ticket) Fail(ctx context.Context) {
 	p := t.pairs.take(k.pair)
 	p.unpend(k.at)
 	seq := p.fail(at)
+	count, _ := p.weight(t.now())
+	ceiling = count >= CurveSteps
 	write := t.attempts != nil && !at.Before(t.quietUntil) && !p.unasked
 	t.mu.Unlock()
 	if !write {
-		return
+		return ceiling
 	}
 	if err := t.attempts.Fail(ctx, k.pair, at); err != nil {
 		t.unanswered(ctx, err)
-		return
+		return ceiling
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if cur := t.pairs.get(k.pair); cur == p {
 		p.shared(seq)
 	}
+	return ceiling
 }
 
 // Succeed resolves the attempt as a credential that proved itself: its pair is
@@ -716,7 +779,7 @@ func (t *Throttle) issueRead(pair, source string, now time.Time) *pendingRead {
 	}
 	fresh := t.pairs.get(pair) == nil
 	s := t.pairs.take(pair)
-	if fresh || s.untouched() {
+	if source != "" && (fresh || s.untouched()) {
 		if !t.sources.take(source).spend(now) {
 			s.unasked = true
 			return nil
@@ -777,6 +840,16 @@ func (t *Throttle) pairOf(subject, source string) string {
 	mac.Write([]byte(typed))
 	mac.Write([]byte{0})
 	mac.Write([]byte(source))
+	return hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+// factorOf is the key a person's second-factor curve is held under — here and
+// in the fleet: a keyed digest of the person's id, in a domain no pair's digest
+// shares, so no subject anybody types names it.
+func (t *Throttle) factorOf(person string) string {
+	mac := hmac.New(sha256.New, t.key)
+	mac.Write([]byte("factor\x00"))
+	mac.Write([]byte(person))
 	return hex.EncodeToString(mac.Sum(nil)[:16])
 }
 
