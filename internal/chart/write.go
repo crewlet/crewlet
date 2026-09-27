@@ -80,6 +80,10 @@ type Writer struct {
 	// by a gesture that writes twice. See [Writer.After].
 	after statelog.Position
 
+	// unwaited is a writer whose caller waits for its records itself, once.
+	// See [Writer.Unwaited].
+	unwaited bool
+
 	// seal turns a secret-tagged literal into a sealed reference, and is
 	// nil on a writer with no secret store behind it — which refuses a
 	// write that needs one rather than storing the literal.
@@ -234,6 +238,35 @@ func AuthorKindOf(k iam.ActorKind) AuthorKind {
 func (w *Writer) After(at statelog.Position) *Writer {
 	next := *w
 	next.after = at
+	return &next
+}
+
+// Unwaited is this writer for a caller that publishes a RUN of records and
+// then waits once, for the highest position they landed at, rather than for
+// this node's applier after each.
+//
+// # What it is for
+//
+// A seed publishes an import and then one content record per object, each on
+// that object's own subject, and none of them decides from the one before: a
+// content write reads its own row, which the import placed. Waiting after each
+// for this node's applier to reach it is latency and nothing else — the few
+// hundred milliseconds [statelog.Request.NoWait] names, per object, spent in
+// sequence — and it is what took a sixty-seat company past the seed's boot
+// budget, so the last seats' content was never written and the node booted
+// with seats nobody had filled.
+//
+// # What the caller owes
+//
+// The wait it skipped, before anything reads the rows: every write through
+// this writer answers `pending` at the position the broker acknowledged, and
+// the caller reads at the highest of them ([Engine.seedChart]'s floor read).
+// What it does NOT skip is [Writer.After]'s — a decide still waits for the
+// caller's own earlier write before it reads, which is how a content write
+// finds the row the import placed.
+func (w *Writer) Unwaited() *Writer {
+	next := *w
+	next.unwaited = true
 	return &next
 }
 
@@ -474,6 +507,7 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (
 	statelog.Result, error) {
 
 	req.Session = w.after
+	req.NoWait = w.unwaited
 	result, err := w.publisher.Publish(ctx, req)
 	switch {
 	case err == nil:

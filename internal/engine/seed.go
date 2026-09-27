@@ -105,6 +105,11 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 	// then lost its answer is the same operation rather than a second one.
 	// The ledger makes the APPLY idempotent on every node; this makes the
 	// PUBLISH idempotent on this one.
+	// UNWAITED, because this node reads at the last position below before
+	// anything reads the rows ([chart.Writer.Unwaited]): a wait after each
+	// record is a few hundred milliseconds per object spent in sequence, and
+	// a company of sixty seats ran out of the seed's budget on it.
+	writer = writer.Unwaited()
 	result, err := writer.WriteImport(ctx, "seed:"+revision, revision, edges)
 	if err != nil {
 		return fmt.Errorf("engine: seed the org chart from the company file: %w", err)
@@ -135,7 +140,10 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 	// name. The two halves are ONE gesture from an operator's point of
 	// view, which is why a failure in the second is reported with the same
 	// revision the first was keyed on.
-	last, err := e.seedContent(ctx, writer, authored, revision)
+	//
+	// EACH ONE DECIDES AFTER THE IMPORT, which is what an unwaited writer
+	// still owes itself: a content write reads the row the import placed.
+	last, err := e.seedContent(ctx, writer.After(result.Position), authored, revision)
 	if err != nil {
 		return err
 	}
@@ -321,12 +329,16 @@ func (e *Engine) publishStagedChart(ctx context.Context) error {
 	}
 	// THE OP ID IS THE KEY, so a retry of a publish that lost its answer is
 	// the same operation rather than a second one.
+	//
+	// UNWAITED, for [Engine.seedChart]'s reason: this reads at the last
+	// position below before the epoch does.
+	writer = writer.Unwaited()
 	result, err := writer.WriteImport(ctx, "staged:"+staged.ID, staged.ID, edges)
 	if err != nil {
 		return fmt.Errorf("engine: publish the chart staged from %s: %w",
 			staged.SourcePath, err)
 	}
-	last, err := e.seedContent(ctx, writer, authored, staged.ID)
+	last, err := e.seedContent(ctx, writer.After(result.Position), authored, staged.ID)
 	if err != nil {
 		return err
 	}

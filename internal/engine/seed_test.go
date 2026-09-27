@@ -131,6 +131,20 @@ func TestTheFirstPublishedCompanyCarriesTheSeed(t *testing.T) {
 			"60 — a node that boots short wires every integration against a "+
 			"roster it does not have until the periodic rebuild fires", got)
 	}
+	// AND EVERY SEAT'S CONTENT LANDED. The seed publishes one content record
+	// per object inside a boot budget, and waiting on this node's applier
+	// after each spent that budget a few hundred milliseconds at a time: the
+	// last seats of a sixty-seat file were never written, and booted with
+	// no name, no backstory and no model chain.
+	var unfilled []string
+	for role := range company.Org.AllRoles() {
+		if role.Name == "" {
+			unfilled = append(unfilled, role.Handle())
+		}
+	}
+	if len(unfilled) > 0 {
+		t.Errorf("%d seats booted with no content: %v", len(unfilled), unfilled)
+	}
 }
 
 // wideSeedDoc is a company of n agent seats, each with its own content record.

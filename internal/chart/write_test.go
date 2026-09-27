@@ -657,3 +657,32 @@ func (r *writeRig) mustImport(opID, revision string, edges ...chart.Edge) {
 	}
 	r.drain()
 }
+
+// AN UNWAITED WRITER ANSWERS AT THE BROKER'S ACKNOWLEDGEMENT, and its caller
+// waits once.
+//
+// The seed publishes one record per object and reads at the highest position
+// they landed at before anything reads the rows; a writer that waited for this
+// node's applier after each spent that time in sequence, per object. So what
+// comes back is `pending` at the acknowledged position, marked as a wait nobody
+// asked for rather than one that ran out.
+func TestAnUnwaitedWriterAnswersAtTheAcknowledgement(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	got, err := r.writer.Unwaited().WriteBatch(t.Context(), "op-create", chart.Batch{
+		Operations: []chart.Operation{
+			op(chart.OpCreateUnit, chart.KindUnit, "platform", ""),
+		}})
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got.Outcome != statelog.OutcomePending || got.Waited || got.Position.Seq == 0 {
+		t.Errorf("an unwaited write answered %+v, want pending at the "+
+			"acknowledged position with no wait behind it", got.Result)
+	}
+	// AND THE RECORD IS THE SAME ONE: applied, it is the unit.
+	r.drain()
+	if got := r.mustUnit("platform"); got.Key != "platform" {
+		t.Errorf("the unwaited write did not land: %+v", got)
+	}
+}

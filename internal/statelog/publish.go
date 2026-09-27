@@ -171,9 +171,12 @@ type Request struct {
 	//
 	// # What it is for, and why it is not an optimisation
 	//
-	// One caller has no use for the wait: a write whose RESULT the caller
-	// already holds independently of the rows. A sign-in is the case it
-	// exists for. The session-start record is durable the moment the
+	// A caller has no use for the wait when it holds the write's RESULT
+	// independently of the rows. A sign-in is the case it exists for, and a
+	// run of records its publisher waits for ONCE, at the highest position
+	// they landed at, is the other: the chart seed publishes one record per
+	// object, none decides from the one before, and a wait after each spent
+	// a sixty-seat company's boot budget ([chart.Writer.Unwaited]). The session-start record is durable the moment the
 	// broker acknowledges it, the cookie minted from it carries that
 	// position, and every node validates the bearer against its own
 	// applier — so the row this node is waiting for is a row nothing in
