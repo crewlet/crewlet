@@ -952,9 +952,13 @@ mechanisms close it and none is sufficient alone:
    decoy, so the two arms do the same shape of work rather than one of them
    returning immediately. The decoy takes the same **turn** at the node's
    verify cap a real verification does and holds its slot for as long as one
-   takes, measured on the node — and derives nothing once it knows that
-   measure, so a name that does not exist costs no memory and no CPU, and no
-   more capacity than a real one.
+   takes — a draw from the node's own recent verifications at its current
+   cost, since a verification's time is a spread rather than one number — and
+   derives nothing once it has something to draw from, so a name that does not
+   exist costs no memory and no CPU, and no more capacity than a real one. A
+   person whose password was set before the cost was last raised verifies at
+   the cheaper cost it was written at, and holds their slot out to the same
+   draw.
 3. **Both arms answer at one deadline measured from admission** — the instant
    the throttle let the attempt through, which is the last instant both arms
    share. That is the only one of the three that equalises the *timing*,
@@ -979,9 +983,9 @@ attempt sees — a decoy that let go when its client hung up would free the line
 at once where a real name held it for a whole derivation. What still
 separates the arms is a load spike from at least as many addresses as the
 node has cores, and then both arms queue alike and differ only by how far a
-derivation is from the node's measure of one. The cost falls on the address
-that sent the flood — including anybody sharing it, which for a deployment
-behind a proxy it was not told to trust is everybody.
+derivation now is from the recent ones a decoy draws from. The cost falls on
+the address that sent the flood — including anybody sharing it, which for a
+deployment behind a proxy it was not told to trust is everybody.
 
 The refusal itself is **one generic error for every arm** — no such login,
 wrong password, wrong code, code already spent. The one exception is choosing a

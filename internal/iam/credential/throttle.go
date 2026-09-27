@@ -46,9 +46,10 @@ import (
 //
 // [Hasher.Decoy] spends the turn a verification would when there is no
 // verifier to check — in the same source's lane, holding a slot of the verify
-// cap for as long as a derivation takes — so the two arms do the same shape of
-// work rather than one of them doing none and returning immediately, and wait
-// for the same things. It derives nothing once the hasher has measured a
+// cap to its end for as long as a derivation takes, drawn from the node's own
+// recent derivations at its current cost — so the two arms do the same shape
+// of work rather than one of them doing none and returning immediately, and
+// wait for the same things. It derives nothing once the hasher has measured a
 // derivation: holding the slot costs no memory and no CPU, and a stranger
 // with no real name to try costs no more than one who has one — one slot, in
 // their own turn (turns.go).
@@ -68,10 +69,13 @@ import (
 //
 // WHAT IT DOES NOT PROMISE: under enough load to push a real verification past
 // the deadline, the pad has nothing left to add. The turn a decoy takes keeps
-// the two arms queueing alike even then, so what separates them is only the
-// difference between a derivation and the measure a decoy holds — and what
-// generates that load is at least [VerifyCap] sources each holding its one
-// turn, because one address holds one slot however much it sends.
+// the two arms queueing alike even then, so what separates them is only how
+// far a derivation now is from the recent ones a decoy draws its hold from —
+// and what generates that load is at least [VerifyCap] sources each holding
+// its one turn, because one address holds one slot however much it sends.
+// Nor does a decoy stand in for a verifier at a HIGHER cost than this build's
+// — one a newer build of a rolling upgrade wrote — which takes longer than
+// anything this node measures, and exists only until the rollout finishes.
 
 // THE CURVE, AND WHY IT IS NEVER A LOCKOUT.
 //

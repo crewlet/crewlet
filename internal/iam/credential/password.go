@@ -7,9 +7,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	mathrand "math/rand/v2"
 	"runtime"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/argon2"
@@ -105,10 +106,10 @@ type Hasher struct {
 	params Params
 	turns  *turns
 
-	// took is how long a derivation takes here, in nanoseconds: a moving
-	// average over every one this hasher has run, or zero until one has.
-	// It is what a decoy holds its turn for ([Hasher.Decoy]).
-	took atomic.Int64
+	// took is how long a derivation AT THIS HASHER'S OWN COST takes here:
+	// what a decoy draws its hold from ([Hasher.Decoy]), and what a
+	// verification at another cost holds its slot out to ([Hasher.pace]).
+	took measure
 
 	// work is the derivation, and hold how a decoy spends its turn. A
 	// hasher's own suite replaces them, to decide from outside when a
@@ -254,8 +255,9 @@ func (h *Hasher) Verify(ctx context.Context, source, verifier, password string) 
 // handful of attempts at once, and the real names queue behind each other in
 // the address's lane and answer late while the decoys answer on time — the
 // roster, read off the order the answers came back in. So a decoy waits for
-// its turn in the same lane and holds a slot of the cap for [Hasher]'s
-// measured derivation time, and an address's answers come back in the same
+// its turn in the same lane and holds a slot of the cap for as long as a
+// derivation here takes — a DRAW from this hasher's recent derivations at its
+// own cost ([measure]) — and an address's answers come back in the same
 // rhythm whichever of its names exist.
 //
 // # Once its turn is granted, it holds it to the end
@@ -271,10 +273,11 @@ func (h *Hasher) Verify(ctx context.Context, source, verifier, password string) 
 // # It derives nothing, once it knows how long deriving takes
 //
 // Holding the slot costs no memory and no CPU. Until this hasher has run a
-// derivation there is no measure to hold for, so that decoy derives once, at
-// this hasher's own cost, and the measure is taken from it. What that costs a
-// stranger with no real name to try is one derivation per process, and past it
-// no more than a real name costs: one slot, in their own turn.
+// derivation at its own cost there is nothing to draw a hold from, so that
+// decoy derives once, at this hasher's own cost, and the measure starts with
+// it. What that costs a stranger with no real name to try is one derivation
+// per process, and past it no more than a real name costs: one slot, in their
+// own turn.
 //
 // ITS RESULT IS DISCARDED BY CONSTRUCTION — it returns nothing a caller could
 // branch on, because a decoy whose answer could be read would be a second
@@ -287,16 +290,38 @@ func (h *Hasher) Decoy(ctx context.Context, source, presented string) error {
 		return err
 	}
 	defer release()
-	if took := time.Duration(h.took.Load()); took > 0 {
-		h.hold(took)
-		return nil
+	h.pace(presented, 0)
+	return nil
+}
+
+// pace keeps a slot of the cap its caller holds until a derivation at this
+// hasher's own cost would have ended, took of it having passed already: out
+// to a draw from [Hasher]'s measure, or — before there is anything to draw —
+// through a derivation at that cost, which is then the measure's first.
+//
+// It is what makes the two arms hold a slot alike: a decoy paces from nothing,
+// and a verification whose stored verifier is at ANOTHER cost paces from what
+// its own derivation took ([Hasher.derive]) — so each holds as long as a
+// verification at this cost would have, or longer where its own work ran
+// longer. The one arm with nothing to add is a verification at this cost,
+// which is itself a sample of what the others are drawn from.
+//
+// BEFORE ANYTHING IS MEASURED, a verification at another cost pays its own
+// derivation AND one at this cost, which is longer than either arm would hold
+// once a measure exists — once per process, until the first derivation at
+// this cost, as the first decoy's derivation is.
+func (h *Hasher) pace(password string, took time.Duration) {
+	if d, ok := h.took.draw(); ok {
+		if d > took {
+			h.hold(d - took)
+		}
+		return
 	}
 	salt := make([]byte, SaltLen)
 	// crypto/rand does not fail: it aborts the process rather than return
 	// an error, so there is nothing here to handle.
 	_, _ = rand.Read(salt)
-	h.timed(presented, salt, h.params)
-	return nil
+	h.timed(password, salt, h.params)
 }
 
 // weakerThan reports whether p is a WEAKER cost than q: below it in at least
@@ -356,7 +381,8 @@ func (h *Hasher) Rehash(password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("credential: read a salt: %w", err)
 	}
-	return h.encode(salt, h.timed(password, salt, h.params)), nil
+	digest, _ := h.timed(password, salt, h.params)
+	return h.encode(salt, digest), nil
 }
 
 // ErrSaturated reports a [Hasher.Rehash] that found every slot of the
@@ -366,8 +392,16 @@ var ErrSaturated = errors.New("credential: every derivation slot is taken, " +
 
 // derive runs the cost at params in source's turn: this hasher's own cost for
 // a new verifier, the stored verifier's for a verification. With
-// [Hasher.Rehash] and [Hasher.Decoy] it is the only caller of [Hasher.timed],
+// [Hasher.Rehash] and [Hasher.pace] it is the only caller of [Hasher.timed],
 // so no derivation this package runs can skip the cap.
+//
+// A VERIFIER AT ANOTHER COST KEEPS ITS SLOT AS LONG AS ONE AT THIS COST WOULD
+// ([Hasher.pace]). Both builds of a rolling upgrade and every person enrolled
+// before a cost was raised verify at the cost their verifier was written at —
+// the state [Hasher.Verify]'s rehash flag exists to repair — and a derivation
+// at a cheaper cost ends sooner than any decoy's hold: one address queueing
+// fakes behind a candidate read which names existed, and which still held a
+// stale verifier, from when its queue moved.
 //
 // IT WAITS FOR ITS TURN FOR AS LONG AS ITS REQUEST DOES: a sign-in VERIFYING
 // is the caller the cap queues rather than refuses, and one refused would
@@ -385,27 +419,86 @@ func (h *Hasher) derive(ctx context.Context, source, password string, salt []byt
 		return nil, err
 	}
 	defer release()
-	return h.timed(password, salt, params), nil
+	digest, took := h.timed(password, salt, params)
+	if params != h.params {
+		h.pace(password, took)
+	}
+	return digest, nil
 }
 
-// timed runs one derivation and folds how long it took into [Hasher]'s
-// measure: an eighth of the way towards each new one, so the measure follows
-// the load the node is under without one slow derivation moving it far.
-// Called only with a slot of the cap held.
-func (h *Hasher) timed(password string, salt []byte, params Params) []byte {
+// timed runs one derivation and answers how long it took — and, for a
+// derivation at this hasher's own cost and no other, adds that to [Hasher]'s
+// measure. Called only with a slot of the cap held.
+//
+// ONLY ITS OWN COST, because the measure is what a decoy holds its slot for,
+// and the arm a decoy stands in for is a verification at the cost the
+// directory's verifiers are written at. Folded in whatever its cost, a stale
+// verifier's cheaper derivation dragged every decoy's hold towards it, and
+// away from how long a current verifier's takes.
+func (h *Hasher) timed(password string, salt []byte, params Params) ([]byte, time.Duration) {
 	start := time.Now()
 	digest := h.work(password, salt, params)
-	took := int64(time.Since(start))
-	for {
-		was := h.took.Load()
-		next := took
-		if was > 0 {
-			next = was + (took-was)/8
-		}
-		if h.took.CompareAndSwap(was, next) {
-			return digest
-		}
+	took := time.Since(start)
+	if params == h.params {
+		h.took.add(took)
 	}
+	return digest, took
+}
+
+// measureKeep is how many of a hasher's recent derivations at its own cost its
+// measure holds: sixteen.
+//
+// THE HORIZON THE MOVING AVERAGE IT REPLACED HAD. That average moved an eighth
+// of the way to each new derivation, which leaves (7/8)^16 — about an eighth —
+// of its weight on anything older than its last sixteen; so a decoy's draw
+// follows a change in the node's load within as many sign-ins as the average
+// did. And sixteen values are enough that the draws spread across what one
+// derivation's time spreads across, rather than repeating a handful.
+const measureKeep = 16
+
+// measure is how long a derivation at a hasher's own cost takes here: the last
+// [measureKeep] of them, a hold DRAWN from among them at random.
+//
+// A DRAW AND NOT AN AVERAGE, because what a decoy stands in for is a
+// verification, and how long one takes is a spread rather than a number. An
+// average is one value every decoy holds exactly while real verifications
+// scatter around it — half of them longer — so one address probing a
+// candidate over and over read a real name off the mean of its queue's
+// timing, and a name nobody holds off a spread of nothing. Drawn from the
+// node's own recent derivations, a decoy's hold and a real verification's are
+// two samples of one spread.
+//
+// Which one is drawn needs no secrecy — every value in the measure is a
+// derivation time this node's own verifications are already disclosing — so
+// the draw is math/rand's, not crypto/rand's.
+//
+// SAFE FOR CONCURRENT USE.
+type measure struct {
+	mu   sync.Mutex
+	took []time.Duration // at most measureKeep; next overwritten is at next
+	next int
+}
+
+// add records one derivation's time, overwriting the oldest once full.
+func (m *measure) add(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.took) < measureKeep {
+		m.took = append(m.took, d)
+		return
+	}
+	m.took[m.next] = d
+	m.next = (m.next + 1) % measureKeep
+}
+
+// draw is one of the recorded times, at random, or false when none is.
+func (m *measure) draw() (time.Duration, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.took) == 0 {
+		return 0, false
+	}
+	return m.took[mathrand.IntN(len(m.took))], true
 }
 
 // argon2id is the one derivation, and it is called only with a slot of the

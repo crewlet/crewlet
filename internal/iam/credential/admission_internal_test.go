@@ -3,6 +3,7 @@ package credential
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -306,12 +307,13 @@ func TestAnAbandonedAttemptGivesUpItsPlace(t *testing.T) {
 // late, its decoys answered on time. So a decoy waits for its source's turn —
 // behind that source's verification here — and holds its slot for the
 // measured length of a derivation, which it takes itself, once, when nothing
-// has been measured yet.
+// has been measured yet. (With one derivation measured, the draw can only be
+// that one.)
 //
 // Mutations: let a decoy skip the turn and it answers while its source's
-// verification is still running; hold for anything but the measure and the
-// hold is not the derivation's length; skip the first decoy's derivation and
-// nothing is ever measured.
+// verification is still running; hold for anything but a draw from the
+// measure and the hold is not the derivation's length; skip the first decoy's
+// derivation and nothing is ever measured.
 func TestADecoyTakesTheSameTurnAndHoldsItAsLong(t *testing.T) {
 	t.Parallel()
 	h := NewHasher(cheapParams, 4)
@@ -336,9 +338,10 @@ func TestADecoyTakesTheSameTurnAndHoldsItAsLong(t *testing.T) {
 		t.Fatal(err)
 	}
 	mu.Lock()
-	first, measured := derived, time.Duration(h.took.Load())
+	first := derived
 	mu.Unlock()
-	if first != 1 || measured < 20*time.Millisecond {
+	measured, ok := h.took.draw()
+	if first != 1 || !ok || measured < 20*time.Millisecond {
 		t.Fatalf("the first decoy derived %d times and measured %s, want one "+
 			"derivation and its length", first, measured)
 	}
@@ -355,7 +358,7 @@ func TestADecoyTakesTheSameTurnAndHoldsItAsLong(t *testing.T) {
 
 	// IN THE SAME LANE: behind its source's verification, not beside it.
 	g := newGated(t, 4)
-	g.took.Store(int64(time.Millisecond))
+	g.took.add(time.Millisecond)
 	running := g.verifyIn(t.Context(), "198.51.100.23", "a-real-name")
 	g.begun(t)
 	decoyed := make(chan error, 1)
@@ -421,7 +424,7 @@ func TestAGrantedTurnRunsToItsEndWhateverItsRequestDoes(t *testing.T) {
 		// gets from the grant to the abandonment.
 		const measure = time.Second
 		g := newGated(t, 4)
-		g.took.Store(int64(measure))
+		g.took.add(measure)
 		gone, abandon := context.WithCancel(t.Context())
 		decoyed := make(chan error, 1)
 		go func() { decoyed <- g.Decoy(gone, source, "a-fake-name") }()
@@ -455,5 +458,120 @@ func heldBy(tb testing.TB, t *turns, slots int) {
 			tb.Fatalf("the cap never came to hold %d slots", slots)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A VERIFIER AT ANOTHER COST HOLDS ITS SLOT AS LONG AS ONE AT THIS COST, AND
+// NEVER MOVES WHAT A DECOY HOLDS.
+//
+// A person enrolled before a cost was raised verifies at the cost their
+// verifier was written at, and so does every verifier the other build of a
+// rolling upgrade wrote. Folded into the one measure a decoy holds, those
+// cheaper derivations dragged every decoy's hold away from how long a current
+// verifier takes; left to end when their derivation did, they freed the lane
+// sooner than a decoy — so one address queueing fakes behind a candidate read
+// which names existed, and which held a stale verifier, off when its queue
+// moved. So only a derivation at the hasher's own cost is measured, a
+// verification at another cost holds its slot until a draw from that measure
+// has passed, and a verification at this cost — itself a sample of what is
+// drawn from — holds nothing more. Before anything is measured, the first
+// verification at another cost measures, as the first decoy does.
+//
+// Mutations: measure every derivation whatever its cost and the stale one
+// lands in the measure; end a stale verification with its derivation and it
+// holds nothing; pace every verification and one at this cost holds on past
+// its own derivation; skip the measuring derivation and a stale verification
+// on a fresh hasher leaves nothing to draw.
+func TestAVerifierAtAnotherCostHoldsItsSlotAsLongAsOneAtThisCost(t *testing.T) {
+	t.Parallel()
+	const password = "a password somebody chose"
+	stale := cheapParams
+	stale.Memory /= 2 // what a build before a cost raise wrote
+
+	var mu sync.Mutex
+	var derived []Params
+	var holds []time.Duration
+	h := NewHasher(cheapParams, 4)
+	h.work = func(_ string, _ []byte, p Params) []byte {
+		mu.Lock()
+		derived = append(derived, p)
+		mu.Unlock()
+		// THIS COST TAKES TIME AND THE STALE ONE NONE, so what a stale
+		// verification holds is nearly the whole draw.
+		if p == cheapParams {
+			time.Sleep(40 * time.Millisecond)
+		}
+		return make([]byte, p.KeyLen)
+	}
+	h.hold = func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		holds = append(holds, d)
+	}
+	measured := func() []time.Duration {
+		h.took.mu.Lock()
+		defer h.took.mu.Unlock()
+		return append([]time.Duration(nil), h.took.took...)
+	}
+
+	// NOTHING MEASURED YET: the stale verification measures this cost.
+	if _, _, err := h.Verify(t.Context(), "198.51.100.23", verifierFor(stale),
+		password); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if len(derived) != 2 || derived[0] != stale || derived[1] != cheapParams {
+		t.Errorf("a stale verification on a hasher that had measured nothing "+
+			"derived at %v, want the stale cost and then this one", derived)
+	}
+	mu.Unlock()
+	if got := measured(); len(got) != 1 || got[0] < 40*time.Millisecond {
+		t.Fatalf("after it the measure is %v, want the one derivation at this "+
+			"cost", got)
+	}
+
+	// MEASURED: more derivations at this cost, and a snapshot of them.
+	for range 3 {
+		if _, err := h.Hash(t.Context(), "", password); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := measured()
+	mu.Lock()
+	holds = nil
+	mu.Unlock()
+	if _, _, err := h.Verify(t.Context(), "198.51.100.23", verifierFor(stale),
+		password); err != nil {
+		t.Fatal(err)
+	}
+	if after := measured(); !slices.Equal(after, before) {
+		t.Errorf("a stale verification moved the measure from %v to %v — a "+
+			"decoy would hold what a stale verifier takes", before, after)
+	}
+	mu.Lock()
+	// A DRAW LESS WHAT THE STALE DERIVATION TOOK, and it took next to
+	// nothing: at least half the shortest draw is left however slowly this
+	// runner got there.
+	if len(holds) != 1 || holds[0] < slices.Min(before)/2 {
+		t.Errorf("a stale verification held %v after its derivation, want one "+
+			"hold out to a draw from %v", holds, before)
+	}
+	holds = nil
+	mu.Unlock()
+
+	// AT THIS COST, nothing on top of its own derivation.
+	current, err := h.Hash(t.Context(), "", password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := h.Verify(t.Context(), "198.51.100.23", current,
+		password); !ok || err != nil {
+		t.Fatalf("a verifier at this cost verified %v (%v)", ok, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(holds) != 0 {
+		t.Errorf("a verification at this cost held %v on top of its derivation, "+
+			"want nothing: it is itself what a decoy's hold is drawn from", holds)
 	}
 }
