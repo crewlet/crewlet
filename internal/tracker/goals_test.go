@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -664,4 +665,61 @@ func TestAGoalAtEveryCapFitsOneRecord(t *testing.T) {
 		ORDER BY log_seq DESC LIMIT 1`)
 	t.Logf("the maximal goal's document is %s bytes against a %d-byte record",
 		bytes, tracker.MaxCommitBytes)
+}
+
+// A GOAL SAVE KEEPS WHAT A NEWER BUILD WROTE, on the goal and on each target it
+// restates by id.
+//
+// A save is the caller's whole statement of every member this build knows —
+// a target it leaves out is gone, and one it adds is new — but a member a
+// newer build wrote is one `write_work_goal` has no argument for. Taken from
+// the caller, it would be erased from every node's row on every save.
+//
+// Mutation: publish the caller's goal and targets as they arrived in
+// WriteGoal's decide, and both members are gone after the rename.
+func TestAGoalSaveKeepsWhatANewerBuildWrote(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	newer := map[string]json.RawMessage{"lane": json.RawMessage(`"newer"`)}
+	stored := aGoal("g-1", func(g *tracker.Goal) {
+		g.V = tracker.DocumentVersion
+		g.CreatedAt, g.UpdatedAt, g.CreatedBy = wednesday, wednesday, "ana"
+		g.Extra = newer
+		g.Targets[0].Extra = newer
+		g.Targets = append(g.Targets, tracker.GoalTarget{
+			ID: "t-dropped", Name: "Dropped", Type: tracker.TargetBinary, Extra: newer,
+		})
+	})
+	if _, err := r.writer.WriteDocument(t.Context(), "op-newer",
+		tracker.GoalSubject("g-1"), "", stored, tracker.ChangeGoalUpdated,
+		nil); err != nil {
+		t.Fatalf("store the newer goal: %v", err)
+	}
+	r.drain()
+
+	saved := aGoal("g-1", func(g *tracker.Goal) {
+		g.Name = "Ship the other thing"
+		g.Targets = append(g.Targets, tracker.GoalTarget{
+			ID: "t-new", Name: "New", Type: tracker.TargetBinary,
+		})
+	})
+	if _, err := r.writer.WriteGoal(t.Context(), "op-rename", saved); err != nil {
+		t.Fatalf("rename the goal: %v", err)
+	}
+	r.drain()
+	for path, want := range map[string]string{
+		"$.name":            "Ship the other thing",
+		"$.lane":            "newer",
+		"$.targets[0].id":   "t-1",
+		"$.targets[0].lane": "newer",
+		"$.targets[1].id":   "t-new",
+		"$.targets[1].lane": "",
+		"$.targets[2].id":   "",
+	} {
+		got := r.strings(`SELECT COALESCE(json_extract(CAST(document AS TEXT), '` + path + `'), '')
+			FROM tracker_goals WHERE id = 'g-1'`)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("after the save the goal holds %s = %q, want %q", path, got, want)
+		}
+	}
 }

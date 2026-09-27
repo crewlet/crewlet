@@ -2,6 +2,7 @@ package changefeed_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -119,9 +120,8 @@ func (p *probe) Source() changefeed.Source {
 	return changefeed.Source{Name: "work", Group: testGroup}
 }
 
-// testGroup is this fixture's own consumer name. Declared as a constant beside
-// the translator that reads it, which is the shape every real estate has now
-// that no helper derives one from a document family.
+// testGroup is this fixture's own consumer name, declared as a constant beside
+// the translator that reads it, as every real estate declares its own.
 const testGroup = "crewlet-test-feed"
 
 func (p *probe) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
@@ -176,10 +176,6 @@ func run(t *testing.T, docs *estate, pub *capture, cl *claims, tr changefeed.Tra
 			t.Error("the feed did not stop")
 		}
 	})
-	// The feed's consumer must exist before a change is written, or
-	// DeliverNew correctly drops it.
-	settle(t, func() bool { return true }, "")
-	time.Sleep(20 * time.Millisecond)
 }
 
 func settle(t *testing.T, want func() bool, why string) {
@@ -417,35 +413,97 @@ type groupless struct{ probe }
 
 func (g *groupless) Source() changefeed.Source { return changefeed.Source{Name: "page"} }
 
-// A REMOVED RECORD IS ACKED AND NEVER TRANSLATED.
+// numbered is a translator whose body holds an integer past 2^53, as a
+// record's composed version does.
+type numbered struct{ probe }
+
+// version is past what a float64 holds exactly: read as one it comes back as
+// 1152921504606847000.
+const version = "1152921504606846977"
+
+func (n *numbered) Translate(ctx context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
+	d, wake, err := n.probe.Translate(ctx, rec)
+	if d.Body != nil {
+		d.Body["version"] = json.Number(version)
+	}
+	return d, wake, err
+}
+
+// A WAKE CARRIES ITS BODY'S OWN BYTES, whose numbers are the writer's digits.
+// The node that routes it decodes the map with every number a float64, so an
+// integer past 2^53 in a record reaches a parser reading the map rounded; the
+// bytes beside the map are what the domain's parser decodes instead. The map
+// still carries the record, for a parser on a build that predates the bytes.
 //
-// The decision moved out of the two domain translators and into the framework
-// when the seam did, and it can only live in one place: every estate answers
-// it the same way — the wake this record once produced was delivered when it
-// was written — so a removal must not reach a translator and must not circle
-// back through the dead-letter path.
-func TestARemovedRecordIsAckedWithoutTranslation(t *testing.T) {
+// Mutation: publish the wake without BodyRaw and the routing node has only the
+// rounded version.
+func TestAWakeCarriesItsBodysExactBytes(t *testing.T) {
 	t.Parallel()
 	docs, pub, cl := newEstate(), &capture{}, newClaims()
-	p := newProbe()
-	run(t, docs, pub, cl, p)
+	run(t, docs, pub, cl, &numbered{probe: probe{wake: true}})
 
 	writeChange(t, docs, "u1")
-	settle(t, func() bool { return p.translations() == 1 }, "the change was never translated")
-	docs.deliver(changefeed.Record{ID: "u1", Key: "item/u1", Removed: true})
+	settle(t, func() bool { return pub.count() == 1 }, "the change never became a wake")
 
-	// The removal must not reach the translator, and it must not circle:
-	// a later change is translated exactly once, which it would not be if
-	// the removal were being redelivered.
-	writeChange(t, docs, "u2")
-	settle(t, func() bool { return p.translations() == 2 }, "the second change never arrived")
-	time.Sleep(100 * time.Millisecond)
-	if got := p.translations(); got != 2 {
-		t.Errorf("%d translations for two changes and a removal — the removal "+
-			"is being translated or retried", got)
+	// ACROSS THE WIRE, as the routing node receives it.
+	raw, err := json.Marshal(pub.first(t))
+	if err != nil {
+		t.Fatalf("encode the wake: %v", err)
 	}
-	if got := docs.acks("u1"); got < 2 {
-		t.Errorf("the removal was acked %d time(s) beyond its change — a "+
-			"removal that is not acked comes back for ever", got-1)
+	var routed events.Event
+	if err := json.Unmarshal(raw, &routed); err != nil {
+		t.Fatalf("decode the wake: %v", err)
+	}
+	w, ok := events.DataAs[*types.RawWebhook](&routed)
+	if !ok || w == nil {
+		t.Fatalf("the routed event is not a raw webhook: %+v", routed)
+	}
+	var exact map[string]json.RawMessage
+	if err := json.Unmarshal(w.BodyRaw, &exact); err != nil {
+		t.Fatalf("the wake carries no body bytes a parser can decode (%q): %v", w.BodyRaw, err)
+	}
+	if got := string(exact["version"]); got != version {
+		t.Errorf("the body's bytes carry the version as %s, want %s", got, version)
+	}
+	if w.Body["key"] != "item/u1" {
+		t.Errorf("the map beside the bytes lost the record: %+v", w.Body)
+	}
+}
+
+// unencodable is a translator whose body holds a value JSON cannot write.
+type unencodable struct{ probe }
+
+func (u *unencodable) Translate(ctx context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
+	d, wake, err := u.probe.Translate(ctx, rec)
+	if d.Body != nil {
+		d.Body["unwritable"] = make(chan int)
+	}
+	return d, wake, err
+}
+
+// A BODY THAT CANNOT BE ENCODED IS A RECORD THIS BUILD CANNOT TRANSLATE. It is
+// returned for redelivery rather than acked, and it takes no claim and
+// publishes nothing: a claim held over a wake nobody published would make the
+// redelivery that a build able to encode it wins skip the wake.
+//
+// Mutation: encode the body after the claim, and the claim is taken; ack it,
+// and the record is gone.
+func TestABodyThatCannotBeEncodedTakesNoClaim(t *testing.T) {
+	t.Parallel()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
+	u := &unencodable{probe: probe{wake: true}}
+	run(t, docs, pub, cl, u)
+
+	writeChange(t, docs, "u1")
+	settle(t, func() bool { return u.translations() == 1 }, "the change was never translated")
+	time.Sleep(50 * time.Millisecond)
+	if got := cl.attempts(); got != 0 {
+		t.Errorf("%d claim(s) taken for a wake that could not be built", got)
+	}
+	if got := pub.count(); got != 0 {
+		t.Errorf("%d wake(s) published from a body that could not be encoded", got)
+	}
+	if got := docs.acks("u1"); got != 0 {
+		t.Errorf("the record was acked %d time(s) — dropped for a build that could encode it", got)
 	}
 }

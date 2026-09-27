@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -455,11 +456,22 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 		return nil
 	}
 	clone := *w
-	if actor == "" || !kind.Valid() {
-		// THE SAME REFUSAL [NewWriter] MAKES, because this is the other
+	refusal := actorRefusal(actor, kind)
+	if refusal == nil && kind == AuthorOperator &&
+		actor != OperatorActor(provenance.OperatorID) {
+		// THE NAME IS THE CREDENTIAL'S, so the two fields a record
+		// carries about an operator cannot name two different tokens:
+		// an audit asks `operator_id` what one token did and reads the
+		// author for who did it.
+		refusal = fmt.Errorf("an operator is recorded under its own "+
+			"credential's name, %q, and this names the credential %q",
+			OperatorActor(provenance.OperatorID), provenance.OperatorID)
+	}
+	if refusal != nil {
+		// THE SAME RULE [NewWriter] HOLDS, because this is the other
 		// door into the same state: a clone that skipped it would be the
 		// one writer in the tree recording history rows nobody can
-		// attribute.
+		// attribute, or an operator under a name a seat can hold.
 		//
 		// CARRIED rather than returned, because the caller is a surface
 		// resolving an identity it has already established — there is no
@@ -469,7 +481,7 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 		// naming the operation, rather than as a nil pointer somewhere
 		// deeper.
 		clone.refusal = fmt.Errorf("tracker: a writer cannot act as %q of "+
-			"kind %q — every record carries who wrote it", actor, kind)
+			"kind %q — %w", actor, kind, refusal)
 	}
 	clone.Actor = actor
 	clone.ActorKind = kind
@@ -581,17 +593,66 @@ type Provenance struct {
 	MintedAt time.Time
 }
 
+// operatorPrefix begins every name an operator's writes are recorded under.
+const operatorPrefix = "operator:"
+
+// OperatorActor is the name an operator's writes are recorded under: the
+// prefix `operator:` and the name of the API token they presented.
+//
+// # Why not the token's bare name
+//
+// Because a record's author is compared with seats' handles, and a bare token
+// name can be one. The wake that leaves out whoever wrote a record ([Route])
+// drops the candidate whose handle is the recorded name, so a token named like
+// a seat would keep that seat from hearing about everything the token wrote. A
+// seat's handle is lowercase letters, digits and dashes (org.ValidHandle), so
+// a name with a colon is never one, whatever the token is called.
+//
+// THE KNOWLEDGE BASE RECORDS AN OPERATOR THE SAME WAY (pages.Actor.Name), so
+// one operator is one name across the work and the pages.
+func OperatorActor(token string) string { return operatorPrefix + token }
+
+// actorRefusal is the rule every writer's identity is held to, and nil when it
+// holds.
+//
+// AN AUTHOR, OF A KIND THIS BUILD KNOWS: a record carrying neither is a
+// history row nobody can attribute.
+//
+// AND THE NAME AGREES WITH THE KIND about whether it is an operator's. An
+// operator's name is [OperatorActor] of a token, and a bare token name is
+// refused for the reason that function gives. A writer of any other kind is
+// never spelled as an operator, because every screen and every audit that
+// reads the name would then show an operator's hand in what somebody else
+// did.
+func actorRefusal(actor string, kind AuthorKind) error {
+	switch {
+	case actor == "":
+		return fmt.Errorf("every record carries who wrote it, and one that " +
+			"does not is a history row nobody can attribute")
+	case !kind.Valid():
+		return fmt.Errorf("%q is not an author kind, and every record carries "+
+			"who wrote it as one of %v", kind, AuthorKinds)
+	}
+	token, operator := strings.CutPrefix(actor, operatorPrefix)
+	switch {
+	case kind == AuthorOperator && (!operator || strings.TrimSpace(token) == ""):
+		return fmt.Errorf("an operator is recorded as %s and the name of its "+
+			"token, because a bare name is one a seat can hold", operatorPrefix)
+	case kind != AuthorOperator && operator:
+		return fmt.Errorf("a name beginning %s is an operator's, and this "+
+			"writer is not one", operatorPrefix)
+	}
+	return nil
+}
+
 // NewWriter builds the tracker's write authority.
 func NewWriter(d WriterDeps) (*Writer, error) {
-	switch {
-	case d.Publisher == nil:
+	if d.Publisher == nil {
 		return nil, fmt.Errorf("tracker: a writer has no publisher")
-	case d.Actor == "":
-		return nil, fmt.Errorf("tracker: a writer has no actor — every record " +
-			"carries who wrote it, and one that does not is a history row " +
-			"nobody can attribute")
-	case !d.ActorKind.Valid():
-		return nil, fmt.Errorf("tracker: %q is not an author kind", d.ActorKind)
+	}
+	if err := actorRefusal(d.Actor, d.ActorKind); err != nil {
+		return nil, fmt.Errorf("tracker: a writer cannot act as %q of kind %q "+
+			"— %w", d.Actor, d.ActorKind, err)
 	}
 	now := d.Now
 	if now == nil {

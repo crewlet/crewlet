@@ -541,9 +541,9 @@ func negated(clause string) string {
 
 // checkFieldOp refuses an operator the field's TYPE does not admit.
 //
-// NAMING WHAT IT DOES ADMIT, because the failure this replaces is silent: a
-// `labels` field compared with `eq` produced a clause that matched nothing,
-// and a board that came back empty reads as "no task has this label" rather
+// NAMING WHAT IT DOES ADMIT, because the alternative fails silently: a
+// `labels` field compared with `eq` compiles to a clause that matches nothing,
+// and a board that comes back empty reads as "no task has this label" rather
 // than as "that is not a question you can ask of a set".
 func checkFieldOp(op string, field resolvedField) error {
 	// "IS IT SET" IS A QUESTION ABOUT THE ROW rather than about the value,

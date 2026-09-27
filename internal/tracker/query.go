@@ -46,9 +46,9 @@ const (
 	// ActivityQuerySpanDays bounds a text search over the activity feed.
 	//
 	// The gate it enforces is on what the query would SCAN rather than on
-	// which key is present — the shape it replaces asked for "a task, a
-	// container or a since: bound", and `container=workspace` and a
-	// five-year `since:` both satisfied that while narrowing nothing.
+	// which key is present — a gate asking for "a task, a container or a
+	// since: bound" is satisfied by `container=workspace` or a five-year
+	// `since:` while nothing is narrowed.
 	//
 	// `q=` is an escaped LIKE over `excerpt`, which no index on
 	// `tracker_history` covers: unscoped it reads every commit the company

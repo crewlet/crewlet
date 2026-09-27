@@ -139,6 +139,10 @@ func TestARecordTheDeletionGateDropsWritesNothing(t *testing.T) {
 	}
 	r.drain()
 	before := markerRow(t, r, "t-1")
+	if strings.Contains(before, "reject") {
+		t.Fatalf("the deletion marker carries a tally of what its gate drops: %s",
+			before)
+	}
 
 	r.redeliver(patch.Position.Seq)
 

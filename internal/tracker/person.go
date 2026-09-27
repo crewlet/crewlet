@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -96,7 +97,7 @@ func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 	read, unread, snoozed []InboxEntry, reasons []Reason,
 	seenThrough Position) (WriteResult, error) {
 
-	if err := ownRecord(w.Actor, handle, "inbox"); err != nil {
+	if err := ownRecord(w.Actor, w.ActorKind, handle, "inbox"); err != nil {
 		return WriteResult{}, err
 	}
 	if err := checkInbox(read, unread, snoozed, reasons, w.Now()); err != nil {
@@ -128,7 +129,7 @@ func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	pinnedViews []string, favorites []Favorite) (WriteResult, error) {
 
-	if err := ownRecord(w.Actor, handle, "pins"); err != nil {
+	if err := ownRecord(w.Actor, w.ActorKind, handle, "pins"); err != nil {
 		return WriteResult{}, err
 	}
 	pinnedViews = cleanHandles(pinnedViews)
@@ -182,7 +183,7 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	priorities []string, authority PersonAuthority) (WriteResult, error) {
 
 	priorities = cleanHandles(priorities)
-	own := w.Actor == handle
+	own := actsAs(w.Actor, w.ActorKind, handle)
 	switch {
 	case !own && !authority.Lead && !authority.Person:
 		return WriteResult{}, fmt.Errorf("tracker: %s is a seat, is not %s and "+
@@ -279,14 +280,30 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 }
 
 // ownRecord refuses a write on somebody else's half of a person record.
-func ownRecord(actor, handle, what string) error {
-	if actor == handle {
+func ownRecord(actor string, kind AuthorKind, handle, what string) error {
+	switch {
+	case actsAs(actor, kind, handle):
 		return nil
+	case kind != AuthorAgent && kind != AuthorHuman:
+		return fmt.Errorf("tracker: %s writes as %s and holds no seat, so it "+
+			"cannot write %s's %s — it is written only on behalf of the person "+
+			"whose it is: %w", actor, kind, handle, what, statelog.ErrConflict)
 	}
 	return fmt.Errorf("tracker: %s cannot write %s's %s — it is written on "+
 		"behalf of the person whose it is, and somebody else's hand in it is "+
 		"the one thing it must never allow: %w",
 		actor, handle, what, statelog.ErrConflict)
+}
+
+// actsAs reports whether a writer acting as actor, of kind, is the person
+// whose record handle names.
+//
+// ONLY A SEAT'S OWN WRITER CAN BE, which is why the KIND is asked before the
+// name: an operator or the engine holds no seat, so whatever its name spells
+// it is nobody's person. Asked of the name alone, a token or a node named like
+// a seat would own that seat's inbox and pins.
+func actsAs(actor string, kind AuthorKind, handle string) bool {
+	return (kind == AuthorAgent || kind == AuthorHuman) && actor == handle
 }
 
 // checkInbox refuses an inbox nothing could render.
@@ -331,13 +348,13 @@ func checkInbox(read, unread, snoozed []InboxEntry, reasons []Reason,
 	return nil
 }
 
-// prunedEntries drops what the person has already read past.
+// prunedEntries drops what the person has already read past: an entry at or
+// below the seen-through position's sequence.
 //
-// AT OR BELOW, and the GENERATION decides first: a sequence from a dead
-// sequence space compares as if it were current, which is exactly the failure
-// [Position] is a triple for. An entry from another generation is KEPT rather
-// than pruned, because the honest reading of "I cannot compare these" is not
-// "you have seen it".
+// THE SEQUENCE ALONE, because that is all an entry carries — [InboxEntry] has
+// no stream and no generation. A read compares the whole triple
+// ([readPast]); this prune cannot, so its answer is sound only while the
+// entries and the position share one sequence space.
 func prunedEntries(entries []InboxEntry, seen Position) []InboxEntry {
 	if seen.Seq == 0 {
 		return entries
@@ -479,12 +496,44 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			post.V, post.Handle, post.UpdatedAt = DocumentVersion, handle, at
+			post.V, post.Handle = DocumentVersion, handle
+			// THE STORED FORM BEFORE THE APPLY, so what the apply
+			// changed is measured against the person as it stands.
+			was, err := personForm(post)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			post.UpdatedAt = at
 			notify, err := apply(tx, &post, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			// NOTHING TO SAY, on [applyProjectEdit]'s rule: a screen
+			// that restates an inbox or the pins as they are would
+			// otherwise publish a record whose only change is the
+			// instant it was written, and take the person's subject
+			// from every write racing it for no change at all. The
+			// version it reports is the one it read.
+			now, err := personForm(post)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if bytes.Equal(was, now) {
+				return statelog.Decision{Version: int64(post.Version)}, nil
+			}
 			return w.decide(subject, OpPatch, kind, scope, opID, post, notify, at)
 		},
 	})
+}
+
+// personForm is a person's stored form with the instant it was written left
+// out, which is the one member every write moves whether or not it changed
+// anything.
+func personForm(p Person) ([]byte, error) {
+	p.UpdatedAt = time.Time{}
+	form, err := storedForm(p)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: encode %s's own state: %w", p.Handle, err)
+	}
+	return form, nil
 }

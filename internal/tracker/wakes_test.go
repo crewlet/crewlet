@@ -624,17 +624,11 @@ func clipForTest(s string) string {
 
 // A SCHEDULE CHANGE CARRIES WHAT IT CHANGED.
 //
-// A due date, a start, an estimate and a size had no producer in this tree
-// until the write tools gained one, so their absence from
-// [tracker.TaskDeltas] was invisible: nothing could move them, so nothing
-// reported the move. With a producer, a re-estimate wrote a history row and a
-// notification card carrying NO deltas at all — which every renderer falls
-// back on the bare KIND for, so a card announced a change with nothing in
-// it.
-//
-// It also matters beyond display: the applier rebuilds a task's spans from the
-// history row's deltas, and a row with none is a commit the reports derived
-// from those spans cannot see.
+// A due date, a start, an estimate and a size are fields a write tool moves,
+// so each belongs in [tracker.TaskDeltas]: without it a re-estimate writes a
+// history row and a notification card carrying NO deltas at all — which every
+// renderer falls back on the bare KIND for, so a card and the activity feed
+// both announce a change with nothing in it.
 func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 	t.Parallel()
 	day := func(iso string) *time.Time {

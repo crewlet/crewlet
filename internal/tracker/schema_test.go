@@ -131,11 +131,10 @@ func TestNoUniqueOutsideAPrimaryKey(t *testing.T) {
 
 // EVERY INDEX NAMES THE QUERY IT SERVES.
 //
-// Twenty-four indexes on the hottest table is a write cost every commit
-// carries, and an index nobody reads is that cost with no reader. Naming the
-// reader in the DDL is what makes deleting one a decision somebody can check
-// rather than a guess — and it is how two partial indexes with no writer at
-// all survived a design review in the shape this replaces.
+// Every index on the hottest table is a write cost every commit carries, and
+// an index nobody reads is that cost with no reader. Naming the reader in the
+// DDL is what makes deleting one a decision somebody can check rather than a
+// guess.
 func TestEveryTrackerIndexNamesItsQuery(t *testing.T) {
 	t.Parallel()
 	source, err := trackerSchemaSource()

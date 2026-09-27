@@ -82,6 +82,18 @@
 // caller lays each element onto the stored element it names, keeping what the
 // caller did not state — the carried members among it — and measures
 // "unchanged" on the result rather than on what the caller sent.
+//
+// # A bag of `any`
+//
+// An object with no struct behind it — a free-form bag its writer builds as a
+// literal — has no field list for a member to be missing from, so a round
+// trip keeps all its members. What it changes is the NUMBERS: decoded into
+// `any` each is a float64, and an integer past 2^53 is written back as a
+// different integer. [Bag] is that object decoded with every number as a
+// [json.Number], and it is the one type for it, for the reason this package is
+// one implementation of the carry: the decode, the refusal of a number no
+// float64 holds, and the merge into a held value are each a clause a copy can
+// get wrong without anything failing.
 package jsoncarry
 
 import (

@@ -175,11 +175,11 @@ func failed(msg string) tools.Result { return tools.Result{Output: msg, Failed: 
 // log line.
 //
 // NEWLINES ONLY, no length cut. A smuggled newline genuinely breaks a
-// line-structured render, so folding whitespace earns its place. Cutting the
-// string did not: what is echoed here is the model's OWN argument, quoted back
-// so it can see what failed to match, and a shortened echo names a query the
-// model never sent — which is worse than a long line, because the model then
-// retries against the wrong string.
+// line-structured render, so folding whitespace earns its place. A cut does
+// not: what is echoed here is the model's OWN argument, quoted back so it can
+// see what failed to match, and a shortened echo names a query the model never
+// sent — which is worse than a long line, because the model then retries
+// against the wrong string.
 func clip(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

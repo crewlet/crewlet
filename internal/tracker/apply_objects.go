@@ -208,13 +208,18 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		if err := decodePayload(c.record.Mutation, &person); err != nil {
 			return 0, fmt.Errorf("tracker: decode the person at %s: %w", c.position, err)
 		}
+		// THE RECORD'S PERSON BESIDE THE COLUMNS, as every other document
+		// here: a member a newer build wrote on the person has no column,
+		// and the document is what [readPerson] decodes so the next write
+		// this node decides carries it. The columns stay the whole of a
+		// row applied before the document had a column.
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_persons
 				(handle, generation, seen_through, seen_through_stream, read_json,
 				 unread_json, snoozed_json, primary_reasons_json, priorities_json,
 				 pinned_views_json, favorites_json, priorities_set_by,
-				 priorities_set_at, version)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				 priorities_set_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (handle) DO UPDATE SET
 				generation = excluded.generation,
 				seen_through = excluded.seen_through,
@@ -227,14 +232,15 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 				favorites_json = excluded.favorites_json,
 				priorities_set_by = excluded.priorities_set_by,
 				priorities_set_at = excluded.priorities_set_at,
-				version = excluded.version
+				version = excluded.version, document = excluded.document
 			WHERE excluded.version > tracker_persons.version`,
 			key, person.Generation, int64(person.SeenThrough.Seq),
 			person.SeenThrough.Stream, jsonOf(person.Read), jsonOf(person.Unread),
 			jsonOf(person.Snoozed), jsonOf(person.PrimaryReasons),
 			jsonOf(person.Priorities), jsonOf(person.PinnedViews),
 			jsonOf(person.Favorites), person.PrioritiesSetBy,
-			store.EncodeTime(person.PrioritiesSetAt), c.packed)
+			store.EncodeTime(person.PrioritiesSetAt), c.packed,
+			[]byte(c.record.Mutation))
 	default:
 		return 0, fmt.Errorf("tracker: %s has no upsert", table)
 	}

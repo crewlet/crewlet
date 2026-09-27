@@ -918,9 +918,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		}
 	}
 	// THE NEXT PAGE'S CURSOR, which is what makes the `cursor` argument
-	// reachable at all: a caller cannot page without one, and this tool was
-	// the only reader of this query grammar that dropped it — the REST
-	// route beside it has always passed it on.
+	// reachable at all: a caller cannot page without one.
 	if answer.NextCursor != "" {
 		result["next_cursor"] = answer.NextCursor
 	}
@@ -1489,7 +1487,7 @@ func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (stri
 
 // resolveHandle turns a handle a caller typed into one the company has.
 //
-// # Why a handle is validated AT ALL, when nothing used to
+// # Why a handle is validated AT ALL
 //
 // Because an unknown one fails silently and permanently. It is stored, it
 // rides the routing snapshot, it becomes a candidate — and [tracker.Route]
@@ -2277,16 +2275,15 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// commenting at once contend at the broker on one subject, and exactly
 	// one wins a round.
 	//
-	// THE COMMENTER'S WATCH IS A GESTURE, NOT A SET. Sending the whole
-	// watcher set — read here, OUTSIDE the writer's own decide snapshot —
-	// made a comment a last-write-wins over that collection: somebody who
-	// watched or unwatched between this read and the append had their
-	// change silently discarded by a comment that was not about them. It
-	// could also push the set past [tracker.MaxWatchers] with nothing
-	// checking, after which the cap refused every unwatch and nobody
-	// could leave. The gesture is resolved against the CURRENT row inside
-	// the decide, and it is `Auto` because nobody pressed watch: at the
-	// cap the comment lands and the watch is skipped.
+	// THE COMMENTER'S WATCH IS A GESTURE, NOT A SET. A whole watcher set
+	// read here, OUTSIDE the writer's own decide snapshot, would make a
+	// comment a last-write-wins over that collection: somebody who watched
+	// or unwatched between this read and the append would have their
+	// change silently discarded by a comment that was not about them, and
+	// nothing would stop the set passing [tracker.MaxWatchers]. The
+	// gesture is resolved against the CURRENT row inside the decide, and
+	// it is `Auto` because nobody pressed watch: at the cap the comment
+	// lands and the watch is skipped.
 	patch := tracker.TaskPatch{
 		Comment: comment,
 		Watch: &tracker.WatchIntent{
@@ -2388,27 +2385,92 @@ func readFailure(name string, err error) string {
 // reports an outage nobody has, and goes looking for its answer in a store
 // that was never down.
 //
-// A DEFERRED REFUSAL IS NOT TOLD TO TRY AGAIN. This node holds a change it
-// cannot apply covering what was asked for — one a newer build of the engine
-// wrote, or one queued behind such a change ([statelog.RefuseDeferred]) — so
-// its copy may already be wrong, waiting changes nothing, and the next call
-// from the same seat asks the same node the same question. A model told "try
-// again" spends its rounds on a loop that cannot end; told what resolves it,
-// it says it could not check.
+// "TRY AGAIN" ONLY WHERE COMING BACK CAN CHANGE THE ANSWER — see
+// [unservedAdvice]. A model told to try again spends its rounds on the same
+// call to the same node, which is a loop that cannot end when nothing about
+// that node moves between two calls.
 func unservedRead(name, store, what string, err error) string {
-	var refused *statelog.Refused
-	if errors.As(err, &refused) && refused.Code == statelog.RefuseDeferred {
-		return fmt.Sprintf("%s could not read %s (%v). This node holds a change "+
-			"to %s that it cannot apply — written by a newer build of the "+
-			"engine, or queued behind one that was — so its copy may already "+
-			"be wrong and it will not answer from it. This is NOT an empty "+
-			"result — do not conclude %s does not exist. Calling again will "+
-			"not help: a build that can read that change is what resolves it. "+
-			"Say you could not check.", name, store, err, what, what)
+	why, next := unservedAdvice(what, err)
+	lead := fmt.Sprintf("%s could not read %s right now (%v).", name, store, err)
+	if why != "" {
+		lead = fmt.Sprintf("%s could not read %s (%v). %s", name, store, err, why)
 	}
-	return fmt.Sprintf("%s could not read %s right now (%v). This is NOT an "+
-		"empty result — do not conclude %s does not exist. Try again, or say "+
-		"you could not check.", name, store, err, what)
+	return fmt.Sprintf("%s This is NOT an empty result — do not conclude %s "+
+		"does not exist. %s", lead, what, next)
+}
+
+// unservedAdvice is what a read refusal means and what a model can do about
+// it: a sentence saying why this node did not answer, empty where the error
+// says enough, and what to do next.
+//
+// ONE SENTENCE PER CODE THAT COMING BACK DOES NOT CLEAR, because each has a
+// different remedy and none of them is the caller's next call:
+// [statelog.ReadRefusal.Retryable] is the framework's own statement of which
+// codes clear by asking this node again, and every code it answers false for
+// is named here. Two of those do clear by WAITING, on a scale a model can
+// act on, and say so: `too_stale` as this node catches up, and `log_full`
+// when the log has room again. A failure that is not a refusal at all — a
+// store error, a context ending — is worth another attempt.
+func unservedAdvice(what string, err error) (why, next string) {
+	const report = "Say you could not check."
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code.Retryable() {
+		return "", "Try again, or say you could not check."
+	}
+	switch refused.Code {
+	case statelog.RefuseTooStale:
+		return "This node is further behind the log than this read accepts, " +
+				"which clears as it catches up.",
+			"Try again in a moment, or say you could not check."
+	case statelog.RefuseLogFull:
+		return "The log is full, so this node could not append the marker a " +
+				"read at this level waits for; that clears once the log's trim " +
+				"frees room or an operator raises its ceiling.",
+			"Say you could not check, and try again later if it still matters."
+	case statelog.RefuseDeferred:
+		return fmt.Sprintf("This node holds a change to %s that it cannot "+
+				"apply — written by a newer build of the engine, or queued "+
+				"behind one that was — so its copy may already be wrong and it "+
+				"will not answer from it.", what),
+			"Calling again will not help: a build that can read that change " +
+				"is what resolves it. " + report
+	case statelog.RefuseDeferredScopeUnknown:
+		return "This node holds a change it cannot apply and could not tell " +
+				"what that change covers, so it will not answer from its copy " +
+				"at all.",
+			"Calling again will not help while it holds that change: a build " +
+				"that can read it is what resolves it. " + report
+	case statelog.RefuseBelowFloor:
+		return "This node missed changes that have since been trimmed from " +
+				"the log, so its copy is missing state no replay can supply.",
+			"Calling again will not help: the node recovers by adopting " +
+				"another node's copy. " + report
+	case statelog.RefuseGenerationLeft:
+		return "The fleet has re-anchored this log and this node's copy is " +
+				"still on the old anchor.",
+			"Calling again will not help: the node recovers by adopting the " +
+				"fleet's copy. " + report
+	case statelog.RefuseEvicted:
+		return "This node has been removed from the fleet, so it answers " +
+				"nothing from its copy.",
+			"Calling again will not help: an operator readmits the node. " + report
+	case statelog.RefuseBarrierRefused:
+		return "The broker refused the marker a read at this level appends, " +
+				"for a reason of its own configuration — the error names it.",
+			"Calling again will not help: an operator changing that setting " +
+				"is what clears it. " + report
+	case statelog.RefuseWrongStream:
+		return "The position this read had to reach is on a different log " +
+				"from the one this node reads — its own copy is from a log " +
+				"that was since recreated, or the read named a position from " +
+				"another log.",
+			"Calling again with the same request will not help. " + report
+	}
+	// A NON-RETRYABLE CODE NOT NAMED ABOVE, which the suite refuses for
+	// every code [statelog.ReadRefusals] lists: nothing here can say
+	// whether it clears, so the model is not sent round a loop on it.
+	return "This node refused the read for a reason with no advice here.",
+		report
 }
 
 // writeFailure explains a write that did not land, in terms the model can act
@@ -2545,18 +2607,18 @@ func positionOf(at statelog.Position) any {
 // seatReadLevel is what every read on this surface uses, and [seatRead] is
 // the same decision in the shape the point readers take.
 //
-// # Why it is a name and not the literal it replaced
+// # Why it is one name and not a literal at each call site
 //
-// Because the literal was `session` at every one of these call sites, each
-// plausible on its own — "the caller sees its own writes" is what a tool
-// wants — and what it produced was the opposite. A session read waits for the
-// caller's own high-water mark, NOTHING here ever populated one, so the wait
-// target was the zero position: the read served this node's committed prefix
-// immediately and labelled the answer `session`. The state-log reader's own
+// Because a literal at each site is a decision made again at each site, and
+// the plausible one is wrong: `session` reads as "the caller sees its own
+// writes", which is what a tool wants, and a session read waits for the
+// caller's own high-water mark — which nothing on this surface holds, so the
+// wait target is the zero position and the read serves this node's committed
+// prefix immediately under the label `session`. The state-log reader's own
 // comment names that shape — "a stale read wearing a stronger name".
 //
-// A seat asked for the strongest guarantee the engine has, was handed the
-// weakest, and could not tell. It has no screen on which to notice, and its
+// A seat asks for the strongest guarantee the engine has and cannot tell
+// when it is handed the weakest. It has no screen on which to notice, and its
 // reads DECIDE things: a create refuses a project the company does not have,
 // a hand-off names a colleague, a turn reports what it found. A seat that
 // reads a stale task and tells a colleague "nobody is assigned to this" has

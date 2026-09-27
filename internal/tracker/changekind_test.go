@@ -12,10 +12,9 @@ import (
 
 // A CHANGE NOBODY IS TOLD ABOUT STILL NAMES WHAT IT WAS.
 //
-// `tracker_history.kind` is what the activity feed's `kinds=` filter, every
-// report window and the unblocked repair's own scan select on — so it is read
-// off the record's own stated kind, never off the NOTIFICATION a quiet record
-// does not carry. Guessed from the OPERATION instead, it would break the
+// `tracker_history.kind` is what the activity feed's `kinds=` filter selects
+// on — so it is read off the record's own stated kind, never off the
+// NOTIFICATION a quiet record does not carry. Guessed from the OPERATION instead, it would break the
 // principle the file that writes the row opens with: the feed is "a complete
 // account of what happened rather than an account of what was announced, and
 // `notified` is how a reader tells "nothing was announced" from "nothing
@@ -254,9 +253,9 @@ func TestAPurgeExcerptKeepsNoCopyOfWhatItDestroyed(t *testing.T) {
 // and a purge must leave that, or it erases that the work ever existed. But the
 // rows also carried what the task SAID: a create's excerpt is its description,
 // a comment's is its body, a title change's deltas name both titles, and every
-// row keeps the whole record it was written from. The purge deleted none of
-// them, so the feed went on showing the content the purge had been asked to
-// destroy. The inbox rows about the task carried the same excerpts.
+// row keeps the whole record it was written from. A purge that left any of
+// them would leave the feed showing the content the purge was asked to
+// destroy, and the inbox rows about the task carry the same excerpts.
 func TestAPurgeLeavesTheHistorysSkeletonAndNoneOfItsContent(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -230,13 +230,13 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 // at all — and reading its absence as "somebody else won" would re-decide
 // against a row that moved because of this very write.
 func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
-	// THE FRAMEWORK'S OWN READER, not a second query against its table.
-	// This one had drifted into looking for a row keyed `id = 'current'`
-	// on a table keyed on `started_at` — which fails on every call with a
-	// missing column rather than reporting no adoption, and the caller
-	// then treats a working node as one that cannot answer for anything.
+	// THE FRAMEWORK'S OWN READER, not a second query against its table:
+	// the table's key and columns are the framework's, and a statement
+	// written here is one that can stop matching them — failing on every
+	// call rather than reporting no adoption, which the caller treats as a
+	// node that cannot answer for anything.
 	//
-	// It is still THE NODE'S OWN ESTATE that is read: an adoption record
+	// It is THE NODE'S OWN ESTATE that is read: an adoption record
 	// is a fact about this machine's history, and a donated snapshot must
 	// not carry the recipient's own.
 	return statelog.AdoptedAt(ctx, g.db)

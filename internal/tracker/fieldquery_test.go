@@ -5,17 +5,12 @@ import (
 	"testing"
 )
 
-// TestTheAllOperatorCountsDistinctMembers is the arm that had no test at all,
-// and a no-op sat inside it saying otherwise.
+// TestTheAllOperatorCountsDistinctMembers holds the `all` arm to its shape.
 //
 // `all` is a COUNT rather than an intersection — one subquery counting the
 // distinct members a task holds from the named set, compared against the size
 // of that set — and the shape that makes it one is a GROUP BY and a HAVING
-// appended INSIDE the subquery's own parentheses. A `strings.Replace` of the
-// select list with itself stood at the head of that arm, left over from a
-// shape that widened the projection, and it read as though the count needed a
-// different SELECT to work. Nothing exercised the arm, so nothing said
-// otherwise.
+// appended INSIDE the subquery's own parentheses.
 func TestTheAllOperatorCountsDistinctMembers(t *testing.T) {
 	t.Parallel()
 	field := resolvedField{

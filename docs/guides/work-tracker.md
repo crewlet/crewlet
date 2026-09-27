@@ -184,16 +184,27 @@ adding a type to make its own create succeed is a seat editing the rules it is
 judged by, and the refusal it was working around is the signal a person needs
 to see.
 
+Each list REPLACES the one it names, so send the whole set. **Restating the
+types or the fields as they are publishes nothing** and moves no policy
+version. A field you name by its id keeps what the tool has no argument for:
+the types it applies to, always, and its default and its configuration beyond
+its options **unless you change its type**. Those two describe a value of the
+old type — a dropdown's `multi`, a number's unit and range, a default written
+for that type — so a retype starts them empty rather than carrying settings the
+new type cannot read. And what a fields write publishes is the declaration it
+merged, checked as a whole: a kept setting the new declaration cannot use is
+refused naming the field, exactly as it would be if you had stated it.
+
 A **project's own** field declarations are the project **lead's**, written with
 `write_project(fields: [...])`. That list REPLACES the project's declarations
 and leaves the workspace's alone — the two are separate scopes and a task's
 effective set is their union — so send the whole set, and read
-`describe_project` first. A field you name by its id keeps what the tool has no
-argument for — the types it applies to, its default and its configuration beyond
-its options — and a list that restates every field as it is changes nothing and
-moves no policy version. A project declaration sharing a workspace field's id
-**shadows** it, which `describe_project` names so a reader can see which
-definition is in force.
+`describe_project` first. A field named by its id keeps what it keeps in the
+workspace catalogue — the types it applies to, and its default and its
+configuration beyond its options unless its type changes — and a list that
+restates every field as it is changes nothing and moves no policy version. A
+project declaration sharing a workspace field's id **shadows** it, which
+`describe_project` names so a reader can see which definition is in force.
 
 ## Tags
 
@@ -276,7 +287,9 @@ the instant are stamped by the engine rather than sent by the caller, because
 an update is an assessment filed under somebody's name on a date. The history
 is carried forward on every save: a goal save is a whole post-state replace,
 and one that dropped the updates would destroy the only part of a goal written
-in prose.
+in prose. For the same reason a save keeps what a newer build wrote on the
+goal and on each target it names by id: the save replaces what the tool can
+state, and a fleet mid-upgrade loses nothing the newer build added.
 
 **A goal holds at most 64 updates, and none is ever dropped.** Every update a
 goal holds comes back whole when the goal is read, and nothing else returns
@@ -955,6 +968,14 @@ tool call to discover. Each names the tool that answers its own question —
 `list_work_goals`, `my_work`. A `purged` wake sends you nowhere for the sharper
 version of the same reason: the row is gone from every node, so the tool would
 answer `not_found`.
+
+**A checklist change tells the owner of each item it touches.** An item is
+news to its assignee when it is added or removed, or when its text, its done
+flag, its owner or the subtask it was promoted into changes — and a reassigned
+item is news to the owner it had as much as to the one it has. Reordering an
+item, or nesting it under another, changes none of those and wakes no item's
+owner. The task's own assignee, collaborators and watchers hear a checklist
+change as they hear any other change to the task.
 
 ## A person's own state
 

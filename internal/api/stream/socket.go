@@ -43,9 +43,9 @@ const (
 	// DISTINCT FROM query_failed because the fault is the caller's, and
 	// the two are acted on in opposite directions — a query_failed is
 	// retried, a bad_params never succeeds however many times it is sent.
-	// Collapsed into query_failed it was a client bug rendered to a person
-	// as an engine fault, retried on every poll, and logged as a WARNING
-	// by the node being asked wrong.
+	// Collapsed into query_failed it would be a client bug rendered to a
+	// person as an engine fault, retried on every poll, and logged as a
+	// WARNING by the node being asked wrong.
 	//
 	// The reason still does not travel — this envelope carries codes and
 	// not prose, for the reason stated above — so the refusal's own
@@ -111,12 +111,11 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			// node rejects, purely to close it politely a moment later,
 			// would let anyone open a socket here.
 			//
-			// It is NOT "close(1008) before accept", which is what this
-			// comment used to claim and what the dashboard was written
-			// against. A close code rides a close FRAME, so a handshake
-			// that never completed cannot carry one: the browser reports
-			// 1006 — indistinguishable from a stopped engine — and hides
-			// the status, so a page cannot port-scan with a socket.
+			// It is NOT "close(1008) before accept": a close code rides a
+			// close FRAME, so a handshake that never completed cannot
+			// carry one. The browser reports 1006 — indistinguishable
+			// from a stopped engine — and hides the status, so a page
+			// cannot port-scan with a socket.
 			//
 			// The client therefore cannot learn this from the socket at
 			// all. It re-asks over plain HTTP, where the status is

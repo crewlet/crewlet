@@ -43,6 +43,10 @@ func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, erro
 			if err := checkRelations(current.ID, *patch.Relations); err != nil {
 				return patch, err
 			}
+			// AND IT KEEPS WHAT ITS CALLER DID NOT RESTATE, on the
+			// gesture's own `set` rule ([carriedRelations]).
+			carried := carriedRelations(*patch.Relations, current.Relations)
+			patch.Relations = &carried
 		}
 		return patch, nil
 	}
@@ -65,14 +69,23 @@ func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, erro
 	// again — and a stamp written back onto the caller's own intent would
 	// make the second round's record carry the first round's instant, for
 	// every path that reuses an intent value.
+	//
+	// A WHOLE SET'S EDGES ARE STAMPED TOO, because an edge it names that the
+	// task does not hold is one this write authors. An edge it restates
+	// takes the stored stamp instead ([carriedRelations]): restating an
+	// edge is not authoring it. Cloning keeps a `set` that is empty and
+	// non-nil exactly that, which is what clears the collection.
 	stamped := *patch.Relate
 	stamped.Add = slices.Clone(stamped.Add)
-	for i, add := range stamped.Add {
-		if add.CreatedBy == "" {
-			stamped.Add[i].CreatedBy = w.Actor
-		}
-		if add.CreatedAt.IsZero() {
-			stamped.Add[i].CreatedAt = w.Now()
+	stamped.Set = slices.Clone(stamped.Set)
+	for _, edges := range [][]Relation{stamped.Add, stamped.Set} {
+		for i, edge := range edges {
+			if edge.CreatedBy == "" {
+				edges[i].CreatedBy = w.Actor
+			}
+			if edge.CreatedAt.IsZero() {
+				edges[i].CreatedAt = w.Now()
+			}
 		}
 	}
 	next, err := stamped.resolve(current)
@@ -96,7 +109,7 @@ func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
 				"removed — a caller states one or the other",
 				current.ID, len(r.Add), len(r.Remove))
 		}
-		return dedupeRelations(r.Set), nil
+		return carriedRelations(dedupeRelations(r.Set), current.Relations), nil
 	}
 	next := slices.Clone(current.Relations)
 	for _, drop := range r.Remove {
@@ -167,6 +180,48 @@ func dedupeRelations(in []Relation) []Relation {
 		}
 		seen[e] = true
 		out = append(out, r)
+	}
+	return out
+}
+
+// carriedRelations is a whole set a caller states, each edge laid onto the
+// stored edge it restates — the same (Kind, Other), which is an edge's
+// identity.
+//
+// THE SET AND THE NOTE ON EACH EDGE ARE THE CALLER'S. Three things are the
+// stored edge's, because a restatement is not an authoring and the caller
+// holds no honest value for any of them:
+//
+//   - what a newer build wrote on the edge, which this build carries
+//     ([Relation.Extra]) and no caller built from this build's types can
+//     state — a caller that carries a member of its own overlays it;
+//   - who authored the edge and when, which the writer stamped on the write
+//     that added it;
+//   - [Relation.OneSidedFinal], the repair duty's decision that the mirror
+//     will never be written, which the duty states with its own gesture
+//     ([RelationIntent.Final]). Removing the edge is what retires it; a
+//     restatement that cleared it would hand the duty an edge it already
+//     gave up on.
+//
+// A NEW LIST, so a decide that runs again finds the caller's as it left it.
+func carriedRelations(stated, stored []Relation) []Relation {
+	type edge struct {
+		kind  RelationKind
+		other string
+	}
+	held := make(map[edge]Relation, len(stored))
+	for _, r := range stored {
+		held[edge{r.Kind, r.Other}] = r
+	}
+	out := slices.Clone(stated)
+	for i, r := range out {
+		was, named := held[edge{r.Kind, r.Other}]
+		if !named {
+			continue
+		}
+		out[i].CreatedBy, out[i].CreatedAt = was.CreatedBy, was.CreatedAt
+		out[i].OneSidedFinal = was.OneSidedFinal || r.OneSidedFinal
+		out[i].Extra = carriedOnto(was.Extra, r.Extra)
 	}
 	return out
 }

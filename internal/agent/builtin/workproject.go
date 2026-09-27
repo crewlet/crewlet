@@ -80,7 +80,11 @@ func (t *writeProject) Description() string {
 		"create_work_item refuses one this project does not have. Renaming or " +
 		"archiving a tag, declaring project fields and setting the default " +
 		"assignee are the project lead's; archiving " +
-		"the project itself takes a person. A project's name, purpose and " +
+		"the project itself takes a person. `fields` REPLACES the project's " +
+		"own declarations, and a field you name by its id keeps the types it " +
+		"applies to — and, unless you change its type, its default and its " +
+		"configuration beyond its options. Restating the fields as they are " +
+		"changes nothing. A project's name, purpose and " +
 		"owning unit come from the org chart and are not writable here."
 }
 

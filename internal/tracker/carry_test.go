@@ -382,7 +382,9 @@ func TestAChecklistItemIsNewsOnlyOnWhatItsAssigneeReads(t *testing.T) {
 
 // storedDeclaration is a field as a newer build left it: a member this build
 // does not know on the declaration, its configuration and one of its options,
-// and the members a tool has no argument for.
+// and the members a tool has no argument for. It is a declaration the
+// validator accepts — a dropdown that holds several — because a fields write
+// validates what it publishes, the kept members included.
 func storedDeclaration() tracker.FieldDef {
 	return tracker.FieldDef{
 		ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldDropdown,
@@ -390,7 +392,7 @@ func storedDeclaration() tracker.FieldDef {
 		Config: tracker.FieldConfig{
 			Options: []tracker.Option{{ID: "o-high", Slug: "high", Name: "High",
 				Extra: map[string]json.RawMessage{"lane": json.RawMessage(`"option"`)}}},
-			Unit:  "sev",
+			Multi: true,
 			Extra: map[string]json.RawMessage{"lane": json.RawMessage(`"config"`)},
 		},
 		CreatedBy: "bo",
@@ -418,7 +420,7 @@ func keptDeclaration(t *testing.T, r *roundTrip, table, key, column, prefix stri
 		prefix + ".lane":                    "field",
 		prefix + ".config.lane":             "config",
 		prefix + ".config.options[0].lane":  "option",
-		prefix + ".config.unit":             "sev",
+		prefix + ".config.multi":            "1",
 		prefix + ".applies_to[0]":           "bug",
 		prefix + ".default":                 "o-high",
 		prefix + ".created_by":              "bo",

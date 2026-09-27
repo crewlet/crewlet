@@ -138,8 +138,8 @@ func TestRepeatedTailDragsDoNotConsumeTheCreateLattice(t *testing.T) {
 //
 // The proof mentions no counter, no high-water mark, no staleness and no
 // in-flight create — which is why it survives out-of-order create landings
-// and head placements, on which the bound this replaces failed with no
-// concurrency at all.
+// and head placements, both of which put a key somewhere a bound stated over
+// a counter does not expect it.
 func TestTheTwoMintSetsAreDisjointByShape(t *testing.T) {
 	t.Parallel()
 	// Every create's key.

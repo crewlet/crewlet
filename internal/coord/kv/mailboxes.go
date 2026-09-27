@@ -25,6 +25,10 @@ import (
 type mailboxRecord struct {
 	AbsentSince   *time.Time `json:"absent_since,omitempty"`
 	RetiringSince *time.Time `json:"retiring_since,omitempty"`
+
+	// Extra is every member of the row this build does not know, written
+	// back beside the ones it does (carry.go).
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 func encodeMailbox(rec coord.MailboxRecord) ([]byte, error) {

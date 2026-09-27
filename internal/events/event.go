@@ -24,8 +24,18 @@
 // into `any` yields a float64, so a 19-digit id or any integer past 2^53 would
 // be silently rewritten — in a known payload as much as an unknown one, since
 // the envelope and the typed body both go round the merge on every publish.
-// The one bag of `any` an event holds, [Event.Payload], decodes each number as
-// a [encoding/json.Number] for the same reason.
+//
+// A BAG OF `any` IS EXACT WHERE ITS TYPE MAKES IT SO. [Event.Payload], and
+// every payload member declared as a [jsoncarry.Bag], decode each number as a
+// [encoding/json.Number] for the same reason. A payload member declared as a
+// plain map[string]any decodes each as a float64: the body of a
+// [github.com/crewlet/crewlet/internal/events/types.RawWebhook] is one on
+// purpose, since the parsers reading a number out of it assert float64, and
+// the delivery's exact bytes travel beside it where its publisher had them;
+// the per-call and per-round maps a turn's events carry,
+// [github.com/crewlet/crewlet/internal/events/types.ToolExecution] and
+// [github.com/crewlet/crewlet/internal/events/types.RoundNarration], are the
+// others.
 package events
 
 import (

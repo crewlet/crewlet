@@ -13,23 +13,30 @@
 // consumer over it is what eventually reaches a seat. A node that dies
 // between the write and the publish costs a redelivery, not a lost wake.
 //
-// # Why the estate is a seam and not a family
+// # Why the estate is a seam
 //
-// This package once spoke the coordination estate's own vocabulary — a
-// document family, a bucket key class, a change record — and those types are
-// gone with the last projector, so the names below are history rather than
-// links. A durable record does not have to live in a bucket: a state
-// machine's LOG is the other shape, and a log delivery has no family, no key
-// class and no change. Manufacturing a family for one would have been worse
-// than the vocabulary it fixed, because a family was also what started a
-// projector — the engine would have stood one up over a bucket that did not
-// exist.
+// Every estate a feed reads is a state-log domain's LOG, and this package
+// knows none of them: a [Source] names the estate as a STRING, an [Opener]
+// opens one durable consumer over it, and a [Record] is one delivered record.
+// Each domain supplies its own Opener, so which broker a log lives on is the
+// engine's business and what a record means is the domain's, and this package
+// holds only what every estate shares — the rules below.
 //
-// So the seam is one level up. A [Source] names the estate as a STRING, an
-// [Opener] opens one durable consumer over it, and a [Record] is one delivered
-// change from either — the bucket adapter is [DocumentSource] here, and a log
-// domain supplies its own. Everything below this comment is unchanged by that
-// and is why the package exists.
+// # Why a wake carries its body twice
+//
+// A wake crosses the broker to whichever node routes it, and that node decodes
+// the body as a map of `any`, where every number is a float64 — so an integer
+// past 2^53 in a record, a composed version among them, reaches its parser
+// rounded. A wake therefore carries its body a second time as that body's own
+// bytes, whose numbers are the writer's digits, and the domain's parser
+// decodes those. The map stays because it is what every parser reads, a build
+// that predates the bytes among them.
+//
+// The second copy is base64, so a wake is about seven-thirds of its record, and
+// a wake past the transport's ceiling is refused at publish and circles for
+// ever. Each domain holds its largest record to that: the tracker's
+// TestACommitAtItsDesignMaximumStillWakes and the knowledge base's
+// TestACreateAtEveryCapStillWakes measure the wake at every cap.
 //
 // # Why a group and not a duty
 //
@@ -57,6 +64,7 @@ package changefeed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -86,15 +94,15 @@ const ClaimTTL = 5 * time.Minute
 //
 // Two seconds: long enough that a broker reconnect or a leader election
 // completes inside one delay rather than being retried through, short enough
-// that a person waiting on a notification does not notice. The consumer's own
-// redelivery cap is what ends a change that keeps failing.
+// that a person waiting on a notification does not notice. It is also the only
+// pacing a record that keeps failing gets, since nothing caps its redeliveries
+// (see [Feed.handle]).
 const nakDelay = 2 * time.Second
 
 // Source identifies the estate a feed reads.
 //
-// A STRING, because every estate this reads is now a LOG: the document
-// families it was written against are gone, and a log delivery has no family,
-// no key class and no change record to name one with.
+// A STRING, because an estate is a domain's log, and a log has no name this
+// package could derive one from.
 type Source struct {
 	// Name is the notification source a parser registers under, and the
 	// scope of this estate's claim keys — "work", "page", "tracker".
@@ -106,19 +114,15 @@ type Source struct {
 	// first had not handled.
 	//
 	// EACH ESTATE DECLARES ITS OWN, as a constant beside the translator
-	// that reads it. The helper that used to derive one from a document
-	// family is gone with the families — and what it was for survives as
-	// a rule rather than a function: a name is chosen once and never
-	// improved.
+	// that reads it, and a name is chosen once and never improved.
 	Group string
 }
 
 // Opener opens one durable consumer over an estate.
 //
-// DECLARED HERE, by the consumer, and satisfied by [DocumentSource] for a
-// bucket family and by a state log's own domain for a log. The group name is
-// passed rather than held so there is exactly one place it comes from — the
-// translator's own [Source].
+// DECLARED HERE, by the consumer, and satisfied by each state-log domain over
+// its own log. The group name is passed rather than held so there is exactly
+// one place it comes from — the translator's own [Source].
 type Opener interface {
 	Open(ctx context.Context, group string) (Records, error)
 }
@@ -151,50 +155,36 @@ type Message struct {
 	Nak func(delay time.Duration) error
 }
 
-// Record is one delivered change, whatever estate it came from.
+// Record is one delivered log record.
 type Record struct {
-	// ID is the estate's own identity for this delivery: a create-only
-	// bucket key, or a log record's operation id. Stable across
-	// redeliveries, which is what lets a translator that has no id of its
-	// own use it as one.
+	// ID is the record's operation id, read off the envelope every build
+	// can decode. Stable across redeliveries, which is what lets a
+	// translator that has no id of its own use it as one.
 	ID string
 
-	// Position is the delivery's place in its estate — the composed log
-	// position, or the bucket revision.
+	// Position is the delivery's place in its log.
 	//
-	// # Why the three fields below travel with it
+	// # Why the two fields below travel with it
 	//
 	// A position alone is only comparable against the same stream and the
 	// same generation. The node that WINS a message is rarely the node
 	// that runs the woken seat, and a reanchor renumbers a log — so a
 	// wake stamped with a bare position is a number the woken node cannot
-	// safely compare with its own. A bucket feed leaves them empty and
-	// zero, which is the honest answer for an estate that has neither.
+	// safely compare with its own.
 	Position uint64
 
-	// Stream is the log's stream name, empty for a bucket feed.
+	// Stream is the log's stream name.
 	Stream string
 
-	// Gen is the log's generation, zero for a bucket feed.
+	// Gen is the log's generation.
 	Gen uint64
 
-	// Key is the bucket key, or the subject, this delivery arrived on. For
-	// diagnosis, and for a translator that parses it.
+	// Key is the subject this delivery arrived on. For diagnosis, and for
+	// a translator that parses it.
 	Key string
 
 	// Payload is the record's bytes, verbatim.
 	Payload []byte
-
-	// Removed marks a delivery that says the record is GONE rather than
-	// carrying one — a retention sweep or an operator's delete on the
-	// bucket estate. A log never produces one: its records are its
-	// history.
-	//
-	// The framework acks it and never translates it, because the decision
-	// is the same in every estate and cannot be otherwise: the wake this
-	// record once produced was delivered when it was written, and there is
-	// nothing left to derive a second one from.
-	Removed bool
 }
 
 // Publisher is the queue surface this package publishes wakes through.
@@ -238,6 +228,11 @@ type Delivery struct {
 	// so the node that wins a feed message routes without reading anything
 	// — a projection that had not caught up would otherwise route from a
 	// stale head, or block the feed until it had.
+	//
+	// A NUMBER IN IT IS A [encoding/json.Number] or a Go integer, never a
+	// float64 a decode produced: the feed publishes this map's own
+	// encoding as the wake's exact bytes ([types.RawWebhook.BodyRaw]), so
+	// a number rounded here reaches every parser rounded.
 	Body map[string]any
 
 	// ID is the record's own id, used for the claim and as the seed of
@@ -336,24 +331,24 @@ func (f *Feed) Run(ctx context.Context) error {
 
 // handle processes one message, settling it exactly once.
 func (f *Feed) handle(ctx context.Context, msg *Message) {
-	if msg.Removed {
-		// The record is gone. Nothing to tell anybody: the wake it once
-		// produced was delivered when it was written.
-		log.DebugContext(ctx, "changefeed_record_removed", "key", msg.Key)
-		f.ack(ctx, msg)
-		return
-	}
 	body, wake, err := f.translator.Translate(ctx, msg.Record)
+	var ev *events.Event
+	if err == nil && wake {
+		// BUILT BEFORE THE CLAIM, so a body that cannot be encoded is a
+		// record this build cannot translate, handled as one below, and
+		// never a claim taken for a wake that was never published.
+		ev, err = Wake(f.translator.Source().Name, body)
+	}
 	if err != nil {
 		// A translation failure is a RECORD THIS BUILD CANNOT READ, and a
 		// redelivery will not make it readable. It is naked all the same,
 		// because the alternative — acking — would drop a wake permanently
 		// on a build that is about to be upgraded past the problem.
 		//
-		// AND NOTHING ENDS IT. Both domain consumers set `MaxDeliver: -1`
-		// deliberately (see [jetstream] — a budget that ran out would drop
-		// a wake silently), so this record circles at the head of the
-		// consumer with every wake behind it waiting. That is the right
+		// AND NOTHING ENDS IT. A domain's feed group caps no redelivery,
+		// deliberately — a budget that ran out would drop a wake silently —
+		// so this record circles at the head of the consumer with every
+		// wake behind it waiting. That is the right
 		// trade and it has NO OTHER SYMPTOM: the feed simply stops moving,
 		// on a fleet whose every other surface is healthy. So it is
 		// counted, and the count is what `feed_unreadable` fires on.
@@ -369,8 +364,8 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 	}
 	if !wake {
 		// A DECISION IS HANDLING. A quiet import, a draft, an actor-only
-		// change: acked, because naking would circle it to the
-		// dead-letter path for having been handled correctly.
+		// change: acked, because a nak would bring it back for ever for
+		// having been handled correctly.
 		f.ack(ctx, msg)
 		return
 	}
@@ -381,8 +376,6 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 		return
 	}
 
-	ev := events.New(types.RawWebhook{Body: body.Body, Handle: body.Actor}, events.NewTrace())
-	ev.Source = f.translator.Source().Name
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
 		// THE CLAIM IS RELEASED BEFORE THE NAK. A claim held over a
 		// delivery that never published would make the redelivery skip
@@ -395,6 +388,25 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 		return
 	}
 	f.ack(ctx, msg)
+}
+
+// Wake is the event one delivery from a source's feed publishes on the inbound
+// topic: the body as the map every parser reads, and as that map's own
+// encoding, whose numbers are the writer's digits — see the package doc for
+// why both.
+//
+// EXPORTED because it is the whole of what a parser downstream of a feed
+// receives, so a parser's own tests decode what this builds rather than a
+// copy of it.
+func Wake(source string, d Delivery) (*events.Event, error) {
+	exact, err := json.Marshal(d.Body)
+	if err != nil {
+		return nil, fmt.Errorf("changefeed: encode the %s delivery %s: %w", source, d.ID, err)
+	}
+	ev := events.New(types.RawWebhook{Body: d.Body, BodyRaw: exact, Handle: d.Actor},
+		events.NewTrace())
+	ev.Source = source
+	return ev, nil
 }
 
 // claim reports whether this node should publish the wake.

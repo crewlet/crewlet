@@ -771,6 +771,11 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// covered. This branch is also the renew path — a claim
 			// doubles as one.
 			value.Epoch = mine.value.Epoch
+			// THE SAME TENURE, so what the held record carries is carried
+			// on. A takeover below is a new tenure and carries nothing: a
+			// member a previous holder's build wrote describes that
+			// holder.
+			value.Extra = mine.value.Extra
 			if opts.Preferred != "" && opts.Preferred != mine.value.Preferred {
 				// The hint moved without the tenure moving. Pin it on
 				// the persistent record FIRST, so the epoch bucket is
@@ -1263,7 +1268,11 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 			return 0, "", fmt.Errorf("%w: decode epoch record for %s: %w",
 				coord.ErrUnavailable, resource, err)
 		}
-		next := resourceValue{Resource: resource, Epoch: cur.Epoch + 1, Preferred: cur.Preferred}
+		// THE DECODED ROW, moved on, so a member a newer build keeps on
+		// the resource is written back rather than dropped by whichever
+		// build claims it next.
+		next := cur
+		next.Resource, next.Epoch = resource, cur.Epoch+1
 		if preferred != "" {
 			next.Preferred = preferred
 		}

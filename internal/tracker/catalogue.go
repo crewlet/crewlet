@@ -74,8 +74,8 @@ var builtinTypes = []TaskType{
 //
 // EVERY COMPANY HAS IT, because it is a builtin and a catalogue adds to the
 // builtins rather than replacing them — so this default can never name a type
-// the company does not declare. `create_work_item` has always told a model
-// "`task` if you are unsure", and this is where that is true.
+// the company does not declare. `create_work_item` tells a model "`task` if
+// you are unsure", and this is where that is true.
 const DefaultTaskType = "task"
 
 // BuiltinTypes is what this build ships, copied so a caller cannot edit it.
@@ -172,6 +172,13 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 				// move: a task's policy stamp records the declarations
 				// it was validated against, and these are those.
 				return statelog.Decision{Version: int64(current.Version)}, nil
+			}
+			// THE POST-IMAGE IS WHAT IS PUBLISHED, so it is what the
+			// validator judges: the check before the snapshot saw the
+			// caller's list, and the merge adds what the stored
+			// declaration kept — which the caller's list never held.
+			if err := checkFields(merged); err != nil {
+				return statelog.Decision{}, err
 			}
 			// THE STORED DOCUMENT WITH ITS FIELDS REPLACED, so a member a
 			// newer build wrote on the catalogue itself is kept.
@@ -442,6 +449,22 @@ func checkOptions(f *FieldDef) error {
 //   - what the caller leaves [FieldDef.Unstated];
 //   - who declared it and when, which a later edit does not change.
 //
+// # A retype starts the type's own settings empty
+//
+// The default and every member of the configuration but the options describe
+// a value OF THE STORED TYPE: a dropdown's `multi`, a number's unit and
+// range, a date's time flag, a default written for that type. Laid onto a
+// declaration of another type they describe nothing it holds: a knob the new
+// type has no use for is one [checkFields] refuses stated outright, and the
+// coercion honours what the declaration says — a number carrying `multi`
+// takes a list. So when the stated
+// type differs from the stored one, what the caller leaves unstated of those
+// is empty rather than carried, members a newer build wrote on the
+// configuration included; a caller with no argument for them has nothing to
+// restate them with, and the new type's own settings are a later edit's.
+// The types it applies to and the options are not settings of a type, and
+// follow the rules above whatever the type.
+//
 // Everything else is the caller's. It writes into neither list, since a
 // decide that runs again must find the caller's as it left it.
 func mergeFields(stored, stated []FieldDef) []FieldDef {
@@ -463,21 +486,25 @@ func mergeFields(stored, stated []FieldDef) []FieldDef {
 		if unstated.AppliesTo {
 			f.AppliesTo = slices.Clone(was.AppliesTo)
 		}
-		if unstated.Default {
+		sameType := f.Type == was.Type
+		if unstated.Default && sameType {
 			f.Default = slices.Clone(was.Default)
 		}
-		if unstated.Config {
+		if unstated.Config && sameType {
 			options := f.Config.Options
 			f.Config = was.Config
+			f.Config.Tracking = slices.Clone(was.Config.Tracking)
 			f.Config.Options = options
 		}
 		f.CreatedBy, f.CreatedAt = was.CreatedBy, was.CreatedAt
 		f.Extra = carriedOnto(was.Extra, f.Extra)
-		f.Config.Extra = carriedOnto(was.Config.Extra, f.Config.Extra)
-		if f.Config.Rollup != nil && was.Config.Rollup != nil {
-			rollup := *f.Config.Rollup
-			rollup.Extra = carriedOnto(was.Config.Rollup.Extra, rollup.Extra)
-			f.Config.Rollup = &rollup
+		if sameType {
+			f.Config.Extra = carriedOnto(was.Config.Extra, f.Config.Extra)
+			if f.Config.Rollup != nil && was.Config.Rollup != nil {
+				rollup := *f.Config.Rollup
+				rollup.Extra = carriedOnto(was.Config.Rollup.Extra, rollup.Extra)
+				f.Config.Rollup = &rollup
+			}
 		}
 		options := make(map[string]Option, len(was.Config.Options))
 		for _, o := range was.Config.Options {

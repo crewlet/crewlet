@@ -43,8 +43,7 @@ func documentSelect(s Subject) (query string, args []any, err error) {
 		// THE COLUMN IS THE WRITE'S OWN. Each of these tables keys on
 		// the word its subject means — a project on its `key`, a tag set
 		// on the project it belongs to, a catalogue on its `name` — and
-		// the catalogue's was spelled `id` here against a table that has
-		// no such column, so the first read of one failed at runtime.
+		// [Applier.upsertDocument] writes the key into that same column.
 		column := map[string]string{
 			"tracker_projects":   "key",
 			"tracker_tagsets":    "project_key",
@@ -56,12 +55,9 @@ func documentSelect(s Subject) (query string, args []any, err error) {
 		return `SELECT document, version FROM ` + table + ` WHERE id = ?`,
 			[]any{key}, nil
 	}
-	// NOT tracker_persons, and its absence here is the point: that table
-	// stores no `document` column at all — a person's record is exploded
-	// into columns and nothing keeps the blob — so this statement would
-	// fail with "no such column: document" the first time anything read
-	// one. [readPerson] reassembles it from the columns instead, for the
-	// reason [readCounter] gives for the same shape.
+	// NOT tracker_persons: a row applied before that table had a
+	// `document` column holds none, and a person is then its columns.
+	// [readPerson] reads both and decides which one is the person.
 	return "", nil, fmt.Errorf("tracker: %s has no document read", s.Kind)
 }
 
@@ -109,11 +105,13 @@ func readTagSet(ctx context.Context, tx *sql.Tx, project string) (TagSet, bool, 
 
 // readPerson reads one person's own state.
 //
-// ITS OWN STATEMENT rather than [readDocument], because a person is not a
-// whole-document object: `tracker_persons` carries no `document` column — the
-// applier explodes the record into columns and keeps no blob — so the generic
-// read would have failed on a column that has never existed. The counter is
-// the other table of this shape and says the same thing.
+// ITS OWN STATEMENT rather than [readDocument], because a row need not hold a
+// document: `tracker_persons` gained its `document` column after rows were
+// already being applied into it, and a row applied before then is the person
+// as its columns — which is all a build that predates the column ever reads.
+// So the document is the person when the row holds one, because it is what
+// the record carried, members this build does not know included; and the
+// columns are the person when it does not.
 //
 // AN ABSENT PERSON IS NOT AN ERROR. Everyone starts without a row: the first
 // thing that writes one is that person's first gesture, so "no row" is the
@@ -123,21 +121,33 @@ func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, e
 	var seenSeq int64
 	var setAt int64
 	var version int64
-	var read, unread, snoozed, reasons, priorities, pins, favorites []byte
+	var read, unread, snoozed, reasons, priorities, pins, favorites, document []byte
 	switch err := tx.QueryRowContext(ctx, `
 		SELECT generation, seen_through, seen_through_stream, read_json,
 		       unread_json, snoozed_json, primary_reasons_json, priorities_json,
 		       pinned_views_json, favorites_json, priorities_set_by,
-		       priorities_set_at, version
+		       priorities_set_at, version, document
 		FROM tracker_persons WHERE handle = ?`, handle).
 		Scan(&person.Generation, &seenSeq, &person.SeenThrough.Stream, &read,
 			&unread, &snoozed, &reasons, &priorities, &pins, &favorites,
-			&person.PrioritiesSetBy, &setAt, &version); {
+			&person.PrioritiesSetBy, &setAt, &version, &document); {
 	case errors.Is(err, sql.ErrNoRows):
 		return Person{V: DocumentVersion, Handle: handle}, false, nil
 	case err != nil:
 		return Person{}, false, fmt.Errorf("tracker: read %s's own state: %w",
 			handle, err)
+	}
+	if len(document) > 0 {
+		var stored Person
+		if err := json.Unmarshal(document, &stored); err != nil {
+			return Person{}, false, fmt.Errorf("tracker: decode %s's own "+
+				"state: %w", handle, err)
+		}
+		// THE ROW'S VERSION, never the document's, as [readDocument]
+		// fills it: the record carries the version its writer read, and
+		// the row carries the position that applied it.
+		stored.Version = uint64(version)
+		return stored, true, nil
 	}
 	person.V, person.Handle = DocumentVersion, handle
 	person.Version = uint64(version)
@@ -210,17 +220,6 @@ func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error
 	return task, true, nil
 }
 
-// readSubtree is every descendant of a root task, ORDERED BY (depth, id).
-//
-// # Why the order is part of the answer
-//
-// A cross-project move assigns each descendant a key from one minted range,
-// and a duty completing an abandoned walk on another node has to assign the
-// SAME key to the same descendant. The base rides the root's record; this
-// ordering is the other half, and it is by (depth, id) because both are
-// stable: a depth is a fact about the tree and an id never changes, while
-// anything ordered by a rank or a title would re-order under an edit somebody
-// made while the walk ran.
 // readChildBatch is one batch of a task's DIRECT children.
 //
 // # Why direct children rather than the subtree
@@ -261,6 +260,17 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
 	return scanSubtree(rows, parent)
 }
 
+// readSubtree is every descendant of a root task, ORDERED BY (depth, id).
+//
+// # Why the order is part of the answer
+//
+// A cross-project move assigns each descendant a key from one minted range,
+// and a duty completing an abandoned walk on another node has to assign the
+// SAME key to the same descendant. The base rides the root's record; this
+// ordering is the other half, and it is by (depth, id) because both are
+// stable: a depth is a fact about the tree and an id never changes, while
+// anything ordered by a rank or a title would re-order under an edit somebody
+// made while the walk ran.
 func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
 	rows, err := tx.QueryContext(ctx, `
 		WITH RECURSIVE descendants(id, depth) AS (

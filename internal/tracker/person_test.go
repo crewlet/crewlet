@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -314,5 +315,176 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 		[]tracker.Favorite{{Kind: "project"}})
 	if err == nil || !strings.Contains(err.Error(), "points at nothing") {
 		t.Fatalf("a favourite with no id was accepted: %v", err)
+	}
+}
+
+// A PERSON KEEPS WHAT A NEWER BUILD WROTE ON IT, across a write this build
+// decides.
+//
+// A person write starts from the stored row. Read back from its columns alone,
+// a member a newer build wrote on the person has nowhere to come from, and nor
+// does the seen-through position's generation — so the next pin or inbox mark
+// this node decided would publish the person without them, and every node
+// would drop them. The row keeps the record's person, and the read decodes it.
+//
+// Mutation: leave `document` out of the person upsert, or skip it in
+// readPerson, and the generation reads zero and the newer member is gone after
+// the pins write.
+func TestAPersonKeepsWhatANewerBuildWroteOnIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	newer := map[string]json.RawMessage{"lane": json.RawMessage(`"newer"`)}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-newer",
+		tracker.PersonSubject("ana"), "", tracker.Person{
+			V: tracker.DocumentVersion, Handle: "ana", UpdatedAt: wednesday,
+			SeenThrough: tracker.Position{
+				Stream: "CREWLET_TRACKER_LOG", Generation: 3, Seq: 5, Extra: newer,
+			},
+			PinnedViews: []string{"v-1"},
+			Extra:       newer,
+		}, tracker.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("store the newer person: %v", err)
+	}
+	r.drain()
+	if got := r.person("ana").SeenThrough; got.Generation != 3 || got.Seq != 5 {
+		t.Errorf("the person reads seen through %+v, want generation 3 at 5", got)
+	}
+
+	if _, err := r.writer.WritePins(t.Context(), "op-pins", "ana",
+		[]string{"v-1", "v-2"}, nil); err != nil {
+		t.Fatalf("pin another view: %v", err)
+	}
+	r.drain()
+	for path, want := range map[string]string{
+		"$.lane":                    "newer",
+		"$.seen_through.lane":       "newer",
+		"$.seen_through.generation": "3",
+		"$.pinned_views[1]":         "v-2",
+	} {
+		got := r.strings(`SELECT COALESCE(json_extract(CAST(document AS TEXT), '` +
+			path + `'), '') FROM tracker_persons WHERE handle = 'ana'`)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("after the pins write the person holds %s = %q, want %q",
+				path, got, want)
+		}
+	}
+}
+
+// A PERSON ROW WITH NO DOCUMENT IS READ FROM ITS COLUMNS.
+//
+// A row applied before `tracker_persons` had a document column holds none,
+// and it is the whole of what a build that predates the column wrote — so it
+// reads as the person its columns say, and the next write on it carries a
+// document from then on.
+//
+// Mutation: decode the document unconditionally in readPerson and the read
+// of the older row fails.
+func TestAPersonRowWithNoDocumentIsReadFromItsColumns(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WritePins(t.Context(), "op-pins", "ana",
+		[]string{"v-1"}, []tracker.Favorite{{Kind: "project", ID: "ENG"}}); err != nil {
+		t.Fatalf("WritePins: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.WriteInbox(t.Context(), "op-inbox", "ana", nil,
+		[]tracker.InboxEntry{{RecordID: "rec-1", Position: 9}}, nil, nil,
+		tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 3}); err != nil {
+		t.Fatalf("WriteInbox: %v", err)
+	}
+	r.drain()
+	if _, err := r.db.Replicated().SQL().ExecContext(t.Context(),
+		`UPDATE tracker_persons SET document = NULL WHERE handle = 'ana'`); err != nil {
+		t.Fatalf("take the document off the row: %v", err)
+	}
+
+	got := r.person("ana")
+	switch {
+	case !got.Held:
+		t.Fatal("a row with no document reads as nobody")
+	case len(got.PinnedViews) != 1 || len(got.Favorites) != 1:
+		t.Fatalf("the pins read %v and %v, want what the columns hold",
+			got.PinnedViews, got.Favorites)
+	case len(got.Unread) != 1 || got.SeenThrough.Seq != 3:
+		t.Fatalf("the inbox reads %v seen through %+v, want what the columns hold",
+			got.Unread, got.SeenThrough)
+	}
+
+	if _, err := r.writer.WritePriorities(t.Context(), "op-prio", "ana",
+		[]string{"t-1"}, tracker.PersonAuthority{}); err != nil {
+		t.Fatalf("WritePriorities: %v", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT COALESCE(json_extract(CAST(document AS TEXT),
+		'$.pinned_views[0]'), '') FROM tracker_persons WHERE handle = 'ana'`); len(got) != 1 || got[0] != "v-1" {
+		t.Errorf("the next write's document holds pinned view %q, want the "+
+			"one the columns held", got)
+	}
+}
+
+// RESTATING A PERSON AS IT IS PUBLISHES NOTHING.
+//
+// A screen that submits every control restates the inbox or the pins as they
+// stand, and a record whose only change is the instant it was written would
+// take the person's subject from every write racing it for nothing. A change,
+// even one entry, publishes.
+//
+// Mutation: drop the comparison in writePersonNotifying and every restatement
+// publishes.
+func TestRestatingAPersonAsItIsPublishesNothing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	pins := func(op string, views ...string) tracker.WriteResult {
+		t.Helper()
+		result, err := r.writer.WritePins(t.Context(), op, "ana", views,
+			[]tracker.Favorite{{Kind: "project", ID: "ENG"}})
+		if err != nil {
+			t.Fatalf("WritePins: %v", err)
+		}
+		r.drain()
+		return result
+	}
+	inbox := func(op string) tracker.WriteResult {
+		t.Helper()
+		result, err := r.writer.WriteInbox(t.Context(), op, "ana",
+			[]tracker.InboxEntry{{RecordID: "rec-1", Position: 8}},
+			[]tracker.InboxEntry{{RecordID: "rec-2", Position: 9}}, nil,
+			[]tracker.Reason{tracker.ReasonMention},
+			tracker.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 3})
+		if err != nil {
+			t.Fatalf("WriteInbox: %v", err)
+		}
+		r.drain()
+		return result
+	}
+	priorities := func(op string) tracker.WriteResult {
+		t.Helper()
+		result, err := r.writer.WritePriorities(t.Context(), op, "ana",
+			[]string{"t-1", "t-2"}, tracker.PersonAuthority{})
+		if err != nil {
+			t.Fatalf("WritePriorities: %v", err)
+		}
+		r.drain()
+		return result
+	}
+	for _, write := range []struct {
+		name  string
+		write func(op string) tracker.WriteResult
+	}{
+		{"the pins", func(op string) tracker.WriteResult { return pins(op, "v-1") }},
+		{"the inbox", inbox},
+		{"the priorities", priorities},
+	} {
+		first := write.write("op-" + write.name)
+		if first.Position.Seq == 0 {
+			t.Fatalf("the first write of %s published nothing", write.name)
+		}
+		if again := write.write("op-again-" + write.name); again.Position.Seq != 0 {
+			t.Errorf("restating %s as they are published a record at %+v",
+				write.name, again.Position)
+		}
+	}
+	if changed := pins("op-change", "v-1", "v-2"); changed.Position.Seq == 0 {
+		t.Error("a pin added to the list published nothing")
 	}
 }

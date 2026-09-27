@@ -105,8 +105,8 @@ func TestAnActivitySearchIsRefusedByWhatItWouldScan(t *testing.T) {
 		}
 	}
 
-	// (b) A PROJECT WITH NO WINDOW is refused too, which is the half the
-	// name-shaped gate let through.
+	// (b) A PROJECT WITH NO WINDOW is refused too: it names a narrowing
+	// key and still reads the project's whole history.
 	if _, err := r.reader.Activity(t.Context(), tracker.ActivityQuery{
 		Q: "deploy", Project: "ENG", Level: statelog.ReadStale,
 	}, wednesday); err == nil {

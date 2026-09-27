@@ -501,11 +501,11 @@ var ErrTooBroad = errors.New("tracker: this query selects more rows than the ans
 //
 // # A BOUNDED COUNT, never a test for the presence of a filter key
 //
-// The gate this replaces refused a workspace grouping "without a narrowing
-// filter — a status_group, an assignee, a unit or a date bound", and
-// `status_group=not_started,active` satisfies that while narrowing nothing:
-// every open task is already in it. A gate that tests a NAME is one a caller
-// learns to satisfy in a single attempt without making the query any cheaper.
+// NOT a demand for "a narrowing filter — a status_group, an assignee, a unit
+// or a date bound": `status_group=not_started,active` satisfies that while
+// narrowing nothing, since every open task is already in it. A gate that tests
+// a NAME is one a caller learns to satisfy in a single attempt without making
+// the query any cheaper.
 //
 // So the gate is on CARDINALITY. [readGroups] runs one paged statement per
 // column over this same predicate, and past [GroupByRowCeiling] that sorting

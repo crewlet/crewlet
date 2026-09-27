@@ -1,0 +1,38 @@
+-- A person's row keeps the person the record carried, beside its columns.
+--
+-- # Why the columns are not the whole of a person
+--
+-- `tracker_persons` holds a person as one column per member this build knows.
+-- A member a NEWER build adds to the person has no column, so an apply that
+-- writes only the columns drops it on this node while a peer that knows it
+-- keeps it. Worse, a person write starts from the stored row, so the next one
+-- this node decides publishes the person without that member, and every node
+-- then drops it. The seen-through position loses the same way: its two
+-- columns hold its stream and its sequence, and neither its generation nor a
+-- member a newer build nests in it. `document` is the person as the record
+-- carried it — members this build does not know included — which is what
+-- every other whole-document table of the tracker stores beside its
+-- extracted columns.
+--
+-- # What reads it
+--
+-- The tracker's own person read (`readPerson`) decodes `document` when a row
+-- holds one, and reassembles the person from the columns when it does not.
+-- The columns stay, written on every apply: they are the whole of a row
+-- applied before this column existed.
+--
+-- # A build that predates the column
+--
+-- Its upsert names only the columns it knows and its read reassembles a person
+-- from them, on a database of its own that has no such column. A row it
+-- applied reaches this migration with `document` NULL, and this build reads
+-- that row from its columns, exactly as the older build did; the next person
+-- write on that handle applies with a document. A build that predates the
+-- column does not run on a database this migration has touched: running a
+-- binary below the schema it already migrated is not supported
+-- (docs/guides/deployment.md).
+--
+-- NULLABLE, because NULL is exactly "applied before this column": there is no
+-- document to default to.
+
+ALTER TABLE tracker_persons ADD COLUMN document BLOB;
