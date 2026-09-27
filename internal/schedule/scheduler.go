@@ -49,6 +49,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/cron"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -368,14 +369,14 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e E
 			"scope_id", e.ScopeID, "timezone", zone, "error", err)
 		return 0
 	}
-	cron, err := Parse(sch.Cron)
+	expr, err := cron.Parse(sch.Cron)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
 			"scope_id", e.ScopeID, "cron", sch.Cron, "error", err)
 		return 0
 	}
 
-	toFire, toSkip := s.due(cron, loc, e, at, windowStart, first)
+	toFire, toSkip := s.due(expr, loc, e, at, windowStart, first)
 	for _, ft := range toSkip {
 		s.recordSkip(ctx, e, ft, loc)
 	}
@@ -411,7 +412,7 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e E
 // deterministic offset so a popular cron minute does not stampede. The
 // canonical, unshifted fire time is what forms the identity, so dedupe is
 // unaffected and two nodes with the same config compute the same offset.
-func (s *Scheduler) due(cron Expr, loc *time.Location, e Entry, at, windowStart time.Time, first bool) (toFire, toSkip []time.Time) {
+func (s *Scheduler) due(expr cron.Expr, loc *time.Location, e Entry, at, windowStart time.Time, first bool) (toFire, toSkip []time.Time) {
 	jitter := s.jitterFor(e.ScopeID, e.Schedule.Name)
 	effNow := at.Add(-jitter)
 
@@ -419,17 +420,17 @@ func (s *Scheduler) due(cron Expr, loc *time.Location, e Entry, at, windowStart 
 		if windowStart.IsZero() {
 			return nil, nil
 		}
-		return cron.FireTimes(windowStart.Add(-jitter), effNow, loc), nil
+		return expr.FireTimes(windowStart.Add(-jitter), effNow, loc), nil
 	}
 
 	// First evaluated tick after (re)start: consider exactly ONE missed
 	// fire, the most recent. Older misses are never backfilled — a company
 	// that was down for a day does not want yesterday's standups.
-	prev, ok := cron.Prev(effNow, loc)
+	prev, ok := expr.Prev(effNow, loc)
 	if !ok || !e.Schedule.CatchesUp() {
 		return nil, nil
 	}
-	if age := effNow.Sub(prev); age <= s.catchupWindow(cron, loc, effNow) {
+	if age := effNow.Sub(prev); age <= s.catchupWindow(expr, loc, effNow) {
 		return []time.Time{prev}, nil
 	}
 	return nil, []time.Time{prev}
@@ -443,12 +444,12 @@ func (s *Scheduler) due(cron Expr, loc *time.Location, e Entry, at, windowStart 
 // prevent. It is a bounded heuristic and says so: for an irregular cadence
 // (`0 9 * * 1,5`) the interval between the next two fires approximates the
 // period rather than equalling it.
-func (s *Scheduler) catchupWindow(cron Expr, loc *time.Location, ref time.Time) time.Duration {
-	t1, ok := cron.Next(ref, loc)
+func (s *Scheduler) catchupWindow(expr cron.Expr, loc *time.Location, ref time.Time) time.Duration {
+	t1, ok := expr.Next(ref, loc)
 	if !ok {
 		return s.catchupMin
 	}
-	t2, ok := cron.Next(t1, loc)
+	t2, ok := expr.Next(t1, loc)
 	if !ok {
 		return s.catchupMin
 	}

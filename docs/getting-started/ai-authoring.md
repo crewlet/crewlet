@@ -177,7 +177,7 @@ check them by reading:
 |---|---|
 | `lead` / `manages` naming a role or unit that exists | Reference integrity across the document — not expressible in JSON Schema |
 | Real IANA timezone | Needs the timezone database |
-| Cron *semantics* (`99 * * * *` has the right shape) | Needs a cron parser |
+| A cron expression — its field count as well as its values (`99 * * * *`) | The schema takes a cron as text; checking one needs a cron parser, which `crewlet validate` runs |
 
 The two encodings are held in sync by
 `internal/config/schema_test.go`, which runs every rule through

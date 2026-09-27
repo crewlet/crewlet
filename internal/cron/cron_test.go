@@ -1,4 +1,4 @@
-package schedule_test
+package cron_test
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/cron"
 )
 
 // The cases below cover the grammar and the evaluator. Where a case pins an
@@ -14,9 +14,9 @@ import (
 // travels with it: those are the reason the evaluator iterates UTC and matches
 // the LOCAL projection rather than the other way round.
 
-func mustParse(t *testing.T, expr string) schedule.Expr {
+func mustParse(t *testing.T, expr string) cron.Expr {
 	t.Helper()
-	e, err := schedule.Parse(expr)
+	e, err := cron.Parse(expr)
 	if err != nil {
 		t.Fatalf("Parse(%q): %v", expr, err)
 	}
@@ -60,7 +60,7 @@ func TestParseAcceptsTheGrammar(t *testing.T) {
 		"  0   9  *  *  * ", // arbitrary inter-field whitespace
 		"0 9 * * 7",         // 7 is Sunday
 	} {
-		if err := schedule.Validate(expr); err != nil {
+		if err := cron.Validate(expr); err != nil {
 			t.Errorf("Validate(%q) = %v, want nil", expr, err)
 		}
 	}
@@ -87,12 +87,12 @@ func TestParseRejectsWhatItCannotEvaluate(t *testing.T) {
 		{"0 9 * * jan", "a month name in the day field"},
 		{"*/ * * * *", "a step with nothing after the slash"},
 	} {
-		err := schedule.Validate(tc.expr)
+		err := cron.Validate(tc.expr)
 		if err == nil {
 			t.Errorf("Validate(%q) = nil, want an error (%s)", tc.expr, tc.why)
 			continue
 		}
-		if !errors.Is(err, schedule.ErrCron) {
+		if !errors.Is(err, cron.ErrInvalid) {
 			t.Errorf("Validate(%q) = %v, want it to wrap ErrCron so callers can branch", tc.expr, err)
 		}
 		// The message has to name the expression: a config with twenty
@@ -108,7 +108,7 @@ func TestTheZeroExprMatchesNothing(t *testing.T) {
 	t.Parallel()
 	// An Expr nobody parsed into fires nothing. That is the safe zero: a
 	// struct field left unset must not become "* * * * *".
-	var zero schedule.Expr
+	var zero cron.Expr
 	for h := 0; h < 24; h++ {
 		if zero.Matches(at(2026, time.June, 8, h, 0)) {
 			t.Fatalf("the zero Expr matched %02d:00", h)
@@ -391,7 +391,7 @@ func TestTheHorizonReachesTheRarestLegalFire(t *testing.T) {
 	got, ok := e.Next(at(2096, time.March, 1, 0, 0), time.UTC)
 	if !ok {
 		t.Fatalf("Next from 2096-03-01 = not found; the horizon is shorter than the "+
-			"longest gap the grammar allows (%v)", schedule.Horizon)
+			"longest gap the grammar allows (%v)", cron.Horizon)
 	}
 	if want := at(2104, time.February, 29, 0, 0); !got.Equal(want) {
 		t.Fatalf("Next = %v, want %v", got, want)
@@ -486,7 +486,7 @@ func TestAZoneWithANonHourOffsetProjectsCorrectly(t *testing.T) {
 
 // --- helpers --------------------------------------------------------------
 
-func requireMatch(t *testing.T, e schedule.Expr, local time.Time, want bool) {
+func requireMatch(t *testing.T, e cron.Expr, local time.Time, want bool) {
 	t.Helper()
 	if got := e.Matches(local); got != want {
 		t.Errorf("Matches(%s) = %v, want %v", local.Format(time.RFC3339), got, want)

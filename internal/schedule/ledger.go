@@ -173,8 +173,9 @@ type Ledger interface {
 // A fall-back day repeats a local hour, so a 02:30 schedule has two UTC
 // instants that day; both render to one label, so the second one loses the
 // claim and the schedule fires once. The evaluator deliberately reports both
-// instants (see [Expr.FireTimes]) — collapsing them is this function's job,
-// and splitting the responsibility that way is what keeps each half testable.
+// instants (see internal/cron's Expr.FireTimes) — collapsing them is this
+// function's job, and splitting the responsibility that way is what keeps each
+// half testable.
 func FireLabel(fireUTC time.Time, loc *time.Location) string {
 	return fireUTC.In(loc).Format("20060102T1504")
 }

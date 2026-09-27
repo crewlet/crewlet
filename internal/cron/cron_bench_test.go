@@ -1,22 +1,22 @@
-package schedule_test
+package cron_test
 
 import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/cron"
 )
 
 // BenchmarkNextUnreachable measures the WORST case the linear scan can be
 // asked for: an expression that never matches, so the walk runs the whole
 // horizon before reporting not-found.
 //
-// It exists to keep the cost of [schedule.Horizon] an observed number rather
+// It exists to keep the cost of [cron.Horizon] an observed number rather
 // than an argument. Every reachable expression terminates at its next fire —
 // a daily cron costs at most a day of minutes — so this is the only shape
 // that pays the full walk, and it is reached only by an impossible date.
 func BenchmarkNextUnreachable(b *testing.B) {
-	e, err := schedule.Parse("0 0 30 2 *") // February 30th
+	e, err := cron.Parse("0 0 30 2 *") // February 30th
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func BenchmarkNextUnreachable(b *testing.B) {
 // BenchmarkNextDaily is the shape an operator actually runs: one fire a day,
 // found within a day of minutes.
 func BenchmarkNextDaily(b *testing.B) {
-	e, err := schedule.Parse("30 9 * * 1-5")
+	e, err := cron.Parse("30 9 * * 1-5")
 	if err != nil {
 		b.Fatal(err)
 	}

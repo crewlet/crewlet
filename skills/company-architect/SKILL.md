@@ -92,9 +92,9 @@ config — rungs 2 and 3 especially:
   silent miss.
 - **Timezones are real IANA names** (`Europe/Amsterdam`, not `CET` or
   `Mars/Olympus`).
-- **Cron expressions are semantically valid.** The schema only checks
-  there are five fields — `99 * * * *` has the right shape and is still
-  nonsense.
+- **Cron expressions are valid.** The schema takes a cron as plain text,
+  so it checks neither the field count nor the values — `99 * * * *` and
+  `0 9 * *` both pass it. `crewlet validate` is what checks one.
 - **Everything under "Invariants"** below. Those are judgement calls; no
   validator will ever catch them.
 

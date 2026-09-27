@@ -1,14 +1,4 @@
-package schedule
-
-import (
-	"errors"
-	"fmt"
-	"strconv"
-	"strings"
-	"time"
-)
-
-// The 5-field cron evaluator.
+// Package cron is the 5-field cron grammar and its evaluator.
 //
 //	┌───────────── minute        (0-59)
 //	│ ┌───────────── hour         (0-23)
@@ -26,14 +16,34 @@ import (
 // (neither is a bare `*`), a day matches if EITHER field matches. When only
 // one is restricted, that field alone decides.
 //
+// # A package of its own, because the grammar has two readers
+//
+// The scheduler EVALUATES an expression on every tick, and the org model
+// VALIDATES one when a company is written — and the scheduler depends on the
+// org model, so a grammar living in the scheduler was one the validator could
+// not reach. It counted the fields instead, which is not the grammar: `61 * * *
+// *` and `0 9 * * MON-FRY` validated clean and then failed on every tick, as a
+// `schedule_parse_failed` line and a schedule that never fired. Here, importing
+// nothing of the engine's, it is one grammar both read — the small shared
+// grammars' shape (internal/envref is another).
+//
 // Dependency-free on purpose. A cron library is a large surface for a grammar
 // that fits on a screen, and the engine's runtime dependency set is the thing
 // an operator installs.
+package cron
 
-// ErrCron is the sentinel every parse failure wraps. Callers branch on it
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// ErrInvalid is the sentinel every parse failure wraps. Callers branch on it
 // with errors.Is; the wrapped message names the expression and the field, so
 // a company with twenty schedules gets a line that says which one to fix.
-var ErrCron = errors.New("invalid cron expression")
+var ErrInvalid = errors.New("invalid cron expression")
 
 // Horizon bounds how far Next and Prev will scan before reporting that an
 // expression has no fire in that direction.
@@ -100,7 +110,7 @@ func Parse(expr string) (Expr, error) {
 	fields := strings.Fields(expr)
 	if len(fields) != cronFields {
 		return Expr{}, fmt.Errorf("%w %q: expected %d fields (minute hour day-of-month month day-of-week), got %d",
-			ErrCron, expr, cronFields, len(fields))
+			ErrInvalid, expr, cronFields, len(fields))
 	}
 
 	minutes, _, err := parseField(expr, "minute", fields[0], 0, 59, nil)
@@ -143,8 +153,8 @@ func Parse(expr string) (Expr, error) {
 }
 
 // Validate reports whether an expression parses, discarding the result. It is
-// what config validation calls, so a bad expression fails `crewlet validate`
-// rather than silently at 9am.
+// what the org model's admission rule calls (internal/org schedule.go), so a
+// bad expression fails `crewlet validate` rather than silently at 9am.
 func Validate(expr string) error {
 	_, err := Parse(expr)
 	return err
@@ -155,7 +165,7 @@ func Validate(expr string) error {
 func parseField(expr, name, spec string, lo, hi int, aliases map[string]int) (uint64, bool, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
-		return 0, false, fmt.Errorf("%w %q: empty %s field", ErrCron, expr, name)
+		return 0, false, fmt.Errorf("%w %q: empty %s field", ErrInvalid, expr, name)
 	}
 	restricted := spec != "*"
 
@@ -163,7 +173,7 @@ func parseField(expr, name, spec string, lo, hi int, aliases map[string]int) (ui
 	for term := range strings.SplitSeq(spec, ",") {
 		term = strings.TrimSpace(term)
 		if term == "" {
-			return 0, false, fmt.Errorf("%w %q: empty term in %s field %q", ErrCron, expr, name, spec)
+			return 0, false, fmt.Errorf("%w %q: empty term in %s field %q", ErrInvalid, expr, name, spec)
 		}
 
 		base, stepStr, hasStep := strings.Cut(term, "/")
@@ -171,10 +181,10 @@ func parseField(expr, name, spec string, lo, hi int, aliases map[string]int) (ui
 		if hasStep {
 			var err error
 			if step, err = strconv.Atoi(strings.TrimSpace(stepStr)); err != nil {
-				return 0, false, fmt.Errorf("%w %q: %s field: invalid step %q", ErrCron, expr, name, stepStr)
+				return 0, false, fmt.Errorf("%w %q: %s field: invalid step %q", ErrInvalid, expr, name, stepStr)
 			}
 			if step <= 0 {
-				return 0, false, fmt.Errorf("%w %q: %s field: step must be positive, got %d", ErrCron, expr, name, step)
+				return 0, false, fmt.Errorf("%w %q: %s field: step must be positive, got %d", ErrInvalid, expr, name, step)
 			}
 		}
 
@@ -197,7 +207,7 @@ func parseField(expr, name, spec string, lo, hi int, aliases map[string]int) (ui
 			}
 			if end < start {
 				return 0, false, fmt.Errorf("%w %q: %s field: range %q is descending — ranges do not wrap, "+
-					"so a weekend is 6-7, sat,sun or 0,6", ErrCron, expr, name, base)
+					"so a weekend is 6-7, sat,sun or 0,6", ErrInvalid, expr, name, base)
 			}
 		default:
 			var err error
@@ -227,10 +237,10 @@ func parseValue(expr, name, token string, lo, hi int, aliases map[string]int) (i
 	}
 	v, err := strconv.Atoi(key)
 	if err != nil {
-		return 0, fmt.Errorf("%w %q: %s field: %q is not a number or a name for this field", ErrCron, expr, name, token)
+		return 0, fmt.Errorf("%w %q: %s field: %q is not a number or a name for this field", ErrInvalid, expr, name, token)
 	}
 	if v < lo || v > hi {
-		return 0, fmt.Errorf("%w %q: %s field: value %d is outside %d-%d", ErrCron, expr, name, v, lo, hi)
+		return 0, fmt.Errorf("%w %q: %s field: value %d is outside %d-%d", ErrInvalid, expr, name, v, lo, hi)
 	}
 	return v, nil
 }

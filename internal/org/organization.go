@@ -779,12 +779,37 @@ func (o *Organization) Validate() error {
 
 // ValidateAdmission reports every ADMISSION rule the company breaks, joined:
 // duplicate seat names, two units answering to one key (a duplicate name, or
-// an id that is another unit's key), and a unit reference on a seat declared
-// inside a different unit. See the class note above [Organization.Validate].
-// It assumes [Organization.Normalize] has run, so a root seat moved into its
-// unit is counted once, where it now sits.
+// an id that is another unit's key), a unit reference on a seat declared
+// inside a different unit, and a schedule whose cron has five fields that the
+// grammar refuses. See the class note above [Organization.Validate]. It
+// assumes [Organization.Normalize] has run, so a root seat moved into its unit
+// is counted once, where it now sits.
 func (o *Organization) ValidateAdmission() error {
-	return errors.Join(o.validateSeatNames(), o.validateUnitKeys(), o.validateUnitRefs())
+	return errors.Join(o.validateSeatNames(), o.validateUnitKeys(), o.validateUnitRefs(),
+		o.validateCronGrammar())
+}
+
+// validateCronGrammar refuses every schedule, a seat's or a unit's, whose cron
+// the grammar refuses — see [Schedule.cronGrammar], and for why a seat's
+// schedules are read here rather than in [Role.Validate], the class note above
+// [Organization.Validate]: that method holds the runnable rules.
+func (o *Organization) validateCronGrammar() error {
+	var errs []error
+	for r := range o.AllRoles() {
+		for i, s := range r.Schedules {
+			if err := s.cronGrammar(fmt.Sprintf("role %q", r.Name)); err != nil {
+				errs = append(errs, &SeatError{Seat: r, Field: []any{"schedules", i, "cron"}, Err: err})
+			}
+		}
+	}
+	for u := range o.AllUnits() {
+		for i, s := range u.Schedules {
+			if err := s.cronGrammar(fmt.Sprintf("unit %q", strings.TrimSpace(u.Name))); err != nil {
+				errs = append(errs, &UnitError{Unit: u, Field: []any{"schedules", i, "cron"}, Err: err})
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // validateUnitRefs refuses a `unit:` reference on a seat that sits inside a

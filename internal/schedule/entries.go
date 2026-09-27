@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/cron"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -220,16 +221,16 @@ func nextRun(expr, zone string, ref time.Time) (time.Time, string) {
 	if err != nil {
 		return time.Time{}, "unknown timezone " + zone
 	}
-	cron, err := Parse(expr)
+	parsed, err := cron.Parse(expr)
 	if err != nil {
 		return time.Time{}, err.Error()
 	}
-	fire, ok := cron.Next(ref, loc)
+	fire, ok := parsed.Next(ref, loc)
 	if !ok {
 		// Parsed, and the calendar never reaches it — February 30th. Not a
 		// config typo the parser can catch, and worth saying out loud
 		// because the row otherwise looks like any other quiet schedule.
-		return time.Time{}, "no fire within " + Horizon.String()
+		return time.Time{}, "no fire within " + cron.Horizon.String()
 	}
 	return fire, ""
 }

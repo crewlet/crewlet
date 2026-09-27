@@ -80,12 +80,15 @@ schedules:
 Config load (and so `crewlet validate`) checks each schedule's shape: a
 non-empty `name` and `task`, a `cron` with exactly five fields, a
 `timezone` that loads, a non-negative `timeout_seconds`, a `target` of
-`each` or `lead`, and names unique within the owning role or unit. The
-cron **grammar** itself is parsed on every tick rather than at load, so an
-expression with five fields and an invalid value (`61 * * * *`) passes
-validation, and the schedule is skipped on every tick with
-`schedule_parse_failed` naming it. Watch for that line after adding a
-schedule.
+`each` or `lead`, and names unique within the owning role or unit. A
+written document is also held to the cron **grammar** — the same parser
+the scheduler evaluates it with — so an expression with five fields and an
+invalid value (`61 * * * *`, `0 9 * * MON-FRY`) is refused at that
+schedule's `cron`, naming the field and the value. The grammar is an
+[admission rule](configuration.md#what-a-stored-revision-is-held-to): a stored
+revision written before it was checked still applies, its node logs
+`org_admission_warning`, and that one schedule is skipped on every tick
+with `schedule_parse_failed` naming it while the rest of the company runs.
 
 ### Cron syntax
 
