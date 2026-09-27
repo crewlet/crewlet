@@ -88,10 +88,11 @@ A few things worth knowing when deploying Crewlet:
   `api.auth.max_grants` and no more, and logs a warning on every boot that
   enables it.
 - **Carrying a credential is not the same as being allowed to use it.** Every
-  route and every socket question declares one of ten grants, and both
-  transports are decided by the same registry, so a question cannot be reached
-  by choosing a channel. A route registered with no grant is a build failure
-  rather than a route that answers to anyone.
+  route and every socket question declares one of
+  [eleven grants](docs/concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow),
+  and both transports are decided by the same registry, so a question cannot be
+  reached by choosing a channel. A route registered with no grant is a build
+  failure rather than a route that answers to anyone.
 - **A cross-site write is refused by its `Origin`.** CORS decides who may
   *read* an answer; on a state change that is the part an attacker does not
   need, so a separate check refuses a non-read whose `Origin` is not an address
@@ -118,9 +119,13 @@ A few things worth knowing when deploying Crewlet:
   backend: a fresh deployment's identity estate is empty, so it is what creates
   the first person, and on a running one it is the way back in when the
   identity provider is down.
-- **Config encryption at rest** is available and recommended when your
-  company config carries secrets — see
-  `docs/concepts/configuration.md#secrets`.
+- **The company configuration is always sealed at rest.** Every revision is
+  encrypted and authenticated under the Tier A keyring before it reaches the
+  store — there is no plaintext mode, and a node reads only sealed revisions —
+  so a copied store file, a backup or a volume snapshot carries ciphertext
+  alone. The keyring is the root of trust: keep it out of the store's backup
+  domain. See
+  [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
 - **Personal data in configuration revisions written before this release.**
   Every node keeps its own copy of every company-config revision it has ever
   met, in an append-only table that nothing deleted from and that is in every
@@ -136,7 +141,14 @@ A few things worth knowing when deploying Crewlet:
   forward the revision table is also swept: 400 days, plus the active
   revision and its parent chain (see
   `docs/guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach`).
-- **Sandbox isolation.** Coding-agent runs execute inside an isolated sandbox
-  (E2B); the sandbox boundary — not the coding agent's own permission
-  prompts — is the isolation model. Treat anything you inject into a sandbox
-  (tokens in `role.sandbox.env`) as visible to the code that runs there.
+- **Sandbox isolation depends on the cell a seat runs in.** A coding agent
+  runs fully permissioned — the sandbox boundary, not the agent's own
+  permission prompts, is the isolation model — so where it runs is the
+  security decision. `run_in: e2b` is a remote VM per run and `run_in:
+  container` a Docker or Podman container on the engine host; `run_in: direct`
+  is a process tree running **as the engine's own user on the engine host**,
+  which isolates each box's state and not the host — it can read what that
+  user can. Use `direct` on a workstation or a dedicated VM, never where the
+  work is untrusted. Treat anything you inject into a sandbox (tokens in
+  `role.sandbox.env`) as visible to the code that runs there. See
+  [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).
