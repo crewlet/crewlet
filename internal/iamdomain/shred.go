@@ -196,8 +196,7 @@ func (r *Reader) KeyCensus(ctx context.Context, keys KeyIndex) (KeyCensus, error
 		return census, nil
 	}
 	var removed, owned map[string]bool
-	err = r.scan(ctx, func(tx *sql.Tx) error {
-		var err error
+	err = r.scan(ctx, func(tx *sql.Tx) (err error) {
 		if census.Prefix, err = statelog.PrefixIn(ctx, tx, Domain{}); err != nil {
 			return fmt.Errorf("iamdomain: read how much of the log these rows "+
 				"hold: %w", err)

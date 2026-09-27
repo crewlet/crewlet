@@ -237,10 +237,10 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// before the person exists, naming nobody to the redeemer, and leaves
 	// only the reservation this same redemption finishes on its retry.
 	if in.Link != nil {
-		linked, err := w.claim(ctx, at, KindLink, in.Link.Blind, in.PersonID,
+		linked, linkErr := w.claim(ctx, at, KindLink, in.Link.Blind, in.PersonID,
 			Claim{Issuer: in.Link.Issuer}, "", in.OpID+":link", &in)
-		if err != nil {
-			return statelog.Result{}, err
+		if linkErr != nil {
+			return statelog.Result{}, linkErr
 		}
 		if linked.Outcome == statelog.OutcomeUnknown {
 			return unresolved(in.OpID), nil
@@ -276,16 +276,15 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// nothing about that link — a person able to sign in through a
 	// provider account with no row on the trail saying so.
 	var pinned Link
-	decide := func(tx *sql.Tx) error {
-		if err := w.createsNobodyTwice(ctx, tx, in); err != nil {
+	decide := func(tx *sql.Tx) (err error) {
+		if err = w.createsNobodyTwice(ctx, tx, in); err != nil {
 			return err
 		}
 		if basis != nil {
-			if err := basis(tx); err != nil {
+			if err = basis(tx); err != nil {
 				return err
 			}
 		}
-		var err error
 		pinned, err = liveLinkOf(ctx, tx, in.PersonID)
 		return err
 	}
@@ -526,24 +525,24 @@ type Enrolment struct {
 // still checks the reason on every record, which is the backstop for the
 // gestures that are one append; this is the check that runs while nothing has
 // been published.
-func (e Enrolment) validate() error {
+func (in Enrolment) validate() error {
 	switch {
-	case e.Invitation != "" && e.BootstrapCode != "":
+	case in.Invitation != "" && in.BootstrapCode != "":
 		return errors.New("iamdomain: an enrolment redeems an invitation or " +
 			"the one-time code, never both — each is a different authority " +
 			"for what it confers, and one record cannot be bounded by two")
-	case e.Invitation != "" && e.Email == "":
+	case in.Invitation != "" && in.Email == "":
 		return fmt.Errorf("%w: redeeming an invitation enrols the address it "+
 			"was issued to, and this enrolment names none", ErrNotFindable)
-	case e.PersonID == "":
+	case in.PersonID == "":
 		return errors.New("iamdomain: an enrolment needs the person id it is " +
 			"creating: every append in the sequence names it, so one minted " +
 			"per append would enrol three people")
-	case e.OpID == "":
+	case in.OpID == "":
 		return errors.New("iamdomain: an enrolment needs an operation id — it " +
 			"is a sequence of appends, and without a stable id a retry cannot " +
 			"tell which of them already landed")
-	case e.Kind != iam.KindPerson && e.Kind != iam.KindMachine:
+	case in.Kind != iam.KindPerson && in.Kind != iam.KindMachine:
 		// THE DIRECTORY HOLDS PEOPLE AND MACHINES, and nothing else
 		// enrols. A seat is the chart's and the engine is the node, so
 		// a directory row of either kind is a second answer to who they
@@ -551,34 +550,34 @@ func (e Enrolment) validate() error {
 		// findable by an address alone and act as nothing the rest of
 		// the engine can name.
 		return fmt.Errorf("%w: %q is not a kind the directory enrols — want "+
-			"%s or %s", ErrNotEnrollable, e.Kind, iam.KindPerson, iam.KindMachine)
-	case !e.Stage.Valid():
-		return fmt.Errorf("%w: %q is not an enrolment stage", ErrInvalid, e.Stage)
-	case len(e.Reason) > MaxReason:
+			"%s or %s", ErrNotEnrollable, in.Kind, iam.KindPerson, iam.KindMachine)
+	case !in.Stage.Valid():
+		return fmt.Errorf("%w: %q is not an enrolment stage", ErrInvalid, in.Stage)
+	case len(in.Reason) > MaxReason:
 		return fmt.Errorf("%w: the reason on this enrolment is %d bytes and "+
 			"the cap is %d — it is rendered into an authentication trail "+
 			"beside the op that caused it, so it says WHICH cause fired "+
-			"rather than narrating", ErrInvalid, len(e.Reason), MaxReason)
-	case e.Colleague != "" && !e.Colleague.Valid():
+			"rather than narrating", ErrInvalid, len(in.Reason), MaxReason)
+	case in.Colleague != "" && !in.Colleague.Valid():
 		// UNSET IS THE CLOSED END and a real setting — see
 		// [Person.Colleague] — so only a value this build cannot place on
 		// its ladder is refused. Stored, it would read as no reach on
 		// this build and as whatever a newer one means by it on the next.
 		return fmt.Errorf("%w: %q is not a colleague level — want one of %v",
-			ErrInvalid, e.Colleague, iam.Colleagues)
-	case e.Link != nil && e.Kind != iam.KindPerson:
+			ErrInvalid, in.Colleague, iam.Colleagues)
+	case in.Link != nil && in.Kind != iam.KindPerson:
 		return fmt.Errorf("%w: a provider link signs a PERSON in through "+
 			"their identity provider, and a %s has no provider sign-in to "+
-			"make", ErrInvalid, e.Kind)
-	case e.Link != nil && (e.Link.Issuer == "" || e.Link.Blind == ""):
+			"make", ErrInvalid, in.Kind)
+	case in.Link != nil && (in.Link.Issuer == "" || in.Link.Blind == ""):
 		return fmt.Errorf("%w: a provider link needs the issuer and the "+
 			"subject's blind, and this one has (%q, %q)", ErrInvalid,
-			e.Link.Issuer, e.Link.Blind)
-	case e.Kind == iam.KindPerson && e.Email == "":
+			in.Link.Issuer, in.Link.Blind)
+	case in.Kind == iam.KindPerson && in.Email == "":
 		return fmt.Errorf("%w: enrolling a person needs an address — it is "+
 			"the interactive login key, and somebody with none can never "+
 			"sign in", ErrNotFindable)
-	case e.Kind == iam.KindMachine && e.Login == "":
+	case in.Kind == iam.KindMachine && in.Login == "":
 		// A MACHINE NEEDS NO ADDRESS and must still be FINDABLE. It has
 		// no login page and no mailbox — `svc:ci` proves itself with a
 		// token — so requiring an address would have meant inventing
@@ -586,8 +585,8 @@ func (e Enrolment) validate() error {
 		// nobody can list, revoke or audit.
 		return fmt.Errorf("%w: enrolling a %s needs a login — it has no login "+
 			"page and therefore no address, so the login is the only thing "+
-			"that finds it", ErrNotFindable, e.Kind)
-	case e.Login == "":
+			"that finds it", ErrNotFindable, in.Kind)
+	case in.Login == "":
 		// A PERSON NEEDS ONE TOO, and not to be found: their address
 		// already does that. A login is the NAME a principal acts and is
 		// written under while they hold no seat — iam.ActorFor records an
@@ -602,14 +601,14 @@ func (e Enrolment) validate() error {
 			"they make is recorded under while they hold no seat, and without "+
 			"one they would be recorded as nobody", ErrInvalidLogin)
 	}
-	if e.BootstrapCode != "" {
+	if in.BootstrapCode != "" {
 		// THE FOUNDER'S GRANTS ARE BOUNDED BY NO WRITER — that is the
 		// exemption — so the one bound they meet is that this build can
 		// name each of them. It was met only at the person record, after
 		// the take and both claims had landed, which left a reservation
 		// holding the founder's address and login behind a refusal
 		// knowable before anything was written.
-		for _, g := range e.Grants {
+		for _, g := range in.Grants {
 			if !g.Valid() {
 				return fmt.Errorf("%w: %q is not a grant this build knows, "+
 					"and conferring a spelling nothing can check is not "+
@@ -617,7 +616,7 @@ func (e Enrolment) validate() error {
 			}
 		}
 	}
-	return LoginFits(e.Kind, e.Login)
+	return LoginFits(in.Kind, in.Login)
 }
 
 // redeemable refuses an enrolment its invitation does not cover, read inside
@@ -921,7 +920,7 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 			// already hold, which the arm above lets through; anything
 			// else would hand an existing person a second address or
 			// login under an operation that was never about them.
-			if err := enrolling.notYetEnrolled(ctx, tx, kind); err != nil {
+			if err = enrolling.notYetEnrolled(ctx, tx, kind); err != nil {
 				return err
 			}
 		}
@@ -1316,7 +1315,7 @@ func (w *Writer) revoke(ctx context.Context, personID string, past *uint64,
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	decide := func(tx *sql.Tx) error {
+	decide := func(tx *sql.Tx) (err error) {
 		current, err := epochOf(ctx, tx, personID)
 		if err != nil {
 			return err
@@ -1386,7 +1385,7 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 		return statelog.Result{}, err
 	}
 	var generation uint64
-	decide := func(tx *sql.Tx) error {
+	decide := func(tx *sql.Tx) (err error) {
 		// NEVER BUMPED IS ZERO, so the first bump lands at 1 and ends
 		// exactly the cookies that predate it.
 		current, err := generationOf(ctx, tx)
@@ -1456,9 +1455,9 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	decide := func(tx *sql.Tx) error {
+	decide := func(tx *sql.Tx) (err error) {
 		var claims Claims
-		err := tx.QueryRowContext(ctx, `
+		err = tx.QueryRowContext(ctx, `
 			SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`,
 			personID).Scan(&claims.EmailBlind, &claims.Login, &claims.SeatID)
 		switch {
@@ -1526,7 +1525,7 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	// THE LAST RUN'S COUNTERS, which is what the landed record carries: a
 	// decide may run again against a fresh snapshot.
 	var opened SessionOpened
-	decide := func(tx *sql.Tx) error {
+	decide := func(tx *sql.Tx) (err error) {
 		epoch, err := epochOf(ctx, tx, in.Person)
 		if err != nil {
 			return err
@@ -1681,9 +1680,9 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	decide := func(tx *sql.Tx) error {
+	decide := func(tx *sql.Tx) (err error) {
 		var owner string
-		err := tx.QueryRowContext(ctx,
+		err = tx.QueryRowContext(ctx,
 			`SELECT person_id FROM iam_sessions WHERE lineage = ?`, lineage).
 			Scan(&owner)
 		switch {
@@ -1964,8 +1963,8 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) error {
-		if err := decide(tx); err != nil {
+	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) (err error) {
+		if err = decide(tx); err != nil {
 			return err
 		}
 		rec.Mutation = mutation
@@ -2080,12 +2079,12 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 	}
 	// THE LAST RUN'S ANSWER, which is what the landed record carries.
 	var minted TokenMinted
-	decide := func(tx *sql.Tx) error {
+	decide := func(tx *sql.Tx) (err error) {
 		owner, err := heldPerson(ctx, tx, in.PersonID, "a token for them")
 		if err != nil {
 			return err
 		}
-		if err := tokenOwnable(in.PersonID, owner); err != nil {
+		if err = tokenOwnable(in.PersonID, owner); err != nil {
 			return err
 		}
 		login, err := loginOf(ctx, tx, in.PersonID)
@@ -2099,7 +2098,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 				"account, and a token minted on it would act under the "+
 				"configuration file's name", ErrRefused, login)
 		}
-		if err := w.mayMintFor(in, owner); err != nil {
+		if err = w.mayMintFor(in, owner); err != nil {
 			return err
 		}
 		grants, err := w.tokenGrants(in.Grants, owner.Grants)
@@ -2133,7 +2132,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 			Grants: grants, Colleague: colleague, Epoch: epoch,
 			Generation: generation,
 		}
-		held := make([]Credential, 0, len(owner.Credentials)+1)
+		kept := make([]Credential, 0, len(owner.Credentials)+1)
 		for _, c := range owner.Credentials {
 			if c.ID == in.ID {
 				// THE SAME MINT, RETRIED after an answer that did not
@@ -2142,9 +2141,10 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 				// credentials a revocation names as one.
 				continue
 			}
-			held = append(held, c)
+			kept = append(kept, c)
 		}
-		owner.Credentials = append(held, token)
+		kept = append(kept, token)
+		owner.Credentials = kept
 		minted = TokenMinted{Grants: grants, Colleague: colleague,
 			ExpiresAt: in.ExpiresAt, Epoch: epoch, Generation: generation}
 		rec.Mutation, err = authoredPerson(owner)
@@ -2421,7 +2421,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// its row — so an address somebody typed and never sent leaves no
 	// cleartext anywhere, which is the same promise a removal makes, one
 	// object earlier.
-	if err := w.sealer.Mint(ctx, id, w.secretAuthor(), w.Now()); err != nil {
+	if err = w.sealer.Mint(ctx, id, w.secretAuthor(), w.Now()); err != nil {
 		return InviteIssued{}, fmt.Errorf("iamdomain: mint an "+
 			"invitation's key: %w", err)
 	}
@@ -2463,9 +2463,9 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// one its first attempt issued on this very address — outstanding,
 	// spoken for — and must be answered with it rather than refused by it.
 	expires := in.ExpiresAt
-	decide := func(tx *sql.Tx) error {
+	decide := func(tx *sql.Tx) (err error) {
 		expires = in.ExpiresAt
-		if err := w.issuedBefore(ctx, tx, id, blind, in, &expires); err != nil {
+		if err = w.issuedBefore(ctx, tx, id, blind, in, &expires); err != nil {
 			return err
 		}
 		holder, held, err := holderOf(ctx, tx, KindEmail, blind)
@@ -2688,7 +2688,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	// THE LAST RUN'S BEFORE AND AFTER, which is the pair the landed record
 	// actually carries: a decide may run again against a fresh snapshot.
 	var before, after []iam.Grant
-	decide := func(tx *sql.Tx) error {
+	decide := func(tx *sql.Tx) (err error) {
 		person, err := heldPerson(ctx, tx, in.PersonID, "their row")
 		if err != nil {
 			return err
@@ -2700,7 +2700,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if err != nil {
 			return err
 		}
-		if err := w.MayConfer(person.Grants, updated.Grants); err != nil {
+		if err = w.MayConfer(person.Grants, updated.Grants); err != nil {
 			return err
 		}
 		before, after = slices.Clone(person.Grants), slices.Clone(updated.Grants)
@@ -2712,8 +2712,8 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) error {
-		if err := decide(tx); err != nil {
+	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) (err error) {
+		if err = decide(tx); err != nil {
 			return err
 		}
 		rec.Mutation = mutation

@@ -367,9 +367,9 @@ func sessionState(ctx context.Context, tx *sql.Tx, grant RefreshGrant,
 		if uint64(settled.Packed()) < grant.Start {
 			return SessionUnseen, nil
 		}
-		retained, err := deferredFor(ctx, tx, grant.Person)
-		if err != nil {
-			return "", err
+		retained, deferredErr := deferredFor(ctx, tx, grant.Person)
+		if deferredErr != nil {
+			return "", deferredErr
 		}
 		if retained {
 			return SessionUnseen, nil

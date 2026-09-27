@@ -467,7 +467,7 @@ func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenR
 		out.Colleague = held.Colleague
 		out.Epoch = held.Epoch
 		out.Generation = held.Generation
-		if err := readGeneration(ctx, tx, &out.FleetGeneration); err != nil {
+		if err = readGeneration(ctx, tx, &out.FleetGeneration); err != nil {
 			return err
 		}
 		// THE OWNER'S BUCKET, once the row has named them, read in the
@@ -1222,17 +1222,17 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 		for rows.Next() {
 			var holder SeatHolder
 			var stage string
-			if err := rows.Scan(&holder.Seat, &holder.Person, &stage); err != nil {
+			if err = rows.Scan(&holder.Seat, &holder.Person, &stage); err != nil {
 				_ = rows.Close()
 				return fmt.Errorf("iamdomain: read a seat binding: %w", err)
 			}
 			holder.Stage = iam.Stage(stage)
 			out = append(out, holder)
 		}
-		if err := rows.Close(); err != nil {
+		if err = rows.Close(); err != nil {
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
 		}
-		if err := rows.Err(); err != nil {
+		if err = rows.Err(); err != nil {
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
 		}
 

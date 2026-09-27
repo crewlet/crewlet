@@ -438,8 +438,7 @@ func (w *Writer) takeExemption(ctx context.Context, at *statelog.Position,
 	// THE LAST RUN'S LIST, which is the one the landed record was decided
 	// with: a decide may run again against a fresh snapshot.
 	var earlier []string
-	decide := func(tx *sql.Tx) error {
-		var err error
+	decide := func(tx *sql.Tx) (err error) {
 		earlier, err = w.takeable(ctx, tx, in.BootstrapCode, in.PersonID)
 		return err
 	}

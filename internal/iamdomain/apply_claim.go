@@ -84,31 +84,7 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	// shape with a different target, and stating them apart is what stops a
 	// release needing to know who the holder was.
 	if at.record.Op == OpRelease {
-		// A RELEASED SEAT CLEARS ITS POSITION TOO. Left behind it would
-		// say a binding that no longer exists was decided against a
-		// chart this node has seen, which is a sentence about nothing —
-		// and the next bind would then read one claim's handle beside
-		// another's position until it overwrote both.
-		clear := column + ` = ''`
-		if kind == KindSeat {
-			clear += ", chart_position = 0"
-		}
-		result, err := tx.ExecContext(ctx, `
-			UPDATE iam_people
-			SET `+clear+`, updated_at = ?, scoped_through = ?
-			WHERE `+column+` = ? AND scoped_through < ?`,
-			at.unix(), at.packed, at.record.Subject.ID, at.packed)
-		if err != nil {
-			return 0, fmt.Errorf("iamdomain: release the %s claim on %s: %w",
-				kind, at.record.Subject.ID, err)
-		}
-		written, _ := result.RowsAffected()
-		if kind == KindSeat && written > 0 {
-			// AN UNBIND hands the seat back to the chart, which is a
-			// move in its standing — see [Reader.SeatHolders].
-			a.directoryMoved = true
-		}
-		return int(written), nil
+		return a.releaseToken(ctx, tx, at, kind, column)
 	}
 
 	if at.record.Person == "" {
@@ -235,6 +211,38 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 		n, _ := sealed.RowsAffected()
 		written += n
+	}
+	return int(written), nil
+}
+
+// releaseToken is a release's half of [Applier.writeToken]: it clears the
+// claim's column on whoever holds the token, the record naming no holder.
+//
+// A RELEASED SEAT CLEARS ITS POSITION TOO. Left behind it would say a binding
+// that no longer exists was decided against a chart this node has seen, which
+// is a sentence about nothing — and the next bind would then read one claim's
+// handle beside another's position until it overwrote both.
+func (a *Applier) releaseToken(ctx context.Context, tx *sql.Tx, at applyContext,
+	kind ObjectKind, column string) (int, error) {
+
+	clear := column + ` = ''`
+	if kind == KindSeat {
+		clear += ", chart_position = 0"
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE iam_people
+		SET `+clear+`, updated_at = ?, scoped_through = ?
+		WHERE `+column+` = ? AND scoped_through < ?`,
+		at.unix(), at.packed, at.record.Subject.ID, at.packed)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: release the %s claim on %s: %w",
+			kind, at.record.Subject.ID, err)
+	}
+	written, _ := result.RowsAffected()
+	if kind == KindSeat && written > 0 {
+		// AN UNBIND hands the seat back to the chart, which is a move in
+		// its standing — see [Reader.SeatHolders].
+		a.directoryMoved = true
 	}
 	return int(written), nil
 }
