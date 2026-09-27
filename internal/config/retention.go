@@ -218,18 +218,24 @@ const (
 	// broker's own declared store limit.
 	//
 	// THE FLOOR IS FIVE GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside: FOUR state-log domains, none of which may be
-	// sized below TrackerLogMaxBytesFloor, plus the mailboxes, the event
-	// stream and every coordination bucket, which reserve nothing and grow
-	// against the same number. Below it a node provisions its way to a
-	// refusal on whichever stream happens to be last.
+	// own logs fit inside with room beside them. Every node reserves all
+	// FIVE state-log domains' ceilings whatever it runs, and left unset
+	// they come to 3.56 GiB at their smallest: the tracker's, the vectors'
+	// and the knowledge base's at the gibibyte scaling stops at, the org
+	// chart's 64 MiB and the identity log's 512 MiB default (the last two
+	// are never scaled below what they ask). What is left, about 1.4 GiB,
+	// is for the mailboxes, the event stream and every coordination bucket,
+	// which reserve nothing and grow against the same number. Below it a
+	// node provisions its way to a refusal on whichever stream happens to
+	// be last.
 	//
 	// IT MOVED WITH THE FOURTH DOMAIN. At four gibibytes the org chart's
-	// log was the one that did not fit: four explicit floors exactly fill
-	// the old limit, so the cross-field check above passes — it refuses
-	// only a sum GREATER than the limit — and the node then fails at boot
-	// on whichever stream the broker reached last, which is the failure
-	// that check exists to move forward to `crewlet validate`.
+	// log was the one that did not fit — its floor was then the gibibyte
+	// the other logs take, so four explicit floors exactly filled the old
+	// limit, the cross-field check above passed (it refuses only a sum
+	// GREATER than the limit), and the node failed at boot on whichever
+	// stream the broker reached last, which is the failure that check
+	// exists to move forward to `crewlet validate`.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is two
 	// orders of magnitude above the largest estate the domain ceilings can
