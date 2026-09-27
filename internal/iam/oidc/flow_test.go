@@ -486,8 +486,13 @@ func TestAProofIsDatedByTheProvider(t *testing.T) {
 		{"a step-up inside its window", time.Hour, at.Add(-time.Minute),
 			at.Add(-time.Minute), false},
 		{"a step-up with no auth_time", time.Hour, time.Time{}, time.Time{}, true},
-		{"a step-up outside its window", time.Hour, at.Add(-time.Hour - time.Second),
-			time.Time{}, true},
+		// THE WINDOW IS JUDGED WITHIN THE SKEW, because `auth_time` is the
+		// provider's clock: one running thirty seconds behind reports an
+		// authentication at the window's edge that far older.
+		{"a step-up past its window by less than the skew", time.Hour,
+			at.Add(-time.Hour - 30*time.Second), at.Add(-time.Hour - 30*time.Second), false},
+		{"a step-up outside its window and the skew", time.Hour,
+			at.Add(-time.Hour - oidc.ClockSkew - time.Second), time.Time{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -1316,6 +1316,15 @@ removed, is a different way to sign in as somebody else.
 | The **nonce**, from the flight cookie | An ID token captured from any other login replays into this one |
 | The **expiry**, required rather than honoured-when-present | A token with no `exp` is valid for ever, so one captured off the wire replays until the provider rotates its key |
 
+Every **time claim** — `exp`, `iat` and `nbf` — is judged within **60
+seconds** of the node's clock, and so is a step-up's `auth_time` against the
+window it asked for. Each was written by the *provider's* clock, and two hosts'
+clocks are never exactly one: a provider running a few seconds ahead issues
+every token "in the future", and judged to the second, each sign-in on a node
+that is behind would be refused for a reason nobody can see. A minute is room
+for two imperfect clocks and nothing more; what it costs is a minute on a token
+lifetime a provider sets in hours.
+
 Beyond those, a token naming more than one audience must name this client as
 its `azp`, and when the company sets `oidc.require_acr` the asserted
 authentication context must match — requesting `acr_values` is a request the

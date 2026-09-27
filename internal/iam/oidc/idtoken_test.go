@@ -272,8 +272,11 @@ func TestEveryIDTokenValidationRefusesWhatItIsFor(t *testing.T) {
 		},
 		"an expired token": {
 			token: func(t *testing.T) string {
+				// PAST THE SKEW, which is the tolerance and not the
+				// check: a minute's grace on a clock this node does
+				// not keep is not a token that is still good.
 				c := claims()
-				c["exp"] = at.Add(-time.Minute).Unix()
+				c["exp"] = at.Add(-oidc.ClockSkew - time.Second).Unix()
 				return sign(t, c, jwt.SigningMethodRS256, testKID, signingKey)
 			},
 			why: "expiry is checked against the caller's clock",
@@ -432,5 +435,48 @@ func TestTheAlgorithmPinRefusesASymmetricTokenTheKeyTypeWouldAccept(t *testing.T
 	rsaToken := sign(t, claims(), jwt.SigningMethodRS256, testKID, signingKey)
 	if _, err := testConfig().Verify(t.Context(), bytes, rsaToken, testNonce, at); err == nil {
 		t.Error("an RS256 token verified against a []byte key")
+	}
+}
+
+// EVERY TIME CLAIM IS JUDGED WITHIN A MINUTE OF THIS NODE'S CLOCK.
+//
+// `exp`, `iat` and `nbf` are written by the PROVIDER's clock, and two hosts'
+// clocks are never exactly one: a provider running a few seconds ahead issues
+// every token "in the future", and judged to the second each sign-in on the
+// node that is behind is refused for a reason nobody can see. So each is judged
+// within [oidc.ClockSkew] — and no further, which the cases two minutes out
+// hold.
+//
+// Mutation: drop the leeway and the few-seconds cases are refused; widen it
+// past two minutes and the far ones are accepted.
+func TestEveryTimeClaimIsJudgedWithinTheSkew(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		claim string
+		at    time.Time
+		want  bool
+	}{
+		{"issued five seconds ahead of this clock", "iat", at.Add(5 * time.Second), true},
+		{"expired five seconds ago by this clock", "exp", at.Add(-5 * time.Second), true},
+		{"valid from five seconds ahead of this clock", "nbf", at.Add(5 * time.Second), true},
+		{"issued two minutes ahead of this clock", "iat", at.Add(2 * time.Minute), false},
+		{"expired two minutes ago by this clock", "exp", at.Add(-2 * time.Minute), false},
+		{"valid from two minutes ahead of this clock", "nbf", at.Add(2 * time.Minute), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := claims()
+			c[tc.claim] = tc.at.Unix()
+			_, err := testConfig().Verify(t.Context(), publishedKeys(),
+				sign(t, c, jwt.SigningMethodRS256, testKID, signingKey), testNonce, at)
+			switch {
+			case tc.want && err != nil:
+				t.Errorf("refused a token %s: %v — a provider a few seconds "+
+					"off this node's clock would fail every sign-in here", tc.name, err)
+			case !tc.want && err == nil:
+				t.Errorf("accepted a token %s, which is past any clock's skew", tc.name)
+			}
+		})
 	}
 }

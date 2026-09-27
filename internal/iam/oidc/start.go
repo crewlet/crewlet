@@ -241,14 +241,15 @@ func Open(cipher secrets.Cipher, sealed string, now time.Time) (Flight, error) {
 // A flight with a [Flight.MaxAge] asked for a fresh authentication, and one
 // the provider did not give — no `auth_time`, which `max_age` makes required,
 // or one outside the window — is [ErrRefused]: the person asked to confirm who
-// they are, and nothing confirmed it.
+// they are, and nothing confirmed it. The window is judged within
+// [ClockSkew], as every other instant the provider's clock wrote is: an
+// `auth_time` from a provider running behind reads older by exactly its lag.
 func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
 	at := c.AuthTime
 	if at.After(now) {
-		// A PROVIDER'S CLOCK AHEAD OF THIS ONE, by the amount no token
-		// validation here tolerates for anything else either: the
-		// authentication happened, and not later than the token that
-		// reports it arrived.
+		// A PROVIDER'S CLOCK AHEAD OF THIS ONE, inside the skew the
+		// token's own `iat` was held to: the authentication happened,
+		// and not later than the token that reports it arrived.
 		at = now
 	}
 	if f.MaxAge <= 0 {
@@ -259,7 +260,7 @@ func (f Flight) ProvedAt(c Claims, now time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("%w: the provider asserted no "+
 			"auth_time, which it must when max_age is asked, so nothing says "+
 			"the person authenticated at all", ErrRefused)
-	case now.Sub(at) > f.MaxAge:
+	case now.Sub(at) > f.MaxAge+ClockSkew:
 		return time.Time{}, fmt.Errorf("%w: the provider says the person "+
 			"authenticated %s ago, outside the %s window this confirmation "+
 			"asked for", ErrRefused, now.Sub(at).Round(time.Second), f.MaxAge)

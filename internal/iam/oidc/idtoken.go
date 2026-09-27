@@ -37,6 +37,24 @@ import (
 //
 // The suite removes each in turn and fails; that is what the checks are, and a
 // comment claiming them would be a claim.
+//
+// Every TIME CLAIM — `exp`, `iat`, `nbf` — is judged within [ClockSkew] of
+// this node's clock, because it was written by the PROVIDER's.
+
+// ClockSkew is how far the identity provider's clock may be from this node's
+// before a time claim it wrote is refused.
+//
+// SIXTY SECONDS, the design's figure, and it is two clocks' worth of ordinary
+// drift rather than a grace period: a host kept by NTP sits within tens of
+// milliseconds of true time and a host whose sync has lapsed drifts seconds a
+// day, so a minute is room for both ends of the exchange to be imperfect and
+// nothing more. What it is FOR is `iat`: a provider whose clock runs a few
+// seconds ahead of this node's issues a token "in the future" on every sign-in,
+// and judged exactly that is a login refused for a reason nobody can see —
+// intermittently, on whichever node's clock is behind. What it costs is a
+// minute on `exp`, the lifetime a captured token is good for, which a provider
+// sets in hours.
+const ClockSkew = 60 * time.Second
 
 // Claims are what this engine reads out of an ID token.
 //
@@ -138,6 +156,9 @@ func (c Config) Verify(ctx context.Context, keys Keys, raw, nonce string,
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuedAt(),
 		jwt.WithTimeFunc(func() time.Time { return now }),
+		// AND EVERY TIME CLAIM WITHIN THE SKEW, `exp`, `iat` and `nbf`
+		// alike: each was written by the provider's clock.
+		jwt.WithLeeway(ClockSkew),
 	)
 	if err != nil {
 		return Claims{}, fmt.Errorf("%w: the id token did not verify: %w",
