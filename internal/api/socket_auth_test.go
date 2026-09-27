@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A CLOSED POSTURE OPENS THE SOCKET ON ITS QUERY TOKEN, through the whole
@@ -80,10 +81,13 @@ func TestTheSocketOpensOnItsQueryToken(t *testing.T) {
 // Two things the shipped client depends on, and both are load-bearing:
 //
 //   - THE HANDSHAKE CREDENTIAL RIDES `?token=`. A browser cannot set a header
-//     on a WebSocket constructor, so this is the only channel it has. Nothing
-//     mints a cookie yet, so removing it would take the dashboard off the air
-//     entirely — which is why the per-frame credential could go with this work
-//     and the handshake one could not.
+//     on a WebSocket constructor, so a pasted token has no other channel, and
+//     the bundle the tree ships still opens its socket that way: its sign-in
+//     does not yet hand the socket a session cookie. The guard ALREADY accepts
+//     one on the handshake ([TestACookieAuthenticatesTheHandshake]), which is
+//     the precondition for retiring the query branch — but not the whole of it:
+//     the branch goes when the shipped bundle stops sending `?token=`, which
+//     is what the needle below would then report.
 //   - THE 401/426 PAIRING ON A PLAIN GET. A browser is told nothing about why
 //     a handshake failed — no status, and no close code, because a connection
 //     that never opened sends no close frame — so the client re-asks over
@@ -159,4 +163,69 @@ func readShippedBundle(t *testing.T) string {
 			"case is looking in the wrong place", all.Len(), len(scripts))
 	}
 	return all.String()
+}
+
+// A SESSION COOKIE AUTHENTICATES THE SOCKET'S HANDSHAKE.
+//
+// A browser attaches its cookie to a WebSocket handshake as it does to any
+// request to its origin, so a person signed in with a session cookie needs no
+// token in the URL — the one channel a pasted token has, and one that lands in
+// proxy logs. Through the whole app, the way a browser arrives: the probe the
+// dashboard re-asks over plain HTTP answers 426 for a live session and 401 for
+// one this node has applied the end of, and a real handshake carrying only the
+// cookie opens and is sent the snapshot.
+//
+// Control: the same cookie against an app with no session arm is 401, so the
+// 426 above is the cookie's doing and nothing else's.
+func TestACookieAuthenticatesTheHandshake(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	b.API.ExternalURL = "http://127.0.0.1:8080"
+	cookies := newCookieArm(t, &b)
+	live := cookies.person(t, []iam.Grant{iam.GrantStateRead}, clock)
+	over := cookies.ended(t)
+	a := newApp(t, api.Options{Bootstrap: &b, Sessions: cookies.arm})
+	without := newApp(t, api.Options{Bootstrap: &b})
+
+	probe := func(app *api.App, cookie *http.Cookie) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/ws/stream", nil)
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := probe(a, live); got != http.StatusUpgradeRequired {
+		t.Errorf("the probe with a live session's cookie answered %d, want 426", got)
+	}
+	if got := probe(a, over); got != http.StatusUnauthorized {
+		t.Errorf("the probe with an ended session's cookie answered %d, want 401", got)
+	}
+	if got := probe(without, live); got != http.StatusUnauthorized {
+		t.Fatalf("the control — the same cookie on an app with no session arm — "+
+			"answered %d, want 401; the 426 above is not the cookie's", got)
+	}
+
+	srv := httptest.NewServer(a)
+	t.Cleanup(srv.Close)
+	conn, _, err := websocket.Dial(t.Context(),
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {live.String()}}})
+	if err != nil {
+		t.Fatalf("a handshake carrying a live session's cookie was refused: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, raw, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var first map[string]any
+	if err := json.Unmarshal(raw, &first); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	if first["kind"] != stream.KindSnapshot {
+		t.Errorf("first frame = %v, want the snapshot", first["kind"])
+	}
 }
