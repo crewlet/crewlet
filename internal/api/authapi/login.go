@@ -715,6 +715,16 @@ func (s *Service) backend() config.AuthBackend {
 	return s.boot.API.Auth.Resolved()
 }
 
+// passwordFloor is the shortest password this deployment accepts: its own
+// `api.auth.local.min_password_length`, or the engine's twelve.
+//
+// ONE READING FOR EVERY SITE THAT SETS OR DESCRIBES A PASSWORD — the two
+// enrolments that choose one and the two answers that tell a form what to
+// refuse before it posts — so a form can never be told one number while the
+// route enforces another. That was the shape before this: every site said
+// twelve, and none read the setting.
+func (s *Service) passwordFloor() int { return s.boot.API.Auth.Local.Passwords() }
+
 // sourceOf is what the throttle keys on.
 //
 // THE CLIENT, RESOLVED THROUGH THE TRUSTED PROXIES, and never the login: keyed

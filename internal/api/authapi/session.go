@@ -94,7 +94,7 @@ type configResponse struct {
 func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
 	out := configResponse{Backend: s.backend()}
 	if s.backend() == config.AuthBackendLocal {
-		out.MinPasswordLength = iam.MinPasswordChars
+		out.MinPasswordLength = s.passwordFloor()
 		out.SecondFactor = string(s.boot.API.Auth.Local.TOTP)
 	}
 	if s.provider != nil {

@@ -229,7 +229,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	if !live {
 		return
 	}
-	if err = credential.CheckStrength(in.Password); err != nil {
+	if err = credential.CheckStrength(in.Password, s.passwordFloor()); err != nil {
 		// SPECIFIC, because the caller has already proved they hold the
 		// code and the remedy is theirs to act on: a password refused
 		// with the generic sign-in message would send the first

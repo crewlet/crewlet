@@ -780,7 +780,10 @@ api:
     local:              # present on the `local` backend
       totp: required    # required | optional. NO DEFAULT: state one
       accept_insecure: false   # acknowledge an insecure posture off loopback
-      min_password_length: 12  # 12..256; 0 takes the engine's floor of 12
+      min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
+                               #   Enforced wherever a person sets a password
+                               #   — the founding and every redemption — and
+                               #   what /auth/config tells a form to refuse
     # oidc:             # present on the `oidc` backend instead
     #   issuer: "https://acme.okta.com/oauth2/default"    # https only
     #   client_id: "0oa1b2c3d4"

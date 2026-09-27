@@ -99,7 +99,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	view := inviteView{
 		Email: email, InvitedBy: held.InvitedBy,
 		Login:             iam.LoginFromAddress(email),
-		MinPasswordLength: iam.MinPasswordChars,
+		MinPasswordLength: s.passwordFloor(),
 	}
 	if s.provider != nil {
 		view.ProviderStart = auth.AuthInvitePrefix + url.PathEscape(held.ID) +
@@ -129,7 +129,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
-	if err = credential.CheckStrength(in.Password); err != nil {
+	if err = credential.CheckStrength(in.Password, s.passwordFloor()); err != nil {
 		// SPECIFIC, because holding the link is already evidence this
 		// invitation was issued to them and the remedy is theirs.
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,

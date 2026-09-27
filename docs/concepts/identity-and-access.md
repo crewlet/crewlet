@@ -731,6 +731,13 @@ actually choose from (everybody appends `1!`), an attacker who knows the rule
 enumerates it, and they push people to write the result down. Length is the
 only property that buys entropy from a human at no cost to them.
 
+Twelve is the engine's floor and a deployment may raise it with
+`api.auth.local.min_password_length`; nothing lowers it. The raised floor is
+the one every password is held to — the founder's at `POST /auth/bootstrap` and
+every redemption's — and the one `GET /auth/config` and an invitation's view
+report, so a form refuses exactly what the route would. It used to be validated
+and reported as twelve whatever it said, and enforced by nothing.
+
 Behind that floor there is a small blocklist, and it is deliberately hundreds
 of entries rather than a published top-ten-thousand corpus: those lists are
 ranked by observed frequency and human-chosen passwords cluster at six to ten

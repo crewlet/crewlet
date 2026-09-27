@@ -24,23 +24,53 @@ func TestTwelveCharactersIsTheOnlyRule(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if err := credential.CheckStrength(password); err != nil {
+			if err := credential.CheckStrength(password, iam.MinPasswordChars); err != nil {
 				t.Errorf("%q was refused: %v — the only rule is length, and a "+
 					"composition rule shrinks what people choose from",
 					password, err)
 			}
 		})
 	}
-	if err := credential.CheckStrength("elevenchars"); !errors.Is(err, credential.ErrWeak) {
+	if err := credential.CheckStrength("elevenchars", iam.MinPasswordChars); !errors.Is(err, credential.ErrWeak) {
 		t.Errorf("an eleven-character password was accepted: %v", err)
 	}
 	// AND THE REFUSAL SAYS WHAT IS WRONG, unlike every other refusal in
 	// this package: it is answered to somebody who has already proved who
 	// they are and is choosing a new secret.
-	err := credential.CheckStrength("short")
+	err := credential.CheckStrength("short", iam.MinPasswordChars)
 	if err == nil || !strings.Contains(err.Error(), "12") {
 		t.Errorf("the refusal %v does not name the minimum, so somebody "+
 			"choosing a password cannot tell what would satisfy it", err)
+	}
+}
+
+// A DEPLOYMENT'S FLOOR RAISES THE ENGINE'S, AND NOTHING LOWERS IT.
+//
+// `api.auth.local.min_password_length` was validated and enforced by nothing,
+// so a company that asked for twenty accepted fifteen. The floor handed in is
+// what is refused below — and the refusal names it, because the person choosing
+// a password has to know what would satisfy it — while zero, or anything under
+// twelve, still refuses under twelve. Mutation: ignore the argument and the
+// fifteen-character case is accepted; take it without the max and eleven is.
+func TestADeploymentFloorRaisesTheEnginesAndNothingLowersIt(t *testing.T) {
+	t.Parallel()
+	const fifteen = "fifteen-letters"
+	err := credential.CheckStrength(fifteen, 20)
+	if !errors.Is(err, credential.ErrWeak) {
+		t.Fatalf("%q was accepted under a floor of 20: %v", fifteen, err)
+	}
+	if !strings.Contains(err.Error(), "minimum is 20") {
+		t.Errorf("the refusal %q does not name the floor of 20", err)
+	}
+	if err := credential.CheckStrength(fifteen, 0); err != nil {
+		t.Errorf("%q was refused under the engine's own floor: %v — the "+
+			"control, which says the case above is about the floor", fifteen, err)
+	}
+	for _, min := range []int{0, 8, iam.MinPasswordChars - 1} {
+		if err := credential.CheckStrength("elevenchars", min); !errors.Is(err, credential.ErrWeak) {
+			t.Errorf("a floor of %d accepted eleven characters: %v — the "+
+				"engine's floor is under every deployment's", min, err)
+		}
 	}
 }
 
@@ -56,7 +86,7 @@ func TestTheFloorCountsCharactersAndNotBytes(t *testing.T) {
 	if len(short) < iam.MinPasswordChars {
 		t.Fatalf("this case is not testing anything: %q is %d bytes", short, len(short))
 	}
-	if err := credential.CheckStrength(short); !errors.Is(err, credential.ErrWeak) {
+	if err := credential.CheckStrength(short, iam.MinPasswordChars); !errors.Is(err, credential.ErrWeak) {
 		t.Errorf("%q (%d bytes, 4 characters) was accepted: %v", short,
 			len(short), err)
 	}
@@ -73,7 +103,7 @@ func TestOneBlocklistEntryCatchesEverySpellingOfItsFamily(t *testing.T) {
 		"password1234", "Password1234", "P@ssw0rd1234", "p4$$w0rd1234",
 		"  password1234  ", "PASSWORD1234",
 	} {
-		if err := credential.CheckStrength(password); !errors.Is(err, credential.ErrWeak) {
+		if err := credential.CheckStrength(password, iam.MinPasswordChars); !errors.Is(err, credential.ErrWeak) {
 			t.Errorf("%q was accepted — the fold is what lets one entry stand "+
 				"for every spelling of its family", password)
 		}
@@ -88,7 +118,7 @@ func TestOneBlocklistEntryCatchesEverySpellingOfItsFamily(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if err := credential.CheckStrength(password); !errors.Is(err, credential.ErrWeak) {
+			if err := credential.CheckStrength(password, iam.MinPasswordChars); !errors.Is(err, credential.ErrWeak) {
 				t.Errorf("%q was accepted", password)
 			}
 		})
@@ -107,7 +137,7 @@ func TestTheFoldDoesNotRefuseAnOrdinaryPassword(t *testing.T) {
 		"correct-horse-staples", "my-first-bicycle-1987", "Tr0ub4dor&3xkcd!!",
 		"the rain in spain falls", "quartz-ledger-inbound-9",
 	} {
-		if err := credential.CheckStrength(password); err != nil {
+		if err := credential.CheckStrength(password, iam.MinPasswordChars); err != nil {
 			t.Errorf("%q was refused: %v", password, err)
 		}
 	}
