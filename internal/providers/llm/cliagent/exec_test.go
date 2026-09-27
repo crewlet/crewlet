@@ -398,13 +398,16 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-not-for-the-child")
 	t.Setenv("CREWLET_STORE_DSN", "file:/var/lib/crewlet/state.db")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-billed")
+	t.Setenv("CREWLET_SECRET_KEY_2026_01", "keyring-material-not-for-the-child")
 
 	p := fakeProvider(t, map[string]string{"FAKE_DUMP_ENV": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	for _, leaked := range []string{"SLACK_BOT_TOKEN", "CREWLET_STORE_DSN", "ANTHROPIC_API_KEY"} {
+	for _, leaked := range []string{
+		"SLACK_BOT_TOKEN", "CREWLET_STORE_DSN", "ANTHROPIC_API_KEY", "CREWLET_SECRET_KEY_2026_01",
+	} {
 		if strings.Contains(comp.Content, leaked+"=") {
 			t.Errorf("%s reached the child:\n%s", leaked, comp.Content)
 		}

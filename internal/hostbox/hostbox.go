@@ -7,7 +7,9 @@
 // seed operator-supplied credential paths in, both copy a refreshed login back
 // out, and both hand a child process an environment. A second implementation
 // of any of those is the one that drifts — and each of them is a guard, so
-// drift means a hole.
+// drift means a hole. The environment had already drifted: the CLI backend
+// carried a copy of the allowlist that disagreed with this one about five
+// names.
 //
 // Nothing here imports the rest of Crewlet: it sits below both consumers.
 package hostbox
@@ -20,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -31,20 +34,29 @@ const DirMode os.FileMode = 0o700
 // FileMode is the mode for every file they create, for the same reason.
 const FileMode os.FileMode = 0o600
 
-// PassthroughEnv is the host environment a child process may inherit.
+// PassthroughEnv is the host environment every child process may inherit.
 //
 // An ALLOWLIST, not a denylist, and that polarity is the whole point: the
-// engine's own environment holds the org's chat token, its database DSN and
-// possibly a metered API key, none of which a coding agent has any business
-// reading. A denylist would leak every variable nobody thought to name.
+// engine's own environment holds the keyring every session cookie and every
+// sealed revision is signed under, the Tier A token values, the identity
+// provider's client secret, the database DSN and possibly a metered API key,
+// none of which a child has any business reading. A denylist would leak every
+// variable nobody thought to name — and the engine's Tier A `${VAR}`
+// references mean an operator names those variables, not this package.
 //
 // What is on it is what a process needs to run at all — where to find
-// binaries, how to talk TLS, how to reach the network — never what to
-// authenticate as. Credentials reach a child only through the run environment
-// config deliberately put there.
+// binaries, how to render text, how to talk TLS, how to reach the network —
+// never what to authenticate as. Credentials reach a child only through the
+// environment its config deliberately declares.
+//
+// ONE LIST FOR EVERY CHILD. The CLI backend kept its own and had already
+// drifted from this one: it lacked LC_NUMERIC, TERM and the ALL_PROXY pair (so
+// a coding CLI behind a SOCKS proxy reached nothing), and it carried LANGUAGE,
+// which this one did not.
 var PassthroughEnv = []string{
 	"PATH",
 	"LANG",
+	"LANGUAGE",
 	"LC_ALL",
 	"LC_CTYPE",
 	"LC_NUMERIC",
@@ -77,6 +89,25 @@ func Inherit(extra ...string) map[string]string {
 		}
 	}
 	return env
+}
+
+// Environ renders env as os/exec's KEY=value slice: sorted, and NEVER nil.
+//
+// NEVER NIL, because a nil exec.Cmd.Env does not mean "no environment": os/exec
+// then hands the child the ENGINE's own, which is precisely what the allowlist
+// exists to keep out of it. An empty map therefore renders as an empty,
+// non-nil slice — a child with nothing rather than a child with everything —
+// and a caller whose child genuinely needs something states it.
+//
+// Sorted, so a spawn is reproducible from a log line and a test compares an
+// environment rather than a map's iteration order.
+func Environ(env map[string]string) []string {
+	out := make([]string, 0, len(env))
+	for name, value := range env {
+		out = append(out, name+"="+value)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ErrEscape reports a path that resolves outside the root it was joined to.

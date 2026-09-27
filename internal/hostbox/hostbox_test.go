@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -145,6 +146,23 @@ func TestInheritTakesOnlyTheAllowlist(t *testing.T) {
 		if _, ok := env[secret]; ok {
 			t.Fatalf("%s reached the child environment", secret)
 		}
+	}
+}
+
+// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec reads a nil Cmd.Env as
+// "inherit the parent's", so an empty map rendered as nil would hand a child
+// the whole engine environment — the exact opposite of the empty one it asked
+// for.
+func TestEnvironIsNeverNilAndSorted(t *testing.T) {
+	if got := Environ(nil); got == nil || len(got) != 0 {
+		t.Fatalf("Environ(nil) = %#v, want an empty non-nil slice", got)
+	}
+	if got := Environ(map[string]string{}); got == nil {
+		t.Fatal("Environ of an empty map is nil, which os/exec reads as the engine's own")
+	}
+	got := Environ(map[string]string{"B": "2", "A": "1", "C": ""})
+	if want := []string{"A=1", "B=2", "C="}; !slices.Equal(got, want) {
+		t.Fatalf("Environ = %v, want %v", got, want)
 	}
 }
 

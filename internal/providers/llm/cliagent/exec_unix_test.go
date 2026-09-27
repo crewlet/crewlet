@@ -134,3 +134,26 @@ func reapTree(grandchild int) {
 	}
 	_ = syscall.Kill(grandchild, syscall.SIGKILL)
 }
+
+// A CALL WITH NO ENVIRONMENT IS NOT STARTED.
+//
+// os/exec reads a nil Cmd.Env as "inherit the parent's", so a caller that
+// forgot to build one would not run a CLI with nothing — it would run it with
+// the engine's keyring, its Tier A tokens and every provider key, which is
+// what the version probe once did. The refusal has to come before the fork,
+// so the proof is that the child never ran at all.
+func TestACallWithNoEnvironmentIsNotStarted(t *testing.T) {
+	t.Parallel()
+	marker := filepath.Join(t.TempDir(), "ran")
+	_, err := run(t.Context(), invocation{
+		binary:  "/bin/sh",
+		args:    []string{"-c", `: > "$0"`, marker},
+		timeout: 10 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("a call with no environment of its own was run")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the child ran before the refusal, holding the engine's environment")
+	}
+}

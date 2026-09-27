@@ -43,6 +43,10 @@ const stderrTail = 50
 const maxOutput = 32 << 20
 
 // invocation is one CLI call, fully resolved.
+//
+// Its env is the child's WHOLE environment, from [buildEnv], and it is
+// required: [run] refuses a nil one, because os/exec reads a nil Cmd.Env as
+// "inherit the engine's".
 type invocation struct {
 	binary  string
 	args    []string
@@ -116,6 +120,18 @@ type rawResult struct {
 // runtime that forks helpers, and signalling only the process Go started
 // leaves those holding the seat's memory and its network sockets.
 func run(ctx context.Context, in invocation) (*rawResult, error) {
+	// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec hands a child whose
+	// Env is nil the ENGINE's own environment — its keyring, its Tier A
+	// tokens, the org's chat token and every provider key — which is the
+	// one thing the allowlist exists to keep out of a vendor's CLI. The
+	// version probe reached here with none once and ran `--version` with
+	// more access than any completion ever got; refused here, the next
+	// caller that forgets cannot do the same silently.
+	if in.env == nil {
+		return nil, fmt.Errorf("cliagent: %s was about to run with no environment "+
+			"of its own, which os/exec would fill with the engine's; it was not "+
+			"started", in.binary)
+	}
 	callCtx, cancel := context.WithTimeout(ctx, in.timeout)
 	defer cancel()
 
