@@ -267,7 +267,9 @@ credentials, its sandbox cell, its `mcp_env` — are the company's own
 `config:write` grant, because a lead who could write the first could make
 themselves anybody's manager and a stdio MCP server is `exec.Command` with the
 config's command. Sending back what you read changes nothing, so a lead's
-`PATCH` of a goal carries the seat's relations unchanged and lands.
+`PATCH` of a goal carries the seat's relations unchanged and lands — and a
+relation the body leaves out is a **change**: refused to a lead, naming the
+field, and applied for an administrator.
 
 ### Edit one seat's goal
 
@@ -276,23 +278,45 @@ runtime half with `?runtime=true`, and you get it only if you also hold
 `config:read`.
 
 ```bash
-curl -s "$CREWLET_URL/chart/seats/sre" -H "$AUTH" | jq .seat
+curl -s "$CREWLET_URL/chart/seats/sre" -H "$AUTH" > sre.json
+
+# The seat as it will be: every field the read served, with the one you mean
+# to change changed. `manages` is served beside the seat rather than inside it.
+jq '.seat + {manages: .manages}
+    | {unit, name, email, goal, manages, project, space}
+    | with_entries(select(.value != null))
+    | .goal = "keep the platform boring"' sre.json > sre-edit.json
 
 curl -X PATCH $CREWLET_URL/chart/seats/sre \
   -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"unit":"engineering","name":"SRE",
-       "goal":"keep the platform boring"}'
+  -d @sre-edit.json
 ```
 
 A content write is **full post-state**, like the record it becomes: a field you
-leave out is a field you set to empty — with one exception, `runtime`. Leaving
-it out keeps the runtime half the seat has, which is what lets somebody who
-leads the seat correct its goal without holding, or seeing, its model chain
-and credentials; removing the half is `"clear_runtime": true`, which takes
-`config:write` like any runtime write. It carries no
+leave out is a field you set to empty — with one exception, `runtime`. That is
+why the body is built from the whole read rather than typed out. A body naming
+only the field you meant to change leaves out the seat's `email`, `manages`,
+`project` and `space`, and each of those is then a change: a lead is refused
+`403` naming them, and an administrator holding `config:write` is **granted**
+it — the seat's address, the teams it manages, its project and its space are
+cleared under a `200`, and losing `manages` is itself a change of authority,
+since it decides whom that seat manages.
+
+**Three prose fields are not in the read**: a seat's `backstory`,
+`responsibilities` and `behavioral_guidelines`. `GET /chart/seats/{handle}`
+does not serve them, so the body above sets them empty on a seat that has
+them. On such a seat, add the three to the body from the company file you
+author before you send it.
+
+Leaving `runtime` out keeps the runtime half the seat has, which is what lets
+somebody who leads the seat correct its goal without holding, or seeing, its
+model chain and credentials; removing the half is `"clear_runtime": true`,
+which takes `config:write` like any runtime write. It carries no
 **kind**: whether a person or an agent holds the seat is structure, set by the
 batch that creates it and changed by a `set_kind` operation, and a content body
-naming one is refused.
+naming one is refused — which is why the `jq` above picks the fields it sends
+rather than sending `.seat` whole, whose `handle`, `kind` and
+`former_handles` no content body reads.
 
 ### Hire, move, dissolve
 
