@@ -26,9 +26,9 @@ import (
 //     The throttle's curve for a login then belongs to everybody at once: a
 //     stranger guessing at somebody's login puts that person's own sign-in
 //     behind the same thirty-second wait, which is a slowdown the defence
-//     caused, and every audit row names the proxy. `crewlet validate` warns about exactly
-//     this shape — an `https` external URL, which only a proxy can terminate,
-//     with no proxy trusted.
+//     caused, and every audit row names the proxy. `crewlet validate` warns
+//     about exactly this shape — an `https` external URL, which only a proxy
+//     can terminate, with no proxy trusted.
 //
 // # What it is used for, and why that makes the default fail-safe
 //

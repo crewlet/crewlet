@@ -611,8 +611,9 @@ type admission struct {
 // BEFORE ANYTHING IS LOOKED UP, on the subject as the caller TYPED it and the
 // source it came from: keyed on what it resolved to, the curve would be one
 // only real people could climb, and the roster again. A route whose
-// credential names nobody takes [Service.uncounted] instead. A wait of up to [credential.InlineDelay] is served inside this
-// call; a longer one is `429 throttled` naming the time left.
+// credential names nobody takes [Service.uncounted] instead. A wait of up to
+// [credential.InlineDelay] is served inside this call; a longer one is
+// `429 throttled` naming the time left.
 //
 // THE CALLER RESOLVES THE TICKET — [credential.Ticket.Fail] through
 // [Service.refuseSignIn] or its siblings, [credential.Ticket.Succeed] where
