@@ -42,22 +42,42 @@ import (
 // Credential is a configured secret a session stands for — a Tier A token's
 // value — held so a bearer can be bound to it and checked against it.
 //
+// THREE STATES, and the zero value is the first: NONE, a person's session,
+// which answers to rows rather than to a configured value; a VALUE
+// ([CredentialOf]); and WITHDRAWN ([Withdrawn]) — a subject that is a
+// configured credential with nothing configured under its name any more,
+// because its entry was removed or renamed. Withdrawn is not none: a session
+// exchanged from a token that no longer exists is over, and one answering to
+// none would be served as though it were a person's.
+//
 // ITS VALUE NEVER PRINTS: [Credential.String] and [Credential.GoString] are
 // redacted, so a log line or an error that formats an [Identity] carries the
 // fact that a credential is there and never the credential.
-type Credential struct{ secret string }
+type Credential struct {
+	secret     string
+	configured bool
+}
 
 // CredentialOf wraps a configured secret.
-func CredentialOf(secret string) Credential { return Credential{secret: secret} }
+func CredentialOf(secret string) Credential {
+	return Credential{secret: secret, configured: true}
+}
+
+// Withdrawn is the credential of a subject that is a configured credential
+// with nothing configured under its name any more.
+func Withdrawn() Credential { return Credential{configured: true} }
 
 // IsZero reports that there is no credential: a person's session, which
 // answers to rows rather than to a configured value.
-func (c Credential) IsZero() bool { return c.secret == "" }
+func (c Credential) IsZero() bool { return !c.configured }
 
 // String is the redacted form every formatting verb but %#v prints.
 func (c Credential) String() string {
-	if c.IsZero() {
+	switch {
+	case c.IsZero():
 		return "none"
+	case c.secret == "":
+		return "withdrawn"
 	}
 	return "[redacted]"
 }
@@ -94,6 +114,9 @@ func (s *Signer) bound(b Bearer, cred Credential) (bool, string) {
 	case cred.IsZero():
 		return false, "the bearer is bound to a configured credential and " +
 			"its subject answers to none"
+	case cred.secret == "":
+		return false, "the configured credential this session was exchanged " +
+			"from is no longer configured"
 	case b.Binding == "":
 		return false, "the subject answers to a configured credential and " +
 			"the bearer was minted without one"

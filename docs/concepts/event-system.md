@@ -289,9 +289,11 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
 #       the publishing node's, and the fleet-wide record is iam_history
 iam_session_started        # method, second factor, lineage, client address
 iam_session_ended          # logout / logout_all / idle / absolute / revoked
-                           # / idp_revoked / person_removed. An idle or
-                           # absolute end is noticed when the bearer is next
-                           # presented, once per session per node
+                           # / idp_revoked / person_removed /
+                           # credential_changed. An idle or absolute end, and
+                           # a token's session whose value changed or whose
+                           # entry was removed, is noticed when the bearer is
+                           # next presented, once per session per node
 iam_login_failures         # ONE per client per minute, from the engine's own
                            # flush loop: counts, the distinct-subject count,
                            # the methods (a rejected bearer is `bearer`), how

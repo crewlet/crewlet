@@ -198,29 +198,41 @@ const (
 	RowMalformed Row = "malformed"
 )
 
-// Deadline is which of a bearer's own deadlines ended a session.
+// Ending is what ended a session when no RECORD did.
 //
-// A VALUE BESIDE [RowEnded] RATHER THAN TWO MORE ROWS, because the table's
-// answer is the same for both — refuse, and clear the cookie — and a row is a
+// A VALUE BESIDE [RowEnded] RATHER THAN MORE ROWS, because the table's answer
+// is the same for all of them — refuse, and clear the cookie — and a row is a
 // decision about what a request may do. What differs is what the audit trail
-// says happened, and a deadline is the one way a session ends that no record
-// ever states: the idle deadline lives in the bearer and nowhere else, so the
-// frame that validates a bearer is the only one that can ever see it pass.
-type Deadline string
+// says happened, and these are the ways a session ends that no record ever
+// states: the idle deadline lives in the bearer and nowhere else, the absolute
+// one too, and the value a token's session was exchanged from lives in a
+// configuration file — so the frame that validates a bearer is the only one
+// that can ever see any of them decide.
+type Ending string
 
 const (
-	// DeadlineIdle is a session unused for [Idle].
-	DeadlineIdle Deadline = "idle"
+	// EndingIdle is a session unused for [Idle].
+	EndingIdle Ending = "idle"
 
-	// DeadlineAbsolute is a session past the lifetime it was minted with,
+	// EndingAbsolute is a session past the lifetime it was minted with,
 	// which no re-issue moves.
-	DeadlineAbsolute Deadline = "absolute"
+	EndingAbsolute Ending = "absolute"
+
+	// EndingCredential is a session exchanged from a configured credential
+	// whose value is not the one it was exchanged from any more — a new
+	// value under the token's id, or the entry removed — decided while
+	// this node's rows would still have served it, so no record this node
+	// holds got there first. See credential.go.
+	EndingCredential Ending = "credential"
 )
 
-// Valid reports whether d is none or one of the two deadlines.
-func (d Deadline) Valid() bool {
-	return d == "" || d == DeadlineIdle || d == DeadlineAbsolute
+// Valid reports whether e is none or an ending this build names.
+func (e Ending) Valid() bool {
+	return e == "" || e == EndingIdle || e == EndingAbsolute || e == EndingCredential
 }
+
+// Deadline reports whether e is one of the bearer's own deadlines.
+func (e Ending) Deadline() bool { return e == EndingIdle || e == EndingAbsolute }
 
 // Rows are the six, in the order the design's table states them.
 //
@@ -332,10 +344,11 @@ type Validation struct {
 	// Err is the read failure behind [RowStalled], when there was one.
 	Err error
 
-	// Deadline is which of the bearer's own deadlines ended it, set on a
-	// [RowEnded] a deadline decided and empty everywhere else — including
+	// Ending is what ended it when no record did — one of the bearer's own
+	// deadlines, or the credential a token's session stands for — set on a
+	// [RowEnded] one of those decided and empty everywhere else, including
 	// the ends a RECORD decided, which already said so when it landed.
-	Deadline Deadline
+	Ending Ending
 }
 
 // EnrolmentOnly reports whether the session this bearer names may do nothing
@@ -407,10 +420,10 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	// recently it was used.
 	switch {
 	case !now.Before(b.AbsoluteExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b, Deadline: DeadlineAbsolute,
+		return Validation{Row: RowEnded, Bearer: b, Ending: EndingAbsolute,
 			Detail: "the absolute deadline has passed"}
 	case !now.Before(b.IdleExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b, Deadline: DeadlineIdle,
+		return Validation{Row: RowEnded, Bearer: b, Ending: EndingIdle,
 			Detail: "the idle deadline has passed"}
 	}
 
@@ -448,9 +461,13 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 //
 //   - [RowValid]: the session was live until its own deadline, which is the
 //     whole of what ended it.
-//   - [RowEnded] or [RowGone]: a record ended it, the sweep has already
-//     collected it, or the token it was exchanged from has a new value;
-//     either way the ending was not the deadline's to announce.
+//   - [RowEnded] carrying [EndingCredential]: the rows would still serve it,
+//     and the credential a token's session was exchanged from has since
+//     changed — no record ended it either, so the deadline, the ending a
+//     presentation can date, is still the one to announce.
+//   - [RowEnded] otherwise, or [RowGone]: a record ended it, or the sweep has
+//     already collected it; either way the ending was not the deadline's to
+//     announce.
 //   - [RowBehind] or [RowStalled]: this node cannot say, and a fact nobody
 //     could confirm is not one to announce.
 //
@@ -476,6 +493,12 @@ func (s *Signer) Standing(ctx context.Context, directory Directory,
 // has not applied the session's row still holds the configuration, so a
 // rotated token's session is over there too rather than served for reads
 // until the row arrives.
+//
+// AND IT SAYS SO, as [EndingCredential]: the rows would have served, so no
+// record this node holds ended the session, and nothing but this frame will
+// ever say it ended. Left bare, a break-glass session cut off by the value it
+// was exchanged from changing ended without a row, and the trail could not
+// say which sessions a rotation ended.
 func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
 	v := rowsStanding(b, identity, err)
 	if v.Row != RowValid && v.Row != RowBehind {
@@ -483,7 +506,7 @@ func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
 	}
 	if ok, why := s.bound(b, identity.Credential); !ok {
 		return Validation{Row: RowEnded, Bearer: b, Person: identity.Person,
-			Detail: why}
+			Ending: EndingCredential, Detail: why}
 	}
 	return v
 }

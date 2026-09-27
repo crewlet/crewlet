@@ -43,8 +43,10 @@ const (
 	// token's id.
 	OnceTokenOverreach OnceClass = "token_overreach"
 
-	// OnceSessionEnded is a session noticed past one of its own deadlines,
-	// keyed on its lineage, for the life of the process.
+	// OnceSessionEnded is a session noticed ended by something no record
+	// states — one of its own deadlines, or the credential a token's
+	// session was exchanged from changing — keyed on its lineage, for the
+	// life of the process.
 	OnceSessionEnded OnceClass = "session_ended"
 )
 
@@ -75,9 +77,10 @@ var onceBounds = map[OnceClass]int{
 	OnceTokenUse:       256,
 	OnceTokenOverreach: 256,
 
-	// 8192 deadline endings, remembered for the life of the process: a
-	// 500-person company ends about 500 sessions a day this way, so the
-	// bound is about sixteen days of them. The lineage forgotten is the
+	// 8192 endings no record states, remembered for the life of the
+	// process: a 500-person company ends about 500 sessions a day on a
+	// deadline, and a token rotation ends only the break-glass sessions
+	// exchanged in its hour, so the bound is about sixteen days of them. The lineage forgotten is the
 	// one noticed longest ago, and it announces again only if it is
 	// presented again AND its rows still read live — which the retention
 	// sweep ends.

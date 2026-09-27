@@ -35,42 +35,83 @@ func (s *signedIn) exchanged(value, answers string) string {
 	return cookie
 }
 
-// A SESSION EXCHANGED FROM A TOKEN IS OVER ONCE THE TOKEN'S VALUE CHANGES.
+// A SESSION EXCHANGED FROM A TOKEN IS OVER ONCE THE TOKEN'S VALUE CHANGES —
+// AND SAYS WHAT ENDED IT.
 //
 // It answered to the token's NAME: a new value under the same id kept every
 // session the old value opened for the rest of its hour, which is the hour a
 // leak is answered in. The bearer is bound to the value, so the new one ends
 // it — on a node that has not applied the session's row too, where the reads
-// would otherwise be served on the bearer alone. THE CONTROL is the same value,
-// served on both nodes. Mutation: skip the binding check and the rotated rows
-// serve.
+// would otherwise be served on the bearer alone — and so does the entry being
+// removed, which withdraws the credential. Either is an ending no record
+// states, so the validation carries [session.EndingCredential] for the guard to
+// announce: left bare, the trail could not say which break-glass sessions a
+// rotation cut off. THE CONTROL is the same value, served on both nodes.
+// Mutations: skip the binding check and the rotated rows serve; drop the ending
+// and they end unannounced.
 func TestAnExchangedSessionEndsWhenItsTokensValueChanges(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
-		answers string
+		answers session.Credential
 		want    session.Row
 		behind  session.Row
+		ending  session.Ending
 	}{
-		{"the value it was exchanged with", tokenValue, session.RowValid, session.RowBehind},
-		{"a new value under the same name", "a-rotated-tier-a-token-for-ops-02", session.RowEnded, session.RowEnded},
-		{"no value at all", "", session.RowEnded, session.RowEnded},
+		{"the value it was exchanged with", session.CredentialOf(tokenValue),
+			session.RowValid, session.RowBehind, ""},
+		{"a new value under the same name",
+			session.CredentialOf("a-rotated-tier-a-token-for-ops-02"),
+			session.RowEnded, session.RowEnded, session.EndingCredential},
+		{"its entry removed", session.Withdrawn(),
+			session.RowEnded, session.RowEnded, session.EndingCredential},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig := newSignedIn(t)
-			rig.cookie = rig.exchanged(tokenValue, tc.answers)
-			if got := rig.validate(); got.Row != tc.want {
-				t.Errorf("landed on %q (%s), want %q", got.Row, got.Detail, tc.want)
+			rig.cookie = rig.exchanged(tokenValue, "")
+			rig.dir.identity.Credential = tc.answers
+			got := rig.validate()
+			if got.Row != tc.want || got.Ending != tc.ending {
+				t.Errorf("landed on %q ending %q (%s), want %q ending %q",
+					got.Row, got.Ending, got.Detail, tc.want, tc.ending)
 			}
 			// A NODE THAT HAS NOT APPLIED THE SESSION'S START.
 			rig.dir.identity.Session = session.LineageRow{}
 			rig.dir.identity.Applied = startPos - 1
-			if got := rig.validate(); got.Row != tc.behind {
-				t.Errorf("behind, landed on %q (%s), want %q", got.Row,
-					got.Detail, tc.behind)
+			if got := rig.validate(); got.Row != tc.behind || got.Ending != tc.ending {
+				t.Errorf("behind, landed on %q ending %q (%s), want %q ending %q",
+					got.Row, got.Ending, got.Detail, tc.behind, tc.ending)
 			}
 		})
+	}
+}
+
+// A TOKEN'S SESSION WHOSE ENTRY IS GONE IS NOT A PERSON'S.
+//
+// A withdrawn credential is not "none": a bearer minted without a binding —
+// which nothing this engine exchanges produces — whose token has since been
+// removed must be refused as a token's session, never served as a person's.
+// Mutation: read a withdrawn credential as none and the unbound bearer serves.
+func TestAWithdrawnCredentialIsNotNone(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	rig.cookie = rig.exchanged(tokenValue, "")
+	unbound, err := rig.signer.Mint(session.Mint{
+		Lineage: rig.lineage, Person: iam.TokenLogin("ops"), Generation: 1,
+		StartPosition: startPos, AbsoluteExpiresAt: rig.clock.now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.cookie = unbound
+	rig.dir.identity.Credential = session.Withdrawn()
+	if got := rig.validate(); got.Row != session.RowEnded {
+		t.Errorf("an unbound bearer for a removed token landed on %q (%s), "+
+			"want ended", got.Row, got.Detail)
+	}
+	if got := fmt.Sprintf("%v %#v", session.Withdrawn(), session.Withdrawn()); strings.Contains(got, "redacted") {
+		t.Errorf("a withdrawn credential prints %q; it holds no value to redact", got)
 	}
 }
 

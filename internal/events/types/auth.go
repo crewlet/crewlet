@@ -158,13 +158,21 @@ const (
 	// EndPersonRemoved is the person being removed, which ends every
 	// session they hold along with everything else about them.
 	EndPersonRemoved SessionEndReason = "person_removed"
+
+	// EndCredentialChanged is a session exchanged from a Tier A token
+	// whose value is not the one it was exchanged from any more — a new
+	// value put under the token's id, which is how a leak is answered, or
+	// the entry removed. Noticed, like a deadline, when its cookie is next
+	// presented, because the value lives in a configuration file and no
+	// record ever states it changed.
+	EndCredentialChanged SessionEndReason = "credential_changed"
 )
 
 // Valid reports whether r is a reason this build names.
 func (r SessionEndReason) Valid() bool {
 	switch r {
 	case EndLogout, EndLogoutAll, EndIdle, EndAbsolute, EndRevoked,
-		EndIDPRevoked, EndPersonRemoved:
+		EndIDPRevoked, EndPersonRemoved, EndCredentialChanged:
 		return true
 	}
 	return false
@@ -313,8 +321,8 @@ type IAMSessionEnded struct {
 	Reason  SessionEndReason `json:"reason"`
 
 	// By is who ended it: the holder for a logout, an administrator for a
-	// revocation or a removal, and EMPTY for a deadline or a provider
-	// verdict, which nobody authored.
+	// revocation or a removal, and EMPTY for a deadline, a provider verdict
+	// or a changed credential, which nobody this engine can name authored.
 	By string `json:"by"`
 
 	// OperatorID is the CREDENTIAL By acted through: a machine token's

@@ -725,14 +725,14 @@ func TestBothBehindArmsReissueTheCookie(t *testing.T) {
 // record, and a second announcement from every node a stale cookie reaches
 // would name the wrong cause.
 //
-// Mutation: drop the Deadline from the idle arm and the first case fails; set
+// Mutation: drop the Ending from the idle arm and the first case fails; set
 // one on the row-ended arm and the last does.
 func TestADeadlineSaysWhichDeadlineEndedTheSession(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		world func(*signedIn)
-		want  session.Deadline
+		want  session.Ending
 	}{
 		{"idle past the idle window", func(s *signedIn) {
 			// A LIFETIME LONGER THAN THE IDLE WINDOW, which the rig's own
@@ -747,10 +747,10 @@ func TestADeadlineSaysWhichDeadlineEndedTheSession(t *testing.T) {
 			}
 			s.cookie = cookie
 			s.clock.advance(session.Idle + time.Minute)
-		}, session.DeadlineIdle},
+		}, session.EndingIdle},
 		{"past the absolute lifetime", func(s *signedIn) {
 			s.clock.advance(absolute + time.Minute)
-		}, session.DeadlineAbsolute},
+		}, session.EndingAbsolute},
 		{"ended by a record", func(s *signedIn) {
 			s.dir.identity.Session.Ended = true
 		}, ""},
@@ -763,11 +763,11 @@ func TestADeadlineSaysWhichDeadlineEndedTheSession(t *testing.T) {
 			if got.Row != session.RowEnded {
 				t.Fatalf("landed on %q, want ended: %s", got.Row, got.Detail)
 			}
-			if got.Deadline != tc.want {
-				t.Errorf("deadline = %q, want %q (%s)", got.Deadline, tc.want, got.Detail)
+			if got.Ending != tc.want {
+				t.Errorf("ending = %q, want %q (%s)", got.Ending, tc.want, got.Detail)
 			}
-			if !got.Deadline.Valid() {
-				t.Errorf("deadline %q is not one this build names", got.Deadline)
+			if !got.Ending.Valid() {
+				t.Errorf("ending %q is not one this build names", got.Ending)
 			}
 		})
 	}
@@ -812,17 +812,17 @@ func TestStandingIsWhatTheRowsSayPastADeadline(t *testing.T) {
 			tc.world(rig)
 			rig.clock.advance(absolute + time.Minute)
 			refused := rig.validate()
-			if refused.Row != session.RowEnded || refused.Deadline != session.DeadlineAbsolute {
+			if refused.Row != session.RowEnded || refused.Ending != session.EndingAbsolute {
 				t.Fatalf("validation landed on %q (%q), want the absolute deadline",
-					refused.Row, refused.Deadline)
+					refused.Row, refused.Ending)
 			}
 			got := rig.signer.Standing(t.Context(), rig.dir, refused.Bearer)
 			if got.Row != tc.want {
 				t.Errorf("standing is %q, want %q (%s)", got.Row, tc.want, got.Detail)
 			}
-			if got.Reissue != "" || got.Deadline != "" {
+			if got.Reissue != "" || got.Ending.Deadline() {
 				t.Errorf("standing re-issued %q or named deadline %q: it is "+
-					"about the rows alone", got.Reissue, got.Deadline)
+					"about the rows alone", got.Reissue, got.Ending)
 			}
 		})
 	}
