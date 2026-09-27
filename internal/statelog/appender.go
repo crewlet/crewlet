@@ -49,8 +49,9 @@ type Appender interface {
 // and the refusals that are neither a stale expectation nor an unanswered
 // append split three ways further, because each sends a different person to a
 // different knob: a log at its ceiling is the operator's retention, a record
-// too large for the broker is the writer's change or the server's
-// max_payload, and anything else the broker refused is the broker's own words.
+// too large for the broker is the writer's change or whichever of three limits
+// refused it ([tooLargeDetail]), and anything else the broker refused is the
+// broker's own words.
 // Folded into one, a record too large was told to raise a ceiling it was
 // nowhere near.
 //
