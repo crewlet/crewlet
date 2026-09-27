@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// THE SETTINGS DOCUMENT: what a stored revision holds once the org chart has
-// left it.
+// Settings is THE SETTINGS DOCUMENT: what a stored revision holds once the org
+// chart has left it.
 //
 // # What changed, and what deliberately did not
 //

@@ -313,8 +313,7 @@ func (x *identityIndex) place(leaf error) *located {
 		l := &located{err: leaf, text: text}
 		for _, r := range dup.Seats {
 			field := "name"
-			switch {
-			case dup.Kind == org.DuplicateHandle && r.DeclaredHandle != "":
+			if dup.Kind == org.DuplicateHandle && r.DeclaredHandle != "" {
 				// The handle is written, so that is the line to change; a
 				// derived one is changed by renaming the seat.
 				field = "handle"
