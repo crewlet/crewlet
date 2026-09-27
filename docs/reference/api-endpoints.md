@@ -3460,11 +3460,21 @@ so a node that has not applied what the fleet holds must not be able to say it.
 
 The hint is **derived, not fixed**: how far behind this node is over how fast
 it is actually draining, so a node grinding through a bulk apply asks for
-longer than one that caught up in milliseconds. A refusal that waiting cannot
-clear — a node holding a record its build cannot decode — is **not** a `503`,
-because a client told to come back would go round a loop that cannot
-terminate; those are ordinary failures and the log names them. See
-[Read Consistency](../guides/consistency.md).
+longer than one that caught up in milliseconds. **Every** refusal by the state
+log is `unavailable` — `503` over REST, the `unavailable` frame on the socket —
+carrying the refusal's code as `refusal` and its own words as `detail`, because
+none of them is a fault: the node understood the question and cannot answer it
+*here*. What differs is whether to come back. A `Retry-After` is sent only
+where waiting clears the refusal, and it is that refusal's own hint — the
+derived one above for `behind`, the broker's election timeout for `no_quorum`
+and `broker_unreachable`, one position heartbeat for `below_floor` and
+`floor_unknown`. A refusal waiting cannot clear — a record this node cannot
+decode (`deferred`), a log at its byte ceiling (`log_full`), a barrier its
+broker refused (`broker_refused`), an evicted node — carries **none**, so a
+client asks another node or waits for an operator rather than polling this one;
+see [the thirteen refusals](../guides/consistency.md#the-thirteen-refusals) for
+what each one asks of whom. A `min_position` on another domain's log is not a
+refusal at all: it is the request's mistake, and it is `400 bad_params`.
 
 **The reads are here and the writes are [the write surface's](#the-human-write-surface).**
 Every write is attributed to somebody — a seat through its own tools, a person
