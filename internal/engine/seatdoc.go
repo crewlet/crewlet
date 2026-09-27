@@ -143,7 +143,11 @@ func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte
 		BehavioralGuidelines: role.BehavioralGuidelines,
 		Manages:              role.Manages,
 		Project:              role.Project, Space: role.Space,
-		Runtime: runtime,
+		// THE WHOLE DOCUMENT STATES THE RUNTIME HALF, so a document
+		// holding none clears it: a content write that left the half out
+		// would keep the seat's old one, which is not what a caller
+		// writing the seat back whole asked for.
+		Runtime: runtime, ClearRuntime: runtime == nil,
 	})
 	if err != nil {
 		return statelog.Position{}, fmt.Errorf("engine: write the seat %s (%s): %w",

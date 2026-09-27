@@ -1,0 +1,153 @@
+package chart_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/chartapi"
+	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/iam"
+)
+
+// THE `/chart` SURFACE OVER THIS RIG'S REAL WRITER.
+//
+// The surface's own suite drives a fake writer, which is right for what it
+// asks — which verb a route reaches, what each outcome renders as — and can
+// say nothing about what a request DOES to the rows: whether a body that left
+// the runtime half out kept the one the object has, or whether a refusal the
+// domain made reaches the caller as the refusal it is. Those are properties
+// of the pair, so they are asked here, where the pair is real.
+
+// surfaceRig is the chart surface mounted over a writer rig.
+type surfaceRig struct {
+	*writeRig
+	mux *http.ServeMux
+}
+
+// serveChart mounts the surface over r, as who, with a lead relation that
+// answers leads for every pair in led — a seat's handle or a unit's key.
+func serveChart(r *writeRig, who iam.Principal, led ...string) surfaceRig {
+	r.t.Helper()
+	svc, err := chartapi.New(chartapi.Options{
+		Reader: r.reader(),
+		Authority: func(actor string, kind chart.AuthorKind, grants []iam.Grant,
+			p chart.Provenance) chartapi.Writer {
+			return r.writer.As(actor, kind, grants, p)
+		},
+		Principal: func(*http.Request) (iam.Principal, iam.Resolution) {
+			return who, iam.Resolved
+		},
+		Chart: leadRelation(led),
+	})
+	if err != nil {
+		r.t.Fatalf("chartapi.New: %v", err)
+	}
+	mux := http.NewServeMux()
+	if err := svc.Routes(mux); err != nil {
+		r.t.Fatalf("Routes: %v", err)
+	}
+	return surfaceRig{writeRig: r, mux: mux}
+}
+
+// send serves one request while a consumer applies the log, so a write this
+// node publishes is one it applies inside the resolve budget.
+func (s surfaceRig) send(method, path, body string) *httptest.ResponseRecorder {
+	s.t.Helper()
+	rec := httptest.NewRecorder()
+	s.whileDraining(func() {
+		s.mux.ServeHTTP(rec, httptest.NewRequestWithContext(s.t.Context(),
+			method, path, strings.NewReader(body)))
+	})
+	return rec
+}
+
+// leadRelation answers that its actor leads every object it names, and
+// nothing else, whoever asks.
+type leadRelation []string
+
+func (l leadRelation) leads(subject string) bool {
+	for _, led := range l {
+		if led == subject {
+			return true
+		}
+	}
+	return false
+}
+
+func (l leadRelation) Leads(_ context.Context, _, subject string) (bool, error) {
+	return l.leads(subject), nil
+}
+
+func (l leadRelation) LeadsUnit(_ context.Context, _, unit string) (bool, error) {
+	return l.leads(unit), nil
+}
+
+func (l leadRelation) LeadsProject(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (l leadRelation) LeadsContainer(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (l leadRelation) LeadsAnyone(context.Context, string) (bool, error) {
+	return len(l) > 0, nil
+}
+
+// signedIn is a person bound to the seat `mira`, holding grants, who proved
+// who they are a minute ago — inside both step-up windows, because every
+// chart write asks for a recent proof and no case here is about its age.
+func signedIn(grants ...iam.Grant) iam.Principal {
+	at := time.Now().Add(-time.Minute)
+	return iam.Principal{ID: uuid.New(), Login: "mira.lead", Seat: "mira",
+		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: grants,
+		ReauthAt: at.Add(time.Hour), SensitiveReauthAt: at.Add(15 * time.Minute)}
+}
+
+// A LEAD'S PATCH THAT LEAVES THE RUNTIME OUT KEEPS IT, THROUGH THE SURFACE.
+//
+// A body is full post-state for every field but the runtime half, which the
+// person editing a goal neither may change nor is shown. Before, the route
+// admitted the lead and the domain read the missing half as a clear, so every
+// lead's edit of a seat with a model chain was refused. And a lead's body that
+// DOES state a runtime is refused at the route, naming the grant, before the
+// domain is reached.
+func TestALeadsPatchThroughTheSurfaceKeepsTheRuntimeItLeftOut(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
+	seeded := json.RawMessage(`{"llm":["zulu"],"mcp_env":{"gl":{"T":"${T}"}}}`)
+	if _, err := r.writer.WriteSeat(t.Context(), "op-seed", chart.SeatContent{
+		Handle: "sarah-chen", Name: "Sarah Chen", Runtime: seeded,
+	}); err != nil {
+		t.Fatalf("seed the runtime half: %v", err)
+	}
+	r.drain()
+	s := serveChart(r, signedIn(), "sarah-chen")
+
+	rec := s.send(http.MethodPatch, "/chart/seats/sarah-chen",
+		`{"name":"Sarah Chen","goal":"ship the thing"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the lead's goal edit answered %d: %s", rec.Code, rec.Body)
+	}
+	seat := r.mustSeat("sarah-chen")
+	if seat.Goal != "ship the thing" || string(seat.Runtime) != string(seeded) {
+		t.Errorf("the seat reads goal %q and runtime %s, want the lead's goal "+
+			"and its runtime %s", seat.Goal, seat.Runtime, seeded)
+	}
+
+	rec = s.send(http.MethodPatch, "/chart/seats/sarah-chen",
+		`{"name":"Sarah Chen","runtime":{"llm":["haiku"]}}`)
+	if rec.Code != http.StatusForbidden ||
+		!strings.Contains(rec.Body.String(), string(iam.GrantConfigWrite)) {
+		t.Errorf("the lead's runtime write answered %d %s, want 403 naming %s",
+			rec.Code, rec.Body, iam.GrantConfigWrite)
+	}
+}

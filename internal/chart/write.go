@@ -419,7 +419,7 @@ func (w *Writer) decidePlacement(subject Subject, opID string, at time.Time,
 	}
 	scope := BatchScope(terms)
 	return w.record(subject, OpPlace, opID, at, scope,
-		PlacementPayload{V: DocumentVersion, Edges: edges})
+		PlacementPayload{V: DocumentVersion, Edges: edges}, structural)
 }
 
 // decideRemoval forms the gate-installing record.
@@ -445,7 +445,8 @@ func (w *Writer) decideRemoval(subject Subject, opID string, at time.Time,
 	// node must not be able to defer, so its shape can never be one a node
 	// might not know.
 	return w.record(subject, OpRemove, opID, at, scope,
-		RemovePayload{V: GateRecordVersion, Objects: removed, Reason: reason})
+		RemovePayload{V: GateRecordVersion, Objects: removed, Reason: reason},
+		structural)
 }
 
 // record encodes one record with this writer's own provenance.
@@ -454,13 +455,18 @@ func (w *Writer) decideRemoval(subject Subject, opID string, at time.Time,
 // operator id, the turn and the revision one set rather than five fields each
 // write remembers to fill. A path that built a record itself would be the one
 // that forgot the author column.
+//
+// NEED IS THE DECIDE'S, stated by every caller: what a record asks of its
+// party depends on what it changes, which only the decide's snapshot can say
+// — see [requirement].
 func (w *Writer) record(subject Subject, op OpKind, opID string, at time.Time,
-	scope ScopeSet, payload any) (statelog.Decision, error) {
+	scope ScopeSet, payload any, need requirement) (statelog.Decision, error) {
 
 	// THE DOMAIN'S OWN HALF OF THE AUTHORITY QUESTION, asked here because
 	// this is the one funnel every decide in this package reaches. See
 	// grant.go for what it decides and what it deliberately does not.
-	if err := w.mayAuthor(classOf(payload)); err != nil {
+	if err := w.mayAuthor(ObjectRef{Kind: subject.Kind, ID: subject.ID},
+		need); err != nil {
 		return statelog.Decision{}, err
 	}
 	body, err := marshal(payload)
@@ -587,7 +593,7 @@ func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
 			// one. The apply is where every node sees the same ledger.
 			return w.record(subject, OpImport, opID, at, scope, ImportPayload{
 				V: DocumentVersion, Revision: revision, Edges: edges,
-			})
+			}, structural)
 		},
 	})
 	return WriteResult{Result: result, Objects: objects}, err

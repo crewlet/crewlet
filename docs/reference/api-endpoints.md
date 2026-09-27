@@ -537,7 +537,17 @@ So the two are decided differently, and the **payload picks the question**:
 | What the body carries | Who may write it |
 |---|---|
 | the public half alone | whoever **leads that object** — the unit's lead for a unit, the seat's lead for a seat |
-| anything under `runtime` | `config:write`, the company's own grant |
+| anything under `runtime`, or `clear_runtime: true` | `config:write`, the company's own grant |
+
+**A body that leaves `runtime` out keeps the runtime half the object has.** It is
+the one field that is not full post-state, because the person editing a goal
+may neither change that half nor read it back: a lead's `PATCH` of a seat's
+prose lands and the seat keeps its model chain and its credentials. Taking the
+half away is `"clear_runtime": true`, never an empty or absent `runtime` — a
+clear that could be spelled by leaving something out is one a caller makes by
+accident. A `runtime` of `null` is refused `400`, since it could mean either,
+and one stated beside `clear_runtime` is refused too. A stated `runtime` must
+be a JSON object.
 
 A body refused on the second question answers exactly as a route refused at its
 pattern does: `403 unauthorized` with `reason` and the `grants` that would have
@@ -581,9 +591,12 @@ be placed on it again.
 
 The same rules are enforced a second time **inside the domain**, against the
 grants the authoring party holds — so a surface that skipped its own check
-still cannot write a seat's credentials, and a write that would CLEAR the
-runtime half is a privileged write too (a content record is full post-state, so
-omitting the half sets it to empty).
+still cannot write a seat's credentials. The domain decides on what the write
+**changes**, read against the object's row in the same snapshot the write is
+decided in: a `runtime` identical to the one the object holds (key order and
+whitespace aside) changes nothing and asks for nothing, while a different one
+or a clear asks for `config:write` — which is what the route asked for already
+on seeing the field.
 
 #### Structure is neither
 

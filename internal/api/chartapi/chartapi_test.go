@@ -479,6 +479,20 @@ func TestAWriteCarryingTheRuntimeHalfIsDecidedAsAnOperatorWrite(t *testing.T) {
 		{"the company's own grant may", leadOf(iam.GrantConfigWrite),
 			`{"name":"Engineering","runtime":{"mcp_env":{"gitlab":{"T":"${X}"}}}}`,
 			http.StatusOK, true},
+		// A CLEAR IS THE RUNTIME HALF TOO, although it carries no bytes:
+		// it takes away a seat's model chain and its credentials.
+		{"nor clear it", leadOf(),
+			`{"name":"Engineering","clear_runtime":true}`,
+			http.StatusForbidden, false},
+		{"which the company's own grant may", leadOf(iam.GrantConfigWrite),
+			`{"name":"Engineering","clear_runtime":true}`,
+			http.StatusOK, true},
+		// NULL IS NEITHER KEEP NOR CLEAR, and it is the body's shape that
+		// is wrong — so it is refused as one, before a lead is told they
+		// lack a grant for sending nothing.
+		{"a null runtime is a shape nobody means", leadOf(),
+			`{"name":"Engineering","runtime":null}`,
+			http.StatusBadRequest, false},
 		{"somebody who leads nothing may not edit even the public half",
 			proved(iam.Principal{ID: uuid.New(), Login: "sre", Seat: "sre",
 				Kind: iam.KindPerson, Stage: iam.StageActive}),

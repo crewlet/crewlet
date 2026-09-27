@@ -205,6 +205,16 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 // identical, and not harmless in the history, which would read as somebody
 // having edited every seat in the company.
 //
+// # A file states every object's runtime half, or clears it
+//
+// A content write that leaves the runtime half out KEEPS the one the object
+// has, which is what lets a lead edit a goal they may not send the half back
+// with. A file is the whole object, so one that declares no runtime for it
+// says the object has none: the seed clears it rather than leaving it out.
+// On a first boot the two are one answer — the import just created every
+// object, runtime and all empty — and on a staged publish, "this file is the
+// chart again", they are not.
+//
 // # A failure here stops rather than continuing
 //
 // A partial content seed is a company where some seats can think and others
@@ -233,7 +243,7 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 				Purpose: unit.Purpose, Goals: unit.Goals,
 				Channel: unit.Channel, Project: unit.Project,
 				Space: unit.Space, KnowledgeRefs: unit.KnowledgeRefs,
-				Runtime: unit.Runtime,
+				Runtime: unit.Runtime, ClearRuntime: len(unit.Runtime) == 0,
 			})
 		if err != nil {
 			return last, fmt.Errorf("engine: seed the content of unit %q: %w",
@@ -251,7 +261,7 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 				BehavioralGuidelines: seat.BehavioralGuidelines,
 				Manages:              seat.Manages,
 				Project:              seat.Project, Space: seat.Space,
-				Runtime: seat.Runtime,
+				Runtime: seat.Runtime, ClearRuntime: len(seat.Runtime) == 0,
 			})
 		if err != nil {
 			return last, fmt.Errorf("engine: seed the content of seat %q: %w",

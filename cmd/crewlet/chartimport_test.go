@@ -240,6 +240,27 @@ func TestOneFileReachesBothSurfacesInOrder(t *testing.T) {
 			t.Errorf("%s carried a kind, which the node refuses on a content write", path)
 		}
 	}
+	// AND EVERY OBJECT STATES ITS RUNTIME HALF OR CLEARS IT. A content
+	// write that leaves the half out keeps what the object has, so a file
+	// declaring none for an object has to say so — and `"runtime": null`
+	// is a value the node refuses. The unit here declares none; both seats
+	// declare a model chain.
+	for path, want := range map[string]bool{
+		"PATCH /chart/units/engineering": true,
+		"PATCH /chart/seats/cto":         false, "PATCH /chart/seats/ops": false,
+	} {
+		body := node.bodies[path]
+		runtime, stated := body["runtime"]
+		cleared, _ := body["clear_runtime"].(bool)
+		switch {
+		case want && (!cleared || stated):
+			t.Errorf("%s declares no runtime and sent runtime %v, clear %v; "+
+				"want a clear and no runtime", path, runtime, body["clear_runtime"])
+		case !want && (cleared || runtime == nil):
+			t.Errorf("%s declares a runtime and sent runtime %v, clear %v; "+
+				"want the runtime and no clear", path, runtime, body["clear_runtime"])
+		}
+	}
 
 	// AND THE IMPORT IS KEYED, so a second run of the same file is a no-op
 	// every node reaches the same way rather than a rewrite of every row.

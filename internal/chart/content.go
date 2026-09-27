@@ -1,11 +1,13 @@
 package chart
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -68,7 +70,8 @@ import (
 //
 // FULL POST-STATE, like the record it becomes: a field left empty is a field
 // set to empty, because a chart is authored as a document and reconciled
-// whole. A caller editing one field of a unit sends the unit.
+// whole. A caller editing one field of a unit sends the unit — all but its
+// runtime half, which is kept when left out ([SeatContent.Runtime]).
 type UnitContent struct {
 	Key string
 
@@ -82,8 +85,13 @@ type UnitContent struct {
 	KnowledgeRefs []string
 
 	// Runtime is the unit's engine-only content, opaque to this domain.
-	// See [Unit.Runtime].
+	// See [Unit.Runtime], and [SeatContent.Runtime] for what leaving it
+	// out means.
 	Runtime json.RawMessage
+
+	// ClearRuntime removes the unit's runtime half. See
+	// [SeatContent.ClearRuntime].
+	ClearRuntime bool
 }
 
 // SeatContent is one seat's own content.
@@ -130,7 +138,36 @@ type SeatContent struct {
 
 	// Runtime is the seat's engine-only content, opaque to this domain.
 	// See [Seat.Runtime].
+	//
+	// # Left out, it is the one the seat already has
+	//
+	// The one exception to full post-state, and the reason is who writes
+	// the rest. Everything else here is prose a lead edits; the runtime
+	// half is the company's configuration — a model chain, credentials,
+	// an `mcp_env` — which that lead may neither change nor see. Read as
+	// full post-state, a lead correcting a goal had to send back a half
+	// they were never shown, and omitting it CLEARED the seat's model
+	// chain, which is why every such edit had to be refused. So an absent
+	// runtime is CARRIED from the row, inside the decide's own snapshot —
+	// never from a read taken before it, which would pair a runtime from
+	// one instant with an expectation formed at another and undo a
+	// rotation somebody made in between — and taking it away is a
+	// gesture of its own ([SeatContent.ClearRuntime]).
+	//
+	// A STATED ONE MUST BE A JSON OBJECT, because it is decoded onto a
+	// seat and a value of any other shape decodes onto nothing: stored,
+	// it is a seat that silently runs with no model chain.
 	Runtime json.RawMessage
+
+	// ClearRuntime removes the seat's runtime half — its model chain, its
+	// credentials, its sandbox cell — which is the company's configuration
+	// and asks for the company's grant whatever the row held.
+	//
+	// ITS OWN FIELD RATHER THAN AN EMPTY RUNTIME, because an absent
+	// runtime is "keep what it has": a clear that could be spelled by
+	// leaving something out is one a caller makes by accident. Refused
+	// beside a stated runtime, which would be two answers to one question.
+	ClearRuntime bool
 }
 
 // WriteUnit publishes one unit's content.
@@ -166,11 +203,10 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			// THE ROW THIS WRITE REPLACES, read in THIS transaction
-			// and for one question only: a content record is full
-			// post-state, so a write that omits the opaque half
-			// CLEARS it, and clearing the company's configuration is
-			// not a public edit. See [Writer.mayReplace].
+			// THE ROW THIS WRITE REPLACES, read in THIS transaction:
+			// what the record asks of its party is what it CHANGES,
+			// and an omitted runtime half is carried from here. See
+			// [requirement] and [SeatContent.Runtime].
 			prior, found, err := readUnit(ctx, tx, key)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -178,16 +214,19 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 			if !found {
 				return statelog.Decision{}, notPlaced(ctx, tx, object)
 			}
-			if err = w.mayReplace(prior.Runtime); err != nil {
+			runtime, changed, err := nextRuntime(object, prior.Runtime,
+				content.Runtime, content.ClearRuntime)
+			if err != nil {
 				return statelog.Decision{}, err
 			}
+			need := contentRequirement(changed)
 			payload := UnitPayload{
 				V: DocumentVersion, Key: key, Name: content.Name,
 				Type: content.Type, Purpose: content.Purpose,
 				Goals: content.Goals, Channel: content.Channel,
 				Project: content.Project, Space: content.Space,
 				KnowledgeRefs: content.KnowledgeRefs,
-				Runtime:       content.Runtime,
+				Runtime:       runtime,
 			}
 			// THE CAPS ARE CHECKED WHERE A RECORD IS WRITTEN and
 			// never where one is applied — the asymmetry every value
@@ -198,7 +237,7 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 			if err := payload.unit().Validate(); err != nil {
 				return statelog.Decision{}, fmt.Errorf("%w: %w", ErrRefused, err)
 			}
-			return w.record(subject, OpUpsert, opID, at, scope, payload)
+			return w.record(subject, OpUpsert, opID, at, scope, payload, need)
 		},
 	})
 	return WriteResult{Result: result, Objects: []ObjectRef{object}}, err
@@ -206,9 +245,11 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 
 // WriteSeat publishes one seat's content.
 //
-// IT IS THE ONE WRITE HERE THAT READS A ROW BACK. A seat's email is a value a
-// read MASKS, so a write that hands the mask back has to be restored from what
-// is stored rather than written as eight characters of `__redacted__`.
+// IT READS THE ROW IT PATCHES for three things only that row can say: whether
+// its runtime half changes, what to carry when the caller left that half out,
+// and — because a seat's email is a value a read MASKS — the stored value a
+// write that hands the mask back is restored from, rather than written as
+// eight characters of `__redacted__`.
 func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent) (
 	WriteResult, error) {
 
@@ -240,6 +281,9 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			if !found {
+				return statelog.Decision{}, notPlaced(ctx, tx, object)
+			}
 			// THE STATED UNIT IS CHECKED, NEVER TRUSTED. The scope
 			// this record was published under names it, so a value
 			// that disagrees with the row would file the record's
@@ -247,21 +291,25 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			// the team it IS in would ever look. A seat that moved
 			// between the caller's read and this write is told to
 			// re-read rather than having its write filed wrongly.
-			// WHAT IS BEING REPLACED, which the payload cannot say:
-			// a content write is full post-state, so one that omits
-			// the opaque half CLEARS it. See [Writer.mayReplace].
-			if !found {
-				return statelog.Decision{}, notPlaced(ctx, tx, object)
-			}
-			if err = w.mayReplace(prior.Runtime); err != nil {
-				return statelog.Decision{}, err
-			}
 			if prior.UnitKey != unit {
 				return statelog.Decision{}, fmt.Errorf("chart: the write on "+
 					"%s states that it sits in %q and the chart has it in %q "+
 					"— re-read the seat and write it again, because the "+
 					"record's own blast radius is filed under that value: %w",
 					object, unit, prior.UnitKey, ErrRefused)
+			}
+			runtime, changed, err := nextRuntime(object, prior.Runtime,
+				content.Runtime, content.ClearRuntime)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			// ASKED BEFORE THE EMAIL IS SEALED, and again by
+			// [Writer.record] as every record is: sealing writes the
+			// company's secret store, and a party refused the record
+			// must not have written there on the way to the refusal.
+			need := contentRequirement(changed)
+			if err := w.mayAuthor(object, need); err != nil {
+				return statelog.Decision{}, err
 			}
 			payload := SeatPayload{
 				V: DocumentVersion, Handle: handle,
@@ -270,7 +318,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 				BehavioralGuidelines: content.BehavioralGuidelines,
 				Manages:              content.Manages,
 				Project:              content.Project, Space: content.Space,
-				Runtime: content.Runtime,
+				Runtime: runtime,
 			}
 			email, err := w.resolveMasked(ctx, object, "email",
 				content.Email, prior.Email)
@@ -285,7 +333,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			if err := candidate.Validate(); err != nil {
 				return statelog.Decision{}, fmt.Errorf("%w: %w", ErrRefused, err)
 			}
-			return w.record(subject, OpUpsert, opID, at, scope, payload)
+			return w.record(subject, OpUpsert, opID, at, scope, payload, need)
 		},
 	})
 	return WriteResult{Result: result, Objects: []ObjectRef{object}}, err
@@ -418,6 +466,82 @@ func (w *Writer) publishContent(ctx context.Context, object ObjectRef,
 		return result, miss.refusal(object)
 	}
 	return result, err
+}
+
+// nextRuntime is the runtime half a content write publishes for object, and
+// which of its fields — none, or the runtime itself — CHANGE the row's.
+//
+// FOUR ANSWERS. Left out, it is the row's own, carried verbatim and changing
+// nothing ([SeatContent.Runtime]). Cleared, it is none, and a clear is a change
+// whatever the row held: it is the gesture that takes a seat's model chain
+// away, and a caller told it was free because the row happened to be empty
+// would have been told something about a row that moves. Stated beside a
+// clear, it is refused. Stated alone, it must be a JSON object, and it changes
+// the row where the two differ as JSON — key order and whitespace aside — and
+// is the row's own bytes where they do not.
+func nextRuntime(object ObjectRef, prior, stated json.RawMessage, clear bool) (
+	json.RawMessage, []string, error) {
+
+	changed := []string{"runtime"}
+	switch {
+	case clear && len(stated) > 0:
+		return nil, nil, fmt.Errorf("chart: the write on %s states a runtime "+
+			"half and clears it — leave the runtime out to keep what the "+
+			"object holds, or clear it, but not both: %w", object, ErrRefused)
+	case clear:
+		return nil, changed, nil
+	case len(stated) == 0:
+		return prior, nil, nil
+	}
+	restated, err := canonicalObject(stated)
+	if err != nil {
+		return nil, nil, fmt.Errorf("chart: the runtime half of the write on "+
+			"%s is not a JSON object (%v) — it is decoded onto the object, and "+
+			"a value of any other shape decodes onto nothing, so the object "+
+			"would run with no model chain and no credentials. Leave it out "+
+			"to keep the one it has: %w", object, err, ErrRefused)
+	}
+	// A ROW WHOSE RUNTIME DOES NOT DECODE IS ONE THIS WRITE CHANGES: a
+	// comparison that cannot say is answered the way that asks for the
+	// grant, never the way that skips it.
+	held, err := canonicalObject(prior)
+	if err != nil || held != restated {
+		return stated, changed, nil
+	}
+	// THE SAME HALF, RESTATED, IS THE ROW'S OWN: the record carries the
+	// bytes the row holds, so a restatement in another key order is no
+	// change on any node rather than a rewrite that reads as one.
+	return prior, nil, nil
+}
+
+// canonicalObject is one runtime half as a comparable string: a JSON object
+// re-encoded with its keys sorted, and empty for no runtime at all.
+//
+// NUMBERS KEEP THEIR SPELLING ([json.Decoder.UseNumber]). Decoded as floats,
+// two budgets past 2^53 that differ by one compare equal, and a change to one
+// would be read as no change at all; kept as written, `1` and `1.0` compare
+// different, which asks for a grant nobody needed — the safe direction.
+func canonicalObject(raw json.RawMessage) (string, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "", nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var value map[string]any
+	if err := dec.Decode(&value); err != nil {
+		return "", err
+	}
+	if value == nil {
+		return "", errors.New("null is not an object")
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return "", errors.New("something follows the object")
+	}
+	out, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // resolveMasked settles one field that may have arrived masked.

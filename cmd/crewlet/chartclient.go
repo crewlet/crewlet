@@ -93,14 +93,22 @@ func (c *chartClient) ImportStructure(ctx context.Context, revision string,
 // default max_payload is one mebibyte — so an import that carried content
 // would be refused by the broker on exactly the companies large enough to
 // need it.
+//
+// THE RUNTIME HALF IS STATED OR CLEARED, never sent empty. The node keeps an
+// object's runtime half when a write leaves it out, because a lead editing a
+// goal neither may nor can send it back; a file, though, is the whole object,
+// so one that declares no runtime for it says the object has none — which is
+// a clear, and a clear is its own field. Sent as `"runtime": null`, the node
+// refuses it as a value that decodes onto nothing.
 func (c *chartClient) WriteUnit(ctx context.Context, unit chart.AuthoredUnit) error {
-	body, err := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"name": unit.Name, "type": unit.Type, "purpose": unit.Purpose,
 		"goals": unit.Goals, "channel": unit.Channel,
 		"project": unit.Project, "space": unit.Space,
 		"knowledge_refs": unit.KnowledgeRefs,
-		"runtime":        unit.Runtime,
-	})
+	}
+	statesRuntime(fields, unit.Runtime)
+	body, err := json.Marshal(fields)
 	if err != nil {
 		return err
 	}
@@ -111,7 +119,7 @@ func (c *chartClient) WriteUnit(ctx context.Context, unit chart.AuthoredUnit) er
 func (c *chartClient) WriteSeat(ctx context.Context, seat chart.AuthoredSeat) error {
 	// NO KIND: what holds a seat is structure, and the import's edge for
 	// this seat already stated it.
-	body, err := json.Marshal(map[string]any{
+	fields := map[string]any{
 		// THE UNIT THE STRUCTURE JUST PLACED IT IN. The domain refuses a
 		// value that disagrees with the row, so this is what makes the
 		// order of the two writes load-bearing: the placement lands
@@ -123,13 +131,25 @@ func (c *chartClient) WriteSeat(ctx context.Context, seat chart.AuthoredSeat) er
 		"behavioral_guidelines": seat.BehavioralGuidelines,
 		"manages":               seat.Manages,
 		"project":               seat.Project, "space": seat.Space,
-		"runtime": seat.Runtime,
-	})
+	}
+	statesRuntime(fields, seat.Runtime)
+	body, err := json.Marshal(fields)
 	if err != nil {
 		return err
 	}
 	_, err = c.write(ctx, http.MethodPatch, "/chart/seats/"+seat.Handle, body)
 	return err
+}
+
+// statesRuntime adds an object's runtime half to a content body: the half
+// where the file declares one, and a clear where it declares none — see
+// [chartClient.WriteUnit].
+func statesRuntime(fields map[string]any, runtime json.RawMessage) {
+	if len(runtime) == 0 {
+		fields["clear_runtime"] = true
+		return
+	}
+	fields["runtime"] = runtime
 }
 
 // chartAnswer is what every write on this surface reports about itself.

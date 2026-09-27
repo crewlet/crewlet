@@ -33,6 +33,11 @@ const MaxBodyBytes = 256 << 10
 // this surface does not know what an `mcp_env` key is any more than
 // internal/chart does, and a struct that named the fields would be the
 // company document growing back with a route in front of it.
+//
+// LEFT OUT, IT IS KEPT, and `clear_runtime` is how it is taken away — the
+// one field of the body that is not full post-state, because the half is the
+// company's configuration and the person editing a goal may neither change it
+// nor read it back. See [chart.SeatContent.Runtime].
 type unitBody struct {
 	Name          string          `json:"name"`
 	Type          string          `json:"type"`
@@ -43,6 +48,7 @@ type unitBody struct {
 	Space         string          `json:"space"`
 	KnowledgeRefs []string        `json:"knowledge_refs"`
 	Runtime       json.RawMessage `json:"runtime,omitempty"`
+	ClearRuntime  bool            `json:"clear_runtime,omitempty"`
 }
 
 // IT CARRIES NO KIND: what holds a seat is structure, changed by a batch's
@@ -60,6 +66,7 @@ type seatBody struct {
 	Project              string          `json:"project"`
 	Space                string          `json:"space"`
 	Runtime              json.RawMessage `json:"runtime,omitempty"`
+	ClearRuntime         bool            `json:"clear_runtime,omitempty"`
 }
 
 // patchUnit writes one unit's content.
@@ -68,7 +75,8 @@ func (s *Service) patchUnit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.mayWriteRuntime(w, r, len(body.Runtime) > 0) {
+	if !runtimeStated(w, body.Runtime) ||
+		!s.mayWriteRuntime(w, r, len(body.Runtime) > 0 || body.ClearRuntime) {
 		return
 	}
 	result, err := s.writerFor(r).WriteUnit(r.Context(), s.opID(r), chart.UnitContent{
@@ -76,6 +84,7 @@ func (s *Service) patchUnit(w http.ResponseWriter, r *http.Request) {
 		Purpose: body.Purpose, Goals: body.Goals, Channel: body.Channel,
 		Project: body.Project, Space: body.Space,
 		KnowledgeRefs: body.KnowledgeRefs, Runtime: body.Runtime,
+		ClearRuntime: body.ClearRuntime,
 	})
 	s.answerWrite(w, result, err)
 }
@@ -86,7 +95,8 @@ func (s *Service) patchSeat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.mayWriteRuntime(w, r, len(body.Runtime) > 0) {
+	if !runtimeStated(w, body.Runtime) ||
+		!s.mayWriteRuntime(w, r, len(body.Runtime) > 0 || body.ClearRuntime) {
 		return
 	}
 	result, err := s.writerFor(r).WriteSeat(r.Context(), s.opID(r), chart.SeatContent{
@@ -97,18 +107,42 @@ func (s *Service) patchSeat(w http.ResponseWriter, r *http.Request) {
 		BehavioralGuidelines: body.BehavioralGuidelines,
 		Manages:              body.Manages,
 		Project:              body.Project, Space: body.Space,
-		Runtime: body.Runtime,
+		Runtime: body.Runtime, ClearRuntime: body.ClearRuntime,
 	})
 	s.answerWrite(w, result, err)
 }
 
-// mayWriteRuntime re-asks when the body turned out to carry the opaque half.
+// runtimeStated refuses a body whose `runtime` is JSON null, and reports
+// whether the handler may go on.
+//
+// NULL IS NEITHER OF THE TWO THINGS A CALLER CAN MEAN. Left out, the half is
+// kept; `clear_runtime` takes it away. A client serialising an absent value as
+// null means the first, and a reader of the field means the second, so the
+// body is refused naming both rather than guessed at — and refused before the
+// authority is asked, because the question is the body's shape, and a lead
+// told they lack `config:write` for sending nothing would go and ask for it.
+func runtimeStated(w http.ResponseWriter, runtime json.RawMessage) bool {
+	if !bytes.Equal(bytes.TrimSpace(runtime), []byte("null")) {
+		return true
+	}
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+		map[string]string{"detail": "`runtime` is null: leave it out to keep " +
+			"the runtime half the object has, or send `clear_runtime: true` " +
+			"to remove it"})
+	return false
+}
+
+// mayWriteRuntime re-asks when the body turned out to state the opaque half —
+// a runtime, or a clear of one.
 //
 // # The payload picks the question
 //
-// A body that carries the runtime half is asking to write a seat's model
+// A body that states the runtime half is asking to write a seat's model
 // chain, its credentials, its sandbox cell and its `mcp_env` — which is
 // exec.Command on every engine host, and therefore the company's own grant.
+// Whether the half it states actually DIFFERS from the one the object holds
+// is the domain's to say, inside its own snapshot: this is the upper bound a
+// route can decide from the body alone.
 // A body that carries only the public half is a lead editing their team, and
 // the ROUTE has already decided that: its policy names the object the pattern
 // names, and the authority table asked who leads it.

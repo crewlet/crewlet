@@ -281,8 +281,11 @@ curl -X PATCH $CREWLET_URL/chart/seats/sre \
 ```
 
 A content write is **full post-state**, like the record it becomes: a field you
-leave out is a field you set to empty. That is also why omitting `runtime` is
-itself a privileged write — it clears the half you did not send. It carries no
+leave out is a field you set to empty — with one exception, `runtime`. Leaving
+it out keeps the runtime half the seat has, which is what lets somebody who
+leads the seat correct its goal without holding, or seeing, its model chain
+and credentials; removing the half is `"clear_runtime": true`, which takes
+`config:write` like any runtime write. It carries no
 **kind**: whether a person or an agent holds the seat is structure, set by the
 batch that creates it and changed by a `set_kind` operation, and a content body
 naming one is refused.

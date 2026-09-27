@@ -1,6 +1,8 @@
 package chart_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -173,73 +175,226 @@ func TestALeadEditsThePlainObjectsACompanyFileSeeded(t *testing.T) {
 	}
 }
 
-// TestClearingTheRuntimeHalfIsStillAPrivilegedWrite is the control the class
-// rule needs, and the one a reader of contentClass will doubt.
-//
-// A content record is FULL POST-STATE, so a write that OMITS the runtime half
-// clears it. If "carries no runtime bytes" meant "public", a party with no
-// capability could delete every seat's model chain and every unit's engine
-// settings one request at a time — a change to the company's configuration
-// made by somebody who may not make one.
-//
-// BOTH HALVES OF THE CHART, because the two decides read different rows and a
-// gate written into one of them looks exactly like a gate written into both.
-func TestClearingTheRuntimeHalfIsStillAPrivilegedWrite(t *testing.T) {
+// AND AN AGENT SEAT THE SAME FILE SEEDED, whose runtime half is its model
+// chain: the lead's goal lands and the chain is carried, byte for byte.
+func TestALeadEditsAnAgentSeatACompanyFileSeededAndKeepsItsModelChain(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name string
-		seed func(r *writeRig)
-		wipe func(w *chart.Writer) error
-	}{
-		{
-			name: "a seat",
-			seed: func(r *writeRig) {
-				r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
-				if _, err := r.writer.WriteSeat(r.t.Context(), "op-runtime",
-					chart.SeatContent{
-						Handle: "sarah-chen", Runtime: json.RawMessage(`{"models":["opus"]}`),
-					}); err != nil {
-					r.t.Fatalf("seed the runtime half: %v", err)
-				}
-				r.drain()
-			},
-			wipe: func(w *chart.Writer) error {
-				_, err := w.WriteSeat(t.Context(), "op-clear", chart.SeatContent{
-					Handle: "sarah-chen"})
-				return err
-			},
-		},
-		{
-			name: "a unit",
-			seed: func(r *writeRig) {
-				r.batch("op-unit", op(chart.OpCreateUnit, chart.KindUnit, "eng", ""))
-				if _, err := r.writer.WriteUnit(r.t.Context(), "op-runtime",
-					chart.UnitContent{
-						Key:     "eng",
-						Runtime: json.RawMessage(`{"mcp_env":{"TOKEN":"${T}"}}`),
-					}); err != nil {
-					r.t.Fatalf("seed the runtime half: %v", err)
-				}
-				r.drain()
-			},
-			wipe: func(w *chart.Writer) error {
-				_, err := w.WriteUnit(t.Context(), "op-clear", chart.UnitContent{
-					Key: "eng",
-				})
-				return err
-			},
-		},
+	r := newWriteRig(t)
+	r.seedCompany(plainCompany)
+	before := r.mustSeat("sre").Runtime
+	if !strings.Contains(string(before), "zulu") {
+		t.Fatalf("the seeded agent seat carries runtime %s, want its model chain", before)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
+	if _, err := lead.WriteSeat(t.Context(), "op-goal", chart.SeatContent{
+		Handle: "sre", Unit: "eng", Name: "SRE", Goal: "keep it up at night too",
+	}); err != nil {
+		t.Fatalf("a lead's edit of an agent seat's goal: %v", err)
+	}
+	r.drain()
+	seat := r.mustSeat("sre")
+	if seat.Goal != "keep it up at night too" || string(seat.Runtime) != string(before) {
+		t.Errorf("the agent seat reads goal %q and runtime %s, want the lead's "+
+			"goal and its model chain %s", seat.Goal, seat.Runtime, before)
+	}
+}
+
+// runtimeObject is one of the chart's two content writes, seen as the three
+// things a runtime case varies: the prose a lead edits, the runtime half it
+// states, and whether it clears that half.
+type runtimeObject struct {
+	name  string
+	seed  json.RawMessage
+	place func(r *writeRig)
+	write func(w *chart.Writer, opID, prose string, runtime json.RawMessage,
+		clear bool) error
+	read func(r *writeRig) (prose string, runtime json.RawMessage)
+}
+
+// runtimeObjects are a seat and a unit, each seeded with a runtime half by a
+// party holding the company's grant. BOTH HALVES OF THE CHART, because the two
+// decides read different rows and a rule written into one of them looks
+// exactly like a rule written into both.
+func runtimeObjects() []runtimeObject {
+	return []runtimeObject{{
+		name: "a seat",
+		seed: json.RawMessage(`{"models":["opus"],"mcp_env":{"gl":{"T":"${T}"}}}`),
+		place: func(r *writeRig) {
+			r.batch("op-seat", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
+		},
+		write: func(w *chart.Writer, opID, prose string, runtime json.RawMessage,
+			clear bool) error {
+			_, err := w.WriteSeat(context.Background(), opID, chart.SeatContent{
+				Handle: "sarah-chen", Name: "Sarah Chen", Goal: prose,
+				Runtime: runtime, ClearRuntime: clear,
+			})
+			return err
+		},
+		read: func(r *writeRig) (string, json.RawMessage) {
+			seat := r.mustSeat("sarah-chen")
+			return seat.Goal, seat.Runtime
+		},
+	}, {
+		name: "a unit",
+		seed: json.RawMessage(`{"mcp_env":{"gl":{"T":"${T}"}},"token_budget":9007199254740993}`),
+		place: func(r *writeRig) {
+			r.batch("op-unit", op(chart.OpCreateUnit, chart.KindUnit, "eng", ""))
+		},
+		write: func(w *chart.Writer, opID, prose string, runtime json.RawMessage,
+			clear bool) error {
+			_, err := w.WriteUnit(context.Background(), opID, chart.UnitContent{
+				Key: "eng", Name: "Engineering", Purpose: prose,
+				Runtime: runtime, ClearRuntime: clear,
+			})
+			return err
+		},
+		read: func(r *writeRig) (string, json.RawMessage) {
+			unit := r.mustUnit("eng")
+			return unit.Purpose, unit.Runtime
+		},
+	}}
+}
+
+// AN OMITTED RUNTIME HALF IS THE ONE THE OBJECT HAS, AND WHAT A WRITE ASKS FOR
+// IS WHAT IT CHANGES.
+//
+// A content record is full post-state, so a write that left the runtime half
+// out used to CLEAR it — and every edit of a seat with a model chain had to be
+// refused to a lead, since the edit would have wiped the chain. The half is
+// carried from the row inside the decide instead, so a lead's prose edit
+// lands and the seat keeps its credentials; and the class is decided by what
+// the record CHANGES against that row, so a runtime restated verbatim — in
+// another key order — asks for nothing, while a different one, or a clear,
+// asks for the company's grant.
+//
+// Mutations: stop carrying and the first case wipes the runtime; read the class
+// off what the payload carries and the first two are refused; compare the
+// bytes rather than the objects and the second is refused; compare decoded
+// floats and the unit's budget past 2^53 reads as unchanged; drop the clear
+// from the change list and the lead's clear lands.
+func TestAWriteAsksForWhatItChangesAndCarriesTheRuntimeItLeftOut(t *testing.T) {
+	t.Parallel()
+	for _, object := range runtimeObjects() {
+		t.Run(object.name, func(t *testing.T) {
 			t.Parallel()
 			r := newWriteRig(t)
-			c.seed(r)
-			err := c.wipe(r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{}))
-			if !errors.Is(err, chart.ErrRefused) {
-				t.Fatalf("clearing %s's runtime half with no grants: err = %v, "+
-					"want a refusal — a write that omits it SETS it to empty",
-					c.name, err)
+			object.place(r)
+			if err := object.write(r.writer, "op-seed", "seeded", object.seed,
+				false); err != nil {
+				t.Fatalf("seed the runtime half: %v", err)
+			}
+			r.drain()
+			lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
+			admin := r.writer.As("ops", chart.AuthorHuman,
+				[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{})
+
+			if err := object.write(lead, "op-prose", "the lead's", nil, false); err != nil {
+				t.Fatalf("a lead's prose edit leaving the runtime out: %v", err)
+			}
+			r.drain()
+			prose, runtime := object.read(r)
+			if prose != "the lead's" || string(runtime) != string(object.seed) {
+				t.Fatalf("after the lead's edit the object reads %q with runtime "+
+					"%s, want the lead's prose and the seeded runtime %s — an "+
+					"omitted half is the one the object has", prose, runtime,
+					object.seed)
+			}
+
+			// THE SAME HALF, RE-ENCODED, IS NO CHANGE.
+			var decoded map[string]any
+			dec := json.NewDecoder(strings.NewReader(string(object.seed)))
+			dec.UseNumber()
+			if err := dec.Decode(&decoded); err != nil {
+				t.Fatalf("decode the seed: %v", err)
+			}
+			restated, err := json.MarshalIndent(decoded, "", "  ")
+			if err != nil {
+				t.Fatalf("restate the seed: %v", err)
+			}
+			if err := object.write(lead, "op-restated", "restated",
+				restated, false); err != nil {
+				t.Fatalf("a lead restating the runtime the object already "+
+					"holds: %v — a write asks for what it changes", err)
+			}
+			r.drain()
+
+			for _, refused := range []struct {
+				what    string
+				runtime json.RawMessage
+				clear   bool
+			}{
+				{"a different runtime", json.RawMessage(`{"models":["haiku"]}`), false},
+				// ONE BELOW A BUDGET PAST 2^53, which a float64 reads
+				// as the same number.
+				{"a budget one below what it holds", json.RawMessage(
+					strings.Replace(string(object.seed), "993}", "992}", 1)), false},
+				{"a clear", nil, true},
+			} {
+				if bytes.Equal(refused.runtime, object.seed) {
+					continue
+				}
+				err := object.write(lead, "op-"+refused.what, "x", refused.runtime,
+					refused.clear)
+				if !errors.Is(err, chart.ErrRefused) {
+					t.Errorf("a lead's write of %s to %s: err = %v, want a "+
+						"refusal", refused.what, object.name, err)
+					continue
+				}
+				for _, named := range []string{"runtime", string(iam.GrantConfigWrite)} {
+					if !strings.Contains(err.Error(), named) {
+						t.Errorf("the refusal of %s does not name %q: %v",
+							refused.what, named, err)
+					}
+				}
+			}
+			r.drain()
+			if _, runtime := object.read(r); string(runtime) != string(object.seed) {
+				t.Errorf("a refused write changed the runtime to %s", runtime)
+			}
+
+			// AND THE COMPANY'S GRANT CLEARS IT.
+			if err := object.write(admin, "op-clear", "cleared", nil, true); err != nil {
+				t.Fatalf("a clear by the company's grant: %v", err)
+			}
+			r.drain()
+			if _, runtime := object.read(r); len(runtime) != 0 {
+				t.Errorf("the object still holds %s after a clear", runtime)
+			}
+		})
+	}
+}
+
+// A RUNTIME HALF THAT IS NOT AN OBJECT, OR IS STATED AND CLEARED AT ONCE, IS
+// REFUSED WHOEVER WRITES IT.
+//
+// The half is decoded onto the running seat, and a value of any other shape
+// decodes onto nothing, so storing one is a seat that silently runs with no
+// model chain; and a write that states a half and clears it is two answers to
+// one question. The company's grant is what the refusals are held against,
+// because a rule a grant could buy past is not a rule about the value.
+func TestARuntimeHalfIsOneObjectOrNone(t *testing.T) {
+	t.Parallel()
+	for _, object := range runtimeObjects() {
+		t.Run(object.name, func(t *testing.T) {
+			t.Parallel()
+			r := newWriteRig(t)
+			object.place(r)
+			for _, c := range []struct {
+				what    string
+				runtime json.RawMessage
+				clear   bool
+			}{
+				{"null", json.RawMessage(`null`), false},
+				{"a list", json.RawMessage(`["opus"]`), false},
+				{"a string", json.RawMessage(`"opus"`), false},
+				{"two values", json.RawMessage(`{} {}`), false},
+				{"a runtime and a clear", json.RawMessage(`{"models":["opus"]}`), true},
+			} {
+				err := object.write(r.writer, "op-"+c.what, "x", c.runtime, c.clear)
+				if !errors.Is(err, chart.ErrRefused) {
+					t.Errorf("%s as %s's runtime: err = %v, want a refusal",
+						c.what, object.name, err)
+				}
 			}
 		})
 	}

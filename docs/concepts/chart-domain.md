@@ -102,8 +102,12 @@ back out. What decides them is **which half of an object you are writing**: the
 public half is whoever leads that object, and anything under `runtime` — a
 seat's model chain, its credentials, its sandbox cell, its `mcp_env` — takes
 the company's own `config:write` grant, because a stdio MCP server is
-`exec.Command` with the config's command. Reads split the same way and default
-to **stripped**. See
+`exec.Command` with the config's command. What a write asks for is what it
+**changes**, read against the object's row inside the write's own snapshot, so a
+content write that leaves the runtime half out keeps the one the object has —
+which is how a lead corrects a seat's goal without holding its credentials —
+and taking the half away is a clear of its own. Reads split the same way and
+default to **stripped**. See
 [the `/chart/*` reference](../reference/api-endpoints.md#chart--the-org-chart-auth-gated)
 and [Configure via the API](../guides/configure-via-api.md#evolving-the-org-chart).
 

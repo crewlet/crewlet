@@ -3,6 +3,7 @@ package chart
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -22,7 +23,9 @@ import (
 // exactly like a legitimate one for ever afterwards.
 //
 // So the domain asks too, from the one place every door funnels through
-// ([Writer.record]), against what the writer's own party holds.
+// ([Writer.record]), against what the writer's own party holds — and about
+// what each record CHANGES, which only the decide's own snapshot can say
+// ([requirement]).
 //
 // # It is NOT a second opinion about the same question
 //
@@ -38,10 +41,12 @@ import (
 // nowhere here; everything a grant can decide is refused here as well as at
 // the door.
 //
-// # Fail-closed, including for a payload this file does not name
+// # Fail-closed, including for a record this file does not name
 //
-// [classOf] answers [ClassStructure] for anything it does not recognise, so a
-// payload added later is over-gated rather than ungated. Over-gated fails at
+// [Writer.record] takes the class as an argument every decide must state, so a
+// record added later cannot reach the log without somebody choosing what it
+// asks for; and a comparison that cannot tell whether a value changed — a row
+// whose runtime half does not decode — answers that it did. Over-gated fails at
 // the first write with a message naming the grant; ungated fails silently,
 // for ever, and looks correct.
 
@@ -49,15 +54,24 @@ import (
 type PayloadClass string
 
 const (
-	// ClassPublic is a content record carrying only the half this domain
-	// can read — a name, a purpose, a goal, who somebody manages. No grant
-	// decides it: it is the unit's lead's, which is a relation.
+	// ClassPublic is a content record that changes only the half this
+	// domain can read and that no authority is derived from — a name, a
+	// purpose, a goal. No grant decides it: it is the object's lead's,
+	// which is a relation.
 	ClassPublic PayloadClass = "public"
 
-	// ClassPrivileged is a content record carrying the OPAQUE half, which
-	// travels on the row's `document` because this domain can say what a
-	// unit key and a parent mean and cannot say what an `mcp_env` key is
-	// for. That is the company's configuration by another name.
+	// ClassPrivileged is a content record that CHANGES the OPAQUE half,
+	// which travels on the row's `document` because this domain can say
+	// what a unit key and a parent mean and cannot say what an `mcp_env`
+	// key is for. That is the company's configuration by another name.
+	//
+	// A CHANGE, NOT A PRESENCE. A content record is full post-state, so
+	// every one carries the runtime half its object will hold — the one
+	// the decide carried forward from the row when the caller left it out
+	// ([SeatContent.Runtime]) — and a class read off what the payload
+	// merely CARRIES would make every edit of a seat that has a model
+	// chain a configuration change. What the decide compares against the
+	// row it read is what the record asks for.
 	ClassPrivileged PayloadClass = "privileged"
 
 	// ClassStructure is every record the chart serialises on one subject
@@ -80,52 +94,38 @@ func GrantFor(c PayloadClass) iam.Grant {
 	return iam.GrantConfigWrite
 }
 
-// classOf reports what a record asks for, from the payload alone.
+// requirement is what one record asks of the party publishing it, decided by
+// the decide that forms the record.
 //
-// THE PAYLOAD AND NOT THE OP, because the op says which record this is and
-// the payload says what it carries: one [OpUpsert] is a lead correcting a
-// goal and the next is somebody handing a seat a credential, and only the
-// second is the company's to decide.
-func classOf(payload any) PayloadClass {
-	switch p := payload.(type) {
-	case UnitPayload:
-		return contentClass(p.Runtime)
-	case SeatPayload:
-		return contentClass(p.Runtime)
-	}
-	return ClassStructure
+// # Why the decide decides it, and not the payload
+//
+// The payload says what the record CARRIES, and the class is about what it
+// CHANGES: the same runtime half is a configuration change on a seat whose row
+// holds another one and nothing at all on a seat whose row holds exactly it.
+// Only the decide's own snapshot holds the row to compare against, so the
+// class is formed there — in the transaction the expectation is formed in —
+// and handed to [Writer.record] rather than recomputed from bytes that cannot
+// say.
+type requirement struct {
+	class PayloadClass
+
+	// fields are the fields of a content record whose change asked for
+	// its class, in the order the record states them — what a refusal
+	// names, so the person reading it knows which edit to take back.
+	// Empty for a record whose whole kind asks (structure).
+	fields []string
 }
 
-// contentClass is one content payload's class, from whether it carries the
-// opaque half.
-//
-// AN EMPTY RUNTIME HALF IS PUBLIC, and that is not a hole a caller can use:
-// a content record is FULL POST-STATE, so a write that omits the runtime half
-// CLEARS it. Clearing a seat's model chain and its credentials is a change to
-// the company's configuration and is refused as one — which is why the test
-// for it is a control rather than an afterthought.
-func contentClass(runtime []byte) PayloadClass {
-	if len(runtime) > 0 {
-		return ClassPrivileged
-	}
-	return ClassPublic
-}
+// structural is the requirement every record on the tree's subject states.
+var structural = requirement{class: ClassStructure}
 
-// mayReplace refuses a content write that would CLEAR an opaque half the
-// party may not author.
-//
-// A content record is FULL POST-STATE, so a write that omits the runtime half
-// SETS it to empty. Without this, deleting every seat's model chain and
-// credentials one request at a time would be a public edit — the payload
-// carries no privileged bytes, and what it destroys is the whole of them.
-//
-// IT IS A SECOND CALL RATHER THAN A CLEVERER classOf, because the two
-// questions read different things: what is being written is on the payload,
-// and what is being replaced is in a row only the decide's own snapshot may
-// read. Folding them would mean passing a row into [Writer.record], which
-// every structural decide would then have to supply and none of them has.
-func (w *Writer) mayReplace(prior []byte) error {
-	return w.mayAuthor(contentClass(prior))
+// contentRequirement is the requirement of a content record whose changed
+// fields ask for the company's grant: public where none did.
+func contentRequirement(changed []string) requirement {
+	if len(changed) == 0 {
+		return requirement{class: ClassPublic}
+	}
+	return requirement{class: ClassPrivileged, fields: changed}
 }
 
 // mayAuthor refuses a record this writer's party is not entitled to publish.
@@ -133,15 +133,22 @@ func (w *Writer) mayReplace(prior []byte) error {
 // [ErrRefused] rather than a bare error, so the three outcomes a surface
 // renders stay three: this is a decision that will not change on a retry, not
 // a contention and not a fault.
-func (w *Writer) mayAuthor(c PayloadClass) error {
-	need := GrantFor(c)
-	if need == "" || slices.Contains(w.Grants, need) {
+func (w *Writer) mayAuthor(object ObjectRef, need requirement) error {
+	grant := GrantFor(need.class)
+	if grant == "" || slices.Contains(w.Grants, grant) {
 		return nil
 	}
+	if len(need.fields) > 0 {
+		return fmt.Errorf("chart: %s acts with %v and this write to %s changes "+
+			"%s, which needs %q — the half of a chart object this domain holds "+
+			"as opaque bytes is the company's configuration (a seat's models, "+
+			"its credentials, its sandbox cell, its mcp_env), so it is not one "+
+			"team's to change. Leave it out to keep what the object holds: %w",
+			w.Actor, w.Grants, object, strings.Join(need.fields, ", "), grant,
+			ErrRefused)
+	}
 	return fmt.Errorf("chart: %s acts with %v and a %s record needs %q — "+
-		"the half of a chart object this domain holds as opaque bytes is "+
-		"the company's configuration (a seat's models, its credentials, its "+
-		"sandbox cell, its mcp_env), and its structure is the company's "+
-		"shape, so neither is one team's to change: %w",
-		w.Actor, w.Grants, c, need, ErrRefused)
+		"the chart's structure is the company's shape, so it is not one "+
+		"team's to change: %w",
+		w.Actor, w.Grants, need.class, grant, ErrRefused)
 }

@@ -57,7 +57,14 @@ type AuthoredUnit struct {
 
 	// Runtime is the unit's engine-only content, opaque here. See
 	// [Unit.Runtime].
-	Runtime json.RawMessage
+	//
+	// OMITTED WHEN EMPTY, because an authored company travels as JSON — an
+	// offline import stages one — and a nil [json.RawMessage] encodes as
+	// `null` and decodes back as the four bytes `null`: an object with no
+	// runtime half arrived as one whose half is a value that decodes onto
+	// nothing, which a content write refuses. Absent, it decodes as nil,
+	// which is what it was.
+	Runtime json.RawMessage `json:",omitempty"`
 }
 
 // AuthoredSeat is one seat as written.
@@ -76,8 +83,9 @@ type AuthoredSeat struct {
 	BehavioralGuidelines []string
 
 	// Runtime is the seat's engine-only content, opaque here. See
-	// [Seat.Runtime].
-	Runtime json.RawMessage
+	// [Seat.Runtime], and [AuthoredUnit.Runtime] for why it is omitted
+	// when empty.
+	Runtime json.RawMessage `json:",omitempty"`
 
 	// Manages is the authored list, entries exactly as written — including
 	// ones that resolve to nothing. Expanding here would store a derived
