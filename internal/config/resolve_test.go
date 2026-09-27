@@ -36,7 +36,7 @@ providers:
 func TestTierAResolvesAtLoad(t *testing.T) {
 	t.Setenv("ACME_DB", "/srv/acme.db")
 	t.Setenv("ACME_TOKEN", "tok-123-long-enough-to-be-one")
-	t.Setenv("ACME_KEY_MATERIAL", "bWF0ZXJpYWw=")
+	t.Setenv("ACME_KEY_MATERIAL", TestKeyMaterial)
 	cfg, err := ParseBootstrap([]byte(`
 store:
   path: "${ACME_DB}"

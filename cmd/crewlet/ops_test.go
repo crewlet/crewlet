@@ -188,8 +188,7 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 		"        grants: [state:read, config:read, config:write, secrets:read,\n"+
 		"                 secrets:write, work:write, knowledge:write,\n"+
 		"                 audit:read, fleet:operate, sandbox:run]\n"+
-		"secrets:\n  active_key_id: k1\n  keys:\n"+
-		"    - id: k1\n      material: \"bWF0ZXJpYWw=\"\n",
+		fixtureKeyring,
 		filepath.Join(dir, "index.db"), host, port, host, port, cliFixtureToken)
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -367,8 +366,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 		"  auth:\n    max_grants: [state:read]\n"+
 		"    tokens:\n      - id: ops\n        token: %s\n"+
 		"        grants: [state:read]\n"+
-		"secrets:\n  active_key_id: k1\n  keys:\n"+
-		"    - id: k1\n      material: \"bWF0ZXJpYWw=\"\n",
+		fixtureKeyring,
 		filepath.Join(dir, "index.db"), cliFixtureToken)
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {

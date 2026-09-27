@@ -190,7 +190,7 @@ api:
     tokens: [{id: founder, token: a-token-long-enough-to-pass, grants: [config:write]}]
 secrets:
   active_key_id: k1
-  keys: [{id: k1, material: "bWF0ZXJpYWw="}]
+  keys: [{id: k1, material: "`+TestKeyMaterial+`"}]
 `), EnvOnly())
 	if err != nil {
 		t.Fatal(err)

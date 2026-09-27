@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1596,6 +1595,12 @@ func (s *Secrets) validate(path Path) error {
 		if k.Material == "" {
 			p.add(at(kp, "material"), ErrMissing,
 				"key material must not be empty (generate one with `crewlet secrets keygen`)")
+		} else if _, err := secrets.DecodeKey(k.Material); err != nil {
+			// THE CIPHER'S OWN CHECK, through the one decoder and in the
+			// one sentence [Secrets.Cipher] refuses with — so validation
+			// refuses exactly what the boot would, where it used to pass
+			// a key the boot then refused.
+			p.add(at(kp, "material"), ErrShape, keyMaterialProblem, k.ID, err)
 		}
 		if _, dup := ids[k.ID]; dup {
 			p.add(at(kp, "id"), ErrConflict, "duplicate key id %q", k.ID)
@@ -1677,19 +1682,25 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 		Keys:     make(map[string][]byte, len(s.Keys)),
 	}
 	for i, key := range s.Keys {
-		material, err := base64.StdEncoding.DecodeString(strings.TrimSpace(key.Material))
+		material, err := secrets.DecodeKey(key.Material)
 		if err != nil {
 			// The ID reaches the message and the material never does. The
 			// path is the element's own material field: `keys` is a list, so
 			// a path naming the id as if it were a map key pointed at nothing
 			// in the file.
 			return nil, fault(at(idx(field("secrets.keys"), i), "material"), ErrShape,
-				"key %q: key material must be base64 (generate one with `crewlet secrets keygen`)", key.ID)
+				keyMaterialProblem, key.ID, err)
 		}
 		ring.Keys[key.ID] = material
 	}
 	return secrets.NewCipher(ring)
 }
+
+// keyMaterialProblem is the ONE sentence unusable key material is refused
+// with, by [Secrets.validate] and [Secrets.Cipher] alike, so `crewlet validate`
+// says exactly what a boot would. Its arguments are the key's id and
+// [secrets.DecodeKey]'s error, neither of which carries the material.
+const keyMaterialProblem = "key %q: %v (generate one with `crewlet secrets keygen`)"
 
 // validateSync checks stream.sync, and its three refusals are the cases where
 // the value is a claim the deployment cannot make.

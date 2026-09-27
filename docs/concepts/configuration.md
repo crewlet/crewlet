@@ -805,6 +805,12 @@ It has no default — a key the engine invented would be one no other node holds
 - on a node serving the API it signs every session cookie and derives the key
   that verifies each per-run token.
 
+Each key's `material` must be the base64 of a 32-byte key, which is what
+`crewlet secrets keygen` prints. `crewlet validate` checks it on the value its
+`${VAR}` resolves to, with the same decoder the node uses to build its keyring,
+so a key that is not base64, or decodes to the wrong length, is refused by
+`validate` naming `secrets.keys[i].material` rather than at boot.
+
 ### What Tier A must state once the API is served
 
 Three more settings stop being optional the moment `api.port` is non-zero, and

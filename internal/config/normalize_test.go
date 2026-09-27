@@ -30,7 +30,7 @@ func TestTierAIsTrimmedBeforeAnyRuleReadsIt(t *testing.T) {
 	b.API.Auth.AllowedOrigins = []string{" https://ops.example.com \n"}
 	b.Secrets = config.Secrets{
 		ActiveKeyID: " k1 \n",
-		Keys:        []config.SecretKey{{ID: " k1 \n", Material: " bWF0ZXJpYWw= \n"}},
+		Keys:        []config.SecretKey{{ID: " k1 \n", Material: " " + config.TestKeyMaterial + " \n"}},
 	}
 
 	_ = b.Validate() // the trim is what is under test, not the verdict
@@ -263,7 +263,7 @@ func populatedBootstrap(t *testing.T) config.Bootstrap {
 	b.API.Auth.AllowedOrigins = []string{"https://ops.example.com"}
 	b.Secrets = config.Secrets{
 		ActiveKeyID: "k1",
-		Keys:        []config.SecretKey{{ID: "k1", Material: "bWF0ZXJpYWw="}},
+		Keys:        []config.SecretKey{{ID: "k1", Material: config.TestKeyMaterial}},
 	}
 	return b
 }
