@@ -40,9 +40,10 @@ type Revision struct {
 	Source  string
 	Summary string
 
-	// Payload is the document as stored. When a keyring is configured this
-	// is the sealed envelope rather than the plaintext structure — opaque
-	// to SQL either way, which is why it is one column and not a schema.
+	// Payload is the document as stored: the sealed envelope, under the
+	// keyring every node holds, rather than the plaintext structure. Opaque
+	// to SQL, which is why it is one column and not a schema — and to this
+	// package, which stores what it is handed and never opens it.
 	Payload json.RawMessage
 
 	Active      bool

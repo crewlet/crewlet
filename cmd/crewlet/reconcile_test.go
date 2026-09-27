@@ -145,7 +145,7 @@ func TestAnOverrideImportsAnEditedFileOnce(t *testing.T) {
 
 func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 	t.Parallel()
-	// THE trap. With a keyring configured the stored payload is ciphertext
+	// THE trap. Every stored payload is sealed, so it is ciphertext
 	// and a fresh nonce makes it differ on every seal, so comparing stored
 	// BYTES would import a new revision on every boot — and move the
 	// pointer, so the whole fleet rebuilds its epoch every restart.
@@ -172,7 +172,7 @@ func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 	}
 	// And what was stored really is sealed.
 	if !secrets.Sealed(revisions[0].Payload) {
-		t.Error("a keyring was configured and the revision was stored in plaintext")
+		t.Error("the revision was stored in plaintext")
 	}
 	if bytes.Contains(revisions[0].Payload, []byte("Acme")) {
 		t.Errorf("the company name survived into the stored form: %s", revisions[0].Payload)

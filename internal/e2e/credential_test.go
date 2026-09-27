@@ -68,10 +68,10 @@ func withCredential(t *testing.T, boot *config.Bootstrap) {
 //
 // # One call, because the requirement is one rule
 //
-// `api.port` non-zero makes four settings mandatory at once — the external
-// URL, the grant ceiling, at least one credential, and the keyring — and a
-// fixture that took some of them is a fixture that fails validation or answers
-// 401 to its own case. They were two helpers and one fixture called only the
+// `api.port` non-zero makes three settings mandatory at once — the external
+// URL, the grant ceiling and at least one credential — and the keyring is
+// mandatory on every node whatever it serves; a fixture that took some of
+// them is a fixture that fails validation or answers 401 to its own case. They were two helpers and one fixture called only the
 // first, which is a pairing nothing could have caught: the case that broke was
 // in the SOLO partition, so an ordinary `make test` never reached it.
 func withServingTierA(t *testing.T, boot *config.Bootstrap) {

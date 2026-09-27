@@ -48,9 +48,9 @@ import (
 // # Why the comparison is against the opened document
 //
 // The seed is compared against the ACTIVE revision's opened document, not
-// against its stored bytes: with a keyring configured the stored form is
-// ciphertext and differs on every seal, so a byte comparison would import a
-// fresh revision on every single boot.
+// against its stored bytes: every revision is sealed under the keyring every
+// node holds, so the stored form is ciphertext that differs on every seal, and
+// a byte comparison would import a fresh revision on every single boot.
 
 // startReconciler seeds the store from the file, converges this node on the
 // pointer, and returns the loop for the caller to run.

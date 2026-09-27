@@ -619,8 +619,8 @@ CREATE TABLE company_config (
                                                   -- write no credential made
     source             TEXT    NOT NULL,          -- "api" | "file" | "rekey" | "fleet"
     summary            TEXT    NOT NULL,          -- short human-readable change note
-    payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
-                                                  -- sealed envelope when a keyring is set
+    payload            TEXT    NOT NULL,          -- the whole document, sealed under
+                                                  -- the keyring every node holds
     is_active          INTEGER NOT NULL DEFAULT 0,
     activated_at       INTEGER,
     scrubbed_at        INTEGER,                   -- when `crewlet config scrub`

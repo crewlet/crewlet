@@ -278,7 +278,7 @@ The steady-state reconcile deliberately does **not** walk the group like that. I
 
 Three sinks, chosen by flag:
 
-- **`-secret-store`**: write each minted value into the encrypted [secret store](../concepts/secret-store.md) under the same `${VAR}` name the config references. The engine consults the store ahead of the environment, so the `source` + restart step disappears entirely — and a run against a node whose engine is up records the credential where the whole fleet reads it. This is the recommended sink once a Tier A keyring is configured.
+- **`-secret-store`**: write each minted value into the encrypted [secret store](../concepts/secret-store.md) under the same `${VAR}` name the config references. The engine consults the store ahead of the environment, so the `source` + restart step disappears entirely — and a run against a node whose engine is up records the credential where the whole fleet reads it. This is the recommended sink: every node's Tier A carries the keyring the store seals under.
 - **`-env-file PATH`**: append/update `VAR=token` lines — the file the operator feeds the engine. Written through on every mint, so a crash mid-run cannot leave a minted-but-unrecorded credential, and each write is atomic and leaves the file `0600` — including when you created it yourself, which under the usual umask means `0644`. A newly minted token is shown once; re-runs never re-print a live token.
 - **`-print`**: emit `export VAR=token` lines to stdout for shell `eval` and persist nothing.
 

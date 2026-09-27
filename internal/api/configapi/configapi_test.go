@@ -857,7 +857,7 @@ func TestASealedStoreRoundTripsThroughTheSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !secrets.Sealed(active.Payload) {
-		t.Fatal("a keyring was configured and the revision was stored in plaintext")
+		t.Fatal("the revision was stored in plaintext")
 	}
 	// ...and read back through the surface.
 	res := s.do(t, http.MethodGet, "/config", "", nil)
