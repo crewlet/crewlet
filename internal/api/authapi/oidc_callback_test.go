@@ -295,6 +295,9 @@ type providerRig struct {
 	mux    *http.ServeMux
 	cipher secrets.Cipher
 	config oidc.Config
+
+	// provider is the surface's own, so a case can hold its slots.
+	provider *oidc.Provider
 }
 
 // newProviderRig builds the surface a provider sign-in runs through, linked
@@ -330,15 +333,15 @@ func newProviderRig(t *testing.T, idp *provider, b config.Bootstrap,
 		// hands it over.
 		GroupsClaim: b.API.Auth.OIDC.GroupsClaim,
 	}
-	svc := buildWith(t, b, oidc.NewProvider(cfg, idp.Client(),
-		func() time.Time { return clock }), func(o *authapi.Options) {
+	provider := oidc.NewProvider(cfg, idp.Client(), func() time.Time { return clock })
+	svc := buildWith(t, b, provider, func(o *authapi.Options) {
 		o.Directory = linkedDirectory{blind: subjectBlind, person: linkedPerson}
 		o.Cipher = cipher
 		options(o)
 	})
 	mux := http.NewServeMux()
 	svc.Routes(mux)
-	return providerRig{mux: mux, cipher: cipher, config: cfg}
+	return providerRig{mux: mux, cipher: cipher, config: cfg, provider: provider}
 }
 
 // start begins a sign-in that returns to the given path.
@@ -358,8 +361,18 @@ func (rig providerRig) callback(t *testing.T, cookies []*http.Cookie, code,
 	state string) *httptest.ResponseRecorder {
 
 	t.Helper()
-	callback := httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCCallback+
-		"?state="+url.QueryEscape(state)+"&code="+url.QueryEscape(code), nil)
+	return rig.callbackWithin(t.Context(), t, cookies, code, state)
+}
+
+// callbackWithin is [providerRig.callback] on a request whose context is ctx,
+// for a browser that leaves before it is answered.
+func (rig providerRig) callbackWithin(ctx context.Context, t *testing.T,
+	cookies []*http.Cookie, code, state string) *httptest.ResponseRecorder {
+
+	t.Helper()
+	callback := httptest.NewRequestWithContext(ctx, http.MethodGet,
+		auth.PathAuthOIDCCallback+"?state="+url.QueryEscape(state)+
+			"&code="+url.QueryEscape(code), nil)
 	callback.RemoteAddr = "198.51.100.7:5100"
 	for _, c := range cookies {
 		callback.AddCookie(c)
@@ -449,6 +462,74 @@ func TestARedeemedFlightIsRefusedOnReplay(t *testing.T) {
 	}
 	if _, failures := audit.snapshot(); len(failures) != 1 {
 		t.Errorf("the trail holds %d failed attempts, want the replay", len(failures))
+	}
+}
+
+// A BROWSER THAT LEAVES WHILE IT WAITS ITS TURN HAS SPENT NOTHING.
+//
+// A callback beyond the eight a provider admits at once waits for a slot on
+// its own request ([oidc.ExchangeSlots]), which is exactly the morning's wave
+// a person reloads a spinning page in. The browser that left is answered 503
+// with a Retry-After and counted as no attempt — and its flight was never
+// spent, since the provider was never asked: the flight used to be spent
+// BEFORE the wait, so the reload presenting the same cookie was refused as a
+// replay and counted as a failed attempt, and every reload in the wave burned
+// a login. Here eight slots are held, the first callback gives up waiting, and
+// the reload of the same cookie, once a slot is free, signs the person in.
+//
+// Mutation: spend the flight before the slot is taken and the reload is 401
+// with a failed attempt; drop the admission's own error arm and the abandoned
+// callback is a counted 401 too.
+func TestACallbackThatGivesUpWaitingForATurnSpendsNoFlight(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	audit := &recordingAudit{}
+	rig := newProviderRig(t, idp, b, func(o *authapi.Options) { o.Audit = audit })
+
+	started := rig.start(t, "/work")
+	code, state := idp.authorize(t, started.Header().Get("Location"))
+	cookies := started.Result().Cookies()
+
+	// THE WAVE: every slot held by somebody else's exchange.
+	held := make([]*oidc.Admission, 0, oidc.ExchangeSlots)
+	for range oidc.ExchangeSlots {
+		admission, err := rig.provider.Admit(t.Context())
+		if err != nil {
+			t.Fatalf("hold a slot: %v", err)
+		}
+		held = append(held, admission)
+	}
+	gone, leave := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer leave()
+	abandoned := rig.callbackWithin(gone, t, cookies, code, state)
+	for _, admission := range held {
+		admission.Release()
+	}
+	if abandoned.Code != http.StatusServiceUnavailable ||
+		abandoned.Header().Get("Retry-After") == "" {
+		t.Fatalf("a callback that gave up waiting answered %d (Retry-After %q): "+
+			"%s, want 503 with a Retry-After", abandoned.Code,
+			abandoned.Header().Get("Retry-After"), abandoned.Body)
+	}
+	if n := idp.exchanges.Load(); n != 0 {
+		t.Fatalf("the token endpoint was asked %d times while every slot was "+
+			"held, want none", n)
+	}
+
+	reloaded := rig.callback(t, cookies, code, state)
+	if reloaded.Code != http.StatusFound || reloaded.Header().Get("Location") != "/work" {
+		t.Fatalf("the reload of a flight that never reached the provider "+
+			"answered %d (%s), want the sign-in", reloaded.Code, reloaded.Body)
+	}
+	if n := idp.exchanges.Load(); n != 1 {
+		t.Errorf("the token endpoint was asked %d times, want the reload's one", n)
+	}
+	if _, failures := audit.snapshot(); len(failures) != 0 {
+		t.Errorf("the trail holds %d failed attempts, want none: nobody "+
+			"presented anything wrong", len(failures))
 	}
 }
 

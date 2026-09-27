@@ -211,7 +211,7 @@ func TestALoginBegunOnOneNodeFinishesOnAnother(t *testing.T) {
 	if flight.Return != "/work" {
 		t.Errorf("the return address reads %q", flight.Return)
 	}
-	tokens, err := nodeB.Exchange(t.Context(), metadata.TokenEndpoint,
+	tokens, err := exchange(t.Context(), nodeB, metadata.TokenEndpoint,
 		code, flight.Verifier)
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
@@ -342,7 +342,7 @@ func TestACodeCannotBeRedeemedWithoutTheVerifier(t *testing.T) {
 		"somebody else's":    "a-verifier-the-challenge-was-not-made-from",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := provider.Exchange(t.Context(),
+			if _, err := exchange(t.Context(), provider,
 				idp.Server.URL+"/token", code, verifier); err == nil {
 				t.Error("the provider redeemed a code against the wrong " +
 					"verifier, so this case is asserting about a provider " +

@@ -184,20 +184,34 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
-	// ONE EXCHANGE PER FLIGHT, decided before the provider is asked
-	// anything: whoever started a flight holds its cookie and its state,
-	// and could otherwise make this node exchange a code at the provider
-	// once per request for the flight's whole ten minutes.
+	// A TURN AT THE PROVIDER'S TOKEN ENDPOINT FIRST ([oidc.ExchangeSlots]),
+	// waited for on this request. A browser that leaves while it waits
+	// has asked the provider nothing and spent nothing: it is answered 503,
+	// counted as no attempt, and the reload the answer invites presents
+	// the same flight to be exchanged then.
+	admission, err := s.provider.Admit(r.Context())
+	if err != nil {
+		abandoned(w, r, source, err)
+		return
+	}
+	defer admission.Release()
+	// ONE EXCHANGE PER FLIGHT, decided once the provider WILL be asked and
+	// before it is: whoever started a flight holds its cookie and its
+	// state, and could otherwise make this node exchange a code at the
+	// provider once per request for the flight's whole ten minutes. Spent
+	// before the turn came, a flight whose browser left during the wait
+	// was refused as a replay on the reload, having reached nobody.
 	if !s.redeemed.Redeem(flight, s.now()) {
 		s.refuseSignIn(w, r, adm, attempt, "flight already redeemed on this node")
 		return
 	}
-	tokens, err := s.provider.Exchange(r.Context(),
+	tokens, err := admission.Exchange(r.Context(),
 		metadata.TokenEndpoint, code, flight.Verifier)
+	admission.Release()
 	if err != nil && r.Context().Err() != nil {
-		// THE BROWSER WENT AWAY, most often while it waited its turn at
-		// the provider's token endpoint ([oidc.ExchangeSlots]): nothing
-		// was refused, so nothing is counted as a failed attempt.
+		// THE BROWSER WENT AWAY DURING THE EXCHANGE ITSELF: nothing was
+		// refused, so nothing is counted as a failed attempt — and the
+		// flight stays spent, since the provider may have been asked.
 		abandoned(w, r, source, err)
 		return
 	}

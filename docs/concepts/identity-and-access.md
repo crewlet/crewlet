@@ -1335,7 +1335,9 @@ exchanges and deactivation probes together. A callback beyond the eight
 **waits its turn** on its own request rather than being refused: at a hundred
 milliseconds an exchange, a 3,000-person company signing in at nine o'clock
 clears in about 37 seconds, and a browser that gives up waiting is answered
-`503` and counted as no attempt, having asked the provider nothing.
+`503` and counted as no attempt, having asked the provider nothing — and
+having spent nothing either: the reload of that same callback, once a turn is
+free, is exchanged then.
 
 Everything a node sends the provider — the discovery document, the key set,
 every exchange and every probe — goes through one HTTP client with a
@@ -1349,8 +1351,10 @@ one person closing their tab fails nobody else's sign-in.
 And a flight is exchanged **once**. Whoever started a flight holds its cookie
 and its `state`, and a made-up code is free, so the same cookie presented over
 and over would be an exchange at the provider per request for its whole ten
-minutes. The node that finishes a flight remembers it until the flight would
-have expired anyway — up to 8,192 of them, about a megabyte, far more than a
+minutes. The node that finishes a flight remembers it — from the moment the
+flight holds its turn at the token endpoint, never before, so a flight whose
+browser left while it waited was never spent — until the flight would have
+expired anyway — up to 8,192 of them, about a megabyte, far more than a
 morning's wave finishes inside ten minutes — so a cookie presented a second
 time to that node is refused as a failed sign-in before the provider hears of
 it. A flight is remembered by a digest of its **PKCE verifier**, the random

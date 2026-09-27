@@ -59,7 +59,7 @@ type Tokens struct {
 }
 
 // exchange redeems an authorization code, over the provider's own client and
-// inside one of its slots — [Provider.Exchange] is the only way in.
+// inside one of its slots — [Admission.Exchange] is the only way in.
 //
 // THE VERIFIER GOES WITH IT, which is the whole of PKCE: the provider hashed
 // the challenge at the authorization request and compares it to this, so a code

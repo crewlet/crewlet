@@ -58,7 +58,7 @@ func TestThePerIssuerSlotsRefuseNothingLegitimate(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = provider.Exchange(t.Context(), server.URL, "a-code", "a-verifier")
+			_, errs[i] = exchange(t.Context(), provider, server.URL, "a-code", "a-verifier")
 		}()
 	}
 	waitFor(t, func() bool { return inFlight.Load() == oidc.ExchangeSlots })
@@ -104,14 +104,15 @@ func TestACallerThatGivesUpWaitingAsksNothing(t *testing.T) {
 	provider := oidc.NewProvider(testConfig(), server.Client(),
 		func() time.Time { return at })
 	for range oidc.ExchangeSlots {
-		go func() { _, _ = provider.Exchange(t.Context(), server.URL, "c", "v") }()
+		go func() { _, _ = exchange(t.Context(), provider, server.URL, "a-code", "a-verifier") }()
 	}
 	waitFor(t, func() bool { return served.Load() == oidc.ExchangeSlots })
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := provider.Exchange(ctx, server.URL, "c", "v"); err == nil {
-		t.Fatal("an exchange whose request ended while it waited was answered")
+	if admission, err := provider.Admit(ctx); err == nil {
+		admission.Release()
+		t.Fatal("a caller whose request ended while it waited was admitted")
 	}
 	if got := served.Load(); got != oidc.ExchangeSlots {
 		t.Errorf("the endpoint was asked %d times, want the %d holding the slots",
@@ -133,6 +134,72 @@ func TestTheProvidersConnectionCapCoversItsSlots(t *testing.T) {
 		t.Errorf("httpx.IdentityProviderConns = %d, below the %d slots and the "+
 			"two fetches beside them", httpx.IdentityProviderConns, oidc.ExchangeSlots)
 	}
+}
+
+// AN ADMISSION HOLDS ITS SLOT UNTIL IT IS RELEASED, AND FREES IT ONCE.
+//
+// The sign-in surface takes a slot, decides whether the flight may be spent,
+// and only then exchanges — so the slot is a value it holds across that
+// decision, and giving it back is the caller's. A second release must free
+// nothing: the slot is somebody else's by then, and freeing it would let a
+// ninth request reach the provider beside eight.
+//
+// Mutation: release without the once and the provider admits nine; make Admit
+// hand out a slot it does not take and the ninth caller is admitted at once.
+func TestAnAdmissionHoldsItsSlotUntilReleasedAndFreesItOnce(t *testing.T) {
+	t.Parallel()
+	provider := oidc.NewProvider(testConfig(), nil, func() time.Time { return at })
+	held := make([]*oidc.Admission, oidc.ExchangeSlots)
+	for i := range held {
+		admission, err := provider.Admit(t.Context())
+		if err != nil {
+			t.Fatalf("admission %d with slots free: %v", i, err)
+		}
+		held[i] = admission
+	}
+	blocked := func() bool {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		admission, err := provider.Admit(ctx)
+		if err == nil {
+			admission.Release()
+			return false
+		}
+		return true
+	}
+	if !blocked() {
+		t.Fatal("a ninth caller was admitted beside eight held slots")
+	}
+	held[0].Release()
+	held[0].Release()
+	next, err := provider.Admit(t.Context())
+	if err != nil {
+		t.Fatalf("a released slot was not handed on: %v", err)
+	}
+	if !blocked() {
+		// FATAL, because the releases below would wait for ever on a
+		// slot count this has already got wrong.
+		t.Fatal("a slot released twice was freed twice, so the provider " +
+			"would see nine requests at once")
+	}
+	next.Release()
+	for _, admission := range held[1:] {
+		admission.Release()
+	}
+}
+
+// exchange is one caller's whole turn at the token endpoint: admitted, one
+// exchange, released.
+func exchange(ctx context.Context, provider *oidc.Provider, endpoint, code,
+	verifier string) (oidc.Tokens, error) {
+
+	admission, err := provider.Admit(ctx)
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	defer admission.Release()
+	return admission.Exchange(ctx, endpoint, code, verifier)
 }
 
 // waitFor polls a condition for up to five seconds.

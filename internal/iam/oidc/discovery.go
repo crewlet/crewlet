@@ -201,31 +201,66 @@ func (p *Provider) WithLogger(logger *slog.Logger) *Provider {
 // Config is the provider's configuration.
 func (p *Provider) Config() Config { return p.config }
 
-// Exchange redeems an authorization code, inside one of this provider's
-// [ExchangeSlots] and over THIS PROVIDER'S OWN CLIENT, the one its discovery
-// and its key set already use: the three requests go to one party, and a
-// client of the caller's own gave that party a second timeout policy and a
-// second trust store — the callback did exactly that, so a provider built
-// with a client that trusted its issuer discovered and fetched keys fine and
-// then failed every code exchange. The configuration's exchange is unexported
-// so there is no way to the token endpoint that skips the slots.
+// Admit waits for one of this provider's [ExchangeSlots] and answers it held,
+// as the one way to exchange an authorization code: [Admission.Exchange].
 //
-// A caller waits for a slot on its own context; one that ends first is
-// answered its context's error, having asked the provider nothing.
-func (p *Provider) Exchange(ctx context.Context, tokenEndpoint, code, verifier string) (
-	Tokens, error) {
-
+// # Admitted first, and asked second
+//
+// A caller that has to DECIDE something once it is sure the provider will be
+// asked — the sign-in surface spends a flight ([Redemptions]) exactly then —
+// decides it between the two. A flight spent before its exchange waited for a
+// slot was a flight spent on a request that never reached the provider: the
+// browser left during the wait, was answered 503 and invited to retry, and the
+// reload presenting the same cookie was refused as a replay and counted as a
+// failed attempt — so the morning's wave the slots are sized for burned the
+// login of everybody who reloaded a callback still spinning in it.
+//
+// A caller waits on its own context; one that ends first is answered its
+// context's error, having taken no slot and asked the provider nothing. The
+// caller gives the slot back with [Admission.Release].
+func (p *Provider) Admit(ctx context.Context) (*Admission, error) {
 	release, err := p.slot(ctx)
 	if err != nil {
-		return Tokens{}, err
+		return nil, err
 	}
-	defer release()
-	return p.config.exchange(ctx, p.client, tokenEndpoint, code, verifier)
+	return &Admission{provider: p, release: sync.OnceFunc(release)}, nil
 }
 
+// Admission is one of a provider's [ExchangeSlots], held.
+//
+// IT IS THE ONLY WAY TO THE TOKEN ENDPOINT FOR A CODE, and the configuration's
+// own exchange is unexported so there is none that skips the slots. And it
+// exchanges OVER THIS PROVIDER'S OWN CLIENT, the one its discovery and its key
+// set already use: the three requests go to one party, and a client of the
+// caller's own gave that party a second timeout policy and a second trust
+// store — the callback did exactly that, so a provider built with a client
+// that trusted its issuer discovered and fetched keys fine and then failed
+// every code exchange.
+type Admission struct {
+	provider *Provider
+
+	// release gives the slot back — ONCE, whoever calls it and however
+	// often, since a second release would free a slot another caller
+	// holds.
+	release func()
+}
+
+// Exchange redeems an authorization code inside this admission's slot.
+func (a *Admission) Exchange(ctx context.Context, tokenEndpoint, code,
+	verifier string) (Tokens, error) {
+
+	return a.provider.config.exchange(ctx, a.provider.client, tokenEndpoint,
+		code, verifier)
+}
+
+// Release gives the slot back. Safe to call more than once; only the first
+// call does anything.
+func (a *Admission) Release() { a.release() }
+
 // Refresh exchanges a refresh token — the deactivation probe's one question —
-// inside a slot and over the provider's own client, for [Provider.Exchange]'s
-// reasons.
+// inside a slot and over the provider's own client, for [Admission]'s reasons.
+// Nothing is decided between the slot and the request, so the two are one
+// call.
 func (p *Provider) Refresh(ctx context.Context, tokenEndpoint, refresh string) (
 	Tokens, error) {
 
