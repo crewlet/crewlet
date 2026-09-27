@@ -64,7 +64,7 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name   string
-		break_ func(*Bootstrap)
+		remove func(*Bootstrap)
 		want   string
 	}{
 		{"no address a browser reaches this on", func(b *Bootstrap) {
@@ -83,7 +83,7 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := serving()
-			tc.break_(&b)
+			tc.remove(&b)
 			refuses(t, b, tc.want)
 		})
 	}

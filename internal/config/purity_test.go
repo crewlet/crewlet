@@ -2,10 +2,9 @@ package config
 
 import (
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
-	"io/fs"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -41,18 +40,21 @@ import (
 func TestValidationTakesNoContextNoStoreAndNoSQL(t *testing.T) {
 	t.Parallel()
 
-	fset := token.NewFileSet()
-	pkg, err := parser.ParseDir(fset, ".", func(f fs.FileInfo) bool {
-		return !strings.HasSuffix(f.Name(), "_test.go")
-	}, parser.SkipObjectResolution)
+	// THE FILES THE BUILD COMPILES, which is what go/build answers and
+	// parser.ParseDir did not: it ignored build constraints, so a file
+	// the build leaves out would have been walked as though it shipped.
+	pkg, err := build.ImportDir(".", 0)
 	if err != nil {
-		t.Fatalf("parse the package: %v", err)
+		t.Fatalf("list the package's files: %v", err)
 	}
+	fset := token.NewFileSet()
 	files := map[string]*ast.File{}
-	for _, p := range pkg {
-		for name, file := range p.Files {
-			files[filepath.Base(name)] = file
+	for _, name := range pkg.GoFiles {
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
 		}
+		files[name] = file
 	}
 	if len(files) == 0 {
 		t.Fatal("parsed no source files — this guard was certifying nothing")

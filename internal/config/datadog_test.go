@@ -195,29 +195,6 @@ func TestTheExternalBaseIsTrimmed(t *testing.T) {
 	}
 }
 
-// validateCompanyDoc parses and validates a company document carrying body at
-// the top level.
-func validateCompanyDoc(t *testing.T, body string) error {
-	t.Helper()
-	doc := `
-name: Acme
-providers:
-  llm:
-    fast:
-      type: anthropic
-      model: claude-golden
-` + body + `
-roles:
-  - name: SWE
-    llm: fast
-`
-	c, err := config.ParseCompany([]byte(doc))
-	if err != nil {
-		return err
-	}
-	return c.Validate()
-}
-
 // A CLOUD SITE GIVEN BY URL IS CLOUD, and is not asked for a signing secret
 // it cannot use. Both validators used to decide "Cloud" from cloud_id alone,
 // so https://acme.atlassian.net, which is how most companies write a Cloud
