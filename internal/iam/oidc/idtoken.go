@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -314,7 +313,3 @@ func (f *flexibleBool) UnmarshalJSON(data []byte) error {
 	}
 	return nil
 }
-
-// KnownAlgorithm reports whether an algorithm is one this engine accepts, for
-// a caller that has to say why a provider's metadata is unusable.
-func KnownAlgorithm(alg string) bool { return slices.Contains(Algorithms, alg) }

@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/jwks"
+	"github.com/crewlet/crewlet/internal/logging"
 )
 
 // DISCOVERY: the three endpoints a round trip needs, read from the provider
@@ -44,44 +47,76 @@ type Metadata struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	JWKSURI               string `json:"jwks_uri"`
-	EndSessionEndpoint    string `json:"end_session_endpoint"`
 
-	// ScopesSupported and IDTokenSigningAlgValuesSupported are read to
-	// REPORT rather than to decide. A provider that does not advertise
-	// `offline_access` is one whose deactivation probe will never work,
-	// and saying so at validation is better than an operator discovering
-	// it when somebody's off-boarding takes a week.
+	// EndSessionEndpoint is where a person signing out here is sent to end
+	// their session AT THE PROVIDER too (`POST /auth/logout/oidc`), and
+	// empty at a provider that publishes none.
+	EndSessionEndpoint string `json:"end_session_endpoint"`
+
+	// The four lists below are read to REPORT rather than to decide — see
+	// [Metadata.Concerns].
 	ScopesSupported    []string `json:"scopes_supported"`
 	SigningAlgorithms  []string `json:"id_token_signing_alg_values_supported"`
-	ClaimsSupported    []string `json:"claims_supported"`
 	ResponseTypes      []string `json:"response_types_supported"`
 	CodeChallengeTypes []string `json:"code_challenge_methods_supported"`
 }
 
-// SupportsOfflineAccess reports whether the deactivation probe can work at
-// all against this provider.
-func (m Metadata) SupportsOfflineAccess() bool {
-	for _, scope := range m.ScopesSupported {
-		if scope == "offline_access" {
-			return true
-		}
-	}
-	return false
+// Concern is one thing a provider's discovery document says this engine's
+// sign-in cannot rely on there: the document field that says it, and a
+// sentence for the operator.
+type Concern struct {
+	Field  string
+	Detail string
 }
 
-// SupportsS256 reports whether the provider advertises the PKCE
-// transformation this engine uses.
+// Concerns reads a discovery document's advertised capabilities against what
+// this engine asks of a provider, one [Concern] per mismatch.
 //
-// ADVISORY, and deliberately not a refusal: the field is optional, plenty of
-// providers implement S256 without advertising it, and a login refused because
-// a document omitted a list is an outage caused by metadata.
-func (m Metadata) SupportsS256() bool {
-	for _, method := range m.CodeChallengeTypes {
-		if method == "S256" {
-			return true
-		}
+// # Advisory, and never a refusal
+//
+// Every one of these lists is optional or unevenly kept — plenty of providers
+// implement S256 without advertising it — so an ABSENT list says nothing, and
+// a list that disagrees is reported rather than acted on: a login refused
+// because a document omitted a value is an outage caused by metadata. What a
+// concern is FOR is the operator who would otherwise meet it a round trip
+// later as something with no name: every sign-in refused as an unverifiable
+// token, a provider ignoring the PKCE challenge it was sent, a deactivation
+// probe that never has a refresh token to ask with. [Provider.Metadata]
+// reports each one when it fetches a document, which is once a day.
+func (m Metadata) Concerns(c Config) []Concern {
+	var out []Concern
+	if len(m.ResponseTypes) > 0 && !slices.Contains(m.ResponseTypes, "code") {
+		out = append(out, Concern{Field: "response_types_supported", Detail: fmt.Sprintf(
+			"the provider advertises %v and not `code`, the authorization code "+
+				"flow this engine signs in with, so it may refuse every sign-in "+
+				"request", m.ResponseTypes)})
 	}
-	return len(m.CodeChallengeTypes) == 0
+	if len(m.SigningAlgorithms) > 0 && !slices.ContainsFunc(m.SigningAlgorithms,
+		func(alg string) bool { return slices.Contains(Algorithms, alg) }) {
+
+		out = append(out, Concern{Field: "id_token_signing_alg_values_supported",
+			Detail: fmt.Sprintf("the provider signs ID tokens with %v and this "+
+				"engine verifies %v, so every sign-in will be refused as an "+
+				"unverifiable token; configure the application at the provider "+
+				"to sign with RS256", m.SigningAlgorithms, Algorithms)})
+	}
+	if len(m.CodeChallengeTypes) > 0 && !slices.Contains(m.CodeChallengeTypes, "S256") {
+		out = append(out, Concern{Field: "code_challenge_methods_supported",
+			Detail: fmt.Sprintf("the provider advertises %v and not S256, the "+
+				"only PKCE method this engine sends, so it may refuse the "+
+				"challenge or ignore it — and an ignored challenge is a code "+
+				"anybody who intercepts it can redeem", m.CodeChallengeTypes)})
+	}
+	if len(m.ScopesSupported) > 0 && slices.Contains(c.requested(), "offline_access") &&
+		!slices.Contains(m.ScopesSupported, "offline_access") {
+
+		out = append(out, Concern{Field: "scopes_supported", Detail: "the provider " +
+			"does not advertise `offline_access`, so a sign-in may get no refresh " +
+			"token and the deactivation probe nothing to ask with: somebody " +
+			"disabled at the provider keeps their session here until its " +
+			"absolute deadline"})
+	}
+	return out
 }
 
 // Provider is a discovered identity provider, with its key set cached beside
@@ -92,6 +127,7 @@ type Provider struct {
 	config Config
 	client *http.Client
 	now    func() time.Time
+	logger *slog.Logger
 
 	// slots admits a request to the token endpoint: a buffered channel of
 	// [ExchangeSlots], taken for the length of one exchange or refresh.
@@ -146,7 +182,20 @@ func NewProvider(config Config, client *http.Client, now func() time.Time) *Prov
 		now = time.Now
 	}
 	return &Provider{config: config, client: client, now: now,
-		slots: make(chan struct{}, ExchangeSlots)}
+		logger: log, slots: make(chan struct{}, ExchangeSlots)}
+}
+
+// log is where a provider reports what its discovery document says it cannot
+// be relied on for — see [Metadata.Concerns].
+var log = logging.Get("iam.oidc")
+
+// WithLogger replaces where the provider reports, and returns it for chaining.
+// CALLED ONCE, before the provider is used; a nil one keeps the default.
+func (p *Provider) WithLogger(logger *slog.Logger) *Provider {
+	if logger != nil {
+		p.logger = logger
+	}
+	return p
 }
 
 // Config is the provider's configuration.
@@ -276,6 +325,13 @@ func (p *Provider) discover(ctx context.Context, inflight *discovery) {
 		})
 	}
 	inflight.metadata = fetched
+	// SAID ONCE PER FETCH, which is once a day: a concern is about the
+	// provider, and every sign-in between two fetches would repeat it.
+	for _, concern := range fetched.Concerns(p.config) {
+		p.logger.WarnContext(ctx, "oidc_provider_metadata_concern",
+			"issuer", fetched.Issuer, "field", concern.Field,
+			"detail", concern.Detail)
+	}
 }
 
 // Keys is the provider's cached key set, discovering first if it has to.

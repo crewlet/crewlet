@@ -1370,6 +1370,20 @@ its `azp`, and when the company sets `oidc.require_acr` the asserted
 authentication context must match — requesting `acr_values` is a request the
 provider is free to ignore, so the check on the way back is what enforces it.
 
+When a node fetches the provider's discovery document — on first use, then
+once a day — it reports what the document says will not work there, one
+`oidc_provider_metadata_concern` warning per problem, naming the field: an
+`id_token_signing_alg_values_supported` naming no algorithm above (every
+sign-in would be refused as an unverifiable token), a
+`response_types_supported` without `code`, a `code_challenge_methods_supported`
+without `S256` (a provider that ignores the PKCE challenge lets whoever
+intercepts a code redeem it), and a `scopes_supported` without
+`offline_access` while this deployment asks for it (no refresh token, so no
+deactivation probe). **None of them refuses anything**: every one of those
+lists is optional and unevenly kept, so an absent list says nothing, and a
+sign-in refused because a document omitted a value would be an outage caused
+by metadata.
+
 ### Linking is explicit, and an email match is never a link
 
 The engine does not create a person because a provider asserted an address, and
