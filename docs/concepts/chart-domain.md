@@ -249,6 +249,9 @@ alias has fallen off the capped list — and nothing else may take it:
   on `crewlet.chart.apply.declined`). A new object's identity is the address it
   is created under, so a seat created on another's identity would be a second
   seat sharing the first one's mailbox, lease and diary.
+- **A removal tombstones it** beside the address the object held, under the same
+  record. A removed seat's identity therefore stays unavailable exactly as its
+  last address does, rather than becoming free the moment the seat is gone.
 
 **A content write never creates its object.** A creation takes an address, and
 an address is exact only where every structural change contends; a content
@@ -324,14 +327,12 @@ retains it rather than applying a create as a move, and applies it once it is
 upgraded.
 
 Every path that gives an address — a create, an import and a rename — asks
-**one** set of rules on every version-2 record, so none of them can forget one: a reserved word (`root`, `tree`, `barrier`, and `none` for
-a seat), a seat handle outside the handle grammar (a `.` or a `:` is a login's
-shape, which every name lookup sends to the identity directory), a removed
-address, an address somebody answers to as a key, or somebody's identity. A
-rename also may not take another object's retired alias; a creation may.
-- **A removal tombstones it** beside the address the object held, under the same
-  record. A removed seat's identity therefore stays unavailable exactly as its
-  last address does, rather than becoming free the moment the seat is gone.
+**one** set of rules on every version-2 record, so none of them can forget one:
+a reserved word (`root`, `tree`, `barrier`, and `none` for a seat), a seat
+handle outside the handle grammar (a `.` or a `:` is a login's shape, which
+every name lookup sends to the identity directory), a removed address, an
+address somebody answers to as a key, or somebody's identity. A rename also may
+not take another object's retired alias; a creation may.
 
 A retired alias that is *not* an identity is different and stays takeable by a
 new object — the claimant then wins every reference written with it, which is
