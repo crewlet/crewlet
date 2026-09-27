@@ -2009,9 +2009,19 @@ is the only number that can be pushed *forward* without knowing which sessions
 were affected — every cookie in existence carries a value below the new one —
 which is why bumping it is the restore runbook's last step.
 
-Both are stated on the record rather than incremented by the applier. An
-applier that did `+ 1` would fold over an arrival order, and two nodes at one
-checkpoint have seen the same set of records in a different order.
+It ends **bearers**, and nothing else. A restore rolls back every other change
+to the directory made after the artefact was taken as well — a removal, a
+suspension, a withdrawn credential, a reduced grant — and none of those is a
+bearer: the person comes back holding the password, the second factor and the
+grants they had, and signs in again like everybody else. No number moved
+forward can undo those, because each one is about somebody in particular, so
+the runbook re-applies them by hand, from a record kept outside the estate,
+before it bumps the generation
+([Backups & Restore](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)).
+
+Both counters are stated on the record rather than incremented by the applier.
+An applier that did `+ 1` would fold over an arrival order, and two nodes at
+one checkpoint have seen the same set of records in a different order.
 
 And a session is **opened at** both. The writer reads the person's current
 epoch and the fleet's current generation in the same snapshot it forms the
