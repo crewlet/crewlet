@@ -625,8 +625,12 @@ type Generation struct {
 // [jsoncarry]'s and not this package's: a decode keeps what it has no home
 // for, an encode folds it back, and a carried field loses to a known one.
 
+// EncodePerson is the bytes a person's document travels as, with every field a
+// newer build wrote folded back in.
 func EncodePerson(p Person) ([]byte, error) { return jsoncarry.Encode(p, p.Extra) }
 
+// DecodePerson reads a person's document, keeping every field this build has
+// no home for, and refuses one written at a version above [DocumentVersion].
 func DecodePerson(data []byte) (Person, error) {
 	var p Person
 	extra, err := jsoncarry.Decode(data, &p, personFields)
@@ -640,8 +644,12 @@ func DecodePerson(data []byte) (Person, error) {
 	return p, nil
 }
 
+// EncodeClaim is the bytes a claim's payload travels as, with every field a
+// newer build wrote folded back in.
 func EncodeClaim(c Claim) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
 
+// DecodeClaim reads a claim's payload, keeping every field this build has no
+// home for, and refuses one written at a version above [DocumentVersion].
 func DecodeClaim(data []byte) (Claim, error) {
 	var c Claim
 	extra, err := jsoncarry.Decode(data, &c, claimFields)
@@ -655,8 +663,13 @@ func DecodeClaim(data []byte) (Claim, error) {
 	return c, nil
 }
 
+// EncodeInvitation is the bytes an invitation's document travels as, with
+// every field a newer build wrote folded back in.
 func EncodeInvitation(i Invitation) ([]byte, error) { return jsoncarry.Encode(i, i.Extra) }
 
+// DecodeInvitation reads an invitation's document, keeping every field this
+// build has no home for, and refuses one written at a version above
+// [DocumentVersion].
 func DecodeInvitation(data []byte) (Invitation, error) {
 	var i Invitation
 	extra, err := jsoncarry.Decode(data, &i, invitationFields)
@@ -670,8 +683,13 @@ func DecodeInvitation(data []byte) (Invitation, error) {
 	return i, nil
 }
 
+// EncodeSession is the bytes a session record's payload travels as, with every
+// field a newer build wrote folded back in.
 func EncodeSession(s Session) ([]byte, error) { return jsoncarry.Encode(s, s.Extra) }
 
+// DecodeSession reads a session record's payload, keeping every field this
+// build has no home for, and refuses one written at a version above
+// [DocumentVersion].
 func DecodeSession(data []byte) (Session, error) {
 	var s Session
 	extra, err := jsoncarry.Decode(data, &s, sessionFields)
@@ -685,8 +703,13 @@ func DecodeSession(data []byte) (Session, error) {
 	return s, nil
 }
 
+// EncodeRevocation is the bytes a revocation's payload travels as, with every
+// field a newer build wrote folded back in.
 func EncodeRevocation(r Revocation) ([]byte, error) { return jsoncarry.Encode(r, r.Extra) }
 
+// DecodeRevocation reads a revocation's payload, keeping every field this
+// build has no home for, and refuses one written at a version above
+// [DocumentVersion].
 func DecodeRevocation(data []byte) (Revocation, error) {
 	var r Revocation
 	extra, err := jsoncarry.Decode(data, &r, revocationFields)
@@ -700,8 +723,13 @@ func DecodeRevocation(data []byte) (Revocation, error) {
 	return r, nil
 }
 
+// EncodeStatus is the bytes a stage change's payload travels as, with every
+// field a newer build wrote folded back in.
 func EncodeStatus(s StatusChange) ([]byte, error) { return jsoncarry.Encode(s, s.Extra) }
 
+// DecodeStatus reads a stage change's payload, keeping every field this build
+// has no home for, and refuses one written at a version above
+// [DocumentVersion].
 func DecodeStatus(data []byte) (StatusChange, error) {
 	var s StatusChange
 	extra, err := jsoncarry.Decode(data, &s, statusFields)
@@ -715,8 +743,13 @@ func DecodeStatus(data []byte) (StatusChange, error) {
 	return s, nil
 }
 
+// EncodeRemoval is the bytes a removal's payload travels as, with every field
+// a newer build wrote folded back in.
 func EncodeRemoval(r Removal) ([]byte, error) { return jsoncarry.Encode(r, r.Extra) }
 
+// DecodeRemoval reads a removal's payload, keeping every field this build has
+// no home for, and checks no version: the payload is pinned at
+// [GateRecordVersion], so the envelope pass has already refused any other.
 func DecodeRemoval(data []byte) (Removal, error) {
 	var r Removal
 	extra, err := jsoncarry.Decode(data, &r, removalFields)
@@ -731,8 +764,13 @@ func DecodeRemoval(data []byte) (Removal, error) {
 	return r, nil
 }
 
+// EncodeBootstrapDoc is the bytes the one-time code's document travels as,
+// with every field a newer build wrote folded back in.
 func EncodeBootstrapDoc(b Bootstrap) ([]byte, error) { return jsoncarry.Encode(b, b.Extra) }
 
+// DecodeBootstrapDoc reads the one-time code's document, keeping every field
+// this build has no home for, and refuses one written at a version above
+// [DocumentVersion].
 func DecodeBootstrapDoc(data []byte) (Bootstrap, error) {
 	var b Bootstrap
 	extra, err := jsoncarry.Decode(data, &b, bootstrapFields)
@@ -746,8 +784,13 @@ func DecodeBootstrapDoc(data []byte) (Bootstrap, error) {
 	return b, nil
 }
 
+// EncodeSweep is the bytes a retention sweep's payload travels as, with every
+// field a newer build wrote folded back in.
 func EncodeSweep(s Sweep) ([]byte, error) { return jsoncarry.Encode(s, s.Extra) }
 
+// DecodeSweep reads a retention sweep's payload, keeping every field this
+// build has no home for, and refuses one written at a version above
+// [DocumentVersion].
 func DecodeSweep(data []byte) (Sweep, error) {
 	var s Sweep
 	extra, err := jsoncarry.Decode(data, &s, sweepFields)
@@ -761,10 +804,16 @@ func DecodeSweep(data []byte) (Sweep, error) {
 	return s, nil
 }
 
+// EncodeInvalidation is the bytes a company-wide invalidation's payload
+// travels as, with every field a newer build wrote folded back in.
 func EncodeInvalidation(i Invalidation) ([]byte, error) {
 	return jsoncarry.Encode(i, i.Extra)
 }
 
+// DecodeInvalidation reads a company-wide invalidation's payload, keeping
+// every field this build has no home for, and checks no version: the payload
+// is pinned at [GateRecordVersion], so the envelope pass has already refused
+// any other.
 func DecodeInvalidation(data []byte) (Invalidation, error) {
 	var i Invalidation
 	extra, err := jsoncarry.Decode(data, &i, invalidationFields)
@@ -778,8 +827,14 @@ func DecodeInvalidation(data []byte) (Invalidation, error) {
 	return i, nil
 }
 
+// EncodeEviction is the bytes an eviction's or a readmission's payload travels
+// as, with every field a newer build wrote folded back in.
 func EncodeEviction(e Eviction) ([]byte, error) { return jsoncarry.Encode(e, e.Extra) }
 
+// DecodeEviction reads an eviction's or a readmission's payload, keeping every
+// field this build has no home for, and checks no version: the payload is
+// pinned at [GateRecordVersion], so the envelope pass has already refused any
+// other.
 func DecodeEviction(data []byte) (Eviction, error) {
 	var e Eviction
 	extra, err := jsoncarry.Decode(data, &e, evictionFields)
@@ -792,8 +847,13 @@ func DecodeEviction(data []byte) (Eviction, error) {
 	return e, nil
 }
 
+// EncodeGeneration is the bytes a reanchor's payload travels as, with every
+// field a newer build wrote folded back in.
 func EncodeGeneration(g Generation) ([]byte, error) { return jsoncarry.Encode(g, g.Extra) }
 
+// DecodeGeneration reads a reanchor's payload, keeping every field this build
+// has no home for, and refuses one written at a version above
+// [DocumentVersion].
 func DecodeGeneration(data []byte) (Generation, error) {
 	var g Generation
 	extra, err := jsoncarry.Decode(data, &g, generationFields)
@@ -807,8 +867,13 @@ func DecodeGeneration(data []byte) (Generation, error) {
 	return g, nil
 }
 
+// EncodeCredential is the bytes one credential's document travels as, with
+// every field a newer build wrote folded back in.
 func EncodeCredential(c Credential) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
 
+// DecodeCredential reads one credential's document, keeping every field this
+// build has no home for, and refuses one written at a version above
+// [DocumentVersion].
 func DecodeCredential(data []byte) (Credential, error) {
 	var c Credential
 	extra, err := jsoncarry.Decode(data, &c, credentialFields)
