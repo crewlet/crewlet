@@ -233,34 +233,46 @@ func TestAnAbsentNameIsAnswerableAsNotFound(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING REFUSES RATHER THAN STORING PLAINTEXT, and says what
-// to run. A store that could hold unencrypted secrets is a footgun with no
-// upside.
-func TestWithoutAKeyringEveryWriteIsRefusedWithTheRemedy(t *testing.T) {
+// WITHOUT A KEYRING THERE IS NO SURFACE, and the refusal names the field.
+//
+// Built with no keyring, this surface used to answer every route 503
+// no_keyring and tell the caller to run `crewlet secrets keygen` — a posture
+// for a node with no keyring, which cannot exist: validation refuses a Tier A
+// file without secrets.keys and the engine refuses to start. So a nil cipher,
+// or a keyring with no active key to rekey onto, is the wiring mistake a nil
+// fleet is, and it fails the boot by name.
+func TestWithoutAKeyringTheSurfaceIsRefused(t *testing.T) {
 	t.Parallel()
-	h, _ := surface(t, nil, "")
-	code, body := call(t, h, http.MethodPut, "/secrets/A", "v")
-	if code != http.StatusServiceUnavailable {
-		t.Fatalf("PUT = %d %s, want 503", code, body)
-	}
-	if !strings.Contains(body, "keygen") {
-		t.Errorf("the refusal does not say how to get a keyring: %s", body)
+	for _, c := range []struct {
+		name  string
+		opts  secretsapi.Options
+		field string
+	}{
+		{"no keyring", secretsapi.Options{Fleet: coordmem.NewFleet(),
+			ActiveKeyID: "k1"}, "Options.Cipher"},
+		{"no active key", secretsapi.Options{Fleet: coordmem.NewFleet(),
+			Cipher: cipherFor(t, "k1")}, "Options.ActiveKeyID"},
+	} {
+		svc, err := secretsapi.New(c.opts)
+		if err == nil {
+			t.Errorf("%s: built a secrets surface: %v", c.name, svc)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.field) {
+			t.Errorf("%s: the refusal does not name %s: %v", c.name, c.field, err)
+		}
 	}
 }
 
-// EVERY REFUSAL HERE CARRIES ITS SENTENCE, AND A 503 FOR A MISSING KEY SAYS
-// NOTHING ABOUT WHEN.
+// EVERY REFUSAL HERE CARRIES ITS SENTENCE, AND NONE OF THEM SAYS WHEN.
 //
 // This surface built its own `{"error": code}` bodies, so the credential
-// screen rendered a code and no line a person could act on. And a node with
-// no keyring (or no active key) will have none after any wait: a Retry-After
-// there teaches a client to hammer a node that cannot answer until somebody
-// reconfigures it, so its ABSENCE is the answer — the hint says what to do.
-func TestARefusalCarriesItsSentenceAndAMissingKeyNoRetryAfter(t *testing.T) {
+// screen rendered a code and no line a person could act on. And none of these
+// clears by waiting — a name is refused for its shape and a rekey for naming
+// another key — so a Retry-After on one would teach a client to repeat it.
+func TestARefusalCarriesItsSentenceAndNoRetryAfter(t *testing.T) {
 	t.Parallel()
 	keyed, _ := surface(t, cipherFor(t, "k1"), "k1")
-	keyless, _ := surface(t, nil, "")
-	noActive, _ := surface(t, cipherFor(t, "k1"), "")
 	for _, c := range []struct {
 		name         string
 		h            http.Handler
@@ -272,10 +284,6 @@ func TestARefusalCarriesItsSentenceAndAMissingKeyNoRetryAfter(t *testing.T) {
 			http.StatusBadRequest, httpjson.CodeInvalidName},
 		{"a rekey onto a key this node does not seal with", keyed, http.MethodPost,
 			"/secrets/rekey?key_id=k9", http.StatusConflict, httpjson.CodeKeyIDMismatch},
-		{"a write on a node with no keyring", keyless, http.MethodPut, "/secrets/A",
-			http.StatusServiceUnavailable, httpjson.CodeNoKeyring},
-		{"a rekey on a node naming no active key", noActive, http.MethodPost,
-			"/secrets/rekey", http.StatusServiceUnavailable, httpjson.CodeNoActiveKey},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -295,7 +303,7 @@ func TestARefusalCarriesItsSentenceAndAMissingKeyNoRetryAfter(t *testing.T) {
 				t.Errorf("message = %v, want the code's own sentence", body["message"])
 			}
 			if got := rec.Header().Get("Retry-After"); got != "" {
-				t.Errorf("Retry-After = %q: no wait gives a node a key", got)
+				t.Errorf("Retry-After = %q over a refusal no wait clears", got)
 			}
 		})
 	}
@@ -677,9 +685,6 @@ func TestEveryRefusalHereIsTheEnginesEnvelope(t *testing.T) {
 		Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
 		Now: func() time.Time { return clock },
 	}, iam.AllGrants...)
-	unkeyed := mounted(t, secretsapi.Options{
-		Fleet: coordmem.NewFleet(), Now: func() time.Time { return clock },
-	}, iam.AllGrants...)
 	for _, tc := range []struct {
 		name         string
 		h            http.Handler
@@ -699,9 +704,6 @@ func TestEveryRefusalHereIsTheEnginesEnvelope(t *testing.T) {
 		{"a rekey onto another key", sealed, http.MethodPost,
 			"/secrets/rekey?key_id=k9", "", http.StatusConflict,
 			httpjson.CodeKeyIDMismatch},
-		{"a node with no keyring", unkeyed, http.MethodPut,
-			"/secrets/GITLAB_TOKEN", "v", http.StatusServiceUnavailable,
-			httpjson.CodeNoKeyring},
 	} {
 		code, raw := call(t, tc.h, tc.method, tc.path, tc.body)
 		var body map[string]any

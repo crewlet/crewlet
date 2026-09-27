@@ -75,10 +75,9 @@ const MaxValueBytes = 64 << 10
 
 // Service is the /secrets surface.
 type Service struct {
-	store  *fleetsecrets.Store
-	keyID  string
-	cipher secrets.Cipher
-	now    func() time.Time
+	store *fleetsecrets.Store
+	keyID string
+	now   func() time.Time
 
 	// guard decides every route and the reveal a GET asks for on top of
 	// its route. No chart: not one verb here asks a relation.
@@ -91,11 +90,12 @@ type Options struct {
 	// node opens the fleet store, and [New] refuses to build without it.
 	Fleet coord.Secrets
 
-	// Cipher seals and opens a value. Nil is a node with no keyring,
-	// which every route refuses rather than storing plaintext.
+	// Cipher seals and opens a value, under the keyring every node holds.
+	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
 
-	// ActiveKeyID is the keyring key a rekey re-seals onto.
+	// ActiveKeyID is the keyring key a rekey re-seals onto: Tier A's
+	// secrets.active_key_id. Required for the same reason.
 	ActiveKeyID string
 
 	// Now is injectable so a test can pin a row's timestamp.
@@ -104,34 +104,35 @@ type Options struct {
 
 // New builds the service.
 //
-// A MISSING FLEET IS REFUSED rather than served as an absent surface: `crewlet
-// run` builds this beside an engine whose fleet store is open on every
-// topology, so a nil here is a wiring mistake, and an unregistered /secrets
-// answering 404 would hide it.
+// A MISSING FLEET OR KEYRING IS REFUSED rather than served as a narrower
+// surface: `crewlet run` builds this beside an engine whose fleet store is open
+// on every topology and whose Tier A carries a keyring and an active key —
+// validation refuses a file without them and the engine refuses to start — so
+// a nil here is a wiring mistake. An unregistered /secrets answering 404 would
+// hide it, and so did the surface this was: built with no keyring, it answered
+// every route 503 no_keyring, describing a deployment that cannot exist.
 func New(opts Options) (*Service, error) {
 	if opts.Fleet == nil {
 		return nil, errors.New("secretsapi: Options.Fleet is required: the " +
 			"company's credentials live in the fleet's coordination store")
 	}
+	if opts.Cipher == nil {
+		return nil, errors.New("secretsapi: Options.Cipher is required: every " +
+			"node holds the keyring (secrets.keys) a credential is sealed under")
+	}
+	if opts.ActiveKeyID == "" {
+		return nil, errors.New("secretsapi: Options.ActiveKeyID is required: it " +
+			"is the key (secrets.active_key_id) a rekey re-seals onto")
+	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	if opts.Cipher == nil {
-		// SAID AT REGISTRATION. Every route then answers 503, and a 503
-		// with no explanation anywhere is a support ticket: a node with
-		// no secrets.keys genuinely cannot hold a credential, and the
-		// operator's answer is `crewlet secrets keygen`.
-		log.Warn("secret_routes_disabled",
-			"hint", "this node has no secrets.keys, so /secrets cannot seal "+
-				"anything; run `crewlet secrets keygen` and install one")
-	}
 	return &Service{
-		store:  fleetsecrets.New(opts.Fleet, opts.Cipher),
-		keyID:  opts.ActiveKeyID,
-		cipher: opts.Cipher,
-		now:    now,
-		guard:  authz.ContextGuard(authz.NoChart{}),
+		store: fleetsecrets.New(opts.Fleet, opts.Cipher),
+		keyID: opts.ActiveKeyID,
+		now:   now,
+		guard: authz.ContextGuard(authz.NoChart{}),
 	}, nil
 }
 
@@ -244,9 +245,6 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	if !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSecretReveal}) {
 		return
 	}
-	if !s.sealed(w) {
-		return
-	}
 	value, err := s.store.Get(r.Context(), name)
 	switch {
 	case errors.Is(err, secrets.ErrNotFound):
@@ -293,9 +291,6 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 			"hint": "a secret is keyed by environment-variable name, because " +
 				"that is what a ${VAR} in the company config resolves through",
 		})
-		return
-	}
-	if !s.sealed(w) {
 		return
 	}
 	// THE SHARED READER, not a copy of it. This route answered
@@ -375,18 +370,6 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 // number cannot answer, and this is what an operator reads before retiring
 // the old key.
 func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
-	if !s.sealed(w) {
-		return
-	}
-	if s.keyID == "" {
-		// A 503 WITH NO Retry-After: this node lacks the configuration,
-		// and no wait gives it one — see [httpjson.Unavailable].
-		httpjson.UnavailableWith(w, httpjson.CodeNoActiveKey, 0, httpjson.Detail{
-			"hint": "this node's secrets.active_key_id is unset, so there is " +
-				"no key to re-seal onto",
-		})
-		return
-	}
 	// THE CALLER'S EXPECTED KEY, refused on a mismatch rather than
 	// ignored. A CLI whose Tier A names a different active key than this
 	// node's is an operator rekeying onto a key the fleet will not seal
@@ -445,21 +428,6 @@ func nonNil(names []string) []string {
 	return names
 }
 
-// sealed refuses a write on a node with no keyring, and says what to do.
-func (s *Service) sealed(w http.ResponseWriter) bool {
-	if s.cipher != nil {
-		return true
-	}
-	// A 503 WITH NO Retry-After: waiting installs no key — see
-	// [httpjson.CodeNoKeyring].
-	httpjson.UnavailableWith(w, httpjson.CodeNoKeyring, 0, httpjson.Detail{
-		"detail": "this node has no secrets.keys, so it cannot seal or open a " +
-			"secret",
-		"hint": "run `crewlet secrets keygen` and install the key in Tier A",
-	})
-	return false
-}
-
 // render is one row as the surface reports it — never its value.
 func render(row secrets.Record) map[string]any {
 	return map[string]any{
@@ -482,10 +450,6 @@ func render(row secrets.Record) map[string]any {
 // carry a bucket name and a broker address, and an error from the cipher can
 // name a key id. None of that belongs in a response body on this surface.
 func (s *Service) fail(w http.ResponseWriter, what string, err error) {
-	if errors.Is(err, secrets.ErrNoKeyring) {
-		s.sealed(w)
-		return
-	}
 	log.Error("secret_request_failed", "what", what, "error", err)
 	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }

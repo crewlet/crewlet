@@ -66,10 +66,10 @@ one JSON object, and it always has the same three parts in the same places:
   (`surface_busy`) — carries a `Retry-After` in seconds, derived from the
   refusal where the refusal knows (a node behind its log estimates from its
   own backlog) and a few seconds otherwise. A `503` for a missing piece of
-  THIS node's configuration — `no_keyring`, `no_active_key`, a node that runs
-  no identity domain asked a question only one that does can answer — carries
-  NONE, because no wait installs a key: the header's absence is the answer,
-  and the `hint` names what to change. So does a refusal from the state log
+  THIS node's configuration — a node that runs no identity domain asked a
+  question only one that does can answer — carries NONE, because no wait
+  changes what the node runs: the header's absence is the answer, and the
+  `hint` names what to do instead. So does a refusal from the state log
   that waiting cannot clear on THIS node — a node evicted from the fleet, one
   holding a record it cannot decode, a log at its byte ceiling, a deleted
   object — on every surface that answers one with a `503` (`/chart`, `/work`,
@@ -1338,16 +1338,16 @@ can explain.
 the route answers what a listing answers for one name, so a browser, a crawl or
 a link preview cannot pull a credential out by accident.
 
-**A node with no `secrets.keys` answers `503 no_keyring`** on every route that
-seals or opens, pointing at `crewlet secrets keygen`. The store has no
-plaintext mode; refusing is the only alternative to holding credentials in the
-clear.
+**Every value is sealed under the node's keyring.** The store has no plaintext
+mode, and there is no node without a keyring to ask about: `crewlet validate`
+refuses a Tier A file with no `secrets.keys`, and the engine refuses to start
+without one.
 
 **Every refusal here is the engine's envelope** — `error`, the sentence
 `message` a screen shows, and the route's own detail beside them:
-`reserved_name`, `invalid_name`, `not_found`, `no_keyring`, and on a rekey
-`no_active_key`, `key_id_mismatch` (with `key_id` and `your_key_id`) and
-`rekey_incomplete` (with the `moved` names and the `engine_keys_moved` count).
+`reserved_name`, `invalid_name`, `not_found`, and on a rekey
+`key_id_mismatch` (with `key_id` and `your_key_id`) and `rekey_incomplete`
+(with the `moved` names and the `engine_keys_moved` count).
 
 `crewlet secrets` is the client for all of this — see
 [the secret store](../concepts/secret-store.md#which-store-the-cli-writes) for

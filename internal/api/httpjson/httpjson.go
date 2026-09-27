@@ -41,9 +41,9 @@
 // because those are the only writers that set the `Retry-After` and the
 // envelope together: a dozen 503s written through [FailWith] told a client to
 // come back and never said when. Zero seconds writes NO header, and that is a
-// setting rather than an omission — a node missing its keyring will not have
-// one after any wait, and the header's absence is how a client learns not to
-// hammer it. `internal/api`'s source walk holds the settings surfaces to this,
+// setting rather than an omission — a node that runs no identity domain will
+// not run one after any wait, and the header's absence is how a client learns
+// not to hammer it. `internal/api`'s source walk holds the settings surfaces to this,
 // to hand-built bodies, and to codes minted outside the table.
 package httpjson
 
@@ -332,22 +332,11 @@ const (
 	CodeSummaryRequired Code = "summary_required"
 )
 
-// The credential set: `/secrets`' refusals, and the keyring refusal `/setup`
-// shares with it because a connection seals a credential through the same
-// store.
+// The credential set: `/secrets`' refusals. There is no "no keyring" code:
+// every node holds one, and the surface refuses to be built without it.
 const (
 	// CodeInvalidName is a name a credential cannot be stored under.
 	CodeInvalidName Code = "invalid_name"
-
-	// CodeNoKeyring is a node with no `secrets.keys`, which can neither
-	// seal a credential nor open one. A 503 with NO Retry-After: waiting
-	// does not install a key, and a client told to come back would hammer
-	// a node that cannot answer until somebody reconfigures it.
-	CodeNoKeyring Code = "no_keyring"
-
-	// CodeNoActiveKey is a rekey on a node whose keyring names no key to
-	// re-seal onto — a configuration fault, answered like [CodeNoKeyring].
-	CodeNoActiveKey Code = "no_active_key"
 
 	// CodeKeyIDMismatch is a rekey whose caller expects a different active
 	// key from the one this node seals under.
@@ -747,12 +736,6 @@ var codes = map[Code]string{
 
 	CodeInvalidName: "That is not a name a credential can be stored under. The " +
 		"detail says what a name may be.",
-	CodeNoKeyring: "This node has no keyring, so it can neither seal a " +
-		"credential nor open one. Generate a key, add it to the node's " +
-		"configuration and restart it.",
-	CodeNoActiveKey: "This node's keyring names no active key, so there is " +
-		"nothing to re-seal onto. Set one in the node's configuration and " +
-		"restart it.",
 	CodeKeyIDMismatch: "This node seals under a different key from the one " +
 		"you expected. Make the two configurations agree before rekeying.",
 	CodeRekeyIncomplete: "The rekey stopped part of the way through. The detail " +
