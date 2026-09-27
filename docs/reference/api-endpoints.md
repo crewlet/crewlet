@@ -374,7 +374,10 @@ under the fleet's keyring in a session cookie, and at least 26 characters in a
 Tier A value, which `crewlet validate` refuses shorter. Every refused bearer on
 a guarded route is still a failed attempt in the audit trail's per-client,
 per-minute tally, so a spray is seen; it is never answered `429`, however many
-valid or refused requests the address has in flight.
+valid or refused requests the address has in flight. An unguarded route —
+`/health`, `/ready`, the dashboard's shell and assets, the webhooks, the
+sign-in routes — never compares a bearer at all: the request is anonymous
+there, and the provider step-up start refuses any request that presents one.
 
 **Every source is the proxy's unless you say otherwise.** Behind a proxy that is
 not in [`api.trusted_proxies`](../getting-started/configuration.md#tier-a), every

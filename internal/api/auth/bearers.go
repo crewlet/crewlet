@@ -57,13 +57,15 @@ func withBearer(ctx context.Context) context.Context {
 	return context.WithValue(ctx, bearerKey{}, true)
 }
 
-// PresentedBearer reports whether the request presented a bearer at all —
-// matched, refused or uncheckable alike.
+// PresentedBearer reports whether a request to an UNGUARDED route presented a
+// bearer, which the guard marks there and never compares — see
+// [Guard.resolveUnguarded].
 //
 // FOR THE ONE UNGUARDED ROUTE THAT READS A RESOLUTION, the provider step-up
 // start, which confirms a BROWSER's own session with the identity provider: a
 // bearer proves nobody is present, so it refuses every presented bearer alike,
-// before reading anything the resolution says about it.
+// and a request carrying one resolves as nobody there rather than as whoever
+// its cookie names.
 func PresentedBearer(ctx context.Context) bool {
 	presented, _ := ctx.Value(bearerKey{}).(bool)
 	return presented

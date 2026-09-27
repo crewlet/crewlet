@@ -329,25 +329,23 @@ func TestAnUnguardedRouteReachesTheHandlerWithNoOperator(t *testing.T) {
 	}
 }
 
-func TestAValidTokenIsAttributedEvenWhereItIsNotRequired(t *testing.T) {
+func TestABearerIsResolvedOnlyWhereTheGuardJudgesIt(t *testing.T) {
 	t.Parallel()
-	// Attribution and authorization are different questions. A route that
-	// does not REQUIRE a token can still be told who presented one, which
-	// is what lets an operator-only query be answered on a surface the
-	// anonymous-read posture lets through.
-	//
-	// Resolving only on guarded routes made that unreachable: the query
-	// arrived with a valid token, no operator attached, and came back
-	// unauthorized to a caller holding the right credential.
+	// A GUARDED ROUTE RESOLVES THE BEARER IT RELIES ON, and an unguarded
+	// one never compares it. It used to be resolved everywhere, so that an
+	// exempt route could be told who presented one — and none reads that:
+	// what it bought was a directory read for a matching Tier A value on
+	// /health, /static and the webhooks, answering a right guess slower
+	// than a wrong one at line rate, on routes whose refusals nothing
+	// counts. See [auth.Guard]'s resolveUnguarded.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 
-	// An unguarded route under an open read posture.
 	if _, seen := serve(t, g, "GET", "/events", "Bearer secret"); seen != "token:founder" {
-		t.Errorf("operator = %q on an unguarded read, want token:founder", seen)
+		t.Errorf("operator = %q on a guarded read, want token:founder", seen)
 	}
-	// And an exempt one.
-	if _, seen := serve(t, g, "GET", "/health", "Bearer secret"); seen != "token:founder" {
-		t.Errorf("operator = %q on an exempt route, want token:founder", seen)
+	if _, seen := serve(t, g, "GET", "/health", "Bearer secret"); seen != "" {
+		t.Errorf("operator = %q on an exempt route, want none: the bearer "+
+			"was compared where nothing judges it", seen)
 	}
 }
 

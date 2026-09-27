@@ -245,13 +245,7 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 	// stays anonymous rather than being quietly upgraded by whatever
 	// cookie happened to be in the jar.
 	if candidate := g.Credential(r); candidate != "" {
-		// MARKED WHATEVER IT RESOLVED TO, so every answer carries it: an
-		// unguarded route that reads the resolution must answer a good
-		// bearer and a bad one alike, and can only if it can tell one was
-		// presented at all. See bearers.go.
-		resolved, refusal := g.bearer(r, candidate)
-		//nolint:contextcheck // the resolved request's own, derived from r.Context() by g.bearer
-		return resolved.WithContext(withBearer(resolved.Context())), refusal
+		return g.bearer(r, candidate)
 	}
 	if g.sessions != nil {
 		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.tokenByLogin)

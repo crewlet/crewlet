@@ -1059,8 +1059,17 @@ one route a break-glass holder uses to reach the dashboard.
 What a guess costs the guesser is **visibility**: every refused bearer on a
 guarded route is a failed attempt in the audit trail's per-client, per-minute
 tally — `iam_login_failures`, naming the client and how many different values
-it tried — and an unguarded route's own credential, such as the Forge relay's
-JWT on `/webhooks/forge`, is not this guard's to count.
+it tried.
+
+An **unguarded** route never compares a bearer at all — `/health`, the
+dashboard's assets, the webhooks, the sign-in routes. Nothing there acts on
+whom a bearer names, and comparing one anyway answered a right value and a
+wrong one at different speeds (a matching Tier A token reads the identity
+directory for its seat binding first) on routes whose refusals nothing counts.
+Such a request is simply anonymous, and the one unguarded route that reads a
+resolution, the provider step-up start, refuses any request presenting a
+bearer. The Forge relay's own JWT on `/webhooks/forge` is that route's to
+verify, and never the guard's.
 
 ---
 

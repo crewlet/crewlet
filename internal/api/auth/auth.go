@@ -553,20 +553,16 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		path := r.URL.Path
 		markNoStore(w, path)
 
-		// ATTRIBUTION AND AUTHORIZATION ARE DIFFERENT QUESTIONS, and
-		// the credential is resolved for both. A route that does not
-		// REQUIRE one can still be told who presented one — the
-		// webhook edge attributing a delivery, a probe answered
-		// differently for an operator — and skipping the resolution
-		// there made that unreachable: the request arrived with a
-		// valid token, no principal attached, and came back
-		// unauthorized to a caller holding the right credential.
-		//
 		// EVERY REQUEST LEAVES HERE CARRYING AN ANSWER, which is what
 		// stops [iam.From] reading a handler nobody wired through this
 		// as [iam.Unknown] — silence is not anonymity, and that
 		// distinction is only worth anything if the resolver actually
-		// runs everywhere.
+		// runs everywhere. An unguarded route's answer is
+		// [Guard.resolveUnguarded]'s, which never compares a bearer.
+		if Unguarded(path) {
+			next.ServeHTTP(w, g.resolveUnguarded(w, r))
+			return
+		}
 		r, refusal := g.Resolve(w, r)
 		// THE RESOLVED REQUEST'S CONTEXT IS THIS HANDLER'S OWN, carrying
 		// the answer: Resolve returns r.WithContext of a context derived
@@ -575,16 +571,6 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// both uses below as new contexts.
 		//nolint:contextcheck // derived from r.Context(); see the paragraph above
 		principal, how := iam.From(r.Context())
-		if Unguarded(path) {
-			// THE REFUSAL IS DISCARDED HERE ON PURPOSE. It is only
-			// ever a credential whose SEAT is gone, or a session that
-			// may only enrol a second factor, and the routes that are
-			// unguarded are how somebody signs in and how the sign-in
-			// screen renders — locking either person out of those
-			// would leave them holding a live cookie with no way on.
-			next.ServeHTTP(w, r)
-			return
-		}
 		if refusal != nil && refusal.Applies(r) {
 			// RESOLVED AND STILL REFUSED, on a route the refusal does
 			// not leave them — see [Refusal.Applies]. Logged at info
@@ -667,6 +653,38 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			g.overreached(r, entry, recorded.status)
 		}
 	})
+}
+
+// resolveUnguarded answers who a request to an [Unguarded] route is — without
+// comparing a presented bearer.
+//
+// # A session is resolved there, and a bearer is only marked
+//
+// One unguarded route reads a resolution at all: the provider step-up start,
+// which confirms the person a browser's SESSION belongs to, so a cookie is
+// resolved here exactly as on a guarded route. A BEARER is not. Nothing
+// unguarded acts on the principal a bearer resolves to — the webhooks verify
+// their own signatures, the per-run edges carry their own token, and the
+// step-up start refuses every bearer alike ([PresentedBearer]) — and comparing
+// one anyway was an oracle: a matching Tier A value reads the identity
+// directory for the token's seat binding before it answers, and a refused one
+// returns after a map compare, so `Authorization: Bearer <guess>` against
+// /health, /favicon.ico or /static answered a right value and a wrong one at
+// different speeds, as fast as they were sent, on routes whose refusals the
+// audit trail's failure tally does not count. So the value is never looked at
+// here: the request is anonymous, marked as having presented a bearer.
+//
+// THE REFUSAL [Guard.Resolve] RETURNS IS DISCARDED ON PURPOSE. It is only ever
+// a credential whose SEAT is gone, or a session that may only enrol a second
+// factor, and the routes that are unguarded are how somebody signs in and how
+// the sign-in screen renders — locking either person out of those would leave
+// them holding a live cookie with no way on.
+func (g *Guard) resolveUnguarded(w http.ResponseWriter, r *http.Request) *http.Request {
+	if g.Credential(r) != "" {
+		return r.WithContext(withBearer(iam.WithAnonymous(r.Context())))
+	}
+	resolved, _ := g.Resolve(w, r)
+	return resolved
 }
 
 // remoteHost is the caller's address without its port, for the failure log.
