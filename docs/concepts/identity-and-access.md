@@ -1037,8 +1037,15 @@ never on the path of every attempt: a pair this node already knows is owed more
 than five seconds is refused with a map lookup and no round trip, so a pair
 costs at most one read per attempt its curve lets through; a clean pair is read
 once a window, so an honest sign-in pays one read and its second-factor step
-none; and a store that fails to answer is left alone for thirty seconds rather
-than timed out on every sign-in. Each failure is dated by the clock of the node
+none; a record is one value read with one get, never a consumer; and a store
+that fails to answer is left alone for thirty seconds rather than timed out on
+every sign-in. A pair nobody has met yet — what every new name a guessing run
+types arrives as — is asked about only as fast as its **source's allowance**
+refills: sixteen at once, then one a second. Past it, a fresh name is decided
+on the node's own count and its failure kept there, so one address typing new
+names costs the coordination store a bounded trickle rather than two round
+trips per name; the same pair's next attempt is shared as ever, and a success
+still clears the fleet's record. Each failure is dated by the clock of the node
 that saw it, and **no node's clock can stretch a wait past the ceiling**: a
 reader takes none of the fleet's failures as later than its own clock, so a
 node ten minutes fast costs a mistyped password the ordinary second elsewhere

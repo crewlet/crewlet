@@ -516,6 +516,129 @@ func TestAPairsRoundTripsAreBoundedByItsCurve(t *testing.T) {
 	}
 }
 
+// A FLOOD OF FRESH NAMES FROM ONE SOURCE COSTS THE FLEET A BOUNDED AMOUNT.
+//
+// A pair's round trips are bounded by its curve, but a guessing run that types
+// a new name every time meets a fresh pair every time, and a fresh pair was a
+// read and — once it failed — a write, as fast as the names came: one source
+// drove the coordination store at line rate, never slowed by any curve. So a
+// source's pairs this node holds no record of are asked about only as fast as
+// its allowance refills — [credential.FreshPairBurst] at once, then one a
+// [credential.FreshPairEvery] — and past it a fresh pair is decided on this
+// node's count and its failure kept here. A source's allowance is its own: a
+// colleague elsewhere is asked about as ever. And a pair this node already
+// holds a record of is no longer fresh, so a run concentrated on one account is
+// read and written at every step whatever the source has spent.
+//
+// Mutations: charge nothing for a fresh pair and the flood reads and writes
+// once per name; charge the whole fleet one allowance and the other source's
+// pair is decided unread; charge a known pair too and the run at one account
+// stops being shared.
+func TestAFloodOfFreshNamesCostsTheFleetABoundedAmount(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	th, clock, _ := newThrottle(t, store)
+	const flood = 500
+	for i := range flood {
+		if err := failOnce(t, th, credential.Attempt{Source: "198.51.100.23",
+			Subject: fmt.Sprintf("name.%d", i)}); err != nil {
+			t.Fatalf("fresh name %d was refused: %v", i, err)
+		}
+	}
+	reads, writes := store.io()
+	if reads > credential.FreshPairBurst || writes > credential.FreshPairBurst {
+		t.Fatalf("%d fresh names from one source in an instant cost %d reads and "+
+			"%d writes of the fleet window, want at most the %d its allowance holds",
+			flood, reads, writes, credential.FreshPairBurst)
+	}
+
+	// ANOTHER SOURCE'S FRESH PAIR is asked about as ever.
+	if err := failOnce(t, th, credential.Attempt{Source: "203.0.113.50",
+		Subject: "sarah.chen"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, w := store.io(); r != reads+1 || w != writes+1 {
+		t.Errorf("another source's first failure cost %d reads and %d writes, "+
+			"want one of each — the flood spent somebody else's allowance",
+			r-reads, w-writes)
+	}
+
+	// A RUN AT ONE ACCOUNT from the spent source: its first attempt is
+	// fresh and unshared, and every step after it is read and written.
+	reads, writes = store.io()
+	who := credential.Attempt{Source: "198.51.100.23", Subject: "the.cfo"}
+	for range 4 {
+		if err := failOnce(t, th, who); err != nil {
+			clock.advance(credential.RetryAfter(err))
+			if err := failOnce(t, th, who); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if r, w := store.io(); r-reads < 3 || w-writes < 3 {
+		t.Errorf("four failures at one account from a source that spent its "+
+			"allowance cost %d reads and %d writes, want every step after the "+
+			"first shared", r-reads, w-writes)
+	}
+
+	// AND THE ALLOWANCE REFILLS: a minute on, fresh pairs are asked about
+	// again.
+	clock.advance(time.Minute)
+	reads, _ = store.io()
+	if err := failOnce(t, th, credential.Attempt{Source: "198.51.100.23",
+		Subject: "a.minute.later"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := store.io(); r != reads+1 {
+		t.Errorf("a minute on, a fresh pair from the source cost %d reads, want "+
+			"the one its refilled allowance pays for", r-reads)
+	}
+}
+
+// A SUCCESS ON A PAIR THIS NODE NEVER ASKED ABOUT STILL CLEARS THE FLEET.
+//
+// A pair decided without a read is one whose fleet record this node does not
+// know, which is not the same as knowing it is empty: this person may have
+// failed on another node a minute ago. Their success here has answered those
+// failures, so it flushes the record — or they would owe a wait on the next
+// node for a mistake this sign-in proved was theirs.
+//
+// Mutation: flush only a pair read and found failing, and the other node still
+// makes them wait.
+func TestASuccessOnAPairNeverAskedAboutStillClearsTheFleet(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}
+	elsewhere, _, _ := onClock(t, store, clock)
+	here, _, _ := onClock(t, store, clock)
+	who := credential.Attempt{Source: "192.0.2.10", Subject: "alice"}
+	if err := failOnce(t, elsewhere, who); err != nil {
+		t.Fatal(err)
+	}
+	// Somebody at the same address spends its allowance on this node.
+	for i := range credential.FreshPairBurst {
+		if err := failOnce(t, here, credential.Attempt{Source: "192.0.2.10",
+			Subject: fmt.Sprintf("name.%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ticket, err := here.Admit(t.Context(), who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket.Succeed(t.Context())
+
+	clock.advance(100 * time.Millisecond)
+	third, _, sleeps := onClock(t, store, clock)
+	if _, err := third.Admit(t.Context(), who); err != nil {
+		t.Fatal(err)
+	}
+	if waited := sleeps.all(); len(waited) != 0 {
+		t.Errorf("a person who signed in still owes the fleet %v on another "+
+			"node, for a failure their success answered", waited)
+	}
+}
+
 // AN HONEST SIGN-IN'S SECOND STEP COSTS THE FLEET NOTHING.
 //
 // A password that proves itself where a second factor is held releases its
