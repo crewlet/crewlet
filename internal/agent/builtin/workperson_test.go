@@ -633,33 +633,6 @@ func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 	}
 }
 
-// projectSpy records the edit the project tool built.
-type projectSpy struct {
-	edit tracker.ProjectEdit
-	tags tracker.TagEdit
-}
-
-func (p *projectSpy) WriteProject(_ context.Context, _, _ string,
-	edit tracker.ProjectEdit, _ tracker.ProjectAuthority) (
-	tracker.WriteResult, error) {
-
-	p.edit = edit
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
-}
-
-func (p *projectSpy) WriteTags(_ context.Context, _, _ string,
-	edit tracker.TagEdit, _ tracker.TagAuthority) (tracker.WriteResult, error) {
-
-	p.tags = edit
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
-}
-
-func (p *projectSpy) EnsureTags(context.Context, string, string, []string) (
-	[]string, []string, error) {
-
-	return nil, nil, nil
-}
-
 // THE PERSON TOOLS TAKE GESTURES, and their schemas say so.
 //
 // `mark_inbox` used to take all three lists and the watermark and REPLACE each

@@ -42,6 +42,13 @@ export interface ViewerState {
   handle: string;
   /** That seat's display name, or "". */
   name: string;
+  /**
+   * The changes the engine will make as this person — every tool
+   * `POST /operator/act/{tool}` serves a token bound to a seat, and NONE for
+   * an anonymous or unbound caller, who may not act (ADR-0024). Read by
+   * `lib/useWriteAccess.ts`, and by nothing that decides for itself.
+   */
+  acts: readonly string[];
   kind: "agent" | "human" | "";
   /** A token is presented and no seat names its id. */
   unbound: boolean;
@@ -87,6 +94,7 @@ function useViewerRead(): ViewerState {
     operator: data?.operator ?? false,
     handle,
     name: data?.name ?? "",
+    acts: data?.acts ?? [],
     kind: (data?.kind as ViewerState["kind"]) ?? "",
     unbound: operatorID !== "" && handle === "",
     anonymous: !unknown && operatorID === "",

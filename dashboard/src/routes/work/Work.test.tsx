@@ -21,6 +21,7 @@ import { CalendarView } from "./shapes/Calendar.tsx";
 import { BoardCard, PriorityMark, WorkRow } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
 import type { QueryName, WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
 
@@ -508,10 +509,15 @@ function serving(
   return query;
 }
 
+// UNDER A VIEWER, as the frame mounts every screen: the trash column's
+// Restore is a write control, and it asks who is reading before it says
+// whether it can act.
 const mountWork = () =>
   render(
     <Router>
-      <Work />
+      <ViewerProvider>
+        <Work />
+      </ViewerProvider>
     </Router>,
   );
 
@@ -1184,9 +1190,9 @@ test("a removed row names who removed it, from the feed rather than the row", as
   // to resolve in the same tick, which is what made this case flake.
   await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
   expect(screen.getByText("the wrong subtree")).toBeTruthy();
-  // And the way back is on the row: this dashboard writes nothing, so what it
-  // offers is the call an assistant would make.
-  expect(screen.getByText("Restore")).toBeTruthy();
+  // And the way back is on the row, as a control made as the reader — drawn
+  // whoever is reading, and disabled with the reason where they cannot act.
+  expect(screen.getByRole("button", { name: "Restore ENG-9" })).toBeTruthy();
 });
 
 // A ROW THE FEED'S PAGE DOES NOT REACH SAYS SO.

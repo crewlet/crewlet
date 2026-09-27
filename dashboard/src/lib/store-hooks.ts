@@ -19,7 +19,6 @@
 
 import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 import type { EngineHealth } from "~/contract/health.ts";
-import { indexOrg, seatBadgeOf, type SeatKind } from "./seats.ts";
 import type {
   Slice,
   StoreState,
@@ -97,12 +96,6 @@ export function usePhaseEvents() {
 
 export function useOrg() {
   return useSlice(["org"], (s) => s.org);
-}
-
-/** A seat's name and kind by its handle or its name, off the chart this store holds. */
-export function useSeatBadgeOf(): (key: string) => { name: string; kind?: SeatKind } {
-  const org = useOrg();
-  return useMemo(() => seatBadgeOf(indexOrg(org)), [org]);
 }
 
 export function useTools() {

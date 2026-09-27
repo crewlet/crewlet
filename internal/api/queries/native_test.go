@@ -906,51 +906,82 @@ func TestAroundReachesTheCallerAndIsNullWhenAbsent(t *testing.T) {
 // The case is written as a WALK over the questions rather than one assertion
 // per reader, because the defect was never in one of them: it was that adding
 // the fourteenth question would inherit whatever the thirteenth typed.
+// sessionQuestion is one question this surface serves at a caller's floor:
+// the domain whose log it reads, the arguments it needs to answer at all, and
+// where the stub records the level it was asked at.
+type sessionQuestion struct {
+	what   string
+	domain string
+	args   map[string]any
+	level  func(*stubWork, *stubPages) statelog.ReadLevel
+	// ready prepares stubs a question needs to answer rather than refuse
+	// (a revision has to be held to be read); nil for none.
+	ready func(*stubWork, *stubPages)
+}
+
+// sessionQuestions are EVERY question on this surface that reads a
+// freshness — and therefore takes a write's position as its floor. One
+// table, walked by [TestEveryNativeQuestionResolvesTheCallersOwnLevel] for
+// the behaviour and by [TestEverySessionQueryTakesAFreshnessFloor] against
+// the dashboard's own list, so the two cannot come to describe different
+// sets.
+var sessionQuestions = []sessionQuestion{
+	{"work_items", "tracker", map[string]any{},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.query.Level }, nil},
+	{"work_item", "tracker", map[string]any{"id": "ENG-1"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
+	{"work_views", "tracker", map[string]any{"container": "workspace"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }, nil},
+	{"work_catalogue", "tracker", map[string]any{},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.catalogueQuery.Level }, nil},
+	{"work_person", "tracker", map[string]any{"handle": "ana"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.personQuery.Level }, nil},
+	{"work_projects", "tracker", map[string]any{},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.projectQuery.Level }, nil},
+	{"work_project", "tracker", map[string]any{"key": "ENG"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.detailQuery.Level }, nil},
+	{"work_workload", "tracker", map[string]any{},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.workloadQuery.Level }, nil},
+	{"work_activity", "tracker", map[string]any{"container": "workspace"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.activityQuery.Level }, nil},
+	// OPERATOR-ONLY, and it is in this walk precisely because it
+	// is: `my_work` is somebody's whole day, and an operator
+	// reading it at a level nobody chose is the same defect with a
+	// credential in front of it.
+	{"work_my_work", "tracker", map[string]any{"handle": "ana"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }, nil},
+	{"work_inbox", "tracker", map[string]any{"handle": "ana"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }, nil},
+	{"work_routing", "tracker", map[string]any{"record_id": "r-1"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.routingQuery.Level }, nil},
+	{"pages", "pages", map[string]any{},
+		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
+	{"page", "pages", map[string]any{"id": "p1"},
+		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
+	{"containers", "pages", map[string]any{},
+		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
+	{"page_activity", "pages", map[string]any{},
+		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
+	{"page_revision", "pages", map[string]any{"page": "p1", "version": 2},
+		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level },
+		func(_ *stubWork, p *stubPages) { p.revisionHeld = true }},
+}
+
 func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		what  string
-		args  map[string]any
-		level func(*stubWork, *stubPages) statelog.ReadLevel
-	}{
-		{"work_items", map[string]any{},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.query.Level }},
-		{"work_item", map[string]any{"id": "ENG-1"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }},
-		{"work_views", map[string]any{"container": "workspace"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }},
-		{"work_catalogue", map[string]any{},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.catalogueQuery.Level }},
-		{"work_person", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.personQuery.Level }},
-		{"work_projects", map[string]any{},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.projectQuery.Level }},
-		{"work_project", map[string]any{"key": "ENG"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.detailQuery.Level }},
-		{"work_activity", map[string]any{"container": "workspace"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.activityQuery.Level }},
-		// OPERATOR-ONLY, and it is in this walk precisely because it
-		// is: `my_work` is somebody's whole day, and an operator
-		// reading it at a level nobody chose is the same defect with a
-		// credential in front of it.
-		{"work_my_work", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }},
-		{"work_inbox", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }},
-		{"work_routing", map[string]any{"record_id": "r-1"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.routingQuery.Level }},
-		{"pages", map[string]any{},
-			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
-		{"page", map[string]any{"id": "p1"},
-			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
-		{"containers", map[string]any{},
-			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
-	} {
+	for _, tc := range sessionQuestions {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
 			// THE DEFAULT FIRST: a caller who says nothing gets this
 			// surface's own level, not whatever the reader defaults to.
-			work, pages := &stubWork{}, &stubPages{}
+			fresh := func() (*stubWork, *stubPages) {
+				work, pages := &stubWork{}, &stubPages{}
+				if tc.ready != nil {
+					tc.ready(work, pages)
+				}
+				return work, pages
+			}
+			work, pages := fresh()
 			src := queries.Sources{Work: work, Pages: pages}
 			ask := askNative
 			if personalQuestions[tc.what] {
@@ -967,7 +998,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 
 			// AND THE ASK IS HONOURED, which is the half twelve of these
 			// questions dropped on the floor.
-			work, pages = &stubWork{}, &stubPages{}
+			work, pages = fresh()
 			src = queries.Sources{Work: work, Pages: pages}
 			asked := map[string]any{"read_level": "linearizable"}
 			for k, v := range tc.args {
@@ -984,7 +1015,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 
 			// AND A BARE `session` IS REFUSED RATHER THAN QUIETLY
 			// SERVED: it waits for a position, and none was named.
-			work, pages = &stubWork{}, &stubPages{}
+			work, pages = fresh()
 			src = queries.Sources{Work: work, Pages: pages}
 			bad := map[string]any{"read_level": "session"}
 			for k, v := range tc.args {
@@ -998,7 +1029,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			// WITH THE POSITION IT IS HONOURED, which is the whole of
 			// read-your-writes over this wire: a write answered with
 			// where it landed and the caller hands that back.
-			work, pages = &stubWork{}, &stubPages{}
+			work, pages = fresh()
 			src = queries.Sources{Work: work, Pages: pages}
 			own := map[string]any{
 				"read_level": "session", "min_position": "CREWLET_TRACKER_LOG@1:4711",

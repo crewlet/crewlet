@@ -2875,11 +2875,15 @@ refusal: whether it landed is unknown, so the answer carries **`outcome:
 `request_id`. A tool that made its write and could not confirm it — the
 broker's acknowledgement was lost, or this node's operation ledger cannot
 vouch for it — is answered exactly the same way, with the tool's own sentence
-as `detail` saying what to read and that the same request is the safe retry.
-That key is what tells either from a tool's own `unavailable` refusal (a node
-in maintenance, a sealed log), which wrote nothing and carries no `outcome` —
-the class alone would read both as "nothing happened". No transport code is
-also a refusal class, so a client otherwise branches on `error` alone.
+as `detail` saying what to read and that the same request is the safe retry,
+and its audit record says `unknown` rather than `refused`. That key is what
+tells either from a tool's own `unavailable` refusal (a node in maintenance, a
+sealed log), which wrote nothing and carries no `outcome` — the class alone
+would read both as "nothing happened". No
+transport code is also a refusal class, so a client otherwise branches on
+`error` alone. The dashboard reads any other `5xx` — a gateway that gave up
+waiting, a success whose body was cut short — as `unknown` too: it says
+nothing about an engine that may have written.
 
 Every act is logged as `operator_act` at info with the tool, the operator id,
 the seat, the request id and the outcome or refusal — never the arguments —

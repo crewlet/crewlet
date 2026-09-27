@@ -49,12 +49,14 @@
  * row for was told "everything has been marked read" and sent to a facet that
  * was just as empty. See `noticeQuiet`.
  *
- * # Read-only, like everything else
+ * # Marking one read is a gesture, made as you
  *
  * Marking a notice read is a WRITE, and it belongs to the person whose inbox
- * it is — through their own assistant, with `mark_inbox`, attributed to them.
- * A button here would write as "the dashboard", which is not a person and
- * cannot be asked why.
+ * it is: the button calls `mark_inbox` as the person the token is bound to
+ * (ADR-0024), naming this one record. The engine marks that record and
+ * nothing else — every other mark and the read position stay where they are
+ * — and the list is re-read at the position the write answered with, so the
+ * row changes only once the engine says it has.
  */
 
 import { useMemo } from "react";
@@ -76,7 +78,7 @@ import { plainText } from "~/lib/markdown.ts";
 import { WATCHED, type Attention } from "~/lib/attention.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
-import { ToolCallBlock } from "~/components/ToolCall.tsx";
+import { MarkReadButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import type { WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
@@ -352,7 +354,7 @@ export function Inbox() {
             first click reflows the list under the pointer, so the row a reader
             clicked is no longer the row they are looking at. */}
         <aside className="inbox-detail" aria-label="The selected row">
-          <Detail selected={selected} viewer={viewer.name} now={now} />
+          <Detail selected={selected} now={now} />
         </aside>
       </div>
     </>
@@ -605,13 +607,13 @@ function NoticeRow({
 }
 
 /** The right-hand pane: one row, in full. */
-function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string; now: number }) {
+function Detail({ selected, now }: { selected: Selected; now: number }) {
   if (!selected) {
     return (
       <EmptyState
         icon={<InboxGlyph size={28} />}
         title="Pick a row"
-        description="Its reason, what changed and the call that would mark it are shown here."
+        description="Its reason, what changed and the control that marks it read are shown here."
       />
     );
   }
@@ -681,17 +683,16 @@ function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string
         {(notice.actor_seat ?? notice.actor) ? `${notice.actor_seat ?? notice.actor} · ` : ""}
         {fmtDateTime(notice.at)} · {relTime(notice.at, now)}
       </p>
-      {/* THE CALL THAT WOULD MARK IT, rather than a control that pretends to.
-          This screen only reads — every write here is attributed to somebody,
-          and a button in a browser would write as "the dashboard", which is
-          nobody — so what it offers is the `mark_inbox` an assistant would
-          make, pre-filled with this entry's own record. The engine reads
-          where the notice sits itself, and marks nothing else. */}
-      <ToolCallBlock subject={{ kind: "notice", id: notice.record_id }} viewer={viewer} />
-      <p className="t-caption">
-        Your assistant marks these read with <code className="inline">mark_inbox</code>, which is
-        attributed to you. Nothing on this screen writes.
-      </p>
+      {/* ONE RECORD, MARKED AS YOU. Offered while the notice is unread; a
+          read one has nothing left to mark. */}
+      {!notice.read && (
+        <div className="row gap-2">
+          {/* KEYED ON THE RECORD: the detail pane is one slot the selection
+              moves through, and without a key a refusal for one notice stayed
+              drawn under the next one's button. */}
+          <MarkReadButton key={notice.record_id} recordId={notice.record_id} />
+        </div>
+      )}
     </div>
   );
 }

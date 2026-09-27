@@ -22,6 +22,7 @@ import {
   stringValue,
   walk,
 } from "../test/source.ts";
+import { ACTIONS } from "~/contract/actions.ts";
 import { WORKSPACES } from "./nav.ts";
 import { resolves } from "./routes.ts";
 
@@ -502,13 +503,15 @@ test("a column with no word in its head declares one", () => {
  * with a literal kind, because `Calls` reads a NAME, and a string in brackets
  * is not one.
  *
- * `act` IS READ BY BINDING: the function imported from a module of this tree.
- * React's own `act`, which the test kits call with a callback, is a different
- * function that shares the spelling. `act` is the write surface's entry
- * (`protocol/act.ts`), which names a tool the way a query names a kind; it has
- * no caller yet, and is held here from its first. An ALIAS of any of the three
- * is refused (`import { useQuery as ask }`), because every call behind it is
- * invisible to a reader that looks for the name.
+ * `act` AND `useAct` ARE READ BY BINDING: the functions imported from a
+ * module of this tree. React's own `act`, which the test kits call with a
+ * callback, is a different function that shares the spelling. `act` is the
+ * write surface's entry (`protocol/act.ts`) and `useAct` the hook every
+ * screen reaches it through (`lib/useAct.ts`); each names a TOOL the way a
+ * query names a kind, and `internal/api/operator` holds the tools the
+ * dashboard may name (`contract/actions.ts`) against the engine's catalogue.
+ * An ALIAS of any of them is refused (`import { useQuery as ask }`), because
+ * every call behind it is invisible to a reader that looks for the name.
  *
  * TWO CALLS FORWARD A KIND, and each is named in `FORWARDS` with its reason
  * rather than exempted by its shape. An entry that stops matching is stale and
@@ -519,7 +522,7 @@ test("a column with no word in its head declares one", () => {
 /** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
 const SPELLED = new Set(["useQuery", "query"]);
 /** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
-const BOUND = new Set(["act"]);
+const BOUND = new Set(["act", "useAct"]);
 
 /** The sites that hand on a kind somebody else named, and why. */
 const FORWARDS: readonly { path: string; callee: string; argument: string; why: string }[] = [
@@ -528,6 +531,12 @@ const FORWARDS: readonly { path: string; callee: string; argument: string; why: 
     callee: "query",
     argument: "what",
     why: "useQuery's own body sends the socket the kind its caller named, and every caller is held to a literal here",
+  },
+  {
+    path: "lib/useAct.ts",
+    callee: "act",
+    argument: "tool",
+    why: "useAct's own body sends the tool its caller named, and every useAct( is held to a literal here",
   },
   {
     path: "routes/org/builder/testkit.tsx",
@@ -653,6 +662,28 @@ describe("every read names its question", () => {
         .length;
     expect(literal("useQuery")).toBeGreaterThan(80);
     expect(literal("query")).toBeGreaterThanOrEqual(2);
+    expect(literal("useAct")).toBeGreaterThanOrEqual(4);
+  });
+
+  // THE WRITE VOCABULARY IS EXACTLY WHAT THE SCREENS PRESS. `ACTIONS` is
+  // held against the engine's catalogue by a Go gate, and that gate can only
+  // certify a row's arguments as ones the tool TAKES — never that a control
+  // sends them. A row no control uses is a certified write nothing makes, and
+  // a control naming a tool with no row does not compile; so the rows are
+  // held to the useAct( literals outside the suites, both ways.
+  test("and every write the vocabulary allows is one a screen makes", () => {
+    const pressed = new Set(
+      tree
+        .filter(({ path }) => !/\.test\.tsx?$/.test(path))
+        .flatMap(({ calls }) => calls)
+        .filter((c) => c.callee === "useAct" && c.name !== null)
+        .map((c) => c.name!),
+    );
+    expect(
+      Object.keys(ACTIONS).sort(),
+      "contract/actions.ts carries a row per tool a control presses, and no other: " +
+        "add the row with the control that sends it",
+    ).toEqual([...pressed].sort());
   });
 
   test("and every forward it names still forwards", () => {
@@ -691,6 +722,7 @@ describe("every read names its question", () => {
     // in a string rather than by a name.
     ["a computed key", 'socket["query"]("events", params);'],
     ["the write surface", 'import { act } from "~/protocol/act.ts";\nact(tool, { args });'],
+    ["the write hook", 'import { useAct } from "~/lib/useAct.ts";\nuseAct(tool);'],
   ])("the rule catches %s", (_name, source) => {
     const { calls } = namedCalls(source, "tsx");
     expect(calls.length, `nothing read in ${source}`).toBe(1);
@@ -700,6 +732,7 @@ describe("every read names its question", () => {
   test.each([
     ["useQuery", 'import { useQuery as ask } from "~/lib/useQuery.ts";\nask("work_item");'],
     ["act", 'import { act as write } from "~/protocol/act.ts";\nwrite("set_pins", {});'],
+    ["useAct", 'import { useAct as change } from "~/lib/useAct.ts";\nchange("set_pins");'],
   ])("the rule catches an alias of %s", (name, source) => {
     const { aliases, calls } = namedCalls(source, "tsx");
     expect(aliases.map((a) => a.imported)).toEqual([name]);
@@ -724,6 +757,11 @@ describe("every read names its question", () => {
     [
       "the write surface",
       'import { act } from "~/protocol/act.ts";\nact("set_pins", {});',
+      "set_pins",
+    ],
+    [
+      "the write hook",
+      'import { useAct } from "~/lib/useAct.ts";\nconst pin = useAct("set_pins");',
       "set_pins",
     ],
   ])("the rule reads %s", (_name, source, name) => {

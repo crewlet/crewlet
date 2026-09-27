@@ -522,8 +522,8 @@ function projectLede(detail: WorkProjectDetail): string {
  * came back short, and it REPLACES the list — "Nothing matches" is for a query
  * that genuinely narrowed.
  *
- * IT NAMES HOW WORK GETS FILED, because the dashboard writes nothing itself
- * and a reader looking at an empty project is looking for the way in.
+ * IT NAMES HOW WORK GETS FILED, because a reader looking at an empty project
+ * is looking for the way in.
  */
 function NothingFiled({ detail }: { detail: WorkProjectDetail }) {
   return (

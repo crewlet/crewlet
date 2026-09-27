@@ -22,6 +22,29 @@ import { Router } from "~/app/router.tsx";
 import type { RowChrome } from "~/components/work.tsx";
 import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
 
+// THE TRASH COLUMN'S RESTORE IS A WRITE CONTROL, and asks who is reading and
+// whether the socket is up before it says whether it can act. These cases are
+// about the column's other cells, so it reads as an anonymous, connected tab.
+vi.mock("~/lib/viewer.ts", () => ({
+  useViewer: () => ({
+    operatorID: "",
+    operator: false,
+    handle: "",
+    name: "",
+    acts: [],
+    kind: "",
+    unbound: false,
+    anonymous: true,
+    loading: false,
+    asking: false,
+  }),
+}));
+vi.mock("~/lib/store-hooks.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  return { ...actual, useConnection: () => ({ connected: true }) };
+});
+
 afterEach(() => {
   cleanup();
   location.hash = "#/";

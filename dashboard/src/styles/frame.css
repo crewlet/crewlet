@@ -1146,11 +1146,14 @@ a.user-block-who:focus-visible {
 /* AND THE CELLS' OWN LINKS SIT ABOVE IT. Positioned and later in the document
    than the overlay, so they win the hit test in the same stacking context —
    without this the overlay swallows every click and a seat chip inside a row
-   would open the row. No `z-index`: introducing one here would put the rows
-   into stacking contexts the sticky header and the peek rail then have to be
-   reasoned about against. */
+   would open the row. A write control's refusal is lifted with them, or its
+   sentence could not be selected and a click on it opened the row. No
+   `z-index`: introducing one here would put the rows into stacking contexts
+   the sticky header and the peek rail then have to be reasoned about
+   against. */
 .grid-row a:not(.row-link),
-.grid-row button {
+.grid-row button,
+.grid-row .write-refusal {
   position: relative;
 }
 

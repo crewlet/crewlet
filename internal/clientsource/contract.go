@@ -106,6 +106,13 @@ var contract = []Entry{
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,
 		"internal/api/stream.TestTheDashboardKnowsExactlyTheQueryErrorCodesTheEngineSends"},
+	{"ACT_ERRORS", ReadLiteral, "internal/api/operator.TestTheDashboardKnowsExactlyTheActRefusals"},
+
+	// actions.ts
+	{"ACTIONS", ReadLiteral, "internal/api/operator.TestEveryActionTheDashboardTakesIsOneTheActTransportServes"},
+
+	// domains.ts
+	{"SESSION_QUERIES", ReadLiteral, "internal/api/queries.TestEverySessionQueryTakesAFreshnessFloor"},
 
 	// gate.ts
 	{"GATE_ACTIONS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryGateAction"},

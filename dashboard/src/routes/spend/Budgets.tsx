@@ -18,12 +18,12 @@
  * could ask.
  */
 
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useMemo } from "react";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { MeterCell, SeatLabel, TokenCell } from "~/app/frame/cells.tsx";
-import { useSeatBadgeOf } from "~/lib/store-hooks.ts";
 
 import { stateTone, windowOf } from "~/lib/budget.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";

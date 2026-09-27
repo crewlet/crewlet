@@ -439,9 +439,17 @@ func interrupted(w http.ResponseWriter, r *http.Request, name string, err error,
 	}
 	log.WarnContext(r.Context(), "operator_act_interrupted",
 		append(logged, "error", err.Error())...)
+	// `outcome: unknown` IS THE MACHINE-READABLE HALF of the sentence. The
+	// class alone is `unavailable`, which a TOOL also answers when it
+	// refused before writing anything (a node in maintenance, a sealed log)
+	// — and a caller that read both the same way would tell a person
+	// "nothing happened" about a write that may have landed. The key says
+	// which: a refusal carries none, and this answer is the one 503 whose
+	// write nobody can vouch for.
 	httpjson.FailWith(w, http.StatusServiceUnavailable,
 		httpjson.Code(crewletmcp.RefusalUnavailable), map[string]string{
-			"tool": name,
+			"tool":    name,
+			"outcome": string(statelog.OutcomeUnknown),
 			"detail": "the call was interrupted before it answered, so whether it " +
 				"landed is unknown; send it again with the same request_id",
 		})

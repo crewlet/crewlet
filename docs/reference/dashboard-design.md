@@ -3394,27 +3394,106 @@ every caller while the guard is disabled, is refused `unbound`, and
 reads to disable a control and say why, rather than offer a press the engine
 refuses.
 
-Where an object page offers a change as a closed disclosure, **Change this with
-your assistant**, it holds the operator MCP calls that would make it, with this
-object's ids already in them:
+### A write control is never hidden
 
-```
-update_work_item {"item":"ENG-8","status":"in_progress"}
-comment_on_work_item {"item":"ENG-8","body":"…"}
-remove_work_item {"item":"ENG-8"}
-```
+Every control that changes the company is drawn for every reader. Where your
+browser cannot make the change it is **disabled, and says why** — the kit
+button's `disabledReason`, which keeps it focusable and hoverable so the
+sentence reaches exactly the reader who needs it. The five reasons, in the
+order you clear them:
 
-Copy one, edit it, and send it to whatever assistant you have connected to
-`/operator/mcp`. Anything irreversible is last and says so. One line under the
-block names who would be attributed — your token, as an operator, never a seat.
+| You are | The control says |
+|---|---|
+| Offline | Offline — reconnect to make changes. Nothing is queued while you are away. |
+| Not yet known | Checking who you are before anything can be changed. |
+| Anonymous | Set an API token to act — every change is recorded under your name. |
+| An unbound token | This token is not bound to a person — set contact.crewlet_operator_id on your seat to act as yourself. |
+| A person the engine does not make this change for | This engine does not make this change for you. |
 
-The calls are checked against the real operator catalogue by a test
-(`TestEveryToolCallTheScreenOffersIsOneAnOperatorHas`): every tool named
-exists, every argument filled is one that tool takes, and none of them is a
-read. A block of tool names written by hand is a documentation surface that
-starts lying on the first rename, and it lies in the worst way — a copied call
-the engine refuses, on the one screen whose whole promise is that this is what
-to send.
+A change is **never queued**: a write sent when the connection came back would
+be one you walked away from believing it had happened, onto a company that may
+have moved since. `viewer.acts` is the engine's own list of what it makes for
+you, and the last row is read from it, never guessed from a tool's name — a
+company whose tracker is Jira has no native writer, and its task page shows
+Assign disabled rather than a button the engine refuses.
+
+### Writes are confirmed, not optimistic
+
+Nothing on screen moves until the engine has answered. Each answer is one of
+four, and each tells you something different:
+
+| Outcome | What you see |
+|---|---|
+| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. |
+| `pending` | "Sent — this node has not applied it yet." The re-read waits until this node has. |
+| `unknown` | "Could not confirm — it may have landed", which **stays** until you dismiss it, with Retry. |
+| refused | The engine's reason, beside the control that caused it, until your next press. |
+
+**The re-read waits for your write.** An `applied` or `pending` answer carries
+the position its record landed at in its domain's log, and the tab keeps it as
+a **read floor** for that domain (`protocol/session.ts`) — a per-tab value that
+only rises. From then on every question that reads that log
+(`contract/domains.ts`, held against the engine by
+`TestEverySessionQueryTakesAFreshnessFloor`) asks with
+`read_level=session&min_position=<floor>`, which the engine answers only once
+the serving node holds that position. So the list you just changed never comes
+back from a node that has not applied the change, whether the next read is the
+refetch your press fires or a poll a second later.
+
+**A retry is the same write.** `unknown` means nobody can vouch either way —
+the connection dropped after the request left, a gateway gave up, or the
+engine's call was interrupted (the act route says `outcome: unknown` for that
+one, beside its class). The dashboard never retries on its own. When you press
+Retry it sends the **same `request_id`** it sent the first time, from which the
+engine derives the same operations; a new press is a new id. Each Retry is
+bound to the press it reports — press twice and the first toast's Retry still
+sends the first press, never the second. A refusal a busy or draining node
+caused offers "Try again" on the same terms; one the request caused does not,
+because the same request would be refused again. A control reused across
+objects — the Inbox's Mark read as you move between notices — belongs to the
+object it is drawn for, so one notice's refusal never appears under another's.
+
+**The refusal is in the dashboard's words**, except where the engine's own
+sentence names the argument that was wrong (`invalid`) or the rule that
+forbade it (`forbidden`): every other tool sentence is written for a model
+reading a tool result. `contract/errors.ts` `ACT_ERRORS` holds one sentence per
+code and is held against the engine's codes both ways
+(`TestTheDashboardKnowsExactlyTheActRefusals`). A conditional edit that lost
+the race reads "Changed by somebody else since you opened it." — somebody
+else, not a name, because the refusal carries the version it lost to and not
+its author. That refusal, and every other that says the screen is out of date
+(`conflict`, `not_found`, `exists`, `already_answered`), asks the write's
+questions again without raising your read floor, so the page redraws what is
+there now and your next press is made against it.
+
+### What a screen can change today
+
+`contract/actions.ts` `ACTIONS` is the dashboard's whole write vocabulary —
+the tool, the arguments a screen may send, the log it lands in and the
+questions it moves — and `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`
+holds it against the real operator catalogue: every tool is served by the act
+route and is not a read, every argument is one the tool takes, every required
+one can be sent. It carries a row for each tool a control presses and no
+other — `app/source.test.ts` holds it to the `useAct("…")` calls both ways — so
+a tool arrives in it with the control that sends it. The controls
+(`components/writes.tsx`):
+
+| Control | Where | Tool |
+|---|---|---|
+| Assign / Reassign (with a reason) | A task's page | `update_work_item` (`if_match` on the version you are looking at) |
+| Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
+| Pin / Unpin | A saved view's page | `set_pins` |
+| Mark read | A notice in the Inbox | `mark_inbox` (that one record; every other mark and your read position stay) |
+
+A change to the **company document** — a seat, a budget ceiling, an MCP
+server, a model — is not an act: it is a new configuration revision, and every
+screen that makes one goes through `protocol/configWrite.ts` (read the document
+and its entity tag, dry-run a merge patch, save it with its audit summary, or
+replace one entity), always conditional on the revision it edited.
+`protocol/configAnswer.ts` is the one reading of a `/config` refusal — a
+conflict to re-read, the drain gate's certain `503`, a request that may have
+landed, or the problems the document has — which the org builder's model
+classifies through too.
 
 ## How it is built
 
@@ -3480,7 +3559,9 @@ exist on both sides by necessity — the dashboard is a separate build in a
 separate language and cannot import a Go identifier — so where a screen must
 know a set the engine owns (the event categories, the turn bands, the wake
 reasons, the work tracker's sort keys, change kinds and grouping axes, the
-config kinds, the query error codes, the push kinds, the feed length) or read
+config kinds, the query error codes, the push kinds, the feed length, the
+write vocabulary and its refusal codes, the questions a write is read back
+through) or read
 an answer an engine test holds it to (the integrations row, a seat's memory,
 the health envelope), the declaration lives in one module per concern there,
 and nowhere else. Each is held against the engine by ONE Go test, through
@@ -3498,6 +3579,20 @@ the directory. That is what lets `protocol/` compose the contract's shapes
 into `protocol.js`, and it imports them by a RELATIVE path, because that second
 build has no `~` alias and an import through one is left unresolved there
 rather than failing it.
+
+**The dashboard used to be held to reading, and is now held to writing as
+you.** Three gates carry that, each owning one side of it:
+`TestEveryActionTheDashboardTakesIsOneTheActTransportServes` (`ACTIONS` against
+the real operator catalogue, with every seam wired so the catalogue is the
+largest any company serves), `TestTheDashboardKnowsExactlyTheActRefusals`
+(`ACT_ERRORS` against the transport's codes and the tool refusal classes, both
+ways) and `TestEverySessionQueryTakesAFreshnessFloor` (`SESSION_QUERIES` against
+the questions the engine serves at a floor). On the dashboard side
+`app/source.test.ts` holds every `act(` and `useAct(` to a literal tool, and
+`app/writeGate.test.tsx` holds the one write to one hook and renders every
+write control for every kind of reader. The gate these replaced checked a
+block of copyable tool calls; the block is gone, because the button is now
+the call.
 
 `static/dashboard/protocol.js` is a **second** build target: the protocol layer
 alone, unminified, importable by plain `node`. `internal/e2e/golden_test.go`
@@ -4114,11 +4209,17 @@ to.
    keyed row uses an identity that survives the row's own lifecycle.
 6. **Every empty state says why it is empty** and what would fill it, and
    distinguishes "nothing happened" from "nothing could be read".
-7. **A write says what happened.** Every write goes through
-   `protocol/rest.ts` — nothing outside `src/protocol/` reaches the network,
-   which `protocol/transport.test.ts` holds — and reports its outcome: a toast
-   on success, and the engine's own refusal beside the field it names. A
-   button whose result is invisible is a button an operator presses twice.
+7. **A write says what happened, and is made as you.** A change to the
+   company's work goes through `act` (`protocol/act.ts`) from `useAct`
+   (`lib/useAct.ts`) and nowhere else — `app/writeGate.test.tsx` holds that,
+   and renders every write control for an anonymous, an unbound and a bound
+   reader — and a change to the company document through
+   `protocol/configWrite.ts`. Nothing outside `src/protocol/` reaches the
+   network (`protocol/transport.test.ts`). Every write reports its outcome: a
+   toast when it landed, a persistent notice with Retry when nobody can say,
+   and the engine's refusal beside the control that caused it. A write control
+   is never hidden and never optimistic (see "Acting, as yourself"). A button
+   whose result is invisible is a button an operator presses twice.
 8. **No screen renders a credential.** The setup dialog shows the `${VAR}` a
    field points at, or — for a hand-written literal — an empty box whose
    PLACEHOLDER is dots saying one is held. Never a value, because no route

@@ -98,7 +98,8 @@ import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
 import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
 import { CreateCompany, NextSteps } from "./CreateCompany.tsx";
 import { clearSavedRevision, recordSavedRevision, useSavedRevision } from "./savedRevision.ts";
-import { browserClock, randomKeys, restTransport, sessionDraftStorage } from "./runtime.ts";
+import { configTransport } from "~/protocol/configWrite.ts";
+import { browserClock, randomKeys, sessionDraftStorage } from "./runtime.ts";
 import { useSave, type SaveEvents } from "./useSave.ts";
 import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
@@ -482,7 +483,7 @@ function prefersTable(): boolean {
 
 export function Builder({
   surfaces,
-  transport = restTransport,
+  transport = configTransport,
   clock = browserClock,
   storage,
   keys = randomKeys,

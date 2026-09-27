@@ -38,9 +38,9 @@ import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { href } from "~/app/router.tsx";
 import { MessageSquareGlyph, UsersGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
-import { useOrg, useSeatBadgeOf } from "~/lib/store-hooks.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
 import { elapsedMs, fmtDateTime, fmtDuration, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { A2AChannel } from "~/protocol/index.ts";

@@ -24,6 +24,7 @@ import { columnChoices } from "../shapes/Grid.tsx";
 import { Router } from "~/app/router.tsx";
 import { pick } from "~/testing.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { groupAxisOptions, secondAxisOptions, SORTS, type Shape } from "~/lib/work.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
 
@@ -364,7 +365,9 @@ const task: WorkSummary = {
 const mountList = () =>
   render(
     <Router>
-      <ItemsView />
+      <ViewerProvider>
+        <ItemsView />
+      </ViewerProvider>
     </Router>,
   );
 

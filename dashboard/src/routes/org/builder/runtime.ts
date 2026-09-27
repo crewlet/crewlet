@@ -6,11 +6,9 @@
  * test with a fake clock and a scripted engine; `Builder.tsx` owns their
  * lifetimes, and this module is what it hands over.
  *
- * - The TRANSPORT resolves with every answer, refusals included, as the model
- *   requires, and rejects only when the caller aborted. `protocol/rest.ts`
- *   throws on a refusal; a thrown refusal is turned back into the status and
- *   body the engine sent, and anything else that never reached the engine is
- *   status 0.
+ * - The TRANSPORT is not here: it is `protocol/configWrite.ts`'s
+ *   `configTransport`, the one path every screen that writes the company
+ *   document takes, and the model's `ConfigTransport` is its shape.
  * - The CLOCK is monotonic (`performance.now`), because the check's debounce
  *   and backoff are durations and a wall clock moved by NTP or a suspended
  *   laptop would fire them early or never.
@@ -21,54 +19,9 @@
  *   accessor itself can throw (a sandboxed frame, blocked site data).
  */
 
-import { isAbort, rest, RestError, type RestResponse } from "~/protocol/index.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import type { KeySource } from "./model/keys.ts";
-import type { Clock, ConfigTransport, HttpAnswer } from "./model/transport.ts";
-
-/** What a request that never reached the engine answers: status 0 with its reason. */
-function unreachable(err: unknown): HttpAnswer {
-  return {
-    status: 0,
-    body: {
-      error: "unreachable",
-      detail: err instanceof Error ? err.message : "The engine could not be reached.",
-    },
-    etag: null,
-  };
-}
-
-/**
- * Runs one REST call and resolves with the answer, refusal or not. An abort
- * rejects, because a superseded request is not an engine that answered.
- */
-export async function answerOf(call: Promise<RestResponse>): Promise<HttpAnswer> {
-  try {
-    const { status, body, etag } = await call;
-    return { status, body, etag };
-  } catch (err) {
-    if (isAbort(err)) throw err;
-    if (err instanceof RestError) return { status: err.status, body: err.body, etag: null };
-    return unreachable(err);
-  }
-}
-
-/** The configuration API over the dashboard's one REST path. */
-export const restTransport: ConfigTransport = {
-  send: (request, signal) =>
-    answerOf(
-      rest.request(request.method, "/config", {
-        query: request.query,
-        contentType: request.contentType,
-        headers: request.headers,
-        body: request.body,
-        signal,
-      }),
-    ),
-  current: (signal) => answerOf(rest.request("GET", "/config", { signal })),
-  revision: (id, signal) =>
-    answerOf(rest.request("GET", `/config/revisions/${encodeURIComponent(id)}`, { signal })),
-};
+import type { Clock } from "./model/transport.ts";
 
 /** A monotonic clock and one-shot timers. */
 export const browserClock: Clock = {

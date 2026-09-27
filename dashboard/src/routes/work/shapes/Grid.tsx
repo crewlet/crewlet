@@ -86,8 +86,7 @@
  */
 
 import { useMemo } from "react";
-import { Button, EmptyValue, Tag, useClipboard } from "@crewlethq/ui";
-import { CopyGlyph } from "@crewlethq/icons/glyphs";
+import { EmptyValue, Tag } from "@crewlethq/ui";
 
 import {
   columnChoicesOf,
@@ -111,16 +110,13 @@ import { GroupMark, headingOf } from "./group.tsx";
 import { type Shape } from "~/lib/work.ts";
 import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
-import { callText } from "~/lib/toolcall.ts";
+import { RestoreButton } from "~/components/writes.tsx";
 import type {
   WorkActivityRecord,
   WorkGroup,
   WorkProjectDetail,
   WorkSummary,
 } from "~/protocol/index.ts";
-
-/** How long the copy button says it worked, matching `ToolCall.tsx`'s. */
-const COPIED_MS = 1_400;
 
 /**
  * The two shapes this grid draws, as the screen's `shape=` spells them.
@@ -851,44 +847,7 @@ function trashColumns(
       header: "",
       label: "Restore",
       shrink: true,
-      cell: (row) => <RestoreCall id={row.key} />,
+      cell: (row) => <RestoreButton item={row.key} />,
     },
   ];
-}
-
-/**
- * The call that brings one task back, ready to paste.
- *
- * A COPY BUTTON RATHER THAN A RESTORE BUTTON, for the reason the whole
- * `ToolCall` surface exists: this dashboard reads, and a browser posting a
- * restore would be attributed to "the dashboard", which is not a person and
- * cannot be asked why. The full block is too tall for a grid row, so the row
- * carries the one call a reader on this tab wants and the peek carries the
- * rest.
- */
-function RestoreCall({ id }: { id: string }) {
-  const clip = useClipboard({ resetMs: COPIED_MS });
-  const text = callText({
-    tool: "restore_work_item",
-    label: "Bring it back from the trash",
-    args: { item: id },
-  });
-  return (
-    <Button
-      size="small"
-      variant="ghost"
-      leadingIcon={<CopyGlyph />}
-      title={text}
-      onClick={(e) => {
-        // THE ROW IS AN ANCHOR. Without this the copy also opens the task,
-        // so the reader lands on a page they did not ask for holding a call
-        // they did.
-        e.preventDefault();
-        e.stopPropagation();
-        void clip.copy(text);
-      }}
-    >
-      {clip.state === "copied" ? "Copied" : "Restore"}
-    </Button>
-  );
 }

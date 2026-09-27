@@ -133,7 +133,7 @@ const NAME = 1;
 const HANDLE = 2;
 const LEAD = 3;
 const PROBLEMS = 4;
-const ACTIONS = 5;
+const ACTIONS_COLUMN = 5;
 
 /**
  * "Company", the unit's own type, or which kind of seat: the word a row writes
@@ -295,7 +295,7 @@ export function TableView() {
       ref={grid}
       tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
       renderCell={cell}
-      cellHasControl={(_id, column) => column === ACTIONS}
+      cellHasControl={(_id, column) => column === ACTIONS_COLUMN}
       onRowKey={onRowKey}
       onRowKeyDown={onRowKeyDown}
       // A REAL PREDICATE, because the row draws the actions the console draws
@@ -358,7 +358,7 @@ function RowControls({
       {view.type !== "seat" && (
         <OrgTableAdd
           label={`Add to ${name}`}
-          onOpen={() => grid.opened(view.key, ACTIONS)}
+          onOpen={() => grid.opened(view.key, ACTIONS_COLUMN)}
           sections={addSections(api, view)}
         />
       )}

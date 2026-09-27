@@ -52,7 +52,8 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useSandboxes, useSeatBadgeOf } from "~/lib/store-hooks.ts";
+import { useSandboxes } from "~/lib/store-hooks.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import {
   elapsedMs,
   fmtDateTime,

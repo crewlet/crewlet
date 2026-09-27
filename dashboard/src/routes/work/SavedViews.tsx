@@ -40,6 +40,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup, type SeatKind } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { PinButton } from "~/components/writes.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 
 /**
@@ -179,13 +180,24 @@ export function SavedViews({ id }: { id?: string }) {
           facts={viewFacts(one, owner)}
         />
         <ViewFacts view={one} />
-        <Button
-          variant="primary"
-          leadingIcon={<ArrowRightGlyph size="sm" />}
-          onClick={() => nav.to(["work"], { view: one.key })}
-        >
-          Run this view on the board
-        </Button>
+        <div className="row gap-2 wrap">
+          <Button
+            variant="primary"
+            leadingIcon={<ArrowRightGlyph size="sm" />}
+            onClick={() => nav.to(["work"], { view: one.key })}
+          >
+            Run this view on the board
+          </Button>
+          {/* A PIN IS YOURS: it puts the view in your own sidebar and moves
+              nobody else's. The mark above re-reads at the position the
+              write answered with, so it changes when the engine says so. */}
+          <PinButton
+            key={one.id as string}
+            view={one.id as string}
+            name={one.name}
+            pinned={Boolean(one.pinned)}
+          />
+        </div>
       </>
     );
   }

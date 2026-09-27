@@ -753,3 +753,48 @@ func (p *positionedPages) Comment(ctx context.Context, actor pages.Actor, id str
 		Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 2, Seq: 88},
 	}}, err
 }
+
+// AN INTERRUPTED CALL SAYS, IN A KEY, THAT NOBODY KNOWS WHETHER IT LANDED.
+//
+// Both of the transport's 503s carry the class `unavailable`: a tool that
+// refused before writing anything (a node in maintenance, a sealed log), and
+// a call whose context ended while the write was in flight. They mean
+// opposite things to a person — "nothing happened, try again" and "it may
+// have happened" — and the sentence alone is prose no client should parse.
+// So the interrupted answer carries `outcome: unknown` and the refusal does
+// not, which is how the dashboard tells a person the truth about each.
+func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
+	t.Parallel()
+	decode := func(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+		t.Helper()
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("answer is not JSON: %q", rec.Body)
+		}
+		return body
+	}
+	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+"create_work_item", nil)
+
+	rec := httptest.NewRecorder()
+	operator.Interrupted(rec, r, "create_work_item", context.DeadlineExceeded, nil)
+	body := decode(t, rec)
+	if rec.Code != http.StatusServiceUnavailable || body["error"] != "unavailable" {
+		t.Fatalf("an interrupted call answered %d %v, want 503 unavailable", rec.Code, body)
+	}
+	if body["outcome"] != string(statelog.OutcomeUnknown) {
+		t.Errorf("an interrupted call answered outcome %v, want unknown — a client "+
+			"reading only the class tells a person nothing happened", body["outcome"])
+	}
+
+	rec = httptest.NewRecorder()
+	operator.Refuse(rec, r, "create_work_item", "the tracker is sealed for maintenance",
+		crewletmcp.RefusalUnavailable, nil)
+	body = decode(t, rec)
+	if rec.Code != http.StatusServiceUnavailable || body["error"] != "unavailable" {
+		t.Fatalf("a tool's unavailable refusal answered %d %v", rec.Code, body)
+	}
+	if _, has := body["outcome"]; has {
+		t.Errorf("a tool's refusal claims an outcome %v — it wrote nothing, and "+
+			"saying unknown would tell a person it may have", body["outcome"])
+	}
+}

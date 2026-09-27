@@ -494,3 +494,57 @@ test("a notices page with more behind it counts itself as a floor", async () => 
   const head = screen.getByText("Notices").closest("header");
   expect(head?.querySelector(".inbox-band-count")?.textContent).toBe("2+");
 });
+
+// THE DETAIL PANE IS ONE SLOT THE SELECTION MOVES THROUGH, and a write drawn in
+// it belongs to the notice it was drawn for: a refusal for one notice was
+// still drawn under the next one's Mark read — and its Try again would have
+// marked the notice now on screen rather than the one refused.
+test("a refusal for one notice is not carried to the next", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: "invalid",
+            tool: "mark_inbox",
+            detail: "read: r-x is no record",
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } },
+        ),
+    ),
+  );
+  location.hash = "#/inbox?row=r-assignee-1";
+  mount({
+    viewer: {
+      operator_id: "U0FOUNDER",
+      operator: true,
+      handle: "ada",
+      name: "Ada",
+      kind: "human",
+      acts: ["mark_inbox"],
+    },
+    work_inbox: {
+      handle: "ada",
+      notices: [notice("assignee", 1), notice("assignee", 2)],
+      primary_reasons: ["assignee"],
+      unread: 2,
+      primary: 2,
+    },
+  });
+  await settle();
+  fireEvent.click(await screen.findByRole("button", { name: "Mark read" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("read: r-x is no record");
+  // Notice 2's excerpt is in the list only, until the pane moves to it.
+  const second = () => screen.queryAllByText(/something happened, assignee 2/).length;
+  const listed = second();
+
+  await act(async () => {
+    location.hash = "#/inbox?row=r-assignee-2";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  await settle();
+  expect(second()).toBeGreaterThan(listed);
+  expect(screen.getByRole("button", { name: "Mark read" })).toBeTruthy();
+  expect(document.querySelector(".write-refusal")).toBeNull();
+});

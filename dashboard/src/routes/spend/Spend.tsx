@@ -78,7 +78,8 @@ import {
 import { useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
-import { useEngineHealth, useOrgBudget, useSeatBadgeOf, useTokens } from "~/lib/store-hooks.ts";
+import { useEngineHealth, useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   eventHistoryLabel,

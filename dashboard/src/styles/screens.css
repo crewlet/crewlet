@@ -3825,73 +3825,29 @@ a.work-cal-chip {
    two pixels are the same two pixels — the row's own counts beside it are
    what say which. */
 
-/* ---- "Change this with your assistant" ---------------------------------
-   Closed by default and quiet when closed: it is the answer to a question a
-   reader has occasionally, not a control the screen is about. */
-.toolcall {
-  display: flex;
+/* ---- A write control, and what became of its last press ----------------
+   The button and its refusal sit together: the refusal is drawn where the
+   press was made and stays until the next one (lib/useAct.ts), so it wraps
+   under the button rather than widening the row it sits in. */
+.write-button {
+  display: inline-flex;
   flex-direction: column;
-  gap: var(--spacing-2);
-  border-top: 1px solid var(--color-border-default);
-  padding-top: var(--spacing-3);
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  min-width: 0;
 }
-.toolcall-toggle {
+.write-refusal {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-2);
-  background: none;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
+  gap: var(--spacing-1) var(--spacing-2);
+  max-width: 40rem;
   font-size: var(--font-size-compact);
-  color: var(--color-text-tertiary);
-  text-align: left;
-}
-.toolcall-toggle:hover {
-  color: var(--color-text-primary);
-}
-.toolcall-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-.toolcall-note {
-  margin: 0;
-  font-size: var(--font-size-compact);
-  color: var(--color-text-tertiary);
-}
-.toolcall-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
-}
-/* A DASHED EDGE ON THE IRREVERSIBLE ONE, not a red fill: it is still just
-   text on a page, and a block that shouted would be a delete button. */
-.toolcall-row.is-destructive {
-  border-style: dashed;
-  border-color: var(--color-feedback-danger-ink);
-}
-.toolcall-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.toolcall-label {
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-.toolcall-code {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-primary);
-  white-space: pre-wrap;
+  color: var(--color-feedback-danger-ink);
   overflow-wrap: anywhere;
-  user-select: all;
+}
+.write-refusal .t-caption {
+  color: var(--color-text-secondary);
 }
 
 /* ---- Home --------------------------------------------------------------- */

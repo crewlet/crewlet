@@ -85,8 +85,7 @@ import {
 } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
-import { ToolCallBlock } from "~/components/ToolCall.tsx";
-import { useViewer } from "~/lib/viewer.ts";
+import { AssignButton, RestoreButton } from "~/components/writes.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import type { PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact, type SetBy } from "~/app/frame/ObjectHeader.tsx";
@@ -388,6 +387,20 @@ export function WorkItem({ id }: { id: string }) {
           [ObjectHeader] per object exists to end. What stays here is the way
           OUT, which the header has no room for and the bar is for. */}
       <PageActions>
+        {/* THE CHANGE THIS PAGE OFFERS, made as you. A task in the trash is
+            offered the way back rather than a hand-off: assigning something
+            nobody can see on a board is a change that reaches nobody. */}
+        {item &&
+          (item.removed ? (
+            <RestoreButton key={item.key} item={item.key} />
+          ) : (
+            <AssignButton
+              key={item.key}
+              item={item.key}
+              version={item.version}
+              assignee={item.assignee ?? ""}
+            />
+          ))}
         {item ? (
           // THE PROJECT IS A PATH AND THE TASK IS THE FRAME'S `peek=` TOKEN.
           // This carried `?project=&item=`, which are the two spellings the
@@ -686,11 +699,6 @@ export function ItemBody({
   flush?: boolean;
 }) {
   const item = detail.task;
-  // WHOSE NAME WOULD LAND on a change made from the block at the foot — the
-  // token's own, not a seat's, which is what an operator write is attributed
-  // to. Here rather than passed in, because the peek renders this same body
-  // and would otherwise have to thread it through for one line of prose.
-  const viewer = useViewer();
   const { open: openPeek } = usePeekControls();
   const [tab, setTab] = useParam("thread", "comments");
   // WHICH CHANGE'S ROUTING IS OPEN. A filter rather than a section: stepping
@@ -835,13 +843,6 @@ export function ItemBody({
           <History detail={detail} chrome={labels} now={now} />
         )}
       </Card>
-      {/* THE READ-ONLY PRODUCT'S ANSWER TO AN EDIT BUTTON. Closed by default:
-          it is what to do when somebody wants to change this, not what the
-          screen is about. */}
-      <ToolCallBlock
-        subject={{ kind: "item", id: detail.task.key, removed: Boolean(detail.task.removed) }}
-        viewer={viewer.handle}
-      />
     </>
   );
 }

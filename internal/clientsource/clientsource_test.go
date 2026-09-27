@@ -711,3 +711,59 @@ func TestTheExportsWalkSeesEveryNameOrRefuses(t *testing.T) {
 		})
 	}
 }
+
+// A PROPERTY IS ITS OWN LITERAL, read with every other reader.
+//
+// A table keyed by name whose rows are lists — `ACTIONS.set_pins.args` — is
+// read one row at a time, and each row is a [clientsource.Body] the string
+// readers take. What is NOT a literal is refused rather than read as empty,
+// because an empty list is exactly what a gate reads as "nothing to check".
+func TestAPropertyIsReadAsItsOwnLiteral(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"contract/actions.ts": "export const ACTIONS = {\n" +
+			"  set_pins: { args: [\"views\", 'favorites'], domain: \"tracker\" },\n" +
+			"  \"update_work_item\": {\n    args: [\"item\",\n \"assignee\"] as const,\n" +
+			"    domain: \"tracker\", refreshes: [] },\n" +
+			"  named: { args: ELSEWHERE },\n" +
+			"  trailing: { args: [\"x\"].concat(y) },\n" +
+			"} as const;",
+	})
+	body, err := clientsource.Literal(root, "ACTIONS")
+	if err != nil {
+		t.Fatalf("Literal: %v", err)
+	}
+	row, err := clientsource.Property(body, "update_work_item")
+	if err != nil {
+		t.Fatalf("Property: %v", err)
+	}
+	args, err := clientsource.Property(row, "args")
+	if err != nil {
+		t.Fatalf("Property(args): %v", err)
+	}
+	if got := clientsource.Strings(args); !slices.Equal(got, []string{"item", "assignee"}) {
+		t.Errorf("args = %q, want [item assignee]", got)
+	}
+	if got := clientsource.Field(row, "domain"); !slices.Equal(got, []string{"tracker"}) {
+		t.Errorf("domain = %q, want [tracker]", got)
+	}
+	empty, err := clientsource.Property(row, "refreshes")
+	if err != nil || len(clientsource.Strings(empty)) != 0 {
+		t.Errorf("an empty list is a list: %q, %v", clientsource.Strings(empty), err)
+	}
+	for _, key := range []string{"named", "trailing"} {
+		row, err := clientsource.Property(body, key)
+		if err != nil {
+			t.Fatalf("Property(%s): %v", key, err)
+		}
+		if _, err := clientsource.Property(row, "args"); err == nil {
+			t.Errorf("%s.args is not a literal this reader can see, and was read", key)
+		}
+	}
+	if _, err := clientsource.Property(body, "missing"); err == nil {
+		t.Error("a key the literal does not carry was read as empty rather than refused")
+	}
+	if _, err := clientsource.Property(args, "item"); err == nil {
+		t.Error("an array has no properties, and one was read")
+	}
+}

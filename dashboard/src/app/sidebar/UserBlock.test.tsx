@@ -22,6 +22,7 @@ const nobody: ViewerState = {
   operator: false,
   handle: "",
   name: "",
+  acts: [],
   kind: "",
   unbound: false,
   anonymous: false,

@@ -902,6 +902,23 @@ export function seatBadgeOf(index: OrgIndex): (key: string) => { name: string; k
 }
 
 /**
+ * A seat's name and kind by its handle or its name, off the chart the store
+ * holds.
+ *
+ * HERE, BESIDE [seatBadgeOf], rather than in `store-hooks.ts`, which it used
+ * to be: that put `store-hooks.ts → seats.ts → useQuery.ts → store-hooks.ts`
+ * in the import graph, a cycle whose evaluation order decided whether a
+ * suite's mock of the store hooks reached `useQuery` at all — so adding an
+ * unrelated import to a screen could turn a passing suite's queries into
+ * "useClient outside a ClientContext provider". This module already reads
+ * the store; the store no longer reads this module.
+ */
+export function useSeatBadgeOf(): (key: string) => { name: string; kind?: SeatKind } {
+  const org = useOrg();
+  return useMemo(() => seatBadgeOf(indexOrg(org)), [org]);
+}
+
+/**
  * The same two answers, as the pair a ROW RENDERER takes.
  *
  * A grid cell is handed resolvers rather than the chart — see the row chrome

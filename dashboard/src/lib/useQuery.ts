@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { QueryError, queryErrorCode, type QueryMap, type QueryName } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
+import { session, SessionFloors } from "~/protocol/session.ts";
 
 export interface QueryResult<T> {
   data: T | null;
@@ -140,7 +141,7 @@ export function useQuery<K extends QueryName>(
     const run = async (): Promise<void> => {
       let retryMs = 0;
       try {
-        const data = await socket.query(what, JSON.parse(key) as Record<string, unknown>);
+        const data = await socket.query(what, withFloor(what, key));
         if (generation.current !== mine) return;
         setState({ data, loading: false, error: null });
       } catch (err) {
@@ -182,6 +183,17 @@ export function useQuery<K extends QueryName>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, what, key, enabled, pollMs, asked, refetchOnReconnect && connected]);
 
+  // A WRITE FROM THIS TAB ASKS AGAIN — at the floor it raised, which
+  // `withFloor` reads on the very next ask. The screen that pressed a button
+  // is redrawn from an answer that includes the press, never from the one it
+  // held before it, and never from a guess about what the press did.
+  useEffect(() => {
+    if (!enabled) return;
+    return session.onWritten((domain, refreshes) => {
+      if (SessionFloors.moves(what, domain, refreshes)) refetch();
+    });
+  }, [enabled, what, refetch]);
+
   // A TAB COMING BACK ASKS AGAIN.
   //
   // `visibilitychange` rather than window focus: focus fires for a click
@@ -202,4 +214,24 @@ export function useQuery<K extends QueryName>(
   }, [enabled, refetchOnFocus, refetch]);
 
   return { ...state, refetch };
+}
+
+/** The keys that already say how fresh an answer must be. */
+const FRESHNESS_KEYS = ["read_level", "min_position", "max_lag_seq", "max_lag_seconds"];
+
+/**
+ * A question's parameters, with this tab's read floor for its domain named
+ * where it has one (`protocol/session.ts`).
+ *
+ * EVERY ASK, NOT ONLY THE REFETCH A WRITE FIRES: a poll that came round a
+ * second after the write, on a node that had not applied it yet, would
+ * otherwise redraw the row as it was before the press. A caller that named
+ * its own freshness keeps it — it asked for something specific, and a
+ * staleness bound beside `session` is a request the engine refuses.
+ */
+export function withFloor(what: string, key: string): Record<string, unknown> {
+  const params = JSON.parse(key) as Record<string, unknown>;
+  const floor = session.freshness(what);
+  if (floor === null || FRESHNESS_KEYS.some((k) => k in params)) return params;
+  return { ...params, ...floor };
 }

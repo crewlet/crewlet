@@ -1,0 +1,248 @@
+/**
+ * A press, end to end: what the person is told, and what the screen reads
+ * next.
+ *
+ * WRITES ARE CONFIRMED, NOT OPTIMISTIC — so the case that matters is the whole
+ * loop: the change answers with a position, this tab's floor rises to it, and
+ * the question on screen is asked again AT that floor, which is what makes the
+ * redraw include the press. A hook that toasted "done" and left the screen
+ * polling at `stale` would pass every smaller test here.
+ */
+
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { ToastProvider } from "@crewlethq/ui";
+
+import { useAct } from "./useAct.ts";
+import { useQuery } from "./useQuery.ts";
+import { useClient, useConnection } from "./store-hooks.ts";
+import { useViewer, type ViewerState } from "./viewer.ts";
+import { WriteButton } from "~/components/WriteButton.tsx";
+import { session } from "~/protocol/session.ts";
+
+vi.mock("./store-hooks.ts", () => ({ useClient: vi.fn(), useConnection: vi.fn() }));
+vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
+
+const BOUND: ViewerState = {
+  operatorID: "founder",
+  operator: true,
+  handle: "jane",
+  name: "Jane Founder",
+  acts: ["set_pins", "update_work_item"],
+  kind: "human",
+  unbound: false,
+  anonymous: false,
+  loading: false,
+  asking: false,
+};
+
+interface Sent {
+  kind: string;
+  params: Record<string, unknown>;
+}
+
+let sent: Sent[];
+
+beforeEach(() => {
+  sent = [];
+  vi.mocked(useViewer).mockReturnValue(BOUND);
+  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useClient).mockReturnValue({
+    socket: {
+      query: vi.fn(async (kind: string, params: Record<string, unknown>) => {
+        sent.push({ kind, params });
+        return { views: [] };
+      }),
+    },
+  } as never);
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+/** The engine's act route, answering every press with `answer`. */
+function engine(answer: () => Response) {
+  const posts: { request_id: string }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: RequestInit) => {
+      posts.push(JSON.parse(init.body as string) as { request_id: string });
+      return answer();
+    }),
+  );
+  return posts;
+}
+
+const json = (payload: unknown, status: number) =>
+  new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+
+/** A screen that reads a tracker question and pins a view. */
+function Screen() {
+  useQuery("work_views", { container: "workspace" });
+  const pin = useAct("set_pins");
+  return (
+    <WriteButton
+      write={pin}
+      onPress={() => void pin.run({ views: { add: ["v1"] } }, { done: "Pinned Triage" })}
+    >
+      Pin
+    </WriteButton>
+  );
+}
+
+function mount() {
+  return render(
+    <ToastProvider>
+      <Screen />
+    </ToastProvider>,
+  );
+}
+
+test("an applied press is re-read at the position it landed at, and named in a toast", async () => {
+  engine(() =>
+    json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:900" }, 200),
+  );
+  mount();
+  await waitFor(() => expect(sent).toHaveLength(1));
+  // BEFORE ANY WRITE the question names no floor of its own — unless an
+  // earlier case in this file raised the tab's, which is exactly what a tab
+  // does, so only the next read is asserted on.
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await waitFor(() => expect(sent).toHaveLength(2));
+  expect(sent[1]!.params).toMatchObject({
+    container: "workspace",
+    read_level: "session",
+    min_position: "CREWLET_TRACKER_LOG@1:900",
+  });
+  expect((await screen.findAllByText("Pinned Triage")).length).toBeGreaterThan(0);
+});
+
+test("pending tells the person this node has not applied it, and the reads wait for it", async () => {
+  engine(() =>
+    json({ tool: "set_pins", outcome: "pending", position: "CREWLET_TRACKER_LOG@1:901" }, 200),
+  );
+  mount();
+  await waitFor(() => expect(sent).toHaveLength(1));
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText(/this node has not applied it yet/)).length).toBeGreaterThan(
+    0,
+  );
+  await waitFor(() => expect(sent).toHaveLength(2));
+  expect(sent[1]!.params).toMatchObject({ min_position: "CREWLET_TRACKER_LOG@1:901" });
+  expect(session.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:901");
+});
+
+// UNKNOWN IS NEVER RETRIED ON ITS OWN, and a Retry the person presses sends
+// the SAME request id: the engine derives the same operations from it, so the
+// retry is the first attempt again rather than a second change.
+test("unknown stays on screen, and its Retry sends the same request id", async () => {
+  const posts = engine(() => new Response("bad gateway", { status: 502 }));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect(
+    (await screen.findAllByText(/Could not confirm — it may have landed/)).length,
+  ).toBeGreaterThan(0);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(posts).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(posts).toHaveLength(2));
+  expect(posts[1]!.request_id).toBe(posts[0]!.request_id);
+
+  // AND A NEW PRESS IS A NEW REQUEST.
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await waitFor(() => expect(posts).toHaveLength(3));
+  expect(posts[2]!.request_id).not.toBe(posts[0]!.request_id);
+});
+
+/** Two presses of one control, each pinning a different view. */
+function TwoPresses() {
+  const pin = useAct("set_pins");
+  return (
+    <>
+      <WriteButton
+        write={pin}
+        onPress={() => void pin.run({ views: { add: ["va"] } }, { done: "Pinned A" })}
+      >
+        Pin A
+      </WriteButton>
+      <WriteButton
+        write={pin}
+        onPress={() => void pin.run({ views: { add: ["vb"] } }, { done: "Pinned B" })}
+      >
+        Pin B
+      </WriteButton>
+    </>
+  );
+}
+
+// A TOAST'S RETRY IS BOUND TO ITS OWN PRESS. The toast stays while the person
+// goes on working, so a Retry that read "the last press" when clicked sent
+// whatever was pressed since — another change, under another request id —
+// and the press the toast was about was never retried at all.
+test("an unknown press's Retry sends that press, whatever was pressed since", async () => {
+  const answers = [
+    () => new Response("bad gateway", { status: 502 }),
+    () =>
+      json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:950" }, 200),
+    () =>
+      json({ tool: "set_pins", outcome: "applied", position: "CREWLET_TRACKER_LOG@1:951" }, 200),
+  ];
+  const posts: { request_id: string; args: unknown }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: RequestInit) => {
+      posts.push(JSON.parse(init.body as string) as { request_id: string; args: unknown });
+      return answers[posts.length - 1]!();
+    }),
+  );
+  render(
+    <ToastProvider>
+      <TwoPresses />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin A" }));
+  await screen.findAllByText(/Could not confirm — it may have landed/);
+  fireEvent.click(screen.getByRole("button", { name: "Pin B" }));
+  await waitFor(() => expect(posts).toHaveLength(2));
+  await screen.findAllByText("Pinned B");
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(posts).toHaveLength(3));
+  expect(posts[2]).toEqual(posts[0]);
+  expect(posts[2]!.args).toEqual({ views: { add: ["va"] } });
+});
+
+// A REFUSAL OUTLASTS THE TOAST: it is drawn beside the control that caused it
+// and stays until the next press, because a sentence naming the field that
+// was wrong is gone from a toast before it has been read.
+test("a refusal is drawn beside the control and stays until the next press", async () => {
+  engine(() =>
+    json({ error: "invalid", tool: "set_pins", detail: "views: v9 is not a view" }, 422),
+  );
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  const refusal = () => document.querySelector(".write-refusal");
+  await waitFor(() => expect(refusal()?.textContent).toContain("views: v9 is not a view"));
+  expect(refusal()?.getAttribute("role")).toBe("alert");
+  await new Promise((r) => setTimeout(r, 50));
+  expect(refusal()?.textContent).toContain("views: v9 is not a view");
+});
+
+// OFFLINE IS DISABLED, NEVER QUEUED.
+test("offline, the press sends nothing and says why", async () => {
+  vi.mocked(useConnection).mockReturnValue({ connected: false } as never);
+  const posts = engine(() => json({}, 200));
+  mount();
+  const button = screen.getByRole("button", { name: "Pin" });
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(button);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(posts).toHaveLength(0);
+  expect(document.body.textContent).toContain("Offline");
+});

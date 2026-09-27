@@ -661,11 +661,83 @@ func Field(body Body, name string) []string {
 // stop covering exactly the entries most likely to need it. A computed key
 // (`[name]: …`) is refused, because what it names is a value somewhere else.
 func Keys(body Body) ([]string, error) {
+	props, err := properties(body)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(props))
+	for _, p := range props {
+		out = append(out, p.key)
+	}
+	return out, nil
+}
+
+// Property is the array or object literal one top-level property of an object
+// literal holds, as a [Body] every other reader takes — for a table keyed by
+// name whose rows are themselves lists or records (`ACTIONS.set_pins.args`).
+//
+// THE VALUE MUST BE THE LITERAL ITSELF, bar a trailing `as const` or
+// `satisfies T`: a property holding a name, a call or a spread is declared
+// somewhere this body does not show, and reading around it would certify a
+// row nobody can see. A key the literal does not carry is an error, never an
+// empty body, for the reason [Literal] refuses a missing declaration — an
+// empty list is exactly what a gate reads as "nothing to check".
+func Property(body Body, key string) (Body, error) {
+	props, err := properties(body)
+	if err != nil {
+		return Body{}, err
+	}
+	name := body.name + "." + key
+	for _, p := range props {
+		if p.key != key {
+			continue
+		}
+		value := p.value
+		if len(value) == 0 || !value[0].is("[", "{") {
+			return Body{}, fmt.Errorf("clientsource: %s is not an array or "+
+				"object literal, so no reader can see what it holds", name)
+		}
+		end := closing(value)
+		if end < 0 {
+			return Body{}, fmt.Errorf("clientsource: %s opens a %q that is "+
+				"never closed", name, value[0].text())
+		}
+		rest := value[end+1:]
+		switch {
+		case len(rest) == 0:
+		case len(rest) >= 2 && (rest[0].word("as") || rest[0].word("satisfies")):
+		default:
+			return Body{}, fmt.Errorf("clientsource: %s is followed by %q, "+
+				"where the literal was expected to end", name, rest[0].text())
+		}
+		open, shut := value[0], value[end]
+		sub := Body{
+			name:   name,
+			array:  open.is("["),
+			source: (*open.src)[open.start:shut.end],
+			toks:   value[1:end],
+		}
+		// No spread check here: [Literal] already refused one at any
+		// depth, so a row cannot carry one.
+		return sub, nil
+	}
+	return Body{}, fmt.Errorf("clientsource: %s carries no property %q", body.name, key)
+}
+
+// property is one top-level property of an object literal: its key, and the
+// tokens of its value (empty for a shorthand or a method).
+type property struct {
+	key   string
+	value []token
+}
+
+// properties walks an object literal's own properties, in order.
+func properties(body Body) ([]property, error) {
 	if body.array {
 		return nil, fmt.Errorf("clientsource: %s is an array, and has no keys", body.name)
 	}
 	toks := body.toks
-	var out []string
+	var out []property
 	for i := 0; i < len(toks); {
 		t := toks[i]
 		if t.is(",") {
@@ -682,16 +754,22 @@ func Keys(body Body) ([]string, error) {
 			i++
 			t = toks[i]
 		}
+		var key string
 		switch {
 		case t.kind == kIdent || t.kind == kNumber:
-			out = append(out, t.text())
+			key = t.text()
 		case t.kind == kString:
-			out = append(out, t.value)
+			key = t.value
 		default:
 			return nil, fmt.Errorf("clientsource: %s has a property keyed by %q, "+
 				"which names no key a reader can see", body.name, t.text())
 		}
-		// On to the next property at depth zero.
+		// On to the next property at depth zero, keeping what follows a
+		// `:` directly after the key as the value.
+		from := -1
+		if i+1 < len(toks) && toks[i+1].is(":") {
+			from = i + 2
+		}
 		depth := 0
 		for i++; i < len(toks); i++ {
 			if depth == 0 && toks[i].is(",") {
@@ -704,8 +782,30 @@ func Keys(body Body) ([]string, error) {
 				depth--
 			}
 		}
+		p := property{key: key}
+		if from >= 0 && from <= i {
+			p.value = toks[from:i]
+		}
+		out = append(out, p)
 	}
 	return out, nil
+}
+
+// closing is the index of the bracket closing the one toks opens with, or -1.
+func closing(toks []token) int {
+	depth := 0
+	for k, t := range toks {
+		switch {
+		case t.is("(", "[", "{"):
+			depth++
+		case t.is(")", "]", "}"):
+			depth--
+			if depth == 0 {
+				return k
+			}
+		}
+	}
+	return -1
 }
 
 // file is one scanned source file.
