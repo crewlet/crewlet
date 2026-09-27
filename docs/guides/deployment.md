@@ -423,9 +423,11 @@ than something a reconnect policy should paper over.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the three state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the five state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_CHART_LOG`, `CREWLET_IAM_LOG` — every one on
+every node, including a log its roles do not apply), a stream per extra
+subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), and the eighteen `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -503,9 +505,9 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The three logs reserve their byte
-ceilings against the account's JetStream storage limit when their streams are
-created, and the node sizes them to half of what that limit has left. An
+**And it needs room for the state logs.** The five state logs reserve their
+byte ceilings against the account's JetStream storage limit when their streams
+are created, and the node sizes them to half of what that limit has left. An
 untiered limit counts every replica, so a `replicas: 3` fleet needs three
 times the bytes; a tiered one needs its `R3` tier. An account that states no
 limit leaves the node nothing to size against but its own disk, and a server's

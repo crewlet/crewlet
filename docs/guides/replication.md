@@ -390,15 +390,21 @@ from the work tracker, are the first retired kind.
 
 A byte ceiling is a **reservation**. The broker grants it in full when it
 creates the stream, before a single record is written, and refuses to create a
-stream whose ceiling it could not honour. So the three logs compete for one
-number, and a node sizes them together, once, when it creates their streams:
+stream whose ceiling it could not honour. So the state logs compete for one
+number, and a node sizes them together, once, when it creates their streams —
+**all five** this build registers (the tracker's, the vectors', the knowledge
+base's, the org chart's and the identity estate's), whatever roles the node
+runs. Every node creates every log's stream, a stream keeps whatever ceiling
+the node that created it gave it, and a seats-only satellite that sized its
+logs over the four it applies would hand the others a share of bytes the fifth
+already has:
 
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. |
-| **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. The org chart's log asks a flat 64 MiB (`stream.chart_log_max_bytes`, 64 MiB..16 GiB) and the identity estate's a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB): neither grows with anything the volume has a say in — a chart is hundreds of objects, and the identity log grows with headcount and sign-ins. |
+| **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB — which is a floor on scaling DOWN, never a raise: an unset ask already below it, the org chart's and the identity log's, is held at exactly what it asked for, whatever the pool. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
 missing stream is created with and nothing else: a booting node never rewrites
@@ -430,9 +436,10 @@ keep the ceilings they were created with, and no Tier A setting changes them: �
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 4 GiB free there, three quarters
-of which is the three 1 GiB floors), which the broker measures again when the
-node next starts. Or, when the refused log's ceiling is
+on that volume (a first boot needs at least 4.75 GiB free there, three
+quarters of which — 3.56 GiB — is what the floors reserve: the three 1 GiB
+floors, the org chart's 64 MiB and the identity log's 512 MiB), which the
+broker measures again when the node next starts. Or, when the refused log's ceiling is
 above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
 so when that applies.
 
