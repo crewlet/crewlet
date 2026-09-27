@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 const cliCompanyDoc = `
@@ -42,10 +43,26 @@ func companyFile(t *testing.T, dir, name string, amend func(string) string) stri
 
 // fixtureKeyring is the `secrets:` block a CLI fixture's Tier A carries,
 // because every node requires one and a file without it is refused before a
-// case reaches its subject. Thirty-two zero bytes: a key the keyring accepts,
-// sealing nothing a case reads back as a secret.
-const fixtureKeyring = "secrets:\n  active_key_id: fixture\n  keys:\n" +
-	"    - {id: fixture, material: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}\n"
+// case reaches its subject.
+var fixtureKeyring = "secrets:\n  active_key_id: fixture\n  keys:\n" +
+	"    - {id: fixture, material: \"" + secrets.EncodeKey(fixtureKey) + "\"}\n"
+
+// fixtureKey is the one key [fixtureKeyring] declares: thirty-two zero bytes,
+// a key the keyring accepts, sealing nothing a case reads back as a secret.
+var fixtureKey = make([]byte, 32)
+
+// fixtureCipher is [fixtureKeyring] as a cipher, for a case that seeds a store
+// directly: a node seals its revisions under the keyring its Tier A names, and
+// nothing reads or writes a company document without one.
+var fixtureCipher = func() secrets.Cipher {
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "fixture", Keys: map[string][]byte{"fixture": fixtureKey},
+	})
+	if err != nil {
+		panic("the fixture keyring does not build: " + err.Error())
+	}
+	return cipher
+}()
 
 // keyedTierA is a Tier A document with [fixtureKeyring] appended, so a case
 // states what it is about and nothing else. A document that states its own

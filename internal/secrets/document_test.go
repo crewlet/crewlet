@@ -152,16 +152,39 @@ func TestAPlaintextDocumentIsRefusedByAReaderHoldingAKeyring(t *testing.T) {
 	}
 }
 
-// WITHOUT A KEYRING A PLAINTEXT DOCUMENT STILL READS, for the caller holding
-// none — which is no node, and is what a unit that seals nothing runs on.
-func TestAReaderWithNoKeyringReadsPlaintext(t *testing.T) {
+// WITHOUT A KEYRING NOTHING IS SEALED AND NOTHING IS READ.
+//
+// A nil cipher used to be a posture: it read a plaintext payload verbatim and
+// wrote one, for a caller holding no keyring. No node is such a caller, so a
+// nil is a caller wired without the node's keyring — and what it did was the
+// harm the seal exists to prevent: read an unauthenticated document as if a
+// node had written it, and write a revision every node refuses to apply.
+//
+// Mutation: let a nil cipher read plaintext, or store plaintext, and a row
+// answers without ErrNoKeyring.
+func TestWithNoKeyringNothingIsSealedOrRead(t *testing.T) {
 	t.Parallel()
-	opened, err := Open(nil, document)
+	cipher, err := NewCipher(testRing(t))
 	if err != nil {
-		t.Fatalf("Open(nil, plaintext): %v", err)
+		t.Fatal(err)
 	}
-	if string(opened) != string(document) {
-		t.Fatalf("opened %s, want the document unchanged", opened)
+	sealed, err := Seal(cipher, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, payload := range map[string][]byte{"plaintext": document, "sealed": sealed} {
+		opened, err := Open(nil, payload)
+		if !errors.Is(err, ErrNoKeyring) {
+			t.Errorf("Open(nil, %s) = %v, want ErrNoKeyring", name, err)
+		}
+		// NOTHING rather than an empty document: returning one would boot
+		// the caller onto an empty company.
+		if opened != nil {
+			t.Errorf("a refused Open(nil, %s) still produced %s", name, opened)
+		}
+	}
+	if stored, err := Seal(nil, document); !errors.Is(err, ErrNoKeyring) || stored != nil {
+		t.Errorf("Seal(nil) = (%s, %v), want nothing and ErrNoKeyring", stored, err)
 	}
 }
 
@@ -190,28 +213,6 @@ func TestTheMigrationOpensEitherAndOnlyWithAKeyring(t *testing.T) {
 	}
 	if _, err := OpenToReseal(nil, document); !errors.Is(err, ErrNoKeyring) {
 		t.Errorf("OpenToReseal with no keyring = %v, want ErrNoKeyring", err)
-	}
-}
-
-func TestASealedDocumentWithNoKeyIsAnErrorNotAnEmptyCompany(t *testing.T) {
-	t.Parallel()
-	// Returning nothing would boot the node onto an empty company, which
-	// reads on every surface as an operator who has configured nothing —
-	// and the actual fault is a deployment that lost its root of trust.
-	cipher, err := NewCipher(testRing(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sealed, err := Seal(cipher, document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opened, err := Open(nil, sealed)
-	if !errors.Is(err, ErrSealedWithoutKey) {
-		t.Fatalf("err = %v, want ErrSealedWithoutKey", err)
-	}
-	if opened != nil {
-		t.Errorf("a refused open still produced %s", opened)
 	}
 }
 

@@ -30,14 +30,6 @@ import (
 // argument holds unchanged.
 const EnvelopeKey = "__encrypted__"
 
-// ErrSealedWithoutKey reports a sealed document and no keyring to open it.
-//
-// Distinct from a decrypt failure on purpose: the fix is different. A missing
-// keyring is a deployment that lost its root of trust — the bootstrap config
-// no longer names the key that sealed this — where a decrypt failure is a
-// document that does not belong to the key it was offered.
-var ErrSealedWithoutKey = errors.New("secrets: document is sealed and no keyring is configured")
-
 // ErrUnsealedWithKey reports a payload that is NOT sealed, read by a caller
 // that holds a keyring.
 //
@@ -102,14 +94,15 @@ func EnvelopeKeyIDOf(payload []byte) (string, bool) {
 
 // Seal wraps a document as a sealed envelope.
 //
-// A nil cipher stores the document as it is, for a caller holding no keyring
-// at all — which no node is: every node's Tier A carries one and the engine
-// refuses to start without it, so a nil reaches here only from a caller built
-// by hand around a store it seals nothing into. A caller holding a keyring
-// always seals, and [Open] with that keyring refuses anything it did not.
+// A NIL CIPHER IS REFUSED ([ErrNoKeyring]). It used to store the document as
+// it was, for a caller holding no keyring — which no node is: every node's
+// Tier A carries one and the engine refuses to start without it. So a nil
+// here is a caller wired without the node's keyring, and what it wrote was a
+// revision every node refuses to apply; the /config surface built that way
+// answered 201 to writes the fleet never ran.
 func Seal(cipher Cipher, document []byte) ([]byte, error) {
 	if cipher == nil {
-		return document, nil
+		return nil, fmt.Errorf("secrets: seal document: %w", ErrNoKeyring)
 	}
 	// Idempotent: re-sealing an already-sealed document would nest one
 	// envelope inside another, and the outer one would open to something
@@ -130,30 +123,30 @@ func Seal(cipher Cipher, document []byte) ([]byte, error) {
 
 // Open unwraps a stored payload, returning the document.
 //
-// WITH A KEYRING, ONLY A SEALED PAYLOAD OPENS. A payload that is not sealed is
-// refused with [ErrUnsealedWithKey]: the seal is what authenticates a
-// document a peer published, and one without it could have been written by
+// ONLY A SEALED PAYLOAD OPENS, and only under a keyring. A payload that is not
+// sealed is refused with [ErrUnsealedWithKey]: the seal is what authenticates
+// a document a peer published, and one without it could have been written by
 // anything that reaches the coordination store. It used to come back
 // verbatim, so a node holding a keyring applied a forged plaintext document as
 // readily as its own.
 //
-// WITHOUT ONE, a plaintext payload comes back verbatim and a sealed one is
-// [ErrSealedWithoutKey] rather than an empty document: silently returning
-// nothing would boot onto an empty company, which reads on every surface as
-// an operator who has configured nothing. No node holds no keyring; see
-// [Seal] for who does.
+// A NIL CIPHER IS REFUSED ([ErrNoKeyring]) whatever the payload is. It used to
+// read a plaintext payload verbatim — the same forged document, for any caller
+// wired without the node's keyring — and to refuse a sealed one with an error
+// of its own; neither is a posture a node can be in, since every node holds a
+// keyring and the engine refuses to start without one. Refusing, rather than
+// answering an empty document, is what keeps a caller built that way from
+// booting onto an empty company, which reads on every surface as an operator
+// who has configured nothing.
 //
 // The one reader that must take a plaintext payload with a keyring in hand is
 // the migration that seals it, and it says so by calling [OpenToReseal].
 func Open(cipher Cipher, payload []byte) ([]byte, error) {
-	if !Sealed(payload) {
-		if cipher != nil {
-			return nil, ErrUnsealedWithKey
-		}
-		return payload, nil
-	}
 	if cipher == nil {
-		return nil, ErrSealedWithoutKey
+		return nil, fmt.Errorf("secrets: open document: %w", ErrNoKeyring)
+	}
+	if !Sealed(payload) {
+		return nil, ErrUnsealedWithKey
 	}
 	return openSealed(cipher, payload)
 }
