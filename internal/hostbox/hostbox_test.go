@@ -170,6 +170,27 @@ func TestTheBaseAllowlistCarriesNoneOfTheHostUsersLocations(t *testing.T) {
 	}
 }
 
+// A FAMILY IS STILL AN ALLOWLIST: every member of the family arrives, and a
+// name outside it — the engine's keyring above all — does not, however much it
+// resembles one.
+func TestInheritFamiliesTakesTheFamilyAndNothingElse(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+	t.Setenv("DOCKER_CONTEXT", "rootless")
+	t.Setenv("DOCKERFILE_PATH", "/not/a/runtime/setting")
+	t.Setenv("CREWLET_SECRET_KEY_2026_01", "base64-keyring-material-not-for-the-child")
+
+	env := map[string]string{}
+	InheritFamilies(env, "DOCKER_")
+	if env["DOCKER_HOST"] != "unix:///run/user/1000/docker.sock" || env["DOCKER_CONTEXT"] != "rootless" {
+		t.Errorf("the family did not arrive whole: %v", env)
+	}
+	for _, name := range []string{"DOCKERFILE_PATH", "CREWLET_SECRET_KEY_2026_01"} {
+		if _, ok := env[name]; ok {
+			t.Errorf("%s is outside the DOCKER_ family and reached the child", name)
+		}
+	}
+}
+
 // A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec reads a nil Cmd.Env as
 // "inherit the parent's", so an empty map rendered as nil would hand a child
 // the whole engine environment — the exact opposite of the empty one it asked

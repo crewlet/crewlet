@@ -470,7 +470,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	name := l.containerName(id)
 	argv := l.runArgv(ctx, layout, name)
 
-	result, err := runHost(ctx, hostCommand{argv: argv})
+	result, err := runHost(ctx, runtimeCommand(0, argv...))
 	if err != nil || result.ExitCode != 0 {
 		_ = os.RemoveAll(layout.root)
 		detail := strings.TrimSpace(result.Stderr)
@@ -496,9 +496,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	// on fail silently and only much later — see verifyMount — so the box is
 	// torn down here rather than returned to do half its job.
 	if err := verifyMount(ctx, box, layout); err != nil {
-		_, _ = runHost(context.WithoutCancel(ctx), hostCommand{
-			argv: []string{l.runtime, "rm", "-f", name},
-		})
+		_, _ = runHost(context.WithoutCancel(ctx), runtimeCommand(0, l.runtime, "rm", "-f", name))
 		_ = os.RemoveAll(layout.root)
 		return nil, err
 	}
@@ -584,7 +582,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		return nil
 	}
 	if l.opts.Placement == Container {
-		_, _ = runHost(ctx, hostCommand{argv: []string{l.runtime, "rm", "-f", l.containerName(sandboxID)}})
+		_, _ = runHost(ctx, runtimeCommand(0, l.runtime, "rm", "-f", l.containerName(sandboxID)))
 	} else if signalJob(layout, "kill", procgroup.Kill) {
 		// SIGKILL alone, with NO SIGCONT first. A stopped process is killed
 		// by SIGKILL directly — the signal cannot be caught, blocked or
@@ -761,9 +759,8 @@ func (l *Local) boxIsAlive(layout boxLayout, live map[string]bool) bool {
 // One listing per reap, rather than an inspect per box: the reap runs on the
 // Create path, which an agent is waiting on.
 func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
-	result, err := runHost(ctx, hostCommand{argv: []string{
-		l.runtime, "ps", "-a", "--filter", "name=" + ContainerPrefix, "--format", "{{.Names}}",
-	}})
+	result, err := runHost(ctx, runtimeCommand(0,
+		l.runtime, "ps", "-a", "--filter", "name="+ContainerPrefix, "--format", "{{.Names}}"))
 	if err != nil || result.ExitCode != 0 {
 		detail := strings.TrimSpace(result.Stderr)
 		if err != nil {

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +15,12 @@ import (
 )
 
 // hostCommand is one command to run on the engine host.
+//
+// Its env is the child's WHOLE environment and it is REQUIRED: [runHost]
+// refuses a nil one, because os/exec reads a nil Cmd.Env as "inherit the
+// engine's" — the keyring, the Tier A tokens and every credential the engine
+// was started with. A box's own command carries [directBox.childEnv]; a
+// command for the container runtime's CLI is built by [runtimeCommand].
 type hostCommand struct {
 	argv    []string
 	cwd     string
@@ -55,23 +60,48 @@ func (c *capture) String() string {
 	return string(c.buf)
 }
 
-// flattenEnv renders an env map as os/exec's KEY=value slice.
+// runtimeCommand is a control command for the container runtime's own CLI —
+// `run`, `exec`, `pause`, `rm`, `ps`, `info` — carrying [runtimeEnv].
 //
-// Sorted, so a spawn is reproducible and a test can assert on it; nil for an
-// empty map, which is os/exec's "inherit the parent" — a distinction the
-// callers here rely on being explicit, since inheriting the ENGINE's
-// environment is exactly what the allowlist exists to prevent. Every caller
-// passes a populated map.
-func flattenEnv(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(env))
-	for key, value := range env {
-		out = append(out, key+"="+value)
-	}
-	slices.Sort(out)
-	return out
+// A CONSTRUCTOR rather than a field each call site remembers: every one of
+// these was a hostCommand with no environment at all, which os/exec filled with
+// the engine's, so the runtime's CLI — and every plugin and credential helper
+// it runs — was handed the keyring and the Tier A tokens.
+func runtimeCommand(timeout time.Duration, argv ...string) hostCommand {
+	return hostCommand{argv: argv, env: runtimeEnv(), timeout: timeout}
+}
+
+// runtimeEnv is the environment a container runtime's CLI runs with.
+//
+// NOT THE ENGINE'S, for the reason no child gets that (see [hostbox]). The CLI
+// runs as the engine's user in no box, so it gets the host allowlist and the
+// engine user's own locations — where the runtime keeps its config, and where
+// a rootless daemon's socket lives (XDG_RUNTIME_DIR) — and then the runtime's
+// OWN configuration, which is what it cannot run correctly without:
+//
+//   - the DOCKER_ family — DOCKER_HOST, DOCKER_CONTEXT, DOCKER_CONFIG and the
+//     TLS trio — without which a rootless Docker's CLI dials the system socket
+//     instead of the user's and a remote daemon is not the one configured;
+//   - the CONTAINER_ and CONTAINERS_ families — Podman's remote connection
+//     and its config, storage and registry files — and the PODMAN_ family;
+//   - REGISTRY_AUTH_FILE, where Podman reads registry credentials, and
+//     DBUS_SESSION_BUS_ADDRESS, which rootless Podman's systemd cgroup
+//     manager dials.
+//
+// FAMILIES rather than names, because each vendor documents the set as a
+// prefix and adds to it, and a runtime that silently lost a new member would
+// dial something other than what the operator configured. None of them is
+// anything of the engine's.
+//
+// The run environment a coding agent gets is NOT here: it travels as an
+// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds
+// is what the runtime needs and nothing a box does. A `-e NAME` in
+// `local.run_args` therefore copies only a name this environment carries.
+func runtimeEnv() map[string]string {
+	env := hostbox.Inherit(append(append([]string{}, hostbox.HostUserEnv...),
+		"REGISTRY_AUTH_FILE", "DBUS_SESSION_BUS_ADDRESS")...)
+	hostbox.InheritFamilies(env, "DOCKER_", "CONTAINER_", "CONTAINERS_", "PODMAN_")
+	return env
 }
 
 // ---------------------------------------------------------------------
@@ -180,7 +210,7 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	// return.
 	proc := exec.Command("/bin/sh", "-c", cmd) //nolint:noctx // deliberate; see above
 	proc.Dir = dir
-	proc.Env = flattenEnv(b.childEnv(opts.Env))
+	proc.Env = hostbox.Environ(b.childEnv(opts.Env))
 	procgroup.Detach(proc)
 	// nil stdio is os/exec's /dev/null, which is what we want: nothing reads
 	// these, and a pipe nobody drains would block the agent on a full buffer.
@@ -468,7 +498,7 @@ func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 	// represented are dropped LOUDLY rather than silently truncated into a
 	// different env.
 	var lines []string
-	for _, assignment := range flattenEnv(merged) {
+	for _, assignment := range hostbox.Environ(merged) {
 		key, value, _ := strings.Cut(assignment, "=")
 		if strings.ContainsAny(value, "\n\r") {
 			localLog.Warn("local_sandbox_env_var_unrepresentable", "sandbox_id", b.layout.id, "var", key)
@@ -505,10 +535,8 @@ func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (
 	if err != nil {
 		return ExecResult{}, err
 	}
-	return runHost(ctx, hostCommand{
-		argv:    argv,
-		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
-	})
+	return runHost(ctx, runtimeCommand(
+		time.Duration(opts.TimeoutSec*float64(time.Second)), argv...))
 }
 
 // StartBackground backgrounds the job inside the container and echoes its pid.
@@ -527,7 +555,7 @@ func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts Exe
 	if err != nil {
 		return "", err
 	}
-	result, err := runHost(ctx, hostCommand{argv: argv})
+	result, err := runHost(ctx, runtimeCommand(0, argv...))
 	if err != nil {
 		return "", err
 	}
@@ -603,7 +631,7 @@ func (b *containerBox) SetTimeout(ctx context.Context, seconds float64) error {
 }
 
 func (b *containerBox) Pause(ctx context.Context) error {
-	result, err := runHost(ctx, hostCommand{argv: []string{b.runtime, "pause", b.container}})
+	result, err := runHost(ctx, runtimeCommand(0, b.runtime, "pause", b.container))
 	if err != nil || result.ExitCode != 0 {
 		detail := strings.TrimSpace(result.Stderr)
 		if err != nil {
@@ -618,16 +646,15 @@ func (b *containerBox) Pause(ctx context.Context) error {
 // container reports an error we ignore, which keeps Connect a single
 // unconditional call.
 func (b *containerBox) unpause(ctx context.Context) {
-	_, _ = runHost(ctx, hostCommand{argv: []string{b.runtime, "unpause", b.container}})
+	_, _ = runHost(ctx, runtimeCommand(0, b.runtime, "unpause", b.container))
 }
 
 func (b *containerBox) Close(ctx context.Context) error {
 	// A removal that failed LEAKS a container on the engine host, which is
 	// the one outcome here an operator has to be able to see: nothing else
 	// in the teardown path will mention it again.
-	if res, err := runHost(ctx, hostCommand{
-		argv: []string{b.runtime, "rm", "-f", b.container},
-	}); err != nil || res.ExitCode != 0 {
+	if res, err := runHost(ctx, runtimeCommand(0, b.runtime, "rm", "-f", b.container)); err != nil ||
+		res.ExitCode != 0 {
 		localLog.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
 			"container", b.container, "exit", res.ExitCode,
 			"stderr", strings.TrimSpace(res.Stderr))

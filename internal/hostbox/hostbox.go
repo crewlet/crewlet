@@ -119,6 +119,29 @@ func Inherit(extra ...string) map[string]string {
 	return env
 }
 
+// InheritFamilies adds to env every host variable whose name begins with one
+// of prefixes.
+//
+// FOR A CHILD WHOSE OWN CONFIGURATION IS A DOCUMENTED FAMILY of variables — a
+// container runtime's `DOCKER_*` — where naming each member would break the
+// child the day its vendor adds one, and silently: a runtime that no longer
+// sees its `DOCKER_HOST` dials the default socket instead of failing. A family
+// is still an allowlist; what it cannot do is reach a name outside itself.
+func InheritFamilies(env map[string]string, prefixes ...string) {
+	for _, kv := range os.Environ() {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(name, prefix) {
+				env[name] = value
+				break
+			}
+		}
+	}
+}
+
 // Environ renders env as os/exec's KEY=value slice: sorted, and NEVER nil.
 //
 // NEVER NIL, because a nil exec.Cmd.Env does not mean "no environment": os/exec

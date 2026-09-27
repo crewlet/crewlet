@@ -94,10 +94,8 @@ func runtimeIsRootless(ctx context.Context, runtime string) bool {
 	default:
 		format = "{{.SecurityOptions}}"
 	}
-	result, err := runHost(ctx, hostCommand{
-		argv:    []string{runtime, "info", "--format", format},
-		timeout: containerProbeTimeout,
-	})
+	result, err := runHost(ctx, runtimeCommand(containerProbeTimeout,
+		runtime, "info", "--format", format))
 	if err != nil || result.ExitCode != 0 {
 		// THE ERROR TRAVELS, and it is not decoration: "could not start
 		// the binary" and "the daemon answered nothing" are different
