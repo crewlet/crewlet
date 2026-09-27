@@ -2,7 +2,6 @@ package fleetsecrets
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -63,9 +62,11 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 	}
 	local, err := from.List(ctx)
 	if err != nil {
-		if errors.Is(err, secrets.ErrNoKeyring) {
-			return nil, nil
-		}
+		// NOT EVEN A MISSING KEYRING IS SKIPPED. That was a no-op once,
+		// for a node that kept its secrets in the environment; every node
+		// holds a keyring now, so a local store that cannot be read is a
+		// fault like any other, and a silent skip would leave this node's
+		// rows where no peer can see them with nothing said.
 		return nil, fmt.Errorf("fleetsecrets: read this node's secrets: %w", err)
 	}
 	if len(local) == 0 {

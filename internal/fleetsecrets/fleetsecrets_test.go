@@ -140,7 +140,7 @@ func TestAListingCarriesNoValueAndNeedsNoKey(t *testing.T) {
 
 	rows, err := fleetsecrets.New(fleet, nil).List(t.Context())
 	if err != nil {
-		t.Fatalf("a node with no keyring could not list what exists: %v", err)
+		t.Fatalf("a store with no keyring could not list what exists: %v", err)
 	}
 	if len(rows) != 2 || rows[0].Name != "A" || rows[1].Name != "B" {
 		t.Fatalf("rows = %+v, want them name-ordered", rows)
@@ -154,8 +154,8 @@ func TestAListingCarriesNoValueAndNeedsNoKey(t *testing.T) {
 
 // THE ENGINE'S KEYS UNDER A PREFIX NEED NO KEYRING EITHER, because what reads
 // them is the duty that finishes a removal and collects a key nobody owns:
-// destroying one is an Unset, which a node with no keyring can perform, so
-// finding the key must not be the half that needs one. Only the prefix's rows
+// destroying one is an Unset, which opens nothing, so finding the key must not
+// be the half that needs a keyring. Only the prefix's rows
 // come back, in name order, each with WHEN it was written — which is what a key
 // nobody owns is aged by — and never with its envelope, and only through the
 // engine's own view.
@@ -179,7 +179,7 @@ func TestTheEnginesKeysUnderAPrefixNeedNoKeyring(t *testing.T) {
 	keyless := fleetsecrets.New(fleet, nil).Estate()
 	keys, err := keyless.Keys(t.Context(), "iam/person/")
 	if err != nil {
-		t.Fatalf("a node with no keyring could not find what a removal left: %v", err)
+		t.Fatalf("a store with no keyring could not find what a removal left: %v", err)
 	}
 	var names []string
 	for _, key := range keys {
@@ -199,7 +199,7 @@ func TestTheEnginesKeysUnderAPrefixNeedNoKeyring(t *testing.T) {
 	}
 	if removed, err := keyless.Unset(t.Context(), "iam/person/a/dek"); err != nil ||
 		!removed {
-		t.Fatalf("a node with no keyring could not destroy a key it found: "+
+		t.Fatalf("a store with no keyring could not destroy a key it found: "+
 			"(%v, %v)", removed, err)
 	}
 	// A PREFIX OUTSIDE THE ENGINE'S NAMESPACE IS REFUSED: the engine's view
@@ -763,14 +763,42 @@ func TestMigrationOnAnEmptyTableDoesNothing(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING HAS NOTHING TO MIGRATE and must not fail the boot
-// over it: secrets then come from the environment and the store is not in use.
-func TestMigrationWithoutAKeyringIsASilentNoOp(t *testing.T) {
+// A LOCAL ROW THIS NODE CANNOT OPEN IS KEPT, AND THE MIGRATION SAYS SO.
+//
+// It used to be a silent no-op for a node with no keyring, which kept its
+// secrets in the environment. Every node holds a keyring now; what is left is
+// a row sealed under a key this node's keyring no longer carries — dropped
+// before the migration ran — and skipping it quietly would leave a credential
+// where no peer can see it with nothing said, while removing it would destroy
+// the only copy.
+func TestAMigrationThatCannotOpenALocalRowKeepsItAndSaysSo(t *testing.T) {
 	t.Parallel()
-	fleet, _ := fleetStore(t, ring(t, "k1"))
-	_, err := fleetsecrets.Migrate(context.Background(), localStore(t, nil), fleet, clock)
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "s.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("a node with no keyring failed its migration: %v", err)
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.SecretValues(ring(t, "k1")).Set(t.Context(), "GL", "glpat-x", sam,
+		"cli", clock); err != nil {
+		t.Fatal(err)
+	}
+	// THE KEY THAT SEALED IT IS GONE from the ring this node now holds.
+	local := db.SecretValues(ring(t, "k2"))
+	fleet, _ := fleetStore(t, ring(t, "k2"))
+
+	moved, err := fleetsecrets.Migrate(context.Background(), local, fleet, clock)
+	if err == nil {
+		t.Fatalf("a migration that could open nothing reported success, moving %v", moved)
+	}
+	rows, err := local.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "GL" {
+		t.Fatalf("the local rows are %+v, want the unopened one kept", rows)
+	}
+	if onFleet, err := fleet.List(t.Context()); err != nil || len(onFleet) != 0 {
+		t.Errorf("the fleet holds %+v (err %v), want nothing copied", onFleet, err)
 	}
 }
 
