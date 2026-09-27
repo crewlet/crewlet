@@ -88,6 +88,13 @@ func (a *attempts) io() (reads, writes int) {
 	return a.reads, a.writes
 }
 
+// flushed is how many flushes the fleet window has been asked for.
+func (a *attempts) flushed() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.flushes
+}
+
 // subjects is every key the fleet window holds.
 func (a *attempts) subjects() []string {
 	a.mu.Lock()
@@ -1119,6 +1126,58 @@ func TestAStoreThatDoesNotAnswerIsLeftAloneForAWhile(t *testing.T) {
 	}
 	if reads, _ := store.io(); reads != 3 {
 		t.Errorf("after the pause the store was asked %d times in all, want 3", reads)
+	}
+}
+
+// A SIGN-IN WHILE THE STORE IS LEFT ALONE DOES NOT ASK IT TO FORGET A RECORD
+// NOBODY READ.
+//
+// A success flushes a pair whose fleet record this node does not know, because
+// unknown is not nothing — but a pair admitted while the store is being left
+// alone after failing to answer is unknown only BECAUSE of the outage, and
+// flushing it put the store's timeout under every honest sign-in on the node
+// for as long as the pause lasted: the round trip [credential.FleetRetry]
+// exists to spare them. Once the pause is over, a pair admitted during it is
+// flushed on its success like any other nobody read.
+//
+// Mutation: flush every pair never read, whatever the pause, and the sign-in
+// during it asks the store to forget.
+func TestASuccessWhileTheStoreIsLeftAloneLeavesItAlone(t *testing.T) {
+	t.Parallel()
+	store := newAttempts()
+	th, clock, _ := newThrottle(t, store)
+	store.breaks(errors.New("the coordination store is unreachable"))
+	tripped, err := th.Admit(t.Context(), credential.Attempt{Source: "203.0.113.7",
+		Subject: "trips.the.pause"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tripped.Release()
+
+	during, err := th.Admit(t.Context(), credential.Attempt{Source: "198.51.100.4",
+		Subject: "sarah.chen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := th.Admit(t.Context(), credential.Attempt{Source: "198.51.100.4",
+		Subject: "tom.okafor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	during.Succeed(t.Context())
+	if got := store.flushed(); got != 0 {
+		t.Fatalf("a success while the store was left alone asked it to flush %d "+
+			"times, want none: a pair nobody read is unknown only because of the "+
+			"outage", got)
+	}
+
+	clock.advance(credential.FleetRetry)
+	store.breaks(nil)
+	later.Succeed(t.Context())
+	if got := store.flushed(); got != 1 {
+		t.Errorf("a success once the pause was over, on a pair admitted during "+
+			"it, flushed %d times, want once: its record is unknown, and the "+
+			"store is being asked again", got)
 	}
 }
 

@@ -237,8 +237,11 @@ const DegradeInterval = coord.AttemptWindow
 // ceiling's wait, so no pair at full strength takes more than one attempt on
 // this node's count alone, and one that stays down costs one failing round
 // trip per half minute rather than one per attempt. A success's flush is
-// still attempted, because it is what lifts a person's wait on every other
-// node and it happens once per sign-in.
+// still attempted where this node knows the pair has failures against it,
+// because it is what lifts a person's wait on every other node and it happens
+// once per sign-in that followed a mistake — but never for a pair the pause
+// kept this node from reading, which is every honest sign-in during it
+// ([Ticket.Succeed]).
 const FleetRetry = DelayCeiling
 
 // The curve.
@@ -661,16 +664,27 @@ func (k *Ticket) Succeed(ctx context.Context) {
 	}
 	t := k.t
 	t.mu.Lock()
-	// A PAIR WHOSE FLEET RECORD THIS NODE DOES NOT KNOW IS FLUSHED ANYWAY
-	// — one the bound forgot after admission took it, and one admitted
-	// without a read, because its source's allowance was spent or the store
-	// was being left alone. Unknown is not nothing: left, what the fleet has
+	// A PAIR THIS NODE KNOWS HAS FAILURES AGAINST IT IS FLUSHED — its own,
+	// or the fleet's as it last read them — because what the fleet holds
 	// under it would delay this person's next attempt on every other node
-	// for a failure their success has answered. Only a pair read clean and
-	// failed nowhere since costs nothing, which is an honest sign-in's.
+	// for a failure their success has answered.
+	//
+	// SO IS ONE WHOSE FLEET RECORD IT DOES NOT KNOW — one the bound forgot
+	// after admission took it, one admitted without a read because its
+	// source's allowance was spent — since unknown is not nothing. But not
+	// while the store is being left alone after failing to answer
+	// ([FleetRetry]): a pair admitted then is unknown only BECAUSE of the
+	// outage, and flushing it put the store's timeout under every honest
+	// sign-in on the node for as long as the pause lasted, which is the
+	// round trip the pause exists to spare them.
+	//
+	// Only a pair read clean and failed nowhere since costs nothing, which is
+	// an honest sign-in's.
 	p := t.pairs.get(k.pair)
+	known := p != nil && (len(p.fails) > 0 || len(p.fleet) > 0)
+	unknown := p == nil || p.readIndex == 0
 	flush := t.attempts != nil &&
-		(p == nil || p.readIndex == 0 || len(p.fails) > 0 || len(p.fleet) > 0)
+		(known || (unknown && !t.now().Before(t.quietUntil)))
 	t.pairs.drop(k.pair)
 	t.mu.Unlock()
 	if flush {
