@@ -172,23 +172,6 @@ func (b *Blinder) Email(address string) (string, error) {
 	return b.derive("email", folded)
 }
 
-// Subject is the blind for an identity provider's own subject claim.
-//
-// NOT NORMALISED, and the asymmetry with an address is the provider's: an
-// `iss`/`sub` pair is an opaque identifier the provider assigned, case is
-// significant in it, and folding one would merge two accounts the provider
-// considers distinct. It is blinded for the address's reason — it identifies
-// a person at a third party — and for no other.
-func (b *Blinder) Subject(issuer, subject string) (string, error) {
-	if issuer == "" || subject == "" {
-		return "", fmt.Errorf("iamdomain: an identity-provider binding needs "+
-			"both an issuer and a subject, and has issuer %q subject %q — a "+
-			"binding missing either would match every account at that provider "+
-			"or every provider's account for that subject", issuer, subject)
-	}
-	return b.derive("oidc", issuer+"\x00"+subject)
-}
-
 // InvitationID is the invitation an issue names, derived from the operation
 // key it is published under — so a retry of an issue whose outcome nobody could
 // establish names the invitation its first attempt issued, and hands back the
@@ -204,7 +187,7 @@ func (b *Blinder) Subject(issuer, subject string) (string, error) {
 // key compute the invitation it names and the person it creates. Under the
 // company's key it is unguessable without that key whatever the operation key
 // was — and in a MAC domain of its own ([invitationIDDomain]), so no blind of
-// any address or subject is ever an invitation id.
+// any address is ever an invitation id.
 //
 // A UUID7 AT THE KEY'S INSTANT, which is what [InvitedPersonID] derives the
 // person the invitation creates at: the key must be a uuid7 ([operationKey]).
@@ -284,11 +267,13 @@ func InvitationVerifier(secret string) string {
 
 // derive is the one HMAC, and the one encoding.
 //
-// THE CLASS IS INSIDE THE MAC rather than beside it, so an address's blind and
-// an identity provider's can never collide even if the two values were equal —
-// which they can be, because a provider is free to use an address as its
-// subject claim. A separator between the class and the value is what stops
-// `("emai", "lx@y")` and `("email", "x@y")` producing one blind.
+// THE CLASS IS INSIDE THE MAC rather than beside it, so a blind of one kind of
+// value can never collide with a blind of another even where the two values
+// are equal. An address is the only class this build derives, and the class
+// stays in the input because every blind an estate already holds was derived
+// with it: dropping it would re-key every address claim in the company. A
+// separator between the class and the value is what stops `("emai", "lx@y")`
+// and `("email", "x@y")` producing one blind.
 //
 // HEX rather than base64, because the result is a SUBJECT TOKEN on a broker
 // path: base64's `+` and `/` are not path-safe, base64url's `-` and `_` are

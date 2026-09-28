@@ -221,17 +221,16 @@ func TestTheFleetsSecretBeatsASurvivingLocalRow(t *testing.T) {
 
 // NO ${VAR} REACHES THE ENGINE'S OWN KEYS.
 //
-// A person's key and a session's refresh token share the fleet's bucket with
-// the operator's credentials. While they carried operator names, every apply
-// decrypted all of them into this node's resolver, and `${…}` in an `mcp_env`
-// handed somebody's live credential at their identity provider to a child
-// process. The snapshot now holds the operator's rows alone, and an engine
-// name is not one any reference can spell — so neither the snapshot, a
+// A person's key shares the fleet's bucket with the operator's credentials.
+// While it carried an operator name, every apply decrypted all of them into
+// this node's resolver, and `${…}` in an `mcp_env` handed somebody's key to a
+// child process. The snapshot now holds the operator's rows alone, and an
+// engine name is not one any reference can spell — so neither the snapshot, a
 // lookup nor an expansion answers with one.
 func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
 	e, _, fleet := engineWithFleetSecrets(t)
-	const key = "iam/session/018f3a9c-0000-7000-8000-000000000001/refresh"
-	if err := fleet.Estate().Set(t.Context(), key, "a-live-refresh-token",
+	const key = "iam/person/018f3a9c-0000-7000-8000-000000000001/dek"
+	if err := fleet.Estate().Set(t.Context(), key, "a-live-person-key",
 		secrets.Author{Name: "node-a", Kind: "system"}, "iam", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +251,7 @@ func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
 	if got, found := e.LookupSecret(key); found || got != "" {
 		t.Errorf("a lookup of the engine's key answered (%q, %t)", got, found)
 	}
-	if got := e.Resolve("${" + key + "}"); strings.Contains(got, "a-live-refresh-token") {
+	if got := e.Resolve("${" + key + "}"); strings.Contains(got, "a-live-person-key") {
 		t.Errorf("a reference to the engine's key expanded to %q", got)
 	}
 	if got := e.Resolve("${GL}"); got != "glpat-x" {

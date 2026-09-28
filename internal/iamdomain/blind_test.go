@@ -131,64 +131,32 @@ func TestABlindIsASubjectTokenABrokerAccepts(t *testing.T) {
 	}
 }
 
-// A CLASS IS INSIDE THE MAC, so an address and an identity provider's subject
-// claim can never collide — and they CAN be the same string, because a
-// provider is free to use an address as its subject.
-func TestAnAddressAndAnIdentityProviderSubjectNeverCollide(t *testing.T) {
+// AN ADDRESS'S BLIND IS THE SAME ON EVERY BUILD.
+//
+// The blind is the subject an address claim arbitrates on and the column a
+// sign-in resolves through, so a build that derived it differently would
+// re-key every address in the company at once: a sign-in would resolve nobody,
+// and a second person could claim each address on the new subject. The value
+// is pinned rather than recomputed so the derivation's SHAPE is held — the
+// domain, the address class inside the MAC and the separators — and not only
+// its determinism.
+//
+// Mutation: drop the class from the MAC, or the separator after it, and the
+// blind changes.
+func TestAnAddressBlindIsTheSameOnEveryBuild(t *testing.T) {
 	t.Parallel()
 	b, err := iamdomain.NewBlinder(testBlindKey)
 	if err != nil {
 		t.Fatalf("blinder: %v", err)
 	}
-	const shared = "sarah.chen@example.com"
-	address, err := b.Email(shared)
+	blind, err := b.Email("Sarah.Chen@example.com")
 	if err != nil {
 		t.Fatalf("blind: %v", err)
 	}
-	subject, err := b.Subject("https://idp.example.com", shared)
-	if err != nil {
-		t.Fatalf("blind: %v", err)
-	}
-	if address == subject {
-		t.Fatal("an address and an identity provider's subject claim blind to " +
-			"one value — a provider that uses an address as its subject would " +
-			"make one person's IdP binding collide with another's address claim")
-	}
-
-	// AND THE CLASS IS WHAT KEEPS THEM APART, demonstrated rather than
-	// assumed. The pair above differs in its BYTES as well as its class,
-	// so it passes whether or not the class reaches the MAC. This pair
-	// does not: an identity-provider binding writes issuer, a separator
-	// and subject, so an "address" spelled as exactly those bytes is the
-	// one input that would collide with it under a derivation that left
-	// the class out.
-	//
-	// The address is not one anybody has. That is the point — the case is
-	// about the DERIVATION's shape, and a collision that needs a strange
-	// input is still a collision, reachable by whoever chooses the input.
-	const issuer, sub = "idp", "user"
-	collide, err := b.Email(issuer + "\x00" + sub)
-	if err != nil {
-		t.Fatalf("blind: %v", err)
-	}
-	pair, err := b.Subject(issuer, sub)
-	if err != nil {
-		t.Fatalf("blind: %v", err)
-	}
-	if collide == pair {
-		t.Error("an address spelled as an issuer, a separator and a subject " +
-			"blinds to the same value as that binding — the class is not " +
-			"reaching the MAC, so the two namespaces share one space")
-	}
-	// AND THE ISSUER IS PART OF IT, so one subject at two providers is two
-	// bindings rather than one.
-	elsewhere, err := b.Subject("https://other.example.com", shared)
-	if err != nil {
-		t.Fatalf("blind: %v", err)
-	}
-	if elsewhere == subject {
-		t.Error("the same subject at two providers blinds to one value — any " +
-			"provider could then assert anybody's binding")
+	const want = "61af38c1dca85239e60ff6a1d888a53192a61a7c8a0fb27e90b41b2d098510aa"
+	if blind != want {
+		t.Errorf("the address blinds to %s, want %s — every address claim in "+
+			"an existing estate was derived the old way", blind, want)
 	}
 }
 
@@ -239,12 +207,6 @@ func TestAnEmptyAddressHasNoBlind(t *testing.T) {
 		if blind, err := b.Email(empty); err == nil {
 			t.Errorf("%q blinded to %q", empty, blind)
 		}
-	}
-	if _, err := b.Subject("", "x"); err == nil {
-		t.Error("a binding with no issuer was blinded")
-	}
-	if _, err := b.Subject("x", ""); err == nil {
-		t.Error("a binding with no subject was blinded")
 	}
 }
 

@@ -29,9 +29,9 @@
 //
 // # The engine's own key material is not reachable from here at all
 //
-// The same bucket holds a person's data key, each OIDC session's refresh
-// token and the identity estate's blind-index key, under names in the engine's own
-// namespace ([secrets.Reserved]). Every route that takes a name refuses one of
+// The same bucket holds a person's data key and the identity estate's
+// blind-index key, under names in the engine's own namespace
+// ([secrets.Reserved]). Every route that takes a name refuses one of
 // those with `403 reserved_name` before anything else — whatever the caller
 // holds — and the listing counts them per keyring key without naming any. They
 // were once ordinary names here, and that made a reveal a way to copy a
@@ -165,9 +165,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 
 // list serves GET /secrets — every name, with no values.
 //
-// THE ENGINE'S OWN KEYS ARE COUNTED AND NEVER NAMED. A person's data key and a
-// session's refresh token are not the operator's to read, write or delete, and
-// a listing of them was the first step to every one of those; what an operator
+// THE ENGINE'S OWN KEYS ARE COUNTED AND NEVER NAMED. A person's data key is not
+// the operator's to read, write or delete, and a listing of them was the first
+// step to every one of those; what an operator
 // does need is to see a rotation reach them, so `engine_keys` says how many
 // there are under each keyring key and nothing else.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -200,9 +200,8 @@ func reserved(w http.ResponseWriter, name string) bool {
 	}
 	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeReservedName, map[string]string{
 		"detail": secrets.ErrReservedName.Error(),
-		"hint": "a person's key, a session's refresh token and the address " +
-			"index's key belong to the identity estate: remove a person with " +
-			"`crewlet iam remove` and end a session with `crewlet iam revoke`; a " +
+		"hint": "a person's key and the address index's key belong to the " +
+			"identity estate: remove a person with `crewlet iam remove`; a " +
 			"rekey moves these keys with everything else",
 	})
 	return true

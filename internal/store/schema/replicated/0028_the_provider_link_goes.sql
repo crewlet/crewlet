@@ -1,0 +1,31 @@
+-- `iam_credentials.subject_blind` goes, with the identity provider link it held.
+--
+-- 0019 shipped it for sign-in through an external OpenID Connect provider: a
+-- person's `oidc` credential row carried the keyed blind of the provider's
+-- subject, a partial index resolved a sign-in's subject through it, and the
+-- `iam.link.<blind>` claim was the only writer of those rows. Sign-in through
+-- a provider is gone — people sign in with a password and a second factor, or
+-- a deployment signs no people in at all — so nothing writes the column,
+-- nothing reads it, and no `oidc` row can be presented to anything.
+--
+-- THE ROWS GO FIRST, then the index, then the column. An `oidc` row is a
+-- credential nothing can verify and nothing can list as one of the four
+-- methods this build knows, so it is deleted rather than left for a reader to
+-- stumble over; the index is dropped before the column because a column an
+-- index still names cannot be dropped.
+--
+-- A DEVELOPMENT ESTATE THAT EVER LINKED A PROVIDER ACCOUNT MUST BE RESET. The
+-- identity log is the write-ahead log and these rows are derived from it: a
+-- log still carrying an `iam.link.*` record names a subject kind this build
+-- has no case for, and its applier refuses the record rather than guessing,
+-- which stalls the log. No tag ever shipped the provider sign-in, so no
+-- deployment an operator runs holds such a record; one made while developing
+-- this engine is reset — its identity log and its replicated estate — rather
+-- than carried by an apply arm that would exist for a version nobody ran.
+--
+-- DROPPED IN THE COMMIT THAT STOPS THE WRITERS NAMING IT, for 0021's reason:
+-- an insert naming a column that is gone fails the apply on every node at
+-- once.
+DELETE FROM iam_credentials WHERE method = 'oidc';
+DROP INDEX iam_credentials_subject_idx;
+ALTER TABLE iam_credentials DROP COLUMN subject_blind;

@@ -356,8 +356,8 @@ const (
 	CodeRekeyIncomplete Code = "rekey_incomplete"
 
 	// CodeReservedName is a name in the ENGINE's own namespace — a person's
-	// key, a session's refresh token — which no caller of `/secrets` may
-	// address, whatever it holds. The detail names the gesture that does.
+	// key, a blind-index key — which no caller of `/secrets` may address,
+	// whatever it holds. The detail names the gesture that does.
 	CodeReservedName Code = "reserved_name"
 )
 

@@ -201,7 +201,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// gesture collapses into the first attempt's.
 	if in.Seat != "" {
 		seated, seatErr := w.claim(ctx, at, KindSeat, in.Seat, in.PersonID,
-			Claim{}, "", in.OpID+":seat", &in)
+			Claim{}, in.OpID+":seat", &in)
 		if seatErr != nil {
 			return statelog.Result{}, seatErr
 		}
@@ -233,7 +233,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		// is the one that should fail before anything else has
 		// happened.
 		address, claimErr := w.claim(ctx, at, KindEmail, blind, in.PersonID,
-			Claim{Sealed: sealedEmail}, "", in.OpID+":email", &in)
+			Claim{Sealed: sealedEmail}, in.OpID+":email", &in)
 		if claimErr != nil {
 			return statelog.Result{}, claimErr
 		}
@@ -248,7 +248,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// would acknowledge the second claim as the first inside its duplicate
 	// window, and the person would be written holding the login they gave
 	// up rather than the one they chose.
-	claimed, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, Claim{}, "",
+	claimed, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, Claim{},
 		in.OpID+":login:"+in.Login, &in)
 	if err != nil {
 		return statelog.Result{}, err
@@ -256,30 +256,13 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	if claimed.Outcome == statelog.OutcomeUnknown {
 		return unresolved(in.OpID), nil
 	}
-	// AND THE PROVIDER LINK, LAST OF THE CLAIMS, when the enrolment pins
-	// one — an invitation redeemed THROUGH the identity provider. After
-	// the address and the login, because those are the two a redeemer can
-	// be refused and change: a subject somebody else holds is refused here
-	// before the person exists, naming nobody to the redeemer, and leaves
-	// only the reservation this same redemption finishes on its retry.
-	if in.Link != nil {
-		linked, linkErr := w.claim(ctx, at, KindLink, in.Link.Blind, in.PersonID,
-			Claim{Issuer: in.Link.Issuer}, "", in.OpID+":link", &in)
-		if linkErr != nil {
-			return statelog.Result{}, linkErr
-		}
-		if linked.Outcome == statelog.OutcomeUnknown {
-			return unresolved(in.OpID), nil
-		}
-	}
-
 	person := Person{
 		V: DocumentVersion, Kind: in.Kind, Stage: in.Stage,
 		NameSealed: sealedName, EmailSealed: sealedEmail,
 		Credentials: in.Credentials, Grants: in.Grants,
 		Colleague: in.Colleague,
 	}
-	mutation, err := authoredPerson(person)
+	mutation, err := EncodePerson(person)
 	if err != nil {
 		return statelog.Result{}, err
 	}
@@ -293,26 +276,14 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// above was earlier, and a check against it alone would pair an
 	// invitation somebody spent a moment ago with a person it then creates.
 	// Nil for the writer's own authority, which was checked above.
-	//
-	// AND THE LINK THE PERSON WILL HOLD, read in the same snapshot, because
-	// it is not only this enrolment's: a redemption that stopped after an
-	// attempt through the identity provider pinned a subject to this
-	// person's reservation, and a retry by password finishes the same
-	// person holding it. Announcing what THIS call asked for would say
-	// nothing about that link — a person able to sign in through a
-	// provider account with no row on the trail saying so.
-	var pinned Link
-	decide := func(tx *sql.Tx) (err error) {
-		if err = w.createsNobodyTwice(ctx, tx, in); err != nil {
+	decide := func(tx *sql.Tx) error {
+		if err := w.createsNobodyTwice(ctx, tx, in); err != nil {
 			return err
 		}
 		if basis != nil {
-			if err = basis(tx); err != nil {
-				return err
-			}
+			return basis(tx)
 		}
-		pinned, err = liveLinkOf(ctx, tx, in.PersonID)
-		return err
+		return nil
 	}
 	// ARBITRATED, NOT A CREATE, and the claims are why: they run first and
 	// their apply leaves a RESERVATION row for this person, so a create
@@ -330,20 +301,6 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
 			Person: in.PersonID, Added: added, By: w.Actor,
 			OperatorID: w.OperatorID, Version: result.Position.Packed(),
-		})
-	}
-	// THE LINK IS ANNOUNCED ONCE THE PERSON IT PINS EXISTS, and not when
-	// its claim landed: until the content record lands, the claim is held
-	// by a reservation nobody can sign in as, and an announcement then
-	// would describe a sign-in that may never be possible.
-	if pinned.Blind != "" {
-		via := types.LinkViaAdmin
-		if in.Invitation != "" {
-			via = types.LinkViaInvite
-		}
-		w.announce(ctx, result, err, types.IAMIdentityLinked{
-			Person: in.PersonID, Issuer: pinned.Issuer, Via: via, By: w.Actor,
-			OperatorID: w.OperatorID,
 		})
 	}
 	return result, err
@@ -543,13 +500,6 @@ type Enrolment struct {
 	// exemption from the conferral rule — see [Writer.Enrol].
 	BootstrapCode string
 
-	// Link is the identity provider subject this enrolment PINS to the
-	// person it creates, or nil — set by an invitation redeemed through the
-	// provider, which is one of the only two ways a link is ever made
-	// ([KindLink]). Claimed after the address and the login, as its own
-	// record on its own subject.
-	Link *Link
-
 	// OpID is the operation id for the whole gesture. Each append derives
 	// its own from it with a suffix, so a retry of the sequence dedupes
 	// step by step rather than all-or-nothing.
@@ -619,14 +569,6 @@ func (in Enrolment) validate() error {
 		// this build and as whatever a newer one means by it on the next.
 		return fmt.Errorf("%w: %q is not a colleague level — want one of %v",
 			ErrInvalid, in.Colleague, iam.Colleagues)
-	case in.Link != nil && in.Kind != iam.KindPerson:
-		return fmt.Errorf("%w: a provider link signs a PERSON in through "+
-			"their identity provider, and a %s has no provider sign-in to "+
-			"make", ErrInvalid, in.Kind)
-	case in.Link != nil && (in.Link.Issuer == "" || in.Link.Blind == ""):
-		return fmt.Errorf("%w: a provider link needs the issuer and the "+
-			"subject's blind, and this one has (%q, %q)", ErrInvalid,
-			in.Link.Issuer, in.Link.Blind)
 	case in.Kind == iam.KindPerson && in.Email == "":
 		return fmt.Errorf("%w: enrolling a person needs an address — it is "+
 			"the interactive login key, and somebody with none can never "+
@@ -873,16 +815,11 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 	if err := w.mayAdminister(OpClaim); err != nil {
 		return statelog.Result{}, err
 	}
-	if kind == KindLink {
-		return statelog.Result{}, fmt.Errorf("%w: a provider link is "+
-			"pinned with Writer.Link, which states its issuer and announces "+
-			"it — a bare claim would do neither", ErrInvalid)
-	}
 	// THE HOLDER'S KIND IS READ INSIDE THE SNAPSHOT, never taken from the
 	// caller: a login's grammar is the kind of whoever holds it, and a
 	// caller stating that kind would be stating what it read in another
 	// transaction — which is the one input this check cannot trust.
-	return w.claim(ctx, w.gesture(), kind, token, personID, Claim{}, "", opID, nil)
+	return w.claim(ctx, w.gesture(), kind, token, personID, Claim{}, opID, nil)
 }
 
 // claim is the shared body, so an enrolment's own claims and an operator's
@@ -899,21 +836,15 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 // [Enrolment.alreadyEnrolled].
 //
 // payload carries what a claim states beside its token — an address's sealed
-// form, a link's issuer — and nothing else: the person and the chart position
-// are the decide's. replacing is the token a MOVE takes the person off, and it
-// is read only for a link: see [ErrLinked].
+// form — and nothing else: the person and the chart position are the decide's.
 func (w *Writer) claim(ctx context.Context, at *statelog.Position,
-	kind ObjectKind, token, personID string, payload Claim, replacing, opID string,
+	kind ObjectKind, token, personID string, payload Claim, opID string,
 	enrolling *Enrolment) (statelog.Result, error) {
 
 	if token == "" || personID == "" || opID == "" {
 		return statelog.Result{}, fmt.Errorf("iamdomain: a %s claim needs a "+
 			"token, a person and an operation id, and has (%q, %q, %q)",
 			kind, token, personID, opID)
-	}
-	if kind == KindLink && payload.Issuer == "" {
-		return statelog.Result{}, fmt.Errorf("%w: a provider link needs the "+
-			"issuer its subject belongs to", ErrInvalid)
 	}
 	// A SEAT IS CLAIMED BY ITS IDENTITY, whatever address it was named by,
 	// and the subject has to be known before the snapshot is — so the
@@ -969,23 +900,6 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 				return err
 			}
 		}
-		if kind == KindLink {
-			// A LINK SIGNS A PERSON IN, read HERE for the login's
-			// reason: a machine has no provider sign-in to make, and
-			// a subject pinned to one would be a way to act as a
-			// service account from a browser.
-			var enrolledKind iam.Kind
-			if enrolling != nil {
-				enrolledKind = enrolling.Kind
-			}
-			if err := linkable(ctx, tx, personID, enrolledKind); err != nil {
-				return err
-			}
-			if err := unlinkedElsewhere(ctx, tx, personID, token,
-				replacing); err != nil {
-				return err
-			}
-		}
 		if kind == KindSeat {
 			// THE CHART READ GUARANTEES NOTHING, and this is the one
 			// place in the domain that crosses a log. A seat lives on
@@ -1023,7 +937,7 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 			}
 		}
 		claim := Claim{V: DocumentVersion, Person: personID,
-			Sealed: payload.Sealed, Issuer: payload.Issuer}
+			Sealed: payload.Sealed}
 		if kind == KindSeat {
 			// AND THE POSITION THAT READ WAS TAKEN AT GOES ON THE
 			// RECORD, which is the half that IS load-bearing. It is
@@ -1044,35 +958,6 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 	}
 	return w.publishAt(ctx, at,
 		w.request(&rec, opID, statelog.PatternCreate, decide))
-}
-
-// linkable refuses a provider link for anybody but a person, read inside the
-// claim's own snapshot — or taken from the enrolment creating them, which is
-// the one caller that knows the kind before the row exists.
-func linkable(ctx context.Context, tx *sql.Tx, personID string,
-	enrolling iam.Kind) error {
-
-	kind := enrolling
-	if kind == "" {
-		var stored string
-		err := tx.QueryRowContext(ctx,
-			`SELECT kind FROM iam_people WHERE id = ?`, personID).Scan(&stored)
-		switch {
-		case errors.Is(err, sql.ErrNoRows), err == nil && reservation(stored):
-			return fmt.Errorf("%w: this node holds no enrolled person %s to "+
-				"pin a provider subject to", ErrNotFound, personID)
-		case err != nil:
-			return fmt.Errorf("iamdomain: read person %s's kind: %w",
-				personID, err)
-		}
-		kind = iam.Kind(stored)
-	}
-	if kind != iam.KindPerson {
-		return fmt.Errorf("%w: a provider link signs a PERSON in through "+
-			"their identity provider, and %s is a %s", ErrInvalid, personID,
-			kind)
-	}
-	return nil
 }
 
 // chartPositionOf is the org chart log's checkpoint on THIS node, read inside
@@ -1142,11 +1027,6 @@ func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
 		return statelog.Result{}, fmt.Errorf("%w: a login is never released "+
 			"on its own — every principal holds one, and it is the name their "+
 			"changes are recorded under. Rename it instead", ErrInvalidLogin)
-	case KindLink:
-		return statelog.Result{}, fmt.Errorf("%w: a provider link is "+
-			"removed with Writer.Unlink, which announces it — a bare release "+
-			"would take somebody's sign-in away with nothing saying so",
-			ErrInvalid)
 	}
 	return w.release(ctx, w.gesture(), kind, token, holder, opID, reason, false)
 }
@@ -1236,7 +1116,7 @@ func (w *Writer) release(ctx context.Context, at *statelog.Position,
 func (w *Writer) Rename(ctx context.Context, personID, from, to, opID,
 	reason string) (statelog.Result, error) {
 
-	return w.replace(ctx, KindLogin, personID, from, to, Claim{}, opID, reason)
+	return w.replace(ctx, KindLogin, personID, from, to, opID, reason)
 }
 
 // Rebind moves a person from one seat to another, the new one first, for
@@ -1248,14 +1128,10 @@ func (w *Writer) Rename(ctx context.Context, personID, from, to, opID,
 func (w *Writer) Rebind(ctx context.Context, personID, from, to, opID,
 	reason string) (statelog.Result, error) {
 
-	return w.replace(ctx, KindSeat, personID, from, to, Claim{}, opID, reason)
+	return w.replace(ctx, KindSeat, personID, from, to, opID, reason)
 }
 
-// replace is the shared body of [Writer.Rename], [Writer.Rebind] and a
-// [Writer.Link] that moves a person from one provider subject to another.
-//
-// payload is what the NEW claim states beside its token — a link's issuer —
-// and the empty claim for a login and a seat.
+// replace is the shared body of [Writer.Rename] and [Writer.Rebind].
 //
 // # The claim IS the move, and the release is its trail
 //
@@ -1270,13 +1146,11 @@ func (w *Writer) Rebind(ctx context.Context, personID, from, to, opID,
 // published under. It used to fail the whole move with an error advising a
 // retry under the same op id, which nothing could act on — a caller re-reads
 // the person before it moves them, found them already moved and published
-// nothing — while a link moved that way was never announced
-// ([types.IAMIdentityLinked]), because the error was all its caller saw. The
-// CLAIM is still a step nothing may be built on unconfirmed: one whose outcome
+// nothing. The CLAIM is still a step nothing may be built on unconfirmed: one whose outcome
 // nobody can establish ends the gesture as unknown before any release is
 // published, which would leave the person holding neither token.
 func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
-	to string, payload Claim, opID, reason string) (statelog.Result, error) {
+	to, opID, reason string) (statelog.Result, error) {
 
 	if err := w.mayAdminister(OpClaim); err != nil {
 		return statelog.Result{}, err
@@ -1315,7 +1189,7 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 	// ONE MARK FOR THE MOVE, so the release decides from a state holding
 	// the claim that freed its token.
 	mark := w.gesture()
-	claimed, err := w.claim(ctx, mark, kind, to, personID, payload, from,
+	claimed, err := w.claim(ctx, mark, kind, to, personID, Claim{},
 		opID+":"+string(kind), nil)
 	switch {
 	case err != nil:
@@ -1611,7 +1485,6 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 			V: DocumentVersion, Person: in.Person, Epoch: epoch,
 			AbsoluteExpiresAt: in.AbsoluteExpiresAt,
 			ProvedAt:          in.ProvedAt,
-			GroupGrants:       slices.Clone(in.GroupGrants),
 			EnrolmentOnly:     in.EnrolmentOnly,
 		})
 		return err
@@ -1697,14 +1570,6 @@ type SessionStart struct {
 	// [Session.ProvedAt]. It is the WRITER's clock, authored at the proof,
 	// like the absolute deadline beside it.
 	ProvedAt time.Time
-
-	// GroupGrants are what the identity provider's groups conferred at
-	// this sign-in — see [Session.GroupGrants]. They are NOT checked
-	// against the writer's own grants, unlike a person's declared set:
-	// they are the operator's Tier A mapping applied to what the provider
-	// asserted, and every node clamps them to its own ceiling at decision
-	// time rather than here.
-	GroupGrants []iam.Grant
 
 	// EnrolmentOnly opens a session that may do nothing but enrol a second
 	// factor — see [Session.EnrolmentOnly]. The SIGN-IN decides it, from
@@ -1802,12 +1667,10 @@ func claimSubject(kind ObjectKind, token string) (Subject, error) {
 		return LoginSubject(token), nil
 	case KindSeat:
 		return SeatSubject(token), nil
-	case KindLink:
-		return LinkSubject(token), nil
 	}
 	return Subject{}, fmt.Errorf("iamdomain: %s is not a claim kind — an "+
-		"address, a login, a seat binding and a provider subject are the four "+
-		"things two people can race for", kind)
+		"address, a login and a seat binding are the three things two people "+
+		"can race for", kind)
 }
 
 // holderOf is who currently holds a claim, read INSIDE a decide's snapshot.
@@ -1822,8 +1685,6 @@ func holderOf(ctx context.Context, tx *sql.Tx, kind ObjectKind, token string) (
 		column = "login"
 	case KindSeat:
 		column = "seat_id"
-	case KindLink:
-		return linkHolderOf(ctx, tx, token)
 	default:
 		return "", false, fmt.Errorf("iamdomain: %s is not a claim kind", kind)
 	}
@@ -2042,7 +1903,7 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 		if person.Credentials, err = in.Apply(person.Credentials); err != nil {
 			return err
 		}
-		mutation, err = authoredPerson(person)
+		mutation, err = EncodePerson(person)
 		return err
 	}
 	rec, err := w.record(PersonSubject(in.PersonID), OpUpdate, in.PersonID,
@@ -2242,7 +2103,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		owner.Credentials = kept
 		minted = TokenMinted{Grants: grants, Colleague: colleague,
 			ExpiresAt: in.ExpiresAt, Epoch: epoch, Generation: generation}
-		rec.Mutation, err = authoredPerson(owner)
+		rec.Mutation, err = EncodePerson(owner)
 		return err
 	}
 	result, err := w.publish(ctx,
@@ -2894,7 +2755,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 			return err
 		}
 		before, after = slices.Clone(person.Grants), slices.Clone(updated.Grants)
-		mutation, err = authoredPerson(updated)
+		mutation, err = EncodePerson(updated)
 		return err
 	}
 	rec, err := w.record(PersonSubject(in.PersonID), OpUpdate, in.PersonID,

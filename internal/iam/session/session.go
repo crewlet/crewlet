@@ -26,8 +26,8 @@
 //
 // The rule that shapes both tables in this package. A browser reads 401 as
 // "sign in again" and discards the cookie, so one stalled applier answering
-// 401 would log every person on that node out and stampede the identity
-// provider with the re-authentications. A node that cannot tell whether a
+// 401 would log every person on that node out and send them all back to the
+// sign-in form at once. A node that cannot tell whether a
 // session is valid says so — 503 — and a node that KNOWS it is not says 401.
 // The grace exists only for the arm a lagging node can honestly serve, reads
 // of a session it has not yet seen, and it ends at [statelog.StallGrace],
@@ -134,24 +134,10 @@ const HostCookieName = "__Host-" + CookieBaseName
 // setup, while an unprefixed cookie on a public https deployment works
 // perfectly and silently accepts one a sibling subdomain wrote.
 func CookieName(externalURL string) string {
-	return NameFor(externalURL, CookieBaseName)
-}
-
-// NameFor is what a cookie of this engine's called base is set under for a
-// deployment reachable at externalURL: `__Host-` + base wherever the bearer
-// takes the prefix, and the bare base on plain http — [CookieName]'s rule, for
-// the OTHER cookies a browser is handed (the provider round trip's flight).
-//
-// ONE RULE FOR EVERY COOKIE, because the prefix's guarantee is per cookie: a
-// flight cookie a sibling host could write beside a session cookie it cannot
-// is a second way to hand a browser somebody else's login in progress. A
-// prefixed cookie must be Secure, carry `Path=/` and no Domain — see
-// [HostPrefixed] for the first.
-func NameFor(externalURL, base string) string {
 	if HostPrefixed(externalURL) {
-		return "__Host-" + base
+		return HostCookieName
 	}
-	return base
+	return CookieBaseName
 }
 
 // HostPrefixed reports whether a deployment reachable at externalURL names its

@@ -347,14 +347,14 @@ func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 
 // THE ENGINE'S OWN KEYS ARE UNREACHABLE HERE, whatever the caller holds.
 //
-// A person's data key and a session's refresh token live in the same bucket
-// as the operator's credentials. When they carried operator names, this
-// surface listed every one, a reveal copied a person's key out before their
-// removal could shred it, and a DELETE shredded somebody with no removal on
-// record. Every route that takes a name now refuses one BY NAME — including a
-// caller carrying every grant — the listing counts them without naming any,
-// and a rekey moves and counts them. For every kind of key the engine keeps:
-// the directory's blind-index key is as much the engine's as a person's.
+// A person's data key lives in the same bucket as the operator's credentials.
+// When the engine's keys carried operator names, this surface listed every
+// one, a reveal copied a person's key out before their removal could shred it,
+// and a DELETE shredded somebody with no removal on record. Every route that
+// takes a name now refuses one BY NAME — including a caller carrying every
+// grant — the listing counts them without naming any, and a rekey moves and
+// counts them. For every kind of key the engine keeps: the directory's
+// blind-index key is as much the engine's as a person's.
 func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
 	t.Parallel()
 	for _, key := range []string{

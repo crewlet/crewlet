@@ -41,10 +41,10 @@ var ReproducibleTables = []string{
 	// estate could ever notice.
 	"iam_people",
 
-	// What a person proves themselves with: a password verifier, an
-	// identity-provider subject, a machine token's verifier. One row per
+	// What a person proves themselves with: a password verifier, a second
+	// factor, recovery codes, a machine token's verifier. One row per
 	// credential rather than one per person, because a machine holds
-	// several and a person holds a password and an IdP binding at once.
+	// several and a person holds a password and a second factor at once.
 	"iam_credentials",
 
 	// An address spoken for by somebody who has no person yet, and the

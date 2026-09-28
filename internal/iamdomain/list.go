@@ -84,13 +84,6 @@ type PersonRow struct {
 	// Version is the iam position that last wrote this row.
 	Version uint64
 
-	// Link is the identity provider subject this person is pinned to — the
-	// issuer in the clear, the subject as its blind — or the zero Link for
-	// somebody who signs in no other way than this engine's own. It is
-	// what an administrator moving or removing the link names as the one
-	// they are replacing ([LinkChange.Replacing]).
-	Link Link
-
 	// Reserved reports a RESERVATION: an enrolment whose claims landed and
 	// whose content record has not — see [Sighting.Reserved]. It carries
 	// the claimed columns and nothing a person is: no kind, no stage, no
@@ -174,7 +167,7 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 		SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
 		       p.seat_id, p.chart_position, p.document,
 		       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
-		       COALESCE(e.epoch, 0), ` + linkColumns + `
+		       COALESCE(e.epoch, 0)
 		FROM iam_people p
 		LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id
 		WHERE p.id > ?`)
@@ -230,7 +223,7 @@ func (r *Reader) Person(ctx context.Context, id string) (PersonRow, error) {
 			SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
 			       p.seat_id, p.chart_position, p.document,
 			       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
-			       COALESCE(e.epoch, 0), `+linkColumns+`
+			       COALESCE(e.epoch, 0)
 			FROM iam_people p
 			LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id
 			WHERE p.id = ?`, id)
@@ -256,22 +249,6 @@ func (r *Reader) Person(ctx context.Context, id string) (PersonRow, error) {
 	return out, nil
 }
 
-// linkColumns are a directory row's LIVE provider link — its subject's blind
-// and its credential document, which carries the issuer — read beside the row
-// as two scalar subqueries rather than a join.
-//
-// NOT A JOIN, because a join multiplies rows: a person holding two live links
-// — which the broker never produces and a restore can — would appear twice on
-// a page and push somebody else off it. The subqueries take one, the lowest
-// id, and [Reader.Claims] is where the duplicate is named.
-const linkColumns = `
-	COALESCE((SELECT c.subject_blind FROM iam_credentials c
-	           WHERE c.person_id = p.id AND c.method = 'oidc'
-	             AND c.revoked_at = 0 ORDER BY c.id LIMIT 1), ''),
-	COALESCE((SELECT c.document FROM iam_credentials c
-	           WHERE c.person_id = p.id AND c.method = 'oidc'
-	             AND c.revoked_at = 0 ORDER BY c.id LIMIT 1), x'')`
-
 // scanPerson reads one directory row, opening the document for the halves no
 // column carries.
 func scanPerson(rows *sql.Rows) (PersonRow, error) {
@@ -284,21 +261,11 @@ func scanPerson(rows *sql.Rows) (PersonRow, error) {
 		updated  int64
 		version  int64
 		epoch    int64
-		link     []byte
 	)
 	if err := rows.Scan(&out.ID, &kind, &stage, &out.Login, &out.NameSealed,
 		&out.EmailSealed, &out.Seat, &out.SeatAt, &document,
-		&created, &updated, &version, &epoch, &out.Link.Blind,
-		&link); err != nil {
+		&created, &updated, &version, &epoch); err != nil {
 		return PersonRow{}, fmt.Errorf("iamdomain: scan a directory row: %w", err)
-	}
-	if out.Link.Blind != "" {
-		// THE ISSUER IS THE CREDENTIAL'S, and a document this build
-		// cannot open still leaves the blind: the person IS linked, and
-		// saying so without naming the provider is truer than not.
-		if held, err := DecodeCredential(link); err == nil {
-			out.Link.Issuer = held.Issuer
-		}
 	}
 	out.Kind = iam.Kind(kind)
 	out.Stage = iam.Stage(stage)
@@ -349,13 +316,6 @@ type CredentialRow struct {
 	// tokens and needs to know which is which.
 	Label string
 
-	// Issuer is the identity provider an oidc credential — a provider
-	// link — belongs to, and SubjectBlind the keyed blind of the subject it
-	// pins. Empty on every other method. The blind is what unlinking names
-	// ([Writer.Unlink]); it is never a subject a screen can print.
-	Issuer       string
-	SubjectBlind string
-
 	// Grants and Colleague are what a machine token was minted carrying —
 	// the ceiling on what it can do, re-cut to its owner's own grants on
 	// every request. Empty on every other method.
@@ -377,7 +337,7 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, person_id, method, created_at, expires_at, revoked_at,
-			       subject_blind, document
+			       document
 			FROM iam_credentials WHERE person_id = ? ORDER BY created_at DESC`,
 			personID)
 		if err != nil {
@@ -395,7 +355,7 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 				document []byte
 			)
 			if err := rows.Scan(&row.ID, &row.PersonID, &method, &created,
-				&expires, &revoked, &row.SubjectBlind, &document); err != nil {
+				&expires, &revoked, &document); err != nil {
 				return fmt.Errorf("iamdomain: scan a credential: %w", err)
 			}
 			row.Method = CredentialMethod(method)
@@ -405,7 +365,6 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 			if held, err := DecodeCredential(document); err == nil {
 				row.Label = held.Label
 				row.Grants, row.Colleague = held.Grants, held.Colleague
-				row.Issuer = held.Issuer
 			}
 			out = append(out, row)
 		}

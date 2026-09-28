@@ -164,9 +164,9 @@ func TestTheEnginesKeysUnderAPrefixNeedNoKeyring(t *testing.T) {
 	s, fleet := fleetStore(t, ring(t, "k1"))
 	estate := s.Estate()
 	minted := map[string]time.Time{
-		"iam/person/b/dek":       clock.Add(time.Minute),
-		"iam/person/a/dek":       clock,
-		"iam/session/l1/refresh": clock,
+		"iam/person/b/dek":    clock.Add(time.Minute),
+		"iam/person/a/dek":    clock,
+		"iam/blind-index-key": clock,
 	}
 	for name, at := range minted {
 		if err := estate.Set(t.Context(), name, "value-"+name, nodeA, "iam",
@@ -212,11 +212,10 @@ func TestTheEnginesKeysUnderAPrefixNeedNoKeyring(t *testing.T) {
 
 // THE OPERATOR'S VIEW DOES NOT REACH THE ENGINE'S KEYS, by any route.
 //
-// A person's key and a session's refresh token used to be ordinary operator
-// secrets: listed, revealable — so a copy taken before a removal defeated the
-// shred the removal is — deletable, so a DELETE shredded somebody with no
-// removal on record, and decrypted into every node's ${VAR} snapshot on every
-// apply. Each of those routes is closed here, and the one gesture that crosses
+// A person's key used to be an ordinary operator secret: listed, revealable —
+// so a copy taken before a removal defeated the shred the removal is —
+// deletable, so a DELETE shredded somebody with no removal on record, and
+// decrypted into every node's ${VAR} snapshot on every apply. Each of those routes is closed here, and the one gesture that crosses
 // — a rekey, because the keyring is one keyring — moves them and counts them.
 //
 // FOR EVERY KIND OF KEY the owner keeps: a person's data key and the

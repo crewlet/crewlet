@@ -17,23 +17,20 @@ import (
 // seat or a unit, which is stored under a `CHART_<KIND>_<ID>_<FIELD>` name and
 // referenced from the row, because it is a value the operator typed. And the
 // ENGINE's key material, all of it the identity directory's: a person's data
-// key, whose deletion is what removing them does; an OIDC session's refresh
-// token, a credential at somebody else's identity provider; and the
-// blind-index key the directory matches an address under. Those live in the
-// same store because it is the one place a delete reaches every node at once
-// and nothing on the request path reads it back.
+// key, whose deletion is what removing them does, and the blind-index key the
+// directory matches an address under. Those live in the same store because it
+// is the one place a delete reaches every node at once and nothing on the
+// request path reads it back.
 //
 // # Why the two must not meet
 //
 // They used to share the environment-variable grammar, which made the engine's
-// keys ordinary operator secrets. `/secrets` listed every person's key and every
-// signed-in session's refresh token; a reveal handed out a person's live token
-// at their identity provider, and a copy taken before a removal defeated the
-// shred the removal is; a PUT or a DELETE shredded somebody with no removal on
-// record, or replaced a blind-index key and orphaned every address in the
-// directory; and every apply decrypted all of it into each node's `${VAR}`
-// resolver, where `${IAM_SESSION_…_REFRESH}` in an `mcp_env` handed somebody
-// else's credential to a child process.
+// keys ordinary operator secrets. `/secrets` listed every person's key; a
+// reveal was a copy taken before a removal, which defeated the shred the
+// removal is; a PUT or a DELETE shredded somebody with no removal on record,
+// or replaced a blind-index key and orphaned every address in the directory;
+// and every apply decrypted all of it into each node's `${VAR}` resolver,
+// where a reference in an `mcp_env` handed a person's key to a child process.
 //
 // # A different SHAPE, so no reference grammar can reach it
 //
@@ -130,10 +127,9 @@ func CheckEstateName(name string) error {
 //
 // IT EXISTS FOR THE ROTATION. A rekey re-seals these rows with everything else,
 // and the operator retiring the old key needs to know that none is still
-// sealed under it — dropping that key would make every person's name, every
-// refresh token and the blind-index key unreadable at once. A count per key
-// answers that without putting a person's id or a session's lineage on an
-// operator's screen.
+// sealed under it — dropping that key would make every person's name and the
+// blind-index key unreadable at once. A count per key answers that without
+// putting a person's id on an operator's screen.
 type EngineKeys struct {
 	Total int            `json:"total"`
 	ByKey map[string]int `json:"by_key,omitempty"`

@@ -2,11 +2,8 @@ package iamdomain_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -205,139 +202,6 @@ func TestOneResolveAnswersTheSessionAndThePersonTogether(t *testing.T) {
 	if seen.Generation != 0 {
 		t.Errorf("generation = %d on a fleet that has never invalidated",
 			seen.Generation)
-	}
-}
-
-// A PROVIDER'S SUBJECT RESOLVES THROUGH A LIVE LINK, AND NEVER THROUGH THE
-// ADDRESS COLUMN.
-//
-// The callback used to look the subject's blind up as an ADDRESS blind. The two
-// are different classes inside one MAC by construction, so that matched nobody
-// and every provider sign-in was refused, while the blinder, the reader and the
-// callback each passed their own suite. And the subject is the WHOLE of what a
-// provider sign-in proves, so a withdrawn link must resolve nobody, a subject a
-// person was moved OFF must resolve nobody, and a subject two people hold must
-// resolve neither of them. Resolving either one would sign somebody in as
-// somebody else with nothing further checked.
-func TestAProviderSubjectResolvesThroughALiveLinkOnly(t *testing.T) {
-	t.Parallel()
-	rig := newWriteRig(t)
-	reader := rig.reader(t)
-	blinder, err := iamdomain.NewBlinder(testBlindKey)
-	if err != nil {
-		t.Fatalf("blinder: %v", err)
-	}
-	subject := func(sub string) string {
-		t.Helper()
-		blind, err := blinder.Subject("https://idp.example.com", sub)
-		if err != nil {
-			t.Fatalf("blind a subject: %v", err)
-		}
-		return blind
-	}
-	now := brokerAt.Add(time.Hour)
-	enrol := func(login string) string {
-		t.Helper()
-		id := uuid.New().String()
-		if err := rig.enrol(iamdomain.Enrolment{
-			PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
-			Name: login, Email: login + "@example.com", Login: login,
-			OpID: "enrol-" + login, Reason: "a provider link",
-		}); err != nil {
-			t.Fatalf("enrol %s: %v", login, err)
-		}
-		return id
-	}
-	link := func(person, sub, replacing string) {
-		t.Helper()
-		if err := rig.during(func() error {
-			_, err := rig.writer.Link(t.Context(), iamdomain.LinkChange{
-				PersonID: person, Replacing: replacing,
-				Link: iamdomain.Link{Issuer: "https://idp.example.com",
-					Blind: subject(sub)},
-				OpID: "link-" + person + "-" + sub, Reason: "pinned",
-			})
-			return err
-		}); err != nil {
-			t.Fatalf("link %s to %s: %v", person, sub, err)
-		}
-	}
-
-	linked := enrol("ada.linked")
-	link(linked, "ada", "")
-	withdrawn := enrol("rex.withdrawn")
-	link(withdrawn, "rex", "")
-	if err := rig.during(func() error {
-		_, err := rig.writer.Unlink(t.Context(), withdrawn,
-			iamdomain.Link{Issuer: "https://idp.example.com",
-				Blind: subject("rex")}, "unlink-rex", "left")
-		return err
-	}); err != nil {
-		t.Fatalf("unlink: %v", err)
-	}
-	moved := enrol("mo.moved")
-	link(moved, "mo-old", "")
-	link(moved, "mo-new", subject("mo-old"))
-	first := enrol("dan.first")
-	link(first, "dan", "")
-	second := enrol("dan.second")
-	rig.drain()
-	// A RESTORE is the only thing that puts one subject on two people: the
-	// rows it copies back never passed through the broker, so the second
-	// holder is written straight into the estate rather than published.
-	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO iam_credentials
-				(id, person_id, method, verifier, subject_blind, expires_at,
-				 revoked_at, bucket, created_at, version, document)
-			VALUES (?, ?, 'oidc', x'', ?, 0, 0, 0, 0, 1, x'')`,
-			uuid.New().String(), second, subject("dan"))
-		return err
-	}); err != nil {
-		t.Fatalf("restore a duplicate link: %v", err)
-	}
-
-	// THE CONTROL: the address column never matches a subject, so the
-	// lookup that shipped refused a person this estate does link.
-	if held, err := reader.PersonByEmailBlind(t.Context(), subject("ada")); err != nil ||
-		held.ID != "" {
-		t.Fatalf("the address column matched a subject (%q, %v): the two "+
-			"blinds are separate classes and must never meet", held.ID, err)
-	}
-
-	for name, want := range map[string]struct {
-		sub, id, login string
-	}{
-		"a linked subject":       {"ada", linked, "ada.linked"},
-		"the subject moved TO":   {"mo-new", moved, "mo.moved"},
-		"a withdrawn link":       {"rex", "", ""},
-		"the subject moved OFF":  {"mo-old", "", ""},
-		"a subject nobody links": {"nobody", "", ""},
-	} {
-		held, err := reader.PersonBySubjectBlind(t.Context(), subject(want.sub), now)
-		if err != nil {
-			t.Errorf("%s: %v, want no error", name, err)
-		}
-		if held.ID != want.id || held.Login != want.login {
-			t.Errorf("%s resolved to %q (%q), want %q — a subject resolving "+
-				"to anybody but its one live holder signs somebody in as "+
-				"somebody else", name, held.ID, held.Login, want.id)
-		}
-	}
-
-	held, err := reader.PersonBySubjectBlind(t.Context(), subject("dan"), now)
-	if !errors.Is(err, iamdomain.ErrSubjectAmbiguous) {
-		t.Fatalf("a subject two people hold answered %v, want "+
-			"ErrSubjectAmbiguous", err)
-	}
-	if held.ID != "" {
-		t.Errorf("an ambiguous subject resolved to %q", held.ID)
-	}
-	for _, id := range []string{first, second} {
-		if !strings.Contains(err.Error(), id) {
-			t.Errorf("the refusal does not name holder %s, so an operator "+
-				"cannot find the link to remove: %v", id, err)
-		}
 	}
 }
 

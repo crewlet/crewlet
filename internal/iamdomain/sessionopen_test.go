@@ -1,7 +1,6 @@
 package iamdomain_test
 
 import (
-	"slices"
 	"testing"
 	"time"
 
@@ -190,19 +189,16 @@ func openSession(t *testing.T, rig *writeRig, person string) (*session.Signer, s
 	return signer, cookie
 }
 
-// A SESSION'S PROOF AND ITS CARRIED GRANTS ARE READ BACK AS ITS OWN FACTS.
+// A SESSION'S PROOF IS READ BACK AS ITS OWN FACT.
 //
 // A step-up surface asks how recently the holder proved who they are, and the
 // only honest answer is the instant the session was opened on a proof — every
 // node reading it off the replicated row rather than off the person, since
 // proof on one device says nothing about another. Nothing recorded it, so
 // the guard composed every session's deadline from zero and no step-up could
-// ever be satisfied. The identity provider's group grants are the same kind of
-// fact: true of the sign-in that presented them and of no other, so they are
-// read off the session's row and never the person's. A session opened on NO
-// proof reads back as none, never as a stale-but-set instant, and carries
-// nothing.
-func TestASessionsProofAndCarriedGrantsAreReadBackAsItsOwnFacts(t *testing.T) {
+// ever be satisfied. A session opened on NO proof reads back as none, never as
+// a stale-but-set instant.
+func TestASessionsProofIsReadBackAsItsOwnFact(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const person = "018f3a9c-0000-7000-8000-0000000008a2"
@@ -216,19 +212,16 @@ func TestASessionsProofAndCarriedGrantsAreReadBackAsItsOwnFacts(t *testing.T) {
 	proved := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	reader := rig.reader(t)
 	for _, tc := range []struct {
-		name    string
-		proved  time.Time
-		carried []iam.Grant
+		name   string
+		proved time.Time
 	}{
-		{"a provider's sign-in", proved,
-			[]iam.Grant{iam.GrantWorkWrite, iam.GrantStateRead}},
-		{"a token's exchange", time.Time{}, nil},
+		{"a password sign-in", proved},
+		{"a token's exchange", time.Time{}},
 	} {
 		lineage := uuid.Must(uuid.NewV7()).String()
 		if err := rig.draining(func() error {
 			_, err := rig.writer.OpenSession(t.Context(), iamdomain.SessionStart{
 				Lineage: lineage, Person: person, ProvedAt: tc.proved,
-				GroupGrants:       tc.carried,
 				AbsoluteExpiresAt: time.Now().Add(time.Hour),
 				OpID:              "session:" + lineage,
 			})
@@ -240,15 +233,9 @@ func TestASessionsProofAndCarriedGrantsAreReadBackAsItsOwnFacts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: resolve: %v", tc.name, err)
 		}
-		if !got.Session.Found || !got.Session.ProvedAt.Equal(tc.proved) ||
-			!slices.Equal(got.Session.GroupGrants, tc.carried) {
-			t.Errorf("%s: the session reads back as %+v, want found, proved "+
-				"at %s and carrying %v", tc.name, got.Session, tc.proved, tc.carried)
-		}
-		if len(got.Person.Grants) != 0 {
-			t.Errorf("%s: the person reads back holding %v — a session's "+
-				"carried grants must never land on the person", tc.name,
-				got.Person.Grants)
+		if !got.Session.Found || !got.Session.ProvedAt.Equal(tc.proved) {
+			t.Errorf("%s: the session reads back as %+v, want found and "+
+				"proved at %s", tc.name, got.Session, tc.proved)
 		}
 	}
 }

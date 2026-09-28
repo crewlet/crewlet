@@ -21,7 +21,6 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		estate   bool
 	}{
 		{"iam/person/018f3a9c-0000-7000-8000-000000000001/dek", true, true},
-		{"iam/session/lin-1/refresh", true, true},
 		{"iam/blind-index-key", true, true},
 		// RESERVED AND STILL NOT WRITABLE: an owner with a malformed tail.
 		{"iam/person//dek", true, false},

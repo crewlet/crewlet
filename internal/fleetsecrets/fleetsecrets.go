@@ -29,16 +29,15 @@
 //
 // # Two views over one bucket: the operator's, and the engine's own
 //
-// The bucket also holds the ENGINE's key material — a person's data key, an
-// OIDC session's refresh token and the identity estate's blind-index key, all
-// under `iam/` — under path-shaped names no `${VAR}` can reach
-// ([secrets.Reserved]). [Store] is the OPERATOR's view: it neither
-// lists, snapshots, reads, writes nor deletes a reserved row, and says so by
-// name ([secrets.ErrReservedName]). [Estate] is
-// the engine's: it addresses reserved rows and nothing else. The one gesture
-// that crosses is a REKEY, which re-seals every row under the active key
-// because the keyring is one keyring — and reports the engine's rows as a count
-// rather than by name ([Rekeyed]).
+// The bucket also holds the ENGINE's key material — a person's data key and
+// the identity estate's blind-index key, both under `iam/` — under path-shaped
+// names no `${VAR}` can reach ([secrets.Reserved]). [Store] is the OPERATOR's
+// view: it neither lists, snapshots, reads, writes nor deletes a reserved row,
+// and says so by name ([secrets.ErrReservedName]). [Estate] is the engine's:
+// it addresses reserved rows and nothing else. The one gesture that crosses is
+// a REKEY, which re-seals every row under the active key because the keyring
+// is one keyring — and reports the engine's rows as a count rather than by
+// name ([Rekeyed]).
 //
 // # A plain put is right for a credential and wrong for a key
 //
@@ -196,9 +195,8 @@ func (s *Store) get(ctx context.Context, name string) (string, error) {
 // than putting the fleet's store on the path of every config read.
 //
 // THE ENGINE'S ROWS ARE NOT OPENED, and that is the other half of the reserved
-// namespace: no reference can name one, so decrypting every person's key and
-// every session's refresh token into each node's resolver on every apply was
-// all exposure and no use.
+// namespace: no reference can name one, so decrypting every person's key into
+// each node's resolver on every apply was all exposure and no use.
 //
 // It FAILS CLOSED on the first row it cannot open, exactly as the local store
 // does. A partial snapshot is the worst outcome available: the names that are
@@ -343,8 +341,8 @@ type Rekeyed struct {
 
 // Rekey re-seals every row this node can open under the active key — the
 // operator's AND the engine's, because the keyring is one keyring: an engine
-// row left under a retired key is every person's name, every refresh token and
-// the blind-index key unreadable the moment that key is dropped.
+// row left under a retired key is every person's name and the blind-index key
+// unreadable the moment that key is dropped.
 //
 // A row already under the active key is left alone, so a second run reports
 // nothing and costs one read — which is what makes this safe to put in a

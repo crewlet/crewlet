@@ -650,15 +650,12 @@ func TestAnEmptySealedValueNeedsNoKeyAtAll(t *testing.T) {
 	}
 }
 
-// THE TWO SECRET NAMES ARE ADDRESSED BY WHAT NOTHING RENAMES.
+// A PERSON'S KEY IS ADDRESSED BY WHAT NOTHING RENAMES.
 func TestTheSecretNamesAreKeyedOnWhatNothingRenames(t *testing.T) {
 	t.Parallel()
 	if got, want := iamdomain.PersonDEKName(who),
 		"iam/person/018f3a9c-0000-7000-8000-000000000001/dek"; got != want {
 		t.Errorf("a person's key lives at %q, want %q", got, want)
-	}
-	if got := iamdomain.SessionRefreshName("lin1"); got != "iam/session/lin1/refresh" {
-		t.Errorf("a session's refresh material lives at %q", got)
 	}
 	// TWO PEOPLE NEVER SHARE A KEY: the id is the name's one segment,
 	// verbatim, so two distinct ids stay two distinct names.
@@ -666,19 +663,13 @@ func TestTheSecretNamesAreKeyedOnWhatNothingRenames(t *testing.T) {
 	if iamdomain.PersonDEKName(who) == iamdomain.PersonDEKName(other) {
 		t.Error("two people share one key name — removing either destroys both")
 	}
-	// PER LINEAGE, not per person: ending one session must not end the
-	// others, so two lineages must never share a name.
-	if iamdomain.SessionRefreshName("a") == iamdomain.SessionRefreshName("b") {
-		t.Error("two session lineages share one secret name — signing out of " +
-			"one would end the other")
-	}
 }
 
 // EVERY SECRET THIS ESTATE STORES IS IN THE ENGINE'S OWN NAMESPACE.
 //
 // Not the operator's: a name in the environment-variable grammar is one
 // `/secrets` lists and reveals, a DELETE removes and a `${VAR}` resolves, and
-// all three used to reach a person's key and a session's refresh token. The
+// all three used to reach a person's key. The
 // engine's namespace is one no operator surface addresses and no reference can
 // name — and it is a grammar the store refuses outside of, so a name here that
 // strayed from it would be a key nothing could mint.
@@ -687,7 +678,6 @@ func TestEverySecretNameIsInTheEnginesOwnNamespace(t *testing.T) {
 	id := uuid.Must(uuid.NewV7()).String()
 	for _, name := range []string{
 		iamdomain.PersonDEKName(id),
-		iamdomain.SessionRefreshName(id),
 		iamdomain.BlindKeyName,
 	} {
 		if err := secrets.CheckEstateName(name); err != nil {

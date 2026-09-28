@@ -70,16 +70,13 @@ import (
 
 // Keys is the fleet secret store, as this domain uses it.
 //
-// CONSUMER-DEFINED and three methods wide, because that is what this package
-// calls for a value it may simply replace — a session's refresh grant, which a
-// provider's rotation overwrites: [fleetsecrets.Estate] is the concrete type
-// and it does more. A seam this narrow is also what lets the suite exercise a
+// CONSUMER-DEFINED and two methods wide, because that is what this package
+// calls on a value it reads or destroys outright: [fleetsecrets.Estate] is the
+// concrete type and it does more. A seam this narrow is also what lets the suite exercise a
 // shredded key, a store that cannot be reached and a key that is not there,
 // none of which a real coordination backend makes easy to arrange.
 type Keys interface {
 	Get(ctx context.Context, name string) (string, error)
-	Set(ctx context.Context, name, value string, by secrets.Author,
-		source string, now time.Time) error
 	Unset(ctx context.Context, name string) (bool, error)
 }
 
@@ -131,28 +128,11 @@ func PersonDEKName(personID string) string {
 	return personKeyPrefix + personID + personKeySuffix
 }
 
-// SessionRefreshName is where one session lineage's refresh material lives.
-//
-// PER LINEAGE rather than per person, because ending one session must not end
-// the others: a delete here is what makes a single sign-out irreversible for
-// that session and leaves every other one alone. The person's own revocation
-// epoch is the other lever, and it is the one that ends all of them at once.
-//
-// `iam/session/<lineage>/refresh`, in the engine's own namespace for
-// [PersonDEKName]'s reason — and for a sharper one: this value is a live
-// credential at somebody else's identity provider.
-func SessionRefreshName(lineage string) string {
-	return sessionRefreshPrefix + lineage + sessionRefreshSuffix
-}
-
-// The fixed halves of the two per-object names, which is also what a duty
-// lists the store by: the key duty finds every person key by its prefix, and
-// the deactivation probe every session's refresh material by its own.
+// The fixed halves of a person key's name, which is also what the key duty
+// lists the store by: it finds every person key by its prefix.
 const (
-	personKeyPrefix      = "iam/person/"
-	personKeySuffix      = "/dek"
-	sessionRefreshPrefix = "iam/session/"
-	sessionRefreshSuffix = "/refresh"
+	personKeyPrefix = "iam/person/"
+	personKeySuffix = "/dek"
 )
 
 // idOfPersonKey reads the id back out of a person key's name, or reports that

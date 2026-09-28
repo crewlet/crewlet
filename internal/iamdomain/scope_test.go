@@ -48,8 +48,6 @@ func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 			iamdomain.PeopleScope("p1")},
 		iamdomain.KindSeat: {iamdomain.SeatSubject("seat1"),
 			iamdomain.PeopleScope("p1")},
-		iamdomain.KindLink: {iamdomain.LinkSubject("blind2"),
-			iamdomain.PeopleScope("p1")},
 		iamdomain.KindSession: {iamdomain.SessionSubject("lin1"),
 			iamdomain.PeopleScope("p1")},
 		iamdomain.KindInvalidation: {iamdomain.InvalidationSubject(),

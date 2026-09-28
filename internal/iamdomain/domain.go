@@ -245,7 +245,8 @@ func (Domain) OpsTable() string { return "iam_ops" }
 // WHAT THE STALL MUST GATE INSTEAD IS THE REQUEST PATH, and it does, one layer
 // up: a node that has not applied a revocation answers a session bearer with
 // 503 — never 401, because a browser reads 401 as "sign in again" and one
-// stalled applier would stampede the identity provider. That refusal is
+// stalled applier would send everybody back to the sign-in form at once. That
+// refusal is
 // per-request, it is where the staleness actually matters, and it is the one
 // place that can tell "this node is behind" from "this person is not allowed".
 //

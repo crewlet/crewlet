@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
@@ -321,7 +320,6 @@ func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
 	out.Ended = endedAt != 0
 	out.Epoch = uint64(epoch)
 	out.ProvedAt = doc.ProvedAt
-	out.GroupGrants = doc.GroupGrants
 	out.EnrolmentOnly = doc.EnrolmentOnly
 	return nil
 }
@@ -604,78 +602,6 @@ func (r *Reader) PersonByEmailBlind(ctx context.Context, blind string) (Sighting
 	return r.sighting(ctx, "email_blind", blind)
 }
 
-// ErrSubjectAmbiguous is an identity provider's subject that more than one
-// person holds a live link to.
-//
-// NEVER RESOLVED TO EITHER OF THEM, because the subject is the whole of what a
-// provider sign-in proves: a password sign-in against a duplicated login still
-// has to verify THAT person's digest, while a subject resolved to the wrong
-// holder is somebody signed in as somebody else with nothing further checked.
-// Nothing the broker arbitrates produces one; a restore can, and the sign-in
-// stays refused until an operator unlinks one of the holders — the claim
-// report names both.
-var ErrSubjectAmbiguous = errors.New("iamdomain: more than one person holds " +
-	"a live link to this identity provider subject")
-
-// PersonBySubjectBlind resolves an identity provider's blinded subject to the
-// person holding a LIVE link to it, on [Reader.PersonByLogin]'s three answers.
-//
-// THE CREDENTIAL AND NOT THE PERSON ROW, because a subject belongs to a link
-// rather than to a person: the person row's blind is their ADDRESS, and a
-// subject looked up there matches nobody — which is how every provider sign-in
-// was refused while each piece passed its own tests. A withdrawn link — an
-// unlink, a move to another subject, a removal — resolves nobody, for
-// [CredentialRow.Revoked]'s rule: the callback checks the person's stage and
-// nothing about the link, so this read is the only place a revoked link is
-// refused. A link its claim pinned to a RESERVATION answers that reservation
-// ([Sighting.Reserved]), which acts as nobody: an enrolment through the
-// provider that stopped between its claims and its person.
-func (r *Reader) PersonBySubjectBlind(ctx context.Context, blind string,
-	now time.Time) (Sighting, error) {
-
-	if blind == "" {
-		return Sighting{}, nil
-	}
-	var out Sighting
-	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT DISTINCT person_id FROM iam_credentials
-			 WHERE subject_blind = ? AND method = ? AND revoked_at = 0
-			   AND (expires_at = 0 OR expires_at > ?)`,
-			blind, string(MethodOIDC), now.UnixMilli())
-		if err != nil {
-			return fmt.Errorf("iamdomain: resolve a provider subject: %w", err)
-		}
-		var holders []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return fmt.Errorf("iamdomain: read a provider subject: %w", err)
-			}
-			holders = append(holders, id)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iamdomain: read a provider subject: %w", err)
-		}
-		switch len(holders) {
-		case 0:
-			out = Sighting{}
-			return nil
-		case 1:
-			return sightingIn(ctx, tx, "id", holders[0], &out)
-		default:
-			return fmt.Errorf("%w: %s", ErrSubjectAmbiguous,
-				strings.Join(holders, ", "))
-		}
-	})
-	if err != nil {
-		return Sighting{}, err
-	}
-	return out, nil
-}
-
 // sighting is the one lookup every spelling shares.
 func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, error) {
 	if token == "" {
@@ -823,8 +749,7 @@ func anybodyEnrolled(ctx context.Context, tx *sql.Tx, besides string) (bool, err
 }
 
 // HoldsBlinds reports whether any row this node holds carries a value derived
-// from the company's blind-index key — a person's address, an invitation's, or
-// a provider link's subject.
+// from the company's blind-index key — a person's address, or an invitation's.
 //
 // WHAT IT IS FOR is the one decision a missing key forces: mint one, or refuse.
 // On an estate that never held a blind a fresh key is simply the first one; on
@@ -853,8 +778,7 @@ func (r *Reader) HoldsBlinds(ctx context.Context, end uint64) (bool, error) {
 		var count int
 		if err := tx.QueryRowContext(ctx, `
 			SELECT EXISTS(SELECT 1 FROM iam_people WHERE email_blind != '')
-			    OR EXISTS(SELECT 1 FROM iam_invites)
-			    OR EXISTS(SELECT 1 FROM iam_credentials WHERE subject_blind != '')`).
+			    OR EXISTS(SELECT 1 FROM iam_invites)`).
 			Scan(&count); err != nil {
 			return fmt.Errorf("iamdomain: look for a blinded row: %w", err)
 		}
@@ -1070,11 +994,10 @@ func fromMillis(ms int64) time.Time {
 // Because ending a session is a claim that it was live until now. Asked only
 // for the owner, a named sign-out closed and announced a session a record had
 // already ended — revoked, invalidated, past its absolute deadline — naming
-// the caller as the one who ended it. Live is [Reader.SessionStates]' own
-// reading of one row (not ended, not past its absolute deadline, not opened
-// before the company's last invalidation, at its person's current revocation
-// epoch), so a named sign-out and the deactivation probe agree about which
-// sessions are over. An absent row is never live.
+// the caller as the one who ended it. Live is one reading of the row: not
+// ended, not past its absolute deadline, not opened before the company's last
+// invalidation, and at its person's current revocation epoch. An absent row is
+// never live.
 func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 	now time.Time) (string, bool, error) {
 
@@ -1083,35 +1006,59 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 	}
 	var (
 		owner string
-		state SessionState
+		live  bool
 	)
-	// THE CHECKPOINT IS ONLY EVER READ FOR AN ABSENT ROW, which this never
-	// hands on — an absent row is never live — so the applier's own is as
-	// good as the snapshot's here.
-	settled := r.committed()
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx,
-			`SELECT person_id FROM iam_sessions WHERE lineage = ?`, lineage).
-			Scan(&owner)
-		if errors.Is(err, sql.ErrNoRows) {
+		var epoch, start, expires, ended int64
+		err := tx.QueryRowContext(ctx, `
+			SELECT person_id, epoch, start_position, absolute_expires_at,
+			       ended_at
+			FROM iam_sessions WHERE lineage = ?`, lineage).
+			Scan(&owner, &epoch, &start, &expires, &ended)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			owner = ""
 			return nil
-		}
-		if err != nil {
+		case err != nil:
 			return fmt.Errorf("iamdomain: read a session's owner: %w", err)
 		}
 		invalidated, err := readInvalidated(ctx, tx)
 		if err != nil {
 			return err
 		}
-		state, err = sessionState(ctx, tx, RefreshGrant{Lineage: lineage},
-			settled, invalidated, now)
-		return err
+		switch {
+		case ended != 0,
+			expires > 0 && expires <= now.UnixMilli(),
+			// A SESSION OPENED BEFORE THE COMPANY'S LAST INVALIDATION
+			// carries the generation that invalidation ended.
+			invalidated > 0 && uint64(start) < invalidated:
+			return nil
+		}
+		current, err := epochOf(ctx, tx, owner)
+		if err != nil {
+			return err
+		}
+		live = uint64(epoch) >= current
+		return nil
 	})
 	if err != nil {
 		return "", false, err
 	}
-	return owner, owner != "" && state == SessionLive, nil
+	return owner, live, nil
+}
+
+// readInvalidated is the company's session generation — the position of its
+// last invalidation, zero for a company that never had one — read inside the
+// caller's snapshot.
+func readInvalidated(ctx context.Context, tx *sql.Tx) (uint64, error) {
+	var invalidated int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT version FROM iam_session_generation WHERE singleton = 0`).
+		Scan(&invalidated)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("iamdomain: read the session generation: %w", err)
+	}
+	return uint64(invalidated), nil
 }
 
 // SeatHeld reports whether a seat — named by its IDENTITY, the handle it was

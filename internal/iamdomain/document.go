@@ -157,16 +157,6 @@ type Claim struct {
 	// high bits.
 	ChartPosition uint64 `json:"chart_position,omitempty"`
 
-	// Issuer is the identity provider a LINK claim's subject belongs to,
-	// in the clear, set on a [KindLink] claim and on nothing else.
-	//
-	// IN THE CLEAR because it is the company's own provider's address and
-	// identifies nobody, and it has to travel because the subject's blind
-	// is one-way: without it a link row could say that somebody is linked
-	// and never to which provider — and a company that changes provider
-	// could not tell its old links from its new ones.
-	Issuer string `json:"issuer,omitempty"`
-
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -247,8 +237,8 @@ type Session struct {
 	AbsoluteExpiresAt time.Time `json:"absolute_expires_at,omitzero"`
 
 	// ProvedAt is when the holder proved who they are to open this
-	// session — a password and its second factor, an identity provider's
-	// token, an invitation or the bootstrap code — which is what a
+	// session — a password and its second factor, an invitation or the
+	// bootstrap code — which is what a
 	// step-up surface asks to be recent.
 	//
 	// ON THE SESSION AND NOT THE PERSON, because proof is a fact about one
@@ -262,23 +252,6 @@ type Session struct {
 	// from a Tier A token proves no person is at the keyboard, and a
 	// stale-but-set instant would one day have made it fresh.
 	ProvedAt time.Time `json:"proved_at,omitzero"`
-
-	// GroupGrants are what the identity provider's groups conferred at the
-	// sign-in that opened this session — `api.auth.oidc.group_grants`
-	// applied to the groups claim of the ID token it presented — and empty
-	// on every other method.
-	//
-	// ON THE SESSION AND NEVER ON THE PERSON, because a person's groups
-	// are known only at a login and are true only for as long as that
-	// assertion is: written to the person's row they would outlive the
-	// provider saying them, and two sessions from two providers would
-	// overwrite each other's. So what somebody holds is (their declared
-	// grants ∪ the grants their SESSION carries) ∩ the node's ceiling,
-	// taken at decision time; a person who has not signed in through the
-	// provider carries none, and group-derived authority lapses with the
-	// session that presented it — which is the deprovisioning property the
-	// mapping exists for.
-	GroupGrants []iam.Grant `json:"group_grants,omitempty"`
 
 	// EnrolmentOnly marks a session that may do nothing but ENROL A SECOND
 	// FACTOR: opened by a password alone — a sign-in, a step-up, an
@@ -295,8 +268,7 @@ type Session struct {
 	// be restricted on one node and free on the next.
 	//
 	// ITS ZERO IS AN UNRESTRICTED SESSION, which is every session that
-	// existed before this field and every one a provider or a Tier A token
-	// opens. What stops an older build reading a restricted one as free is
+	// existed before this field and every one a Tier A token opens. What stops an older build reading a restricted one as free is
 	// the record's VERSION ([ConditionRecordVersion]), not this field: a
 	// build that cannot decode it defers the record rather than dropping
 	// the field and serving the session whole.
@@ -310,7 +282,7 @@ type Session struct {
 	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
 
 	// EndedReason is why a session stopped, on the CLOSE record: signed
-	// out, revoked, expired, or the identity provider withdrew it. "This
+	// out, revoked or expired. "This
 	// session was revoked, and why" is the sentence an investigation is
 	// looking for, and it is the one an ordinary delete would not have
 	// left behind.
@@ -326,27 +298,14 @@ type Credential struct {
 	// ID is the credential's own id, so a person may hold several.
 	ID string `json:"id"`
 
-	// Method is password, oidc or token.
+	// Method is one of [CredentialMethods].
 	Method CredentialMethod `json:"method"`
 
 	// Verifier is what a presented secret is checked AGAINST, never the
-	// secret: an argon2id digest with its parameters, a hash of a machine
-	// token, or — for an identity provider — nothing at all, because
-	// nothing is presented to this engine.
+	// secret: an argon2id digest with its parameters, or a hash of a
+	// machine token or of a recovery code — and, for a second factor, the
+	// sealed seed ([MethodTOTP] says why that one is a secret).
 	Verifier string `json:"verifier,omitempty"`
-
-	// SubjectBlind is the provider's own subject claim, blinded, for an
-	// oidc credential. It identifies a person at a third party, which is
-	// the same reason an address is blinded and the only one.
-	//
-	// AN OIDC CREDENTIAL IS A LINK, and a link is written by its CLAIM'S
-	// apply and by nothing else ([KindLink]): a person's document never
-	// carries one, and the writer refuses a document that does.
-	SubjectBlind string `json:"subject_blind,omitempty"`
-
-	// Issuer is the provider an oidc credential's subject belongs to, in
-	// the clear — see [Claim.Issuer]. Empty on every other method.
-	Issuer string `json:"issuer,omitempty"`
 
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 	RevokedAt time.Time `json:"revoked_at,omitzero"`
@@ -396,16 +355,6 @@ const (
 	// verifier.
 	MethodPassword CredentialMethod = "password"
 
-	// MethodOIDC is an identity provider's assertion. Nothing is
-	// presented to this engine, so there is no verifier at all: what is
-	// stored is which subject at which issuer this person is.
-	//
-	// IT IS A LINK, taken as a claim ([KindLink], [Writer.Link]) and never
-	// authored inside a person's document: the claim is what keeps one
-	// subject on one person, and a row the document could also write
-	// would be a second writer of the same fact.
-	MethodOIDC CredentialMethod = "oidc"
-
 	// MethodToken is a machine's bearer token, held as a hash.
 	MethodToken CredentialMethod = "token"
 
@@ -443,9 +392,9 @@ const (
 	MethodRecovery CredentialMethod = "recovery"
 )
 
-// CredentialMethods are the five.
+// CredentialMethods are the four.
 var CredentialMethods = []CredentialMethod{
-	MethodPassword, MethodOIDC, MethodToken, MethodTOTP, MethodRecovery,
+	MethodPassword, MethodToken, MethodTOTP, MethodRecovery,
 }
 
 // SecondFactorMethods are the methods that satisfy a second factor rather
