@@ -44,8 +44,27 @@ type Cluster struct {
 // publish is quorum-durable before Publish returns — which is the property
 // that makes "sync truth, async cache" true rather than aspirational.
 //
+// A [testing.TB] rather than a *testing.T, because a BENCHMARK stands up the
+// same topology: a measurement of what a fleet's broker costs is worth
+// nothing taken against a cluster built some other way than the one every
+// fleet test runs on.
+//
 // The cluster is shut down when the test ends.
-func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
+func StartCluster(t testing.TB, n int, base js.Config) *Cluster {
+	t.Helper()
+	return startCluster(t, n, base, false)
+}
+
+// startCluster is [StartCluster], optionally with a LEAF LISTENER on every
+// member — which is where a node without the `data` role joins the fleet.
+//
+// A listener per member rather than one on member 0, because that is the
+// topology [js.Config.LeafURLs] is written for: a leaf names every member and
+// NATS picks one, so a fleet whose leaves all landed on one member would be
+// measuring that member rather than the fleet. The ports are reserved WITH the
+// route ports, for [freePorts]'s reason — reserved separately, the same number
+// can be handed out twice.
+func startCluster(t testing.TB, n int, base js.Config, leafListeners bool) *Cluster {
 	t.Helper()
 	if n < 1 {
 		t.Fatalf("StartCluster(%d): a cluster needs at least one member", n)
@@ -56,15 +75,27 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 		// must name every other member, including ones not started
 		// yet, and the alternative — starting members one at a time
 		// and rewriting routes — is a NATS reload per member.
-		ports := freePorts(ctx, t, n)
+		reserve := n
+		if leafListeners {
+			reserve = 2 * n
+		}
+		ports := freePorts(ctx, t, reserve)
 		routes := make([]string, n)
-		for i, p := range ports {
+		for i, p := range ports[:n] {
 			routes[i] = routeURL(p)
 		}
 
 		c := &Cluster{}
 		for i := range n {
-			if err := c.start(ctx, t, memberConfig(base, i, n, ports[i], routes), i); err != nil {
+			cfg := memberConfig(base, i, n, ports[i], routes)
+			if leafListeners {
+				// LOOPBACK for memberConfig's reason: a listener
+				// wider than the addresses the leaves are given is
+				// reachable on a port nothing here controls.
+				cfg.LeafHost = "127.0.0.1"
+				cfg.LeafPort = ports[n+i]
+			}
+			if err := c.start(ctx, t, cfg, i); err != nil {
 				// THE PARTIAL CLUSTER GOES BACK WITH THE ERROR, so
 				// [withFreshPorts] can take it down before retrying.
 				// Discarded, the members that DID start keep their
@@ -85,6 +116,18 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 		// than a test one.
 		return c, nil
 	})
+}
+
+// LeafURLs is every member's leaf listener, in the form [js.Config.LeafURLs]
+// takes — empty on a cluster started without them.
+func (c *Cluster) LeafURLs() []string {
+	var urls []string
+	for _, cfg := range c.Configs {
+		if cfg.LeafPort != 0 {
+			urls = append(urls, fmt.Sprintf("nats-leaf://%s", hostPort(cfg.LeafPort)))
+		}
+	}
+	return urls
 }
 
 // ClusterStartAttempts is how many times a cluster is stood up before the
@@ -252,7 +295,7 @@ func listenErr(err error) error {
 // instead, the inner loop could spend the outer one's whole budget and hand
 // the outer loop's first real attempt an already-expired context — reported
 // as "no cluster came up" by a loop that had never started a member.
-func withFreshPorts(ctx context.Context, t *testing.T, what string,
+func withFreshPorts(ctx context.Context, t testing.TB, what string,
 	start func(context.Context) (*Cluster, error)) *Cluster {
 
 	t.Helper()
@@ -425,7 +468,7 @@ func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config
 
 // Client connects a queue to member i. Each engine node in a fleet talks to
 // the member embedded in its own process, which is what this models.
-func (c *Cluster) Client(t *testing.T, i int) *js.Queue {
+func (c *Cluster) Client(t testing.TB, i int) *js.Queue {
 	t.Helper()
 	q, err := c.Servers[i].Client(t.Context())
 	if err != nil {
@@ -468,7 +511,7 @@ func memberConfig(base js.Config, i, n, clusterPort int, routes []string) js.Con
 // ctx BOUNDS THIS MEMBER'S START, and is the attempt's rather than the test's:
 // see [withFreshPorts] for why a ceiling the start cannot observe bounds
 // nothing.
-func (c *Cluster) start(ctx context.Context, t *testing.T, cfg js.Config, i int) error {
+func (c *Cluster) start(ctx context.Context, t testing.TB, cfg js.Config, i int) error {
 	t.Helper()
 	cfg.StoreDir = t.TempDir()
 	// PROBED IMMEDIATELY BEFORE THE SERVER BINDS IT, because the interval
@@ -548,7 +591,7 @@ func PortFree(ctx context.Context, host string, port int) (bool, error) {
 // freePorts reserves n ports the OS is not using.
 // ctx bounds the reservation, so an attempt whose wall-clock ceiling has
 // expired does not start by asking the kernel for ports it will not use.
-func freePorts(ctx context.Context, t *testing.T, n int) []int {
+func freePorts(ctx context.Context, t testing.TB, n int) []int {
 	t.Helper()
 	// Held open together, then all released: taking and releasing one at a
 	// time can hand out the same port twice.
