@@ -222,6 +222,16 @@ type RunRecord struct {
 	// meter, so this is the only number that sees it.
 	CostUSD float64
 
+	// LaunchID names the job whose usage this is, and InputTokens and
+	// OutputTokens are what its box reported spending. Carried to the
+	// phase's event for the Tokens view, which is the one place that
+	// counted them nowhere: the budgets and the task were charged at the
+	// collect. The launch is what lets that view count a run once when this
+	// phase is published again — see types.AgentPhaseCompleted.LaunchID.
+	LaunchID     string
+	InputTokens  int
+	OutputTokens int
+
 	// DeliveredRefs are the branches and pull requests the run produced.
 	DeliveredRefs []string
 }

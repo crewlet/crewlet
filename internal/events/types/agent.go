@@ -453,6 +453,25 @@ type AgentPhaseCompleted struct {
 	SandboxID     string         `json:"sandbox_id"`
 	CostUSD       float64        `json:"cost_usd"`
 	DeliveredRefs []string       `json:"delivered_refs,omitempty"`
+	// LaunchID, RunInputTokens and RunOutputTokens are what the detached
+	// coding run this phase collected reported spending — set, like CostUSD,
+	// only on a phase whose Backend is BackendSandbox.
+	//
+	// APART FROM InputTokens and OutputTokens, which are what THIS phase's own
+	// model calls spent in this process: the run's usage is the box's, and it
+	// has already reached the budgets and the task through the post-charge a
+	// collect makes. The two were one number nowhere — the run's tokens
+	// reached no event at all, so the Tokens view left out the most expensive
+	// thing a seat does.
+	//
+	// KEYED BY THE LAUNCH, because a run is spent once while the phase that
+	// carries it can be published again: a resume that fails after its phase
+	// completed is retried, and a person's answer to a parked run carries the
+	// usage of the collect that parked it. The aggregation (internal/tokens)
+	// counts one launch's usage once, whichever of its phases it reads.
+	LaunchID        string `json:"launch_id,omitempty"`
+	RunInputTokens  int    `json:"run_input_tokens,omitempty"`
+	RunOutputTokens int    `json:"run_output_tokens,omitempty"`
 	// Failed is true when the phase died instead of finishing.
 	//
 	// A phase that raises used to publish NOTHING: the only durable record was

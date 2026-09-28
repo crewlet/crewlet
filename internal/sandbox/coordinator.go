@@ -85,17 +85,46 @@ type ResumeRequest struct {
 	// turn's telemetry names what woke it.
 	Trigger *events.Event
 
-	// CostUSD and DeliveredRefs are what the run reported, for the resumed
+	// Usage and DeliveredRefs are what the run reported, for the resumed
 	// phase's own event. The coding agents produce both and nothing carried
 	// them: the phase record's `cost_usd` and `delivered_refs` had no
 	// producer at all, so a subscription CLI's spend — which never passes
-	// through the engine's token meter — was reported nowhere.
+	// through the engine's token meter — was reported nowhere, and the run's
+	// TOKENS still reached no event once its price did: the budgets and the
+	// task counted them at the collect and the Tokens view never did.
 	//
-	// Both are zero when a PERSON's answer resumes a parked clarification:
-	// no new run finished, and claiming a cost for one would double-count
-	// the run that is still going.
-	CostUSD       float64
+	// When a PERSON's answer resumes a parked clarification, Usage is the
+	// collect that PARKED it ([PendingRun.ParkedUsage]): that collect was
+	// charged when it parked, and the answer's resume is the first phase
+	// there is to carry it. Its launch is what lets the Tokens view count
+	// it once however many times the answer is retried. DeliveredRefs stay
+	// empty there — the branch the park pushed is on the row.
+	Usage         RunUsage
 	DeliveredRefs []string
+}
+
+// RunUsage is what one collected launch reported spending in its box.
+//
+// THE ZERO VALUE IS "NOTHING TO REPORT", which is exactly what a run that
+// reports nothing (OpenCode quotes no usage) and a resume that collected no
+// run both mean — never a launch that spent nothing, since a launch with no
+// id names no job.
+type RunUsage struct {
+	// LaunchID is the job the usage is from — [PendingRun.LaunchID] at the
+	// collect.
+	LaunchID     string  `json:"launch_id,omitempty"`
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
+}
+
+// usageOf is a collected result's usage, named by the launch that produced it.
+func usageOf(run PendingRun, result Result) RunUsage {
+	return RunUsage{
+		LaunchID:    run.LaunchID,
+		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		CostUSD: result.CostUSD,
+	}
 }
 
 // Accountant post-charges a collected run's tokens.
@@ -616,16 +645,16 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
-		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
+		Usage: usageOf(run, result), DeliveredRefs: result.DeliveredRefs,
 	})
 	return err
 }
 
-// runOutcome is what a finished run reported about itself, for the resumed
-// phase's own record. Zero where no run finished — a person answering a parked
-// clarification resumes the turn without collecting anything.
+// runOutcome is what a collected run reported about itself, for the resumed
+// phase's own record: the run this completion collected, or — for a person's
+// answer — the collect that parked the run on its question.
 type runOutcome struct {
-	CostUSD       float64
+	Usage         RunUsage
 	DeliveredRefs []string
 }
 
@@ -771,6 +800,11 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
 		Question: result.Question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
+		// WHAT THIS COLLECT SPENT, kept for the answer's resume: it was
+		// charged just now, and no phase completes until the person
+		// answers, so the answer's is the first event there is to carry
+		// it to the Tokens view.
+		Usage: usageOf(run, result),
 	}); err != nil {
 		// THE WAIT DID NOT LAND, so this run is not parked and this turn
 		// is not waiting for anybody: the row is still in the claim that
@@ -936,10 +970,13 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	// it, and re-entering the Execute loop is work like any other. One move,
 	// so no delivery sees the seat between the two halves.
 	c.moveRun(claimed.AgentHandle, StatusAwaiting, StatusResumed)
-	// NO OUTCOME: this resume collects no run. The box is still parked and
-	// its cost is charged where it is collected, so reporting one here would
-	// bill the same run twice.
-	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
+	// THE PARKED COLLECT'S USAGE, and nothing new: this resume collects no
+	// run — the box is still parked — but the collect that parked it was
+	// charged at the park and has reached no phase event yet, so this one
+	// carries it, under that collect's launch so a retried answer counts it
+	// once. No budget is charged here; that happened at the park.
+	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger,
+		runOutcome{Usage: claimed.ParkedUsage})
 	if disposition == AnswerDeferred {
 		// The claim went back and the run is awaiting this same answer
 		// again — so the delivery has to come back, up to the budget
@@ -1007,7 +1044,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// path below like every other failed resume.
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
-		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
+		Usage: outcome.Usage, DeliveredRefs: outcome.DeliveredRefs,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand

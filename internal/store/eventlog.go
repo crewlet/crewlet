@@ -1054,17 +1054,21 @@ const (
 	// would only reintroduce an undercount that looks like an underspend.
 )
 
-// The price is the one value here still read out of the PAYLOAD, and
-// deliberately: it is set by a single backend on a minority of phases, so
-// promoting it would be a migration and a column that is NULL on almost every
-// row of the table. The extraction is free of a scan cost the filter does not
-// already pay — the event_type and event_time predicates are what choose the
-// rows, and json_extract runs only on the ones they keep.
+// The price and the detached run's usage — its launch and the tokens its box
+// reported, see tokens.Record — are the values here still read out of the
+// PAYLOAD, and deliberately: they are set by a single backend on a minority of
+// phases, so promoting them would be a migration and columns that are NULL on
+// almost every row of the table. The extraction is free of a scan cost the
+// filter does not already pay — the event_type and event_time predicates are
+// what choose the rows, and json_extract runs only on the ones they keep.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
-       COALESCE(json_extract(payload, '$.cost_usd'), 0)
+       COALESCE(json_extract(payload, '$.cost_usd'), 0),
+       COALESCE(json_extract(payload, '$.launch_id'), ''),
+       COALESCE(json_extract(payload, '$.run_input_tokens'), 0),
+       COALESCE(json_extract(payload, '$.run_output_tokens'), 0)
 FROM crewlet_events
 WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
@@ -1264,7 +1268,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
-			&rec.CostUSD,
+			&rec.CostUSD, &rec.LaunchID, &rec.RunInputTokens, &rec.RunOutputTokens,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}

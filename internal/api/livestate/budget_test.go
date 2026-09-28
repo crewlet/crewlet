@@ -150,6 +150,39 @@ func phaseSpend(eventID, ts string, total int) *livestate.Envelope {
 	}, id(eventID), at(ts))
 }
 
+// A COLLECTED CODING RUN'S TOKENS REACH THE LIVE ROLLUP, ONCE.
+//
+// The phase event of a resume that collected a detached run carries the run's
+// launch and what its box spent, beside the phase's own tokens. Held by this
+// projection and folded by the one aggregation, the run is in the totals — and
+// a resume retried after its phase completed, which publishes the phase again
+// under a new event id with the same run on it, adds the phase's own tokens
+// again (they were spent again) and the run's not at all.
+func TestACollectedRunsTokensReachTheLiveRollupOnce(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	resumed := func(eventID, ts string) *livestate.Envelope {
+		return env("agent_phase_completed", map[string]any{
+			"role": "SWE", "agent_id": "a-1", "phase": "execute",
+			"model": "claude-sonnet-5", "turn_id": "tn-1",
+			"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+			"backend": "sandbox", "coding_agent": "claude-code", "cost_usd": 0.5,
+			"launch_id": "launch-1", "run_input_tokens": 5000, "run_output_tokens": 700,
+		}, id(eventID), at(ts))
+	}
+	s.Apply(resumed("first", "2026-06-14T12:00:00Z"))
+	s.Apply(resumed("retried", "2026-06-14T12:01:00Z"))
+
+	got := tokens.Aggregate(s.SpendRecords(), tokens.Options{})
+	if want := 2*120 + 5700; got.Totals.TotalTokens != want {
+		t.Errorf("total = %d, want %d: the run's tokens are missing from the live rollup, "+
+			"or counted once per phase that carried them", got.Totals.TotalTokens, want)
+	}
+	if got.Totals.CostUSD != 0.5 {
+		t.Errorf("price = %v, want the run's $0.50 once", got.Totals.CostUSD)
+	}
+}
+
 func TestRecordsInsideTheWindowAreKept(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()

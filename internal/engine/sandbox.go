@@ -334,7 +334,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Answer:        req.Answer,
 		Success:       req.Success,
 		Trigger:       req.Trigger,
-		CostUSD:       req.CostUSD,
+		Usage:         req.Usage,
 		DeliveredRefs: req.DeliveredRefs,
 	})
 }
@@ -403,10 +403,11 @@ type resumeInput struct {
 	Success bool
 	Trigger *events.Event
 
-	// CostUSD and DeliveredRefs are what the collected run reported, for the
-	// resumed phase's own event. Zero when a person's answer resumed a
-	// parked clarification: nothing was collected.
-	CostUSD       float64
+	// Usage and DeliveredRefs are what the collected run reported, for the
+	// resumed phase's own event — see [sandbox.ResumeRequest.Usage], which
+	// is also where a person's answer gets the usage of the collect that
+	// parked its run.
+	Usage         sandbox.RunUsage
 	DeliveredRefs []string
 }
 
@@ -578,7 +579,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 				Run: runner.RunRecord{
 					CodingAgent:   in.Run.CodingAgent,
 					SandboxID:     in.Run.SandboxID,
-					CostUSD:       in.CostUSD,
+					CostUSD:       in.Usage.CostUSD,
+					LaunchID:      in.Usage.LaunchID,
+					InputTokens:   in.Usage.InputTokens,
+					OutputTokens:  in.Usage.OutputTokens,
 					DeliveredRefs: in.DeliveredRefs,
 				},
 				// THE RUN'S OWN TOOL CALLS, off its durable row. An

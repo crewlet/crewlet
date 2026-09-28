@@ -74,6 +74,69 @@ type Record struct {
 	// those two into one number is how a dashboard comes to render "$0.00"
 	// under a company that has never had a price reported at all.
 	CostUSD float64 `json:"cost_usd"`
+
+	// LaunchID names the detached coding run this phase collected, and
+	// RunInputTokens and RunOutputTokens are what that run reported
+	// spending in its box — beside the phase's own InputTokens and
+	// OutputTokens, which are what the engine's model calls spent here. A
+	// bucket counts both: a run's tokens are real spend by the seat, and
+	// the budgets and the task already count them.
+	//
+	// ONE LAUNCH IS COUNTED ONCE, however many records carry it: a resume
+	// retried after its phase completed publishes that phase again with the
+	// same run on it, and every figure the run reports — these and CostUSD,
+	// which on such a record is the run's own price — would otherwise be
+	// summed once per attempt while the budgets and the task, which charge a
+	// launch once, said otherwise. See [settleRuns].
+	LaunchID        string `json:"launch_id,omitempty"`
+	RunInputTokens  int    `json:"run_input_tokens,omitempty"`
+	RunOutputTokens int    `json:"run_output_tokens,omitempty"`
+}
+
+// settleRuns attributes each launch's usage to exactly one of the records that
+// carry it, and zeroes it on the rest.
+//
+// THE RECORD IT STAYS ON IS CHOSEN BY THE RECORDS, never by arrival order —
+// the earliest by instant, the event id breaking a tie — so every fold of the
+// same records puts a run on the same phase, turn and model, and the live
+// window and the queried one cannot disagree about where its spend went.
+//
+// A COPY where anything changes: the records are the projection's, and a fold
+// that edited them would change what the next fold reads.
+func settleRuns(records []Record) []Record {
+	var owner map[string]int
+	for i, r := range records {
+		if r.LaunchID == "" {
+			continue
+		}
+		if owner == nil {
+			owner = map[string]int{}
+		}
+		held, seen := owner[r.LaunchID]
+		if !seen || runsBefore(r, records[held]) {
+			owner[r.LaunchID] = i
+		}
+	}
+	if owner == nil {
+		return records
+	}
+	out := slices.Clone(records)
+	for i := range out {
+		if out[i].LaunchID == "" || owner[out[i].LaunchID] == i {
+			continue
+		}
+		out[i].RunInputTokens, out[i].RunOutputTokens, out[i].CostUSD = 0, 0, 0
+	}
+	return out
+}
+
+// runsBefore orders two records carrying one launch: the earlier instant
+// first, the event id where the instants tie.
+func runsBefore(a, b Record) bool {
+	if c := compareStamp(a.Timestamp, b.Timestamp); c != 0 {
+		return c < 0
+	}
+	return a.EventID < b.EventID
 }
 
 // Bucket is an accumulated total. Embedded rather than nested, because the
@@ -97,9 +160,13 @@ type Bucket struct {
 }
 
 func (b *Bucket) add(r Record) {
-	b.InputTokens += r.InputTokens
-	b.OutputTokens += r.OutputTokens
-	b.TotalTokens += r.TotalTokens
+	// THE RUN'S TOKENS WITH THE PHASE'S OWN, which is what the Tokens view
+	// shows beside the native phases. Only positive counts, for the price's
+	// reason below: a negative one is a bad payload, not a refund.
+	run := max(r.RunInputTokens, 0) + max(r.RunOutputTokens, 0)
+	b.InputTokens += r.InputTokens + max(r.RunInputTokens, 0)
+	b.OutputTokens += r.OutputTokens + max(r.RunOutputTokens, 0)
+	b.TotalTokens += r.TotalTokens + run
 	b.Calls++
 	// A NEGATIVE price is not a rebate, it is a bad payload, and summing it
 	// would silently reduce a company's reported spend. Only a positive one
@@ -238,6 +305,7 @@ type Options struct {
 // — the live window is append-ordered by arrival and the store's is by
 // (time, id) descending.
 func Aggregate(records []Record, opts Options) Rollup {
+	records = settleRuns(records)
 	limit := opts.RecentTurns
 	switch {
 	case limit <= 0:

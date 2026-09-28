@@ -420,6 +420,13 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 	if !strings.Contains(calls[0].Answer, "do NOT redo it") {
 		t.Fatalf("the answer does not stop the executor redoing the work: %q", calls[0].Answer)
 	}
+	// AND WHAT THE RUN SPENT, named by its launch, for the resumed phase's
+	// event: the budgets and the task were charged at this collect, and the
+	// Tokens view had the run's tokens from nowhere.
+	want := RunUsage{LaunchID: calls[0].Run.LaunchID, InputTokens: 900, OutputTokens: 200}
+	if want.LaunchID == "" || calls[0].Usage != want {
+		t.Fatalf("the resume carries usage %+v, want %+v", calls[0].Usage, want)
+	}
 	rig.finished("t1")
 }
 
@@ -2418,9 +2425,11 @@ var answerOnTheDM = ConversationRef{Identity: "chat:D1", Partition: "chat:D1:roo
 func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
+	parkedLaunch := rig.get("t1").LaunchID
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
 		DeliveredRefs: []string{"wip/t1"},
+		InputTokens:   1200, OutputTokens: 300, CostUSD: 0.2,
 	})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2448,6 +2457,14 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	}
 	if !strings.Contains(calls[0].Answer, "which branch?") {
 		t.Fatalf("the loop was not reminded what it asked: %q", calls[0].Answer)
+	}
+	// AND THE PARKED COLLECT'S USAGE, which was charged when it parked and
+	// had no phase to reach the Tokens view by until this one. Named by the
+	// launch that parked, so an answer retried counts it once.
+	want := RunUsage{LaunchID: parkedLaunch, InputTokens: 1200, OutputTokens: 300, CostUSD: 0.2}
+	if parkedLaunch == "" || calls[0].Usage != want {
+		t.Fatalf("the answer's resume carries usage %+v, want the parked collect's %+v",
+			calls[0].Usage, want)
 	}
 }
 

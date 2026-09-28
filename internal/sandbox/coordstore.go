@@ -203,6 +203,7 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Audience = q.Audience
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
+		run.ParkedUsage = q.Usage
 		return true
 	})
 	return err

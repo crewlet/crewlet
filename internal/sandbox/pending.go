@@ -429,6 +429,15 @@ type PendingRun struct {
 	Question string `json:"question"`
 	Audience string `json:"audience"`
 
+	// ParkedUsage is what the collect that parked this run on its question
+	// reported spending, kept until the person's answer resumes the turn:
+	// that collect was charged when it parked, and the answer's resume is
+	// the first phase event there is to carry it (see [ResumeRequest.Usage]).
+	// ADDITIVE, for the reason [PendingRun.ConversationKey] gives: a row an
+	// older build parked decodes with none, and its answer reports none —
+	// what every answer reported before.
+	ParkedUsage RunUsage `json:"parked_usage,omitzero"`
+
 	// TraceID and SpanID are the trace the run started under, so the
 	// follow-up turn nests beneath it rather than appearing as unrelated
 	// work minutes later.
@@ -953,6 +962,9 @@ type Clarification struct {
 	// while the question waits.
 	Branch    string
 	SessionID string
+	// Usage is what the collect that parked the run spent — see
+	// [PendingRun.ParkedUsage].
+	Usage RunUsage
 }
 
 // BoxRef is the box and command a run is attached to.

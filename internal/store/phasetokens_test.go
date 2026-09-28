@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // seedPhase writes one completed phase with a price and the promoted counts.
@@ -62,6 +63,58 @@ func TestAPhasesPriceReachesTheRollup(t *testing.T) {
 	}
 	if total != 0.25 {
 		t.Errorf("summed price = %v, want 0.25 — the payload's own cost_usd", total)
+	}
+}
+
+// A COLLECTED CODING RUN'S TOKENS REACH THE QUERIED ROLLUP, ONCE.
+//
+// The run's launch and what its box spent ride the payload of the phase that
+// collected it, as the price does, and a window read from the store must carry
+// them to the one aggregation exactly as the live window does — or a refresh
+// shows a company that spent less than the page it replaced. A resume retried
+// after its phase completed stores the phase twice with one run on it, and the
+// rollup counts that run once.
+func TestACollectedRunsTokensReachTheQueriedRollupOnce(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	for i, id := range []string{"first", "retried"} {
+		payload, err := json.Marshal(map[string]any{
+			"role": "SWE", "phase": "execute", "model": "sonnet",
+			"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+			"cost_usd": 0.5, "launch_id": "launch-1",
+			"run_input_tokens": 5000, "run_output_tokens": 700,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Minute),
+			Category: "lifecycle", Actor: "SWE",
+			Tags: map[string]string{
+				"agent_role": "SWE", "phase": "execute", "model": "sonnet",
+				"input_tokens": "100", "output_tokens": "20",
+			},
+			Payload: payload,
+		}); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
+
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	for _, r := range got {
+		if r.LaunchID != "launch-1" || r.RunInputTokens != 5000 || r.RunOutputTokens != 700 {
+			t.Fatalf("record %s carries launch %q and run tokens %d/%d, want the payload's",
+				r.EventID, r.LaunchID, r.RunInputTokens, r.RunOutputTokens)
+		}
+	}
+	rollup := tokens.Aggregate(got, tokens.Options{})
+	if want := 2*120 + 5700; rollup.Totals.TotalTokens != want {
+		t.Errorf("total = %d, want %d: the run is missing from the queried rollup, or "+
+			"counted once per stored phase", rollup.Totals.TotalTokens, want)
 	}
 }
 

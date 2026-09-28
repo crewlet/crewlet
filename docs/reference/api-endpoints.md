@@ -3501,6 +3501,16 @@ Notes:
   Rendering the first as `$0.00` states a price nobody quoted. Only a
   POSITIVE price is summed — a negative one is a bad payload, not a
   rebate, and summing it would silently reduce a company's reported spend.
+- A **detached coding run's** tokens are in every bucket's `input_tokens`,
+  `output_tokens` and `total_tokens`, on the `execute` phase that collected
+  it: the phase event carries what the run's box reported (`launch_id`,
+  `run_input_tokens`, `run_output_tokens`) beside what the phase's own model
+  calls spent, and the run's price is its `cost_usd`. **One launch is
+  counted once**, however many phase events carry it — a resume retried
+  after its phase completed publishes the phase again with the same run on
+  it — on the earliest of them, so the live window, a queried one and the
+  series all put it in the same place. A run that parked on a question is
+  counted on the phase its answer resumes, which is the first one there is.
 
 ### `GET /tokens/series`
 

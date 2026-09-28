@@ -53,6 +53,72 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 	}
 }
 
+// A DETACHED CODING RUN'S TOKENS ARE IN THE ROLLUP, AND ONCE.
+//
+// The run's box spends tokens the engine's own meter never sees; they reached
+// the budgets and the task at the collect and no event at all, so the Tokens
+// view left out the most expensive thing a seat does. Now the resumed phase
+// carries them beside its own — and a resume retried after its phase
+// completed publishes that phase again with the same run on it, so the run
+// is counted once per LAUNCH, on the earliest record that carries it,
+// whichever order the records arrive in. Its price rides the same rule: on
+// such a record the price is the run's.
+func TestARunsTokensAreCountedOnceWhicheverPhasesCarryIt(t *testing.T) {
+	t.Parallel()
+	collected := func(id, at string) tokens.Record {
+		r := rec("SWE", "execute", "sonnet", "t1", at, 100, 20)
+		r.EventID = id
+		r.LaunchID, r.RunInputTokens, r.RunOutputTokens, r.CostUSD = "launch-1", 5000, 700, 0.5
+		return r
+	}
+	first := collected("first", "2026-06-14T12:00:05Z")
+	retried := collected("retried", "2026-06-14T12:01:05Z")
+	native := rec("SWE", "review", "haiku", "t1", "2026-06-14T12:00:09Z", 40, 10)
+	// A second run in the same turn is a second job, and is its own.
+	second := collected("second", "2026-06-14T12:02:00Z")
+	second.LaunchID, second.RunInputTokens, second.RunOutputTokens = "launch-2", 300, 30
+
+	records := []tokens.Record{retried, native, first, second}
+	got := tokens.Aggregate(records, tokens.Options{})
+	// The phases' own: three collects at 120 and a review at 50. The runs:
+	// launch-1 once (5,700) and launch-2 (330).
+	if want := 3*120 + 50 + 5700 + 330; got.Totals.TotalTokens != want {
+		t.Errorf("total = %d, want %d — a run's tokens are missing, or counted per "+
+			"record that carries them", got.Totals.TotalTokens, want)
+	}
+	if want := 3*100 + 40 + 5000 + 300; got.Totals.InputTokens != want {
+		t.Errorf("input = %d, want %d", got.Totals.InputTokens, want)
+	}
+	if got.Totals.CostUSD != 1.0 || got.Totals.PricedCalls != 2 {
+		t.Errorf("price = %v over %d priced calls, want each launch's $0.50 once",
+			got.Totals.CostUSD, got.Totals.PricedCalls)
+	}
+	if n := got.ByPhase[0]; n.Phase != "execute" || n.TotalTokens != 3*120+5700+330 {
+		t.Errorf("by_phase = %+v, want the runs on the execute phase that collected them",
+			got.ByPhase)
+	}
+
+	// Any order: the same records reversed land every run on the same record.
+	reversed := []tokens.Record{second, first, native, retried}
+	a, _ := json.Marshal(got)
+	b, _ := json.Marshal(tokens.Aggregate(reversed, tokens.Options{}))
+	if string(a) != string(b) {
+		t.Errorf("where a run's tokens land depends on arrival order:\n%s\n%s", a, b)
+	}
+	// And the series agrees with the table.
+	series := tokens.Bucketed(records, tokens.SeriesOptions{
+		Since: since, Until: until, Interval: tokens.IntervalHour,
+	})
+	if series.Totals.TotalTokens != got.Totals.TotalTokens {
+		t.Errorf("the series counts %d tokens and the rollup %d",
+			series.Totals.TotalTokens, got.Totals.TotalTokens)
+	}
+	// The fold edited nothing it was handed: the next fold reads the same.
+	if records[0].RunInputTokens != 5000 {
+		t.Error("the fold zeroed a run on the caller's own record")
+	}
+}
+
 func TestOrderOfArrivalDoesNotChangeTheAnswer(t *testing.T) {
 	t.Parallel()
 	// The live window is append-ordered by arrival and the store's is by

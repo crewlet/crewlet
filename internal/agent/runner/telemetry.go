@@ -984,6 +984,14 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.SandboxID = rec.Run.SandboxID
 		ev.CostUSD = rec.Run.CostUSD
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
+		// THE RUN'S TOKENS BESIDE THE PHASE'S OWN, never added into them:
+		// the tally above is this turn's spend as the engine metered it,
+		// which the turn's budget and its task are charged from, and the
+		// run was charged to both at its collect. Here they reach the one
+		// place that had them nowhere — the Tokens view.
+		ev.LaunchID = rec.Run.LaunchID
+		ev.RunInputTokens = rec.Run.InputTokens
+		ev.RunOutputTokens = rec.Run.OutputTokens
 	}
 	if rec.Err != nil {
 		// The 2000-character cut this used to carry landed on exactly the
