@@ -36,26 +36,37 @@ export type BrokerFindingKind = (typeof BROKER_FINDING_KINDS)[number];
 /**
  * How long a removal's request may take before the dialog gives up on it.
  *
- * THREE MINUTES AND TEN SECONDS, the command line's own wait and for its
- * reason: the member carrying a removal waits for the metadata group to commit
- * it within the budget one clustered metadata change gets, the node that
- * received the request waits that and a read's round trip on top
- * (`engine.BrokerRemoveWait`, two minutes and ten seconds), and a minute more
- * covers the node listing the fleet and reaching the member. A dialog that
- * gave up first would report a removal the group went on to commit as failed.
+ * THREE MINUTES AND FIVE SECONDS, the command line's own wait and for its
+ * reason: the node bounds the whole removal by one deadline
+ * (`engine.BrokerRemoveWait`, two minutes and five seconds) — the carrying
+ * member's own commit budget and one round trip for its answer — and a minute
+ * more covers the node listing the fleet and reaching the member. A dialog
+ * that gave up first would report a removal the group went on to commit as
+ * failed.
  */
-export const BROKER_REMOVE_TIMEOUT_MS = 190_000;
+export const BROKER_REMOVE_TIMEOUT_MS = 185_000;
 
 /** One live node's broker, as its presence advertises it. */
 export interface BrokerNode {
   node: string;
+  /**
+   * The raft peer id the metadata group counts this node by when it is a
+   * voter — what a voter is matched to its node by, since a voter's name is
+   * only what the answering member has heard.
+   */
+  peer: string;
   kind: BrokerKind | string;
   roles: string[] | null;
 }
 
 /** One voter of the metadata group, as the member that answered sees it. */
 export interface MetaPeer {
+  /**
+   * The server's name — the node id — and EMPTY for a voter the answering
+   * member has not heard from since it started, which `peer` still names.
+   */
   name: string;
+  /** The raft peer id the group counts the voter by. */
   peer: string;
   self?: boolean;
   leader?: boolean;
@@ -76,7 +87,10 @@ export interface MetaGroup {
 /** One disagreement, about one node. */
 export interface BrokerFinding {
   kind: BrokerFindingKind | string;
+  /** The node id, empty for a voter nobody can name. */
   node: string;
+  /** The voter's peer id, on a finding about a voter. */
+  peer?: string;
   detail: string;
 }
 
@@ -98,9 +112,11 @@ export interface FleetBrokerAnswer {
   findings: BrokerFinding[];
 }
 
-/** `POST /fleet/broker/remove/{node}`'s answer. */
+/** `POST /fleet/broker/remove/{node}`'s and `/remove-peer/{peer}`'s answer. */
 export interface BrokerRemoved {
+  /** The removed voter's node id, empty where only its peer id was known. */
   node: string;
+  peer: string;
   /** The member whose system account carried it. */
   by: string;
   group?: MetaGroup;

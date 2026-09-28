@@ -17,7 +17,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-import { balanceSummary, nodeFacts, ObjectPlacement, placementSummary } from "./Fleet.tsx";
+import {
+  balanceSummary,
+  BrokerCell,
+  nodeFacts,
+  ObjectPlacement,
+  placementSummary,
+} from "./Fleet.tsx";
 import { HOLD_LENGTHS } from "./ObjectsDialog.tsx";
 import { Router } from "~/app/router.tsx";
 import { engineFile } from "~/test/engineFiles.ts";
@@ -35,6 +41,31 @@ function node(over: Partial<FleetNode> = {}): FleetNode {
 function fact(n: FleetNode, label: string) {
   return nodeFacts({ node: n, target: 3 }).find((f) => f.label === label);
 }
+
+describe("the broker column", () => {
+  afterEach(cleanup);
+
+  // WHAT EACH NODE'S BROKER IS, off the engine's own row: `unknown` is a value
+  // the engine sends for a presence that does not say, and it is the one kind
+  // marked, because a capacity seal counts it as a member. An engine older
+  // than the field sends nothing, which is no value rather than an empty tag.
+  test("each kind is a tag, and unknown is the one marked", () => {
+    for (const kind of ["member", "leaf", "client"]) {
+      const { container } = render(<BrokerCell broker={kind} />);
+      const tag = within(container).getByText(kind);
+      expect(tag.closest(".crewlet-tag")!.className).toContain("crewlet-tag--neutral");
+      cleanup();
+    }
+    const { container } = render(<BrokerCell broker="unknown" />);
+    expect(within(container).getByText("unknown").closest(".crewlet-tag")!.className).toContain(
+      "crewlet-tag--warning",
+    );
+    cleanup();
+    render(<BrokerCell />);
+    expect(screen.queryByText("unknown")).toBeNull();
+    expect(screen.getByText("This engine predates the broker kind")).toBeTruthy();
+  });
+});
 
 describe("nodeFacts", () => {
   test("a node that is still replaying says how far it has come", () => {

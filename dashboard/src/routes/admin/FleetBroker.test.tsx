@@ -20,6 +20,25 @@ function answer(): FleetBrokerAnswer {
   return structuredClone(golden);
 }
 
+/** A node's peer id, as the engine's answer carries it. */
+function peerOf(node: string): string {
+  const n =
+    golden.group!.peers.find((p) => p.name === node) ?? golden.nodes!.find((x) => x.node === node);
+  if (!n) throw new Error(`the engine's answer names no ${node}`);
+  return n.peer;
+}
+
+/**
+ * The engine's answer as a member that restarted after these voters died
+ * would give it: counted by peer id, with no name — and a finding about one
+ * naming no node.
+ */
+function nameless(a: FleetBrokerAnswer, ...nodes: string[]): FleetBrokerAnswer {
+  for (const p of a.group!.peers) if (nodes.includes(p.name)) p.name = "";
+  for (const f of a.findings) if (nodes.includes(f.node)) f.node = "";
+  return a;
+}
+
 /** A fetch that answers every request with `reply`, recording what was sent. */
 function engine(reply: { status: number; body: unknown }): URL[] {
   const sent: URL[] = [];
@@ -58,6 +77,8 @@ describe("broker membership", () => {
     // operator is looking for, so it must have a row of its own.
     const rows = brokerRows(answer());
     expect(rows.map((r) => r.node)).toEqual(["node-a", "node-b", "node-c", "old-1", "sat-eu-1"]);
+    // EACH ROW IS KEYED BY THE PEER ID the group counts it by.
+    expect(rows.find((r) => r.node === "node-c")!.peer).toBe(peerOf("node-c"));
     const gone = rows.find((r) => r.node === "node-c")!;
     expect(gone.kind).toBeUndefined();
     expect(voterState(gone.voter)).toBe("offline, last heard 1h 30m ago");
@@ -97,6 +118,32 @@ describe("broker membership", () => {
     expect(screen.queryByText("Advertises")).toBeNull();
   });
 
+  test("a voter nobody can name is still matched to its live node, and its own row by peer id", () => {
+    // What a member answers once it has restarted since node-c died: node-c
+    // is counted by its peer id alone, and node-b — live, and a voter — under
+    // a name the answer does not carry.
+    const a = nameless(answer(), "node-b", "node-c");
+    const rows = brokerRows(a);
+    expect(rows.map((r) => r.node)).toEqual(["", "node-a", "node-b", "old-1", "sat-eu-1"]);
+    expect(rows[0]!.peer).toBe(peerOf("node-c"));
+    expect(voterState(rows.find((r) => r.node === "node-b")!.voter)).toBe("current");
+  });
+
+  test("removing a voter nobody can name types its peer id and goes by the peer route", async () => {
+    const gone = peerOf("node-c");
+    const sent = engine({ status: 200, body: { node: "", peer: gone, by: "node-a" } });
+    panel(nameless(answer(), "node-c"));
+    expect(screen.getByText(`peer ${gone}`)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove from the group" }));
+    fireEvent.change(screen.getByLabelText(`Type ${gone} to confirm`), {
+      target: { value: gone },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.getByText(/is no\s+longer a voter/)).toBeTruthy());
+    expect(sent[0]!.pathname).toBe(`/fleet/broker/remove-peer/${gone}`);
+    expect(sent[0]!.searchParams.get("confirm")).toBe(gone);
+  });
+
   test("removing a gone member types its id and sends no force", async () => {
     const sent = engine({
       status: 200,
@@ -113,7 +160,7 @@ describe("broker membership", () => {
       target: { value: "node-c" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(screen.getByText(/is no longer a voter/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/is no\s+longer a voter/)).toBeTruthy());
     expect(sent).toHaveLength(1);
     expect(sent[0]!.pathname).toBe("/fleet/broker/remove/node-c");
     expect(sent[0]!.searchParams.get("confirm")).toBe("node-c");
@@ -122,16 +169,21 @@ describe("broker membership", () => {
   });
 
   test("a member still running is removed only as a second, forced decision", async () => {
-    // A voter whose node came back as a leaf: the engine counts it dead, and
-    // its node still holds a live presence lease.
+    // node-b is live AS A MEMBER, and the finding asks for its removal: the
+    // engine refuses a running member unforced, since it rejoins the group
+    // at its next restart.
     const a = answer();
-    a.group!.peers.push({ name: "sat-eu-1", peer: "p4", current: false, offline: true, active: 0 });
-    a.findings = [{ kind: "dead_member", node: "sat-eu-1", detail: "its node now runs as a leaf" }];
-    const sent = engine({ status: 200, body: { node: "sat-eu-1", by: "node-a" } });
+    a.findings = [
+      { kind: "dead_member", node: "node-b", peer: peerOf("node-b"), detail: "wedged" },
+    ];
+    const sent = engine({
+      status: 200,
+      body: { node: "node-b", peer: peerOf("node-b"), by: "node-a" },
+    });
     panel(a);
     fireEvent.click(screen.getByRole("button", { name: "Remove from the group" }));
-    fireEvent.change(screen.getByLabelText("Type sat-eu-1 to confirm"), {
-      target: { value: "sat-eu-1" },
+    fireEvent.change(screen.getByLabelText("Type node-b to confirm"), {
+      target: { value: "node-b" },
     });
     const remove = screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement;
     expect(remove.disabled).toBe(true);
@@ -140,6 +192,41 @@ describe("broker membership", () => {
     fireEvent.click(remove);
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.searchParams.get("force")).toBe("true");
+  });
+
+  test("a voter whose node now runs as a leaf is removed without force", async () => {
+    // The member sat-eu-1 was is gone for good: its node is alive as a LEAF,
+    // whose broker runs no JetStream and never rejoins — so the engine removes
+    // it unforced, and the dialog must not ask for a decision it does not need.
+    const a = answer();
+    a.group!.peers.push({
+      name: "sat-eu-1",
+      peer: peerOf("sat-eu-1"),
+      current: false,
+      offline: true,
+      active: 0,
+    });
+    a.findings = [
+      {
+        kind: "dead_member",
+        node: "sat-eu-1",
+        peer: peerOf("sat-eu-1"),
+        detail: "its node now runs as a leaf",
+      },
+    ];
+    const sent = engine({
+      status: 200,
+      body: { node: "sat-eu-1", peer: peerOf("sat-eu-1"), by: "node-a" },
+    });
+    panel(a);
+    fireEvent.click(screen.getByRole("button", { name: "Remove from the group" }));
+    expect(screen.queryByText("Remove it although it is running")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Type sat-eu-1 to confirm"), {
+      target: { value: "sat-eu-1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.searchParams.get("force")).toBeNull();
   });
 
   test("a refusal reaches the operator with the engine's own detail and hint", async () => {

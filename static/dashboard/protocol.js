@@ -1185,14 +1185,14 @@ var BROKER_FINDING_KINDS = [
 /**
 * How long a removal's request may take before the dialog gives up on it.
 *
-* THREE MINUTES AND TEN SECONDS, the command line's own wait and for its
-* reason: the member carrying a removal waits for the metadata group to commit
-* it within the budget one clustered metadata change gets, the node that
-* received the request waits that and a read's round trip on top
-* (`engine.BrokerRemoveWait`, two minutes and ten seconds), and a minute more
-* covers the node listing the fleet and reaching the member. A dialog that
-* gave up first would report a removal the group went on to commit as failed.
+* THREE MINUTES AND FIVE SECONDS, the command line's own wait and for its
+* reason: the node bounds the whole removal by one deadline
+* (`engine.BrokerRemoveWait`, two minutes and five seconds) — the carrying
+* member's own commit budget and one round trip for its answer — and a minute
+* more covers the node listing the fleet and reaching the member. A dialog
+* that gave up first would report a removal the group went on to commit as
+* failed.
 */
-var BROKER_REMOVE_TIMEOUT_MS = 19e4;
+var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 //#endregion
 export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };

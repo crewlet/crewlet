@@ -87,7 +87,7 @@ import type {
   FleetSeatLease,
   PlacedObjects,
 } from "~/protocol/index.ts";
-import { BrokerMembership } from "./FleetBroker.tsx";
+import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
 import { ObjectsHoldDialog, ObjectsMemberDialog } from "./ObjectsDialog.tsx";
 import { RetentionPanels } from "./Retention.tsx";
 
@@ -656,6 +656,19 @@ function MemberPending({ member: m, epoch }: { member: FleetObjectMember; epoch:
 // The fleet
 // ---------------------------------------------------------------------------
 
+/**
+ * The Broker column's cell: the kind a node's presence advertises, `unknown`
+ * marked as the one reading that is a guess — and, from an engine older than
+ * the field, no value at all rather than an empty tag.
+ */
+export function BrokerCell({ broker }: { broker?: string }) {
+  return broker ? (
+    <BrokerKindTag kind={broker} />
+  ) : (
+    <EmptyValue label="This engine predates the broker kind" />
+  );
+}
+
 function FleetScreen() {
   const now = useNow();
   const { data, loading, error, refetch } = useQuery("fleet", undefined, { pollMs: POLL_MS });
@@ -817,12 +830,7 @@ function FleetScreen() {
                 // is a value — a node on a build older than the field, which
                 // a capacity seal counts as a member — and it is marked,
                 // because it is the one reading here that is a guess.
-                cell: (n) =>
-                  n.broker ? (
-                    <Tag variant={n.broker === "unknown" ? "warning" : "neutral"}>{n.broker}</Tag>
-                  ) : (
-                    <EmptyValue label="This engine predates the broker kind" />
-                  ),
+                cell: (n) => <BrokerCell broker={n.broker} />,
               },
               {
                 key: "seats",
