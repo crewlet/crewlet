@@ -1109,7 +1109,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			"mode", e.mode, "node", nodeID, "incarnation", e.incarnation,
 			"detail", "the broker and the coordination estate are up and no "+
 				"publisher is: no seats, no duties, no scheduler, no change "+
-				"feed and no write routes")
+				"feed, no object repair or collection and no write routes")
 		// THE ENGINE IS THE CALLER'S FROM HERE, so the guard above stands
 		// down and [Engine.Stop] — the same teardown — is what ends it.
 		// This return is a success like the last one, and a maintenance
@@ -1145,6 +1145,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// node has none yet, and the apply that brings its first native company
 	// arms them then — see [Engine.startNativeFor].
 	e.startNativeDuties(ctx)
+	// AND THIS DATA NODE'S OBJECT PASSES, behind the same gate: each pins
+	// the estate with a barrier, which a capacity window refuses.
+	e.startNativePasses(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.

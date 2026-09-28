@@ -831,6 +831,18 @@ mode. None of them is what a window needs — a participant that will not
 acknowledge is excluded from the operation, not evicted from the logs — and
 each would move the usage the window is measuring.
 
+The [object store](../concepts/object-store.md)'s **repair, collection and scrub
+do not run** in either mode. Every repair and collection first pins the estate
+with a `linearizable` read, which is exactly the barrier the mode refuses;
+started, each would fail at that pin and retry for the whole window. They lose
+nothing they would have done: no node moves the placement map while none
+publishes, and no write lands a file whose chunks a repair would fetch or a
+collection would free. Chunks are still **served** to every node that asks, and
+all three passes resume — the scrub from where its cursor stopped — when the
+node restarts in normal mode. A node in a window runs no trim and so evaluates
+no alarm, `objects_degraded` included, which is why it does not report a repair
+it deliberately did not run.
+
 ### Who has to acknowledge
 
 The seal's proof is that every **broker** process restarted — a request the

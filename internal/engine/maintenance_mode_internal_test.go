@@ -26,7 +26,10 @@ import (
 // proves the log's end with a barrier; an eviction and a readmission, which
 // are gate records on every identity log; and a reanchor, which is a
 // generation record — and each is refused naming the mode, with every log
-// ending where it began.
+// ending where it began. And the one thing that would append on its own: the
+// object store's repair and collection, which pin the estate with a barrier
+// on a schedule of their own, are not running at all — started, every pass
+// failed at its pin and retried for the life of the window.
 func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []statelog.MaintenanceMode{statelog.ModeMaintenance, statelog.ModeSeal} {
@@ -37,6 +40,15 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 			if s == nil {
 				t.Fatalf("the %s-mode node runs no state log, so this case "+
 					"would be about nothing", mode)
+			}
+			if e.objects == nil || e.objects.disk == nil ||
+				len(e.native.Load().objectEstates()) == 0 {
+				t.Fatalf("the premise: the %s-mode node holds no chunks or runs "+
+					"no tracker, so it would start no object pass in any mode", mode)
+			}
+			if e.objects.passes.Load() != nil {
+				t.Errorf("the object passes run in %s mode: every repair and "+
+					"collection pins the estate with a barrier the mode refuses", mode)
 			}
 			ends := map[string]uint64{}
 			for _, running := range s.running() {

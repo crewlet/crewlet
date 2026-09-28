@@ -377,23 +377,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	e.native.Store(n)
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopNative] — the same shutdown — is what ends it.
+	// Its object passes are NOT started here: they append, and a runtime
+	// built in a capacity window must not ([Engine.startNativePasses]).
 	started = true
-	// AND THIS DATA NODE'S OBJECT PASSES, which measure the chunks on its
-	// disk against the files the tracker's rows name: without a tracker
-	// there are no files, and nothing to repair or collect against.
-	//
-	// THE DECLARED LIST, read through each domain's estate — never a source
-	// written here — so the tables the collector keeps alive are the ones
-	// the backup carries and the schema gate holds.
-	if estates := n.objectEstates(); len(estates) > 0 {
-		refs, err := upkeep.Sources(references.All, estates...)
-		if err == nil {
-			err = e.startObjectPasses(ctx, refs)
-		}
-		if err != nil {
-			log.WarnContext(ctx, "object_passes_not_started", "error", err)
-		}
-	}
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki)
 	return nil
@@ -461,9 +447,57 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	}
 	if e.mode.Publishes() {
 		e.startNativeDuties(ctx)
+		e.startNativePasses(ctx)
 		e.startNativeFeeds(ctx)
 	}
 	return true, nil
+}
+
+// startNativePasses runs this data node's object passes — the repair, the
+// collection and the scrub — which measure the chunks on its disk against the
+// files the tracker's rows name: without a tracker there are no files, and
+// nothing to repair or collect against. ONE CALL FOR BOTH CALLERS, [New] and
+// [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
+//
+// # Only where the mode publishes
+//
+// Both callers reach it only past the gate that keeps every publisher off a
+// node in a maintenance mode — [New]'s, and [Engine.startNativeFor]'s beside
+// the duties — rather than through a check of its own, for the reason that
+// gate gives. Every repair and every collection PINS the estate first — a linearizable
+// read of the tracker's log, which appends a barrier to it — and a node in a
+// capacity window appends nothing: its reader refuses that read
+// ([statelog.RefuseMaintenance]), because a barrier is a record on a log whose
+// usage the window is measuring. Started there, every repair failed at its pin
+// and backed off from thirty seconds to ten minutes, a warning a time, for the
+// whole window; given a pin that appends nothing instead, a collection would
+// delete against an end nobody established, the one read the barrier exists
+// for. So the passes stand down with the duties, and the window costs them
+// nothing they would have done: no duty moves the map while no node publishes,
+// and no write lands a file whose chunks a repair would fetch or a collection
+// would free. The scrub stands down with them — it appends nothing, but what it
+// finds only a repair can act on, and its cursor is on disk, so the week's
+// cycle resumes where it stopped.
+//
+// THE DECLARED LIST, read through each domain's estate — never a source written
+// here — so the tables the collector keeps alive are the ones the backup
+// carries and the schema gate holds.
+func (e *Engine) startNativePasses(ctx context.Context) {
+	n := e.native.Load()
+	if n == nil {
+		return
+	}
+	estates := n.objectEstates()
+	if len(estates) == 0 {
+		return
+	}
+	refs, err := upkeep.Sources(references.All, estates...)
+	if err == nil {
+		err = e.startObjectPasses(ctx, refs)
+	}
+	if err != nil {
+		log.WarnContext(ctx, "object_passes_not_started", "error", err)
+	}
 }
 
 // startNativeDuties arms the native runtime's two fleet-singleton duties: the

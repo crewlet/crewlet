@@ -480,6 +480,15 @@ and the scrub tries again shortly.
 Its place in the week is kept in the chunk directory (`.scrub`), so a restart
 resumes the week rather than starting it again.
 
+**None of the three runs on a node in a
+[capacity window](../guides/retention.md#changing-a-logs-ceiling)** (`crewlet
+run -mode maintenance` or `-mode seal`). A repair and a collection each begin by
+waiting for everything the log had committed, and that wait is a `linearizable`
+read, which appends a barrier to the tracker's log — the one kind of write the
+window forbids. Nothing is lost by waiting: no node moves the map while none
+publishes, and no upload lands a file. The node still serves its chunks to
+every node that asks, and the passes resume when it restarts in normal mode.
+
 ---
 
 ## Health

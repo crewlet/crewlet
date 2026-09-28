@@ -53,7 +53,11 @@ import (
 //
 // It withholds the two things that write the company's records: SEATS, which
 // the seat host never claims here ([Engine.seatsAdmitted]), and this node's own
-// WRITERS, which no surface is handed ([Engine.writeSide]).
+// WRITERS, which no surface is handed ([Engine.writeSide]). And everything that
+// would append to a log on its own: the duties and schedulers the constructor's
+// gate never starts, the object store's repair and collection, which pin the
+// estate with a barrier ([Engine.startNativePasses]), and every barrier a read
+// would append ([statelog.RefuseMaintenance]).
 
 // ErrNotPublishing is an operator gesture that appends a record to a state log
 // — an eviction, a readmission, a reanchor — asked of a node in a mode that
