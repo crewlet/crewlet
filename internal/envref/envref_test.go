@@ -231,3 +231,37 @@ func TestValidNameIsTheGrammarWithoutTheBraces(t *testing.T) {
 		}
 	}
 }
+
+// SPLIT IS THE GRAMMAR EXPAND SUBSTITUTES BY, cut rather than replaced.
+//
+// Its one caller rewrites a value's literal half and keeps its references, so
+// the two properties that matter are that the parts reassemble the value byte
+// for byte and that a part is a reference exactly where Expand would
+// substitute one — a shell expansion left inside a literal run, not split out
+// as a reference nothing resolves.
+func TestSplitCutsWhereExpandSubstitutes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		value string
+		want  []Part
+	}{
+		{"", nil},
+		{"literal", []Part{{Text: "literal"}}},
+		{"${A}", []Part{{Text: "${A}", Name: "A"}}},
+		{"Bearer ${TOKEN}", []Part{{Text: "Bearer "}, {Text: "${TOKEN}", Name: "TOKEN"}}},
+		{"${A}${B}", []Part{{Text: "${A}", Name: "A"}, {Text: "${B}", Name: "B"}}},
+		{"x${A}y${1}z", []Part{{Text: "x"}, {Text: "${A}", Name: "A"}, {Text: "y${1}z"}}},
+	} {
+		got := Split(tc.value)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("Split(%q) = %+v, want %+v", tc.value, got, tc.want)
+		}
+		var whole string
+		for _, p := range got {
+			whole += p.Text
+		}
+		if whole != tc.value {
+			t.Errorf("Split(%q) reassembles as %q", tc.value, whole)
+		}
+	}
+}

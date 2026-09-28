@@ -100,6 +100,40 @@ func Names(value string) []string {
 	return out
 }
 
+// Part is one run of a value: either literal text or one reference.
+type Part struct {
+	// Text is the run exactly as it appears in the value — a reference's
+	// full `${NAME}` spelling included.
+	Text string
+
+	// Name is the variable a reference names, and empty for literal text.
+	Name string
+}
+
+// Split cuts a value into its literal runs and its references, in order.
+//
+// Concatenating every part's Text gives the value back byte for byte, and no
+// two literal runs are adjacent: what is between two references is ONE run.
+// It is the grammar [Expand] substitutes by, so a caller that rewrites the
+// literal half of a value — the org chart sealing it into the secret store —
+// leaves every reference exactly where the resolver will find it, and
+// expanding the rewritten value gives what expanding the original gave.
+func Split(value string) []Part {
+	var out []Part
+	at := 0
+	for _, m := range pattern.FindAllStringSubmatchIndex(value, -1) {
+		if m[0] > at {
+			out = append(out, Part{Text: value[at:m[0]]})
+		}
+		out = append(out, Part{Text: value[m[0]:m[1]], Name: value[m[2]:m[3]]})
+		at = m[1]
+	}
+	if at < len(value) {
+		out = append(out, Part{Text: value[at:]})
+	}
+	return out
+}
+
 // Expand substitutes every reference using lookup.
 //
 // A name lookup reports its value and whether it was found. An UNRESOLVED
