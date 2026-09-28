@@ -23,7 +23,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -614,14 +613,11 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 	// be adopted from, and which member happens to hold the newest one is
 	// a scheduling detail. Reading only member 0 would make this case fail
 	// whenever that member skipped a tick for a reason the design allows.
-	var (
-		manifest statelog.Manifest
-		taker    int
-	)
+	var manifest statelog.Manifest
 	waitFor(t, "a member of the fleet to have taken a snapshot", func() bool {
 		for i := range c.nodes {
 			if m, found := newestSnapshotIn(c.dir(t, i)); found {
-				manifest, taker = m, i
+				manifest = m
 				return true
 			}
 		}
@@ -641,18 +637,11 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 	//
 	// ASKED OF THE ENGINE rather than listed here: a literal list of three
 	// outlived the org chart and the identity directory joining the
-	// register, and certified neither. The member that took the artefact
-	// names what it runs; running every role, that is the whole register,
-	// which is asserted too — a fleet narrowed later would otherwise shrink
-	// what this case covers without a word.
+	// register, and certified neither. Every node runs every registered
+	// domain, so the register is exactly what the artefact must name.
 	var runs []string
-	for _, domain := range c.nodes[taker].engine.Domains() {
+	for _, domain := range engine.Domains() {
 		runs = append(runs, domain.Name())
-	}
-	if every := engine.DomainsForRoles(placement.DefaultRoles()); !slices.Equal(runs, every) {
-		t.Fatalf("the member that took the snapshot runs %v and the register "+
-			"holds %v — this case certifies only the domains the taker runs",
-			runs, every)
 	}
 	for _, want := range runs {
 		if _, named := manifest.Domains[want]; !named {
@@ -1101,7 +1090,7 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 func replicatedDigest(t *testing.T, n *node) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		for table, class := range domain.Tables() {
 			if class != statelog.Replicated {
 				continue

@@ -458,6 +458,15 @@ func registeredDomains() []statelog.Domain {
 	return domains
 }
 
+// Domains is every state-log domain this build registers, in the register's
+// order: what every node runs, and so what a snapshot must name and what two
+// members' replicated estates are compared over.
+//
+// EXPORTED FOR THE GATES THAT CHECK A WHOLE NODE, which must not keep a list of
+// their own: a literal list of three outlived the org chart and the identity
+// directory joining the register, and certified neither.
+func Domains() []statelog.Domain { return registeredDomains() }
+
 // signerFor and verifierFor are one domain's halves of the record signature.
 //
 // PER DOMAIN, because the derivation binds the domain's own name in: a record
