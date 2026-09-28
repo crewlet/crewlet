@@ -87,8 +87,13 @@ func Next(state MapState, in Input) (next MapState, changed bool) {
 		return membership.Presence{Node: p.Node, Weight: p.Meta.Weight}
 	})
 	presences := make([]membership.Presence, 0, len(live))
+	able := map[string]bool{}
 	for _, node := range slices.Sorted(maps.Keys(live)) {
-		presences = append(presences, live[node].membership(layout.Number))
+		mp := live[node].membership(layout.Number)
+		presences = append(presences, mp)
+		if !mp.Unhealthy {
+			able[node] = true
+		}
 	}
 
 	before := state.Map
@@ -114,7 +119,7 @@ func Next(state MapState, in Input) (next MapState, changed bool) {
 		next.Balance = rebalance(&next.Map)
 	}
 	at := before.Epoch + 1
-	if converge(&next.Map, live, at) || first {
+	if converge(&next.Map, live, able, at) || first {
 		next.Map.Epoch = at
 	}
 	return next, !sameState(state, next)
@@ -182,14 +187,20 @@ type converging struct {
 	// reporting is every node with a live lease, in node order, so an
 	// adoption walks them the same way on every holder of the duty.
 	reporting []string
+
+	// able is every node whose lease the tick counts present and healthy
+	// ([Presence.membership]): the nodes a join may be named on and whose
+	// word may vouch for a partition.
+	able map[string]bool
 }
 
 // converge brings every partition's holders one make-before-break step toward
 // its target, stamping every holder it changes with the epoch at, and reports
-// whether it changed any.
-func converge(m *Map, live map[string]Presence, at uint64) bool {
+// whether it changed any. able is the live nodes the tick counts present and
+// healthy.
+func converge(m *Map, live map[string]Presence, able map[string]bool, at uint64) bool {
 	c := &converging{m: m, draw: m.Draw(), at: at, reports: map[string]report{},
-		targets: m.targets()}
+		targets: m.targets(), able: able}
 	for node, p := range live {
 		var r report
 		if p.Meta.Layout != nil && *p.Meta.Layout == m.Layout.Number {
@@ -382,8 +393,8 @@ func (c *converging) settle(g int) {
 // by BOTH accounts and at the same epoch — ADR-0019's two conditions for
 // letting any other copy go, adapted to a map with one writer:
 //
-//   - (a) the map lists it serving, and its own lease says it serves the
-//     partition;
+//   - (a) the map lists it serving, and its own lease — one the tick counts
+//     present and healthy — says it serves the partition;
 //   - (b) that lease names a map epoch at least the one at which the map made
 //     it a serving holder: it has itself ACTED on the map that made it one.
 //
@@ -392,13 +403,20 @@ func (c *converging) settle(g int) {
 // map it holds, about to leave; it vouches that it serves, and the copy
 // retired against its word and the copy it drops are the same two copies
 // gone. An empty target vouches for nothing.
+//
+// AND A NODE COUNTED UNHEALTHY VOUCHES FOR NOTHING, whatever its lease says of
+// the partition. Membership counts it exactly as an absent one — a store that
+// says it has failed, or will not say, answers for none of what it holds — and
+// an absent node has no lease to vouch with. Taking its word would let the
+// last good copy go on the say-so of a store that has said it cannot be
+// trusted with one.
 func (c *converging) targetServes(p *Partition, g int, target []string) bool {
 	if len(target) == 0 {
 		return false
 	}
 	for _, node := range target {
 		h := holderOf(p, node)
-		if h == nil || h.State != Serving {
+		if h == nil || h.State != Serving || !c.able[node] {
 			return false
 		}
 		if said, _ := c.says(node, g); said != PartServing {
@@ -419,6 +437,15 @@ func (c *converging) targetServes(p *Partition, g int, target []string) bool {
 // most [MaxJoinsPerNode] of those at once: the ones it has in flight, counted
 // across the whole map, include those this tick adds. A join into a partition
 // nobody serves has no donor to transfer from and is not rationed.
+//
+// NO JOIN IS NAMED ON A NODE THE TICK COUNTS ABSENT OR UNHEALTHY. It stays in
+// the targets for membership's grace, so no copy it should hold is let go in
+// the meantime, but a join named on it is one it cannot start — and a joining
+// holder is counted by the trim from nothing (a joiner's tail is exactly what
+// must not be trimmed), so every log of the partition would stop trimming for
+// as long as the node stayed away: the grace, or under an operator's hold a
+// whole day. The join is named on the first tick it is back. A join already
+// named when it went away stays, for the trim's reason.
 func (c *converging) join() {
 	transfers := map[string]int{}
 	for g := range c.m.Partitions {
@@ -436,6 +463,9 @@ func (c *converging) join() {
 		p := &c.m.Partitions[g]
 		transfer := servers(p) > 0
 		for _, node := range c.targets[g] {
+			if !c.able[node] {
+				continue
+			}
 			if holderOf(p, node) != nil {
 				// Held already, in some state: a joiner in flight, a
 				// server, or a leaver that has started to drain and

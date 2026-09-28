@@ -171,15 +171,18 @@ func TestTheMapConvergesAsTheFleetGrows(t *testing.T) {
 // when every node of the target serves the partition by the map's account AND
 // by its own — (a) — and has itself acted on the map that made it a server:
 // its lease names a map epoch at least its Since, in this map's generation —
-// (b). Each case breaks one clause and the copy stays.
+// (b). Each case breaks one clause and the copy stays. A lease the tick counts
+// unhealthy is no account at all: membership counts its node absent, and an
+// absent node has no lease to vouch with, whatever that lease says it serves.
 func TestAHolderLeavesOnlyUnderBothConditions(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		state      HolderState // the target's holder state in the map
 		said       PartitionState
-		epoch      uint64 // the map epoch the target's lease names
-		otherGen   bool   // the lease names another generation
-		down       bool   // the target has no live lease
+		epoch      uint64      // the map epoch the target's lease names
+		otherGen   bool        // the lease names another generation
+		down       bool        // the target has no live lease
+		unhealthy  func(*Meta) // the target's lease, made one the tick counts unhealthy
 		wantLeaves bool
 	}{
 		"both hold":                            {state: Serving, said: PartServing, epoch: 20, wantLeaves: true},
@@ -187,8 +190,12 @@ func TestAHolderLeavesOnlyUnderBothConditions(t *testing.T) {
 		"(a) the lease says faulted":           {state: Serving, said: PartFaulted, epoch: 20},
 		"(a) the target has no live lease":     {state: Serving, said: PartServing, epoch: 20, down: true},
 		"(a) the map lists the target joining": {state: Joining, said: PartServing, epoch: 20},
-		"(b) the lease names an older epoch":   {state: Serving, said: PartServing, epoch: 19},
-		"(b) another generation's epoch":       {state: Serving, said: PartServing, epoch: 99, otherGen: true},
+		"(a) the target's store has failed": {state: Serving, said: PartServing, epoch: 20,
+			unhealthy: func(m *Meta) { m.Healthy, m.Detail = no(), "disk gone" }},
+		"(a) the target does not say it is healthy": {state: Serving, said: PartServing, epoch: 20,
+			unhealthy: func(m *Meta) { m.Healthy = nil }},
+		"(b) the lease names an older epoch": {state: Serving, said: PartServing, epoch: 19},
+		"(b) another generation's epoch":     {state: Serving, said: PartServing, epoch: 99, otherGen: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -208,6 +215,9 @@ func TestAHolderLeavesOnlyUnderBothConditions(t *testing.T) {
 				target.meta.MapGeneration = uuid.New()
 			}
 			target.down = c.down
+			if c.unhealthy != nil {
+				c.unhealthy(&target.meta)
+			}
 			other.meta.Partitions[id] = PartServing
 			other.meta.MapGeneration, other.meta.MapEpoch = m.Generation, 20
 
@@ -309,6 +319,72 @@ func TestTwoCopiesCannotVouchForEachOtherOnDifferentMaps(t *testing.T) {
 	s.converged()
 	if got := s.state.Map.Target(p); !slices.Equal(got, []string{"data-a"}) {
 		t.Fatalf("%s's target is %v, want A", p, got)
+	}
+}
+
+// A JOIN IS NAMED ONLY ON A NODE THAT CAN TAKE ONE. A partition moved onto a
+// node that is down, or whose lease the tick counts unhealthy, names no join
+// on it while it stays that way: the join is one it cannot start, and the trim
+// counts a joiner's tail from nothing, so a join named on a node that stayed
+// away would stop the partition's logs trimming for as long as it did. The
+// node stays the partition's target, so the copy it would replace is not let
+// go in the meantime; and on the first tick it is back the join is named, and
+// the partition moves. A join already named when its node went away is kept,
+// for the trim's own reason: that joiner's tail is what must not be trimmed.
+func TestAJoinIsNamedOnlyOnANodeThatCanTakeOne(t *testing.T) {
+	t.Parallel()
+	for name, away := range map[string]func(*simNode){
+		"down":           func(n *simNode) { n.down = true },
+		"failed":         func(n *simNode) { n.meta.Healthy, n.meta.Detail = no(), "disk gone" },
+		"health unsaid":  func(n *simNode) { n.meta.Healthy = nil },
+		"another layout": func(n *simNode) { n.meta.Layout = layoutNo(2) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := settled(t, smallLayout, 1, "data-a", "data-b")
+			// B down serves nothing, and its copies are intact on its disk.
+			s.check = s.checkCopies
+			g, p := s.targetedAt("data-a")
+			restore := s.nodes["data-b"].meta
+			restore.Partitions = maps.Clone(restore.Partitions)
+			away(s.nodes["data-b"])
+			next, err := Move(s.state, p, "data-a", "op", "test", s.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.state = next
+			if got := s.state.Map.Target(p); !slices.Equal(got, []string{"data-b"}) {
+				t.Fatalf("%s's target is %v, want B", p, got)
+			}
+			for range 5 {
+				s.tick()
+				s.check()
+				s.act()
+				if h := holderOf(&s.state.Map.Partitions[g], "data-b"); h != nil {
+					t.Fatalf("a join was named on B while it could not take one: %+v", *h)
+				}
+				if got := s.holder(g, "data-a").State; got != Serving {
+					t.Fatalf("A's copy is %s while the target it would go to cannot join", got)
+				}
+			}
+
+			s.nodes["data-b"].down, s.nodes["data-b"].meta = false, restore
+			s.tick()
+			if got := s.holder(g, "data-b"); got.State != Joining {
+				t.Fatalf("B, back, is %s rather than joining", got.State)
+			}
+			// Named, and then away again: the join stays.
+			away(s.nodes["data-b"])
+			for range 3 {
+				s.tick()
+				if got := s.holder(g, "data-b").State; got != Joining {
+					t.Fatalf("a join named before B went away is %s", got)
+				}
+			}
+			s.nodes["data-b"].down, s.nodes["data-b"].meta = false, restore
+			s.settle(50)
+			s.converged()
+		})
 	}
 }
 

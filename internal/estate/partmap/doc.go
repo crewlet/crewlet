@@ -36,16 +36,18 @@
 //
 // A lease's health is read three-valued — healthy, failed, or not said — and a
 // node that does not say its store is healthy is counted exactly as a failed
-// one: absent for that tick, placed on nothing new, and removed if it goes on
-// not saying for the grace. The object store reads its own lease the other way
-// round, an unsaid health as one that has not failed, and that is right THERE:
-// it had members before it had a health report, and the reading kept them
-// placed on. The estate lease was born with the field, so a lease without it
-// is a writer's bug or a build that renamed it, and placing partitions on a
-// node that has not said it can hold them trades a stalled join for a guess.
-// A node that runs another layout than the map's is counted the same way: its
-// partitions are another layout's, and every name it reports means something
-// else here.
+// one: absent for that tick, and removed if it goes on not saying for the
+// grace. A node counted absent is placed on nothing new — no join is named on
+// it — and its word vouches for no copy's retirement, whatever its lease says
+// of a partition, since an absent node has no lease to vouch with. The object
+// store reads its own lease the other way round, an unsaid health as one that
+// has not failed, and that is right THERE: it had members before it had a
+// health report, and the reading kept them placed on. The estate lease was
+// born with the field, so a lease without it is a writer's bug or a build that
+// renamed it, and placing partitions on a node that has not said it can hold
+// them trades a stalled join for a guess. A node that runs another layout than
+// the map's is counted the same way: its partitions are another layout's, and
+// every name it reports means something else here.
 //
 // # One draw over every partition
 //
@@ -127,17 +129,20 @@
 //   - A serving holder the target no longer names is retired — marked
 //     leaving — only under BOTH of ADR-0019's conditions, adapted to a map
 //     with one writer: (a) every node of the partition's target is serving
-//     in the map AND says so on its own lease, and (b) each of those leases
-//     names a map epoch at least the one that made it a server, so none of
-//     them is, on an older map it has not replaced, about to leave itself.
-//     Without (b) two copies can each vouch for the other on different maps,
-//     and both are dropped. An empty target vouches for nothing, and the
-//     last server is never retired.
-//   - Every target node not yet holding the partition joins it. A join into
-//     a partition somebody serves is a snapshot transfer, and a node takes
-//     at most [MaxJoinsPerNode] of those at once across the whole map; a join
-//     into one nobody serves — every partition of a new deployment — has no
-//     donor to wait for and is not rationed.
+//     in the map AND says so on its own lease, which the tick counts present
+//     and healthy, and (b) each of those leases names a map epoch at least
+//     the one that made it a server, so none of them is, on an older map it
+//     has not replaced, about to leave itself. Without (b) two copies can
+//     each vouch for the other on different maps, and both are dropped. An
+//     empty target vouches for nothing, and the last server is never
+//     retired.
+//   - Every target node not yet holding the partition joins it, once the
+//     tick counts it present and healthy: a join named on a node that is
+//     away is one it cannot start, and the trim counts a joiner's tail from
+//     nothing. A join into a partition somebody serves is a snapshot
+//     transfer, and a node takes at most [MaxJoinsPerNode] of those at once
+//     across the whole map; a join into one nobody serves — every partition
+//     of a new deployment — has no donor to wait for and is not rationed.
 //
 // # Pure, and unknown is the caller's
 //
