@@ -186,6 +186,49 @@
 // The ordered walk also owns its watcher, so there is no early-return path
 // that leaks one — the abandoned-listing case the client's blocking 256-entry
 // handoff could park a goroutine and a server-side consumer on for ever.
+//
+// # Every single-key read is the leader's
+//
+// A lease's read-back, a renew's and a release's read, Get, the epoch and
+// hint reads, and every record the fleet store reads by key (fleet.go, the
+// mailboxes, the object map, the positions, the follows, the secrets) go
+// through ONE read: `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only
+// the stream leader answers ([leaderReader], [getLatest]). NONE is the bucket
+// handle's own Get, and none may be.
+//
+// That Get is a DIRECT get, and a direct get is answered by whichever replica
+// the broker picks — the one on the caller's own member first — from its own
+// copy, which can be behind a write the quorum has acknowledged. The contract
+// is that a backend serves its own writes per resource (coord.Backend), and
+// every lease answer rests on it: TryAcquire reads its own write back to learn
+// the store's deadline, and on the copy it read the claim's record was still
+// the claiming one it had just replaced, so a claim that WON answered
+// (nil, nil). Measured on a three-member cluster, a hundred leaf nodes
+// claiming at once: 743 of 10,000 claims on fresh resources answered "not
+// held" for a lease the store then held under their owner until its TTL — a
+// singleton duty dark on every node for a TTL, since the one node that won
+// believed a peer had it. The same read made a renew or a release through a
+// member that was behind answer FALSE, "definitively not yours", which a seat
+// host acts on by shedding the seat, and a fleet record read by key through
+// it answered "absent" for a record the quorum held. shared_cluster_test.go
+// holds both: the conformance case with its handles on members holding no
+// copy, and a member cut off from its peers, whose reads must fail rather than
+// answer from the copy it has.
+//
+// A read the leader cannot answer — none elected, or none reachable — FAILS,
+// which is [coord.ErrUnavailable] to every caller: the contract's third answer,
+// never "absent". A write needs that leader anyway, so a node that cannot read
+// its lease could not have renewed it either.
+//
+// The cost, measured on an in-process cluster: a leader read takes 40–220 µs
+// at the median where a direct get takes 25–135 µs — the hop to the leader
+// when the caller's member is not it — and 27,000 reads a second through one
+// member's client where direct gets reached 50,000. A fleet's lease reads are
+// its heartbeats, one read per held lease per renew, so ten thousand seats on
+// the fifteen-second seat heartbeat ask for under seven hundred a second: a
+// few percent of that ceiling. What a direct get would buy back is served by
+// nothing here, because every read in this package is one a caller acts on as
+// current — which is why none of them stays direct.
 package kv
 
 import (
@@ -336,6 +379,12 @@ type lane struct {
 	// cluster two streams may be led by two servers.
 	stream string
 
+	// read answers a record as the stream LEADER holds it — every
+	// single-key read of this bucket goes through it (see the package doc's
+	// "Every single-key read is the leader's"). Built once, at Open, since
+	// it is only an address.
+	read *leaderReader
+
 	// maxTTL is the longest TTL a claim on this bucket may ask for.
 	maxTTL time.Duration
 
@@ -356,6 +405,9 @@ type Store struct {
 	// duties holds every duty lease this build claims.
 	duties *lane
 	epochs jetstream.KeyValue
+	// epochRead is the epochs bucket's leader read, as [lane.read] is a
+	// lease bucket's.
+	epochRead *leaderReader
 
 	ttl time.Duration
 
@@ -471,6 +523,13 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 				"the bucket while the fleet is down so the next boot re-creates it")
 	}
 
+	var readers [3]*leaderReader
+	for i, bucket := range []jetstream.KeyValue{leases, duties, epochs} {
+		if readers[i], err = newLeaderReader(js, bucket); err != nil {
+			return nil, fmt.Errorf("coord/kv: address %s's leader: %w", bucket.Bucket(), err)
+		}
+	}
+
 	log.DebugContext(ctx, "coord_kv_open", "leases", leases.Bucket(), "duties", duties.Bucket(),
 		"epochs", epochs.Bucket(), "ttl", leaseFacts.age, "max_duty_ttl", coord.MaxDutyTTL)
 	return &Store{
@@ -482,6 +541,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		// accept deadlines it will not honour.
 		leases: &lane{
 			kv:         leases,
+			read:       readers[0],
 			stream:     leaseFacts.stream,
 			maxTTL:     leaseFacts.age,
 			reapsAtMax: true,
@@ -490,12 +550,14 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		// to cover it; openDuties has just made sure it does.
 		duties: &lane{
 			kv:         duties,
+			read:       readers[1],
 			stream:     dutyFacts.stream,
 			maxTTL:     coord.MaxDutyTTL,
 			reapsAtMax: false,
 		},
-		epochs: epochs,
-		ttl:    leaseFacts.age,
+		epochs:    epochs,
+		epochRead: readers[2],
+		ttl:       leaseFacts.age,
 	}, nil
 }
 
@@ -1245,7 +1307,7 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 	key := encodeResource(resource)
 
 	for range casAttempts {
-		kve, err := s.epochs.Get(ctx, key)
+		kve, err := s.epochRead.live(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			next := resourceValue{Resource: resource, Epoch: 1, Preferred: preferred}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -1298,7 +1360,7 @@ func (s *Store) pinHint(ctx context.Context, resource, preferred string) error {
 	key := encodeResource(resource)
 
 	for range casAttempts {
-		kve, err := s.epochs.Get(ctx, key)
+		kve, err := s.epochRead.live(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			// Only reachable if the persistent record vanished under a
 			// live lease, which nothing in this backend does. The lease
@@ -1354,16 +1416,25 @@ type snapshot struct {
 // membership are each renewed on every heartbeat of every node, and scanning
 // the fleet's leases to renew one's own would make the read cost of a
 // heartbeat grow with the fleet.
+//
+// THE RECORD THE CLAIM IS ABOUT IS ALWAYS READ BY ITSELF, from the leader,
+// gated or not. The claim writes at its revision and settle judges the
+// claim's own write by it, so it must be the newest the quorum holds: a
+// scan's copy of it comes from whichever replica the pass landed on, and a
+// replica one write behind hands settle the claiming record this very call
+// replaced — which read as "superseded" and answered (nil, nil) for a lease
+// the store held under this owner until its TTL. The scan is what the GATE
+// judges, and only older-protocol records move that judgement.
 func (s *Store) readForClaim(ctx context.Context, l *lane, resource string, ungated bool) (snapshot, error) {
 	snap := snapshot{clock: s.newClock()}
+	mine, err := s.readOne(ctx, l, resource)
+	if err != nil {
+		return snapshot{}, err
+	}
+	snap.mine = mine
 	if ungated {
-		e, err := s.readOne(ctx, l, resource)
-		if err != nil {
-			return snapshot{}, err
-		}
-		if e != nil {
-			snap.all = []entry{*e}
-			snap.mine = &snap.all[0]
+		if mine != nil {
+			snap.all = []entry{*mine}
 		}
 		return snap, nil
 	}
@@ -1373,12 +1444,6 @@ func (s *Store) readForClaim(ctx context.Context, l *lane, resource string, unga
 		return snapshot{}, err
 	}
 	snap.all, snap.scannedLeases = all, true
-	for i := range all {
-		if all[i].lane == l && all[i].resource == resource {
-			snap.mine = &snap.all[i]
-			break
-		}
-	}
 	return snap, nil
 }
 
@@ -1439,10 +1504,11 @@ func (s *Store) scanForOlderLayout(ctx context.Context, snap snapshot) (bool, er
 	return false, nil
 }
 
-// readOne reads a single lease record from a bucket. A missing key is
-// (nil, nil).
+// readOne reads a single lease record from a bucket, as the stream LEADER holds
+// it. A missing key is (nil, nil); a read the leader did not answer is
+// unknown, never missing.
 func (s *Store) readOne(ctx context.Context, l *lane, resource string) (*entry, error) {
-	kve, err := l.kv.Get(ctx, encodeResource(resource))
+	kve, err := l.read.live(ctx, encodeResource(resource))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, nil
 	}

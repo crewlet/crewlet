@@ -719,6 +719,15 @@ func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
 	return eachEntry(ctx, f.js, kv, visit)
 }
 
+// get reads one key as its stream LEADER holds it — see [getLatest], the one
+// single-key read this package makes, and kv.go for why it is never the
+// bucket handle's own direct get.
+func (f *FleetStore) get(ctx context.Context, kv jetstream.KeyValue,
+	key string) (jetstream.KeyValueEntry, error) {
+
+	return getLatest(ctx, f.js, kv, key)
+}
+
 // create writes a key that must not hold a live value — see [createKey], the
 // one create this package makes, and markers.go for why it is not the bucket
 // handle's own.
@@ -766,7 +775,7 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	key := encodeKey(bucket + "|" + strconv.FormatInt(now.Truncate(window).UnixNano(), 10))
 
 	for range fleetCASRetries {
-		entry, err := f.rate.Get(ctx, key)
+		entry, err := f.get(ctx, f.rate, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			// Create, not Put: the first caller in a window must be
 			// distinguishable from a caller racing it, or two nodes both
@@ -869,7 +878,7 @@ func (f *FleetStore) Worked(ctx context.Context, scope string, keys []string) (m
 		if key == "" {
 			continue
 		}
-		_, err := f.ledger.Get(ctx, ledgerKey(scope, key))
+		_, err := f.get(ctx, f.ledger, ledgerKey(scope, key))
 		switch {
 		case err == nil:
 			out[key] = true
@@ -917,7 +926,7 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 	value := []byte(until.UTC().Format(time.RFC3339Nano))
 
 	for range fleetCASRetries {
-		entry, err := f.cooldowns.Get(ctx, encoded)
+		entry, err := f.get(ctx, f.cooldowns, encoded)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			_, created := f.create(ctx, f.cooldowns, encoded, value)
 			switch {
@@ -1155,7 +1164,7 @@ func (f *FleetStore) stampRefusal(ctx context.Context, scope string) error {
 	key := encodeKey(scope)
 	for range fleetCASRetries {
 		now := time.Now().UTC()
-		entry, err := f.budgets.Get(ctx, key)
+		entry, err := f.get(ctx, f.budgets, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			raw, encoded := encodeBudget(budgetRecord{RefusedAt: now})
 			if encoded != nil {
@@ -1217,7 +1226,7 @@ func (f *FleetStore) clearRefusal(ctx context.Context, scope string, seen time.T
 	key := encodeKey(scope)
 	ctx = context.WithoutCancel(ctx)
 	for range fleetCASRetries {
-		entry, err := f.budgets.Get(ctx, key)
+		entry, err := f.get(ctx, f.budgets, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			// Reset by an operator in between, which cleared it.
 			return
@@ -1272,7 +1281,7 @@ func (f *FleetStore) logUncleared(ctx context.Context, scope string, err error) 
 func (f *FleetStore) bump(ctx context.Context, scope string, delta, limit int) (budgetRecord, bool, error) {
 	key := encodeKey(scope)
 	for range fleetCASRetries {
-		entry, err := f.budgets.Get(ctx, key)
+		entry, err := f.get(ctx, f.budgets, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			if limit > 0 && delta > limit {
 				return budgetRecord{}, false, nil
@@ -1340,7 +1349,7 @@ func (f *FleetStore) Used(ctx context.Context, scope string) (int, error) {
 	if scope == "" {
 		return 0, errors.New("coord/kv: a budget scope is required")
 	}
-	entry, err := f.budgets.Get(ctx, encodeKey(scope))
+	entry, err := f.get(ctx, f.budgets, encodeKey(scope))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return 0, nil
 	}
@@ -1531,7 +1540,7 @@ func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationReques
 // pointer reads the activation pointer: its record, the KV sequence to
 // compare-and-set against, and whether there is one at all.
 func (f *FleetStore) pointer(ctx context.Context) (activationRecord, uint64, bool, error) {
-	entry, err := f.config.Get(ctx, activationKey)
+	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return activationRecord{}, 0, false, nil
 	}
@@ -1677,7 +1686,7 @@ func (f *FleetStore) Payload(ctx context.Context, revisionID string) ([]byte, bo
 	if revisionID == "" {
 		return nil, false, errors.New("coord/kv: a payload read needs a revision id")
 	}
-	entry, err := f.config.Get(ctx, payloadKey)
+	entry, err := f.get(ctx, f.config, payloadKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, false, nil
 	}
@@ -1700,7 +1709,7 @@ func (f *FleetStore) Payload(ctx context.Context, revisionID string) ([]byte, bo
 
 // Target reads the pointer.
 func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error) {
-	entry, err := f.config.Get(ctx, activationKey)
+	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Activation{}, false, nil
 	}
@@ -1807,7 +1816,7 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 	if name == "" {
 		return coord.SecretRecord{}, false, errors.New("coord/kv: a secret needs a name")
 	}
-	entry, err := f.secrets.Get(ctx, encodeKey(name))
+	entry, err := f.get(ctx, f.secrets, encodeKey(name))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.SecretRecord{}, false, nil
@@ -1888,7 +1897,7 @@ func (f *FleetStore) DeleteSecret(ctx context.Context, name string) (bool, error
 		return false, errors.New("coord/kv: a secret needs a name")
 	}
 	key := encodeKey(name)
-	if _, err := f.secrets.Get(ctx, key); errors.Is(err, jetstream.ErrKeyNotFound) {
+	if _, err := f.get(ctx, f.secrets, key); errors.Is(err, jetstream.ErrKeyNotFound) {
 		return false, nil
 	} else if err != nil {
 		return false, unavailable("read the secret before deleting it", err)
@@ -1984,7 +1993,7 @@ func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 
 // Channel reads one record.
 func (f *FleetStore) Channel(ctx context.Context, id string) (coord.Channel, bool, error) {
-	entry, err := f.channels.Get(ctx, encodeKey(id))
+	entry, err := f.get(ctx, f.channels, encodeKey(id))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Channel{}, false, nil
 	}
@@ -2027,7 +2036,7 @@ func (f *FleetStore) CountChannelMessage(ctx context.Context, id string, at time
 func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply func(coord.Channel) coord.Channel) (coord.Channel, bool, error) {
 	key := encodeKey(id)
 	for range fleetCASRetries {
-		entry, err := f.channels.Get(ctx, key)
+		entry, err := f.get(ctx, f.channels, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			return coord.Channel{}, false, nil
 		}
@@ -2185,7 +2194,7 @@ type fireRecord struct {
 
 // SandboxRun reads one run's record.
 func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Record, bool, error) {
-	entry, err := f.runs.Get(ctx, encodeKey(turnID))
+	entry, err := f.get(ctx, f.runs, encodeKey(turnID))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Record{}, false, nil
 	}

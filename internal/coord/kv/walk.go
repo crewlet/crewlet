@@ -115,6 +115,12 @@
 // on the wire, addressed in the API the client speaks ([jsapi.API.Subject]),
 // and decodes the answer the way the client's own KV Get does.
 //
+// It is not only the certification's. A listing met the replica that is
+// behind first, and every read of one key has the same exposure — a claim's
+// read-back, a renew's, a fleet record's — so every single-key read in this
+// package is this one, and none is a direct get: kv.go's "Every single-key
+// read is the leader's" is that rule and what it costs.
+//
 // The index read has the matching hole, and it is closed the same way. A
 // stream info is the leader's EXCEPT while the group has no leader, when every
 // member answers from its own store rather than stay silent (jetstream_api.go
@@ -572,6 +578,35 @@ func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValue
 			revision: msg.Sequence, created: msg.Time, op: op,
 		}, nil
 	}
+}
+
+// live answers key's LIVE value as the leader holds it, the way the bucket
+// handle's own Get answers one: a key with no message, and a key whose newest
+// message is a delete or purge marker, are both [jetstream.ErrKeyNotFound].
+// Every other failure — no leader, a leader that did not answer — is returned
+// as it came, so a caller classifies it as unknown and never as absent.
+func (r *leaderReader) live(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	kve, err := r.last(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if kve.Operation() != jetstream.KeyValuePut {
+		return nil, jetstream.ErrKeyNotFound
+	}
+	return kve, nil
+}
+
+// getLatest is EVERY single-key read in this package: key's live value in kv,
+// as the stream leader holds it — see [leaderReader.live], and kv.go's "Every
+// single-key read is the leader's" for why no read here is a direct get.
+func getLatest(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
+	key string) (jetstream.KeyValueEntry, error) {
+
+	read, err := newLeaderReader(js, kv)
+	if err != nil {
+		return nil, err
+	}
+	return read.live(ctx, key)
 }
 
 // operationOf reads what a stored KV message IS from its headers — the

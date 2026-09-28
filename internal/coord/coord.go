@@ -439,10 +439,15 @@ type AcquireOptions struct {
 // It reads like an implementation detail and it is the whole basis of mutual
 // exclusion: a claim you cannot read back cannot exclude anybody, and the
 // seat host reads ListLive and FleetProtocolFloor immediately after claiming.
-// Both certified backends make it true for free — one is a mutex over a map,
-// the other a single-connection KV — so it went unstated, and the suite
-// enforces it in about twenty places without ever naming it. A backend author
-// who did not know would meet it as twenty failures with no common theme.
+// The twin makes it true for free, being a mutex over a map, and so did the KV
+// backend while a suite ran it on one member — which is how it went unstated
+// while the suite enforced it in about twenty places without naming it. On a
+// replicated bucket it is not free: a read any replica may answer can be
+// behind a write the quorum acknowledged, and the KV backend's claims answered
+// "not held" for leases they had won until every read it acts on became the
+// stream leader's (internal/coord/kv, "Every single-key read is the
+// leader's"). coordtest.RunShared is what holds a backend to it across
+// handles on different members.
 //
 // What it forecloses is asynchronous replication across the coordination
 // store, which nothing has asked for. Taking it up means changing this

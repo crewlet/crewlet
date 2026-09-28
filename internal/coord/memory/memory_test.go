@@ -19,6 +19,16 @@ func TestContract(t *testing.T) {
 	coordtest.Run(t, func(t *testing.T) coord.Backend { return memory.New() })
 }
 
+// And through several handles on one store — the twin has one process, so the
+// same store is every handle, which is the shape the shared cases hold a
+// replicated backend to.
+func TestSharedContract(t *testing.T) {
+	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
+		b := memory.New()
+		return []coord.Backend{b, b, b}
+	})
+}
+
 // The zero value has to work: callers construct plain data without
 // constructors, and a store that only functions when built by New would fail
 // on a struct field somebody forgot to initialise.

@@ -298,7 +298,7 @@ func (f *FleetStore) OpenMaintenance(ctx context.Context, op coord.MaintenanceOp
 func (f *FleetStore) Maintenance(ctx context.Context, stream string) (
 	coord.MaintenanceOperation, bool, error) {
 
-	entry, err := f.positions.Get(ctx, coord.MaintenanceKey(stream))
+	entry, err := f.get(ctx, f.positions, coord.MaintenanceKey(stream))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.MaintenanceOperation{}, false, nil
@@ -416,7 +416,7 @@ func (f *FleetStore) Admissions(ctx context.Context) ([]coord.Admission, error) 
 // remove the admission a NEWER process on that node has since written.
 func (f *FleetStore) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
 	key := coord.AdmissionKey(nodeID)
-	entry, err := f.positions.Get(ctx, key)
+	entry, err := f.get(ctx, f.positions, key)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return nil

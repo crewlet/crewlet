@@ -13,7 +13,7 @@ import (
 
 // ObjectMap reads the map.
 func (f *FleetStore) ObjectMap(ctx context.Context) (coord.ObjectMapRecord, bool, error) {
-	entry, err := f.objects.Get(ctx, objectMapKey)
+	entry, err := f.get(ctx, f.objects, objectMapKey)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.ObjectMapRecord{}, false, nil

@@ -100,6 +100,28 @@ func TestContract(t *testing.T) {
 	})
 }
 
+// TestSharedContract runs the shared cases over three handles on one
+// single-member broker — the easy case, since every read is answered by the
+// one copy there is. shared_cluster_test.go is the one that means something:
+// the same cases with the handles on three members of a cluster.
+func TestSharedContract(t *testing.T) {
+	nc := embeddedNATS(t)
+	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
+		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+		out := make([]coord.Backend, 3)
+		for i := range out {
+			s, err := Open(t.Context(), jsOf(nc), Config{
+				TTL: coordtest.LongTTL, BucketPrefix: prefix,
+			})
+			if err != nil {
+				t.Fatalf("Open handle %d: %v", i, err)
+			}
+			out[i] = s
+		}
+		return out
+	})
+}
+
 func TestKeyMappingRoundTrips(t *testing.T) {
 	t.Parallel()
 	// A resource containing a dot is the one that matters most: a dot is a

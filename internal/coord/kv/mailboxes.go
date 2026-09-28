@@ -64,7 +64,7 @@ func (f *FleetStore) Mailbox(ctx context.Context, handle string) (coord.MailboxR
 	if handle == "" {
 		return coord.MailboxRecord{}, false, errors.New("coord/kv: a mailbox record needs a handle")
 	}
-	entry, err := f.mailboxes.Get(ctx, encodeKey(handle))
+	entry, err := f.get(ctx, f.mailboxes, encodeKey(handle))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.MailboxRecord{}, false, nil

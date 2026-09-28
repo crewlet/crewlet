@@ -176,15 +176,18 @@
 // of two timestamps — see expires_at_is_a_utc_deadline_on_the_stores_clock for
 // why ordering admits a second reason.
 //
-// The largest thing this suite assumes without saying so is READ-YOUR-OWN-
-// WRITE: every case reads back a claim it just made, and coord.go never
-// promises that. Both certified backends make it true for free — one is a
-// mutex over a map, the other a single-connection KV — so no case here can
-// tell a store that guarantees it from one that happens to. A backend with
-// asynchronous replication would fail case after case for a property nobody
-// wrote down. It is enforced rather than relaxed because a claim you cannot
-// read back cannot provide mutual exclusion, and the seat host reads ListLive
-// and FleetProtocolFloor immediately after claiming.
+// The largest thing this suite assumes is READ-YOUR-OWN-WRITE: every case
+// reads back a claim it just made. [Run] hands a case ONE handle, and both
+// certified backends make that true through one handle for free — one is a
+// mutex over a map, the other a KV run here on a single member — so no case
+// in [Run] can tell a store that guarantees it from one that happens to. The
+// KV backend on a REPLICATED bucket did not: a read a replica answered from
+// its own copy could be behind the claim it was reading back, and claims that
+// won answered "not held". [RunShared] is the half that can tell: its cases
+// spread their handles across a store's members. It is enforced rather than
+// relaxed because a claim you cannot read back cannot provide mutual
+// exclusion, and the seat host reads ListLive and FleetProtocolFloor
+// immediately after claiming.
 //
 // Two lag shapes are not the same risk. A general READ lag fails loudly —
 // measured, by making the twin serve reads from a snapshot one write behind,

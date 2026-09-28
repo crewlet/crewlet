@@ -134,6 +134,22 @@ placement hints come from the `epochs` bucket — the one with no expiry at all,
 holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
 
+**Every read of one key is the leader's too**, not only a certification's. A
+claim reads its own write back to learn the store's deadline, a renew and a
+release read the lease before they write, and the fleet's records are read by
+key — and each of those, answered by a replica that had not applied the write
+yet, told its caller the write was never made. On a three-member cluster with
+a hundred nodes claiming at once, 743 of 10,000 claims on fresh seats answered
+"not held" for a lease that was then theirs until its TTL — a singleton duty
+dark on every node, since the one that won believed a peer had it — and a
+renew through a member that was behind answered "no longer yours", which a
+node acts on by shedding the seat. So every single-key read goes to the stream
+leader, and one the leader cannot answer — none elected, none reachable — is
+**unavailable**, never "absent". It costs the hop to the leader: measured
+in-process, 40–220 µs at the median where a replica's read took 25–135 µs, and
+about half the read throughput through one node's connection — a few percent
+of it spent by ten thousand seats renewing on the fifteen-second heartbeat.
+
 **The object store's membership is a class of its own** rather than a field of
 presence, and each reason cost a placement once. Presence is the seat host's,
 and a shutdown drain gives it up at its first step while the node is still
