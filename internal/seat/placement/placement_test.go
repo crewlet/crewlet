@@ -870,3 +870,70 @@ func TestASeatCountReadsOffTheRowAndSilenceIsNotZero(t *testing.T) {
 }
 
 func ptr(n int) *int { return &n }
+
+// ── the broker kind on the wire ──────────────────────────────────────
+
+// EVERY KIND A NODE ADVERTISES READS BACK AS ITSELF, through the JSON round
+// trip the lease store puts every row through. A kind that came back as
+// unknown would count a leaf as a member of every seal — safe, and a seal that
+// waits on a node that can never acknowledge it.
+func TestEveryAdvertisedBrokerKindRoundTrips(t *testing.T) {
+	t.Parallel()
+	for _, kind := range BrokerKinds() {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			raw, err := json.Marshal(NodeProfile{ID: "n1", Broker: kind}.Meta())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got := FromMeta("n1", decoded).Broker; got != kind {
+				t.Fatalf("advertised %q, read back %q", kind, got)
+			}
+		})
+	}
+}
+
+// A ROW THAT DOES NOT SAY IS UNKNOWN, NEVER A LEAF — an older build's row, a
+// value of the wrong type, a kind a newer build added. A leaf is the one
+// reading that would drop a member out of a capacity seal, so it is the one a
+// row that says nothing must never be given; unknown is what a seal counts.
+func TestABrokerKindTheRowDoesNotStateIsUnknownNeverALeaf(t *testing.T) {
+	t.Parallel()
+	for name, meta := range map[string]map[string]any{
+		"an older build's row":       {"roles": []any{"data"}},
+		"no meta at all":             nil,
+		"an empty string":            {"broker": ""},
+		"a value of the wrong type":  {"broker": 7},
+		"a list":                     {"broker": []any{"member"}},
+		"a kind a newer build added": {"broker": "observer"},
+		"another spelling":           {"broker": "Member"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := FromMeta("n1", meta).Broker
+			if got != BrokerUnknown {
+				t.Fatalf("read %q; a row that does not say must read as unknown", got)
+			}
+			if got.String() != "unknown" {
+				t.Errorf("an unknown kind renders as %q, want \"unknown\" — an "+
+					"empty cell reads as nothing to look at", got.String())
+			}
+		})
+	}
+}
+
+// A PROFILE WITH NO KIND WRITES NONE, so absence stays the one way to say
+// unknown and a profile nobody derived a kind for does not claim one.
+func TestAnUnknownBrokerKindIsNotWritten(t *testing.T) {
+	t.Parallel()
+	if _, ok := (NodeProfile{ID: "n1"}).Meta()["broker"]; ok {
+		t.Fatal("a profile with no broker kind advertised one")
+	}
+	if BrokerUnknown.Valid() {
+		t.Fatal("unknown is valid: it would be written onto a presence row as a kind")
+	}
+}

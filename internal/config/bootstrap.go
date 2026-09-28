@@ -933,19 +933,50 @@ func (n *Node) RoleSet() (placement.RoleSet, error) {
 // The id is passed in because it is RESOLVED (config, then environment,
 // then the default) rather than read raw off the field.
 //
-// The node block's alone: its share of the object store is a fact about its
-// disk (store.objects) and rides the object store's own lease, never presence
-// — see [placement.NodeProfile].
-func (n *Node) Profile(id string) placement.NodeProfile {
-	roles, _ := placement.ParseRoles(n.Roles) // validated already
-	labels := make(map[string]string, len(n.Labels))
-	for k, v := range n.Labels {
+// THE BOOTSTRAP'S RATHER THAN THE NODE BLOCK'S, because one of its four facts
+// is not in the node block: the broker kind is the STREAM block's
+// ([Bootstrap.BrokerKind]), and a profile built from the node block alone
+// advertised no broker at all.
+//
+// Its share of the object store is not here either, and deliberately: that is
+// a fact about the node's disk (store.objects) and rides the object store's own
+// lease, never presence — see [placement.NodeProfile].
+func (b *Bootstrap) Profile(id string) placement.NodeProfile {
+	roles, _ := placement.ParseRoles(b.Node.Roles) // validated already
+	labels := make(map[string]string, len(b.Node.Labels))
+	for k, v := range b.Node.Labels {
 		labels[k] = v
 	}
 	if len(labels) == 0 {
 		labels = nil
 	}
-	return placement.NodeProfile{ID: id, Roles: roles, Labels: labels}
+	return placement.NodeProfile{
+		ID: id, Roles: roles, Labels: labels, Broker: b.BrokerKind(),
+	}
+}
+
+// BrokerKind is how this node's broker takes part in the fleet's, derived from
+// the stream block and from nothing else: `type: nats` is a client of a cluster
+// somebody else runs, an embedded broker that joins through `leaf.urls` is a
+// leaf, and every other embedded broker is a member — a solo node's included,
+// since it runs JetStream and holds every replica there is.
+//
+// THE ONE DERIVATION, so the rules that are about the broker, the kind a node
+// advertises on its presence and the broker it actually starts cannot
+// disagree: every rule below that asks "is this node a leaf" asks this.
+//
+// The kind is never set, only derived. A setting could say `member` over a
+// stream block that starts a leaf, and every question asked of the setting
+// would then be answered about a broker the process does not run.
+func (b *Bootstrap) BrokerKind() placement.BrokerKind {
+	switch {
+	case b.Stream.Type == StreamNATS:
+		return placement.BrokerClient
+	case b.Stream.Leaf.Joins():
+		return placement.BrokerLeaf
+	default:
+		return placement.BrokerMember
+	}
 }
 
 // ResolveNodeID answers what this process calls itself.

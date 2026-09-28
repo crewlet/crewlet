@@ -494,9 +494,12 @@ func TestNodeProfileCarriesRolesAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := cfg.Node.Profile("node-7")
+	profile := cfg.Profile("node-7")
 	if !profile.RunsSeats() || profile.RunsIngress() || profile.HoldsData() {
 		t.Fatalf("profile roles = %v", profile.Roles.Names())
+	}
+	if profile.Broker != placement.BrokerLeaf {
+		t.Fatalf("a node joining through leaf urls advertises broker %q", profile.Broker)
 	}
 	if profile.Labels["zone"] != "eu" {
 		t.Fatalf("labels = %v", profile.Labels)

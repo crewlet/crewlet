@@ -1416,7 +1416,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// its box can reach. Gating the bridge on ingress as well took agent mode
 	// away from every node without that role, with the box launching and
 	// every one of its tool calls finding nothing listening.
-	if profile := boot.Node.Profile(nodeID); !profile.RunsIngress() {
+	if profile := boot.Profile(nodeID); !profile.RunsIngress() {
 		return serveBridgeOnly(ctx, boot, profile, e.Bridge(), nodeID, log)
 	}
 	// The config surface is the caller's, built before this function so a

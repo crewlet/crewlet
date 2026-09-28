@@ -739,7 +739,7 @@ func TierWarnings(boot *Bootstrap, company *Company) []Warning {
 	// A WARNING RATHER THAN A REFUSAL, because a fleet mid-way through
 	// labelling its nodes is a real and correct state, and refusing the
 	// revision there would refuse the one that asks for the spreading.
-	if key := company.Objects.FailureDomain; key != "" && boot.Node.Profile("").HoldsData() {
+	if key := company.Objects.FailureDomain; key != "" && boot.Profile("").HoldsData() {
 		if _, labelled := boot.Node.Labels[key]; !labelled {
 			out = append(out, advisory(entry(field("node.labels"), key), fmt.Sprintf(
 				"the company spreads copies of its files across %q "+

@@ -942,7 +942,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// the same thing: it parses the roles with the validator that already
 	// refused an unknown one at load, and it is what the fleet view reads
 	// a peer's presence row back through.
-	e.profile = opts.Bootstrap.Node.Profile(nodeID)
+	e.profile = opts.Bootstrap.Profile(nodeID)
 	// BEFORE the node, which registers every seat's mailbox through it on
 	// its first walk, and AFTER the lease TTL, which a retirement claims a
 	// seat for.

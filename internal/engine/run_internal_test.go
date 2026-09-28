@@ -60,7 +60,7 @@ func TestConfiguredRolesAreTheOnesTaken(t *testing.T) {
 func profileFor(t *testing.T, roles []string) placement.NodeProfile {
 	t.Helper()
 	boot := config.Bootstrap{Node: config.Node{Roles: roles}}
-	return boot.Node.Profile("n1")
+	return boot.Profile("n1")
 }
 
 // engineOn wires just enough engine for the park and pause hooks: they reach
