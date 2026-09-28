@@ -512,6 +512,18 @@ func TestAViewTakesAMapWrittenAgainAfterItsKeyWasLost(t *testing.T) {
 	}
 }
 
+// quietWatch is a store whose watch delivers nothing until it ends.
+type quietWatch struct{ MapSource }
+
+func (q quietWatch) WatchEstateMap(ctx context.Context) (<-chan coord.EstateMapRecord, error) {
+	ch := make(chan coord.EstateMapRecord)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch, nil
+}
+
 // failingLister lists the estate leases until it is told to stop answering.
 type failingLister struct {
 	coord.Lister
@@ -539,7 +551,12 @@ func TestAViewIsFreshOnlyWhileBothHalvesAreConfirmed(t *testing.T) {
 	c := &clock{now: base}
 	leases := &failingLister{Lister: coordmemory.New()}
 	store, _, _ := storeWithMap(t)
-	v := viewOver(t, store, leases, layoutZero, c)
+	// A WATCH THAT DELIVERS NOTHING: the map goes quiet by construction,
+	// so the only confirmations are the reads this test makes — a first
+	// delivery landing after the clock moved would confirm the view at
+	// the new instant, which is a delivery doing its job rather than the
+	// view going quiet.
+	v := viewOver(t, quietWatch{store}, leases, layoutZero, c)
 	run(t, v)
 	eventually(t, "a fresh view", v.Fresh)
 
