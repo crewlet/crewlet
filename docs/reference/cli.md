@@ -725,26 +725,18 @@ hold their work until a provider is added (see
 | `-json` | Emit a machine-readable result on stdout instead of prose. |
 | `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
-**A Tier A document also says which state-log domains it makes a node
-apply**, because `node.roles` decides that and nothing else shows it until the
-node boots: a `seats`-only node runs no identity estate (see
-[Which state-log domains the node runs](../guides/satellite-nodes.md#which-state-log-domains-the-node-runs)).
-The prose summary ends with it —
+A Tier A document's prose summary names what it resolved to:
 
 ```
-crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats], domains [tracker vectors pages chart]
+crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats]
 ```
-
-— and so does the two-tier form's line, after the company's seats and
-providers.
 
 With `-json`, the payload is `{"valid": bool, "tier": str, "file": str,
 "problems": [...], "warnings": [...], "summary": {...}}`. `summary` is what the
 document resolved to: a Tier B file's `company`, `seats` and `llm_providers`;
-a Tier A file's `stream`, `coordination`, `store`, `roles` and `domains`; and
-for the two-tier form the company's three beside `stream`, `coordination` and
-`domains`. `summary.domains` is always a list, in the order the engine reports
-domains everywhere else. Each problem is located and classified, so an editor,
+a Tier A file's `stream`, `coordination`, `store` and `roles`; and for the
+two-tier form the company's three beside `stream` and `coordination`. Each
+problem is located and classified, so an editor,
 CI job, or [AI authoring loop](../getting-started/ai-authoring.md) can fix
 everything in one pass:
 
