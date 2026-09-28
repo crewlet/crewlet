@@ -1,7 +1,5 @@
 package topics
 
-import "strings"
-
 // The knowledge base's own log, and why its grammar sits beside the tracker's.
 //
 // The pages domain is the state-log framework's THIRD, and it is the second
@@ -34,39 +32,15 @@ const (
 // which is the package that switches on them; what lives here is the GRAMMAR
 // they are composed into, which is the half two processes have to agree about.
 
-// PagesLogSubject builds the subject for one object.
-//
-// An EMPTY id is legal and means a kind with exactly one object, which the
-// barrier is. An empty KIND is not: it would publish to the prefix itself, a
-// real subject inside the wildcard that the applier's switch has no case for,
-// so it answers the empty string and callers must treat that as "not
-// publishable" rather than as a subject.
+// PagesLogSubject builds the subject for one object on layout 0's pages log:
+// [LogSubject] under [PagesLogPrefix], and refused wherever that is.
 func PagesLogSubject(kind, id string) string {
-	if kind == "" {
-		return ""
-	}
-	if id == "" {
-		return PagesLogPrefix + "." + kind
-	}
-	return PagesLogPrefix + "." + kind + "." + id
+	return LogSubject(PagesLogPrefix, kind, id)
 }
 
-// PagesLogPath recovers the kind and the id from a subject on the pages log,
-// reporting whether the subject was one.
-//
-// The exact inverse of [PagesLogSubject]. The ID keeps its dots — a revision's
-// is "<page>.<n>" and a comment's is "<page>.<comment>" — so only the FIRST
-// segment is the kind, and splitting on every dot would recover a kind of
-// "revision" and an id of one uuid segment from a subject naming a page's
-// seventh body.
+// PagesLogPath recovers the kind and the id from a subject on layout 0's pages
+// log, reporting whether the subject was one: [LogPath] under
+// [PagesLogPrefix], the exact inverse of [PagesLogSubject].
 func PagesLogPath(subject string) (kind, id string, ok bool) {
-	rest, found := strings.CutPrefix(subject, PagesLogPrefix+".")
-	if !found || rest == "" {
-		return "", "", false
-	}
-	kind, id, found = strings.Cut(rest, ".")
-	if kind == "" || (found && id == "") {
-		return "", "", false
-	}
-	return kind, id, true
+	return LogPath(PagesLogPrefix, subject)
 }
