@@ -533,6 +533,18 @@ func (s *stateLog) Stop() {
 	s.stop()
 	s.done.Wait()
 	s.haltAppliers()
+	// THE CONSUMERS ARE GIVEN UP LAST, once no loop can fetch through them:
+	// the process and its connection may outlive this state log — an engine
+	// stopped and another started over the same backends — and a handle
+	// left open keeps the pull request its last fetch sent standing on the
+	// broker, which is served before the next engine's and hands a record
+	// to a buffer nobody reads until the ack window. Closed, what it holds
+	// and what that request still delivers go back to the broker at once.
+	for _, running := range s.domains {
+		if running != nil && running.consumer != nil {
+			running.consumer.Close()
+		}
+	}
 }
 
 // applierRun is one domain's apply loop: what ends it, and what reports it

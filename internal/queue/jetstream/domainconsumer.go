@@ -70,9 +70,12 @@ type DomainConsumer struct {
 
 	// pull is the consumer's standing pull (pullrequest.go): one inbox
 	// every fetch's request is answered on, and what it delivered that no
-	// fetch has taken. Made by the first fetch and dropped by a reset,
-	// whose consumer those deliveries belonged to. Guarded by mu.
+	// fetch has taken. Made by the first fetch, dropped by a reset, whose
+	// consumer those deliveries belonged to, and released by [Close], whose
+	// consumer stays. Guarded by mu.
 	pull *puller
+	// closed is [DomainConsumer.Close] having run. Guarded by mu.
+	closed bool
 }
 
 // domainConsumerMaxAckPending is how many records the broker may hand this
@@ -1049,14 +1052,16 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	if maxMessages <= 0 {
 		return nil, nil
 	}
-	// THE CONSUMER IS ENSURED FIRST, so a handle a failed reset cleared is
-	// rebuilt before a request is addressed to a name the broker does not
-	// hold — see [DomainConsumer.consumerFor].
-	if _, err := c.consumerFor(ctx); err != nil {
-		return nil, err
-	}
+	// THE STANDING PULL FIRST, which is what refuses a closed handle before
+	// anything is rebuilt for it; it sends nothing.
 	p, err := c.standing()
 	if err != nil {
+		return nil, err
+	}
+	// THE CONSUMER IS ENSURED BEFORE A REQUEST IS SENT, so a handle a failed
+	// reset cleared is rebuilt before a request is addressed to a name the
+	// broker does not hold — see [DomainConsumer.consumerFor].
+	if _, err = c.consumerFor(ctx); err != nil {
 		return nil, err
 	}
 	msgs, err := p.fetch(ctx, maxMessages, max(maxBytes, 0), wait)
@@ -1090,6 +1095,10 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 func (c *DomainConsumer) standing() (*puller, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return nil, fmt.Errorf("jetstream: %s's handle was closed; open the "+
+			"consumer again to read it: %w", c.name, errHandleClosed)
+	}
 	if c.pull != nil {
 		return c.pull, nil
 	}
@@ -1100,6 +1109,30 @@ func (c *DomainConsumer) standing() (*puller, error) {
 	c.pull = p
 	return p, nil
 }
+
+// Close gives up this handle for good, leaving the consumer on the broker for
+// whoever opens it next — a stopped engine's successor in the same process,
+// on the same connection. Call it once nothing will fetch through the handle
+// again; a fetch after it is refused.
+//
+// WHAT THE HANDLE HOLDS IS HANDED BACK, not left: its standing pull's buffer,
+// and every record a request it left standing delivers from here (see
+// pullrequest.go's head). Left, those went to a handle nobody would read, and
+// the successor's own request — queued behind the abandoned one, since the
+// server serves them oldest first — waited out the ack window for a record
+// already on the log. Idempotent.
+func (c *DomainConsumer) Close() {
+	c.mu.Lock()
+	p := c.pull
+	c.pull, c.closed = nil, true
+	c.mu.Unlock()
+	if p != nil {
+		p.release()
+	}
+}
+
+// errHandleClosed is a fetch through a [DomainConsumer] that was closed.
+var errHandleClosed = errors.New("jetstream: state-log consumer handle closed")
 
 // Pending implements [statelog.Fetcher]: how many records this consumer has
 // not delivered, which is what tells a partially filled batch whether waiting

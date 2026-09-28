@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,25 @@ import (
 // by a fetch, one at a time, so what stands is at most one fetch's worth, and
 // the buffer that holds what it delivered is the handle's — the next runner
 // over it takes what the last one left.
+//
+// # And a handle nobody will read again GIVES IT BACK
+//
+// "The next runner over it" is true only while the handle has one. A reader
+// that is done with the consumer for good — an engine stopping, while the
+// process and its connection go on and a new engine opens its own handle on
+// the same consumer — leaves the handle holding whatever the buffer has and a
+// request the server is still serving, and the server serves requests oldest
+// first: a record appended next was delivered to the abandoned handle rather
+// than to the new one's request queued behind it, and sat in a buffer nobody
+// would read until the ack window redelivered it. Measured in the engine's own
+// case: a read barrier appended 42 ms into the second engine went to the first
+// one's inbox and was redelivered ten seconds later, so the node stayed
+// unhydrated past its ten-second bound. So a handle is RELEASED
+// ([DomainConsumer.Close]): what it holds is negatively acknowledged, which
+// the broker redelivers at once, and its inbox is drained, so a request it
+// left standing has a reply nobody is interested in and the server serves the
+// next request of the consumer instead — measured on a member that serves
+// leaves as well as on one that does not.
 
 // pullGrace is how long past its own expiry a request is still counted as one
 // the server may be serving.
@@ -92,6 +112,7 @@ const pullGrace = time.Second
 // puller is one consumer's standing pull.
 type puller struct {
 	nc      *nats.Conn
+	log     *slog.Logger
 	subject string // the consumer's MSG.NEXT subject, in the connection's API
 	sub     *nats.Subscription
 
@@ -117,6 +138,10 @@ type puller struct {
 	// failure is a status that ended a request as a failure, for the next
 	// fetch to report.
 	failure error
+	// released is the handle having been given up ([puller.release]): no
+	// fetch will run again, and a record the inbox still hands over is
+	// handed back rather than buffered.
+	released bool
 }
 
 // standingRequest is one request as the client counts it: what the server
@@ -136,7 +161,7 @@ func (q *Queue) newPuller(stream, consumer string) (*puller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: address the pulls on %s: %w", consumer, err)
 	}
-	p := &puller{nc: q.nc, subject: subject, wake: make(chan struct{}, 1)}
+	p := &puller{nc: q.nc, log: q.log, subject: subject, wake: make(chan struct{}, 1)}
 	// A CALLBACK SUBSCRIPTION rather than a channel one. A channel the
 	// library delivers into drops what finds it full, and a dropped
 	// delivery is a record in flight that nobody holds until the ack
@@ -151,8 +176,53 @@ func (q *Queue) newPuller(stream, consumer string) (*puller, error) {
 
 // close ends the standing inbox. What it had buffered is dropped with it,
 // which is right only where the consumer those records were delivered for is
-// going too — see [DomainConsumer.Reset].
+// going too — see [DomainConsumer.Reset]. A handle whose consumer stays is
+// [puller.release]d instead.
 func (p *puller) close() { _ = p.sub.Unsubscribe() }
+
+// release gives the pull up for good, for a consumer that stays: what the
+// buffer holds is handed back, and the inbox is DRAINED rather than dropped —
+// the server stops routing to it, and whatever had already reached this
+// client is still passed to [puller.deliver], which hands it back too, where
+// an unsubscribe would discard it in flight. A request still standing on the
+// server then has a reply nobody is interested in, and the server skips it
+// for the next request of the consumer. Called once no fetch will run again.
+func (p *puller) release() {
+	p.mu.Lock()
+	p.released = true
+	held := p.buffered
+	p.buffered = nil
+	p.mu.Unlock()
+	p.handBack(held)
+	if err := p.sub.Drain(); err != nil {
+		p.log.Warn("jetstream_pull_release_failed", "subject", p.subject,
+			"error", err.Error(),
+			"detail", "the released state-log pull's inbox could not be drained; "+
+				"it stays subscribed and hands back what it is still delivered")
+	}
+}
+
+// handBack negatively acknowledges records no reader will take, which the
+// broker redelivers at once to whichever request of the consumer is waiting.
+//
+// A hand-back that fails leaves the record where an unread delivery always
+// was — in flight until the ack window redelivers it — and says so, since
+// that is thirty seconds of a strict log standing still.
+func (p *puller) handBack(msgs []*nats.Msg) {
+	for _, msg := range msgs {
+		if err := msg.Nak(); err != nil {
+			seq := uint64(0)
+			if meta, unreadable := msg.Metadata(); unreadable == nil {
+				seq = meta.Sequence.Stream
+			}
+			p.log.Warn("jetstream_pull_handback_failed", "subject", p.subject,
+				"seq", seq, "error", err.Error(),
+				"detail", "a record delivered to a released state-log pull could "+
+					"not be handed back, so the broker redelivers it only once "+
+					"its acknowledgement window passes")
+		}
+	}
+}
 
 // request sends one pull for up to batch records and maxBytes of them (zero is
 // no byte bound), standing for wait; a wait of zero or less asks for what is
@@ -183,6 +253,13 @@ func (p *puller) request(batch, maxBytes int, wait time.Duration) error {
 func (p *puller) deliver(msg *nats.Msg) {
 	status, failure := pullStatus(msg)
 	p.mu.Lock()
+	if p.released {
+		p.mu.Unlock()
+		if status == "" {
+			p.handBack([]*nats.Msg{msg})
+		}
+		return
+	}
 	switch {
 	case status == "":
 		p.buffered = append(p.buffered, msg)

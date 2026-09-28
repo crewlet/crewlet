@@ -859,6 +859,150 @@ func TestARequestLeftStandingDoesNotKeepTheNextFetchFromAsking(t *testing.T) {
 	}
 }
 
+// standLong sends a request the server serves for twenty seconds through a
+// handle's standing pull, and waits until the server holds it — what an
+// engine's last fetch leaves behind when the engine stops.
+func standLong(t *testing.T, cons *DomainConsumer) *puller {
+	t.Helper()
+	p, err := cons.standing()
+	if err != nil {
+		t.Fatalf("the standing pull: %v", err)
+	}
+	p.mu.Lock()
+	err = p.request(1, 0, 20*time.Second)
+	p.mu.Unlock()
+	if err != nil {
+		t.Fatalf("a long request: %v", err)
+	}
+	waitWaiting(t, cons, 1)
+	return p
+}
+
+// waitWaiting waits until the server holds n requests on the consumer.
+func waitWaiting(t *testing.T, cons *DomainConsumer, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		info, err := consumerInfo(t, cons)
+		if err != nil {
+			t.Fatalf("consumer info: %v", err)
+		}
+		if info.NumWaiting >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the server holds %d request(s) on %s, want %d — a request "+
+				"did not reach it", info.NumWaiting, cons.name, n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A CLOSED HANDLE HANDS BACK WHAT IT HELD, to the next handle on the consumer
+// at once.
+//
+// The next reader of a consumer is not always the handle's next fetch: an
+// engine stopped and another started over the same backends opens a handle of
+// its own, and the first one's buffer is read by nobody. The second fetch's
+// twenty-second wait is inside the consumer's thirty-second ack window, so a
+// record left in that buffer is not handed over at all.
+func TestAClosedHandleHandsBackWhatItHeld(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_HELD_LOG", "crewlet.held.log")
+	first, err := q.DomainConsumer(t.Context(), "CREWLET_HELD_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	p := standLong(t, first)
+	// THE SUCCESSOR OPENS while nothing has been delivered, which is what
+	// keeps the consumer rather than rebuilding it — a rebuild would hand
+	// everything over again whatever the first handle did.
+	second, err := q.DomainConsumer(t.Context(), "CREWLET_HELD_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open the successor: %v", err)
+	}
+	appendN(t, log, "crewlet.held.log.task", 1)
+	waitUntil(t, "the first handle to hold the record", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.buffered) == 1
+	})
+	first.Close()
+	got, err := second.Fetch(t.Context(), 1, 0, 20*time.Second)
+	if err != nil || len(got) != 1 || seqOf(got) != 1 {
+		t.Fatalf("the successor's fetch returned %d record(s) from %d, %v, want "+
+			"sequence 1 — the record the closed handle held was not handed back",
+			len(got), seqOf(got), err)
+	}
+	if _, err := first.Fetch(t.Context(), 1, 0, time.Millisecond); !errors.Is(err, errHandleClosed) {
+		t.Errorf("a fetch through the closed handle answered %v, want it refused", err)
+	}
+}
+
+// A CLOSED HANDLE'S STANDING REQUEST DOES NOT TAKE THE SUCCESSOR'S NEXT
+// RECORD.
+//
+// The server serves a consumer's requests oldest first, so the closed handle's
+// request — still standing for most of its twenty seconds — was served before
+// the successor's queued behind it: this is the engine's own case, a read
+// barrier appended into the second engine delivered to the first one's
+// inbox. On a member that SERVES LEAVES, which is a data node's configuration
+// in a fleet with nodes that hold no data, because such a server can find a
+// request's reply across a link as well as on its own clients.
+func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
+	t.Parallel()
+	q := newQueueWith(t, Config{
+		ServerName: "member", LeafHost: "127.0.0.1", LeafPort: unusedPort(t),
+		StoreDir: t.TempDir(),
+	})
+	if err := q.EnsureDomainStream(t.Context(), DomainStream{
+		Name: "CREWLET_LATER_LOG", Subjects: []string{"crewlet.later.log.>"},
+		MaxBytes: 16 << 20, Duplicates: time.Minute,
+	}); err != nil {
+		t.Fatalf("EnsureDomainStream: %v", err)
+	}
+	log, err := q.DomainLog(t.Context(), "CREWLET_LATER_LOG")
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	first, err := q.DomainConsumer(t.Context(), "CREWLET_LATER_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	p := standLong(t, first)
+	second, err := q.DomainConsumer(t.Context(), "CREWLET_LATER_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open the successor: %v", err)
+	}
+	first.Close()
+	type fetched struct {
+		got []statelog.Message
+		err error
+	}
+	done := make(chan fetched, 1)
+	go func() {
+		got, err := second.Fetch(t.Context(), 1, 0, 20*time.Second)
+		done <- fetched{got, err}
+	}()
+	waitWaiting(t, second, 2)
+	appendN(t, log, "crewlet.later.log.task", 1)
+	select {
+	case f := <-done:
+		if f.err != nil || len(f.got) != 1 || seqOf(f.got) != 1 {
+			t.Fatalf("the successor's fetch returned %d record(s) from %d, %v, want "+
+				"sequence 1 — the closed handle's request was served it",
+				len(f.got), seqOf(f.got), f.err)
+		}
+	case <-time.After(25 * time.Second):
+		t.Fatal("the successor's fetch did not return")
+	}
+	// AND THE INBOX IS GONE, so nothing the server still sends it can
+	// reach it.
+	waitUntil(t, "the closed handle's inbox to be drained", func() bool {
+		return !p.sub.IsValid()
+	})
+}
+
 // A RECORD IS HANDED OVER WITH ITS BURST, not at the end of the wait.
 //
 // One record does not end a pull request, so a fetch that read its request
@@ -907,17 +1051,16 @@ func TestARecordIsHandedOverWithItsBurst(t *testing.T) {
 // record appended next is delivered to it rather than waiting for a request.
 func waitStanding(t *testing.T, cons *DomainConsumer) {
 	t.Helper()
+	waitWaiting(t, cons, 1)
+}
+
+// waitUntil waits up to five seconds for cond, naming what it waited for.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		info, err := consumerInfo(t, cons)
-		if err != nil {
-			t.Fatalf("consumer info: %v", err)
-		}
-		if info.NumWaiting > 0 {
-			return
-		}
+	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatal("no request reached the server")
+			t.Fatalf("waited five seconds for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
