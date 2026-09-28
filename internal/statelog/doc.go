@@ -425,6 +425,11 @@
 // the one a running fleet already holds, byte for byte, and every key is the
 // domain's own name.
 //
+// An EVICTION or a RELEASE is not a coordination record at all, and needs no
+// such name: it is a record on the very log it gates, applied into that log's
+// rows in its partition's own file, so it is about that log by construction —
+// the same way a checkpoint, an anchor and a generation are.
+//
 // # The alarm table borrows every threshold it fires at
 //
 // It is in this package rather than beside any one subsystem because an alarm
