@@ -192,6 +192,14 @@ describe("a detached coding run's spend", () => {
       () => true,
     );
     expect(runSpend(runs)).toEqual({ tokens: 5700 + 30, runs: 2 });
+    // And the sum holds that on its own: groupTurns counts whatever runs its
+    // caller hands it, and a caller that merged two lists without runUsages
+    // hands it both copies.
+    const one = fromRunUsageEvent(usage("u1"))!;
+    expect(runSpend([one, { ...one }])).toEqual({ tokens: 5700, runs: 1 });
+    expect(groupTurns([fromPhaseEvent(phaseEvent())!], [one, { ...one }])[0]?.totalTokens).toBe(
+      120 + 5700,
+    );
     // A negative count is a bad payload, not a refund.
     expect(runSpend(runUsages([usage("u3", { input_tokens: -9000 })], () => true)).tokens).toBe(
       700,
