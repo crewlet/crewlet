@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -70,6 +71,87 @@ func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 	} {
 		if !fired[kind] {
 			t.Errorf("%s did not fire on a reading that says it should", kind)
+		}
+	}
+}
+
+// THE VOLUME ALARM IS ABOUT THE VOLUME WITH THE LEAST ROOM, measured per
+// volume. `store.replicated_path` may put the replicated estate on a volume of
+// its own, and the reading measured the node estate's volume alone against
+// both files' bytes: a replicated estate filling its own disk never fired. Here
+// the replicated estate sits on a nearly full volume and the node estate on an
+// empty one, and the reading is the nearly full one's — its free space against
+// its own file, never the other volume's space or both files' bytes.
+func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
+	t.Parallel()
+	nodeDir, replicatedDir := t.TempDir(), t.TempDir()
+	db, err := store.OpenNode(t.Context(), nodeDir+"/company.db", store.Options{
+		ReplicatedPath: replicatedDir + "/crewlet-replicated.db"})
+	if err != nil {
+		t.Fatalf("store.OpenNode: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	part, err := db.OpenPartition(t.Context(), storetest.LayoutZero(1))
+	if err != nil {
+		t.Fatalf("open layout 0's partition: %v", err)
+	}
+	nodeSize, err := fileBytes(db.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicatedSize, err := fileBytes(part.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := map[string]int64{nodeDir: 1 << 40, replicatedDir: 1 << 10}
+	r := &retention{db: db, volumes: func(dir string) (string, int64, error) {
+		return dir, free[dir], nil
+	}}
+	var reading statelog.Reading
+	r.space(&reading)
+	if reading.FreeBytes != 1<<10 || reading.StoreBytes != replicatedSize {
+		t.Fatalf("the reading is %d free against %d stored, want the replicated volume's "+
+			"%d against its own %d", reading.FreeBytes, reading.StoreBytes, 1<<10, replicatedSize)
+	}
+	alarms := statelog.Evaluate(reading)
+	if len(alarms) != 1 || alarms[0].Kind != statelog.KindVolumeLow {
+		t.Errorf("a nearly full volume raised %v, want volume_low", alarms)
+	}
+
+	// ONE VOLUME UNDER BOTH is one volume's bytes, summed.
+	r.volumes = func(string) (string, int64, error) { return "one", 1 << 40, nil }
+	reading = statelog.Reading{}
+	r.space(&reading)
+	if reading.StoreBytes != nodeSize+replicatedSize {
+		t.Errorf("one volume holding both files is %d stored, want %d", reading.StoreBytes,
+			nodeSize+replicatedSize)
+	}
+}
+
+// THE TIGHTEST VOLUME IS THE ONE WITH THE SMALLEST ROOM FOR ITS OWN BYTES, and a
+// volume holding nothing is never it.
+func TestTheTightestVolumeIsTheOneNearestItsAlarm(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		files        []storedFile
+		free, stored int64
+	}{
+		"no files":              {nil, 0, 0},
+		"two files, one volume": {[]storedFile{{"a", 100, 10}, {"a", 100, 30}}, 100, 40},
+		"the smaller ratio, not the smaller free": {
+			[]storedFile{{"big", 1000, 900}, {"small", 50, 5}}, 1000, 900},
+		"an empty volume beside a full one": {
+			[]storedFile{{"empty", 1, 0}, {"full", 10, 100}}, 10, 100},
+		// Tens of terabytes each: the cross products overflow an int64,
+		// and wrapped they choose the roomier volume in either order.
+		"sizes past what a product of int64s holds": {
+			[]storedFile{{"a", 14773780071959, 34330076720781}, {"b", 27431250736051, 18740855235886}},
+			14773780071959, 34330076720781},
+	} {
+		free, stored := tightestVolume(tc.files)
+		if free != tc.free || stored != tc.stored {
+			t.Errorf("%s: %d free against %d stored, want %d against %d", name,
+				free, stored, tc.free, tc.stored)
 		}
 	}
 }

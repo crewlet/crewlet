@@ -97,6 +97,10 @@ type retention struct {
 	// condition reads as "nothing to report".
 	metrics *metrics.Recorder
 
+	// volumes identifies the volume a directory is on and measures what it
+	// has free ([measureVolume], nil); a parameter for the tests.
+	volumes func(dir string) (volume string, free int64, err error)
+
 	// alarms turns each evaluation into the two surfaces that are not a
 	// screen — the `crewlet.alarm.active{kind}` gauge a collector scrapes,
 	// and one WARN on entry and one on exit.

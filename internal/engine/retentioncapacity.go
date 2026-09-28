@@ -2,9 +2,12 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -187,10 +190,12 @@ func (r *retention) space(out *statelog.Reading) {
 	if r.db == nil {
 		return
 	}
+	measure := r.volumes
+	if measure == nil {
+		measure = measureVolume
+	}
+	var files []storedFile
 	for _, db := range storeFiles(r.db) {
-		if size, err := fileBytes(db.Path()); err == nil {
-			out.StoreBytes += size
-		}
 		if wal, err := fileBytes(db.Path() + walSuffix); err == nil {
 			// THE LARGEST, NOT THE SUM. The alarm is about ONE
 			// checkpoint that is not happening, and a gibibyte
@@ -198,15 +203,79 @@ func (r *retention) space(out *statelog.Reading) {
 			// where a gibibyte in one is the fault.
 			out.WALBytes = max(out.WALBytes, wal)
 		}
+		size, err := fileBytes(db.Path())
+		if err != nil {
+			continue
+		}
+		vol, free, err := measure(filepath.Dir(db.Path()))
+		if err != nil {
+			continue
+		}
+		files = append(files, storedFile{volume: vol, free: free, size: size})
 	}
-	// ONE VOLUME, from the node estate's path. Every file is opened under
-	// `store.dir` and a deployment that split them across two mounts would
-	// need two free counts — but it cannot: [store.ReplicatedPath] derives
-	// the partitions' directory from the node's own path unless an operator
-	// moves it.
-	if free, err := freeSpace(r.db.Path()); err == nil {
-		out.FreeBytes = free
+	out.FreeBytes, out.StoreBytes = tightestVolume(files)
+}
+
+// measureVolume is the volume dir is on — the filesystem's own device number,
+// so two paths on one volume are one volume — and what an unprivileged process
+// may still write there ([volumeFree]).
+func measureVolume(dir string) (string, int64, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(dir, &st); err != nil {
+		return "", 0, fmt.Errorf("engine: identify the volume holding %s: %w", dir, err)
 	}
+	free, err := volumeFree(dir)
+	if err != nil {
+		return "", 0, err
+	}
+	// Sprint rather than a conversion: Stat_t.Dev is a uint64 on linux and
+	// an int32 on darwin, both release targets, and the key only has to
+	// tell two devices apart.
+	return fmt.Sprint(st.Dev), free, nil
+}
+
+// storedFile is one database file as the volume alarm weighs it: the volume it
+// is on, what that volume has free, and how large the file is.
+type storedFile struct {
+	volume     string
+	free, size int64
+}
+
+// tightestVolume is the free space and the stored bytes of the volume with the
+// least room for a second copy of what it holds — the one `volume_low` has to
+// be about.
+//
+// PER VOLUME, because the files need not share one. `store.replicated_path`
+// puts the replicated estate's partition files wherever an operator names —
+// the fast local disk for the node's own file and a large network volume for
+// the partitions is the reason it exists — and the reading used to measure the
+// node estate's volume alone against every file's bytes: a replicated estate
+// filling its own volume never fired, and a node estate beside a nearly full
+// disk of somebody else's fired for bytes that were not there. Two files on one volume are one volume's bytes, so the
+// volumes are told apart by what the filesystem says they are, never by their
+// paths.
+func tightestVolume(files []storedFile) (free, stored int64) {
+	type volume struct{ free, stored int64 }
+	byVolume := map[string]*volume{}
+	for _, f := range files {
+		v, ok := byVolume[f.volume]
+		if !ok {
+			v = &volume{free: f.free}
+			byVolume[f.volume] = v
+		}
+		v.stored += f.size
+	}
+	found := false
+	for _, v := range byVolume {
+		// THE SMALLEST RATIO OF FREE TO STORED is the volume nearest the
+		// alarm's own condition — free below a multiple of stored — and
+		// comparing across multiplies rather than divides, so an empty
+		// volume is never a division by zero.
+		if !found || float64(v.free)*float64(stored) < float64(free)*float64(v.stored) {
+			free, stored, found = v.free, v.stored, true
+		}
+	}
+	return free, stored
 }
 
 // semanticCoverage is the fraction of this node's sources carrying a current

@@ -689,10 +689,6 @@ func limitSource(source jetstream.BudgetSource, volume string) string {
 		"not know", source)
 }
 
-// freeSpace is what an unprivileged process may actually use on the volume
-// holding the file at path.
-func freeSpace(path string) (int64, error) { return volumeFree(filepath.Dir(path)) }
-
 // volumeFree is what an unprivileged process may actually use on the volume
 // holding dir.
 //
