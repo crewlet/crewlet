@@ -87,10 +87,7 @@ func TestTheStorePinsAWriterPerRegisteredDomain(t *testing.T) {
 			t.Parallel()
 			b := testBootstrap(t)
 			b.Node.Roles = roles
-			opts, err := storeOptions(&b, nil)
-			if err != nil {
-				t.Fatalf("storeOptions: %v", err)
-			}
+			opts := storeOptions(&b, nil)
 			if opts.PinnedWriters != want {
 				t.Errorf("roles %v pin %d writer(s), want one per registered "+
 					"domain (%d): every node starts an apply loop for each",

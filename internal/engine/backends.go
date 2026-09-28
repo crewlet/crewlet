@@ -253,11 +253,7 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 
 // openStore opens this node's local database.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
-	opts, err := storeOptions(b, c)
-	if err != nil {
-		return nil, err
-	}
-	db, err := store.Open(ctx, b.Store.Path, opts)
+	db, err := store.Open(ctx, b.Store.Path, storeOptions(b, c))
 	if err != nil {
 		return nil, fmt.Errorf("engine: store: %w", err)
 	}
@@ -269,7 +265,7 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 //
 // APART FROM THE OPEN so that what the pool is sized for can be asked of a
 // node's configuration without a file.
-func storeOptions(b *config.Bootstrap, c *config.Company) (store.Options, error) {
+func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
@@ -314,7 +310,7 @@ func storeOptions(b *config.Bootstrap, c *config.Company) (store.Options, error)
 	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}
-	return opts, nil
+	return opts
 }
 
 // openNATS builds a JetStream stream, embedded or external, and the
