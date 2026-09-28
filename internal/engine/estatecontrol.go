@@ -1,0 +1,183 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate/partmap"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// The operator's gestures on the estate map: take a data node out of it, put
+// it back, hold the map through planned maintenance, release the hold, and
+// move one partition off one node or cancel that move.
+//
+// # The same read, decide, compare-and-set as the object map's
+//
+// Each gesture reads the stored map, applies the PURE gesture from
+// internal/estate/partmap and writes the result back at the version read,
+// through the loop both maps share (mapcontrol.go) — so a gesture that raced
+// the maintainer's tick is applied again to what the tick wrote, one whose
+// answer is the map as it stands writes nothing, and one that lost every race
+// answers Landed false with the map as it now stands. Any node that can reach
+// the coordination store may make one: the map is one record there, and a
+// gesture is a compare-and-set on it rather than a message to the node that
+// holds the duty.
+//
+// # What a caller can tell apart
+//
+// [partmap.ErrNoMap] (no estate map), [partmap.ErrUnknownPartition],
+// [partmap.ErrNotAHolder] and [partmap.ErrNowhereToMove] for a move, and
+// internal/membership's refusals for the rest — ErrRemovedMember tested
+// before ErrUnknownMember, which it wraps. A store that did not answer is
+// [ErrEstateUnavailable], and a map this build cannot rewrite
+// [ErrEstateNewerMap].
+//
+// # Under the single-file layout
+//
+// There is no estate map — every data node holds the whole estate, and the
+// map's duty writes none for that layout — so [EstateControl.State] answers
+// that there is none, and EVERY gesture is refused with [partmap.ErrNoMap],
+// saying why: there is no partition to place, move or hold anybody for.
+
+// ErrEstateUnavailable is a gesture whose read or write the coordination store
+// did not answer. It says nothing about the map, which is unchanged or changed
+// as far as anyone here can tell; asking again is safe.
+var ErrEstateUnavailable = errors.New("engine: the estate map could not be read or written")
+
+// ErrEstateNewerMap is a stored estate map a newer build wrote. This build must
+// not rewrite it — a map written back in an older shape drops whatever that
+// build added — so the gesture belongs on a node running the newer build.
+var ErrEstateNewerMap = errors.New("engine: the estate map was written by a newer build; " +
+	"make this gesture from a node running it")
+
+// errNoEstateMap is the refusal of a gesture where there is no estate map:
+// [partmap.ErrNoMap], saying what a fleet with none is.
+var errNoEstateMap = fmt.Errorf("%w: the estate is not divided into partitions — every "+
+	"data node holds the whole of it (layout 0) — so there is no partition to place, "+
+	"move or hold a node for", partmap.ErrNoMap)
+
+// estateMapStore is what the gestures need from the coordination store.
+type estateMapStore interface {
+	EstateMap(ctx context.Context) (coord.EstateMapRecord, bool, error)
+	UpdateEstateMap(ctx context.Context, value []byte, version uint64) (coord.EstateMapRecord, bool, error)
+}
+
+// EstateGesture is what a gesture on the estate map did ([MapGesture]).
+type EstateGesture = MapGesture[partmap.MapState]
+
+// EstateControl applies an operator's gestures to the estate map. Nil on a node
+// with no coordination store to hold one.
+type EstateControl struct {
+	store estateMapStore
+	now   func() time.Time
+}
+
+// Out takes a data node out of the estate map: every partition's target stops
+// naming it, so what it holds is rebuilt on the others while it keeps serving,
+// and then released. by and reason are recorded on the map.
+func (c *EstateControl) Out(ctx context.Context, node, by, reason string) (EstateGesture, error) {
+	return c.apply(ctx, "out", func(s partmap.MapState) (partmap.MapState, error) {
+		return partmap.Out(s, node, by, reason, c.now())
+	}, "node", node, "by", by, "reason", reason)
+}
+
+// In puts a data node back: the targets may name it again — and vouches for
+// one the map removed for absence and has on probation.
+func (c *EstateControl) In(ctx context.Context, node, by string) (EstateGesture, error) {
+	return c.apply(ctx, "in", func(s partmap.MapState) (partmap.MapState, error) {
+		return partmap.In(s, node)
+	}, "node", node, "by", by)
+}
+
+// Hold holds the map for d, at most internal/membership's MaxHold: no member
+// is removed for absence until it expires or is released.
+func (c *EstateControl) Hold(ctx context.Context, d time.Duration, by, reason string) (EstateGesture, error) {
+	return c.apply(ctx, "hold", func(s partmap.MapState) (partmap.MapState, error) {
+		return partmap.HoldFor(s, d, by, reason, c.now())
+	}, "for", d.String(), "by", by, "reason", reason)
+}
+
+// Release ends a hold.
+func (c *EstateControl) Release(ctx context.Context, by string) (EstateGesture, error) {
+	return c.apply(ctx, "release", partmap.Release, "by", by)
+}
+
+// Move moves partition p off node: p's copy there is rebuilt on another member
+// and then released. It lasts until [EstateControl.CancelMove] or the node
+// leaves the map.
+func (c *EstateControl) Move(ctx context.Context, p statelog.PartitionID, node, by, reason string) (EstateGesture, error) {
+	return c.apply(ctx, "move", func(s partmap.MapState) (partmap.MapState, error) {
+		return partmap.Move(s, p, node, by, reason, c.now())
+	}, "partition", p.String(), "node", node, "by", by, "reason", reason)
+}
+
+// CancelMove lifts a move: p's target may name node again.
+func (c *EstateControl) CancelMove(ctx context.Context, p statelog.PartitionID, node, by string) (EstateGesture, error) {
+	return c.apply(ctx, "cancel_move", func(s partmap.MapState) (partmap.MapState, error) {
+		return partmap.CancelMove(s, p, node)
+	}, "partition", p.String(), "node", node, "by", by)
+}
+
+// State reads the stored map as it is now, and false while there is none —
+// which, under the single-file layout, is always.
+//
+// FROM THE STORE, not a watched view: a gesture's caller wants the map the next
+// gesture will be applied to.
+func (c *EstateControl) State(ctx context.Context) (partmap.MapState, uint64, bool, error) {
+	return c.record().state(ctx)
+}
+
+// apply is one gesture through the loop both maps share.
+func (c *EstateControl) apply(ctx context.Context, gesture string,
+	change func(partmap.MapState) (partmap.MapState, error), attrs ...any) (EstateGesture, error) {
+
+	return c.record().apply(ctx, gesture, change, attrs...)
+}
+
+// record is the estate map as the shared gesture loop reads and writes it.
+func (c *EstateControl) record() casMap[partmap.MapState] {
+	return casMap[partmap.MapState]{
+		event: "estate_map",
+		read: func(ctx context.Context) ([]byte, uint64, bool, error) {
+			rec, found, err := c.store.EstateMap(ctx)
+			return rec.Value, rec.Version, found, err
+		},
+		update: func(ctx context.Context, raw []byte, version uint64) (uint64, bool, error) {
+			rec, won, err := c.store.UpdateEstateMap(ctx, raw, version)
+			return rec.Version, won, err
+		},
+		decode:      partmap.DecodeMapStateForUpdate,
+		encode:      partmap.MapState.Encode,
+		noMap:       errNoEstateMap,
+		unavailable: ErrEstateUnavailable,
+		newer:       ErrEstateNewerMap,
+		fields:      estateGestureFields,
+	}
+}
+
+// estateGestureFields is what a written gesture's log line adds: the balance it
+// ran, when it ran one (an out or an in that changed what the map places).
+//
+// A LOG FIELD RATHER THAN NOTHING for the object map's reason
+// ([gestureBalance]): a gesture balances on the node that served it, never on
+// the node keeping the map, so its own line is the only log that carries that
+// balance. No epoch moves: a gesture changes the targets, never the holders.
+func estateGestureFields(before, after partmap.MapState) []any {
+	out := []any{"epoch", after.Map.Epoch}
+	if after.Balance == before.Balance {
+		return out
+	}
+	return append(out, "balance_tolerance", after.Balance.Tolerance,
+		"balance_rounds", after.Balance.Rounds,
+		"balance_deviation", after.Balance.Deviation,
+		"balance_converged", after.Balance.Converged)
+}
+
+// EstateControl is the operator's gestures on the estate map, nil on a node
+// with no coordination store to hold one. Any node that has one may make them:
+// the map is one record there, and a gesture is a compare-and-set on it.
+func (e *Engine) EstateControl() *EstateControl { return e.estateControl }

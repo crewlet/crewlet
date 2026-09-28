@@ -53,6 +53,14 @@ func TestTheEstateMapDutyWritesNothingUnderLayoutZero(t *testing.T) {
 	if _, found, err := e.backends.Fleet.EstateMap(t.Context()); err != nil || found {
 		t.Fatalf("the store holds an estate map after layout-0 ticks (found %v, %v)", found, err)
 	}
+	// AND THE GESTURES ARE THERE, answering that there is no map.
+	control := e.EstateControl()
+	if control == nil {
+		t.Fatal("a node with a coordination store offers no gestures on the estate map")
+	}
+	if _, _, found, err := control.State(t.Context()); err != nil || found {
+		t.Errorf("the gestures read the map as (found %v, %v), want none", found, err)
+	}
 }
 
 // THE ESTATE MAP TAKES NOTHING FROM A COMPANY NO ACTIVATION NAMED, and from one

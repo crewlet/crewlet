@@ -312,9 +312,12 @@ type Engine struct {
 	objects *objectStore
 
 	// estateMaintainer is the estate map duty's loop, nil until the node
-	// that claims it exists, and on a node that publishes nothing. See
-	// estatemap.go.
+	// that claims it exists, and on a node that publishes nothing; and
+	// estateControl the operator's gestures on the map, nil where there is
+	// no coordination store to hold one. See estatemap.go and
+	// estatecontrol.go.
 	estateMaintainer *loop
+	estateControl    *EstateControl
 
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because a node that meets its first native
@@ -896,6 +899,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := e.startObjects(ctx, opts.Bootstrap); err != nil {
 		return nil, err
+	}
+	// AND THE ESTATE MAP'S GESTURES, on every node that reaches the
+	// coordination store and in every mode, as the object map's are: a
+	// gesture is a compare-and-set on one record, not work this node
+	// publishes. Under the single-file layout every one of them answers
+	// that there is no map — see estatecontrol.go.
+	if backends.Fleet != nil {
+		e.estateControl = &EstateControl{store: backends.Fleet, now: time.Now}
 	}
 
 	// AND THE FOLLOWS, on the same reasoning and in the same window: before
