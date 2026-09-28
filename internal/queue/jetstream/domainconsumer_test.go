@@ -720,6 +720,57 @@ func TestARecordReachingAnAbandonedPullIsHandedBack(t *testing.T) {
 		"until the ack window redelivered it")
 }
 
+// A CLOSED HANDLE TAKES NOTHING THE NEXT READER OF ITS CONSUMER NEEDS.
+//
+// A reader that stops leaves the pull it last sent standing at the broker for
+// the rest of its wait, and the broker serves the oldest request first. Over a
+// connection that outlives the reader — a state log stopped and another opened
+// in the same process — a record appended in that window went to the stopped
+// reader's inbox, and the next reader of the same consumer waited out the
+// thirty-second ack window for it. Closing the handle drops the inbox, so the
+// broker, finding no interest in the old request, serves the new one.
+func TestAClosedHandleTakesNothingTheNextReaderNeeds(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_CLOSED_LOG", "crewlet.closed.log")
+	first, err := q.DomainConsumer(t.Context(), "CREWLET_CLOSED_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// THE STOPPED READER'S PULL: a long wait, given up on almost at once.
+	drain, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if got, err := first.Fetch(drain, 1, 0, 20*time.Second); len(got) != 0 {
+		t.Fatalf("an empty log answered %d record(s) (%v)", len(got), err)
+	}
+	waitStanding(t, first)
+	first.Close()
+
+	// THE NEXT READER of the same consumer, which agrees with the rows and
+	// is therefore kept rather than rebuilt.
+	second, err := q.DomainConsumer(t.Context(), "CREWLET_CLOSED_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(second.Close)
+	appendN(t, log, "crewlet.closed.log.task", 1)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := second.Fetch(t.Context(), 1, 0, 500*time.Millisecond)
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if len(got) == 1 {
+			if got[0].Seq != 1 {
+				t.Fatalf("the next reader was handed sequence %d, want 1", got[0].Seq)
+			}
+			return
+		}
+	}
+	t.Fatal("the record appended after the first reader closed was not handed to " +
+		"the next reader within five seconds: the broker delivered it to the " +
+		"closed reader's standing pull, where it waits out the ack window")
+}
+
 // A RECORD DELIVERED TO A REQUEST THE CLIENT GAVE UP ON IS TAKEN BY THE NEXT
 // FETCH — at once, never after the ack window.
 //
