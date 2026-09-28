@@ -170,13 +170,23 @@ type Peers interface {
 
 // FanOutFloor is the corpus size below which a search does not fan out.
 //
-// TEN THOUSAND DOCUMENTS, and the arithmetic is the anchor rather than the
-// round number. [SemanticScanBudget] is one second at the measured coefficient
-// of ≈ 740 000 embeddable sources, so a scan costs ≈ 1.35 µs per source; a
-// broker round trip on a LAN is ≈ 1 ms. Splitting pays only when the local
-// scan is worth several round trips, and 10 000 documents is ≈ 13.5 ms — an
-// order of magnitude above the trip it replaces, and the point below which a
-// fan-out spends more wall clock arranging the work than doing it.
+// TEN THOUSAND DOCUMENTS, and the measurement is the anchor rather than the
+// round number. A broker round trip on a LAN is ≈ 1 ms, and splitting pays
+// only when the local scan is worth several of them. At 10 000 sources the
+// semantic scan's p95 is MEASURED rather than projected — it is
+// BenchmarkSemanticScanUnderLoad's smallest cell — at 49 ms with one reader and
+// 125 ms with eight: fifty round trips and more.
+//
+// It is not lower, and the same benchmark says why. At 10 000 sources a scan
+// costs 4.96 µs per source against 2.58 at 40 000, because below that size the
+// statement's FIXED cost dominates — the plan, the sort, the rerank's 1 200
+// seeks — and a fan-out divides the rows, never the fixed cost: every
+// participant pays it again. The per-row figure behind the budget is the
+// large-corpus one, and projecting it downward (this used to read ≈ 13.5 ms,
+// from a stale 1.35 µs per source) is what makes a smaller floor look free.
+//
+// Below it a fan-out spends more wall clock arranging the work than the
+// division saves.
 //
 // It is a FLOOR rather than a switch because the alternative is worse in both
 // directions: a company that has written 200 pages would pay a network hop per

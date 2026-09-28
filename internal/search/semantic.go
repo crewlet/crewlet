@@ -129,11 +129,23 @@ type SemanticHit struct {
 // SemanticScanBudget bounds one semantic search.
 //
 // ONE SECOND, which is the interactive target the supported corpus is declared
-// against: at the measured coefficient a node holds ≈ 740 000 embeddable
-// sources inside it. It is a CEILING on the statement rather than a promise
-// about it — the point is that a query over a corpus somebody grew past the
-// projection fails a search instead of holding this store's reader for as long
-// as it takes.
+// against. What fits inside it depends on HOW MANY scans run at once, and
+// BenchmarkSemanticScanUnderLoad is where both coefficients come from: at
+// 40 000 sources and 3 072 dimensions the p95 costs 2.58 µs per source with one
+// reader and 6.14 µs with eight, so a node holds ≈ 390 000 embeddable sources
+// inside the budget while it is idle and ≈ 160 000 while eight searches
+// compete for its cores. The second is the figure for a node that is running
+// a company; `crewlet.tracker.search.concurrency` says which row a node is on.
+//
+// IT USED TO SAY ≈ 740 000, which was this second divided by ≈ 1.35 µs per
+// source — a coefficient from before the scan had a benchmark, and about half
+// the idle cost that benchmark then measured. Every projection built on it
+// (the fan-out floor's arithmetic, the evaluation's run time, the vector log's
+// sizing note) overstated what one node scans by two to five times.
+//
+// It is a CEILING on the statement rather than a promise about it — the point
+// is that a query over a corpus somebody grew past the projection fails a
+// search instead of holding this store's reader for as long as it takes.
 const SemanticScanBudget = time.Second
 
 // Semantic runs the two-stage search and returns the exactly-reranked hits.

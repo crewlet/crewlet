@@ -30,6 +30,30 @@ tells it one: it holds every bucket and reads every bucket.
 
 ---
 
+## How big a corpus one node scans
+
+The semantic scan has a **one-second budget**, and how much fits inside it
+depends on how many searches the node is running *at the same moment* — seats
+taking turns, the dashboard, a person searching. Measured at 3 072 dimensions
+on four cores, p95:
+
+| Searches in flight | Cost per document | Documents inside one second |
+|---|---|---|
+| 1 (an idle node) | 2.58 µs | ≈ 390 000 |
+| 8 | 6.14 µs | ≈ 160 000 |
+
+The second row is the one for a node that is running a company. The metric
+`crewlet.tracker.search.concurrency` says which row your node is actually on;
+see [Metrics](../reference/metrics.md). Both rows are a benchmark on one
+machine, so treat them as a projection until the scan benchmark has run on
+yours — [Replication](replication.md#three-things-ci-cannot-prove) says the
+same.
+
+Past the row your node is on, a single node's search is slower than its budget
+and `search_slow` fires. A fleet divides the scan, below.
+
+---
+
 ## When a fleet divides the scan
 
 Above **10 000 documents**, a company running more than one node divides the
@@ -41,9 +65,12 @@ sort the live node ids, give each a contiguous range, hand the remainder to the
 first few. 64 buckets over three nodes is 22, 21, 21.
 
 Below that floor a search is answered by the asking node alone. The floor is
-not a preference — a broker round trip is about a millisecond and 10 000
-documents is about 13 ms of scanning, so under it a fan-out spends more wall
-clock arranging the work than doing it.
+not a preference — a broker round trip is about a millisecond, and a semantic
+scan of 10 000 documents measures 49 ms at p95 on an idle node and 125 ms with
+eight searches in flight. Under it the scan's fixed cost dominates (its
+per-document cost at 10 000 is nearly twice its cost at 40 000), and a fan-out
+divides the documents but makes every node pay that fixed cost again, so it
+spends more wall clock arranging the work than it saves.
 
 **More nodes is not always faster, and the limit is CPU rather than count.**
 Measured on four cores over 4 000 documents, with every participant in one

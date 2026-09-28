@@ -33,10 +33,17 @@ const (
 	//
 	// ONE MESSAGE PER SOURCE, so the stream's size is the corpus rather
 	// than its history: at the packed 12 KiB a 3 072-wide vector costs,
-	// plus its envelope, 740 000 sources — this engine's declared
-	// supported corpus per node — is ≈ 9.1 GB. Sixteen gibibytes is that
-	// with room for the width to change under it and for the transition
-	// window in which both models' records are on the stream.
+	// plus its envelope, ≈ 12.3 KB a source. The ceiling is the one
+	// config.DefaultTrackerVectorsMaxBytes states, for its reason — twice
+	// the modelled year-five peak of a model change republishing every
+	// source at once (8.46 GB) — so this harness and a node agree.
+	//
+	// It is NOT sized from the corpus one node can SCAN, and it must not
+	// be: that is ≈ 390 000 sources idle and ≈ 160 000 under eight
+	// concurrent readers (see [SemanticScanBudget]), ≈ 4.8 GB and ≈ 2 GB
+	// of messages. A corpus past the scan figure is a fleet dividing its
+	// buckets, and every data node still holds every vector — so the log
+	// carries the whole corpus however the scan is divided.
 	//
 	// Crossing it REFUSES an append rather than dropping the oldest
 	// record. A dropped vector is a document that silently stops being

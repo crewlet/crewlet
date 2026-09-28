@@ -62,8 +62,11 @@ type EvalOptions struct {
 // TWENTY-FIVE, which puts the standard error of a recall near 0.97 at about
 // 0.003 — an order of magnitude under the margin between a healthy curve and
 // the declared floor, so a run is a measurement rather than a coin flip. It is
-// also 25 full scans of the corpus, which is what bounds how long this takes:
-// at the measured coefficient that is ≈ 25 seconds at 740 000 sources.
+// also 25 EXACT scans of the wide table beside 25 two-stage searches, which is
+// what bounds how long this takes: the exact f32 scan costs ≈ 13 µs a source
+// (259 ms at 20 000, migration 0004's measurement) against the two-stage
+// search's 2.58, so at the ≈ 390 000 sources one idle node scans inside
+// [SemanticScanBudget] a run is ≈ 2½ minutes, nearly all of it the exact half.
 const EvalQueries = 25
 
 // EvalReport is what one evaluation found.

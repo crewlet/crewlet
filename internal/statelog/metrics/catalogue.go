@@ -457,8 +457,9 @@ func Catalogue() []Instrument {
 			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitCount,
 			Attributes: nil,
 			Shows: "Scans in flight, which is the row of the supported-corpus " +
-				"table this node is actually on. The published figure is a " +
-				"single reader on an idle node.",
+				"table this node is actually on: about 390 000 sources inside " +
+				"the one-second budget with one scan running, about 160 000 " +
+				"with eight.",
 		},
 		{
 			Name: TrackerSearchAnswers, Kind: KindCounter, Unit: UnitCount,
