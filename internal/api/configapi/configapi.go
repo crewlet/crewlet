@@ -420,8 +420,10 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 			"you_sent":     media,
 			"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
 				"shaped like the document. A JSON Patch (RFC 6902) list of " +
-				"operations is a different format this surface does not serve; " +
-				"editing one seat is PUT /config/roles/{handle}",
+				"operations is a different format this surface does not serve. " +
+				"Editing one list member is its own route: PATCH " +
+				"/chart/seats/{handle} or PATCH /chart/units/{key} for a seat or " +
+				"a unit, PUT /config/{collection}/{id} for anything else",
 		})
 	return false
 }

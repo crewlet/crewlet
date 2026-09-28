@@ -57,8 +57,9 @@ type Role struct {
 
 	// Unit is a home-unit reference for a ROOT-level seat, BY THE UNIT'S
 	// KEY (its `id`), resolved into that unit's members before anything else
-	// runs. It is what PUT /config/roles/{handle} writes; a hand-authored
-	// config normally nests the seat under its unit directly. On a seat
+	// runs. It is the flat form, a seat listed at the root that belongs to a
+	// unit; a hand-authored config normally nests the seat under its unit
+	// directly. On a seat
 	// nested inside a unit it moves nothing, and one keying a different unit
 	// is refused on admission (org.ErrMisplacedUnitRef).
 	Unit string `yaml:"unit,omitempty" json:"unit,omitempty" desc:"Key (id) of the home unit for a root-level seat; the seat is moved into it."`
@@ -634,8 +635,10 @@ func (r *Role) Seat() *org.Role {
 }
 
 // IdentityKey is the seat's address inside its list — the derived handle, so
-// it is the same identity `PUT /config/roles/{handle}` addresses and the same
-// one the agent id is built from.
+// it is the same identity `/config/roles/{handle}` reads and
+// `PATCH /chart/seats/{handle}` writes. It is NOT what the agent id is built
+// from: that is the handle a seat was CREATED under (ADR-0019), which a
+// rename leaves behind and a file cannot state.
 //
 // A VALUE receiver, because the redaction walker holds the prior document by
 // value and cannot take an address inside it.
