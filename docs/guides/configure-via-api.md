@@ -278,7 +278,9 @@ never put the old address back.
 
 Read it, edit it, send it back. Reads are **stripped by default**: ask for the
 runtime half with `?runtime=true`, and you get it only if you also hold
-`config:read`.
+`config:read` — with its credentials masked. The `email` comes back as the
+`${CHART_…}` reference the address was sealed under, or `__redacted__`, and
+sending either back keeps the address as it is.
 
 ```bash
 curl -s "$CREWLET_URL/chart/seats/sre" -H "$AUTH" > sre.json

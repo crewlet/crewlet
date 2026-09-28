@@ -201,7 +201,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node. A revocation nobody can confirm is `503` with its `op_id` rather than a claim that your other sessions ended |
 | `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own. A session already over — ended by a record, past its absolute deadline, revoked or invalidated — answers `ended` with nothing written or announced. A node that cannot read its rows answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id` — the id is derived from the lineage, so asking again is the same operation |
 | `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, and the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through. An unbound credential is an **ordinary state**, not an error — a pipeline's token acts under its own login, and binding a person to a seat is a directory row rather than a different credential |
-| `GET` | `/chart` | The company's **org chart** — its units, its seats, every `manages:` edge and every unit's lead — with the position the answer was read at. The **runtime half of every object is stripped** unless the caller asks for it AND may read it; the answer says which it got in `runtime`. **Always needs a token** (see [below](#chart--the-org-chart-auth-gated)) |
+| `GET` | `/chart` | The company's **org chart** — its units, its seats, every `manages:` edge and every unit's lead — with the position the answer was read at. The **runtime half of every object is stripped** unless the caller asks for it AND may read it; the answer says which it got in `runtime`. Its credentials and a seat's address are **masked** either way, as `GET /config` masks the settings. **Always needs a token** (see [below](#chart--the-org-chart-auth-gated)) |
 | `GET` | `/chart/units` `/chart/seats` | One half each, for a client that renders people constantly and the tree once. `/chart/seats` filters: `kind=human` (or `agent`) keeps one kind, and `unheld=true` keeps the seats **nobody in the identity directory is bound to**, asked by the handle each seat was created under so a renamed seat is judged by its binding. `unheld=true` is the **directory's** question, so it takes what the directory's own listing takes — `people:manage` (whoever invites somebody into one of those seats) or `audit:read` — and a reader holding the board's grant alone is refused `403` naming both. On a node that started with no active company, and so holds no directory, it is `503` rather than applied to an empty one, with no `Retry-After` — waiting does not give the node a directory; and where the directory is there and a read of it fails it is `503` too, with one, rather than a list missing a seat or carrying one it should not |
 | `GET` | `/chart/units/{key}` | One unit, what it directly holds, and its own history |
 | `GET` | `/chart/seats/{handle}` | One seat, what it manages, and its own history |
@@ -213,7 +213,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Each edge is `{"object":{...},"parent":...,"lead":...}`, and a seat's edge states its `seat_kind` and its whole `manages` list too — the content writes that follow carry neither. Takes `config:write` |
 | `GET` | `/chart/imports` `/chart/imports/{revision}` | Which revision this company's structure is running, and when it landed |
 | `GET` | `/chart/check` | The **continuous report**: every way the chart and the applied settings disagree (see [below](#the-continuous-report)). **Takes `audit:read`** — it names every seat nobody in the identity directory holds; the counts ride `/health` for everybody |
-| `GET` | `/company/export` | The chart as an authored **document**, whole and unstripped, for a round trip through a file. Takes `config:read` |
+| `GET` | `/company/export` | The chart as an authored **document**, whole and unstripped, for a round trip through a file — its credentials masked, as every read of the runtime half is. Takes `config:read` |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -483,7 +483,7 @@ told they lead nobody goes looking for an authority they already hold.
 |---|---|
 | `state:read` | The company's working state: `/agents`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, the reads under `/work/*` and `/pages/*`, `/containers`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
 | `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, the turn, phase, trace and A2A-channel questions on the socket, `/iam/audit`, the org chart's company-wide feed (`/chart/history`) and its continuous report (`/chart/check`), and — beside `people:manage` — the seats nobody holds (`/chart/seats?unheld=true`). Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
-| `config:read` | Every read under `/config*`, `/company/export`, `/integrations`, the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` — and the `/setup` and `/secrets` **listings**: they carry no values and still say which credentials a company holds, which it has not set, and when each last changed |
+| `config:read` | Every read under `/config*`, `/company/export`, `/integrations`, the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials (masked), its sandbox cell and its `mcp_env` — and the `/setup` and `/secrets` **listings**: they carry no values and still say which credentials a company holds, which it has not set, and when each last changed |
 | `secrets:read` | Revealing a credential's value: `GET /secrets/{name}?reveal=true`, which takes `config:read` as well — the value's grant on top of the row's |
 | `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and the seats nobody holds (`/chart/seats?unheld=true`), which is what an invitation is sent into. **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
 | `work:write` | Filing and moving work — the [write surface's](#the-human-write-surface) item routes — and `/operator/mcp`'s write half. Some of those verbs also ask a RELATION: re-routing, a project's policy and taking an item out of circulation are its project lead's |
@@ -714,6 +714,26 @@ the rows they asked for are rows they may read. Every answer says which it got:
 Without that flag a company whose seats declare no runtime at all renders
 exactly like a caller who was silently stripped.
 
+**A runtime half you may read is still masked.** Every credential in it — an
+`mcp_env` value, the sandbox's `env` and its setup steps' `files` and `env`, a
+seat's own Slack, Mattermost and GitHub App credentials — is served only as a
+whole `${VAR}` reference and anything else as `"__redacted__"`, found by the
+same `secret:"true"` tags `GET /config` masks by; a seat's `email` is served
+the same way. The writer seals every literal into the
+[secret store](../concepts/secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not)
+before a record is published, so what you normally see is the `${CHART_…}`
+reference the value was sealed under, and sending it back changes nothing. A
+`"__redacted__"` sent back is **restored** from the row the write patches,
+matched by where it sits — a list member by its own name — and refused
+`422 refused`, naming the field, where the row holds nothing to restore it
+from or the value sits in a list member with no name of its own. The same holds
+for a file `GET /company/export` produced, because an import's content writes
+are these `PATCH`es: imported back into this deployment every mask is restored,
+and imported into one that holds no such row it is refused rather than storing
+the marker. A `${CHART_…}` reference imports as written, so on another
+deployment it names a value that deployment does not hold until you store it
+there.
+
 **A content write never creates its object.** A `PATCH` naming a unit or a seat
 the chart does not hold is refused (`422 refused`), and nothing is published. The
 refusal names `POST /chart/batch`, which is where an object is created — or,
@@ -870,6 +890,7 @@ they were made:
 | `reference_dangling` | warning | A `manages:` entry, a unit's lead or a seat's unit resolves to nothing |
 | `seat_unheld` | warning | A human seat **nobody in the identity directory is bound to**, so no person can sign in and act as it — work routed there waits for somebody who cannot arrive. **Left undecided, not answered,** where the directory cannot be asked: on a node that started with no active company the whole arm is skipped, and a seat whose holder this node failed to read is counted in the report's `unchecked` instead — neither is reported as held by nobody, which is the answer an operator would act on |
 | `seat_unreachable` | warning | A human seat with no contact identity, so nothing addressed to it reaches anybody on the chat surface this company runs. Validation **admits** such a seat — a person who works only through the dashboard has no chat account to declare — so this report is the only place it is named, and a warning rather than an error because the state is legitimate. Independent of the above and with a different remedy — a seat can have either without the other |
+| `identity_shared` | error | A seat's **address** or one of its **contact identities** is also another seat's, so routing reaches only one of them — an address the first seat declaring it, a contact identity the last — and this seat never hears a delivery addressed to it, or has a person's word attributed to the other. Reported on the seat routing does not reach, naming the one it does and which surfaces (`email`, `slack`, `jira, confluence`, …). Addresses are compared as the party registry compares them, resolved through **this node's** secret snapshot and folded the same way, so two seats plus-addressing one shared mailbox with their own handles share nothing and are not reported. A node that cannot resolve skips this arm: every address on the chart's rows is a sealed reference, and two references never collide |
 
 The **same** evaluation is summarised on `/health` under `consistency`, so a
 gauge, a probe and this screen can never disagree about whether something is

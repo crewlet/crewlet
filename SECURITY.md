@@ -214,6 +214,20 @@ A few things worth knowing when deploying Crewlet:
   alone. The keyring is the root of trust: keep it out of the store's backup
   domain. See
   [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
+- **The org chart's credentials are sealed one value at a time, and served
+  masked.** The chart is an ordered log whose records every node applies,
+  snapshots and backs up, so it cannot be sealed whole: its structure — keys,
+  handles, parents, leads — is plaintext by necessity. Every credential in a
+  seat's or a unit's runtime half, and a seat's address, is sealed into the
+  secret store before a record is published, and every read serves it masked
+  as `GET /config` does. **Builds before this change sealed only the address**,
+  so a literal credential written into a seat's or a unit's runtime half
+  (`mcp_env`, sandbox `env` and setup files, a seat's own chat and GitHub App
+  credentials) through `/chart`, an import or a first-chart seed is on the
+  chart log, in every node's rows and in every snapshot and backup taken since.
+  Treat those values as disclosed and rotate them: writing the seat again seals
+  the new value, and re-sealing the old one would leave the copies already
+  written readable.
 - **Removing a person destroys their key, not only their row.** Each person's
   name and address are sealed under a data key that is theirs alone, and
   removing them destroys it — so those values become unreadable at once

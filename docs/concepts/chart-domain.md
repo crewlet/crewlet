@@ -118,7 +118,11 @@ object's row inside the write's own snapshot: a lead sending back the relations
 they read changes nothing, a content write that leaves the runtime half out
 keeps the one the object has — which is how a lead corrects a seat's goal
 without holding its credentials — and taking the half away is a clear of its
-own. Reads split prose and runtime the same way and default to **stripped**.
+own. Reads split prose and runtime the same way and default to **stripped**,
+and a read that may have the runtime half still gets its **credentials
+masked**, a seat's address with them, exactly as `GET /config` masks the
+settings — holding the grant that reads the configuration is not holding the
+credentials in it.
 See
 [the `/chart/*` reference](../reference/api-endpoints.md#chart--the-org-chart-auth-gated)
 and [Configure via the API](../guides/configure-via-api.md#evolving-the-org-chart).
@@ -458,7 +462,19 @@ each object's content follows on its own subject.
 
 **Half of a seat is opaque here, and that is deliberate.** This domain owns who exists, where they sit and who reports to whom — and it can say what every one of those means, validate it, arbitrate it and render it. It cannot say what an `mcp_env` key is for, what a model chain falls back to, or which sandbox cell a seat runs in. A chart that grew a column per runtime setting would be the company document again with a log underneath it.
 
-So a seat's model chain, tool credentials, sandbox cell, worker grants and schedules travel as **one document the chart carries and does not read**, and a unit's inherited credentials and scheduled work do the same. What is in the *rows* is everything the chart has a column, an edge table or a subject for — and nothing is in both halves. A field in both would be two copies of one fact, of which the copy inside an opaque blob is the one nothing validates, nothing indexes and nothing can arbitrate: a rename that moved the row would leave the old name inside the document, and a reader would get whichever half it unpacked last. A build-time check walks the seat and unit types and fails on a field that is in neither half or in both.
+So a seat's model chain, tool credentials, sandbox cell, worker grants and schedules travel as **one document the chart carries and does not read**, and a unit's inherited credentials and scheduled work do the same.
+
+**Opaque is not unread for a credential.** The writer is handed the one thing
+it needs from the organization model — where in the half its credentials sit,
+by the same `secret:"true"` tags `GET /config` masks by — and seals every
+literal one into the [secret store](secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not)
+before a record is published, so the log, the rows, a snapshot and a backup
+carry `${VAR}` references and never a value. A writer built without that is
+refused rather than left to publish a half it cannot see into. The name a
+value is sealed under is derived from the object's **identity** and the
+field's path, so a rename keeps it and a later hire on a freed address never
+seals over it; every node re-reads those values as it applies the record that
+names them, and the retention sweep deletes one once no row does. What is in the *rows* is everything the chart has a column, an edge table or a subject for — and nothing is in both halves. A field in both would be two copies of one fact, of which the copy inside an opaque blob is the one nothing validates, nothing indexes and nothing can arbitrate: a rename that moved the row would leave the old name inside the document, and a reader would get whichever half it unpacked last. A build-time check walks the seat and unit types and fails on a field that is in neither half or in both.
 
 **Nothing here is derived.** There is no table of effective leads, no expanded
 `manages:` set, no "who manages whom" the applier computes. Every one of those

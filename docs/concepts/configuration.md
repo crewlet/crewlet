@@ -341,6 +341,7 @@ reachable through two writes that were each correct when they were made:
 | a seat's code gate is open on a company with no sandbox backend | a coding run cannot start, and the seat learns it as a tool error inside a turn |
 | a `manages:` entry, a unit's lead or a seat's unit resolves to nothing | the edge manages nobody, or the seat sits at the org root above every team |
 | a human seat carries no contact identity | no agent can @-mention the person — legitimate for somebody who works only through the dashboard, which is why it is reported and never refused |
+| two seats declare one address or one chat identity | routing reaches one of them, so the other never hears what is addressed to it — two content writes on two seats, each arbitrated on its own object, and the address sealed under two different names |
 
 Refusing the second write is not an option: a revision that removes a provider
 is a perfectly valid revision, and refusing it would refuse an operator's edit

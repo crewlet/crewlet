@@ -74,23 +74,45 @@ So the chart makes its own trade, and states it rather than inheriting one:
 - **The structure is plaintext.** Keys, handles, parents and leads are subjects
   and scope paths. Anyone who can read the broker can see the shape of your
   company, and no setting changes that.
-- **A secret-tagged value is never plaintext.** A literal credential written to
-  a seat or a unit is sealed into this store under a name derived from the
-  object and the field, and the record carries a `${VAR}` **reference**. The
-  value reaches the store and never the log, the rows, a snapshot or a backup
-  of either. A write whose literal cannot be sealed is **refused** rather
-  than stored in the clear.
+- **A secret-tagged value is never plaintext, wherever in the object it
+  sits.** Every credential in a seat's or a unit's **runtime half** — an
+  `mcp_env` value, the sandbox's `env` and each setup step's `files` and
+  `env`, a seat's own Slack app token and signing secret, its Mattermost bot
+  token, its GitHub App key and webhook secret — is found by the same
+  `secret:"true"` tags `GET /config` masks by, and a literal one is sealed into
+  this store before the record is published; the record carries a `${VAR}`
+  **reference**. The value reaches the store and never the log, the rows, a
+  snapshot or a backup of either. A write whose literal cannot be sealed is
+  **refused** rather than stored in the clear.
 - **A whole `${VAR}` is stored as written.** It names a credential rather than
   being one, it is what you edit, and sealing it would put a pointer inside the
-  store and a pointer to that pointer on the record.
+  store and a pointer to that pointer on the record. A value that **embeds**
+  references beside literal text — `Bearer ${GITHUB_TOKEN}` — keeps its
+  references where they are and has each literal run sealed under a name of
+  its own, so it expands to exactly what it expanded to before.
+- **A sealed value's name is derived from who and where.** The object's
+  **identity** — the handle or key it was created under, which no rename moves
+  and the chart never issues twice — and the field's path inside it, ending in
+  a digest of both: `CHART_SEAT_SARAH_CHEN_EMAIL_<10 hex>` for `sarah-chen`'s
+  address, `CHART_SEAT_DEV_MCP_ENV_TRACKER_SEAT_TOKEN_<10 hex>` for the
+  `SEAT_TOKEN` in `dev`'s `tracker` server. A second edit of one field
+  overwrites its value rather than leaving the first behind; a renamed seat
+  keeps its names; and a new hire given a freed handle never seals over the
+  previous holder's.
+- **A read serves the mask, and a write restores it.** Every surface that
+  serves the runtime half (`/chart?runtime=true`, `/company/export`) shows a
+  credential only as a whole `${VAR}` reference and anything else as
+  `__redacted__`, and a seat's address the same way — the rule `GET /config`
+  applies. A write handing the mask back is restored from the row it patches,
+  matched by where the value sits (a list member by its own name, never by
+  position); a mask with nothing to restore it from is **refused** naming the
+  field rather than stored where a credential belongs.
 - **A seat's address is sealed like a credential; its name is not.** A
-  literal `email` on a seat is sealed here under a name derived from the seat
-  (`CHART_SEAT_SARAH_CHEN_EMAIL` for `sarah-chen`) and the row carries the
-  reference, exactly as a literal credential is. A
+  literal `email` on a seat is sealed here and the row carries the reference,
+  exactly as a literal credential is. A
   vendor payload's address is matched by the party registry, which resolves
-  that reference from the node's secret snapshot — so a newly sealed address
-  is matched once the node next takes one (the propagation table below) — and
-  compares both sides lower-cased with any plus tag dropped, the fold the
+  that reference from the node's secret snapshot and compares both sides
+  lower-cased with any plus tag dropped, the fold the
   identity directory blinds a person's address under. A seat's `name` is a
   field of the chart like any other, in every node's rows, in every snapshot
   and on the log itself. Neither is where a *person* lives: the place a
@@ -102,9 +124,18 @@ So the chart makes its own trade, and states it rather than inheriting one:
   bucket is in every backup, so that backup goes on opening their name and
   address for whoever holds it and the keyring until it is deleted
   ([what a removal reaches](identity-and-access.md#removing-somebody-destroys-a-key-not-a-row)).
-  A leaver's seat still names them until the seat's own `name` is cleared,
-  and clearing its `email` empties the field without deleting the sealed
-  value: remove the name its reference held with `crewlet secrets unset` too.
+  A leaver's seat still names them until the seat's own `name` is cleared.
+- **A value nothing names any more is collected.** Clearing an address,
+  replacing a credential with your own `${VAR}`, or removing a seat leaves its
+  sealed value unreferenced, and the store has no retention of its own. The
+  retention sweep (`chart_sealed_values`, a fleet singleton) deletes a value
+  the chart wrote once no row names it — judged only on a node whose rows hold
+  the whole chart log, since a row not applied yet reads exactly like a row
+  naming nothing, after an hour's grace that covers a write between its seal
+  and its record, and only at the version it judged, so a value re-sealed in
+  between survives. A value you stored yourself is never touched: the sweep
+  deletes only what the chart wrote (source `chart`), under a name of the
+  shape it derives.
 
 At boot the engine loads every record into a process-local snapshot and installs it as the **secret source**. From then on `${VAR}` resolution asks the store first and falls back to the process environment:
 
@@ -168,7 +199,8 @@ The namespace has one owner, the identity directory (`iam/`); an owner is
 reserved before it writes its first key, so no engine key is ever briefly an
 ordinary operator row. The [org chart](chart-domain.md) keeps no key material
 here: what it seals for a seat or a unit is a value you typed, stored under an
-ordinary `CHART_…` name that you can list, reveal and remove. A name with a `/` in it is one no `${VAR}` can spell, so
+ordinary `CHART_…` name that you can list, reveal and remove, and that the
+retention sweep deletes once no row names it. A name with a `/` in it is one no `${VAR}` can spell, so
 none of them can be resolved into a provider, an `mcp_env` or a child process
 by any document.
 And every operator surface refuses them by name, whatever the caller holds:
@@ -334,11 +366,19 @@ for that than an encrypted table the engine reads back itself.
 | `crewlet run` boot (every node role) | Reads the whole store before resolving any Tier B `${VAR}` |
 | A config revision activates (`PUT /config`, `crewlet config import`) | Every node re-reads the **fleet's** store as it converges on the new activation epoch — engine and API halves alike |
 | A provisioning pass seals a credential | The node that ran it refreshes its snapshot **and re-activates the current revision**, so every node rebuilds against the minted value — coalesced into one apply per 15 seconds (below) |
+| An org chart write seals a value (`PATCH /chart/*`, an import, a node's first-chart seed) | Every node re-reads the values its chart rows name when it applies the record, **before** the company composed from those rows is published — the `CHART_…` names only, so your own secrets keep the rows above. A re-read that fails is retried on the next rebuild even if the rows have not moved |
 | Otherwise | The running process keeps its snapshot |
 
 **A pass that mints a credential does the re-activation itself**, and the row above is the whole of why. Sealing makes a value *resolvable*; it does not touch anything that already resolved the old one, and everything a company actually routes through — seat identities, parsers, transports, provider clients, MCP children — was built at the last apply. So the provisioning pass performs the same gesture an operator would: it re-activates the current revision unchanged. Before it did, a pass could create an agent's Jira account, seal its token, report the integration ready, and leave the running engine routing every issue for that agent to a project lead, for ever. A node with **no config surface** (a worker-only one) seals and logs the outstanding rebuild instead, naming `POST /config/reload`.
 
 The re-activations are **coalesced**: the first in a quiet period runs at once, and any that arrive within 15 seconds of it fold into a single apply at the end of that window rather than each costing a whole-company rebuild and a permanent revision. Connecting one integration seals several values within a second or two, so without it a single button press wrote several. It is also a **bound**, and one the mechanism needs rather than merely benefits from: an apply wakes the reconcile pass that caused it, so a vendor pass that can never converge — one whose own minted credential is refused — seals on every tick, and inline that ran as fast as an apply could complete. See [Integration Reconcile](integration-reconcile.md#what-the-loop-does-and-what-it-leaves-alone).
+
+**The org chart's own values are the exception**, because nothing else would
+ever move them: a chart write is not an activation, so a credential typed into
+a seat after boot resolved to nothing on every node — and a rotation through
+the chart to the value it replaced — until something unrelated took a
+snapshot. The view rebuild reads back what the rows it applied name, so a
+chart write reaches every node as it applies the record.
 
 **A write reaches every node, and the value is a value rather than a file to copy.** `crewlet secrets set` against a running node puts one sealed record on the coordination KV; every peer reads that same record at its next boot or activation. Nothing has to be run once per node, and nothing has to be copied to a node that scales up at 3am.
 
