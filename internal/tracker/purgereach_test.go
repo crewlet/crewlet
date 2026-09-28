@@ -163,3 +163,110 @@ func TestAPurgesEffectOnAnotherTaskOutlivesThatTasksNextEdit(t *testing.T) {
 		t.Errorf("the child's parent pointer is %v after its next edit", got)
 	}
 }
+
+// A PURGE REWRITES A TASK IT REACHES TWICE ONCE, WITH BOTH EFFECTS.
+//
+// A task can be reached by more than one of a purge's effects: the subtask an
+// epic waits on is both its child and its blocker, a blocker linked to the task
+// that waits on it is both a relation and a mirror. Each rewrite of another
+// task stamps it at the purge's position, and a second rewrite from the same
+// record reads that stamp as the record's own redelivery and writes nothing —
+// so, rewritten effect by effect, the second effect was dropped: the subtask
+// kept pointing at the purged epic while its ancestry was rebuilt without it,
+// and the blocker kept listing the purged task, which its next edit wrote back
+// into the mirror rows.
+func TestAPurgeRewritesATaskItReachesTwiceOnceWithBothEffects(t *testing.T) {
+	t.Parallel()
+	for name, stage := range map[string]func(r *roundTrip, purged, other tracker.Task){
+		"a subtask its epic waits on": func(r *roundTrip, purged, other tracker.Task) {
+			r.fileUnder(other, purged)
+			r.waitOn(purged, other)
+		},
+		"a blocker linked to the task that waits on it": func(r *roundTrip, purged, other tracker.Task) {
+			r.waitOn(purged, other)
+			r.relate(other.ID, purged.ID, tracker.RelationLinked)
+		},
+		"a child linked to its parent": func(r *roundTrip, purged, other tracker.Task) {
+			r.fileUnder(other, purged)
+			r.relate(other.ID, purged.ID, tracker.RelationLinked)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			purged := r.createTask("to be purged")
+			other := r.createTask("reached twice")
+			stage(r, purged, other)
+
+			operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+			if _, err := operator.PurgeTask(t.Context(), "op-purge", purged.ID, purged.Project,
+				"a duplicate import"); err != nil {
+				t.Fatalf("purge: %v", err)
+			}
+			r.drain()
+			r.assertFreeOf(other.ID, purged.ID, "after the purge")
+
+			// AND AFTER ITS NEXT EDIT, which re-derives every row from
+			// the document.
+			title := "edited after the purge"
+			if _, err := r.writer.UpdateTask(t.Context(), "op-edit", other.ID, other.Project,
+				tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil); err != nil {
+				t.Fatalf("edit: %v", err)
+			}
+			r.drain()
+			r.assertFreeOf(other.ID, purged.ID, "after its next edit")
+		})
+	}
+}
+
+// fileUnder makes child a direct child of parent.
+func (r *roundTrip) fileUnder(child, parent tracker.Task) {
+	r.t.Helper()
+	if _, err := r.writer.UpdateTask(r.t.Context(), "op-parent-"+child.ID, child.ID, child.Project,
+		tracker.NoIfMatch, tracker.TaskPatch{Parent: &parent.ID}, tracker.ChangeReparented, nil); err != nil {
+		r.t.Fatalf("file %s under %s: %v", child.ID, parent.ID, err)
+	}
+	r.drain()
+}
+
+// waitOn makes dependent wait on blocker, both halves of the edge.
+func (r *roundTrip) waitOn(dependent, blocker tracker.Task) {
+	r.t.Helper()
+	if _, err := r.writer.Depend(r.t.Context(), "op-depend-"+dependent.ID+"-"+blocker.ID,
+		tracker.DependencyChange{
+			Task: dependent.ID, Project: dependent.Project, WaitingOnAdd: []string{blocker.ID},
+		}, fixedLeads{project: "eng-lead"}); err != nil {
+		r.t.Fatalf("%s waits on %s: %v", dependent.ID, blocker.ID, err)
+	}
+	r.drain()
+}
+
+// assertFreeOf fails unless task names gone nowhere — not in its document's
+// parent, relations or dependents, and not in any row derived from them.
+func (r *roundTrip) assertFreeOf(task, gone, when string) {
+	r.t.Helper()
+	held := oneTask(r.t, r, task)
+	if held.Parent != nil {
+		r.t.Errorf("%s the task's document names parent %q, want the purged task's "+
+			"own parent (none)", when, *held.Parent)
+	}
+	if slices.ContainsFunc(held.Relations, func(rel tracker.Relation) bool { return rel.Other == gone }) {
+		r.t.Errorf("%s the task's document still relates to the purged task: %+v",
+			when, held.Relations)
+	}
+	if slices.Contains(held.Dependents, gone) {
+		r.t.Errorf("%s the task's document still lists the purged task among its "+
+			"dependents: %v", when, held.Dependents)
+	}
+	for _, query := range []string{
+		`SELECT COALESCE(parent_id, '') FROM tracker_tasks WHERE id = ? AND parent_id IS NOT NULL`,
+		`SELECT other_id FROM tracker_relations WHERE task_id = ?`,
+		`SELECT blocker_id FROM tracker_task_deps WHERE task_id = ?`,
+		`SELECT dependent_id FROM tracker_task_dependents WHERE task_id = ?`,
+		`SELECT ancestor_id FROM tracker_task_closure WHERE descendant_id = ? AND distance > 0`,
+	} {
+		if got := r.strings(query, task); len(got) != 0 {
+			r.t.Errorf("%s %q answers %v for the task, want nothing", when, query, got)
+		}
+	}
+}
