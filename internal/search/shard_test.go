@@ -248,7 +248,7 @@ func TestTheCandidatePoolIsNarrowedByTheAssignment(t *testing.T) {
 		var hits []search.SemanticHit
 		if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 			var err error
-			hits, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
+			hits, _, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
 				Vector: query, Model: model, Dim: dim,
 				Limit: 500, Candidates: 500, Shards: a,
 			})

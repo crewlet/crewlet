@@ -38,12 +38,14 @@ const (
 	// the modelled year-five peak of a model change republishing every
 	// source at once (8.46 GB) — so this harness and a node agree.
 	//
-	// It is NOT sized from the corpus one node can SCAN, and it must not
-	// be: that is ≈ 390 000 sources idle and ≈ 160 000 under eight
-	// concurrent readers (see [SemanticScanBudget]), ≈ 4.8 GB and ≈ 2 GB
-	// of messages. A corpus past the scan figure is a fleet dividing its
-	// buckets, and every data node still holds every vector — so the log
-	// carries the whole corpus however the scan is divided.
+	// It is NOT sized from the corpus one node can SEARCH, and it must
+	// not be: that is ≈ 345 000 sources idle and ≈ 136 000 under eight
+	// concurrent readers through the full scan, ≈ 545 000 and ≈ 183 000
+	// through an index at its probe ceiling (see [SemanticScanBudget]) —
+	// between ≈ 1.7 GB and ≈ 6.7 GB of messages. A corpus past those
+	// figures is a fleet dividing its buckets, and every data node still
+	// holds every vector — so the log carries the whole corpus however the
+	// search is divided.
 	//
 	// Crossing it REFUSES an append rather than dropping the oldest
 	// record. A dropped vector is a document that silently stops being
@@ -153,6 +155,19 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		// travels anyway, because rebuilding half a million of them on
 		// an adopting node is work a copy already did.
 		"kb_vectors_bin": statelog.Derived,
+		// The installed semantic index (ADR-0022) — its head, its
+		// centroids and the rollout its training cut: written only by
+		// applying a centroids record, and not recomputable in this file
+		// — it is a training over every code in the partition — so they
+		// travel, and a node adopting a snapshot adopts the index with
+		// them. Divergent for kb_vectors' reason: no identity is claimed.
+		"kb_ivf":           statelog.Divergent,
+		"kb_ivf_centroids": statelog.Divergent,
+		"kb_ivf_rollout":   statelog.Divergent,
+		// How many rows of each source every list holds: a count of
+		// kb_vectors_bin under kb_ivf, both in this file. It travels for
+		// kb_vectors_bin's reason.
+		"kb_ivf_lists": statelog.Derived,
 
 		"vectors_log_deferred":       statelog.Local,
 		"vectors_log_deferred_scope": statelog.Local,

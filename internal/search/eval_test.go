@@ -2,6 +2,8 @@ package search_test
 
 import (
 	"database/sql"
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
@@ -101,5 +103,90 @@ func TestTheEvaluationNamesEveryEmbeddingSpace(t *testing.T) {
 	if report.Model != model || report.Sources != 40 {
 		t.Fatalf("an unqualified evaluation measured %q over %d sources",
 			report.Model, report.Sources)
+	}
+}
+
+// THE GROUND TRUTH IS THE REST OF EACH SHAPE'S ROWS: every (query, shape)'s
+// exact top-K over the rows that shape searches, and never the query document
+// itself.
+//
+// A query is a document the corpus holds, found by every first stage at
+// distance zero: counted, it is a free hit in every query's recall and a slot
+// of the top ten no search can miss — an evaluation, and a training measuring
+// the same way, would report an index better than the searches it serves. And
+// a narrowed shape's truth is its own filter's rows, counted, because its
+// floor is read at that count. Held here against the per-query statement the
+// one pass replaced, shape by shape.
+func TestTheGroundTruthIsTheRestOfEachShapesRows(t *testing.T) {
+	t.Parallel()
+	const dim, model, limit = 32, "truth-embed", 20
+	db, _ := indexedStore(t, model, dim, 400)
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		docs, err := search.SampleDocuments(t.Context(), tx, model, dim, 6)
+		if err != nil {
+			return err
+		}
+		if len(docs) != 6 {
+			return fmt.Errorf("sampled %d documents, want 6", len(docs))
+		}
+		shapes := make([][]search.ShapeQuery, len(docs))
+		for i, doc := range docs {
+			shapes[i] = search.ShapesFor(doc, search.Sources)
+		}
+		tops, err := search.ExactTops(t.Context(), tx, docs, shapes, model, dim, limit)
+		if err != nil {
+			return err
+		}
+		for i, doc := range docs {
+			self := search.Key(doc.Source, doc.ID)
+			for j, shape := range shapes[i] {
+				where := "model = ? AND dim = ? AND NOT (source = ? AND source_id = ?)"
+				args := []any{model, dim, string(doc.Source), doc.ID}
+				if shape.Shape != search.ShapeAll {
+					where += " AND source = ?"
+					args = append(args, string(shape.Source))
+				}
+				if shape.Shape == search.ShapeContainer {
+					where += " AND container = ?"
+					args = append(args, shape.Container)
+				}
+				var matching int
+				if err := tx.QueryRowContext(t.Context(),
+					`SELECT COUNT(*) FROM kb_vectors WHERE `+where, args...).Scan(&matching); err != nil {
+					return err
+				}
+				rows, err := tx.QueryContext(t.Context(), `
+					SELECT source || ':' || source_id FROM kb_vectors WHERE `+where+`
+					ORDER BY vector_distance_cos(embedding, ?), source, source_id
+					LIMIT ?`, append(args, doc.Vector, limit)...)
+				if err != nil {
+					return err
+				}
+				var want []string
+				for rows.Next() {
+					var key string
+					if err := rows.Scan(&key); err != nil {
+						_ = rows.Close()
+						return err
+					}
+					want = append(want, key)
+				}
+				_ = rows.Close()
+				got := tops[i][j]
+				if slices.Contains(got.Keys, self) {
+					return fmt.Errorf("query %s counts itself in its own %s truth",
+						self, shape.Shape)
+				}
+				if !slices.Equal(got.Keys, want) || got.Matching != matching {
+					return fmt.Errorf("query %s, shape %+v: the one pass found %d "+
+						"of %d rows %v, the per-query statement %d of %d %v", self,
+						shape, len(got.Keys), got.Matching, got.Keys, len(want),
+						matching, want)
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

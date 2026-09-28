@@ -237,6 +237,25 @@ type EmbedDeps struct {
 	// Publisher is the vector domain's write authority.
 	Publisher *statelog.Publisher
 
+	// Store holds the partition the duty keeps an index for (ADR-0022):
+	// the codes it trains on and the rows it reads the index's state from.
+	Store *store.DB
+
+	// Log names the vector log this duty writes, which is what the index's
+	// training seed is derived from ([IVFSeed]) — so two partitions'
+	// trainings draw different samples and a re-run of one draws the same.
+	Log string
+
+	// Standing reads what the index step must know about the vector log
+	// before it may publish onto it: whether this node has applied all of
+	// it, and which build every node applying it reads ([LogStanding]).
+	//
+	// REQUIRED, never defaulted: a duty that could not ask would either
+	// publish the index's records onto a log a node cannot read — stopping
+	// that node's applier — or decide from rows a moment behind the log,
+	// and there is no safe answer to assume in its place.
+	Standing func(ctx context.Context) (LogStanding, error)
+
 	// Embedder is the provider. A batch embedder is required rather than
 	// preferred: one source at a time is 110 000 round trips for a cold
 	// fill, which does not fit in the tick it runs on.
@@ -275,6 +294,16 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 	switch {
 	case d.Publisher == nil:
 		return nil, fmt.Errorf("search: the embed duty has no publisher")
+	case d.Store == nil:
+		return nil, fmt.Errorf("search: the embed duty has no store — it keeps " +
+			"the partition's semantic index, and trains it from the codes there")
+	case d.Log == "":
+		return nil, fmt.Errorf("search: the embed duty names no vector log — " +
+			"the index's training seed is derived from it")
+	case d.Standing == nil:
+		return nil, fmt.Errorf("search: the embed duty cannot read the vector " +
+			"log's standing — it publishes nothing about the index without " +
+			"knowing this node has applied the log and every node reads the records")
 	case d.Embedder == nil:
 		return nil, fmt.Errorf("search: the embed duty has no embedder")
 	case d.Model == "":
@@ -367,6 +396,23 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	dim := e.deps.Embedder.Width()
 	published := 0
+	var failed []error
+
+	// THE INDEX FIRST, before this tick publishes anything. Its step runs
+	// only on a node that has applied the whole vector log ([LogStanding]),
+	// and a tick that embedded first would have put its own node behind by
+	// every record it had just published — on a company whose corpus moves
+	// every minute, every tick, so the index would never be kept at all. The
+	// previous tick's records have had the interval to apply. A failure of
+	// it costs the index and never the tick's embeddings: a step that cannot
+	// run this tick runs on the next, over the rows as they are then.
+	n, err := e.maintainIndex(ctx, dim)
+	published += n
+	if err != nil {
+		e.deps.Logger.WarnContext(ctx, "search_index_step_failed",
+			"error", err.Error())
+		failed = append(failed, fmt.Errorf("search: the semantic index: %w", err))
+	}
 
 	// ONE SELECTION PER CORPUS PER TICK, ASKED FOR THE WHOLE TICK'S
 	// CEILING. Every batch a corpus is granted is sliced out of this one
@@ -410,7 +456,6 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	//     waste plus a second query and an invariant nothing else here
 	//     depends on, rather than no waste.
 	stale := make([][]Document, len(e.deps.Corpora))
-	var failed []error
 	for i, corpus := range e.deps.Corpora {
 		docs, gone, err := corpus.Stale(ctx, e.deps.Model, dim,
 			EmbedBatchesPerTick*EmbedBatch)
@@ -660,10 +705,36 @@ func (e *Embedder) append(ctx context.Context, subject Subject, rec VectorRecord
 // genuinely newer vector for the same source carries a different one, because
 // the source version and the text digest are both in it.
 func opIDFor(rec VectorRecord) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{
+	parts := []string{
 		rec.Subject.String(), string(rec.Op), rec.Model,
 		fmt.Sprint(rec.Dim), fmt.Sprint(rec.SourceRev), rec.TextSHA,
-	}, "\x00")))
+	}
+	// AN INDEX RECORD IS NAMED BY WHAT IT INSTALLS, or two trainings inside
+	// the broker's duplicate window — an index and the verdict that replaces
+	// it, or two indexes a minute apart — would share one id and the second
+	// would be COLLAPSED into the first, dropped with an acknowledgement.
+	if x := rec.Index; x != nil {
+		parts = append(parts, x.Log, fmt.Sprint(x.Basis), fmt.Sprint(x.Seed),
+			fmt.Sprint(x.Lists), fmt.Sprint(x.Probes), fmt.Sprint(x.TrainedOn),
+			fmt.Sprint(x.Largest), string(x.Why), digestOf(x.Centroids),
+			fmt.Sprint(len(x.Rollout)))
+		if m := x.Measurement; m != nil {
+			parts = append(parts, fmt.Sprintf("%+v", *m))
+		}
+	}
+	// A BATCH IS NAMED BY ITS INDEX AND NUMBER, which fix its range, so every
+	// publication of it is one operation and the duplicate window collapses a
+	// repeat inside it.
+	if r := rec.Reassign; r != nil {
+		parts = append(parts, fmt.Sprint(r.Index), fmt.Sprint(r.Batch))
+	}
+	// A MEASUREMENT BY WHAT IT FOUND, so a second one inside the window that
+	// found something different is published rather than collapsed.
+	if m := rec.Measure; m != nil {
+		parts = append(parts, fmt.Sprint(m.Index), fmt.Sprint(m.Probes),
+			fmt.Sprintf("%+v", m.Measurement))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "vec-" + hex.EncodeToString(sum[:16])
 }
 

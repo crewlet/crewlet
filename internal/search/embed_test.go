@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -56,7 +57,7 @@ func TestTheEmbedDutyReachesTheSearch(t *testing.T) {
 	var hits []search.SemanticHit
 	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
-		hits, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: pack(vector), Model: embedModel,
 			Dim: h.embedder.Width(), Limit: 5,
 		})
@@ -292,8 +293,9 @@ func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
 		corpora[i] = &scriptedCorpus{source: search.SourceTask, backlog: -1}
 	}
 	_, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Embedder: h.embedder, Model: embedModel,
-		Corpora: corpora,
+		Publisher: h.publisher, Store: h.db, Log: search.Domain{}.Stream().Name,
+		Standing: h.standing(nil),
+		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
 	})
 	if err == nil {
 		t.Fatalf("a duty with %d corpora and %d calls a tick was accepted — "+
@@ -459,14 +461,28 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 	h.t.Helper()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Embedder: h.embedder, Model: embedModel,
-		Corpora: corpora,
-		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Publisher: h.publisher, Store: h.db, Log: search.Domain{}.Stream().Name,
+		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
+		Now: func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 	})
 	if err != nil {
 		h.t.Fatalf("build the duty: %v", err)
 	}
 	return duty
+}
+
+// standing is the log's standing as this harness's one node holds it: current
+// when [embedHarness.drain] has applied every record the log holds, and the
+// fleet the readers a test dictates.
+func (h *embedHarness) standing(readers map[string]int) func(context.Context) (search.LogStanding, error) {
+	return func(ctx context.Context) (search.LogStanding, error) {
+		last, err := h.log.End(ctx)
+		if err != nil {
+			return search.LogStanding{}, err
+		}
+		return search.LogStanding{Current: h.consumed >= last, Readers: readers}, nil
+	}
 }
 
 // seedTasks writes tracker rows DIRECTLY, because this suite is about the
@@ -478,6 +494,11 @@ func (h *embedHarness) seedTasks(bodies map[string]string) {
 	for id := range bodies {
 		ids = append(ids, id)
 	}
+	// IN ID ORDER, because each task's version and update instant are
+	// minted in this loop and the duty embeds in update order: seeded in a
+	// map's order, which documents a tick embedded — and so which corpus an
+	// index was trained on — changed from run to run.
+	slices.Sort(ids)
 	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
 		for _, id := range ids {
 			h.version++

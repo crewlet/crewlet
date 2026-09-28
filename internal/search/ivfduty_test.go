@@ -1,0 +1,360 @@
+package search_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"hash/fnv"
+	"math/rand/v2"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/search"
+)
+
+// THE DUTY TRAINS AN INDEX, AND ITS ROLLOUT CONVERGES — through the real record
+// path, on a real broker.
+//
+// The pure gates certify the arithmetic and the applier; this certifies the
+// LOOP. Ticks run until the duty has nothing left to do, and by then: the
+// corpus has been embedded, an index trained each time it reached the minimum
+// or doubled, every such index rolled out on the tick after it, nothing is
+// left unfiled, a search probes the index, and a tick over that state
+// publishes nothing at all. Each step is one tick and each is a record every
+// holder applies.
+func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	// SIXTEEN TOPICS, where an index trained at 2 048 sources still meets
+	// the floor at the corpus's 2 200 a day later — so the day's step is a
+	// measurement, which TestAMeasurementThatMissesTheFloorRetrains is not.
+	embedder := topicalEmbedder{width: 384, topics: 16}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	duty := indexDuty(t, h, embedder, h.standing(map[string]int{"node-a": search.RecordVersion}),
+		func() time.Time { return now })
+	// ENOUGH THAT AN ANSWER IS A SMALL SHARE OF ITS TOPIC: the shipped
+	// answer is 150 documents deep, and a topic much smaller than that is
+	// one no probe of a few lists can hold.
+	h.seedTasks(taskBodies(2_200))
+
+	state, rollouts := runToRest(t, h, duty, embedder.width)
+	if state.Sources != 2_200 || !state.Indexed || state.Head.Lists == 0 {
+		t.Fatalf("the duty came to rest over %d of %d sources with index %+v",
+			state.Sources, 2_200, state.Head)
+	}
+	if rollouts == 0 || state.Stale() != 0 {
+		t.Fatalf("%d rollout tick(s) ran and %d rows are unfiled at rest",
+			rollouts, state.Stale())
+	}
+	if state.Head.Measurement == nil || !state.Head.Measurement.Passed() {
+		t.Fatalf("the installed index records the measurement %+v", state.Head.Measurement)
+	}
+
+	// AND THE INDEX IS WHAT A SEARCH PROBES.
+	query, err := embedder.Embed(t.Context(), "a query about something")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		hits, report, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+			Vector: pack(query), Model: embedModel, Dim: embedder.width, Limit: 5,
+		})
+		if err != nil {
+			return err
+		}
+		if report.Method != search.Stage1IVF || report.Stale ||
+			report.IVFGeneration != state.Head.Generation {
+			return fmt.Errorf("the first stage reports %+v at rest", report)
+		}
+		if len(hits) != 5 {
+			return fmt.Errorf("the probe answered %d hits", len(hits))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A DAY LATER THE DUTY MEASURES IT AGAIN, against the corpus as it is
+	// then — one record, which re-files nothing and keeps the generation.
+	now = now.Add(search.IVFMeasureInterval)
+	published, err := duty.Tick(t.Context())
+	if err != nil || published != 1 {
+		t.Fatalf("a day on, the tick published %d record(s): %v", published, err)
+	}
+	h.drain()
+	measured, err := search.IndexStateOf(t.Context(), duty, embedder.width)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if measured.Head.Generation != state.Head.Generation || measured.Stale() != 0 ||
+		!measured.Head.MeasuredAt.Equal(now) || !measured.Head.Measurement.Passed() {
+		t.Fatalf("after the day's measurement the index is %+v (measured %v, want "+
+			"the same generation %d re-measured at %v with nothing re-filed)",
+			measured.Head, measured.Head.MeasuredAt, state.Head.Generation, now)
+	}
+
+	// AND EVERY RECORD THE DUTY PUBLISHED IS AT THE VERSION ITS KINDS WERE
+	// INTRODUCED AT: a document's at 1, which every build reads, and the
+	// index's at 2.
+	for version, kinds := range publishedVersions(t, h) {
+		for kind := range kinds {
+			want := 1
+			if kind == search.IndexSource {
+				want = search.IndexRecordVersion()
+			}
+			if version != want {
+				t.Fatalf("the duty published %s records at version %d, want %d",
+					kind, version, want)
+			}
+		}
+	}
+}
+
+// A MEASUREMENT THAT MISSES THE FLOOR RETRAINS IN THE SAME TICK, rather than
+// recording a failing index for searches to read.
+//
+// Eight topics of about 275 sources each: the index this corpus trains at
+// 2 048 sources meets the floor at half its lists, and measured a day later
+// over the 2 200 the corpus came to rest at it needs every list — a corpus
+// that moved since training, which is what the daily measurement exists to
+// catch. The same tick trains its replacement from the reading already in
+// hand, so the one record it publishes is a new index that passes, and no
+// search is left reading one that does not.
+func TestAMeasurementThatMissesTheFloorRetrains(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	embedder := topicalEmbedder{width: 384, topics: 8}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	duty := indexDuty(t, h, embedder, h.standing(map[string]int{"node-a": search.RecordVersion}),
+		func() time.Time { return now })
+	h.seedTasks(taskBodies(2_200))
+	state, _ := runToRest(t, h, duty, embedder.width)
+	if !state.Indexed || state.Head.Lists == 0 || state.Head.TrainedOn != 2_048 {
+		t.Fatalf("the duty came to rest with %+v, want the index trained at 2048", state.Head)
+	}
+
+	now = now.Add(search.IVFMeasureInterval)
+	published, err := duty.Tick(t.Context())
+	if err != nil || published != 1 {
+		t.Fatalf("a day on, the tick published %d record(s): %v", published, err)
+	}
+	h.drain()
+	after, err := search.IndexStateOf(t.Context(), duty, embedder.width)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Head.Generation == state.Head.Generation || after.Head.TrainedOn != 2_200 ||
+		after.Head.Lists == 0 || !after.Head.MeasuredAt.Equal(now) ||
+		!after.Head.Measurement.Passed() {
+		t.Fatalf("a measurement that missed the floor left %+v — want a new index, "+
+			"trained over the 2200 sources it measured, that passes", after.Head)
+	}
+	if kinds := publishedKinds(t, h); kinds[search.IndexSource] == 0 {
+		t.Fatal("nothing about the index is on the log")
+	}
+}
+
+// NOTHING ABOUT THE INDEX IS PUBLISHED WHILE A NODE APPLYING THE LOG CANNOT
+// READ IT — AND NOTHING IS DECIDED FROM A NODE THAT HAS NOT APPLIED THE LOG.
+//
+// A build older than the index's records stops its applier at the first one:
+// its envelope decode refuses a subject kind it does not know, and the
+// framework stops rather than defers on an envelope it cannot read. So while
+// the log counts a node advertising no build that reads them — or one that
+// reads below [search.IndexRecordVersion] — the duty embeds as ever and
+// publishes nothing about the index, and the partition keeps the full scan.
+// The moment the last such node is upgraded, the next tick trains.
+//
+// And a duty on a node that has not applied the whole log decides nothing from
+// its rows: it would see the index the log already replaced, or none, and
+// train over a healthy one.
+func TestTheIndexWaitsForEveryReaderAndForTheLog(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	embedder := topicalEmbedder{width: 128, topics: 8}
+	readers := map[string]int{"node-a": search.RecordVersion, "node-old": 0}
+	behind := false
+	standing := h.standing(readers)
+	duty := indexDuty(t, h, embedder, func(ctx context.Context) (search.LogStanding, error) {
+		s, err := standing(ctx)
+		if behind {
+			s.Current = false
+		}
+		return s, err
+	}, func() time.Time { return time.Unix(1_700_000_000, 0).UTC() })
+	h.seedTasks(taskBodies(2_000))
+
+	state, _ := runToRest(t, h, duty, embedder.width)
+	if state.Sources != 2_000 || state.Indexed {
+		t.Fatalf("with a node on a build that cannot read the index, the duty "+
+			"came to rest over %d sources with an index row %+v — that node's "+
+			"applier stops on the first index record", state.Sources, state.Head)
+	}
+	if kinds := publishedKinds(t, h); kinds[search.IndexSource] != 0 {
+		t.Fatalf("the log carries %d record(s) about the index while a node "+
+			"cannot read one", kinds[search.IndexSource])
+	}
+
+	readers["node-old"] = search.IndexRecordVersion() - 1
+	if state, _ = runToRest(t, h, duty, embedder.width); state.Indexed {
+		t.Fatalf("a node reading below the index's version held nothing back: %+v",
+			state.Head)
+	}
+
+	// BEHIND THE LOG, with every reader upgraded: still nothing.
+	readers["node-old"] = search.IndexRecordVersion()
+	behind = true
+	if state, _ = runToRest(t, h, duty, embedder.width); state.Indexed {
+		t.Fatalf("a duty that had not applied the log trained an index: %+v",
+			state.Head)
+	}
+	behind = false
+	if state, _ = runToRest(t, h, duty, embedder.width); !state.Indexed || state.Head.Lists == 0 {
+		t.Fatalf("with every reader upgraded and the log applied, the duty came "+
+			"to rest with %+v", state.Head)
+	}
+}
+
+// indexDuty is a duty over the harness's tasks, embedding with embedder and
+// reading the log's standing from standing.
+func indexDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standing func(context.Context) (search.LogStanding, error), now func() time.Time) *search.Embedder {
+	t.Helper()
+	duty, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Store: h.db, Log: search.Domain{}.Stream().Name,
+		Standing: standing, Embedder: embedder, Model: embedModel,
+		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db}},
+		Now:     now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return duty
+}
+
+// runToRest ticks the duty, applying the log after each tick, until two ticks
+// in a row publish nothing, and reports the state it came to rest in and how
+// many ticks rolled an index out.
+func runToRest(t *testing.T, h *embedHarness, duty *search.Embedder, dim int) (search.IndexState, int) {
+	t.Helper()
+	var state search.IndexState
+	quiet, rollouts := 0, 0
+	for ticks := 0; quiet < 2; ticks++ {
+		if ticks == 20 {
+			t.Fatalf("the duty was still publishing after %d ticks: %+v", ticks, state)
+		}
+		published, err := duty.Tick(t.Context())
+		if err != nil {
+			t.Fatalf("tick %d: %v", ticks, err)
+		}
+		if state.Stale() > 0 && published > 0 {
+			rollouts++
+		}
+		h.drain()
+		if state, err = search.IndexStateOf(t.Context(), duty, dim); err != nil {
+			t.Fatal(err)
+		}
+		if published == 0 {
+			quiet++
+		} else {
+			quiet = 0
+		}
+	}
+	return state, rollouts
+}
+
+func taskBodies(n int) map[string]string {
+	bodies := map[string]string{}
+	for i := range n {
+		bodies[fmt.Sprintf("t%05d", i)] = fmt.Sprintf("task %d", i)
+	}
+	return bodies
+}
+
+// publishedVersions is every record version on the log, with the subject
+// kinds written at it.
+func publishedVersions(t *testing.T, h *embedHarness) map[int]map[search.Source]bool {
+	t.Helper()
+	last, err := h.log.End(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[int]map[search.Source]bool{}
+	for seq := uint64(1); seq <= last; seq++ {
+		_, payload, _, ok, err := h.log.At(t.Context(), seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			continue
+		}
+		env, err := search.DecodeEnvelope(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out[env.V] == nil {
+			out[env.V] = map[search.Source]bool{}
+		}
+		out[env.V][env.Subject.Source] = true
+	}
+	return out
+}
+
+// publishedKinds counts the log's records by subject kind.
+func publishedKinds(t *testing.T, h *embedHarness) map[search.Source]int {
+	t.Helper()
+	last, err := h.log.End(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[search.Source]int{}
+	for seq := uint64(1); seq <= last; seq++ {
+		_, payload, _, ok, err := h.log.At(t.Context(), seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			continue
+		}
+		env, err := search.DecodeEnvelope(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[env.Subject.Source]++
+	}
+	return out
+}
+
+// topicalEmbedder embeds a text as its topic's centre plus a little noise,
+// both derived from the text alone — the one property a duty test needs from
+// a provider being that the corpus it produces has topics to find.
+type topicalEmbedder struct {
+	width, topics int
+}
+
+func (e topicalEmbedder) Width() int { return e.width }
+
+func (e topicalEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(text))
+	sum := h.Sum64()
+	topic := int(sum % uint64(e.topics))
+	centre := rand.New(rand.NewPCG(uint64(topic), 0xCE47E))
+	noise := rand.New(rand.NewPCG(sum, 0x401E))
+	out := make([]float32, e.width)
+	for i := range out {
+		out[i] = float32(centre.NormFloat64() + 0.5*noise.NormFloat64())
+	}
+	return out, nil
+}
+
+func (e topicalEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, text := range texts {
+		v, err := e.Embed(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}

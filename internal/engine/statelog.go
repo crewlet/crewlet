@@ -1422,6 +1422,21 @@ func (s *stateLog) Domain(name string) *runningDomain {
 	return s.domains[name]
 }
 
+// identityDomains is every running domain that claims identity, in the
+// register's order.
+func (s *stateLog) identityDomains() []*runningDomain {
+	if s == nil {
+		return nil
+	}
+	var out []*runningDomain
+	for _, name := range s.order {
+		if running := s.domains[name]; running.domain.ClaimsIdentity() {
+			out = append(out, running)
+		}
+	}
+	return out
+}
+
 // Established reports whether every domain whose health gates seat admission
 // has one.
 //

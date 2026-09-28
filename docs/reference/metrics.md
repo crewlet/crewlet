@@ -68,7 +68,7 @@ A value that goes both ways, sampled at each export.
 | `crewlet.backup.holds` | `1` | — | Live trim holds. A pin that outlives its owner stops the trim until the stale bound expires it, so a count that does not return to zero is a backup that crashed mid-copy. |
 | `crewlet.store.wal.bytes` | `By` | `file` | A write-ahead log a checkpoint cannot pass grows, and this is the only way to see it before the volume fills. |
 | `crewlet.store.bytes` | `By` | `file` | The store's size on disk, which the snapshot's free-space precondition and the provisioning rule are both derived from. |
-| `crewlet.tracker.search.concurrency` | `1` | — | Scans in flight, which is the row of the supported-corpus table this node is actually on: about 390 000 sources inside the one-second budget with one scan running, about 160 000 with eight. |
+| `crewlet.tracker.search.concurrency` | `1` | — | Searches in flight, which is the row of the supported-corpus table this node is actually on: inside the one-second budget, about 345 000 sources with one running and about 136 000 with eight through the full scan, and about 545 000 and 183 000 through an index probing half its lists. |
 | `crewlet.tracker.vector.coverage` | `1` | — | The fraction of sources carrying a current vector. It is how a stalled embedding backlog is reported, since it never drops a seat. |
 | `crewlet.alarm.active` | `1` | `kind` | Whether each named alarm is firing right now, 0 or 1. It is the same table the operator record renders and the CLI exits non-zero on, so a collector and a person see one answer. |
 

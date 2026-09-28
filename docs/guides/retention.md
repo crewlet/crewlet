@@ -476,8 +476,12 @@ It is also what stops an absent node's position counting anywhere else: an
 evicted node's row — and any trim floor it published — counts toward neither
 the generation the fleet is on nor a reanchor's guards, which is how a fleet
 stranded by a node that re-anchored and then vanished is released ([a node a
-peer re-anchored past](#a-node-a-peer-re-anchored-past)). The row itself stays:
-a readmission is judged by it.
+peer re-anchored past](#a-node-a-peer-re-anchored-past)). And it is what
+releases the [semantic index](../concepts/knowledge-system.md#the-first-stage-is-an-index-over-the-codes)
+a node on an older build holds back: the index is published only once every
+node applying the vector log reads its records, and a node evicted on both logs
+below is no longer one of them. The row itself stays: a readmission is judged
+by it.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on: the tracker's log and the pages log. (The vector log counts

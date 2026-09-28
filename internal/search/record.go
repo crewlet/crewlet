@@ -42,7 +42,19 @@ import (
 //
 // A record above it is RETAINED at its position rather than skipped, so a
 // newer peer's shape survives a rolling upgrade in both directions.
-const RecordVersion = 1
+//
+// # What each version added
+//
+//   - 1: the documents' own records — an embed and a forget of a page or a
+//     task.
+//   - 2: the semantic index's records ([IndexSource]: [OpCentroids],
+//     [OpReassign], [OpMeasure]), ADR-0022.
+//
+// A record is WRITTEN at the lowest version that expresses it, never simply at
+// this constant — see [VersionOf] — and it is the maximum of [kindVersions],
+// which a test holds it to, so a kind added at a higher version cannot be
+// written at one no build yet reads.
+const RecordVersion = 2
 
 // Source is where an embedded document came from.
 //
@@ -85,11 +97,91 @@ const (
 	OpForget Op = "forget"
 )
 
+const (
+	// OpCentroids installs the partition's semantic index — or retires it —
+	// on the subject [IndexCentroids]. See [IndexRecord].
+	OpCentroids Op = "centroids"
+
+	// OpReassign re-files one batch of the rollout of the index installed
+	// at [ReassignRecord.Index].
+	OpReassign Op = "reassign"
+
+	// OpMeasure records a later measurement of the installed index, and the
+	// probe count it chose. See [MeasureRecord].
+	OpMeasure Op = "measure"
+)
+
 // Ops is every operation this build writes.
-var Ops = []Op{OpEmbed, OpForget}
+var Ops = []Op{OpEmbed, OpForget, OpCentroids, OpReassign, OpMeasure}
 
 // Valid reports whether an operation off the wire is one this build knows.
 func (o Op) Valid() bool { return slices.Contains(Ops, o) }
+
+// kindVersions is the record version each operation and each subject kind was
+// introduced at: the version a record carrying it is written at, and the
+// lowest a reader must read to apply it.
+//
+// # Why both halves, and why a TABLE
+//
+// A record carries an operation AND a subject kind, and either can be new. The
+// version once came from the operation alone, which gave the rule "a build
+// that adds a kind states it at a version above every build that cannot read
+// it" no mechanism at all: a later build embedding a new source would have
+// written its records at 1, and every build reading 1 would have refused them
+// as a writer fault — retried on every redelivery — instead of deferring them.
+// So a record is written at the higher of its two halves' versions, and the
+// table has an entry for EVERY operation in [Ops] and every kind in [Sources]
+// and [IndexSource] — a test fails the day one is added without its row,
+// which is the moment somebody has to decide what version it is.
+//
+// # Why the LOWEST version that expresses it, never [RecordVersion]
+//
+// A document's embed is the same shape it always was, and stamping it 2 would
+// make every version-1 peer of a rolling upgrade defer every vector this build
+// computes — a whole corpus unsearchable by meaning on the old nodes for the
+// length of the upgrade, for a shape they read perfectly well.
+var kindVersions = struct {
+	ops     map[Op]int
+	sources map[Source]int
+}{
+	ops: map[Op]int{
+		OpEmbed: 1, OpForget: 1,
+		OpCentroids: 2, OpReassign: 2, OpMeasure: 2,
+	},
+	sources: map[Source]int{
+		SourcePage: 1, SourceTask: 1,
+		IndexSource: 2,
+	},
+}
+
+// Version is the record version an operation was introduced at. An operation
+// this build does not know reads as one above every version it reads.
+func (o Op) Version() int {
+	if v, ok := kindVersions.ops[o]; ok {
+		return v
+	}
+	return RecordVersion + 1
+}
+
+// Version is the record version a subject kind was introduced at. A kind this
+// build does not know reads as one above every version it reads.
+func (s Source) Version() int {
+	if v, ok := kindVersions.sources[s]; ok {
+		return v
+	}
+	return RecordVersion + 1
+}
+
+// VersionOf is the version a record doing op on subject is written at: the
+// higher of the two halves' ([kindVersions]).
+func VersionOf(op Op, subject Subject) int {
+	return max(op.Version(), subject.Source.Version())
+}
+
+// indexOp reports an operation about the index rather than about a document.
+func (o Op) indexOp() bool {
+	return o == OpCentroids || o == OpReassign || o == OpMeasure
+}
 
 // Subject is the object a vector record is about: one source document.
 //
@@ -110,7 +202,7 @@ func (s Subject) Validate() error {
 	if err := s.wellFormed(); err != nil {
 		return err
 	}
-	if !s.Source.Valid() {
+	if !s.Source.Valid() && s.Source != IndexSource {
 		return fmt.Errorf("search: %q is not a source this build embeds", s.Source)
 	}
 	return nil
@@ -262,6 +354,16 @@ type VectorRecord struct {
 	// all of them.
 	Embedding []byte `json:"embedding,omitempty"`
 
+	// Index is what an [OpCentroids] record carries, with Model and Dim
+	// above naming the embedding space the index was trained in.
+	Index *IndexRecord `json:"index,omitempty"`
+
+	// Reassign is what an [OpReassign] record carries.
+	Reassign *ReassignRecord `json:"reassign,omitempty"`
+
+	// Measure is what an [OpMeasure] record carries.
+	Measure *MeasureRecord `json:"measure,omitempty"`
+
 	// Extra carries fields a newer build wrote, so a record round-trips
 	// losslessly through a node that cannot interpret them.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -276,6 +378,7 @@ type VectorRecord struct {
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"container", "model", "dim", "source_rev", "text_sha", "embedding",
+	"index", "reassign", "measure",
 }
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
@@ -331,9 +434,9 @@ func Decode(payload []byte) (VectorRecord, error) {
 		}
 	}
 	// A KIND THIS BUILD DOES NOT WRITE, AT A VERSION IT READS, is a writer
-	// fault rather than a newer build: a build that adds a kind states it at a
-	// version above every build that cannot read it, which is the branch
-	// above.
+	// fault rather than a newer build: a build that adds a kind writes it at
+	// the version [kindVersions] gives it, above every build that cannot read
+	// it, which is the branch above.
 	if err := env.Subject.Validate(); err != nil {
 		return VectorRecord{RecordEnvelope: env}, fmt.Errorf("search: the "+
 			"record at version %d names a subject this build reads that version "+
@@ -343,6 +446,9 @@ func Decode(payload []byte) (VectorRecord, error) {
 	if err := json.Unmarshal(payload, &rec); err != nil {
 		return VectorRecord{RecordEnvelope: env}, fmt.Errorf("search: decode "+
 			"the vector record on %s: %w", env.Subject, err)
+	}
+	if err := rec.validate(); err != nil {
+		return VectorRecord{RecordEnvelope: env}, err
 	}
 	var extra map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &extra); err == nil {
@@ -359,7 +465,7 @@ func Decode(payload []byte) (VectorRecord, error) {
 // Encode writes a record.
 func (r VectorRecord) Encode() ([]byte, error) {
 	if r.V == 0 {
-		r.V = RecordVersion
+		r.V = VersionOf(r.Op, r.Subject)
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err
@@ -368,20 +474,14 @@ func (r VectorRecord) Encode() ([]byte, error) {
 		return nil, fmt.Errorf("search: op %q is not one this build writes", r.Op)
 	}
 	if r.Scope.Empty() {
-		r.Scope = statelog.ScopeSet{Paths: []string{ScopePath(r.Container, r.Subject)}}
+		r.Scope = statelog.ScopeSet{Paths: []string{r.scopePath()}}
 	}
-	if r.Op == OpEmbed {
-		if len(r.Embedding) == 0 || r.Model == "" || r.Dim <= 0 {
-			return nil, fmt.Errorf("search: an embed record for %s carries no "+
-				"vector, model or width — all three are the candidate pool's "+
-				"own predicate, and a row missing any of them can never be "+
-				"scanned or excluded", r.Subject)
-		}
-		if want := 4 * r.Dim; len(r.Embedding) != want {
-			return nil, fmt.Errorf("search: the embed record for %s says %d "+
-				"dimensions and carries %d bytes, not %d — vector_distance_cos "+
-				"over mismatched lengths is undefined and fails the whole "+
-				"statement", r.Subject, r.Dim, len(r.Embedding), want)
+	if r.V <= RecordVersion {
+		// A RECORD AT A VERSION THIS BUILD READS IS HELD TO WHAT THIS
+		// BUILD WOULD APPLY; one above it is a newer build's, relayed or
+		// fabricated by a test, and this build has no rule for it.
+		if err := r.validate(); err != nil {
+			return nil, err
 		}
 	}
 	body, err := json.Marshal(r)
@@ -404,4 +504,69 @@ func (r VectorRecord) Encode() ([]byte, error) {
 		}
 	}
 	return json.Marshal(merged)
+}
+
+// validate refuses a record this build would not apply, by its operation.
+//
+// ONE RULE FOR BOTH DIRECTIONS: [VectorRecord.Encode] refuses to write what
+// [Decode] would refuse to read, so a record this build publishes is one every
+// peer of its own version applies.
+func (r VectorRecord) validate() error {
+	if want := VersionOf(r.Op, r.Subject); r.V < want {
+		return fmt.Errorf("search: the %s record on %s is version %d, and that "+
+			"operation on that kind was introduced at version %d — a peer "+
+			"reading %d would apply a record it does not know rather than "+
+			"defer it", r.Op, r.Subject, r.V, want, r.V)
+	}
+	if r.Op.indexOp() != (r.Subject.Source == IndexSource) {
+		return fmt.Errorf("search: op %s on subject %s — a document's op on the "+
+			"index's subject, or the reverse, files a row under the wrong key",
+			r.Op, r.Subject)
+	}
+	switch r.Op {
+	case OpEmbed:
+		if len(r.Embedding) == 0 || r.Model == "" || r.Dim <= 0 {
+			return fmt.Errorf("search: an embed record for %s carries no "+
+				"vector, model or width — all three are the candidate pool's "+
+				"own predicate, and a row missing any of them can never be "+
+				"scanned or excluded", r.Subject)
+		}
+		if want := 4 * r.Dim; len(r.Embedding) != want {
+			return fmt.Errorf("search: the embed record for %s says %d "+
+				"dimensions and carries %d bytes, not %d — vector_distance_cos "+
+				"over mismatched lengths is undefined and fails the whole "+
+				"statement", r.Subject, r.Dim, len(r.Embedding), want)
+		}
+	case OpCentroids:
+		if r.Subject != IndexCentroids {
+			return fmt.Errorf("search: a centroids record on %s — the index has "+
+				"one subject, %s, so the compaction keeps exactly the current one",
+				r.Subject, IndexCentroids)
+		}
+		if r.Index == nil {
+			return fmt.Errorf("search: a centroids record carries no index")
+		}
+		return r.Index.validate(r.Model, r.Dim)
+	case OpReassign:
+		if r.Reassign == nil {
+			return fmt.Errorf("search: a reassign record on %s carries no batch",
+				r.Subject)
+		}
+		return r.Reassign.validate(r.Subject)
+	case OpMeasure:
+		if r.Measure == nil {
+			return fmt.Errorf("search: a measure record on %s carries no "+
+				"measurement", r.Subject)
+		}
+		return r.Measure.validate(r.Subject)
+	}
+	return nil
+}
+
+// scopePath is the one path a record's apply touches, by its kind.
+func (r VectorRecord) scopePath() string {
+	if r.Subject.Source == IndexSource {
+		return IndexScopePath(r.Subject)
+	}
+	return ScopePath(r.Container, r.Subject)
 }

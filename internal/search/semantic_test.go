@@ -33,7 +33,7 @@ func TestTheTwoStageScanAgreesWithTheExactRanking(t *testing.T) {
 
 	var got, want []string
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 20,
 		})
 		if err != nil {
@@ -77,7 +77,7 @@ func TestASecondModelAtTheSameWidthIsExcluded(t *testing.T) {
 
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		rng := rand.New(rand.NewPCG(3, 3))
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: randomEmbedding(rng, dim), Model: model, Dim: dim, Limit: 100,
 		})
 		if err != nil {
@@ -106,7 +106,7 @@ func TestTheScopeFiltersNarrowTheCandidatePool(t *testing.T) {
 	query := randomEmbedding(rng, dim)
 
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 100,
 			Containers: []string{"ENG"},
 		})
@@ -124,7 +124,7 @@ func TestTheScopeFiltersNarrowTheCandidatePool(t *testing.T) {
 				"so the fixture cannot tell a working filter from an absent "+
 				"one", len(hits))
 		}
-		pages, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		pages, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 100,
 			Sources: []search.Source{search.SourcePage},
 		})
@@ -157,7 +157,7 @@ func TestTheAnswerIsOrderedByTheExactDistance(t *testing.T) {
 	db, dim, model := seedVectors(t, 200)
 	rng := rand.New(rand.NewPCG(5, 5))
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: randomEmbedding(rng, dim), Model: model, Dim: dim, Limit: 30,
 		})
 		if err != nil {

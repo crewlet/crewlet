@@ -1897,11 +1897,12 @@ func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
 // enterSearch counts one scan in, and its return counts it out.
 //
 // THE LEVEL NOTHING ELSE CAN SAMPLE. The supported-corpus table has a row per
-// concurrency — ≈ 390 000 sources inside the budget with one reader, ≈ 160 000
-// with eight (see [search.SemanticScanBudget]) — and a node answering nine at
-// once is past the last of them. A duration histogram cannot say which row: it
-// records what the scans cost without recording how many were competing for
-// the disk while they did.
+// concurrency — through the full scan ≈ 345 000 sources inside the budget with
+// one reader and ≈ 136 000 with eight, through an index at its probe ceiling
+// ≈ 545 000 and ≈ 183 000 (see [search.SemanticScanBudget]) — and a node
+// answering nine at once is past the last of them. A duration histogram
+// cannot say which row: it records what the scans cost without recording how
+// many were competing for the disk while they did.
 //
 // SET RATHER THAN ADDED, on both edges, because it is a gauge: the value is
 // the count in flight at the moment a collector reads it, and the rolling
