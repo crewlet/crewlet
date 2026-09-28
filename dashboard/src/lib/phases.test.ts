@@ -22,7 +22,9 @@ import {
   phaseDuration,
   phaseStart,
   rounds,
+  fromRunUsageEvent,
   runSpend,
+  runUsages,
   splitThinking,
   streamedPhases,
   toolCalls,
@@ -145,52 +147,65 @@ describe("identity", () => {
 });
 
 describe("a detached coding run's spend", () => {
-  // The phase that collects a run carries what its box spent BESIDE its own
-  // tokens, and a resume retried after its phase completed publishes that
-  // phase again with the same run on it — so a turn counts a launch once.
-  function collected(id: string, launch: string, at: string) {
+  // A run's usage is a record of its own — `sandbox_run_usage`, published once
+  // per launch at its collect under an id derived from the launch — so a turn
+  // counts each RECORD once, and a copy from the query and one from the stream
+  // are the same record.
+  function usage(id: string, over: Record<string, unknown> = {}): EventRecord {
     return {
-      ...fromPhaseEvent(
-        phaseEvent(
-          {
-            backend: "sandbox",
-            coding_agent: "claude-code",
-            launch_id: launch,
-            run_input_tokens: 5000,
-            run_output_tokens: 700,
-          },
-          at,
-        ),
-      )!,
-      eventId: id,
+      ...phaseEvent(),
+      id,
+      type: "sandbox_run_usage",
+      timestamp: "2026-01-01T00:00:30Z",
+      payload: {
+        turn_id: "t1",
+        role: "PM",
+        launch_id: "launch-" + id,
+        coding_agent: "claude-code",
+        input_tokens: 5000,
+        output_tokens: 700,
+        total_tokens: 5700,
+        cost_usd: 0.5,
+        ...over,
+      },
     };
   }
 
-  test("a phase event's run reaches its record", () => {
-    const r = collected("ev1", "launch-1", "2026-01-01T00:00:09Z");
-    expect([r.launchId, r.runInputTokens, r.runOutputTokens]).toEqual(["launch-1", 5000, 700]);
-    // The phase's own figure is untouched: the run is not the engine's calls.
-    expect(r.totalTokens).toBe(120);
-  });
-
-  test("a launch counts once however many records carry it", () => {
-    const first = collected("ev1", "launch-1", "2026-01-01T00:00:09Z");
-    const retried = collected("ev2", "launch-1", "2026-01-01T00:01:09Z");
-    const second = { ...collected("ev3", "launch-2", "2026-01-01T00:02:09Z"), runInputTokens: 30 };
-    expect(runSpend([first, retried, second])).toEqual({ tokens: 5700 + 730, runs: 2 });
-    // A negative count is a bad payload, not a refund.
-    expect(runSpend([{ ...first, runInputTokens: -9000 }]).tokens).toBe(700);
-  });
-
-  test("a turn's total holds its phases and its runs, each launch once", () => {
-    // The figure the turns list states for the same turn, and the Tokens
-    // view's: a card that summed records showed the run twice after a retry,
-    // and one that ignored runs showed a different total from both.
-    const [group] = groupTurns([
-      collected("ev1", "launch-1", "2026-01-01T00:00:09Z"),
-      collected("ev2", "launch-1", "2026-01-01T00:01:09Z"),
+  test("a usage record reaches a run, and nothing else does", () => {
+    const run = fromRunUsageEvent(usage("u1"))!;
+    expect([run.eventId, run.turnId, run.launchId, run.codingAgent, run.totalTokens]).toEqual([
+      "u1",
+      "t1",
+      "launch-u1",
+      "claude-code",
+      5700,
     ]);
-    expect(group?.totalTokens).toBe(2 * 120 + 5700);
+    // A phase record is not a run, whatever its payload says.
+    expect(fromRunUsageEvent(phaseEvent({ input_tokens: 5000 }))).toBe(null);
+  });
+
+  test("a record counts once, however many copies of it arrive", () => {
+    // The query's answer and the stream both carry a retried collect's one
+    // record, under one id.
+    const runs = runUsages(
+      [usage("u1"), usage("u1"), usage("u2", { input_tokens: 30, output_tokens: 0 })],
+      () => true,
+    );
+    expect(runSpend(runs)).toEqual({ tokens: 5700 + 30, runs: 2 });
+    // A negative count is a bad payload, not a refund.
+    expect(runSpend(runUsages([usage("u3", { input_tokens: -9000 })], () => true)).tokens).toBe(
+      700,
+    );
+  });
+
+  test("a turn's total holds its phases and the runs it launched, and no other turn's", () => {
+    // The figure the turns list states for the same turn, and the Tokens
+    // view's: a card that ignored runs showed a different total from both.
+    const runs = runUsages([usage("u1"), usage("u2", { turn_id: "t2" })], () => true);
+    const [group] = groupTurns([fromPhaseEvent(phaseEvent())!], runs);
+    expect(group?.totalTokens).toBe(120 + 5700);
+    // A run whose turn has no phase here draws no turn of its own.
+    expect(groupTurns([fromPhaseEvent(phaseEvent())!], runs)).toHaveLength(1);
   });
 });
 

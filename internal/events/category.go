@@ -53,7 +53,12 @@ var categories = map[string]string{
 	// that a turn was lost, and it is the one an operator goes looking for
 	// after the fact — a live-only failure would be swept before anybody
 	// asked why the work never came back.
-	"sandbox_run_failed":   "task",
+	"sandbox_run_failed": "task",
+	// What a collected run spent. With the rest of its run rather than with
+	// the phase records under `system`, so filtering to a run's record keeps
+	// its cost — and persisted, because it is the only account of that cost
+	// the Tokens view and the turns list have.
+	"sandbox_run_usage":    "task",
 	"scheduled_task_fired": "task",
 
 	"a2a_channel_opened": "a2a",

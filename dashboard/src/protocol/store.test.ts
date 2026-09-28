@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { MAX_EVENTS, MAX_PHASES, Store } from "./store.ts";
+import { MAX_EVENTS, MAX_PHASES, MAX_RUNS, Store } from "./store.ts";
 import type { EventEnvelope, FeedRow } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
@@ -188,6 +188,39 @@ describe("completed phases", () => {
     store.applyEvent(phaseEvent("p1"));
     expect(phasesWoke).toHaveBeenCalled();
     expect(agentsWoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("coding runs' usage", () => {
+  // WHAT A DETACHED RUN SPENT is a record of its own, and the turn it belongs to
+  // counts it — so the socket keeps its payload, as it does a phase's, and holds
+  // one copy of it however many times a retried collect published it.
+  const usageEvent = (id: string): EventEnvelope =>
+    ({
+      ...feedRow(id, { type: "sandbox_run_usage", category: "task" }),
+      payload: { turn_id: "t1", role: "PM", launch_id: "l1", total_tokens: 5700 },
+    }) as EventEnvelope;
+
+  test("a usage record is kept WITH its payload, once", () => {
+    const store = new Store();
+    store.applyEvent(usageEvent("u1"));
+    store.applyEvent(usageEvent("u1"));
+    expect(store.state.runs).toHaveLength(1);
+    expect(store.state.runs[0]?.payload?.total_tokens).toBe(5700);
+  });
+
+  test("a payload-free row is not kept, and a phase is not a run", () => {
+    const store = new Store();
+    store.applyEvent(feedRow("u1", { type: "sandbox_run_usage" }) as EventEnvelope);
+    store.applyEvent({ ...usageEvent("p1"), type: "agent_phase_completed" });
+    expect(store.state.runs).toHaveLength(0);
+  });
+
+  test("the buffer is bounded, newest first", () => {
+    const store = new Store();
+    for (let i = 0; i < MAX_RUNS + 10; i++) store.applyEvent(usageEvent(`u${i}`));
+    expect(store.state.runs).toHaveLength(MAX_RUNS);
+    expect(store.state.runs[0]?.id).toBe(`u${MAX_RUNS + 9}`);
   });
 });
 

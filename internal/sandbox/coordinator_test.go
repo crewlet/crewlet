@@ -244,6 +244,27 @@ func (r *coordRig) failures() []types.SandboxRunFailed {
 	return out
 }
 
+// usage is one SandboxRunUsage the coordinator published, with its envelope.
+type usage struct {
+	payload types.SandboxRunUsage
+	event   *events.Event
+}
+
+// usages is every SandboxRunUsage the coordinator published, in order and
+// NOT deduped: a case about one record per launch has to see a second
+// publication to judge it.
+func (r *coordRig) usages() []usage {
+	r.queue.mu.Lock()
+	defer r.queue.mu.Unlock()
+	var out []usage
+	for _, p := range r.queue.published {
+		if payload, ok := p.event.Data.(*types.SandboxRunUsage); ok {
+			out = append(out, usage{payload: *payload, event: p.event})
+		}
+	}
+	return out
+}
+
 // completion is the signal the waiter raises for the job the row holds now.
 func (r *coordRig) completion(turnID string) (types.SandboxRunCompleted, *events.Event) {
 	run := r.get(turnID)
@@ -420,12 +441,16 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 	if !strings.Contains(calls[0].Answer, "do NOT redo it") {
 		t.Fatalf("the answer does not stop the executor redoing the work: %q", calls[0].Answer)
 	}
-	// AND WHAT THE RUN SPENT, named by its launch, for the resumed phase's
-	// event: the budgets and the task were charged at this collect, and the
-	// Tokens view had the run's tokens from nowhere.
-	want := RunUsage{LaunchID: calls[0].Run.LaunchID, InputTokens: 900, OutputTokens: 200}
-	if want.LaunchID == "" || calls[0].Usage != want {
-		t.Fatalf("the resume carries usage %+v, want %+v", calls[0].Usage, want)
+	// AND WHAT THE RUN SPENT, as its own record published at this collect
+	// and named by its launch — never on the phase the resume publishes.
+	usages := rig.usages()
+	if len(usages) != 1 {
+		t.Fatalf("the collect published %d usage records, want one", len(usages))
+	}
+	if got := usages[0].payload; got.LaunchID != calls[0].Run.LaunchID || got.LaunchID == "" ||
+		got.InputTokens != 900 || got.OutputTokens != 200 || got.TotalTokens != 1100 {
+		t.Fatalf("the usage record is %+v, want the run's 900/200 under launch %q",
+			got, calls[0].Run.LaunchID)
 	}
 	rig.finished("t1")
 }
@@ -2199,13 +2224,113 @@ func TestEveryCollectOffersTheRunsSpendNamingItsLaunch(t *testing.T) {
 	}
 }
 
+// ONE USAGE RECORD PER LAUNCH, however many times its completion is collected.
+//
+// A resume that fails hands the claim back and the completion comes back — to
+// this node, the seat's next owner, or after a restart — and the retry collects
+// the same finished job again. Its usage record must be the SAME event: the
+// same id, which the live projection dedupes by, and the same instant, which
+// with the id is what the event store keys a row on. Restamped at the retry,
+// one run was a second row at a second instant — counted twice by a window
+// holding both, and once by each of two windows that split them. Each collect
+// still PUBLISHES it, because a first publish that failed is filled in only by
+// the retry's.
+func TestEveryCollectOfOneLaunchPublishesOneRecord(t *testing.T) {
+	rig := newCoordRig(t)
+	launched := rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done",
+		InputTokens: 900, OutputTokens: 100, CostUSD: 0.5})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	collected := rig.now
+	// THE RETRY COMES LATER, as a redelivery does.
+	rig.now = rig.now.Add(10 * time.Minute)
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+
+	usages := rig.usages()
+	if len(usages) != 2 {
+		t.Fatalf("two collects of one launch published %d usage records, want "+
+			"each to publish it", len(usages))
+	}
+	want := types.SandboxRunUsage{
+		Agent: "a-1", AgentHandle: "swe", RoleName: "SWE", TurnID: "t1",
+		LaunchID: launched.LaunchID, WorkKey: launched.UnitOfWork(),
+		SandboxID: launched.SandboxID, CodingAgent: "claude-code",
+		InputTokens: 900, OutputTokens: 100, TotalTokens: 1000, CostUSD: 0.5,
+	}
+	for i, u := range usages {
+		if u.payload != want {
+			t.Errorf("collect %d published %+v, want %+v", i+1, u.payload, want)
+		}
+		if u.event.ID != usageEventID(launched) {
+			t.Errorf("collect %d published id %s, want the launch's own %s",
+				i+1, u.event.ID, usageEventID(launched))
+		}
+		if !u.event.Timestamp.Equal(collected) {
+			t.Errorf("collect %d stamped its record %v, want the first collect's %v "+
+				"— a retry restamped is a second row at a second instant",
+				i+1, u.event.Timestamp, collected)
+		}
+	}
+}
+
+// A USAGE RECORD IS NAMED BY ITS TURN AND ITS LAUNCH, and by nothing else.
+//
+// Nothing else, so the retry on another node derives the same one; both, so a
+// second run_sandbox call in the same turn — a new launch — is a record of its
+// own rather than a duplicate of the first job's that the dedupe would drop.
+func TestAUsageRecordIsNamedByItsTurnAndLaunch(t *testing.T) {
+	t.Parallel()
+	run := PendingRun{TurnID: "t1", LaunchID: "l1", AgentHandle: "swe"}
+	moved := run
+	moved.AgentHandle, moved.Owner, moved.OwnerEpoch = "swe", "node-b:2", 7
+	if usageEventID(moved) != usageEventID(run) {
+		t.Error("the same launch owned by another node names another record")
+	}
+	for _, other := range []PendingRun{
+		{TurnID: "t1", LaunchID: "l2"}, {TurnID: "t2", LaunchID: "l1"},
+	} {
+		if usageEventID(other) == usageEventID(run) {
+			t.Errorf("turn %s launch %s names the same record as t1/l1",
+				other.TurnID, other.LaunchID)
+		}
+	}
+}
+
+// A RUN THAT NEVER RESUMES STILL HAS ITS USAGE RECORD.
+//
+// Its record is published at the collect, before anything the run does next —
+// because a run can stop there: a resume that broke after acting is abandoned,
+// a question can go unanswered, and a node can die holding the claim. Carried
+// on the resumed phase instead, the spend of every such run reached the
+// budgets and the task and no token view.
+func TestARunThatNeverResumesStillHasItsUsageRecord(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 4000, OutputTokens: 600})
+	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned)
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if usages := rig.usages(); len(usages) != 1 || usages[0].payload.TotalTokens != 4600 {
+		t.Fatalf("an abandoned run published %+v, want its 4600 tokens once", usages)
+	}
+}
+
 // A BAD COUNT IS NOTHING, EVERYWHERE THE RUN'S SPEND GOES.
 //
 // A negative token count or price off a coding agent's output is a bad
 // payload. Read as a number it cancelled the tokens beside it at the charge
-// (the charge takes the sum), lowered the task's spend, and refunded the
-// resumed phase's figure in the Tokens view — three surfaces disagreeing about
-// one run.
+// (the charge takes the sum), lowered the task's spend, and would have
+// refunded the Tokens view — three surfaces disagreeing about one run.
 func TestABadUsageCountIsReportedAsNothing(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
@@ -2219,17 +2344,60 @@ func TestABadUsageCountIsReportedAsNothing(t *testing.T) {
 		t.Errorf("charged %d, want the 700 the run did report", got)
 	}
 	if offered := rig.spent.runs(); len(offered) != 1 ||
-		offered[0].result.InputTokens != 0 || offered[0].result.OutputTokens != 700 ||
-		offered[0].result.CostUSD != 0 {
-		t.Errorf("the task was offered %+v, want 0 in, 700 out and no price", offered)
+		offered[0].result.InputTokens != 0 || offered[0].result.OutputTokens != 700 {
+		t.Errorf("the task was offered %+v, want 0 in and 700 out", offered)
 	}
-	calls := rig.resumer.calls()
-	if len(calls) != 1 {
+	usages := rig.usages()
+	if len(usages) != 1 {
+		t.Fatalf("published %d usage records, want one", len(usages))
+	}
+	if got := usages[0].payload; got.InputTokens != 0 || got.TotalTokens != 700 || got.CostUSD != 0 {
+		t.Errorf("the usage record is %+v, want 0 in, 700 in all and no price", got)
+	}
+}
+
+// A RUN THAT REPORTED NOTHING PUBLISHES NO USAGE RECORD, and still resumes.
+//
+// No token and no price is OpenCode's run, and a box that died before it
+// wrote its usage: a record of zero would be a call in every breakdown for
+// spend nobody saw.
+func TestARunThatReportedNothingPublishesNoUsage(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if usages := rig.usages(); len(usages) != 0 {
+		t.Errorf("a run that reported nothing published %+v", usages)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 {
 		t.Fatalf("resumed %d times, want 1", len(calls))
 	}
-	want := RunUsage{LaunchID: calls[0].Run.LaunchID, OutputTokens: 700}
-	if calls[0].Usage != want {
-		t.Errorf("the resumed phase carries %+v, want %+v", calls[0].Usage, want)
+}
+
+// A USAGE RECORD THAT COULD NOT BE PUBLISHED DOES NOT STOP THE RUN.
+//
+// The record is telemetry, like the charge beside it: the run is collected and
+// resumed either way, and handing the claim back over a publish would repeat a
+// resume that already had everything it needed.
+func TestAnUnpublishedUsageRecordDoesNotStopTheRun(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 300})
+	rig.queue.mu.Lock()
+	rig.queue.err = errors.New("the broker is away")
+	rig.queue.mu.Unlock()
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("resumed %d times, want 1 — the publish decided the run's fate", len(calls))
+	}
+	if got := rig.accountant.total(); got != 300 {
+		t.Errorf("charged %d, want the run's 300", got)
 	}
 }
 
@@ -2492,13 +2660,18 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	if !strings.Contains(calls[0].Answer, "which branch?") {
 		t.Fatalf("the loop was not reminded what it asked: %q", calls[0].Answer)
 	}
-	// AND THE PARKED COLLECT'S USAGE, which was charged when it parked and
-	// had no phase to reach the Tokens view by until this one. Named by the
-	// launch that parked, so an answer retried counts it once.
-	want := RunUsage{LaunchID: parkedLaunch, InputTokens: 1200, OutputTokens: 300, CostUSD: 0.2}
-	if parkedLaunch == "" || calls[0].Usage != want {
-		t.Fatalf("the answer's resume carries usage %+v, want the parked collect's %+v",
-			calls[0].Usage, want)
+	// WHAT THE PARKED COLLECT SPENT WAS RECORDED AT THAT COLLECT, under the
+	// launch that parked — and the answer, which collects nothing, records
+	// nothing more. A run whose question is never answered is counted too.
+	usages := rig.usages()
+	if len(usages) != 1 {
+		t.Fatalf("a parked run and its answer published %d usage records, want "+
+			"the park's collect's one", len(usages))
+	}
+	if got := usages[0].payload; got.LaunchID != parkedLaunch || parkedLaunch == "" ||
+		got.TotalTokens != 1500 || got.CostUSD != 0.2 {
+		t.Fatalf("the usage record is %+v, want the parked collect's 1200/300 "+
+			"and $0.20 under launch %q", got, parkedLaunch)
 	}
 }
 

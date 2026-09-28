@@ -150,24 +150,10 @@ export interface PhaseRecord {
   /** The box that ran this phase, when a coding agent did. Links a transcript
    *  to the detached run it suspended into. */
   sandboxId: string;
-  /** What the run reported it cost, in currency. 0 when nothing reported one —
-   *  which is every phase but a sandbox-backed one, and every subscription
-   *  CLI, where the marginal cost genuinely is nothing. */
+  /** The price an OLDER build put on the sandbox phase that collected a run.
+   *  0 on every phase this engine publishes now: a run's price travels on its
+   *  own usage record ([RunUsage]), once per launch. */
   costUSD: number;
-  /**
-   * The detached coding run this phase collected, and what its box reported
-   * spending — BESIDE the phase's own `inputTokens`/`outputTokens`, which are
-   * what the engine's own model calls spent. Empty and zero on every phase that
-   * collected no run, and on a live one.
-   *
-   * A launch is spent ONCE and can ride more than one record: a resume retried
-   * after its phase completed publishes that phase again with the same run on
-   * it. So a figure summed over records counts it through [runTokens], once
-   * per launch — the rule the engine's own Tokens rollup and turns list apply.
-   */
-  launchId: string;
-  runInputTokens: number;
-  runOutputTokens: number;
   /** The branches and pull requests the phase delivered. */
   deliveredRefs: string[];
   /**
@@ -404,9 +390,6 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     // run is registered, and the cost and the refs are what it REPORTS back.
     sandboxId: "",
     costUSD: 0,
-    launchId: "",
-    runInputTokens: 0,
-    runOutputTokens: 0,
     deliveredRefs: [],
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     at: call.updated_at,
@@ -470,16 +453,11 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     hostIteration: num(p.host_iteration),
     backend: String(p.backend ?? ""),
     codingAgent: String(p.coding_agent ?? ""),
-    // THE SANDBOX'S THREE, all on `AgentPhaseCompleted` and none of them read
-    // until now: which box ran it (so the badge naming the coding agent can
-    // reach the run), what the run cost in currency — the ONE money figure the
-    // engine records, from a CLI's own `total_cost_usd` — and the branches and
-    // pull requests the phase produced.
+    // THE SANDBOX'S THREE, all on `AgentPhaseCompleted`: which box ran it (so
+    // the badge naming the coding agent can reach the run), the price an older
+    // build put on it, and the branches and pull requests the phase produced.
     sandboxId: String(p.sandbox_id ?? ""),
     costUSD: num(p.cost_usd),
-    launchId: String(p.launch_id ?? ""),
-    runInputTokens: num(p.run_input_tokens),
-    runOutputTokens: num(p.run_output_tokens),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     at: ev.timestamp,
@@ -714,9 +692,10 @@ export interface TurnGroup {
   live: boolean;
   failed: boolean;
   /**
-   * Everything the turn spent: its own phases, its workers, and the detached
-   * coding runs it collected, each launch once ([runSpend]) — the same figure
-   * `store.Turns` lists and the Tokens view counts for this turn.
+   * Everything the turn spent that the caller handed [groupTurns]: its own
+   * phases, its workers, and the detached coding runs it launched, each record
+   * once ([runSpend]) — the figure `store.Turns` lists and the Tokens view
+   * counts for this turn, where the caller holds every one of its records.
    */
   totalTokens: number;
   trigger: PhaseRecord["trigger"];
@@ -765,42 +744,98 @@ export function attempts(groups: readonly TurnGroup[]): Map<string, Attempt> {
 }
 
 /**
- * What the detached coding runs among `records` spent in their boxes, and how
- * many runs that is — counting each LAUNCH once, however many records carry it.
+ * One detached coding run's usage — a `sandbox_run_usage` record: what the run
+ * reported spending in its box, published ONCE PER LAUNCH at its collect.
  *
- * ONCE PER LAUNCH, because a resume retried after its phase completed
- * publishes that phase again with the same run on it: summed per record, a
- * retried turn showed its run twice while the budgets, the task, the engine's
- * Tokens rollup (`tokens.settleRuns`) and its turns list (`store.Turns`) each
- * count it once. The values of one launch are the same on every record that
- * carries it, so which record is counted does not matter here.
- *
- * A negative count is a bad payload rather than a refund, and counts nothing,
- * as it does at the engine.
+ * A record of its own rather than a figure on a phase, because a run's spend is
+ * not a phase's: it is known at the collect, which every run reaches, while the
+ * phase its turn resumes into can be published more than once or never. Its
+ * `eventId` is derived from the launch, so every copy of one run — a retried
+ * collect, the query's answer and the stream's — is the same record.
  */
-export function runSpend(records: readonly PhaseRecord[]): { tokens: number; runs: number } {
+export interface RunUsage {
+  eventId: string;
+  turnId: string;
+  role: string;
+  launchId: string;
+  codingAgent: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUSD: number;
+  at: string;
+}
+
+/** The wire type of a coding run's usage record. */
+export const RUN_USAGE_EVENT = "sandbox_run_usage";
+
+/** A coding run's usage, from its `sandbox_run_usage` event; null for any other. */
+export function fromRunUsageEvent(ev: EventRecord): RunUsage | null {
+  if (ev.type !== RUN_USAGE_EVENT) return null;
+  const p = ev.payload as Record<string, unknown> | undefined;
+  if (!p) return null;
+  return {
+    eventId: ev.id,
+    turnId: String(p.turn_id ?? ""),
+    role: String(p.role ?? ""),
+    launchId: String(p.launch_id ?? ""),
+    codingAgent: String(p.coding_agent ?? ""),
+    inputTokens: num(p.input_tokens),
+    outputTokens: num(p.output_tokens),
+    totalTokens: num(p.total_tokens),
+    costUSD: num(p.cost_usd),
+    at: ev.timestamp,
+  };
+}
+
+/**
+ * The coding runs among `events` that `keep` accepts, each record once — for a
+ * screen merging a query's answer with the envelopes the socket streamed since,
+ * which carry the same record under the same id.
+ */
+export function runUsages(
+  events: readonly EventRecord[],
+  keep: (run: RunUsage) => boolean,
+): RunUsage[] {
+  const seen = new Set<string>();
+  const out: RunUsage[] = [];
+  for (const ev of events) {
+    const run = fromRunUsageEvent(ev);
+    if (!run || seen.has(run.eventId) || !keep(run)) continue;
+    seen.add(run.eventId);
+    out.push(run);
+  }
+  return out;
+}
+
+/**
+ * What `runs` spent in their boxes, and how many runs that is — each RECORD
+ * once, which is each launch once: a retried collect publishes the same record
+ * under the same id, and the engine's Tokens rollup and its turns list count it
+ * once. A negative count is a bad payload rather than a refund, and counts
+ * nothing, as it does at the engine.
+ */
+export function runSpend(runs: readonly RunUsage[]): { tokens: number; runs: number } {
   const seen = new Set<string>();
   let tokens = 0;
-  for (const r of records) {
-    if (!r.launchId || seen.has(r.launchId)) continue;
-    seen.add(r.launchId);
-    tokens += runTokens(r);
+  for (const r of runs) {
+    if (seen.has(r.eventId)) continue;
+    seen.add(r.eventId);
+    tokens += Math.max(0, r.inputTokens) + Math.max(0, r.outputTokens);
   }
   return { tokens, runs: seen.size };
 }
 
 /**
- * What the coding run ONE phase collected spent in its box — the figure its
- * card shows beside the phase's own. Summed over records, use [runSpend].
+ * Group phases into the turns they belong to, newest turn first — with the
+ * coding runs among `runs` counted in their own turn's total. A run whose turn
+ * has no phase here makes no group: a turn is drawn from its phases.
  */
-export function runTokens(record: PhaseRecord): number {
-  return Math.max(0, record.runInputTokens) + Math.max(0, record.runOutputTokens);
-}
-
-/** Group phases into the turns they belong to, newest turn first. */
-export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
+export function groupTurns(phases: PhaseRecord[], runs: readonly RunUsage[] = []): TurnGroup[] {
   const byTurn = new Map<string, PhaseRecord[]>();
   for (const rec of phases) byTurn.set(rec.turnId, [...(byTurn.get(rec.turnId) ?? []), rec]);
+  const runsOf = new Map<string, RunUsage[]>();
+  for (const run of runs) runsOf.set(run.turnId, [...(runsOf.get(run.turnId) ?? []), run]);
   return [...byTurn.entries()]
     .map(([turnId, list]) => {
       // Within a turn, OLDEST first: a turn is read forwards — onboarding
@@ -854,9 +889,11 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
         live: ordered.some((r) => r.live),
         failed: ordered.some((r) => r.failed),
-        // THE RUNS WITH THE PHASES, each launch once — the figure the turns
+        // THE RUNS WITH THE PHASES, each record once — the figure the turns
         // list and the Tokens view state for the same turn.
-        totalTokens: ordered.reduce((n, r) => n + r.totalTokens, 0) + runSpend(ordered).tokens,
+        totalTokens:
+          ordered.reduce((n, r) => n + r.totalTokens, 0) +
+          runSpend(runsOf.get(turnId) ?? []).tokens,
         trigger: ordered.find((r) => r.trigger)?.trigger ?? null,
       };
     })

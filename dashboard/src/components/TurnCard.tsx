@@ -62,6 +62,12 @@ export function TurnCard({
   const measured = !!row?.complete && (row?.duration_ms ?? 0) > 0;
   const took = measured ? row!.duration_ms : group.span;
   const startedAt = row?.started_at || group.startedAt;
+  // AND ITS TOKENS, by the same rule: a SETTLED turn's row sums every spend
+  // record the engine holds for it — its phases and the usage record of each
+  // coding run it launched — where the card holds only the phases this screen
+  // loaded and the runs this tab happened to see arrive. A running turn's row is
+  // a figure from before its latest phases, so it keeps its own.
+  const tokens = row?.complete ? row.total_tokens : group.totalTokens;
   const began = tsKey(startedAt);
 
   const trigger = group.trigger;
@@ -147,13 +153,16 @@ export function TurnCard({
             facts and a dash claims the first about the second. The dash stays
             for the one case where the zero really is an absence — a turn
             still running, whose phases have not reported their usage yet. */}
-        {group.live && group.totalTokens === 0 ? (
+        {group.live && tokens === 0 ? (
           <span className="phase-meta" title="no phase has reported its usage yet">
             —
           </span>
         ) : (
-          <span className="phase-meta t-num" title="tokens across every phase of this turn">
-            {fmtCount(group.totalTokens)}
+          <span
+            className="phase-meta t-num"
+            title="tokens across every phase of this turn and the coding runs it launched"
+          >
+            {fmtCount(tokens)}
           </span>
         )}
         {took != null && (

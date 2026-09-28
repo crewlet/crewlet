@@ -139,6 +139,54 @@ func TestATurnWithNoCompletionSaysSo(t *testing.T) {
 }
 
 // THE AGGREGATES ARE OVER COLUMNS, and the tokens are the turn's whole spend.
+// A TURN'S TOKENS HOLD THE CODING RUNS IT LAUNCHED, EACH RECORD ONCE.
+//
+// A run's usage is a record of its own, which the turns list sums with the
+// phases because [store.SpendFor] fills the same columns for it — so the turn
+// lists the figure the Tokens view counts for it, and not the hundred tokens
+// its executor's own calls spent. The record is not a PHASE, so the count of
+// phases is unmoved. And a collect retried after a failed resume publishes the
+// same record — the same id at the same instant — which the store holds once.
+func TestATurnsTokensHoldItsCodingRuns(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	seedTurn(t, log, "t-run", base, "Dev", func(rec *store.EventRecord, _ int) {
+		payload, err := json.Marshal(map[string]any{
+			"turn_id": "t-run", "phase": "execute", "model": "claude-haiku-4-5",
+			"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.Payload = payload
+	})
+	appendRunUsage(t, log, "run", base.Add(2*time.Second), "t-run", 5000, 700, 0)
+	appendRunUsage(t, log, "run", base.Add(2*time.Second), "t-run", 5000, 700, 0)
+	seedTurn(t, log, "t-plain", base.Add(time.Minute), "Dev", nil)
+
+	got, err := log.Turns(t.Context(), store.TurnQuery{})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	byID := map[string]store.Turn{}
+	for _, turn := range got {
+		byID[turn.TurnID] = turn
+	}
+	run := byID["t-run"]
+	if run.TotalTokens != 2*120+5700 || run.InputTokens != 2*100+5000 ||
+		run.OutputTokens != 2*20+700 {
+		t.Errorf("t-run lists %d in / %d out / %d total, want its phases' own and "+
+			"its run's once", run.InputTokens, run.OutputTokens, run.TotalTokens)
+	}
+	if run.Phases != 2 {
+		t.Errorf("t-run lists %d phases, want 2 — a run's usage is not a phase", run.Phases)
+	}
+	if plain := byID["t-plain"]; plain.TotalTokens != 0 {
+		t.Errorf("t-plain lists %d tokens, want the none its phases carried", plain.TotalTokens)
+	}
+}
+
 func TestATurnSumsItsTokensAndNamesEveryModel(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -186,68 +234,6 @@ func TestATurnSumsItsTokensAndNamesEveryModel(t *testing.T) {
 	if !slices.Equal(named, want) {
 		t.Errorf("models = %q, which splits to %q, want exactly %q",
 			one.Models, named, want)
-	}
-}
-
-// A TURN'S TOKENS HOLD THE CODING RUNS IT COLLECTED, EACH LAUNCH ONCE.
-//
-// A detached run's usage rides the phase that collected it, BESIDE that
-// phase's own counts, so the column sums never saw it: a turn whose run spent
-// five thousand tokens listed the hundred its executor's resume spent, while
-// the Tokens view counted the run in the same turn. And a resume retried after
-// its phase completed publishes that phase again with the same run on it — a
-// launch spent once, listed once.
-func TestATurnsTokensHoldItsCodingRunsEachLaunchOnce(t *testing.T) {
-	t.Parallel()
-	log := open(t).Events()
-	base := time.Now().UTC().Add(-time.Hour)
-	launches := []string{"launch-1", "launch-1"} // the second record is the retry
-	seedTurn(t, log, "t-run", base, "Dev", func(rec *store.EventRecord, i int) {
-		payload, err := json.Marshal(map[string]any{
-			"turn_id": "t-run", "phase": "execute", "model": "claude-haiku-4-5",
-			"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
-			"backend": "sandbox", "coding_agent": "claude-code",
-			"launch_id": launches[i], "run_input_tokens": 5000, "run_output_tokens": 700,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		rec.Payload = payload
-	})
-	// A SECOND LAUNCH IN ANOTHER TURN is its own run, and a bad payload's
-	// negative count is not a refund.
-	seedTurn(t, log, "t-two", base.Add(time.Minute), "Dev", func(rec *store.EventRecord, i int) {
-		payload, err := json.Marshal(map[string]any{
-			"turn_id": "t-two", "input_tokens": 10, "output_tokens": 1, "total_tokens": 11,
-			"launch_id":        []string{"launch-2", "launch-3"}[i],
-			"run_input_tokens": []int{300, -9000}[i], "run_output_tokens": 30,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		rec.Payload = payload
-	})
-	seedTurn(t, log, "t-plain", base.Add(2*time.Minute), "Dev", nil)
-
-	got, err := log.Turns(t.Context(), store.TurnQuery{})
-	if err != nil {
-		t.Fatalf("Turns: %v", err)
-	}
-	byID := map[string]store.Turn{}
-	for _, turn := range got {
-		byID[turn.TurnID] = turn
-	}
-	if run := byID["t-run"]; run.TotalTokens != 2*120+5700 || run.InputTokens != 2*100+5000 ||
-		run.OutputTokens != 2*20+700 {
-		t.Errorf("t-run lists %d in / %d out / %d total, want its phases' own and "+
-			"launch-1's 5,000 / 700 once", run.InputTokens, run.OutputTokens, run.TotalTokens)
-	}
-	if two := byID["t-two"]; two.TotalTokens != 2*11+330+30 {
-		t.Errorf("t-two lists %d tokens, want its phases' own, launch-2's 330 and "+
-			"launch-3's 30 (its negative input counts nothing)", two.TotalTokens)
-	}
-	if plain := byID["t-plain"]; plain.TotalTokens != 0 {
-		t.Errorf("a turn with no run lists %d tokens", plain.TotalTokens)
 	}
 }
 

@@ -15,11 +15,20 @@ import (
 // re-implementation in the browser, and whatever a reconnect left behind —
 // and a refresh routinely disagreed with the page it replaced.
 
-// foldSpend records one completed phase's spend, reporting whether it counted.
+// The two spend events: a phase completion, and a detached coding run's usage
+// record ([store.SpendFor] promotes the same two).
+const (
+	phaseCompletedType = "agent_phase_completed"
+	runUsageType       = "sandbox_run_usage"
+)
+
+// foldSpend records one spend record — a completed phase's, or a coding run's
+// — reporting whether it counted.
 //
-// Deduped by event id so a redelivered envelope cannot inflate the rollup, and
-// window-pruned so a long-lived process does not keep aggregating spend that
-// has aged out.
+// Deduped by event id so a redelivered envelope cannot inflate the rollup —
+// and a coding run's record is published again, under the same id, by every
+// retried collect of its launch — and window-pruned so a long-lived process
+// does not keep aggregating spend that has aged out.
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	if env.ID != "" {
 		if _, counted := s.spendIDs[env.ID]; counted {
@@ -27,12 +36,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		}
 		s.spendIDs[env.ID] = struct{}{}
 	}
-	// The stamp is PARSED ONCE, here, and carried with the record. The
-	// prune below tests every retained record's age on every spend event,
-	// and re-parsing them — up to three layouts each, twice per pass —
-	// happened inside the projection's write lock, which is the mutex
-	// every /agents request and every websocket snapshot waits on.
-	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: tokens.Record{
+	record := tokens.Record{
 		EventID:      env.ID,
 		Timestamp:    env.Timestamp,
 		AgentID:      str(payload, "agent_id"),
@@ -48,14 +52,20 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
 		CostUSD:      fraction(payload, "cost_usd"),
-		// The detached coding run the phase collected, if it did, and what
-		// ran it — see tokens.Record, which counts one launch once and
-		// under its coding agent.
-		LaunchID:        str(payload, "launch_id"),
-		RunInputTokens:  num(payload, "run_input_tokens"),
-		RunOutputTokens: num(payload, "run_output_tokens"),
-		CodingAgent:     str(payload, "coding_agent"),
-	}})
+	}
+	if env.Type == runUsageType {
+		// A RUN'S RECORD stands under the execute phase that launched it
+		// and under its coding agent, the one name there is for what spent
+		// it — the same mapping the event store's columns take, so the
+		// live rollup and a queried one cannot place it differently.
+		record.Phase, record.Model = tokens.RunPhase, str(payload, "coding_agent")
+	}
+	// The stamp is PARSED ONCE, here, and carried with the record. The
+	// prune below tests every retained record's age on every spend event,
+	// and re-parsing them — up to three layouts each, twice per pass —
+	// happened inside the projection's write lock, which is the mutex
+	// every /agents request and every websocket snapshot waits on.
+	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: record})
 	s.pruneSpend(env.Timestamp)
 	return true
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // Category reports the dashboard category an event type is filed under, and
@@ -118,14 +119,24 @@ var tagKeys = map[string]string{
 	"notification_source": "notification_source",
 }
 
-// spendEventType is the one event that carries an LLM call's cost.
+// The two events that carry spend: a phase completion, which is an LLM call's,
+// and a detached coding run's usage record, which is what its box reported.
 //
 // Gated on the type rather than on "does the payload happen to have these
-// fields", because several other events carry a `model` or a `turn_id` and a
-// rollup that counted them would be counting calls that never happened.
-const spendEventType = "agent_phase_completed"
+// fields", because several other events carry a `model`, a `turn_id` or a
+// token count — agent_turn_completed sums its own phases — and a rollup that
+// counted them would be counting spend twice or calls that never happened.
+const (
+	spendEventType = "agent_phase_completed"
+	runUsageType   = "sandbox_run_usage"
+)
 
-// SpendFor pulls one LLM call's cost out of a phase completion.
+// spendEventTypes are the event types whose rows carry spend in the promoted
+// columns, in the order a statement binds them.
+func spendEventTypes() []string { return []string{spendEventType, runUsageType} }
+
+// SpendFor pulls one spend record out of a phase completion or a coding run's
+// usage record.
 //
 // Read from the event's serialized form for the same reason [extractTags] is:
 // an event type this build has never heard of still arrives with its fields
@@ -145,8 +156,13 @@ const spendEventType = "agent_phase_completed"
 // A struct decode would be shorter and is wrong here for the reason the
 // per-field accessors exist: it fails the whole call on one wrong-typed
 // field, where these zero only the offender.
+//
+// A RUN'S RECORD stands under [tokens.RunPhase] and under its coding agent as
+// its model — see [tokens.Record] — so every reader of the columns counts it
+// beside the phases with no second rule: the Tokens view by model, phase, seat
+// and turn, and the turns list's sums.
 func SpendFor(eventType string, payload []byte) *Spend {
-	if eventType != spendEventType {
+	if eventType != spendEventType && eventType != runUsageType {
 		return nil
 	}
 	var body map[string]json.RawMessage
@@ -154,6 +170,17 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		// The call happened, and dropping it because its payload would
 		// not decode understates the spend this exists to report.
 		return &Spend{}
+	}
+	if eventType == runUsageType {
+		return &Spend{
+			Phase:        tokens.RunPhase,
+			Model:        jsonString(body["coding_agent"]),
+			TurnID:       jsonString(body["turn_id"]),
+			WorkKey:      jsonString(body["work_key"]),
+			InputTokens:  jsonInt(body["input_tokens"]),
+			OutputTokens: jsonInt(body["output_tokens"]),
+			TotalTokens:  jsonInt(body["total_tokens"]),
+		}
 	}
 	spend := &Spend{
 		Phase:        jsonString(body["phase"]),

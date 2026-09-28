@@ -204,33 +204,24 @@ type Resume struct {
 // [types.BackendNative] unconditionally, so a phase that spent twenty minutes
 // in a remote box and one that ran three rounds in this process were reported
 // identically: the sandbox badge could never render, and `coding_agent`,
-// `sandbox_id`, `cost_usd` and `delivered_refs` had no producer at all —
-// despite the coding agents reporting every one of them.
+// `sandbox_id` and `delivered_refs` had no producer at all — despite the
+// coding agents reporting every one of them.
 //
 // Carried rather than re-derived, for the same reason the run's placement is:
 // the resume may be another process on another node, days later, under a
 // company configuration that has been applied again since.
+//
+// WHAT THE RUN SPENT IS NOT HERE. Its tokens and its price are a record of
+// their own, published once per launch at the collect
+// ([types.SandboxRunUsage]); the phase that resumes into its turn is not
+// published once per launch, and a run whose turn never resumes has no such
+// phase at all.
 type RunRecord struct {
 	// CodingAgent is the CLI that did the work; SandboxID the box it ran in.
 	// Both are empty on a resume that is not collecting a run — a person
 	// answering a clarification — and their absence is what says so.
 	CodingAgent string
 	SandboxID   string
-
-	// CostUSD is what the run's own provider billed, where the agent reports
-	// it. A subscription CLI's spend never passes through the engine's token
-	// meter, so this is the only number that sees it.
-	CostUSD float64
-
-	// LaunchID names the job whose usage this is, and InputTokens and
-	// OutputTokens are what its box reported spending. Carried to the
-	// phase's event for the Tokens view, which is the one place that
-	// counted them nowhere: the budgets and the task were charged at the
-	// collect. The launch is what lets that view count a run once when this
-	// phase is published again — see types.AgentPhaseCompleted.LaunchID.
-	LaunchID     string
-	InputTokens  int
-	OutputTokens int
 
 	// DeliveredRefs are the branches and pull requests the run produced.
 	DeliveredRefs []string

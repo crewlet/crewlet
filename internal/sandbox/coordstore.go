@@ -137,6 +137,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// it would tell this job's completion that its spend is already
 		// counted, and the company would never be billed for it.
 		existing.Charged = false
+		// Nor its collect: carried over, this job's usage record would be
+		// stamped with the previous job's instant.
+		existing.CollectedAt = time.Time{}
 		return true
 	})
 	return err
@@ -190,6 +193,11 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		}
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
+		// THE FIRST INSTANT WINS: a release never moves one already
+		// recorded, so a retry that restamped would still find the first.
+		if run.CollectedAt.IsZero() {
+			run.CollectedAt = release.CollectedAt
+		}
 		return true
 	})
 	return released, err
@@ -203,7 +211,6 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Audience = q.Audience
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
-		run.ParkedUsage = q.Usage
 		return true
 	})
 	return err

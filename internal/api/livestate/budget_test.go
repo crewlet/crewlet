@@ -150,45 +150,57 @@ func phaseSpend(eventID, ts string, total int) *livestate.Envelope {
 	}, id(eventID), at(ts))
 }
 
-// A COLLECTED CODING RUN'S TOKENS REACH THE LIVE ROLLUP, ONCE.
+// A CODING RUN'S USAGE RECORD REACHES THE LIVE ROLLUP, ONCE, UNDER ITS CODING
+// AGENT AND BESIDE THE PHASE THAT LAUNCHED IT.
 //
-// The phase event of a resume that collected a detached run carries the run's
-// launch and what its box spent, beside the phase's own tokens. Held by this
-// projection and folded by the one aggregation, the run is in the totals — and
-// a resume retried after its phase completed, which publishes the phase again
-// under a new event id with the same run on it, adds the phase's own tokens
-// again (they were spent again) and the run's not at all.
-func TestACollectedRunsTokensReachTheLiveRollupOnce(t *testing.T) {
+// The record is a spend event of its own, published at the run's collect. A
+// collect retried after a failed resume publishes the SAME record under the
+// same id, which this projection holds once. It stands under the execute
+// phase and the coding agent that ran it — never under the model the engine's
+// own loop ran on — with its price, exactly as the event store's columns
+// place it, so a refresh and the live page agree. A phase from an older build
+// that carried the run's price is still counted as that phase's own.
+func TestACodingRunsUsageReachesTheLiveRollupOnce(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	resumed := func(eventID, ts string) *livestate.Envelope {
-		return env("agent_phase_completed", map[string]any{
-			"role": "SWE", "agent_id": "a-1", "phase": "execute",
-			"model": "claude-sonnet-5", "turn_id": "tn-1",
-			"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
-			"backend": "sandbox", "coding_agent": "claude-code", "cost_usd": 0.5,
-			"launch_id": "launch-1", "run_input_tokens": 5000, "run_output_tokens": 700,
-		}, id(eventID), at(ts))
+	s.Apply(env("agent_phase_completed", map[string]any{
+		"role": "SWE", "agent_id": "a-1", "phase": "execute",
+		"model": "claude-sonnet-5", "turn_id": "tn-1",
+		"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+	}, id("phase"), at("2026-06-14T12:00:00Z")))
+	usage := func() *livestate.Envelope {
+		return env("sandbox_run_usage", map[string]any{
+			"role": "SWE", "agent_id": "a-1", "turn_id": "tn-1",
+			"launch_id": "launch-1", "coding_agent": "claude-code",
+			"input_tokens": 5000, "output_tokens": 700, "total_tokens": 5700,
+			"cost_usd": 0.5,
+		}, id("run"), at("2026-06-14T12:00:30Z"))
 	}
-	s.Apply(resumed("first", "2026-06-14T12:00:00Z"))
-	s.Apply(resumed("retried", "2026-06-14T12:01:00Z"))
+	s.Apply(usage())
+	s.Apply(usage())
 
 	got := tokens.Aggregate(s.SpendRecords(), tokens.Options{})
-	if want := 2*120 + 5700; got.Totals.TotalTokens != want {
-		t.Errorf("total = %d, want %d: the run's tokens are missing from the live rollup, "+
-			"or counted once per phase that carried them", got.Totals.TotalTokens, want)
+	if want := 120 + 5700; got.Totals.TotalTokens != want {
+		t.Errorf("total = %d, want %d: the run is missing from the live rollup, or "+
+			"counted once per publication", got.Totals.TotalTokens, want)
 	}
-	if got.Totals.CostUSD != 0.5 {
-		t.Errorf("price = %v, want the run's $0.50 once", got.Totals.CostUSD)
+	if got.Totals.CostUSD != 0.5 || got.Totals.PricedCalls != 1 {
+		t.Errorf("price = %v over %d priced calls, want the run's $0.50 once",
+			got.Totals.CostUSD, got.Totals.PricedCalls)
 	}
-	// UNDER THE CODING AGENT THAT RAN IT, not the executor's model.
 	for _, m := range got.ByModel {
-		if want := map[string]int{"claude-code": 5700, "claude-sonnet-5": 240}[m.Model]; m.TotalTokens != want {
+		if want := map[string]int{"claude-code": 5700, "claude-sonnet-5": 120}[m.Model]; m.TotalTokens != want {
 			t.Errorf("by_model %s = %d tokens, want %d", m.Model, m.TotalTokens, want)
 		}
 	}
 	if len(got.ByModel) != 2 {
 		t.Errorf("by_model = %+v, want the executor's model and the coding agent", got.ByModel)
+	}
+	if len(got.ByPhase) != 1 || got.ByPhase[0].Phase != "execute" || got.ByPhase[0].TotalTokens != 5820 {
+		t.Errorf("by_phase = %+v, want the run beside its execute phase", got.ByPhase)
+	}
+	if len(got.ByTurn) != 1 || got.ByTurn[0].TotalTokens != 5820 {
+		t.Errorf("by_turn = %+v, want the run in the turn that launched it", got.ByTurn)
 	}
 }
 

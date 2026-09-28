@@ -1054,24 +1054,23 @@ const (
 	// would only reintroduce an undercount that looks like an underspend.
 )
 
-// The price and the detached run's usage — its launch, the tokens its box
-// reported and the coding agent that ran it, see tokens.Record — are the values
-// here still read out of the PAYLOAD, and deliberately: they are set by a
-// single backend on a minority of phases, so promoting them would be a
-// migration and columns that are NULL on almost every row of the table. The extraction is free of a scan cost the
-// filter does not already pay — the event_type and event_time predicates are
-// what choose the rows, and json_extract runs only on the ones they keep.
+// The price is the one value here still read out of the PAYLOAD, and
+// deliberately: it is set by a single backend on a minority of records, so
+// promoting it would be a migration and a column that is NULL on almost every
+// row of the table. The extraction is free of a scan cost the filter does not
+// already pay — the event_type and event_time predicates are what choose the
+// rows, and json_extract runs only on the ones they keep.
+//
+// BOTH SPEND TYPES ([spendEventTypes]): the phase completions, and each coding
+// run's usage record, whose columns [SpendFor] fills under the execute phase
+// and its coding agent. Two ranges of the (event_type, event_time) index.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
-       COALESCE(json_extract(payload, '$.cost_usd'), 0),
-       COALESCE(json_extract(payload, '$.launch_id'), ''),
-       COALESCE(json_extract(payload, '$.run_input_tokens'), 0),
-       COALESCE(json_extract(payload, '$.run_output_tokens'), 0),
-       COALESCE(json_extract(payload, '$.coding_agent'), '')
+       COALESCE(json_extract(payload, '$.cost_usd'), 0)
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+WHERE event_type IN (?, ?) AND event_time >= ?`
 
 // AgentPhaseLimit bounds a seat's phase history.
 //
@@ -1216,18 +1215,17 @@ func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *C
 // than by how many a screen can show.
 const MaxPhasePage = 60
 
-// PhaseTokens returns the per-phase spend records inside a window.
+// PhaseTokens returns the spend records inside a window: every phase's, and
+// every detached coding run's (see [tokens.Record]).
 //
 // The rows the dashboard's spend breakdown is folded from — see
 // internal/tokens, which does the folding for BOTH this and the live window,
 // so a rollup over seven days and a rollup over the live one cannot disagree
 // about what a phase costs.
 //
-// The token counts come out of the PAYLOAD rather than from columns of their
-// own. That is deliberate: they are five numbers on one event type, and
-// promoting them would mean a migration and five more columns that are NULL on
-// every other row in the table. The filterable dimensions — the ones a query
-// selects ON — are the promoted ones.
+// The token counts and every dimension are the PROMOTED COLUMNS (migration
+// 0015) that [SpendFor] fills when the row is written; only the price comes
+// out of the payload, for the reason [phaseTokenSQL] gives.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
 	since, until := q.Window(now())
 
@@ -1239,7 +1237,8 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	// claims: a phase stamped in the future by a skewed clock inside a
 	// window headed "counted through now" is a number with no window.
 	sql := phaseTokenSQL + " AND event_time < ?"
-	args := []any{EncodeTime(since), EncodeTime(until)}
+	types := spendEventTypes()
+	args := []any{types[0], types[1], EncodeTime(since), EncodeTime(until)}
 	if q.AgentRole != "" {
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)
@@ -1269,8 +1268,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
-			&rec.CostUSD, &rec.LaunchID, &rec.RunInputTokens, &rec.RunOutputTokens,
-			&rec.CodingAgent,
+			&rec.CostUSD,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}

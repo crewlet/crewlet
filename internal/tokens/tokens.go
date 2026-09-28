@@ -33,8 +33,16 @@ const DefaultRecentTurns = 50
 // turns is a request to aggregate the whole window into one frame.
 const MaxRecentTurns = 500
 
-// Record is one completed phase's spend — the aggregator's input, and the
-// shape both producers hand it.
+// Record is one spend record — a completed phase's, or a detached coding run's
+// — the aggregator's input, and the shape both producers hand it.
+//
+// A CODING RUN IS A RECORD OF ITS OWN, one per launch, published at the collect
+// (the `sandbox_run_usage` event). It stands under [RunPhase] and its Model is
+// its CODING AGENT: the box reports no model, and credited to the model the
+// engine's own Execute loop ran on, the millions of tokens a coding CLI spent
+// made a small native model's row — and every rate derived from it — wrong.
+// It carries no Iteration, HostPhase or Worker. Both producers map it the same
+// way, and nothing here tells it from a phase: every dimension sums the same.
 type Record struct {
 	EventID   string `json:"event_id"`
 	Timestamp string `json:"timestamp"`
@@ -64,9 +72,11 @@ type Record struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 
-	// CostUSD is what the phase's own provider billed, in dollars, and it
-	// is set on a MINORITY of records: only a subscription coding CLI
-	// reports a price, so every native-provider phase carries zero.
+	// CostUSD is what the record's provider billed, in dollars, and it is
+	// set on a MINORITY of records: only a coding CLI reports a price, so
+	// every native-provider phase carries zero. This build puts a run's
+	// price on the run's own record; a phase from an older build carries it
+	// on the phase that collected the run, which is counted as that phase's.
 	//
 	// Which is why [Bucket] counts PricedCalls beside the sum. A total of
 	// zero over zero priced calls means nobody said what this cost; a total
@@ -74,126 +84,6 @@ type Record struct {
 	// those two into one number is how a dashboard comes to render "$0.00"
 	// under a company that has never had a price reported at all.
 	CostUSD float64 `json:"cost_usd"`
-
-	// LaunchID names the detached coding run this phase collected, and
-	// RunInputTokens and RunOutputTokens are what that run reported
-	// spending in its box — beside the phase's own InputTokens and
-	// OutputTokens, which are what the engine's model calls spent here.
-	// CodingAgent is what ran it, and on a record that carries a run the
-	// price (CostUSD) is the run's: it is the one figure the box reports.
-	// Both are counted: a run's tokens are real spend by the seat, and the
-	// budgets and the task already count them. See [spends] for how.
-	//
-	// ONE LAUNCH IS COUNTED ONCE, however many records carry it: a resume
-	// retried after its phase completed publishes that phase again with the
-	// same run on it, and every figure the run reports would otherwise be
-	// summed once per attempt while the budgets and the task, which charge a
-	// launch once, said otherwise. See [settleRuns].
-	LaunchID        string `json:"launch_id,omitempty"`
-	RunInputTokens  int    `json:"run_input_tokens,omitempty"`
-	RunOutputTokens int    `json:"run_output_tokens,omitempty"`
-	CodingAgent     string `json:"coding_agent,omitempty"`
-}
-
-// spends is what a fold counts: the records with each launch settled onto one
-// of them ([settleRuns]), and each record that carries a run split into TWO —
-// the phase's own model calls under the phase's model, and the run under the
-// coding agent that ran it.
-//
-// TWO RECORDS RATHER THAN ONE WITH TWO SETS OF FIGURES, because the model is
-// a dimension and a record has one. Counted as one, a run's tokens and its
-// price landed under the model the engine's own Execute loop ran on — a
-// small native model credited with five million tokens a coding CLI spent in
-// its box, and every rate derived from that row wrong — while the box reports
-// no model at all: the coding agent is the one name there is for what spent
-// them. Every other dimension (the phase, the seat, the turn) is the same for
-// both halves, so they sum there exactly as one record did; and the run is a
-// CALL of its own, so a model's row and the calls total still agree.
-//
-// A record whose run carries nothing — a duplicate [settleRuns] emptied, a run
-// that reported no usage — stays one record.
-func spends(records []Record) []Record {
-	records = settleRuns(records)
-	out := make([]Record, 0, len(records))
-	for _, r := range records {
-		own, run, carries := r.split()
-		out = append(out, own)
-		if carries {
-			out = append(out, run)
-		}
-	}
-	return out
-}
-
-// split is a record's own model calls and the detached run it carries, and
-// whether it carries one with anything to count.
-func (r Record) split() (own, run Record, carries bool) {
-	own = r
-	own.LaunchID, own.RunInputTokens, own.RunOutputTokens, own.CodingAgent = "", 0, 0, ""
-	if r.CodingAgent == "" && r.LaunchID == "" {
-		return own, Record{}, false
-	}
-	// THE PRICE IS THE RUN'S on a record that carries one: nothing but a
-	// run's box reports a price (see [Record.CostUSD]).
-	own.CostUSD = 0
-	run = Record{
-		EventID: r.EventID, Timestamp: r.Timestamp,
-		AgentID: r.AgentID, AgentRole: r.AgentRole,
-		Phase: r.Phase, HostPhase: r.HostPhase, Worker: r.Worker,
-		Model:  r.CodingAgent,
-		TurnID: r.TurnID, WorkKey: r.WorkKey, Iteration: r.Iteration,
-		InputTokens:  max(r.RunInputTokens, 0),
-		OutputTokens: max(r.RunOutputTokens, 0),
-		CostUSD:      r.CostUSD,
-	}
-	run.TotalTokens = run.InputTokens + run.OutputTokens
-	return own, run, run.TotalTokens > 0 || run.CostUSD > 0
-}
-
-// settleRuns attributes each launch's usage to exactly one of the records that
-// carry it, and zeroes it on the rest.
-//
-// THE RECORD IT STAYS ON IS CHOSEN BY THE RECORDS, never by arrival order —
-// the earliest by instant, the event id breaking a tie — so every fold of the
-// same records puts a run on the same phase, turn and model, and the live
-// window and the queried one cannot disagree about where its spend went.
-//
-// A COPY where anything changes: the records are the projection's, and a fold
-// that edited them would change what the next fold reads.
-func settleRuns(records []Record) []Record {
-	var owner map[string]int
-	for i, r := range records {
-		if r.LaunchID == "" {
-			continue
-		}
-		if owner == nil {
-			owner = map[string]int{}
-		}
-		held, seen := owner[r.LaunchID]
-		if !seen || runsBefore(r, records[held]) {
-			owner[r.LaunchID] = i
-		}
-	}
-	if owner == nil {
-		return records
-	}
-	out := slices.Clone(records)
-	for i := range out {
-		if out[i].LaunchID == "" || owner[out[i].LaunchID] == i {
-			continue
-		}
-		out[i].RunInputTokens, out[i].RunOutputTokens, out[i].CostUSD = 0, 0, 0
-	}
-	return out
-}
-
-// runsBefore orders two records carrying one launch: the earlier instant
-// first, the event id where the instants tie.
-func runsBefore(a, b Record) bool {
-	if c := compareStamp(a.Timestamp, b.Timestamp); c != 0 {
-		return c < 0
-	}
-	return a.EventID < b.EventID
 }
 
 // Bucket is an accumulated total. Embedded rather than nested, because the
@@ -216,8 +106,6 @@ type Bucket struct {
 	PricedCalls int     `json:"priced_calls"`
 }
 
-// add counts one record, which [spends] has already made one call: a phase's
-// own, or a detached run's.
 func (b *Bucket) add(r Record) {
 	b.InputTokens += r.InputTokens
 	b.OutputTokens += r.OutputTokens
@@ -241,8 +129,7 @@ type PhaseRow struct {
 // ModelRow is the per-model breakdown of a rollup. It is built from each
 // completion's own reported model, never from a provider's configured name:
 // a fallback chain serves several models under one key. A detached coding
-// run's row is its CODING AGENT's, which is what spent it — its box reports
-// no model ([spends]).
+// run's row is its CODING AGENT's, which is what spent it ([Record]).
 type ModelRow struct {
 	Model string `json:"model"`
 	Bucket
@@ -362,7 +249,6 @@ type Options struct {
 // — the live window is append-ordered by arrival and the store's is by
 // (time, id) descending.
 func Aggregate(records []Record, opts Options) Rollup {
-	records = spends(records)
 	limit := opts.RecentTurns
 	switch {
 	case limit <= 0:
@@ -502,6 +388,14 @@ func Aggregate(records []Record, opts Options) Rollup {
 // PhaseAuxiliary is the phase whose records carry a worker. Named here rather
 // than imported from the event catalogue so this package stays a leaf.
 const PhaseAuxiliary = "auxiliary"
+
+// RunPhase is the phase a detached coding run's usage record is counted under:
+// `execute`, because the executor is what launches a run — `run_sandbox` is its
+// tool — and a run is its work continued in a box. The usage event names no
+// phase, so both producers ([Record]'s) state this one, from here, rather than
+// each spelling the word; named here rather than imported from the phase
+// vocabulary so this package stays a leaf.
+const RunPhase = "execute"
 
 func bucketFor(m map[string]*Bucket, key string) *Bucket {
 	b := m[key]

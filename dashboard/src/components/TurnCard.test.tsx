@@ -65,9 +65,6 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     codingAgent: "",
     sandboxId: "",
     costUSD: 0,
-    launchId: "",
-    runInputTokens: 0,
-    runOutputTokens: 0,
     deliveredRefs: [],
     trigger: null,
     at: "2026-09-13T10:03:00Z",
@@ -166,4 +163,36 @@ test("the trigger line clamps rather than being cut at one line", () => {
     ".truncate is the cell rule — on a card it cuts the sentence with room underneath",
   ).not.toContain("truncate");
   expect(line.getAttribute("title")).toBe(SUMMARY);
+});
+
+// AND ITS TOKENS, BY THE SAME RULE. A settled turn's row sums every spend record
+// the engine holds for it — the usage record of each coding run it launched
+// among them — where the card holds only the phases this screen loaded and the
+// runs this tab happened to see arrive. A running turn's row is from before its
+// latest phases, so it keeps its own figure.
+test("a settled turn's tokens are its row's, which hold its coding runs", () => {
+  const row = {
+    turn_id: "t1",
+    started_at: "2026-09-13T10:00:00Z",
+    ended_at: "2026-09-13T10:04:35Z",
+    duration_ms: 275_000,
+    complete: true,
+    phases: 2,
+    iterations: 1,
+    failed: false,
+    input_tokens: 5100,
+    output_tokens: 840,
+    total_tokens: 5940,
+  } satisfies TurnRow;
+  const { container } = draw(<TurnCard group={turn({ totalTokens: 120 })} row={row} />);
+  const figure = container.querySelector('[title^="tokens across every phase"]');
+  expect(figure?.textContent).toBe((5940).toLocaleString());
+
+  cleanup();
+  const running = draw(
+    <TurnCard group={turn({ totalTokens: 120 })} row={{ ...row, complete: false }} />,
+  );
+  expect(running.container.querySelector('[title^="tokens across every phase"]')?.textContent).toBe(
+    "240",
+  );
 });

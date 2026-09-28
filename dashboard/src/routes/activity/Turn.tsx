@@ -103,7 +103,7 @@ import {
   mergePhases,
   phaseDuration,
   runSpend,
-  runTokens,
+  runUsages,
   streamedPhases,
   turnSpan,
   type PhaseRecord,
@@ -122,7 +122,7 @@ import {
   type Run,
   type Story,
 } from "~/lib/turnstory.ts";
-import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { useAgents, usePhaseEvents, useRunEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, TurnRow } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -288,9 +288,10 @@ export interface TurnView {
   workerTokens: number;
   workerCount: number;
   /**
-   * What the detached coding runs this turn collected spent in their boxes,
-   * each launch once ([runSpend]), and how many runs — beside `tokens`, which
-   * is the engine's own model calls, for the reason `workerTokens` is.
+   * What the detached coding runs this turn launched spent in their boxes —
+   * their `sandbox_run_usage` records, each once ([runSpend]) — and how many
+   * runs, beside `tokens`, which is the engine's own model calls, for the
+   * reason `workerTokens` is.
    */
   runTokens: number;
   runCount: number;
@@ -344,6 +345,7 @@ export function useTurnView(turnId: string): TurnView {
 
   const agents = useAgents();
   const phaseEvents = usePhaseEvents();
+  const runEvents = useRunEvents();
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
 
@@ -439,15 +441,22 @@ export function useTurnView(turnId: string): TurnView {
   // siblings of the turn's own two phases and the reader had to work out
   // which round each belonged to. It also made the "N phases" badge and the
   // token total disagree with the feed's card for the same turn.
+  // THE CODING RUNS THIS TURN LAUNCHED: the usage records the `turn` query
+  // answered with, and the ones streamed since — the same record under the
+  // same id when both carry it, since a run's is derived from its launch.
+  const turnRuns = useMemo(
+    () => runUsages([...events, ...runEvents], (r) => r.turnId === turnId),
+    [events, runEvents, turnId],
+  );
   const group = useMemo(
-    () => groupTurns(phases).find((g) => g.turnId === turnId),
-    [phases, turnId],
+    () => groupTurns(phases, turnRuns).find((g) => g.turnId === turnId),
+    [phases, turnRuns, turnId],
   );
   const own = group?.phases ?? phases;
   const nested = group?.nested ?? new Map<string, PhaseRecord[]>();
   const workerTokens = phases.reduce((n, p) => n + (p.hostPhase ? p.totalTokens : 0), 0);
   const workerCount = phases.filter((p) => p.hostPhase).length;
-  const runs = runSpend(phases);
+  const runs = runSpend(turnRuns);
 
   const running = phases.some((p) => p.live);
   const rec: TurnRecord = useMemo(
@@ -1796,17 +1805,6 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
                 <span className="phase-meta" title="tokens this phase spent">
                   {fmtCount(p.totalTokens)}
                 </span>
-                {/* AND THE CODING RUN IT COLLECTED, apart from its own: the
-                    box's spend is not the engine's model calls, and the turn's
-                    figure above counts it once however many records carry it. */}
-                {runTokens(p) > 0 && (
-                  <span
-                    className="phase-meta"
-                    title="what the coding run this phase collected spent in its box"
-                  >
-                    +{fmtCount(runTokens(p))} run
-                  </span>
-                )}
                 {/* WHAT THE ENGINE MEASURED, and nothing where it measured
                     nothing: a live phase has no duration yet, and rendering
                     its zero would make the phase still running look like the

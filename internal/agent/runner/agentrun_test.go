@@ -420,8 +420,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 			},
 			Run: runner.RunRecord{
 				CodingAgent: "claude-code", SandboxID: "box-7",
-				CostUSD: 0.42, DeliveredRefs: []string{"https://example.com/pr/9"},
-				LaunchID: "launch-7", InputTokens: 5000, OutputTokens: 700,
+				DeliveredRefs: []string{"https://example.com/pr/9"},
 			},
 		},
 	})
@@ -462,19 +461,12 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if done.CodingAgent != "claude-code" || done.SandboxID != "box-7" {
 		t.Errorf("the box is unnamed: agent=%q id=%q", done.CodingAgent, done.SandboxID)
 	}
-	if done.CostUSD != 0.42 {
-		t.Errorf("cost_usd = %v — a subscription CLI's spend is reported nowhere else", done.CostUSD)
-	}
-	// AND WHAT THE BOX SPENT, beside the phase's own tokens rather than in
-	// them: the Tokens view counted a collected run nowhere, and the tally
-	// the turn's budget and task are charged from must not count it twice.
-	if done.LaunchID != "launch-7" || done.RunInputTokens != 5000 || done.RunOutputTokens != 700 {
-		t.Errorf("run usage = launch %q, %d in / %d out — what the box spent reaches "+
-			"no event", done.LaunchID, done.RunInputTokens, done.RunOutputTokens)
-	}
-	if done.InputTokens >= 5000 {
-		t.Errorf("input_tokens = %d: the run's tokens were folded into the phase's own, "+
-			"which the turn's budget is charged from a second time", done.InputTokens)
+	// AND NOTHING OF WHAT THE BOX SPENT: the run's tokens and its price are
+	// a record of their own, published once at its collect, and a phase
+	// carrying the price again is the run counted twice.
+	if done.CostUSD != 0 {
+		t.Errorf("cost_usd = %v on the resumed phase — the run's price is on its "+
+			"usage record", done.CostUSD)
 	}
 	if len(done.DeliveredRefs) != 1 {
 		t.Errorf("delivered_refs = %v, want what the run produced", done.DeliveredRefs)

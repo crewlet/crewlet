@@ -61,7 +61,10 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
-		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
+		{"AReleaseRecordsTheClaimsCollectInstant", testAReleaseRecordsTheClaimsCollectInstant},
+		{"AReleaseNeverMovesACollectInstant", testAReleaseNeverMovesACollectInstant},
+		{"ARefusedReleaseRecordsNoCollectInstant", testARefusedReleaseRecordsNoCollectInstant},
+		{"OnlyALaunchClearsTheCollectsRecords", testOnlyALaunchClearsTheCollectsRecords},
 		{"ParkingCarriesTheBranch", testParkingCarriesTheBranch},
 		{"OwnershipIsNotStolenByAnOlderLease", testOwnershipIsNotStolenByAnOlderLease},
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
@@ -829,6 +832,70 @@ func mustReleaseCharged(t *testing.T, s sandbox.PendingStore, claimed sandbox.Pe
 	}
 }
 
+// mustReleaseCollected hands a claimed run back with the instant its claim
+// collected it recorded.
+func mustReleaseCollected(t *testing.T, s sandbox.PendingStore, claimed sandbox.PendingRun,
+	at time.Time) {
+
+	t.Helper()
+	release := releaseOf(claimed)
+	release.CollectedAt = at
+	released, err := s.ReleaseClaim(t.Context(), claimed.TurnID, release)
+	if err != nil || !released {
+		t.Fatalf("release %s collected: released=%v err=%v", claimed.TurnID, released, err)
+	}
+}
+
+func testAReleaseRecordsTheClaimsCollectInstant(t *testing.T, s sandbox.PendingStore) {
+	// THE DURABLE HALF OF ONE USAGE RECORD PER LAUNCH. The record's instant
+	// is half of what the event store keys it on, and the retry reads
+	// nothing but the row its own claim returns — so the first collect's
+	// instant has to come back on it, or the retry publishes the same run's
+	// usage as a second row at a second instant.
+	mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
+	if !claimed.CollectedAt.IsZero() {
+		t.Fatalf("a run nothing has collected reads as collected at %v", claimed.CollectedAt)
+	}
+	collected := base.Add(3 * time.Minute)
+	mustReleaseCollected(t, s, claimed, collected)
+	if got := mustClaim(t, s, "t1").CollectedAt; !got.Equal(collected) {
+		t.Errorf("the retry's claim came back collected at %v, want the first "+
+			"attempt's %v", got, collected)
+	}
+}
+
+func testAReleaseNeverMovesACollectInstant(t *testing.T, s sandbox.PendingStore) {
+	// THE FIRST INSTANT WINS. A later release carrying another — or none —
+	// must not move it, or the usage record's second publication lands at
+	// a second instant after all.
+	mustLaunched(t, s, run("t1"))
+	first := base.Add(3 * time.Minute)
+	mustReleaseCollected(t, s, mustClaim(t, s, "t1"), first)
+	mustReleaseCollected(t, s, mustClaim(t, s, "t1"), first.Add(time.Hour))
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	if got := mustGet(t, s, "t1").CollectedAt; !got.Equal(first) {
+		t.Errorf("the collect instant moved to %v, want the first %v", got, first)
+	}
+}
+
+func testARefusedReleaseRecordsNoCollectInstant(t *testing.T, s sandbox.PendingStore) {
+	// A release that hands nothing back writes nothing: on a row a second
+	// launch has opened, the first job's instant would stamp the second
+	// job's usage.
+	mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
+	mustBeginLaunch(t, s, run("t1"))
+	release := releaseOf(claimed)
+	release.CollectedAt = base.Add(3 * time.Minute)
+	if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || released {
+		t.Fatalf("the claim handed back a launch it never took: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1").CollectedAt; !got.IsZero() {
+		t.Errorf("a refused release recorded its collect instant %v on the next launch", got)
+	}
+}
+
 func testAReleaseRecordsTheClaimsCharge(t *testing.T, s sandbox.PendingStore) {
 	// THE DURABLE HALF OF CHARGING A RUN ONCE, in the one write that reopens
 	// the run to a retry. The retry reads nothing but the row its own claim
@@ -877,14 +944,21 @@ func testARefusedReleaseRecordsNoCharge(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
-	// The record is launch-scoped, and every write to the row other than a
-	// launch is about the same launch. One of them dropping it would let the
-	// retry that write opens charge the run again, so each is walked here;
-	// the launch that follows is a new job, and must not inherit it.
+func testOnlyALaunchClearsTheCollectsRecords(t *testing.T, s sandbox.PendingStore) {
+	// The collect's two records — the charge and the instant its usage is
+	// stamped with — are launch-scoped, and every write to the row other
+	// than a launch is about the same launch. One of them dropping either
+	// would let the retry that write opens charge the run again, or publish
+	// its usage at a second instant, so each is walked here; the launch that
+	// follows is a new job, and must not inherit them.
 	ctx := t.Context()
+	collected := base.Add(3 * time.Minute)
 	mustLaunched(t, s, run("t1"))
-	mustReleaseCharged(t, s, mustClaim(t, s, "t1"))
+	release := releaseOf(mustClaim(t, s, "t1"))
+	release.Charged, release.CollectedAt = true, collected
+	if released, err := s.ReleaseClaim(ctx, "t1", release); err != nil || !released {
+		t.Fatalf("release t1 with its records: released=%v err=%v", released, err)
+	}
 	tail := completionOf(t, s, "t1")
 	var claimed sandbox.PendingRun
 	for _, step := range []struct {
@@ -927,14 +1001,23 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 		if err := step.write(); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
 		}
-		if got := mustGet(t, s, "t1"); !got.Charged {
+		got := mustGet(t, s, "t1")
+		if !got.Charged {
 			t.Fatalf("%s dropped the charge record", step.name)
+		}
+		if !got.CollectedAt.Equal(collected) {
+			t.Fatalf("%s moved the collect instant to %v", step.name, got.CollectedAt)
 		}
 	}
 
 	mustBeginLaunch(t, s, run("t1"))
-	if got := mustGet(t, s, "t1"); got.Charged {
+	got := mustGet(t, s, "t1")
+	if got.Charged {
 		t.Error("a second launch inherited the first job's charge, so its own spend would go uncounted")
+	}
+	if !got.CollectedAt.IsZero() {
+		t.Errorf("a second launch inherited the first job's collect instant %v, so "+
+			"its usage would be stamped with the first job's", got.CollectedAt)
 	}
 }
 

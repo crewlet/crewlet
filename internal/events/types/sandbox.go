@@ -1,6 +1,10 @@
 package types
 
-import "github.com/crewlet/crewlet/internal/events"
+import (
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/events"
+)
 
 // Detached sandbox coding runs. The kick-off turn ends as soon as the job is
 // launched and the agent stays busy until the completion signal arrives, so
@@ -12,6 +16,7 @@ func init() {
 	events.Register[SandboxRunCompleted]()
 	events.Register[SandboxClarificationRequested]()
 	events.Register[SandboxRunFailed]()
+	events.Register[SandboxRunUsage]()
 }
 
 // SandboxRunStarted marks a detached coding job being kicked off, after the
@@ -97,6 +102,79 @@ func (e SandboxRunCompleted) SummaryFor(actor string) string {
 		return "Sandbox job completed"
 	}
 	return actor + "'s sandbox job completed"
+}
+
+// SandboxRunUsage is what one collected coding run reported spending in its
+// box: its tokens, and its price where the coding agent quotes one.
+//
+// ITS OWN RECORD, PUBLISHED AT THE COLLECT, because the collect is where a
+// run's spend is known and the only moment every run reaches: the budgets are
+// charged there, and so is the tracker task the turn was spent on. Carried on
+// the phase the run's turn resumed into, it reached no token view for a run
+// that never resumed — a question nobody answered, a resume abandoned, a node
+// that died holding the claim — although the budgets had counted it.
+//
+// ONE RECORD PER LAUNCH. Its id is derived from the turn and the launch
+// ([PendingRun.LaunchID] in internal/sandbox) and its timestamp is the FIRST
+// collect of that launch, which the run's own record keeps across a retry —
+// so a completion collected again after a failed resume publishes this same
+// event, identical in the two fields the event store keys a row on and the
+// live projection dedupes by. A phase carrying the run could be published
+// again at another instant, and a run retried across the edge of a queried
+// window was counted in both.
+//
+// A SPEND RECORD, like [AgentPhaseCompleted]: the Tokens view, the turns list
+// and the Turn screen count it, under the execute phase that launched the run
+// and under its CodingAgent where a phase's figures stand under its model —
+// the box reports no model, and the coding agent is what spent them.
+type SandboxRunUsage struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	LaunchID    string `json:"launch_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey     string `json:"work_key,omitempty"`
+	SandboxID   string `json:"sandbox_id"`
+	CodingAgent string `json:"coding_agent"`
+	// InputTokens, OutputTokens and TotalTokens are what the box reported,
+	// never negative: a negative count off a coding agent's output is a bad
+	// payload, and counted it would refund spend that happened.
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+	// CostUSD is the price the coding agent quoted, zero where it quotes
+	// none — a subscription CLI's marginal cost, or OpenCode, which reports
+	// no usage at all.
+	CostUSD float64 `json:"cost_usd"`
+}
+
+// EventType is the "sandbox_run_usage" wire type.
+func (SandboxRunUsage) EventType() string { return "sandbox_run_usage" }
+
+// Role is the seat whose run spent it — the seat its budget is charged to.
+func (e SandboxRunUsage) Role() string { return e.RoleName }
+
+// AgentID is the instance that launched the run.
+func (e SandboxRunUsage) AgentID() string { return e.Agent }
+
+// SummaryFor is possessive, as [SandboxRunCompleted]'s is — the box spent it,
+// not the seat — and names the price only where one was quoted: "$0.00" beside
+// a run nobody priced would be a price nobody gave.
+func (e SandboxRunUsage) SummaryFor(actor string) string {
+	agent := e.CodingAgent
+	if agent == "" {
+		agent = "coding"
+	}
+	spent := fmt.Sprintf("%s run spent %d tokens", agent, e.TotalTokens)
+	if e.CostUSD > 0 {
+		spent += fmt.Sprintf(" ($%.2f)", e.CostUSD)
+	}
+	if actor == "" {
+		return "A " + spent
+	}
+	return actor + "'s " + spent
 }
 
 // SandboxClarificationRequested records the in-sandbox coding agent asking a

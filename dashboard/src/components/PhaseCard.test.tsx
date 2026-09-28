@@ -57,9 +57,6 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     codingAgent: "",
     sandboxId: "",
     costUSD: 0,
-    launchId: "",
-    runInputTokens: 0,
-    runOutputTokens: 0,
     deliveredRefs: [],
     trigger: null,
     at: "2026-09-02T10:00:00Z",
@@ -117,29 +114,6 @@ describe("a settled phase's zero is a number", () => {
     const { container } = render(<PhaseCard record={phase({ totalTokens: 0, failed: true })} />);
     const tokens = container.querySelector('[title="total tokens"]');
     expect(tokens?.textContent).toBe("0");
-  });
-
-  test("a phase that collected a coding run shows the run beside its own", () => {
-    // The phase's own figure is the engine's model calls; the run's box spent
-    // tokens those never saw. Rendered as one number, or not at all, the card
-    // that collected a five-million-token run read as the cheap phase it
-    // resumed into.
-    const { container } = render(
-      <PhaseCard
-        record={phase({
-          totalTokens: 120,
-          backend: "sandbox",
-          launchId: "launch-1",
-          runInputTokens: 5000,
-          runOutputTokens: 700,
-        })}
-      />,
-    );
-    expect(container.querySelector('[title="total tokens"]')?.textContent).toBe("120");
-    const run = container.querySelector(
-      '[title="what the coding run this phase collected spent in its box"]',
-    );
-    expect(run?.textContent).toBe(`+${(5700).toLocaleString()} run`);
   });
 
   test("and the same for the rounds it never took", () => {

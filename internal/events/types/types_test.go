@@ -51,7 +51,7 @@ func catalogue() []events.Payload {
 		SkillTelemetryWriteFailed{}, CompactionRequested{},
 		CompactionCompleted{}, ReflectionCompleted{},
 		// sandbox.go
-		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{},
+		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{}, SandboxRunUsage{},
 		SandboxClarificationRequested{},
 		// turn.go
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
@@ -102,6 +102,7 @@ var wireTypes = []string{
 	"sandbox_run_completed",
 	"sandbox_run_failed",
 	"sandbox_run_started",
+	"sandbox_run_usage",
 	"scheduled_task_fired",
 	"skill_archived",
 	"skill_promoted",
@@ -290,7 +291,7 @@ var wireTags = map[string][]string{
 	"agent_turn_completed":            {"a2a_context", "agent_id", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "plan_model", "prompt", "prompt_messages", "response", "review_model", "role", "subagent_count", "subagent_tokens", "tool_executions", "total_tokens", "trigger", "turn_id", "work_key"},
 	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_decision", "plan_summary", "plan_tool_sequence", "review_outcome", "role", "skills_used", "started_at", "task_id", "task_summary", "tool_sequence", "turn_id", "work_key"},
 	"agent_phase_started":             {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_key"},
-	"agent_phase_completed":           {"agent_id", "backend", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "input_tokens", "iteration", "launch_id", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_narration", "rounds_used", "run_input_tokens", "run_output_tokens", "sandbox_id", "system_prompt", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "work_key", "worker"},
+	"agent_phase_completed":           {"agent_id", "backend", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "input_tokens", "iteration", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_narration", "rounds_used", "sandbox_id", "system_prompt", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "work_key", "worker"},
 	"agent_turn_progress":             {"a2a_context", "agent_id", "input_tokens", "iteration", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_narration", "round_num", "tool_executions", "total_tokens", "trigger", "turn_id", "work_key"},
 	"subagent_batched":                {"failures", "graph", "parent_handle", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
 	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
@@ -311,6 +312,7 @@ var wireTags = map[string][]string{
 	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "role", "sandbox_id", "task", "task_id", "turn_id", "work_key"},
 	"sandbox_run_completed":           {"agent_handle", "agent_id", "coding_agent", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
 	"sandbox_run_failed":              {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
+	"sandbox_run_usage":               {"agent_handle", "agent_id", "coding_agent", "cost_usd", "input_tokens", "launch_id", "output_tokens", "role", "sandbox_id", "total_tokens", "turn_id", "work_key"},
 	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "question", "role", "sandbox_id", "turn_id", "work_key"},
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
 	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_chars", "phase", "role", "system_chars", "tool_chars", "tool_count", "turn_id", "user_chars", "work_key"},

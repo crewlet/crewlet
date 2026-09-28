@@ -507,7 +507,7 @@ func (s *LiveState) Apply(env *Envelope) Change {
 		return change
 	}
 
-	if env.Type == "agent_phase_completed" {
+	if env.Type == phaseCompletedType || env.Type == runUsageType {
 		change.Tokens = s.foldSpend(*env, payload)
 	}
 

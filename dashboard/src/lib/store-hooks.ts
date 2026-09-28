@@ -94,6 +94,15 @@ export function usePhaseEvents() {
   return useSlice(["phases"], (s) => s.phases);
 }
 
+/**
+ * The coding runs' usage records that arrived while this tab was watching,
+ * payload and all — what a turn's detached runs spent, which a screen merges
+ * over its query's answer as it does [usePhaseEvents].
+ */
+export function useRunEvents() {
+  return useSlice(["runs"], (s) => s.runs);
+}
+
 export function useOrg() {
   return useSlice(["org"], (s) => s.org);
 }

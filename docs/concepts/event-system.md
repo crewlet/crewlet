@@ -223,6 +223,9 @@ agent_spawned, agent_terminated
 task_assigned              # published to the seat's inbox by the scheduler
 sandbox_run_started, sandbox_clarification_requested
 sandbox_run_completed, sandbox_run_failed
+sandbox_run_usage          # what a collected run spent in its box: one record
+                           # per launch, at its first collect, counted by the
+                           # Tokens view and the turns list
 scheduled_task_fired
 
 # a2a: one ask, one answer, then closed. The ask and the answer also travel

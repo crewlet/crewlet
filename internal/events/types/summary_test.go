@@ -40,6 +40,15 @@ func TestSummaries(t *testing.T) {
 		payload: OrgStopped{OrgName: "Acme"},
 		want:    "Organization 'Acme' stopped",
 	}, {
+		name: "a coding run's usage names what spent it, and a quoted price",
+		payload: SandboxRunUsage{RoleName: "Dev", CodingAgent: "claude-code",
+			TotalTokens: 5700, CostUSD: 0.5},
+		want: "Dev's claude-code run spent 5700 tokens ($0.50)",
+	}, {
+		name:    "a run nobody priced states no price",
+		payload: SandboxRunUsage{RoleName: "Dev", CodingAgent: "opencode", TotalTokens: 300},
+		want:    "Dev's opencode run spent 300 tokens",
+	}, {
 		name:    "an assignment names the seat and what it is for",
 		payload: TaskAssigned{RoleName: "Dev", TaskID: "T-42"},
 		want:    "Dev was assigned task T-42",

@@ -137,6 +137,11 @@ type Release struct {
 	// on the row by the release itself. See [PendingRun.Charged].
 	Charged bool
 
+	// CollectedAt is the instant the claim first collected the launch, which
+	// its usage record is stamped with, recorded on the row by the release
+	// for the reason Charged is. See [PendingRun.CollectedAt].
+	CollectedAt time.Time
+
 	// Fence is the lease the claim was taken under.
 	Fence Fence
 }
@@ -429,15 +434,6 @@ type PendingRun struct {
 	Question string `json:"question"`
 	Audience string `json:"audience"`
 
-	// ParkedUsage is what the collect that parked this run on its question
-	// reported spending, kept until the person's answer resumes the turn:
-	// that collect was charged when it parked, and the answer's resume is
-	// the first phase event there is to carry it (see [ResumeRequest.Usage]).
-	// ADDITIVE, for the reason [PendingRun.ConversationKey] gives: a row an
-	// older build parked decodes with none, and its answer reports none —
-	// what every answer reported before.
-	ParkedUsage RunUsage `json:"parked_usage,omitzero"`
-
 	// TraceID and SpanID are the trace the run started under, so the
 	// follow-up turn nests beneath it rather than appearing as unrelated
 	// work minutes later.
@@ -510,6 +506,22 @@ type PendingRun struct {
 	// turn is a second job with spend of its own, so [PendingStore.BeginLaunch]
 	// clears it, and nothing else does.
 	Charged bool `json:"charged,omitempty"`
+
+	// CollectedAt is the instant this launch was FIRST collected, and the
+	// timestamp of its usage record ([types.SandboxRunUsage]).
+	//
+	// ON THE ROW, for the reason Charged is and written by the same release:
+	// the collect is retried, and the event store keys a row on its instant
+	// as well as its id. Restamped by each retry, one launch's usage was a
+	// second row at a second instant — counted twice by any window holding
+	// both, and once by each of two windows that split them.
+	//
+	// THE FIRST COLLECT, never the launch: the budgets are charged at the
+	// collect too, so a run's usage and its charge fall on the same side of
+	// every window. Zero until a collect, and launch-scoped like the charge:
+	// [PendingStore.BeginLaunch] clears it, and nothing else moves it once
+	// set.
+	CollectedAt time.Time `json:"collected_at,omitzero"`
 
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
@@ -602,8 +614,8 @@ type PendingStore interface {
 	// BeginLaunch opens a launch on this turn's row: it creates the row
 	// when there is none, and RESETS an existing one to launching —
 	// clearing the previous job's suspended conversation, the question
-	// it was parked on and the record of its charge, while keeping the
-	// row's identity and its box. Either way the launch gets a new
+	// it was parked on, the record of its charge and the instant it was
+	// collected, while keeping the row's identity and its box. Either way the launch gets a new
 	// [PendingRun.LaunchID].
 	//
 	// CREATE-OR-RESET rather than create-if-absent, because the SECOND
@@ -634,9 +646,10 @@ type PendingStore interface {
 	// Anything else means the run has moved on from the claim (see
 	// [Release]), and a retry of the signal has nothing left to take.
 	//
-	// The claim's charge is recorded IN THE SAME WRITE, and never cleared
-	// by one: a run is reopened to a retry with its record or not at all
-	// (see [PendingRun.Charged]).
+	// The claim's charge and its collect's instant are recorded IN THE SAME
+	// WRITE, and neither is cleared or moved by one: a run is reopened to a
+	// retry with its record or not at all (see [PendingRun.Charged] and
+	// [PendingRun.CollectedAt]).
 	//
 	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
 	// gone. A release to a status outside [Claimable] is an error, because
@@ -962,9 +975,6 @@ type Clarification struct {
 	// while the question waits.
 	Branch    string
 	SessionID string
-	// Usage is what the collect that parked the run spent — see
-	// [PendingRun.ParkedUsage].
-	Usage RunUsage
 }
 
 // BoxRef is the box and command a run is attached to.

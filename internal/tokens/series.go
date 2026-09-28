@@ -282,11 +282,6 @@ type SeriesOptions struct {
 // alternative is a bar at an instant the record does not claim. It cannot
 // happen from either producer: both write RFC3339Nano.
 func Bucketed(records []Record, opts SeriesOptions) Series {
-	// THE SAME RECORDS [Aggregate] folds — each launch once, on the record
-	// it puts it on, and a run under its coding agent — so a chart and the
-	// table beside it agree about when a run was spent and which model
-	// spent it.
-	records = spends(records)
 	interval := opts.Interval
 	if interval != IntervalDay {
 		interval = IntervalHour

@@ -216,6 +216,9 @@ const DID = new Set([
   "sandbox_run_started",
   "sandbox_clarification_requested",
   "sandbox_run_completed",
+  // What the run spent in its box, one record per launch — its own row, and
+  // the figure the header's token fact names beside the turn's own calls.
+  "sandbox_run_usage",
   "subagent_batched",
   "skill_used",
   "a2a_channel_opened",

@@ -73,6 +73,18 @@ export const MAX_EVENTS = 400;
  */
 export const MAX_PHASES = 200;
 
+/**
+ * How many coding runs' usage envelopes the socket keeps, payload and all.
+ *
+ * The same drop-oldest, company-wide bound as [MAX_PHASES] and for the same
+ * reason — these only supplement a screen's query answer — at a quarter of it:
+ * a run is one record per detached coding job, and a turn that collects more
+ * than one is a turn that ran jobs back to back, so a quarter of the phases
+ * the buffer holds is still above the runs those phases can have launched,
+ * while each record is a few hundred bytes rather than a phase's prompts.
+ */
+export const MAX_RUNS = 50;
+
 export interface StoreState {
   agents: AgentRow[];
   events: FeedRow[];
@@ -84,6 +96,12 @@ export interface StoreState {
    * the durable history each screen loads comes from its own query.
    */
   phases: EventEnvelope[];
+  /**
+   * The `sandbox_run_usage` envelopes seen on this socket, newest first — what
+   * each detached coding run spent, one record per launch. Kept with their
+   * payload, and outside what a snapshot replaces, for the reason `phases` is.
+   */
+  runs: EventEnvelope[];
   sandboxes: SandboxEntry[];
   org: OrgProjection;
   tools: ToolRow[];
@@ -123,6 +141,7 @@ function emptyState(): StoreState {
     agents: [],
     events: [],
     phases: [],
+    runs: [],
     sandboxes: [],
     org: {},
     tools: [],
@@ -329,6 +348,15 @@ export class Store {
       if (!this.state.phases.some((p) => p.id === ev.id)) {
         this.state.phases = [ev, ...this.state.phases].slice(0, MAX_PHASES);
         this.emit("phases");
+      }
+    }
+    // A CODING RUN'S USAGE, likewise with its payload: its tokens are in no
+    // other frame, and the turn it belongs to counts them. Deduped by id,
+    // which is the launch's own — a retried collect publishes the same record.
+    if (ev.type === "sandbox_run_usage" && ev.payload) {
+      if (!this.state.runs.some((r) => r.id === ev.id)) {
+        this.state.runs = [ev, ...this.state.runs].slice(0, MAX_RUNS);
+        this.emit("runs");
       }
     }
   }

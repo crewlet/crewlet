@@ -78,6 +78,7 @@ import {
   useAgents,
   useOrg,
   usePhaseEvents,
+  useRunEvents,
   useSandboxes,
   useSchedules,
   useTokens,
@@ -111,6 +112,7 @@ import {
   fromPhaseEvent,
   groupTurns,
   mergePhases,
+  runUsages,
   streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
@@ -726,7 +728,15 @@ export function SeatScreen({ handle }: { handle: string }) {
     return mergePhases([...streamed, ...stored], live);
   }, [history.data, phaseEvents, agent, role]);
 
-  const turns = useMemo(() => groupTurns(phases), [phases]);
+  // THE CODING RUNS THIS TAB SAW THE SEAT LAUNCH, counted in their turns'
+  // figures. A settled turn's card reads the engine's own total off its row
+  // instead (`TurnCard`), which holds every run whether this tab saw it or not.
+  const runEvents = useRunEvents();
+  const seatRuns = useMemo(
+    () => runUsages(runEvents, (r) => role !== "" && r.role === role),
+    [runEvents, role],
+  );
+  const turns = useMemo(() => groupTurns(phases, seatRuns), [phases, seatRuns]);
   // WHICH OF THESE ARE THE SAME WORK. A turn id names one run, so a trigger
   // that failed without acting and came back is several cards here — and
   // without this they read as the seat having been asked twice.
@@ -2302,6 +2312,7 @@ export function SeatPeek({ handle }: { handle: string }) {
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const phaseEvents = usePhaseEvents();
+  const runEvents = useRunEvents();
   const now = useNow();
 
   const index = useMemo(() => indexOrg(org), [org]);
@@ -2316,9 +2327,10 @@ export function SeatPeek({ handle }: { handle: string }) {
   const lastTurn = useMemo(() => {
     const streamed = streamedPhases(phaseEvents, (r) => role !== "" && r.role === role);
     const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role)] : [];
+    const runs = runUsages(runEvents, (r) => role !== "" && r.role === role);
     // Newest turn first, so the head of the list is the one being asked about.
-    return groupTurns(mergePhases(streamed, live))[0] ?? null;
-  }, [phaseEvents, agent, role]);
+    return groupTurns(mergePhases(streamed, live), runs)[0] ?? null;
+  }, [phaseEvents, runEvents, agent, role]);
 
   // NOT AN EMPTY RAIL. A `peek=seat:` reaches this from a pasted or hand-edited
   // URL as often as from a row, so the honest answer names the handle that
