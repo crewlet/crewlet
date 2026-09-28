@@ -18,7 +18,7 @@
  */
 
 import { api } from "./api.ts";
-import { apiToken } from "./authToken.ts";
+import { needSession } from "./session.ts";
 import type { Store } from "./store.ts";
 import type {
   Frame,
@@ -220,26 +220,9 @@ export class LiveSocket {
    */
   private watched = "";
   private watchRetry: ReturnType<typeof setTimeout> | 0 = 0;
-  private token = "";
-  /** Whether the shell has already been asked to collect a token. */
-  private askedForToken = false;
-  private authRejectedHandler: (() => void) | null = null;
 
   constructor(store: Store) {
     this.store = store;
-  }
-
-  /** Operator bearer token, sent on the handshake and on the refusal probe — never
-   *  in a frame, since the engine decides every question by the principal the
-   *  handshake resolved. */
-  setToken(token: string): void {
-    this.token = token || "";
-    // A supplied credential clears the ask-once latch. The latch exists so a
-    // 30-second reconnect backoff cannot reopen the dialog forever — not to
-    // make a SECOND refusal silent. Without this, a reader who answered with a
-    // token the engine also rejects is never asked again and sits on a page
-    // that never says why.
-    if (this.token) this.askedForToken = false;
   }
 
   start(): void {
@@ -255,6 +238,12 @@ export class LiveSocket {
    */
   reconnect(): void {
     this.refused = false;
+    // A RE-DIAL IS A NEW ATTEMPT, usually with a credential the browser did
+    // not hold at the last one — a sign-in's cookie, a step-up's replacement
+    // — so the last refusal no longer describes it. Left standing, the page a
+    // sign-in lands on would open under a banner saying this browser was
+    // refused, until the handshake it had just started answered.
+    this.store.setAuthRejected(false);
     if (this.sock) this.sock.close();
     else this.connect();
   }
@@ -390,17 +379,13 @@ export class LiveSocket {
       return;
     }
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    // A `WebSocket` constructor cannot carry an `Authorization` header, so the
-    // token rides the query string — the one place this dashboard sends it that
-    // way, and the server accepts either form. It is sent on EVERY dial, not
-    // only after a rejection: an engine that guards reads refuses the handshake
-    // outright, and a client that waited to be told would spend a full backoff
-    // cycle disconnected on every load.
-    const token = this.token || apiToken();
-    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    // THE HANDSHAKE CARRIES THE SESSION COOKIE, which the browser attaches to
+    // a same-origin upgrade as it does to any request, and nothing else. There
+    // is deliberately no query-string credential: a URL is written into every
+    // proxy's access log, and the engine reads none there.
     let sock: WebSocket;
     try {
-      sock = new WebSocket(`${proto}://${location.host}${PATH}${qs}`);
+      sock = new WebSocket(`${proto}://${location.host}${PATH}`);
     } catch {
       this.scheduleReconnect();
       return;
@@ -475,37 +460,38 @@ export class LiveSocket {
    * that could read it could use a socket to scan ports it cannot otherwise
    * reach).
    *
-   * This client believed otherwise once, and the whole repair path — the
-   * banner, the dialog, "forget this token" — hung off a code that never
-   * arrived. A wrong token in `localStorage` therefore produced a dashboard
-   * that reconnected for ever, said "retrying", and offered no way to correct
-   * the one thing that was wrong.
+   * This client believed otherwise once, and the whole repair path hung off a
+   * code that never arrived: a refused credential produced a dashboard that
+   * reconnected for ever, said "retrying", and offered no way to correct the
+   * one thing that was wrong.
    *
    * So the status is fetched where a browser will hand it over. A plain GET of
-   * the same path runs the same guard and stops one line short of the upgrade:
-   * 401 is a refused credential, 426 (Upgrade Required) means it was accepted
-   * and only the missing header stopped it. A throw is the network, which is
-   * not an auth problem and must not raise a dialog.
-   *
-   * The credential goes in the HEADER here, not the query string the handshake
-   * is forced to use: a fetch can set one, and a token in a URL is a token in
-   * every proxy's access log.
+   * the same path runs the same guard, with the same cookie, and stops one line
+   * short of the upgrade: 401 is nobody signed in, 426 (Upgrade Required)
+   * means the session was accepted and only the missing header stopped it. A
+   * throw is the network, which is not an auth problem and must not send
+   * anybody to sign in.
    */
   private async probeRefusal(): Promise<void> {
     if (this.isClosed) return;
-    const token = this.token || apiToken();
     try {
-      const res = await fetch(PATH, {
-        headers: token ? { Authorization: "Bearer " + token } : {},
-        cache: "no-store",
-      });
+      const res = await fetch(PATH, { credentials: "same-origin", cache: "no-store" });
       // Not `!res.ok`: 426 is the healthy answer here, and every other failure
-      // is the network or a proxy, neither of which the reader fixes by typing
-      // a token.
+      // is the network or a proxy, neither of which the reader fixes by
+      // signing in.
       if (res.status === 401) this.authRejected();
       else if (res.status === 403) {
-        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
-        this.accessRefused(body?.detail ?? "");
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+          detail?: string;
+        } | null;
+        // A SESSION THAT MAY ONLY ENROL A SECOND FACTOR is refused this
+        // surface until it has, and its repair is the person's own — the
+        // enrolment screen — rather than an administrator's. So it stops
+        // the loop as a refusal does, and asks for the enrolment rather
+        // than saying access was withdrawn.
+        if (body?.error === "second_factor_enrolment_required") this.enrolmentRequired();
+        else this.accessRefused(body?.detail ?? "");
       }
     } catch {
       // Offline, or a proxy that refuses the request outright. The reconnect
@@ -513,21 +499,6 @@ export class LiveSocket {
     }
   }
 
-  /**
-   * The engine refused this browser's credential.
-   *
-   * Two things happen, and both are needed. Asking for a token is the repair —
-   * the dashboard is served unauthenticated by design (the page that asks for a
-   * token cannot itself require one), so the browser has no other moment to
-   * learn it needs one. The store flag is what happens when the reader
-   * dismisses that request: the ask fires once and only once, deliberately, so
-   * a 30-second reconnect backoff does not reopen a dialog forever — which
-   * leaves the page looking like an outage unless the chrome can say otherwise.
-   *
-   * The socket does not own the asking. It cannot: the dialog belongs to the
-   * shell, and a transport that reaches into the DOM to draw one is a transport
-   * that cannot be tested without a browser.
-   */
   /**
    * The engine knows who this browser is and will not serve it this surface.
    *
@@ -538,23 +509,46 @@ export class LiveSocket {
    * `reconnect()` is the way back, once an administrator has restored it.
    */
   private accessRefused(reason: string): void {
+    this.stopDialling();
+    this.store.setAccessRefused(reason);
+  }
+
+  /**
+   * The engine accepts this browser's session for nothing but enrolling the
+   * second factor the deployment requires. Every dial would be refused the
+   * same way until it has, so the loop stops; the enrolment ends by calling
+   * `reconnect()` with the whole session it opened.
+   */
+  private enrolmentRequired(): void {
+    this.stopDialling();
+    needSession("second_factor");
+  }
+
+  /** Stops the reconnect loop and the REST fallback, until `reconnect()`. */
+  private stopDialling(): void {
     this.refused = true;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = 0;
     this.stopFallback();
-    this.store.setAccessRefused(reason);
   }
 
+  /**
+   * The engine resolved nobody from this browser's cookie.
+   *
+   * Two things happen, and both are needed. Asking for a sign-in is the repair
+   * — the dashboard is served unauthenticated by design (the page that signs a
+   * person in cannot itself require them to be), so the browser has no other
+   * moment to learn it needs one. The store flag is what the chrome reads while
+   * the loop goes on dialling: a sign-in in another tab gives this one the
+   * cookie too, and the next dial is what notices.
+   *
+   * The socket does not own the screen. It cannot: the sign-in is a route, and
+   * a transport that reaches into the router is a transport that cannot be
+   * tested without one — so it raises the session need the app follows.
+   */
   private authRejected(): void {
     this.store.setAuthRejected(true);
-    if (this.askedForToken || !this.authRejectedHandler) return;
-    this.askedForToken = true;
-    this.authRejectedHandler();
-  }
-
-  /** Register what to do the first time the engine refuses a credential. */
-  onAuthRejected(fn: () => void): void {
-    this.authRejectedHandler = fn;
+    needSession("sign_in");
   }
 
   /**

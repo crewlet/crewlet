@@ -175,7 +175,7 @@ const seatTurnKey = (g: { turnId: string }) => g.turnId;
  * The operator-gated half of a seat, said precisely when it cannot be shown.
  *
  * `QueryState` covers a refused or failed read, which includes the guarded
- * banner with its Set token button. The three states after it are this
+ * banner with its Sign in button. The three states after it are this
  * screen's own: no configuration is active, the document has no seat by this
  * name (the projection and the document can disagree for a moment either side
  * of an apply), and a name held by two seats in a revision stored before names

@@ -9,8 +9,9 @@
  * The shell composes; it does not decide. Which workspace a route belongs to
  * is `nav.ts`, what the trail says is `workspaces/crumbs.ts`, what a
  * workspace's tree holds is `workspaces/sidebars.tsx`. This file wires them
- * together and owns exactly three things nothing else can: the palette, the
- * token dialog, and the one strip that reports a degraded connection.
+ * together and owns exactly two things nothing else can: the palette, and
+ * the one strip that reports a degraded connection. Who is signed in is the
+ * identity menu's, and signing in is a screen outside the frame (`App.tsx`).
  */
 
 import {
@@ -27,12 +28,12 @@ import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
-import { TokenDialog } from "./TokenDialog.tsx";
 import { AppRail, useRailCollapsed, useWorkspaceChords, type RailBadge } from "./frame/AppRail.tsx";
 import { WorkspaceSidebar, type SidebarSection } from "./frame/WorkspaceSidebar.tsx";
 import { PageBar, CopyLink, StarPage } from "./frame/PageBar.tsx";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
+import { IdentityMenu } from "./frame/IdentityMenu.tsx";
 import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { crumbsFor, titleOf, type Labels } from "./workspaces/crumbs.ts";
@@ -45,13 +46,13 @@ import {
   useKeptSections,
   useWorkSidebar,
 } from "./workspaces/sidebars.tsx";
-import { Avatar, SegmentedControl, StatusDot, Tag } from "@crewlethq/ui";
+import { SegmentedControl, StatusDot } from "@crewlethq/ui";
 import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/prefs.ts";
-import { onTokenRequested } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
 import { FillRequest } from "./fill.tsx";
@@ -207,7 +208,6 @@ export function Shell({ children }: { children: ReactNode }) {
   // makes it (the org builder's canvas lens), and while it holds, the
   // scroller stops being one and hands the column what is left of the window.
   const [filling, setFilling] = useState(false);
-  const [tokenOpen, setTokenOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
 
   const [labels, setLabels] = useState<Labels>({});
@@ -242,16 +242,6 @@ export function Shell({ children }: { children: ReactNode }) {
     return () => socket.watch("");
   }, [socket, viewer.owner]);
 
-  // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
-  // dialog forever. Everything after that is the state bar.
-  useEffect(() => {
-    socket.onAuthRejected(() => setTokenOpen(true));
-  }, [socket]);
-
-  // And from anywhere else that discovers it needs a credential — an
-  // auth-gated answer on a screen the socket was never refused for.
-  useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
-
   useKeyChords([
     { key: "k", meta: true, run: () => setPaletteOpen((v) => !v), whileTyping: true },
     // ESCAPE REACHES THE PALETTE FROM ITS OWN INPUT, which is the only field
@@ -277,11 +267,6 @@ export function Shell({ children }: { children: ReactNode }) {
   // Forward buttons, a phone's back gesture, a restored history entry. The
   // palette that survived one of those was still offering the objects it had
   // ranked for the screen the reader had just left.
-  //
-  // NOT THE TOKEN DIALOG, which is deliberately not in here: a credential
-  // prompt is about the reader's access rather than about where they are, and
-  // dismissing it on a navigation would lose the one thing the socket asked
-  // for.
   useEffect(() => {
     setDrawer(false);
     setPaletteOpen(false);
@@ -381,7 +366,7 @@ export function Shell({ children }: { children: ReactNode }) {
     connected,
     identityUnverifiable,
     configured: engine?.configured,
-    onSetToken: () => setTokenOpen(true),
+    onSignIn: goSignIn,
     onRetry: () => socket.reconnect(),
     onConfig: () => nav.to(["admin", "config"]),
   });
@@ -438,7 +423,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 <CopyLink />
               </>
             }
-            viewer={<ViewerChip />}
+            viewer={<IdentityMenu />}
             onSearch={() => setPaletteOpen(true)}
             onToggleSidebar={sections ? () => setDrawer((v) => !v) : undefined}
           />
@@ -462,87 +447,8 @@ export function Shell({ children }: { children: ReactNode }) {
         <PeekHost />
 
         {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
-        {tokenOpen && (
-          <TokenDialog
-            onClose={() => setTokenOpen(false)}
-            onSaved={(token) => {
-              socket.setToken(token);
-              socket.reconnect();
-            }}
-          />
-        )}
       </div>
     </PeekNeighbours>
-  );
-}
-
-/**
- * Who the frame thinks you are, in the page bar.
- *
- * Three states and three different things to say — see `lib/viewer.ts`. The
- * unbound one is the interesting case: it is ORDINARY, so the chip names the
- * token rather than reporting a fault, and its title says what to bind.
- */
-function ViewerChip() {
-  const viewer = useViewer();
-  if (viewer.loading) return null;
-  if (viewer.anonymous) {
-    return (
-      // NEUTRAL, AND OUTLINED. "anonymous" and a login are both
-      // IDENTITY — who the frame thinks you are — and uilet's tone doc draws
-      // the same line this dashboard does: a tone says what a thing IS, never
-      // who it is. The boundary is what separates the chip from the page bar
-      // behind it; a tint would read as a state nobody is in.
-      <Tag
-        appearance="outline"
-        title="Nobody is signed in and no API token is presented; the guarded screens are locked"
-      >
-        anonymous
-      </Tag>
-    );
-  }
-  if (viewer.unbound) {
-    return (
-      <Tag
-        appearance="outline"
-        // A LOGIN IS A MACHINE VALUE, so it is set in the mono face: the
-        // operator compares it character by character against the one the
-        // directory lists, which proportional digits make harder than it
-        // needs to be.
-        monospace
-        title={`${viewer.login} is not bound to a seat — bind it with crewlet iam bind`}
-      >
-        {viewer.login}
-      </Tag>
-    );
-  }
-  return (
-    <a
-      className="viewer-chip"
-      href={`#/company/people/${viewer.handle}`}
-      title={`@${viewer.handle}`}
-    >
-      {/* THE SAME BADGE THE REST OF THE PRODUCT DRAWS. This held the last
-          hand-rolled `.seat-mark` in the tree, kept on the reasoning that
-          "uilet's Avatar is a picture of a person rather than a kind-of-seat
-          mark" — which was never true of the badge and is not true of the
-          product either: `Avatar` draws INITIALS, and its `dashed` variant is
-          documented as "a HUMAN seat: the engine does not run it", the exact
-          fact the dashed ring carried. Meanwhile the claim beside it, that the
-          mark is "drawn identically in the people list, the peek and the org
-          chart", had stopped holding — all three draw `Avatar` — so the one
-          place a reader sees THEMSELVES was the one place they did not look
-          like themselves. `brand`, because this badge IS the reader: it is the
-          single use the tone exists for. */}
-      <Avatar
-        name={viewer.name || viewer.handle}
-        size="xs"
-        tone="brand"
-        variant="dashed"
-        decorative
-      />
-      <span className="truncate">{viewer.name || viewer.handle}</span>
-    </a>
   );
 }
 

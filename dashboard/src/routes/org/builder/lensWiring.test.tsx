@@ -20,7 +20,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, storeToken } from "~/protocol/index.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CompanyScreen } from "~/routes/company/Company.tsx";
 import { company, Engine, InertWebSocket } from "./testkit.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
@@ -44,9 +44,6 @@ afterEach(() => {
 function mount(hash: string) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
-  // The builder reads the GUARDED configuration, so it needs an operator
-  // token before it will ask for anything at all.
-  storeToken("t");
   new Engine(company()).install();
   const store = new Store();
   store.applyHealth({ status: "ok" });

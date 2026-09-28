@@ -3453,6 +3453,98 @@ export interface Viewer {
   owner: string;
 }
 
+// ---------------------------------------------------------------------------
+// The sign-in surface — `/auth`, read by `protocol/auth.ts`
+// ---------------------------------------------------------------------------
+
+/**
+ * What a session opened by a sign-in may do: everything its grants allow, or
+ * — on a deployment that requires a second factor the person does not hold —
+ * nothing but enrol one. The second is the code the engine refuses every
+ * other route with, so one string names it wherever it is met.
+ */
+export type SessionStatus = "signed_in" | "second_factor_enrolment_required";
+
+/**
+ * What every completed sign-in answers — a password, a redemption, a token
+ * exchange, a step-up, an enrolment's replacement session.
+ *
+ * NO BEARER IN IT. The cookie the response set is the credential, and a body
+ * carrying it too would put the one value most worth stealing where a script
+ * can read it.
+ */
+export interface SignedIn {
+  person: string;
+  /** The login as the estate holds it, which is how a screen names them. */
+  login: string;
+  seat?: string;
+  /** The absolute deadline, which no re-issue moves. */
+  expires_at: string;
+  position: string;
+  status: SessionStatus;
+}
+
+/** What a sign-in page may know before anybody has signed in. */
+export interface AuthConfig {
+  /**
+   * How this deployment signs people in. `local` is passwords; `none` is a
+   * deployment with no people, whose only credential is a Tier A token.
+   */
+  backend: string;
+}
+
+/** What an invitation's screen renders from, before anything is spent. */
+export interface InvitationView {
+  /** The address it is for, opened for this one answer. */
+  email: string;
+  /** Who sent it, or absent. */
+  invited_by?: string;
+  /** The login this form PROPOSES from the address, or absent when nothing in
+   *  it fits the grammar and the person must type one. */
+  login?: string;
+  /** The floor every password is held to. */
+  min_password_length: number;
+  /** The seat redeeming it binds the person to, as the chart calls it now, or
+   *  absent for an invitation that binds none. */
+  seat?: { handle?: string; name?: string };
+}
+
+/**
+ * A second factor's seed: the first leg of an enrolment, which stores nothing.
+ * The second leg sends `secret` back with a code derived from it.
+ */
+export interface SecondFactorSeed {
+  /** The seed in base32, for an app that is typed into. */
+  secret: string;
+  /** The `otpauth://` form an authenticator app opens. */
+  uri: string;
+}
+
+/** A completed enrolment. */
+export interface SecondFactorEnrolled {
+  status: "enrolled";
+  /** The whole session that replaced an enrolment-only one, or absent. */
+  session?: SignedIn;
+}
+
+/** The one and only time a set of recovery codes is readable. */
+export interface RecoveryCodes {
+  codes: string[];
+}
+
+/** Who a session is, as `GET /auth/session` answers — the part a screen reads. */
+export interface SessionAnswer {
+  person: string;
+  login: string;
+  seat?: string;
+  /** `person` or `machine`: a machine holds no second factor to manage. */
+  kind: string;
+  /** The absolute deadline of the session the request carried, or absent for
+   *  a credential that is not a session. */
+  expires_at?: string;
+  status: SessionStatus;
+}
+
 export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;

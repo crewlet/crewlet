@@ -15,6 +15,16 @@
  * `#/conversations` and `#/model` are four views of one question — what the
  * company's workforce did — and nothing in the address said so.
  *
+ * # And a level above both: in the frame, or outside it
+ *
+ * Signing in, redeeming an invitation and enrolling a required second factor
+ * are drawn OUTSIDE the frame (`FRAMELESS` in `nav.ts`), because a browser on
+ * one of them holds no session the frame could use. They are also where the
+ * transports send a browser that lost its session — `FollowSessionNeed`,
+ * mounted once here beside both, is what reads that and moves. The step-up
+ * ceremony (`StepUp.tsx`) is mounted beside both for the same reason: a
+ * refusal that asks for a fresher proof arrives on either side.
+ *
  * # Keyed on the subject, every screen that has one
  *
  * A hash change re-renders this switch rather than remounting it, so
@@ -24,9 +34,17 @@
  * refusal left on screen are all the same bug waiting for somebody to notice.
  */
 
+import { useEffect, useSyncExternalStore } from "react";
 import { Shell } from "./Shell.tsx";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
-import { useRoute } from "./router.tsx";
+import { framelessOf, type FramelessRoute } from "./nav.ts";
+import { StepUpHost } from "./StepUp.tsx";
+import { parseHash, useNavigator, useRoute } from "./router.tsx";
+import { safeNext, signInHash } from "~/lib/session.ts";
+import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
+import { Enrol } from "~/routes/signin/Enrol.tsx";
+import { Invite } from "~/routes/signin/Invite.tsx";
+import { SignIn } from "~/routes/signin/SignIn.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { MyWork } from "~/routes/me/MyWork.tsx";
 import { People } from "~/routes/company/People.tsx";
@@ -187,6 +205,74 @@ function AdminRoutes({ rest }: { rest: string[] }) {
   }
 }
 
+/**
+ * The screens drawn OUTSIDE the frame — see `FRAMELESS` in `nav.ts`. Each
+ * takes exactly the tail its address has, and anything longer is an address
+ * the product does not have.
+ */
+function SignInRoutes({ route, rest }: { route: FramelessRoute; rest: string[] }) {
+  switch (route) {
+    case "login":
+      if (rest.length > 0) return <NotFound what={`“${rest.join("/")}” under sign-in`} />;
+      return <SignIn />;
+    case "enrol":
+      if (rest.length > 0) return <NotFound what={`“${rest.join("/")}” under enrolment`} />;
+      return <Enrol />;
+    case "invite":
+      // ONE SEGMENT, `<id>.<secret>`, and the screen itself says when that
+      // is not a whole link — a link cut short by a mail client is the
+      // ordinary way this arrives wrong, and "no such screen" would send the
+      // person looking for a different page rather than for the rest of it.
+      return <Invite key={rest.join("/")} link={rest.length === 1 ? (rest[0] ?? "") : ""} />;
+  }
+}
+
+/**
+ * Follows what the transports say the session needs.
+ *
+ * A `401` anywhere — the socket's refusal probe, any REST call — means this
+ * browser holds nothing the engine accepts, and the answer is the sign-in
+ * screen, carrying the address the reader was on as `next`. A session that
+ * may only enrol a second factor goes to the enrolment instead. Both REPLACE
+ * the entry: the screen the reader was on cannot be drawn for them, and Back
+ * from the sign-in must not land on it again.
+ *
+ * THE SIGN-IN SCREENS THEMSELVES ARE LEFT ALONE: they answer their own
+ * refusals, and a sign-in form routed to itself would lose what was typed.
+ * An enrolment that loses its session goes to sign in, carrying its own
+ * `next` rather than itself (`signInHash`).
+ */
+function FollowSessionNeed() {
+  const need = useSyncExternalStore(onSessionNeed, currentSessionNeed);
+  const route = useRoute();
+  const nav = useNavigator();
+  useEffect(() => {
+    if (need === null) return;
+    const at = framelessOf(route.path);
+    if (need === "sign_in") {
+      if (at === "login" || at === "invite") return;
+      const target = parseHash(signInHash(route.hash));
+      nav.replace(target.path, target.query);
+      return;
+    }
+    if (at !== null) return;
+    nav.replace(["enrol"], { next: safeNext(route.hash) });
+  }, [need, route, nav]);
+  return null;
+}
+
+/** The frame and its screen, or a screen drawn outside it. */
+function Frame() {
+  const route = useRoute();
+  const outside = framelessOf(route.path);
+  if (outside !== null) return <SignInRoutes route={outside} rest={route.path.slice(1)} />;
+  return (
+    <Shell>
+      <Screen />
+    </Shell>
+  );
+}
+
 function Screen() {
   const route = useRoute();
   const [head, ...rest] = route.path;
@@ -271,9 +357,9 @@ export function App() {
           and paints above it. A toast reports what a write inside a dialog
           did; it has to be readable over the dialog that caused it. */}
       <LayerHost>
-        <Shell>
-          <Screen />
-        </Shell>
+        <FollowSessionNeed />
+        <StepUpHost />
+        <Frame />
       </LayerHost>
     </ToastProvider>
   );

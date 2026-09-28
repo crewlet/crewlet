@@ -42,7 +42,7 @@ if (!("scrollTo" in globalThis)) {
 // Web Storage is the third gap, and the one that only shows up on somebody
 // else's machine. jsdom exposes it from the document's ORIGIN, so whether it
 // is there depends on how the environment was constructed rather than on the
-// version: two suites that store an operator token passed every local run and
+// version: two suites that kept a value in storage passed every local run and
 // failed in CI with `localStorage is undefined`, which is a property of the
 // runner, not of the code under test.
 //
@@ -54,7 +54,7 @@ if (!("scrollTo" in globalThis)) {
 // holds undefined, so an `in` check — which is what the two guards above can
 // safely use — skipped this polyfill entirely and the suites failed exactly
 // as they had before it existed. Reading it can also throw, which is the same
-// reason apiToken() wraps its own read.
+// reason every production read of storage is wrapped.
 //
 // sessionStorage has exactly the same origin dependence, and it is filled by
 // the same factory rather than a second copy, so the two areas cannot come to

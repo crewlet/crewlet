@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -148,7 +149,8 @@ type inboxFrame struct {
 func dialInbox(t *testing.T, base, token string) *inboxSocket {
 	t.Helper()
 	conn, _, err := websocket.Dial(t.Context(),
-		"ws"+strings.TrimPrefix(base, "http")+"/ws/stream?token="+token, nil)
+		"ws"+strings.TrimPrefix(base, "http")+"/ws/stream",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

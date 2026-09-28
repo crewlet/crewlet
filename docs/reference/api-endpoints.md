@@ -247,12 +247,11 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > its cookie whether or not the caller meant to, and an `Authorization` header
 > is only ever there because somebody put it there — so a request presenting a
 > *wrong* header stays anonymous rather than being upgraded by whatever cookie
-> is in the jar. `/ws/stream` also accepts a token as `?token=…`, since a
-> browser cannot set a header on a WebSocket and the shipped dashboard opens
-> its socket that way; the session cookie a browser sends on the handshake
-> works there too. Only there: a token in the query string of any other route
-> authenticates nobody, because a URL lands in proxy logs and browser
-> history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
+> is in the jar. `/ws/stream` reads the same two: a browser cannot set a
+> header on a WebSocket, so the dashboard's handshake carries its session
+> cookie, and any other client sets the header. **No route reads a credential
+> off its URL**, the socket included: a `?token=…` authenticates nobody,
+> because a URL lands in proxy logs and browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
 > `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/static/*`),
 > and the five sign-in routes plus `/auth/invite/*` — a login cannot require a
 > login. That is an **exact list and not a `/auth/` prefix**: the same surface
@@ -263,17 +262,18 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > **A token that is present and wrong is refused even where reads are open.**
 > Sending a credential says you meant to be somebody, so `/ws/stream` answers
 > `401` rather than quietly serving you as anonymous — which is how a revoked
-> token goes on appearing to work. The practical consequence is that a stale
-> token in a browser breaks a dashboard that would have connected with none at
-> all; the dashboard detects that and offers to forget it (see below).
+> token goes on appearing to work. A browser presents only its session cookie,
+> so a dashboard whose session ended is refused `401` and sends its reader to
+> sign in (see below).
 >
 > **`GET /ws/stream` without an `Upgrade` header** answers `401` for a refused
 > credential and `426 Upgrade Required` for an accepted one. That pairing is a
 > contract, not an accident: a browser is told nothing about why a WebSocket
 > handshake failed — no status, and no close code, because a connection that
 > never opened sends no close frame — so the dashboard re-asks over plain HTTP
-> to tell "your token is wrong" from "the engine is down". Without it a reader
-> holding a stale token sees "retrying" for ever.
+> to tell "nobody is signed in" from "the engine is down", and sends the reader
+> to its sign-in screen on the first. Without it a reader whose session ended
+> sees "retrying" for ever.
 >
 > **`api.auth.max_grants` clamps a person exactly as it clamps a token.** The
 > ceiling is applied when the request is resolved, not written anywhere, so
@@ -585,9 +585,11 @@ The policy depends on what was served:
 | The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src 'self'`, then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | Everything else: JSON, plain text, the redirect from `/`, a `404` or a `401` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
 
-These matter because the API token the dashboard may store lives in the
-browser's storage for this origin, and the two landing pages are unauthenticated
-pages on that same origin that render values from their query string. A policy
+These matter because a script running on this origin acts with the signed-in
+person's session — the cookie is `HttpOnly`, so no script can read it, but
+every request it makes carries it — and the two landing pages are
+unauthenticated pages on that same origin that render values from their query
+string. A policy
 is per response, so each page carries its own: the dashboard runs only the
 bundle it was built into, and a landing page runs only the style and script the
 engine wrote into it. No response may be framed by another site.

@@ -90,9 +90,8 @@ api:
   auth:
     backend: none   # nobody signs in on a laptop — the token below is the
                     #   only credential. `local` adds passwords and a second
-                    #   factor. On `local`,
-                    #   `POST /auth/bootstrap` creates the first person from a
-                    #   one-time code this node writes beside its store.
+                    #   factor, and the token below invites the first person
+                    #   with `crewlet iam invite` (step 4).
     max_grants:     # THE CEILING on what this deployment will ever let a
                     #   directory record confer. Required once a port is set.
       [state:read, audit:read, config:read, secrets:read, work:write,
@@ -410,7 +409,16 @@ to go.
 
 ## 4. Watch the first turn
 
-Open the dashboard at <http://localhost:8000/>. It lands on the **Inbox**,
+Open the dashboard at <http://localhost:8000/>. **Opening it means signing
+in**: every route needs a credential, reads included, so the first thing it
+shows is its sign-in screen. On this laptop nobody has a password
+(`backend: none`), so the screen offers the API token alone — paste
+`$CREWLET_API_TOKEN_FOUNDER` and it is exchanged for a one-hour session. The
+browser keeps the session's cookie and never the token: it is sent once, in a
+header, and the page holds it nowhere afterwards. When the hour is up the
+dashboard sends you back to sign in, and then to the screen you were on.
+
+It lands on the **Inbox**,
 which is what a person opening this wants first: whether anything is waiting on
 them. With no company activity yet it says so, and lists any condition the
 engine itself raised.
@@ -454,64 +462,69 @@ Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and
 ### When people sign in rather than share a token
 
 `backend: none` is right for a laptop and wrong the moment more than one person
-uses this. On `local` the first operator is created once, from a
-**one-time code this node writes beside its store**:
+uses this. Set `api.auth.backend: local` — passwords, a second factor and
+recovery codes held by this engine — with a `local:` block stating `totp:
+required` or `optional` (validation asks for `required` on any deployment a
+browser reaches off loopback), and people sign in on the dashboard's own
+sign-in screen instead of sharing the deployment's token.
+
+**The first person is invited with the token you already have.** `crewlet iam
+invite` issues an invitation through the running node, authenticating with
+`CREWLET_API_TOKEN` like every command that talks to one — the founder token
+carries `people:manage`, which issuing takes — and prints its link **once**:
+
+```bash
+export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+crewlet iam invite you@example.com -seat your-name \
+  -grants state:read,audit:read,config:read,config:write,work:write,knowledge:write,people:manage
+```
 
 ```
-2026-06-14 12:00:00.000 WARN  cli  iam_bootstrap_code_ready path=/var/lib/crewlet/bootstrap-code node=node-a
+invitation 0192f4c8-…
+http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
+
+expires 2026-06-21 12:00
+This link is shown once and cannot be read back: what the estate keeps is a hash of the secret after the id. Send it to them yourself — this engine never sends mail.
 ```
 
-Read that file on the host — it holds one line beginning `cwl_boot_` — and
-redeem it at `POST /auth/bootstrap` with a login
-(dotted, like `jane.doe` — every person has one, and it is the name your changes
-are recorded under until you bind a seat), your address and a password.
-Nothing ever serves the code — the log line carries its **path**, and so does
-`GET /health` (`"identity": "unclaimed"`, `"bootstrap_code_path": …`) until
-somebody is enrolled, so reading it means having access to the machine, which
-is the only credential a company genuinely has before it has any. The file is removed when it is used, and the
-route closes for good the moment anybody is enrolled.
+An invitation confers exactly the grants listed, never more than whoever
+issued it holds, and `-seat` binds the person it creates to that human seat —
+one nobody holds, so if you bound `token:founder` to it above, run `crewlet iam
+unbind` on that row first: a seat has one holder, and now it is you.
 
-**Where a second factor is required** — `api.auth.local.totp: required`, which
-is what validation asks of any deployment a browser reaches off loopback — the
-founding opens a session that may only **enrol an authenticator** (and say who
-it is, re-confirm the password, or sign out). Call `POST /auth/totp` twice —
-once for the seed your app scans, once with the first code it shows — and that
-session is replaced by a whole one; until then every other route answers `403
-second_factor_enrolment_required`. The same holds for everybody you invite:
-redeeming the invitation, and every password sign-in until they have enrolled
-one, opens a session like it. See [A required second factor is enrolled before
-anything
+**Open the link.** It is the dashboard's invitation screen: it names who the
+invitation is for, who sent it and the seat it binds, and asks for a login — it
+proposes one from your address, dotted like `jane.doe`, the name your changes
+are recorded under — your name, and a password of at least twelve characters
+(`api.auth.local.min_password_length` raises that). Redeeming it signs you in.
+The secret after the `.` never leaves the page in a URL: the link carries it in
+the fragment, which no browser sends to a server, and the screen sends it in a
+header and a body instead. Opening the link spends nothing, and a spent or
+withdrawn one says so.
+
+**Where a second factor is required**, the session the redemption opens may
+only enrol one, and the dashboard asks for it before anything else opens: it
+shows a key to type into your authenticator app (and the `otpauth://` address
+for one that takes it), takes the first code the app shows, and shows your
+**recovery codes once** — copy or download them then, because nothing reads
+them back. The same holds for every password sign-in until somebody has
+enrolled, so everybody you invite meets this screen too. See [A required second
+factor is enrolled before anything
 else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else).
 
-**A code lasts 24 hours.** One that has run out — an install started on Friday
-and finished on Monday — is refused `410 bootstrap_code_stale`, never "this
-company has started", and a refused attempt claims nothing, so the route stays
-open. If your first attempt stopped halfway, post the same code again and it
-finishes; if that code has since run out, the fresh one below still gets you in
-with the same address and login, because the new attempt ends the old one
-before it claims them. Two ways to a fresh one:
+From then on the dashboard's sign-in screen takes your login or address and
+your password, and the code from your app when it asks. **Your name at the end
+of the page bar** is the menu for your session: your seat, your second factor,
+a new set of recovery codes, and signing out — here, or everywhere at once. A
+gesture that changes how somebody proves who they are asks you to confirm your
+password first, in one dialog, and then carries on with what you asked.
 
-- **Restart the node that wrote the file.** At boot a node checks its file
-  against the identity log: a code the log still honours is kept (you may be
-  about to type it, or be part-way through using it), and one that aged out,
-  was withdrawn or never reached the log is replaced, and the new path logged.
-- **Run `crewlet iam bootstrap-code`** with `CREWLET_API_TOKEN` set to a Tier A
-  token holding `people:manage`. It withdraws every live code, ends a setup
-  somebody left part-way through, and mints one — so it is the one code that
-  works — and prints the path **and the node** it is on — on a fleet the file
-  lands on whichever node served the command, and any node redeems it, because
-  the code is checked on the log rather than against a local file.
-
-Only one founder can ever land. If two people try at once with codes from two
-nodes, the second is told `409 bootstrap_in_progress` and when the first
-attempt lapses; the first finishing closes the route for good.
-
-Everybody after the first arrives by invitation, which confers exactly the
-grants and reach whoever issued it chose; the link's form proposes a login from
-their address, which they keep or change. A Tier A token stays — it is the way
-back in when an administrator is locked out, and what a pipeline uses — but it
-is a machine credential rather than a person, and it is not how people should
-be signing in.
+Everybody after the first arrives the same way, invited by whoever holds
+`people:manage` — with a token of their own, which `crewlet iam token -login`
+mints, or the deployment's. A Tier A token stays — it is what a pipeline uses,
+and the way back in when nobody who can sign in is available — but it is a
+machine credential rather than a person, and it is not how people should be
+signing in.
 
 Your own AI assistant can read and write the same records over MCP. Point any
 client at `/operator/mcp` with your API token:
@@ -558,7 +571,7 @@ curl -s http://localhost:8000/health
 
 **Every route needs that credential, reads included** — `/health` and `/ready`
 are probes and are the exception, which is why the second call carries nothing.
-That is also why the dashboard asked you for the token on first load. Reads used
+That is also why the dashboard opened on its sign-in screen. Reads used
 to serve without one, which meant anyone who could reach port 8000 could read
 the LLM transcripts on `/events`; see
 [Configuration § Auth](../concepts/configuration.md#auth) for what replaced
@@ -579,9 +592,9 @@ Or create the company from the dashboard: open **Company** and its
 **Builder** lens (`#/company?lens=builder`). With no configuration active it opens
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
-it asks for a credential: press **Set token** and paste
-`$CREWLET_API_TOKEN_FOUNDER`, whose entry carries the `config:read` and
-`config:write` it needs. The
+it needs a session whose grants reach it: the one you signed in with using
+`$CREWLET_API_TOKEN_FOUNDER` carries the `config:read` and `config:write` it
+needs, and a person you invite needs them among their grants. The
 dashboard writes no model provider, so one step stays outside it. Until it is
 done the company runs and no agent seat takes a turn; whatever is sent to a
 seat waits on its inbox. Add `providers.llm` afterwards with

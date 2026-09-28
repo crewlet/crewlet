@@ -1366,6 +1366,39 @@ nothing to cache. The lookup is a local read of a replicated row and a map
 lookup on a pinned chart view, and the store is never on a network path from
 the request.
 
+### The dashboard is the browser half
+
+The dashboard holds **no credential of its own**: the cookie above is the whole
+of what a browser presents, on every REST call and on the live socket's
+handshake alike, and being `HttpOnly` it is out of reach of every script on the
+page. There is no token in the browser's storage and none in any URL — the
+socket reads no `?token=`, because a query string is written into every proxy's
+access log. Its sign-in surface is three screens outside the frame:
+
+| Screen | What it does |
+|---|---|
+| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Where `/auth/config` names no local sign-in it offers only **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere — the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
+| `#/invite/<id>.<secret>` | [The invitation link](#everybody-after-the-first-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose — which signs them in |
+| `#/enrol?next=` | Where a session that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else) goes first: the seed from `POST /auth/totp` (the key and its `otpauth://` address), the first code, and the recovery codes shown once |
+
+What the rest of the dashboard does with the session follows the three answers
+a guarded route gives. A `401` — from any call, or from the socket's plain-HTTP
+re-ask, since a refused handshake reaches a page with no status — sends the
+reader to `#/login` with the screen they were on as `next`; a `403
+second_factor_enrolment_required` sends them to `#/enrol`; a `403` of any other
+kind is not a sign-in's to fix and is shown where it happened. A `403
+step_up_required` opens **one** "Confirm it is you" dialog however many
+requests it refused, posts the password (and the code where a second factor is
+held) to `POST /auth/step-up`, and replays each refused request once — see
+[Some gestures ask how recently you proved who you
+are](#some-gestures-ask-how-recently-you-proved-who-you-are). The page bar's
+identity menu signs out — `POST /auth/logout`, or `POST /auth/logout/all` for
+every session the person holds — and then reloads into the sign-in with the
+tab's `sessionStorage` emptied, because a route change would leave the last
+person's company in the tab's memory for whoever sits down next.
+[Dashboard Design](../reference/dashboard-design.md#signing-in-is-a-screen-outside-the-frame)
+has the whole of it.
+
 ### A cookie cannot tell its owner from a copy, and nothing pretends it can
 
 A re-issue moves the idle deadline, which lives in the cookie's own signed

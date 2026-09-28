@@ -2,10 +2,11 @@
  * The Builder lens of the Org chart screen (`#/company?lens=builder`): editing the
  * organization, and creating the company where none exists.
  *
- * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. A
- * stored token proves nothing (an engine with `api.auth.disabled` needs none,
- * and a rotated one is refused), so `GET /config` is read on mount and again
- * whenever the stored token changes, and its answer decides:
+ * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. Being
+ * signed in proves nothing about what the configuration answers the person
+ * (their grants may not reach it), so `GET /config` is read on mount and again
+ * whenever the reader changes — another tab signing in as somebody else
+ * changes this tab's cookie too — and its answer decides:
  *
  * | `GET /config` answers                            | The lens shows |
  * |---|---|
@@ -16,9 +17,9 @@
  * | a plain 404, or a body that is not JSON          | this process does not serve the configuration |
  * | nothing (status 0)                               | the engine could not be reached |
  *
- * A token change mid-edit re-reads without discarding the draft: the draft
- * and its log stay on screen, the check runs again under the new token, and a
- * refusal pauses editing rather than throwing the work away.
+ * A change of reader mid-edit re-reads without discarding the draft: the
+ * draft and its log stay on screen, the check runs again as the new reader,
+ * and a refusal pauses editing rather than throwing the work away.
  *
  * WHAT THIS COMPONENT OWNS is everything with a lifetime: the reducer, the
  * dry-run check (`useCheck.ts`), the live region, the shortcuts, the
@@ -52,7 +53,9 @@ import { useFillScreen } from "~/app/fill.tsx";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { needsSentence } from "~/lib/refusal.ts";
-import { apiToken, onTokenChanged, refusedGrants, requestToken } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { refusedGrants } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
 import {
@@ -260,7 +263,7 @@ export type Posture =
   | { readonly kind: "behind" }
   | {
       readonly kind: "guarded";
-      readonly tokenStored: boolean;
+      readonly signedIn: boolean;
       /** The grants the refusal named; empty for a 401. See [guardedWords]. */
       readonly grants: readonly string[];
     }
@@ -279,7 +282,7 @@ export interface OrgKnowledge {
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
 /** Decides the lens posture from `GET /config`'s answer and the org snapshot. */
-export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: boolean): Posture {
+export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boolean): Posture {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
   if (answer.status === 200) {
@@ -294,7 +297,7 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: bo
     return { kind: "edit", document: answer.body, revision };
   }
   if (answer.status === 401 || answer.status === 403) {
-    return { kind: "guarded", tokenStored, grants: refusedGrants(answer.body) };
+    return { kind: "guarded", signedIn, grants: refusedGrants(answer.body) };
   }
   if (code === "unreadable_body") return { kind: "unserved" };
   if (answer.status === 404) {
@@ -334,12 +337,12 @@ interface StatusLook {
  * token", which was the whole of authority while a Tier A token was the only
  * credential: a person signed in without `config:write` was sent to find a
  * token they have no use for. With no grants named (a 401), the wording
- * turns on whether a token is stored: "refused" names a credential the
- * browser does not hold once it has been cleared, which sends the reader
- * looking for a wrong token rather than a missing one.
+ * turns on whether anybody is signed in: "refused" names a session the
+ * browser does not hold when nobody is, which sends the reader looking for
+ * a wrong credential rather than a missing one.
  */
 export function guardedWords(
-  tokenStored: boolean,
+  signedIn: boolean,
   grants: readonly string[],
 ): { label: string; reason: string; sentence: string } {
   if (grants.length > 0) {
@@ -350,11 +353,11 @@ export function guardedWords(
       sentence: needsSentence("Editing the organization", grants),
     };
   }
-  if (tokenStored) {
+  if (signedIn) {
     return {
-      label: "The engine refused the token",
-      reason: "the engine refused this browser's token",
-      sentence: "The engine refused this browser's token.",
+      label: "The engine refused the session",
+      reason: "the engine refused this browser's session",
+      sentence: "The engine refused this browser's session.",
     };
   }
   return {
@@ -580,6 +583,11 @@ function Lens({
   const toast = useToast();
   const org = useOrg();
   const { connected, authRejected } = useConnection();
+  const viewer = useViewer();
+  // SOMEBODY THE ENGINE RESOLVED is what a stored token used to stand for:
+  // it decides whether a refusal naming no grant says the session was
+  // refused, or that nobody is signed in.
+  const signedIn = !viewer.loading && !viewer.anonymous;
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const [narrowDefault] = useState(prefersTable);
@@ -657,9 +665,9 @@ function Lens({
   const posture = useMemo(
     (): Posture =>
       read
-        ? postureOf(read.answer, { known: orgKnown, name: orgName }, apiToken() !== "")
+        ? postureOf(read.answer, { known: orgKnown, name: orgName }, signedIn)
         : { kind: "loading" },
-    [read, orgKnown, orgName],
+    [read, orgKnown, orgName, signedIn],
   );
 
   const check = useCheck({ state, stateRef, dispatch: dispatchRaw, loaded, transport, clock });
@@ -702,19 +710,23 @@ function Lens({
     }
   }, [read, posture, loaded]);
 
-  // A NEW TOKEN IS A NEW READER. The draft stays on screen; storage forgets
-  // it (the tab may have changed hands), and both the configuration and the
-  // check are asked again under the new credential.
+  // A NEW LOGIN IS A NEW READER. The browser's cookie is shared by its tabs,
+  // so somebody signing in as somebody else in another tab changes who this
+  // one writes as, and the viewer says so on its next read. The draft stays on
+  // screen; storage forgets it (the tab may have changed hands), and both the
+  // configuration and the check are asked again as the new reader. A first
+  // answer is not a change: nobody was reading before it.
   const { reset, requestReset } = check;
-  useEffect(
-    () =>
-      onTokenChanged(() => {
-        requestReset();
-        dispatchRaw({ type: "tokenChanged" });
-        load();
-      }),
-    [requestReset, load],
-  );
+  const reader = useRef<string | null>(null);
+  useEffect(() => {
+    if (viewer.loading) return;
+    const was = reader.current;
+    reader.current = viewer.login;
+    if (was === null || was === viewer.login) return;
+    requestReset();
+    dispatchRaw({ type: "tokenChanged" });
+    load();
+  }, [viewer.loading, viewer.login, requestReset, load]);
 
   // An org push follows every apply, so the configuration may have moved
   // under the draft: check again rather than wait for the next edit. A create
@@ -767,8 +779,6 @@ function Lens({
     if (keeping.unsettled) resume(keeping.unsettled);
   }, [keeping.unsettled, resume]);
 
-  // Read at render: a token change always dispatches, so this is current.
-  const tokenStored = apiToken() !== "";
   // WHAT WAS REFUSED, from whichever answer refused it: the read of the
   // configuration, or the check of the draft against it.
   const refusedFor: readonly string[] =
@@ -777,7 +787,7 @@ function Lens({
       : answered?.status === "guarded"
         ? answered.grants
         : [];
-  const guarded = guardedWords(tokenStored, refusedFor);
+  const guarded = guardedWords(signedIn, refusedFor);
   const readOnlyReason = useMemo((): string | null => {
     if (save.unsettled || keeping.unsettled) return "the outcome of the last save is not known yet";
     if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
@@ -948,10 +958,11 @@ function Lens({
   );
 
   const exitFullscreen = useFullscreenExit();
-  const askForToken = useCallback(() => {
-    // The token dialog belongs to the shell, outside the fullscreen element.
+  const askToSignIn = useCallback(() => {
+    // The sign-in is a screen of its own, outside the fullscreen element; the
+    // draft stays in this tab's storage for when the reader comes back.
     exitFullscreen();
-    requestToken();
+    goSignIn();
   }, [exitFullscreen]);
 
   // ---- Updating onto a newer revision -------------------------------------------
@@ -1222,7 +1233,7 @@ function Lens({
   // ---- Rendering --------------------------------------------------------------
 
   if (!loaded) {
-    return <PostureScreen posture={posture} onRetry={() => load()} onSetToken={askForToken} />;
+    return <PostureScreen posture={posture} onRetry={() => load()} onSignIn={askToSignIn} />;
   }
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
@@ -1495,13 +1506,13 @@ function Lens({
             variant="danger"
             icon={<KeyGlyph />}
             action={
-              <Button variant="secondary" size="small" onClick={askForToken}>
-                Set token
+              <Button variant="secondary" size="small" onClick={askToSignIn}>
+                Sign in
               </Button>
             }
           >
-            {refusedFor.length === 0 && tokenStored
-              ? "The engine refused this browser's token. Your draft is kept on this page; set a token the engine accepts to keep editing."
+            {refusedFor.length === 0 && signedIn
+              ? "The engine refused this browser's session. Your draft is kept on this page; sign in as somebody the engine accepts to keep editing."
               : `${guarded.sentence} Your draft is kept on this page.`}
           </Callout>
         )}
@@ -2017,11 +2028,11 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
 function PostureScreen({
   posture,
   onRetry,
-  onSetToken,
+  onSignIn,
 }: {
   posture: Posture;
   onRetry: () => void;
-  onSetToken: () => void;
+  onSignIn: () => void;
 }) {
   const retry = (
     <Button variant="secondary" onClick={onRetry}>
@@ -2046,11 +2057,11 @@ function PostureScreen({
       return (
         <EmptyState
           icon={<KeyGlyph />}
-          title={guardedWords(posture.tokenStored, posture.grants).sentence}
+          title={guardedWords(posture.signedIn, posture.grants).sentence}
           description="The configuration is guarded, reads included."
           action={
-            <Button variant="primary" onClick={onSetToken}>
-              Set token
+            <Button variant="primary" onClick={onSignIn}>
+              Sign in
             </Button>
           }
         />

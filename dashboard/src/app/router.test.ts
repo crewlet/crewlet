@@ -20,7 +20,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { buildHash, parseHash, samePath } from "./router.tsx";
-import { DESTINATIONS, RAIL, RESERVED_SEGMENTS, railRow, workspaceOf } from "./nav.ts";
+import {
+  DESTINATIONS,
+  FRAMELESS,
+  RAIL,
+  RESERVED_SEGMENTS,
+  framelessOf,
+  railRow,
+  workspaceOf,
+} from "./nav.ts";
 import { crumbsFor, titleOf } from "./workspaces/crumbs.ts";
 
 describe("parsing", () => {
@@ -179,6 +187,22 @@ describe("the navigation grammar", () => {
       expect(/-\d+$/.test(segment), `${segment} is an item-key shape`).toBe(false);
       expect(segment).toBe(segment.toLowerCase());
     }
+  });
+
+  // A ROUTE OUTSIDE THE FRAME IS NOBODY'S WORKSPACE. A rail row owning
+  // `login` would mark a workspace for a screen drawn without the rail, and a
+  // workspace owning a frameless head would never be drawn at all: the frame
+  // is not mounted there.
+  test("a frameless route is owned by no workspace, and names nothing", () => {
+    const owned = new Set(RAIL.flatMap((row) => row.owns));
+    for (const head of FRAMELESS) {
+      expect(owned.has(head), `${head} is frameless and owned by a rail row`).toBe(false);
+      expect(workspaceOf([head]), head).toBe("");
+      expect(head).toBe(head.toLowerCase());
+      expect(framelessOf([head, "tail"]), head).toBe(head);
+    }
+    expect(framelessOf(["inbox"])).toBeNull();
+    expect(framelessOf([])).toBeNull();
   });
 });
 
@@ -435,6 +459,8 @@ describe("the information architecture", () => {
       // `#/` is the root and redirects; it owns nothing and names nothing.
       if (segments.length === 0) continue;
       const head = segments[0] ?? "";
+      // A ROUTE OUTSIDE THE FRAME is the router's own, and is held below.
+      if (framelessOf(segments) !== null) continue;
       expect(
         RAIL.some((row) => row.owns.includes(head)),
         `${route}: no rail row owns “${head}”, so it marks no workspace`,
@@ -488,6 +514,20 @@ describe("the information architecture", () => {
       expect(
         routes.has(`#/${dest.path.join("/")}`),
         `${dest.key} is a destination at #/${dest.path.join("/")}, which the design doc does not list`,
+      ).toBe(true);
+    }
+  });
+
+  // AND EVERY SCREEN OUTSIDE THE FRAME. None of them is a rail row or a
+  // destination, so neither walk above reaches them — and the sign-in
+  // screens are the first thing a person sees, which makes them the worst
+  // pages to leave off the one table a reader starts from.
+  test("every frameless route is written down", () => {
+    const heads = new Set(documented().map((route) => segmentsOf(route)[0]));
+    for (const head of FRAMELESS) {
+      expect(
+        heads.has(head),
+        `#/${head} is drawn outside the frame and not in the design doc`,
       ).toBe(true);
     }
   });

@@ -6,14 +6,13 @@
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { storeToken } from "~/protocol/index.ts";
 import { fromDocument } from "./model/document.ts";
 import { EMPTY_DRAFT } from "./model/draft.ts";
 import { OPERATIONS_VERSION, record, type Intent, type Operation } from "./model/operations.ts";
 import { DRAFT_STORAGE_KEY, type DraftStorage, type KeptDraft } from "./model/persistence.ts";
 import { templateIntent } from "./model/templates.ts";
 import { countingKeys, fixtureDerived } from "./model/testkit.ts";
-import { company, Engine, json, mountBuilder } from "./testkit.tsx";
+import { asReader, company, Engine, json, mountBuilder, rereadViewer } from "./testkit.tsx";
 
 beforeEach(() => {
   localStorage.clear();
@@ -59,7 +58,7 @@ function keep(draft: Partial<KeptDraft>): void {
 const kept = () => sessionStorage.getItem(DRAFT_STORAGE_KEY);
 
 // ONLY THE LOG. The document holds contact identities, emails and policies,
-// and kept in storage it would outlive the operator's token.
+// and kept in storage it would outlive the operator's session.
 test("an edit is kept as its operation log and nothing of the document", async () => {
   const engine = new Engine(company());
   mountBuilder({ engine });
@@ -177,33 +176,49 @@ test("a draft kept for creating a company is discarded, with a word, when a comp
   expect(kept()).toBeNull();
 });
 
-test("a token change forgets the kept draft and keeps the one on screen", async () => {
+// ANOTHER TAB SIGNED IN AS SOMEBODY ELSE, and the cookie is the browser's:
+// this tab now writes as them, so what it kept for the last reader is not
+// theirs to be offered.
+test("a change of reader forgets the kept draft and keeps the one on screen", async () => {
+  let who = "jane.doe";
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { store } = mountBuilder({ engine, query: asReader(() => who) });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await waitFor(() => expect(kept()).not.toBeNull());
-  act(() => {
-    storeToken("someone-else");
-  });
+  const checks = engine.checks().length;
+  who = "sam.lee";
+  rereadViewer(store);
   await waitFor(() => expect(kept()).toBeNull());
-  await waitFor(() =>
-    expect(engine.checks().at(-1)!.headers.Authorization).toBe("Bearer someone-else"),
-  );
+  // Checked again as the new reader, with the edit still in the draft.
+  await waitFor(() => expect(engine.checks().length).toBeGreaterThan(checks));
   expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
 });
 
-test("a token change while a kept draft is offered withdraws the offer", async () => {
+test("a change of reader while a kept draft is offered withdraws the offer", async () => {
   keep({});
+  let who = "jane.doe";
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { store } = mountBuilder({ engine, query: asReader(() => who) });
   await screen.findByText(/This tab kept a draft with 1 change/);
-  act(() => {
-    storeToken("someone-else");
-  });
+  who = "sam.lee";
+  rereadViewer(store);
   await waitFor(() => expect(screen.queryByText(/This tab kept a draft/)).toBeNull());
   expect(kept()).toBeNull();
   expect(screen.getByText("editable")).toBeDefined();
+});
+
+// THE CONTROL: the same reader read again is not somebody else, and a kept
+// draft offered to them stays offered.
+test("the same reader read again keeps the offer standing", async () => {
+  keep({});
+  const engine = new Engine(company());
+  const { store } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
+  await screen.findByText(/This tab kept a draft with 1 change/);
+  rereadViewer(store);
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getByText(/This tab kept a draft with 1 change/)).toBeDefined();
+  expect(kept()).not.toBeNull();
 });
 
 test("a refused read forgets a kept draft rather than offering it to the next reader", async () => {
@@ -211,9 +226,7 @@ test("a refused read forgets a kept draft rather than offering it to the next re
   const engine = new Engine(company());
   engine.script = () => json({ error: "unauthorized" }, 401);
   mountBuilder({ engine });
-  await screen.findByText(
-    "Editing the organization needs a credential the engine accepts. Sign in, or set a token.",
-  );
+  await screen.findByText(/^Editing the organization needs a credential the engine accepts\./);
   // WAITED FOR, NOT READ ON THE SPOT. The refusal is rendered from state and
   // the draft is dropped by the EFFECT that state schedules, so the message
   // is in the DOM one commit before the storage is cleared. Reading it in the

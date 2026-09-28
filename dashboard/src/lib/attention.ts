@@ -18,7 +18,7 @@
  * seat is stopped, no run is parked on a question, and no budget is refusing",
  * which is three of the twelve conditions below written as a closed sentence,
  * so an engine with no active company configuration, a node shedding its
- * seats, a draining node, a refused token and a round stalled for eleven
+ * seats, a draining node, nobody signed in and a round stalled for eleven
  * minutes were all inside a silence that claimed to have measured them.
  */
 
@@ -138,12 +138,13 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       severity: "critical",
       subject: "engine",
       icon: "key",
-      // THE CREDENTIAL, NOT "THE TOKEN". The refusal is of whatever this
-      // browser presented — a stored token or a session cookie — and the
-      // repair named only one of the two, and only the Tier A half of it.
-      title: "The engine refused this browser's credential",
+      // THE SESSION IS THE BROWSER'S ONE CREDENTIAL. The refusal is of the
+      // cookie this browser holds — or of none — so the repair is signing in,
+      // an API token included: the sign-in screen exchanges one for a session
+      // rather than keeping it anywhere.
+      title: "Nobody is signed in on this browser",
       detail:
-        "Reads and writes are both blocked. Sign in again, or set a token the engine accepts: one of its api.auth.tokens values, or a machine token minted by crewlet iam token.",
+        "Reads and writes are both blocked. Sign in — as a person, or with an API token on the sign-in screen.",
     });
   } else if (!connected) {
     out.push({

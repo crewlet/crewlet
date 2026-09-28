@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +95,12 @@ func (f *socketFixture) dial(t *testing.T, token string) (*websocket.Conn, *http
 	return f.dialWith(t, token)
 }
 
+// bearer is a handshake header presenting token, the one place a client
+// other than a browser puts its credential: nothing is read off the URL.
+func bearer(token string) http.Header {
+	return http.Header{"Authorization": {"Bearer " + token}}
+}
+
 // dialAnonymous opens a socket presenting NOTHING.
 func (f *socketFixture) dialAnonymous(t *testing.T) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
@@ -104,11 +109,11 @@ func (f *socketFixture) dialAnonymous(t *testing.T) (*websocket.Conn, *http.Resp
 
 func (f *socketFixture) dialWith(t *testing.T, token string) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
-	target := f.url
+	var opts *websocket.DialOptions
 	if token != "" {
-		target += "?token=" + url.QueryEscape(token)
+		opts = &websocket.DialOptions{HTTPHeader: bearer(token)}
 	}
-	conn, res, err := websocket.Dial(t.Context(), target, nil)
+	conn, res, err := websocket.Dial(t.Context(), f.url, opts)
 	if err == nil {
 		t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
 	}
@@ -291,8 +296,10 @@ func TestAnUnauthenticatedSocketIsRefused(t *testing.T) {
 // dialFrom opens a socket the way a BROWSER does: carrying the page's Origin.
 func (f *socketFixture) dialFrom(t *testing.T, origin string) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
-	conn, res, err := websocket.Dial(t.Context(), f.url+"?token="+url.QueryEscape(fixtureToken),
-		&websocket.DialOptions{HTTPHeader: http.Header{"Origin": []string{origin}}})
+	header := bearer(fixtureToken)
+	header.Set("Origin", origin)
+	conn, res, err := websocket.Dial(t.Context(), f.url,
+		&websocket.DialOptions{HTTPHeader: header})
 	if err == nil {
 		t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
 	}

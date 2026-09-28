@@ -60,7 +60,7 @@ import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { apiToken } from "~/protocol/authToken.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import type {
   RetentionDomain,
   RetentionMaintenance,
@@ -80,11 +80,14 @@ const SNAPSHOT_DONORS_REQUIRED = 2;
 
 export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   const now = useNow();
-  // OPERATOR-GATED, so the panel renders only when this browser holds a
-  // token — the same condition every other operator surface uses. Asking
-  // without one would refuse on every poll and paint the screen red for a
-  // reader who simply is not an operator.
-  const operator = apiToken() !== "";
+  // OPERATOR-GATED, so the panel renders only for a reader who holds
+  // `fleet:operate`, the grant the engine asks of the `retention` question.
+  // Asking without it would refuse on every poll and paint the screen red for
+  // a reader who simply is not an operator — and "is somebody signed in",
+  // which is what a stored token used to stand for here, is not that
+  // question: every person holding `state:read` alone is somebody.
+  const viewer = useViewer();
+  const operator = viewer.operatesFleet;
   const { data, loading, error } = useQuery("retention", undefined, {
     pollMs: POLL_MS,
     enabled: operator,

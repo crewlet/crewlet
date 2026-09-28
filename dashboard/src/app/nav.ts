@@ -168,6 +168,31 @@ export function railRow(key: Workspace | ""): RailRow | undefined {
 }
 
 /**
+ * The routes drawn OUTSIDE the frame: signing in, redeeming an invitation, and
+ * enrolling the second factor a deployment requires before anything else.
+ *
+ * NOT WORKSPACES, and not rows anywhere. Each is somewhere a browser is before
+ * it holds a session the frame can use — nobody, or a session that may do
+ * nothing but enrol — so the rail, the sidebars, the palette and the state
+ * bar would each be a surface drawn over questions the engine will refuse.
+ * The frame's own tables (`RAIL`, `DESTINATIONS`) are therefore the wrong
+ * place for them, and this list is what the router, the sign-in routing and
+ * the link gate read instead.
+ *
+ * Every head is lowercase and none is a key the engine mints, which
+ * `router.test.ts` holds as it holds the reserved segments.
+ */
+export const FRAMELESS = ["login", "invite", "enrol"] as const;
+
+export type FramelessRoute = (typeof FRAMELESS)[number];
+
+/** The frameless route a path is, or null for one the frame draws. */
+export function framelessOf(path: readonly string[]): FramelessRoute | null {
+  const head = path[0];
+  return (FRAMELESS as readonly string[]).includes(head ?? "") ? (head as FramelessRoute) : null;
+}
+
+/**
  * Every reserved path segment, so a test can hold them apart from the keys the
  * engine mints.
  *

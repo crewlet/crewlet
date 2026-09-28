@@ -1558,23 +1558,13 @@
   max-width: var(--measure);
 }
 
-/* ---- The viewer chip ----------------------------------------------------- */
+/* ---- The viewer's own menu ----------------------------------------------- */
 
-.viewer-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 2px var(--space-2) 2px 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  color: var(--text-secondary);
-  font-size: var(--fs-2xs);
+/* THE NAME ON ITS TRIGGER, BOUNDED. The trigger is the design system's own
+   button, which sizes to its label, and a long name would otherwise take the
+   page bar's width away from the trail beside it. */
+.viewer-name {
   max-width: 180px;
-}
-
-.viewer-chip:hover {
-  background: var(--surface-hover);
-  color: var(--text);
 }
 
 /* ---- The rail's engine pill ---------------------------------------------- */
@@ -1917,12 +1907,22 @@ button.histogram-bar[data-empty]:hover {
     gap: var(--space-1);
   }
 
-  /* THE VIEWER IS ITS MARK HERE. The chip is 117px of a 390px bar for a name
-     the reader already knows — their own — and the mark alone is the same
-     link to the same page. The anchor keeps its accessible name from `title`,
-     which carries the handle. */
-  .viewer-chip > .truncate {
-    display: none;
+  /* THE VIEWER IS ITS MARK HERE. The name is 117px of a 390px bar for a name
+     the reader already knows — their own — and the mark alone opens the same
+     menu. HIDDEN THE WAY `.sr-only` HIDES, and not `display: none`: the name
+     is the trigger's only accessible name (its mark is decoration), and a
+     button a screen reader announces as "button, menu" is one nobody can
+     find. Pinned to the origin for `.sr-only`'s reason — see base.css. */
+  .viewer-name {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   /* ---- The bottom bar is navigation --------------------------------------

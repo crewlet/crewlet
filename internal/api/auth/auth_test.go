@@ -598,44 +598,38 @@ func TestANodeServingNoApiNeedsNoneOfIt(t *testing.T) {
 	}
 }
 
-// --- the socket's query token -------------------------------------------- //
+// --- no credential in a URL ----------------------------------------------- //
 
-// THE SOCKET PATH TAKES ITS TOKEN FROM THE QUERY, AND NOTHING ELSE DOES.
+// NO ROUTE TAKES A CREDENTIAL FROM ITS URL, THE SOCKET INCLUDED.
 //
-// A browser cannot set a header on a WebSocket constructor, so the dashboard
-// sends its token as ?token= on /ws/stream. The middleware used to read the
-// header alone and leave the query to the stream handler, and under a closed
-// posture it answered 401 before that handler ever ran: the dashboard could
-// not connect with a valid token on the one posture whose point is that the
-// token is required.
-func TestTheSocketPathTakesItsTokenFromTheQuery(t *testing.T) {
+// The socket used to read `?token=` because a browser cannot set a header on
+// a WebSocket constructor, and it was the one route that paid the price of a
+// credential in a URL — every proxy's access log and the browser's history.
+// The dashboard's handshake carries its session cookie now, and a script sets
+// the header, so a valid token in the query of ANY route, this one first,
+// authenticates nobody.
+func TestNoRouteTakesACredentialFromItsURL(t *testing.T) {
 	t.Parallel()
 	g := guard(t, func(a *config.APIAuth) {
 		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	})
 
-	res, seen := serve(t, g, http.MethodGet, auth.SocketPath+"?token=secret", "")
-	if res.StatusCode != http.StatusOK || seen != "token:founder" {
-		t.Fatalf("a valid query token on the socket path = %d as %q, want 200 as founder",
-			res.StatusCode, seen)
-	}
-	res, _ = serve(t, g, http.MethodGet, auth.SocketPath+"?token=wrong", "")
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Errorf("a wrong query token on the socket path = %d, want 401", res.StatusCode)
-	}
-	// The header still works there, and wins over a stale query.
-	res, seen = serve(t, g, http.MethodGet, auth.SocketPath+"?token=stale", "Bearer secret")
-	if res.StatusCode != http.StatusOK || seen != "token:founder" {
-		t.Errorf("a header beside a stale query = %d as %q, want 200 as founder", res.StatusCode, seen)
-	}
-	// And a token in the URL of any OTHER route authenticates nobody: a URL
-	// lands in proxy logs and browser history, which is a price paid for
-	// exactly one route that has no alternative.
-	for _, path := range []string{"/events?token=secret", "/config?token=secret", "/ws/streams?token=secret"} {
+	for _, path := range []string{
+		auth.SocketPath + "?token=secret",
+		"/events?token=secret",
+		"/config?token=secret",
+	} {
 		res, seen := serve(t, g, http.MethodGet, path, "")
 		if res.StatusCode != http.StatusUnauthorized || seen != "" {
 			t.Errorf("%s = %d as %q, want 401 as nobody", path, res.StatusCode, seen)
 		}
+	}
+	// THE CONTROL: the same token in the header opens the socket, so the
+	// refusal above is about where it was presented and not about the token.
+	res, seen := serve(t, g, http.MethodGet, auth.SocketPath, "Bearer secret")
+	if res.StatusCode != http.StatusOK || seen != "token:founder" {
+		t.Errorf("the token in the header on the socket path = %d as %q, want 200 as founder",
+			res.StatusCode, seen)
 	}
 }
 

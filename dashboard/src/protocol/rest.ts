@@ -4,11 +4,12 @@
  *
  * The socket remains the data channel for state. This is not a second one: it
  * carries the requests that are not questions about state at all. Writes never
- * go over the socket, deliberately — its token rides the query string on the
- * handshake, and a channel whose credential appears in a proxy log is not
- * where a credential-bearing write belongs (see internal/api/auth's own note
- * on that). And a handful of reads exist only as REST, `GET /secrets` above
- * all, because no query in the registry answers them.
+ * go over the socket, deliberately: a write is judged on its `Origin` by the
+ * engine's cross-site check before its handler runs, answers the three write
+ * outcomes as statuses with an op id to retry by, and may be refused for a
+ * step-up this module confirms and replays — none of which a frame on an open
+ * socket carries. And a handful of reads exist only as REST, `GET /secrets`
+ * above all, because no query in the registry answers them.
  *
  * ONE MODULE, for the reason `api.ts` states about itself: a screen reaching
  * for its own transport takes its client from somewhere, and the somewhere the
@@ -17,12 +18,15 @@
  * `location.origin`, which is where the dashboard is served from and the only
  * origin the engine answers on (it writes no CORS header at all).
  *
- * Every call carries the operator bearer token. The engine guards `/config`,
- * `/secrets` and `/setup` in full, reads included, whatever the anonymous-read
- * posture is, so a call with no token is refused rather than silently served.
+ * THE CREDENTIAL IS THE SESSION COOKIE, which the browser attaches to every
+ * same-origin request and this module never sees: it is `HttpOnly`, so no
+ * script on the page can read it, and there is no token in storage for one to
+ * take instead. A call that must present something else — the API token
+ * exchange at `POST /auth/token` — sets its own `Authorization` header for
+ * that one request, and nothing keeps it.
  */
 
-import { apiToken } from "./authToken.ts";
+import { confirmStepUp, needSession, type StepUpWindow } from "./session.ts";
 
 /**
  * What the engine said when it refused.
@@ -37,10 +41,26 @@ export class RestError extends Error {
   readonly code: string;
   readonly detail: string;
   readonly hint: string;
+  /**
+   * The engine's own sentence for the code — the envelope's `message`, which
+   * every refusal it writes carries — or "" for an answer the engine did not
+   * write. What a person is shown when a screen has nothing more specific to
+   * say: the sign-in surface's one uniform refusal is exactly this sentence,
+   * and a screen that wrote its own would be a second copy of the engine's
+   * wording, the one that goes stale.
+   */
+  readonly sentence: string;
+  /**
+   * The `Retry-After` the answer carried, in whole seconds, or null for none.
+   * A `429` always carries one and says how long the curve makes the next
+   * attempt wait; a `503` carries one where waiting can clear the cause and
+   * none where it cannot, which is a difference a screen has to render.
+   */
+  readonly retryAfter: number | null;
   /** Everything else the body carried, for a caller that needs a field. */
   readonly body: Record<string, unknown>;
 
-  constructor(status: number, body: Record<string, unknown>) {
+  constructor(status: number, body: Record<string, unknown>, retryAfter: number | null = null) {
     const code = typeof body.error === "string" ? body.error : "";
     const detail = typeof body.detail === "string" ? body.detail : "";
     super(detail || code || `HTTP ${status}`);
@@ -49,6 +69,8 @@ export class RestError extends Error {
     this.code = code;
     this.detail = detail;
     this.hint = typeof body.hint === "string" ? body.hint : "";
+    this.sentence = typeof body.message === "string" ? body.message : "";
+    this.retryAfter = retryAfter;
     this.body = body;
   }
 
@@ -58,11 +80,10 @@ export class RestError extends Error {
    * Both statuses, because a screen locks the same way for either and the
    * distinction is not one it can act on: 401 is "present a credential" and
    * 403 is "the one you presented does not carry this grant". What neither
-   * is, any more, is a reason to throw the stored token away — a reader
-   * holding a perfectly good credential meets 403 the moment they open a
-   * screen outside their grants, which is the ordinary case rather than the
-   * exceptional one. Discarding it is the socket probe's decision alone, on
-   * a 401 to the handshake.
+   * is, any more, is a reason to send the reader to sign in again — a reader
+   * holding a perfectly good session meets 403 the moment they open a screen
+   * outside their grants, which is the ordinary case rather than the
+   * exceptional one. Only a 401 says nobody is signed in (see [noteSession]).
    */
   get unauthorized(): boolean {
     return this.status === 401 || this.status === 403;
@@ -90,6 +111,43 @@ export function refusedGrants(body: unknown): string[] {
   if (typeof body !== "object" || body === null) return [];
   const grants = (body as Record<string, unknown>).grants;
   return Array.isArray(grants) ? grants.filter((g): g is string => typeof g === "string") : [];
+}
+
+/**
+ * The codes a `401` carries when it is an answer about WHAT WAS TYPED rather
+ * than about the browser's credential: a sign-in whose details were not
+ * accepted, and one whose password proved itself and now wants the second
+ * factor. Every other `401` means this browser holds nothing the engine
+ * accepts, and the session needs a sign-in.
+ */
+const TYPED_REFUSALS = new Set(["sign_in_refused", "second_factor_required"]);
+
+/**
+ * What a refusal says about the browser's SESSION, noted where every screen's
+ * request passes — so no screen has to recognise a lost session itself, and
+ * none can forget to.
+ *
+ * A `401` that is not an answer about typed details is a browser signed in as
+ * nobody the engine accepts: never signed in, its session ended, expired or
+ * revoked. A `403 second_factor_enrolment_required` is a session that may do
+ * nothing but enrol the second factor the deployment requires. Every other
+ * refusal is about the REQUEST, and the session is fine.
+ */
+function noteSession(refusal: RestError): void {
+  if (refusal.status === 401 && !TYPED_REFUSALS.has(refusal.code)) needSession("sign_in");
+  if (refusal.status === 403 && refusal.code === "second_factor_enrolment_required") {
+    needSession("second_factor");
+  }
+}
+
+/**
+ * The seconds a `Retry-After` header names, or null for none. The engine
+ * writes whole seconds and never an HTTP date; anything else is not its
+ * answer and is read as none.
+ */
+function retryAfterOf(response: Response): number | null {
+  const raw = response.headers.get("Retry-After")?.trim() ?? "";
+  return /^\d+$/.test(raw) ? Number(raw) : null;
 }
 
 /**
@@ -202,6 +260,43 @@ function withQuery(path: string, query: Record<string, QueryValue> | undefined):
 }
 
 /**
+ * The route a step-up is given at. It answers `step_up_required` itself when
+ * the caller is a credential nobody present can confirm — and asking to
+ * confirm the confirmation would be a dialog that reopens for ever.
+ */
+const STEP_UP_PATH = "/auth/step-up";
+
+/** Which window a step-up refusal names, from the envelope's own key. */
+function windowOf(refusal: RestError): StepUpWindow {
+  const window = refusal.body.window;
+  return typeof window === "string" && window !== "" ? window : "step_up";
+}
+
+/**
+ * `waiting`, or the caller's own abort if that comes first. A person can sit
+ * at the confirmation for as long as they like, and a screen that gave up on
+ * its request meanwhile must not be held to an answer it no longer wants.
+ */
+function unlessAborted<T>(waiting: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return waiting;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    waiting.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
  * The one request path, answering the status and entity-tag as well as the
  * body.
  *
@@ -210,11 +305,42 @@ function withQuery(path: string, query: Record<string, QueryValue> | undefined):
  * sealed store's names, an integration's requirements), and a heuristic cache
  * hit on one of those is a screen showing the company as it was. A 304 still
  * reaches the caller, when the caller sent the precondition that asks for it.
+ *
+ * # A step-up is confirmed HERE, and the refused request sent again
+ *
+ * A gesture refused `403 step_up_required` is asked of the person once —
+ * through whatever confirms a step-up (`session.ts`), however many requests
+ * were refused together — and then REPLAYED: the same method, path, body and
+ * headers, so a form that was being saved is saved, rather than lost to a
+ * refusal its screen could only report. Once: a replay refused again is the
+ * refusal. Every screen gets this by sending its writes through here, and no
+ * screen implements it, which is what makes it one ceremony rather than a
+ * dozen that disagree.
+ *
+ * The deadline is each ATTEMPT's, not the gesture's: the time a person spends
+ * typing their password is not the engine taking too long.
  */
 async function request(
   method: string,
   path: string,
   options: RequestOptions = {},
+): Promise<RestResponse> {
+  try {
+    return await attempt(method, path, options);
+  } catch (err) {
+    const refused =
+      err instanceof RestError && err.status === 403 && err.code === "step_up_required";
+    if (!refused || path.split("?")[0] === STEP_UP_PATH) throw err;
+    if (!(await unlessAborted(confirmStepUp(windowOf(err)), options.signal))) throw err;
+    return attempt(method, path, options);
+  }
+}
+
+/** One round trip — see [request] for what surrounds it. */
+async function attempt(
+  method: string,
+  path: string,
+  options: RequestOptions,
 ): Promise<RestResponse> {
   const { body, headers = {}, query, signal, read = "json" } = options;
   const contentType = options.contentType ?? (body === undefined ? undefined : "application/json");
@@ -234,12 +360,14 @@ async function request(
   // for an answer, and sending the request anyway could still write.
   if (signal?.aborted) throw signal.reason;
 
-  const token = apiToken();
   const init: RequestInit = {
     method,
     cache: "no-store",
+    // Stated rather than left to the default, because it is the whole of how
+    // this request is authenticated: the session cookie, sent to this origin
+    // and to no other.
+    credentials: "same-origin",
     headers: {
-      ...(token ? { Authorization: "Bearer " + token } : {}),
       ...(contentType ? { "Content-Type": contentType } : {}),
       ...headers,
     },
@@ -326,8 +454,10 @@ async function request(
   // the caller wrote, and it means the representation the caller holds is
   // still current.
   if (!response.ok && response.status !== 304) {
-    const refusal = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-    throw new RestError(response.status, refusal);
+    const body = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    const refusal = new RestError(response.status, body, retryAfterOf(response));
+    noteSession(refusal);
+    throw refusal;
   }
   return { status: response.status, body: parsed, etag: response.headers.get("ETag") };
 }

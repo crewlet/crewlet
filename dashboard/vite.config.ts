@@ -203,6 +203,10 @@ export default defineConfig({
     proxy: {
       "/ws/stream": { target: "ws://localhost:8000", ws: true },
       "/api": { target: "http://localhost:8000" },
+      // The sign-in surface: signing in, invitations, the second factor and
+      // the step-up, whose answers set the session cookie every other request
+      // here carries.
+      "/auth": { target: "http://localhost:8000" },
       "/health": { target: "http://localhost:8000" },
       "/org": { target: "http://localhost:8000" },
       "/agents": { target: "http://localhost:8000" },

@@ -203,10 +203,11 @@ type request struct {
 
 // Handler serves the dashboard's live socket.
 //
-// The credential is ?token= on the URL, because browsers cannot set headers on
-// a WebSocket constructor, or the session cookie a signed-in browser sends on
-// its own. Non-browser clients may send Authorization instead, and should: a
-// query string appears in proxy logs.
+// The credential is the session cookie a signed-in browser sends on its own —
+// a browser cannot set a header on a WebSocket constructor, so the cookie is
+// the whole of what the dashboard presents — or an Authorization bearer from
+// any other client. Nothing is read off the URL: a query string is written
+// into every proxy's access log ([auth.Guard.Credential]).
 //
 // # Who is calling is the GUARD's answer, read once
 //

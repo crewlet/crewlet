@@ -3612,3 +3612,93 @@ a.work-cal-chip {
 .inbox-unread[data-on] {
   background: var(--accent);
 }
+
+/* ---- Signing in ----------------------------------------------------------
+   The screens a browser is on BEFORE it holds a session the frame can use —
+   `#/login`, `#/invite/…`, `#/enrol` — drawn outside the frame, so this is the
+   one page in the product that is its own scroller. The document does not
+   scroll (`body` is `overflow: hidden`, see base.css), which is right for the
+   frame and would cut a tall form off here; so the page takes the viewport
+   and scrolls itself.
+
+   ONE COLUMN AT A READING WIDTH. A form wider than a sentence spreads four
+   fields across a monitor for nothing, and the card is the whole page. */
+.signin {
+  height: 100dvh;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-10) var(--space-4);
+  background: var(--bg);
+}
+
+.signin-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: 52ch;
+  margin-block-end: auto;
+}
+
+/* BOUNDED ON BOTH AXES, and sized on neither, for the reason `.rail-brand img`
+   gives: the mark is 3:2 and meets its box, so a box of any other ratio
+   letterboxes it. */
+.signin-mark {
+  align-self: center;
+  width: auto;
+  height: auto;
+  max-height: var(--control-h);
+  max-width: 100%;
+}
+
+.signin-body,
+.signin-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.signin-body {
+  margin-top: var(--space-4);
+}
+
+/* A SUBMIT DOES NOT STRETCH. Every button on these forms states one gesture,
+   and a full-width bar reads as the page's own edge rather than a control. */
+.signin-form > button {
+  align-self: flex-start;
+}
+
+/* A key and its copy control, or a set of codes and its two controls: one
+   line that wraps rather than overflowing a phone. */
+.signin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.signin-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding-inline-start: var(--space-5);
+}
+
+.signin-codes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* TWO COLUMNS OF CODES, because ten single-word lines are a list a person
+   copies by eye and loses their place in; two of five are a card. */
+.signin-code-list {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

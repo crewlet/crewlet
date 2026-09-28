@@ -11,6 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { currentSessionNeed, sessionRestored } from "./session.ts";
 import { LiveSocket } from "./socket.ts";
 import { Store } from "./store.ts";
 
@@ -41,6 +42,7 @@ class ScriptedWebSocket {
 }
 
 let fetches: string[] = [];
+let fetchInits: (RequestInit | undefined)[] = [];
 let probeStatus = 426;
 let probeBody: unknown = {};
 /** How long the plain-HTTP re-ask takes to answer. */
@@ -50,15 +52,17 @@ beforeEach(() => {
   vi.useFakeTimers();
   ScriptedWebSocket.dials = [];
   fetches = [];
+  fetchInits = [];
   probeStatus = 426;
   probeBody = {};
   probeDelayMs = 0;
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: ScriptedWebSocket });
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       fetches.push(url);
+      fetchInits.push(init);
       if (url.endsWith("/ws/stream")) {
         if (probeDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, probeDelayMs));
         return new Response(JSON.stringify(probeBody), { status: probeStatus });
@@ -71,6 +75,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  sessionRestored();
 });
 
 /** The nth dial, which the case has already caused. */
@@ -120,6 +125,9 @@ describe("the engine's close codes", () => {
     dial(0).closeWith(1006);
     await vi.advanceTimersByTimeAsync(0);
     expect(store.state.accessRefused).toBe("the live socket needs state:read");
+    // THE CONTROL for the enrolment case: a refusal on authority is the
+    // administrator's to repair, and sends nobody to sign in.
+    expect(currentSessionNeed()).toBeNull();
 
     const dialled = ScriptedWebSocket.dials.length;
     await vi.advanceTimersByTimeAsync(120_000);
@@ -129,6 +137,40 @@ describe("the engine's close codes", () => {
     expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
     dial(dialled).open();
     expect(store.state.accessRefused).toBeNull();
+  });
+
+  // A HANDSHAKE THAT NAMES NOBODY is a browser that needs to sign in, which
+  // is said where the application can hear it; the socket itself draws
+  // nothing.
+  test("a 401 handshake asks for a sign-in", async () => {
+    probeStatus = 401;
+    probeBody = { error: "invalid_token" };
+    const { store } = started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.state.authRejected).toBe(true);
+    expect(currentSessionNeed()).toBe("sign_in");
+    expect(store.state.accessRefused).toBeNull();
+  });
+
+  // A SESSION THAT MAY ONLY ENROL is refused the socket until it has, and
+  // its repair is the person's own: the enrolment, not an administrator.
+  test("a session that may only enrol stops the socket and asks for the enrolment", async () => {
+    probeStatus = 403;
+    probeBody = { error: "second_factor_enrolment_required" };
+    const { socket, store } = started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(currentSessionNeed()).toBe("second_factor");
+    expect(store.state.accessRefused).toBeNull();
+
+    const dialled = ScriptedWebSocket.dials.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled);
+
+    // The enrolment ends by re-dialling with the whole session it opened.
+    socket.reconnect();
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
   });
 
   test("a refusal that lands while a dial is in flight is not undone by that dial's close", async () => {
@@ -148,5 +190,22 @@ describe("the engine's close codes", () => {
     dial(1).closeWith(1006);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(ScriptedWebSocket.dials).toHaveLength(2);
+  });
+});
+
+// THE COOKIE IS THE CREDENTIAL, on the dial and on the probe alike. A
+// handshake URL is written into every proxy's access log, which is why the
+// engine reads no credential there; a client that put one there anyway would
+// be leaking it to a log for nothing.
+describe("what a dial presents", () => {
+  test("the handshake URL carries no credential, and the probe no header of its own", async () => {
+    probeStatus = 401;
+    started();
+    expect(dial(0).url).toBe(`ws://${location.host}/ws/stream`);
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    const probe = fetchInits[fetches.findIndex((url) => url.endsWith("/ws/stream"))];
+    expect(probe?.credentials).toBe("same-origin");
+    expect(new Headers(probe?.headers).has("Authorization")).toBe(false);
   });
 });

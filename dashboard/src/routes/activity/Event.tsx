@@ -30,7 +30,7 @@ import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { eventHistoryLabel, fmtDateTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useEngineHealth } from "~/lib/store-hooks.ts";
+import { useEngineHealth } from "~/lib/engineHealth.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";

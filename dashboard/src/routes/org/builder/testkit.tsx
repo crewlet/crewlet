@@ -13,7 +13,7 @@
  * Builder rather than any one view.
  */
 
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { vi } from "vitest";
 import type { ReactNode } from "react";
 import { Router } from "~/app/router.tsx";
@@ -40,6 +40,27 @@ export class InertWebSocket {
   readyState = InertWebSocket.CONNECTING;
   send(): void {}
   close(): void {}
+}
+
+/**
+ * A socket query channel that answers `viewer` as whoever `who()` names now —
+ * the session the browser's cookie carries, which a suite changes the way
+ * another tab signing in would — and nothing else. `""` is nobody.
+ */
+export function asReader(who: () => string): (what: string) => unknown {
+  return (what) =>
+    what === "viewer"
+      ? { login: who(), grants: [], handle: "", name: "", kind: "", owner: who() }
+      : null;
+}
+
+/**
+ * Has the lens ask who it writes as again, as a reconnect does: the viewer is
+ * re-read on every change of connection, which is how a sign-in in another
+ * tab reaches a tab that stayed open.
+ */
+export function rereadViewer(store: Store): void {
+  act(() => store.setConnected(!store.state.connected));
 }
 
 /** One request as it left the page. */
