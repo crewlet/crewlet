@@ -2,10 +2,13 @@ package tracker_test
 
 import (
 	"errors"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -268,5 +271,77 @@ func (r *roundTrip) assertFreeOf(task, gone, when string) {
 		if got := r.strings(query, task); len(got) != 0 {
 			r.t.Errorf("%s %q answers %v for the task, want nothing", when, query, got)
 		}
+	}
+}
+
+// A PURGE NAMING ANOTHER PROJECT IS REFUSED, AND PURGES NOTHING.
+//
+// Its record is filed and probed under the project the caller named, so a
+// purge naming the wrong one would be written under a container the task is not
+// in: a record deferred on the task's real project would not hold it back.
+func TestAPurgeNamingAnotherProjectIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	here := r.createTask("filed in ENG")
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations"})
+
+	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	_, err := operator.PurgeTask(t.Context(), "op-purge-ops", here.ID, "OPS", "a duplicate import")
+	if err == nil || !strings.Contains(err.Error(), "is in project ENG, not OPS") {
+		t.Fatalf("a purge naming OPS for a task in ENG answered %v, want it refused "+
+			"naming the project the task is in", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT id FROM tracker_tasks WHERE id = ?`, here.ID); len(got) != 1 {
+		t.Fatal("a purge refused for naming the wrong project purged the task")
+	}
+}
+
+// A PURGE WHOSE REACH GREW AFTER ITS SCOPE WAS READ IS REFUSED, NAMING THE TASK.
+//
+// The scope is read from this node's rows before the request, because the
+// publisher probes the deferral index with it; the decide may run on newer rows
+// — a peer's write on the purged task's own subject is what the broker refuses
+// the first decide over, and the retry decides after this node has applied it.
+// A dependent that arrived in between is a task the apply will rewrite and the
+// request's scope does not name, so a record deferred on it would not hold the
+// purge back. The decide refuses rather than silently widening a scope the
+// publisher already probed with.
+func TestAPurgeWhoseReachGrewAfterItsScopeWasReadIsRefused(t *testing.T) {
+	t.Parallel()
+	a := newRoundTrip(t)
+	purged := a.createTask("to be purged")
+	dependent := a.createTask("waits on it")
+
+	// A PEER on the same log, caught up, which makes the dependent wait —
+	// both halves, the second on the purged task's own subject.
+	peerDB, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "peer.db"),
+		store.Options{PinnedWriters: 1})
+	if err != nil {
+		t.Fatalf("open the peer's store: %v", err)
+	}
+	t.Cleanup(func() { _ = peerDB.Close() })
+	peer := newRoundTripOn(t, a.broker, a.log, peerDB, "node-b")
+	peer.drain()
+	peer.applyWhileWriting()
+	peer.waitOn(dependent, purged)
+
+	// THIS NODE has not applied it, so its scope names the purged task
+	// alone; its decide waits for the peer's append and then sees it.
+	if got := a.strings(`SELECT task_id FROM tracker_task_deps WHERE blocker_id = ?`,
+		purged.ID); len(got) != 0 {
+		t.Fatalf("the premise: this node already holds the dependent %v", got)
+	}
+	a.applyWhileWriting()
+	operator := a.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	_, err = operator.PurgeTask(t.Context(), "op-purge", purged.ID, purged.Project,
+		"a duplicate import")
+	if !errors.Is(err, statelog.ErrConflict) || !strings.Contains(err.Error(), dependent.ID) {
+		t.Fatalf("a purge whose reach grew to %s after its scope was read answered %v, "+
+			"want a conflict naming it", dependent.ID, err)
+	}
+	a.drain()
+	if got := a.strings(`SELECT id FROM tracker_tasks WHERE id = ?`, purged.ID); len(got) != 1 {
+		t.Fatal("the refused purge purged the task")
 	}
 }

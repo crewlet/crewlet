@@ -1,8 +1,12 @@
 package tracker
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A PURGE'S SCOPE NAMES ITS WHOLE REACH AND STAYS UNDER THE TERM CAP.
@@ -67,4 +71,51 @@ func capped(n int) purgeReach {
 		reach[fmt.Sprintf("t-%02d", i)] = "ENG"
 	}
 	return reach
+}
+
+// A SCOPE THAT DOES NOT NAME A TASK IN THE REACH, OR NAMES IT WHERE IT IS NOT
+// FILED, IS REFUSED NAMING THE TASK.
+//
+// The request's scope is what the publisher probed the deferral index with, so
+// a decide that found a task the scope misses must refuse rather than widen it:
+// a record deferred under that task was never asked about.
+func TestAScopeShortOfThePurgesReachIsRefusedNamingTheTask(t *testing.T) {
+	t.Parallel()
+	named := purgeScope("purged", "ENG", purgeReach{"a": "ENG"})
+	for name, tc := range map[string]struct {
+		scope ScopeSet
+		reach purgeReach
+		short string
+	}{
+		"a task the scope never read": {
+			scope: named, reach: purgeReach{"a": "ENG", "b": "ENG"}, short: "b",
+		},
+		"a task that moved project since": {
+			scope: named, reach: purgeReach{"a": "OPS"}, short: "a",
+		},
+		"a container for another project": {
+			scope: ScopeSet{Terms: []ScopeTerm{{Kind: TermContainer, ID: "OPS"}}},
+			reach: purgeReach{"a": "ENG"}, short: "a",
+		},
+		"a task this node holds no row of, under a container": {
+			scope: ScopeSet{Terms: []ScopeTerm{{Kind: TermContainer, ID: "ENG"}}},
+			reach: purgeReach{"gone": ""}, short: "gone",
+		},
+		"the purged task alone, which a reach has outgrown": {
+			scope: purgeScope("purged", "ENG", nil), reach: purgeReach{"a": "ENG"}, short: "a",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.scope.coversReach(tc.reach)
+			if !errors.Is(err, statelog.ErrConflict) ||
+				!strings.Contains(err.Error(), "task "+tc.short+" ") {
+				t.Fatalf("coversReach = %v, want a conflict naming task %s", err, tc.short)
+			}
+		})
+	}
+	domain := ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
+	if err := domain.coversReach(purgeReach{"a": "ENG", "gone": ""}); err != nil {
+		t.Errorf("the domain does not cover a reach: %v", err)
+	}
 }
