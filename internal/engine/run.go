@@ -293,6 +293,10 @@ type Engine struct {
 	// where it serves none. See [Engine.serveEstate].
 	stopEstate queue.Unsubscribe
 
+	// stopFleetBroker withdraws this member's broker-membership subject,
+	// nil where it serves none. See [Engine.serveFleetBroker].
+	stopFleetBroker queue.Unsubscribe
+
 	// dataView watches the fleet's presence leases, and it is what every
 	// per-request question about data nodes is answered from — which one
 	// a stateless node's tool call goes to, and which divide a search.
@@ -856,6 +860,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// records, and its writers are what [Engine.estateBackend] withholds.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := e.serveEstate(ctx); err != nil {
+		return nil, err
+	}
+	// AND THE BROKER'S MEMBERSHIP, on a member, in every mode: the member
+	// that answers a leaf's read of the metadata group, or carries an
+	// operator's removal of a member that is gone, may be any of them —
+	// and a fleet restarted into a maintenance mode is exactly when an
+	// operator looks at who its broker still counts.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.serveFleetBroker(ctx); err != nil {
 		return nil, err
 	}
 	// THE LEASE TTL IN FORCE, before anything claims a lease on the seat
@@ -1504,6 +1517,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
 	e.stopServingEstate(ctx)
+	e.stopServingFleetBroker(ctx)
 	// THE REST OF THE OBJECT STORE — the passes first, then the chunk
 	// server, then the directory — and BEFORE the native runtime below,
 	// whose tracker reader the passes read the references through.

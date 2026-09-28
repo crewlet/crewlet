@@ -74,6 +74,11 @@ type Backends struct {
 
 	// api is the JetStream API this node's broker is addressed in.
 	api jsapi.API
+
+	// broker is this node's own embedded broker, for the one question only
+	// a member can answer in process: the metadata group's membership. Nil
+	// on an external stream, and on backends a caller lent without one.
+	broker brokerMembership
 }
 
 // Complete reports which of the four a Backends lacks, or nil when it holds
@@ -468,7 +473,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 		server.Shutdown()
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
-	out := &Backends{Queue: q, stopServer: server.Shutdown}
+	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server}
 	conn, err := server.Conn()
 	if err != nil {
 		out.Close(ctx)
