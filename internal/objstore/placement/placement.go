@@ -54,6 +54,7 @@ package placement
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -151,6 +152,22 @@ func (m Map) Validate() error {
 			MinPGBits, MaxPGBits)
 	}
 	return m.Draw().Validate()
+}
+
+// Equal reports whether two maps are the same map, field for field — the
+// question a cached layout is kept across: a layout carries the map it was
+// computed from, and a server answers the epoch it placed by from it, so a
+// layout kept across an epoch that changed nothing else would answer the old
+// epoch, and one kept across a changed member would render every share wrong.
+//
+// ONE COMPARISON for every cache of a layout — the node's map cache and the
+// fleet view's — because written once per cache, a field added to the map is
+// one a copy forgets, and that cache goes on answering with the layout of a
+// map it no longer describes.
+func (m Map) Equal(o Map) bool {
+	return m.Generation == o.Generation && m.Epoch == o.Epoch && m.Replicas == o.Replicas &&
+		m.PGBits == o.PGBits && m.FailureDomain == o.FailureDomain &&
+		slices.Equal(m.Members, o.Members)
 }
 
 // Size is how many copies each group has in this map ([placement.Draw.Size]).

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -661,4 +662,43 @@ func limitedMap() Map {
 	return mapOf(9, 3, "zone",
 		member("n0", 1, "z0"), member("n1", 2, "z0"), member("n2", 1, "z0"),
 		member("n3", 1, "z1"), member("n4", 3, "z1"), member("n5", 1, "z1"), drained)
+}
+
+// TWO MAPS ARE EQUAL ONLY FIELD FOR FIELD, and EVERY field is compared — held
+// by reflection over the map's own fields, so a field added to it later is one
+// this test changes and Equal must notice, rather than one a hand-written
+// comparison quietly forgot while a cache went on answering the layout of a
+// map it no longer describes.
+func TestTwoMapsAreEqualOnlyFieldForField(t *testing.T) {
+	t.Parallel()
+	m := goldenMap()
+	clone := m
+	clone.Members = slices.Clone(m.Members)
+	if !m.Equal(clone) {
+		t.Fatal("a map is not equal to its own copy")
+	}
+	typ := reflect.TypeFor[Map]()
+	for i := range typ.NumField() {
+		changed := m
+		changed.Members = slices.Clone(m.Members)
+		f := reflect.ValueOf(&changed).Elem().Field(i)
+		switch f.Kind() {
+		case reflect.Uint64:
+			f.SetUint(f.Uint() + 1)
+		case reflect.Int:
+			f.SetInt(f.Int() + 1)
+		case reflect.String:
+			f.SetString(f.String() + "-other")
+		case reflect.Array: // the generation
+			f.Index(0).SetUint(f.Index(0).Uint() ^ 0xff)
+		case reflect.Slice: // the members
+			f.Index(0).FieldByName("Share").SetUint(f.Index(0).FieldByName("Share").Uint() + 1)
+		default:
+			t.Fatalf("Map.%s is a %s this test cannot change: teach it, and Equal, about it",
+				typ.Field(i).Name, f.Kind())
+		}
+		if m.Equal(changed) || changed.Equal(m) {
+			t.Errorf("maps differing in %s are equal", typ.Field(i).Name)
+		}
+	}
 }

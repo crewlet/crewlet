@@ -626,18 +626,10 @@ func (c *objectLayouts) of(m objplacement.Map) *objplacement.Layout {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.layout == nil || !sameMap(c.m, m) {
+	if c.layout == nil || !c.m.Equal(m) {
 		c.m = m
 		c.m.Members = slices.Clone(m.Members)
 		c.layout = m.Layout()
 	}
 	return c.layout
-}
-
-// sameMap reports whether two maps place identically: every field a layout
-// reads.
-func sameMap(a, b objplacement.Map) bool {
-	return a.Generation == b.Generation && a.Epoch == b.Epoch &&
-		a.Replicas == b.Replicas && a.PGBits == b.PGBits &&
-		a.FailureDomain == b.FailureDomain && slices.Equal(a.Members, b.Members)
 }

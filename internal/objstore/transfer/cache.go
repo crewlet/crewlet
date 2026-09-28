@@ -2,7 +2,6 @@ package transfer
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -144,7 +143,7 @@ func (c *Cache) install(state objstore.MapState, version uint64) {
 		return
 	}
 	var layout *placement.Layout
-	if held != nil && samePlacement(held.state.Map, state.Map) {
+	if held != nil && held.state.Map.Equal(state.Map) {
 		layout = held.layout
 	} else {
 		layout = state.Map.Layout()
@@ -156,16 +155,6 @@ func (c *Cache) install(state objstore.MapState, version uint64) {
 				"this node places by the new one")
 	}
 	c.current.Store(&installed{state: state, version: version, layout: layout})
-}
-
-// samePlacement reports whether two maps are the same map, field for field —
-// not merely placing alike: a layout carries the map it was computed from, and
-// a server answers the epoch it placed by from it, so a layout kept across an
-// epoch that changed nothing else would answer the old epoch.
-func samePlacement(a, b placement.Map) bool {
-	return a.Generation == b.Generation && a.Epoch == b.Epoch && a.Replicas == b.Replicas &&
-		a.PGBits == b.PGBits && a.FailureDomain == b.FailureDomain &&
-		slices.Equal(a.Members, b.Members)
 }
 
 // Run refreshes every [CacheInterval] until ctx ends. A failed read is logged
