@@ -167,10 +167,11 @@ secrets**:
 | `iam/session/<lineage>/refresh` | One provider session's refresh token |
 | `iam/blind-index-key` | The key an address or a provider subject is blinded under in the identity directory |
 
-The namespace has two owners, each under its own first segment: the identity
-directory (`iam/`) and the [org chart](chart-domain.md) (`chart/`). An owner is
+The namespace has one owner, the identity directory (`iam/`); an owner is
 reserved before it writes its first key, so no engine key is ever briefly an
-ordinary operator row. A name with a `/` in it is one no `${VAR}` can spell, so
+ordinary operator row. The [org chart](chart-domain.md) keeps no key material
+here: what it seals for a seat or a unit is a value you typed, stored under an
+ordinary `CHART_…` name that you can list, reveal and remove. A name with a `/` in it is one no `${VAR}` can spell, so
 none of them can be resolved into a provider, an `mcp_env` or a child process
 by any document.
 And every operator surface refuses them by name, whatever the caller holds:

@@ -219,16 +219,15 @@ func TestTheEnginesKeysUnderAPrefixNeedNoKeyring(t *testing.T) {
 // apply. Each of those routes is closed here, and the one gesture that crosses
 // — a rekey, because the keyring is one keyring — moves them and counts them.
 //
-// FOR EVERY OWNER: the identity estate's person key and the org chart's seat
-// key are one kind of thing, and a namespace that closed one and not the other
-// would leave a human seat's name one reveal away from outliving the removal
-// that shreds it.
+// FOR EVERY KIND OF KEY the owner keeps: a person's data key and the
+// directory's blind-index key are both the engine's, and a namespace that
+// closed one and not the other would leave the address index one DELETE away
+// from orphaning every address in the directory.
 func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
 	t.Parallel()
 	for _, key := range []string{
 		"iam/person/018f3a9c-0000-7000-8000-000000000001/dek",
-		"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek",
-		"chart/blind-index-key",
+		"iam/blind-index-key",
 	} {
 		t.Run(key, func(t *testing.T) {
 			t.Parallel()

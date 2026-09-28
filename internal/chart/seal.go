@@ -35,12 +35,16 @@ import (
 //   - A SECRET-TAGGED VALUE IS NEVER PLAINTEXT. A literal credential in a
 //     content record is sealed into the company's secret store and the record
 //     carries a `${VAR}` REFERENCE — never the value, on the wire or in a row.
-//   - A PERSON'S OWN FIELDS ARE SEALED UNDER A KEY THAT CAN BE DELETED. A human
-//     seat's name, email and contact identities are personal data rather than
-//     company structure, so they ride under a per-seat key: deleting that one
-//     key makes every copy of those fields — in every node's rows, in every
-//     snapshot, in the log itself — unreadable, which is the only erasure a
-//     write-ahead log can actually offer.
+//   - A SEAT'S ADDRESS IS SEALED LIKE A CREDENTIAL, and nothing else about a
+//     seat is. The email is the one content field this writer seals
+//     ([Writer.resolveMasked]): a literal goes into the secret store under
+//     the seat's derived name and the row carries the reference. A seat's
+//     name and its contact identities are chart content, in the clear on the
+//     log, in every node's rows and in every snapshot. The place a PERSON's
+//     name and address live under a key that can be deleted — the only
+//     erasure a write-ahead log can actually offer — is the identity
+//     directory (internal/iamdomain), not the chart; a leaver's seat stops
+//     naming them when the seat's own fields are edited.
 //
 // # Why the predicate is envref.Whole everywhere
 //

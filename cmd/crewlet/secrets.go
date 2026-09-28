@@ -133,13 +133,11 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 	// node's own table never holds one, so there is no route on which
 	// asking could do anything but fail later and less clearly.
 	if secrets.Reserved(name) {
-		return fmt.Errorf("%w: %s\n\nA person's key and a session's refresh "+
-			"token belong to the identity estate, and a human seat's key and "+
-			"the chart's own keys to the org chart: remove a person with "+
-			"`crewlet iam remove`, a seat through the chart's removal (`POST "+
-			"/chart/batch`), end their sessions with `crewlet iam revoke`. "+
-			"`crewlet secrets rekey` moves these keys with everything else and "+
-			"counts them", secrets.ErrReservedName, name)
+		return fmt.Errorf("%w: %s\n\nA person's key, a session's refresh "+
+			"token and the address index's key belong to the identity estate: "+
+			"remove a person with `crewlet iam remove` and end their sessions "+
+			"with `crewlet iam revoke`. `crewlet secrets rekey` moves these keys "+
+			"with everything else and counts them", secrets.ErrReservedName, name)
 	}
 
 	ctx := context.Background()

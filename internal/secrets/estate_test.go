@@ -23,22 +23,20 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		{"iam/person/018f3a9c-0000-7000-8000-000000000001/dek", true, true},
 		{"iam/session/lin-1/refresh", true, true},
 		{"iam/blind-index-key", true, true},
-		// THE ORG CHART'S, which is the second owner: a human seat's data
-		// key and the chart's own company keys.
-		{"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek", true, true},
-		{"chart/blind-index-key", true, true},
-		{"chart/value-key", true, true},
 		// RESERVED AND STILL NOT WRITABLE: an owner with a malformed tail.
 		{"iam/person//dek", true, false},
 		{"iam/Person/x/dek", true, false},
 		{"iam/", true, false},
-		{"chart/seat//dek", true, false},
-		{"chart/", true, false},
 		// NEITHER: an operator's name, and a slash under nobody's owner.
 		{"GITLAB_TOKEN", false, false},
 		{"IAM_PERSON_X_DEK", false, false},
 		{"other/thing", false, false},
 		{"CHART_SEAT_X_EMAIL", false, false},
+		// AND AN OWNER THAT WAS WITHDRAWN: the org chart keeps no key
+		// material here, so its old names are nobody's — refused by the
+		// operator's grammar and the engine's alike.
+		{"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek", false, false},
+		{"chart/blind-index-key", false, false},
 		{"chartx/thing", false, false},
 		{"iamx/thing", false, false},
 	} {

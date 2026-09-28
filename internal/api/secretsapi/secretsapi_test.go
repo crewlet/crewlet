@@ -353,13 +353,13 @@ func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 // removal could shred it, and a DELETE shredded somebody with no removal on
 // record. Every route that takes a name now refuses one BY NAME — including a
 // caller carrying every grant — the listing counts them without naming any,
-// and a rekey moves and counts them. For EVERY owner: a human seat's key in the
-// org chart's namespace is the same kind of thing as a person's.
+// and a rekey moves and counts them. For every kind of key the engine keeps:
+// the directory's blind-index key is as much the engine's as a person's.
 func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
 	t.Parallel()
 	for _, key := range []string{
 		"iam/person/018f3a9c-0000-7000-8000-000000000001/dek",
-		"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek",
+		"iam/blind-index-key",
 	} {
 		t.Run(key, func(t *testing.T) {
 			t.Parallel()

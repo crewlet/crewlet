@@ -357,8 +357,7 @@ func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	const key = "iam/session/018f3a9c-0000-7000-8000-000000000001/refresh"
-	for _, name := range []string{key,
-		"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek"} {
+	for _, name := range []string{key, "iam/blind-index-key"} {
 		for _, args := range [][]string{
 			{"get", name, "-reveal"},
 			{"set", name, "-value", "stolen"},
