@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -70,20 +71,22 @@ type DomainConsumer struct {
 }
 
 // domainConsumerMaxAckPending is how many records the broker may hand this
-// node's applier before one is acknowledged, and it is THE COUNT BOUND ON A
-// PULL.
-//
-// The vendored client cannot bound one pull by both bytes and count, so the
-// applier pulls by bytes and the count has to live somewhere the broker
-// enforces it. This is that place: a pull hands over at most this many
-// records however many bytes it asked for, and [DomainConsumer.Fetch] returns
-// every one of them. The alternative — the applier taking a prefix of a
-// byte-bounded batch — left the remainder delivered and unacknowledged, so
-// the broker hit its own default cap of a thousand, handed over nothing more
-// for a thirty-second ack window, and then redelivered the same prefix.
+// node's applier before one is acknowledged.
 //
 // [statelog.FetchMessages] is the number, and it is the applier's transaction
-// budget: one pull is at most one transaction's worth of records in flight.
+// budget: one pull is at most one transaction's worth of records, and this
+// ceiling keeps it at most one transaction's worth IN FLIGHT. The pull carries
+// the count itself as well — see [DomainConsumer.Fetch] — so what this adds is
+// the bound across pulls: records delivered and not yet acknowledged, because
+// their transaction has not committed, hold back the next pull rather than
+// piling up behind it.
+//
+// It used to be the ONLY count bound, because the client library could not
+// send one pull with both a count and a byte bound and the applier pulled by
+// bytes. Before that it was the applier taking a prefix of a byte-bounded
+// batch, which left the remainder delivered and unacknowledged, so the broker
+// hit its own default cap of a thousand, handed over nothing more for a
+// thirty-second ack window, and then redelivered the same prefix.
 const domainConsumerMaxAckPending = statelog.FetchMessages
 
 // domainConsumerAckWait is how long the broker waits for an acknowledgement
@@ -990,6 +993,12 @@ func domainConsumerName(stream, nodeID string) string {
 
 // Fetch implements [statelog.Fetcher].
 //
+// ONE PULL REQUEST PER CALL, carrying BOTH bounds: at most maxMessages records
+// and, when maxBytes is positive, at most maxBytes of them, standing for wait.
+// The server enforces both, so nothing past either is ever delivered — see
+// pullrequest.go for why the request is made here rather than through the
+// client library, whose byte-bounded fetch allocated 32 MiB on every call.
+//
 // A message that cannot report its own sequence is DROPPED with its
 // acknowledgement withheld, rather than passed on with a zero: the sequence is
 // the applier's checkpoint, its contiguity check and the next writer's
@@ -998,108 +1007,65 @@ func domainConsumerName(stream, nodeID string) string {
 //
 // # Everything a pull delivered is returned
 //
-// A byte-bounded pull cannot also be count-bounded by this client, and the
-// count is enforced by the consumer's own in-flight ceiling instead — see
-// [domainConsumerMaxAckPending]. So maxMessages is passed to the broker only
-// on the count-bounded path, and on the byte-bounded one the batch is drained
-// whole: a message the broker delivered and this call did not return is one it
-// holds against that ceiling and redelivers after the ack window, which is a
-// hole in the applier's run for thirty seconds.
+// A message the broker delivered and this call did not return is one it holds
+// against the consumer's in-flight ceiling and redelivers after the ack
+// window, which is a hole in the applier's run for thirty seconds. So the pull
+// is read until the server says it ended — the wait ran out, or a bound was
+// met — and every delivery is handed over.
+//
+// # The context ends the drain
+//
+// A pull closes when it is FULL or when `wait` expires — one record arriving
+// does not end it — so a caller that wanted the records already in hand had no
+// way to say so and paid the whole wait. The applier's [statelog.Runner] is
+// exactly that caller: a barrier appended onto a quiet log sat in a pull
+// nobody had finished collecting for five seconds, against a two second read
+// budget, so every linearizable read on an idle company refused `behind`.
+//
+// WHAT IS COLLECTED IS RETURNED. A cancelled drain is this caller deciding it
+// has waited long enough, not a failure: the records already delivered are
+// real and are returned, and what the standing request delivers after it is
+// handed back to the broker at once (see [pull.deliver]).
 func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	wait time.Duration) ([]statelog.Message, error) {
 
 	if maxMessages <= 0 {
 		return nil, nil
 	}
-	opts := []jetstream.FetchOpt{jetstream.FetchMaxWait(wait)}
-	var batch jetstream.MessageBatch
-	var err error
-	cons, err := c.consumerFor(ctx)
+	// THE CONSUMER IS ENSURED FIRST, so a handle a failed reset cleared is
+	// rebuilt before a request is addressed to a name the broker does not
+	// hold — see [DomainConsumer.consumerFor].
+	if _, err := c.consumerFor(ctx); err != nil {
+		return nil, err
+	}
+	p, err := c.q.startPull(c.stream, c.name, maxMessages, max(maxBytes, 0), wait)
 	if err != nil {
 		return nil, err
 	}
-	if maxBytes > 0 {
-		batch, err = cons.FetchBytes(maxBytes, opts...)
-	} else {
-		batch, err = cons.Fetch(maxMessages, opts...)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
-	}
-
-	// THE CONTEXT ENDS THE DRAIN, and until it did this function took a
-	// context and used it for nothing but its own return value.
-	//
-	// A batch closes when it is FULL or when `wait` expires — one record
-	// arriving does not end it — so a caller that wanted the records
-	// already in hand had no way to say so and paid the whole wait. The
-	// applier's [statelog.Runner] is exactly that caller: a barrier
-	// appended onto a quiet log sat in a batch nobody had finished
-	// collecting for five seconds, against a two second read budget, so
-	// every linearizable read on an idle company refused `behind`.
-	//
-	// WHAT IS COLLECTED IS RETURNED. A cancelled drain is this caller
-	// deciding it has waited long enough, not a failure — the messages
-	// already taken are real, and the ones still in the batch are handed
-	// back (see handBack).
 	var out []statelog.Message
-	msgs := batch.Messages()
-	for {
-		var msg jetstream.Msg
-		var open bool
-		select {
-		case msg, open = <-msgs:
-			if !open {
-				msg = nil
-			}
-		case <-ctx.Done():
-			go handBack(msgs)
-		}
-		if msg == nil {
-			break
-		}
-		meta, err := msg.Metadata()
-		if err != nil {
+	err = p.read(ctx, wait, func(msg *nats.Msg) {
+		meta, unreadable := msg.Metadata()
+		if unreadable != nil {
 			// NOT ACKNOWLEDGED. A message whose metadata is
 			// unreadable is one this node cannot place in the log,
 			// and acknowledging it would move the broker's floor
 			// past a record nothing applied.
-			continue
+			return
 		}
 		out = append(out, statelog.Message{
 			Seq:      meta.Sequence.Stream,
 			StoredAt: meta.Timestamp,
-			Payload:  msg.Data(),
-			Ack:      msg.Ack,
+			Payload:  msg.Data,
+			Ack:      func() error { return msg.Ack() },
 		})
-	}
-	if err := batch.Error(); err != nil && !errors.Is(err, context.Canceled) {
+	})
+	switch {
+	case ctx.Err() != nil:
+		return out, ctx.Err()
+	case err != nil:
 		return out, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
 	}
-	return out, ctx.Err()
-}
-
-// handBack returns to the broker every record an ABANDONED pull still delivers,
-// until the pull expires and its channel closes.
-//
-// A cancelled drain leaves its pull request standing on the server for the
-// rest of its wait, and a record appended in that window is delivered to it —
-// to a batch nobody is reading, where it is held against the consumer's
-// in-flight count until the ACK WINDOW redelivers it, thirty seconds later.
-// On a process that exits the connection goes with it and so does the pull;
-// on one that stops an applier and starts another over the same connection —
-// an engine restarted in-process, an estate adopted and reopened — the next
-// applier waited out that window for a record already on the log, and a
-// barrier appended in it refused every linearizable read as `behind` for the
-// whole of it. A negative acknowledgement redelivers at once, to whichever
-// pull asks next.
-//
-// Its lifetime is the pull's: the channel closes when the request expires,
-// which is at most the wait the fetch asked for.
-func handBack(msgs <-chan jetstream.Msg) {
-	for msg := range msgs {
-		_ = msg.Nak()
-	}
+	return out, nil
 }
 
 // Pending implements [statelog.Fetcher]: how many records this consumer has

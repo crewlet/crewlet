@@ -49,17 +49,20 @@ const (
 	// company EVERY barrier is a partial batch.
 	ApplyLinger = 250 * time.Millisecond
 
-	// FetchMessages and FetchBytes bound one pull from the broker.
+	// FetchMessages and FetchBytes bound one pull from the broker, and one
+	// pull carries BOTH: the count is the request's `batch` and the bytes
+	// its `max_bytes`, and the broker enforces each.
 	//
 	// BYTES ARE THE REAL BOUND and the message count is the secondary one:
 	// a log whose records vary from a barrier's hundred-odd bytes to a
 	// bulk write's megabytes cannot be sized by count, and a count-only
 	// bound on a catch-up replay fetches whatever the largest records
-	// happen to be. The vendored client fixes a byte-bounded fetch's
-	// message count at a million, so the two cannot both be asked of one
-	// call.
+	// happen to be. The client library cannot send the two together — its
+	// byte-bounded fetch fixes the count at a million, and allocated 32 MiB
+	// on every idle pull doing it — so the jetstream Fetcher makes the
+	// broker's own request itself.
 	//
-	// # The count is enforced by the CONSUMER, never by the caller
+	// # The count is never the caller's to apply afterwards
 	//
 	// It used to be applied by the loop to what came back: take the first
 	// FetchMessages of a byte-bounded batch and drop the rest. The rest had
@@ -72,11 +75,11 @@ const (
 	// were pending, a backlog of 257 records wedged the applier for the
 	// life of the process.
 	//
-	// So the count is the broker-side consumer's MaxAckPending — the
-	// number of records it may hand this node before one is acknowledged —
-	// and a [Fetcher] returns EVERYTHING a pull delivered. A record the
-	// broker handed over and the loop did not take is a hole for an ack
-	// window, on every pull.
+	// So the count is the pull's own, the broker-side consumer's
+	// MaxAckPending holds the same number IN FLIGHT across pulls, and a
+	// [Fetcher] returns EVERYTHING a pull delivered. A record the broker
+	// handed over and the loop did not take is a hole for an ack window,
+	// on every pull.
 	//
 	// FOUR THOUSAND, which is [ApplyTxRowBudget]: the loop estimates a row
 	// per record when it decides whether another pull could fit, so a
@@ -84,6 +87,16 @@ const (
 	// flight is one whose every pull the loop can commit whole. Larger
 	// buys nothing, because the run closes at the budget; smaller commits
 	// more often than the budget asks.
+	//
+	// 28 MiB OF BYTES, and the floor under it is not a preference: a pull
+	// whose byte bound is smaller than the next record is REFUSED by the
+	// broker with nothing delivered, every time, so the applier would stop
+	// at that record for ever. The largest record a log can hold is
+	// [queue.MaxPayloadBytes] (8 MiB) plus the subject, the acknowledgement
+	// subject and the headers the broker counts against the bound, and 28
+	// MiB is three and a half of them — a pull that can always make
+	// progress, and at most 28 MiB in memory per domain between a pull and
+	// its commit. TestAPullCanAlwaysHoldTheLargestRecord holds the floor.
 	FetchMessages = ApplyTxRowBudget
 	FetchBytes    = 29_360_128
 
@@ -107,8 +120,8 @@ const (
 	//
 	// # It is a CEILING ON READ LATENCY, not just on polling
 	//
-	// The vendored client's batch closes when it is FULL or when this
-	// expires — one record arriving does not end it — so a fetch of
+	// A pull closes when it is FULL or when this expires — the broker holds
+	// the request open, and one record arriving does not end it — so a fetch of
 	// [FetchMessages] on a quiet log costs the whole wait however fast the
 	// record got there. Measured on a three-member cluster: the append
 	// acknowledges in about 500 microseconds and the fetch that collects
