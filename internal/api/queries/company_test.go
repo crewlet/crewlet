@@ -376,6 +376,48 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	}
 }
 
+// EACH NODE ROW SAYS WHAT ITS BROKER IS, off the node's own presence: a member,
+// a leaf or a client — and `unknown` for a presence that does not say, a build
+// older than the field. Never an empty cell, and never a guess from the roles,
+// which no longer imply it: a capacity seal counts an unknown as a member, and
+// the fleet screen marks it for that reason.
+func TestFleetSaysWhatEachNodesBrokerIs(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	for id, meta := range map[string]map[string]any{
+		"node-a":   {"roles": []any{"data", "seats"}, "broker": "member"},
+		"sat-1":    {"roles": []any{"seats"}, "broker": "leaf"},
+		"ext-1":    {"roles": []any{"data"}, "broker": "client"},
+		"old-1":    {"roles": []any{"data", "seats"}},
+		"newer-1":  {"roles": []any{"seats"}, "broker": "observer"},
+		"noroles1": nil,
+	} {
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+			Owner: id + ":1", TTL: time.Minute, Meta: meta,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, NodeID: "node-a",
+		Company: func() *config.Company { return cfg },
+	}, "fleet", nil))
+	got := map[string]any{}
+	nodes, _ := body["nodes"].([]any)
+	for _, n := range nodes {
+		row, _ := n.(map[string]any)
+		got[row["id"].(string)] = row["broker"]
+	}
+	want := map[string]any{"node-a": "member", "sat-1": "leaf", "ext-1": "client",
+		"old-1": "unknown", "newer-1": "unknown", "noroles1": "unknown"}
+	for id, kind := range want {
+		if got[id] != kind {
+			t.Errorf("%s's row says broker %v, want %v (rows: %v)", id, got[id], kind, got)
+		}
+	}
+}
+
 func TestFleetNamesTheSeatsNoNodeCanRun(t *testing.T) {
 	t.Parallel()
 	// A seat pinned to a label no node carries is not "unclaimed yet", it
