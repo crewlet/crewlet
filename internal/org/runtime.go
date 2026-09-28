@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // THE HALF OF A SEAT THE CHART CANNOT SPEAK FOR.
@@ -192,6 +196,38 @@ func clearedUnit(content Unit) Unit {
 var emptyUnitRuntime = sync.OnceValues(func() ([]byte, error) {
 	return json.Marshal(clearedUnit(Unit{}))
 })
+
+// RuntimeShape is where a runtime half keeps its credentials: [chart.Runtime],
+// answered from this package's own types.
+//
+// THE TAGS ARE THE ANSWER. Every field of [Role] and [Unit] that holds a
+// credential carries `secret:"true"` — the same tag the authored config's
+// fields carry, read by the same [secrets.Field] — and the half is walked
+// against the type it decodes onto ([secrets.Walk]), so a credential field
+// added to a seat is sealed by the chart the day it lands, with no list here
+// or there for anybody to remember. A test in internal/config holds the two
+// sets of tags against each other through the conversion that builds this
+// half from an authored seat, so neither can drop one the other has.
+type RuntimeShape struct{}
+
+// The types the two halves decode onto, reflected once.
+var (
+	seatRuntimeType = reflect.TypeOf(Role{})
+	unitRuntimeType = reflect.TypeOf(Unit{})
+)
+
+// Credentials implements [chart.Runtime].
+func (RuntimeShape) Credentials(kind chart.ObjectKind, runtime json.RawMessage,
+	visit secrets.Visit) (json.RawMessage, error) {
+
+	switch kind {
+	case chart.KindSeat:
+		return secrets.Walk(seatRuntimeType, runtime, visit)
+	case chart.KindUnit:
+		return secrets.Walk(unitRuntimeType, runtime, visit)
+	}
+	return nil, fmt.Errorf("org: a %s carries no runtime half", kind)
+}
 
 // ApplyUnitRuntime is [ApplySeatRuntime] for a unit.
 func ApplyUnitRuntime(u *Unit, body json.RawMessage) error {

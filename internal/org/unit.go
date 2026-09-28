@@ -151,7 +151,7 @@ type Unit struct {
 	// Inherited by those members with their own values winning; see
 	// [Organization.Normalize] for why it stops at one level and skips
 	// human seats.
-	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
+	MCPEnv MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
 	Roles    []*Role `yaml:"roles,omitempty" json:"roles,omitempty"`
 	Children []*Unit `yaml:"children,omitempty" json:"children,omitempty"`

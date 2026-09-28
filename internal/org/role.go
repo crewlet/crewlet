@@ -320,8 +320,8 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 // sends is the MCP server's call on this same token, which is also why
 // nothing here names a channel.
 type SlackIdentity struct {
-	BotToken      string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
-	SigningSecret string `yaml:"signing_secret,omitempty" json:"signing_secret,omitempty"`
+	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
+	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty"`
 }
 
 // IsZero reports an unconfigured Slack identity.
@@ -368,8 +368,8 @@ type GitHubApp struct {
 	// app, or to no app at all in a company that only ever created
 	// per-agent ones, and verifying against it refused every delivery from
 	// every agent while GitHub's own hook page showed the app healthy.
-	PrivateKey    string `yaml:"private_key,omitempty" json:"private_key,omitempty"`
-	WebhookSecret string `yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty"`
+	PrivateKey    string `secret:"true" yaml:"private_key,omitempty" json:"private_key,omitempty"`
+	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty"`
 }
 
 // Held reports a seat whose app exists and is installed, which is the only
@@ -383,7 +383,7 @@ func (g *GitHubApp) Held() bool {
 // everything on this backend: the inbound websocket, the outbound REST
 // calls, and — named again under mcp_env.mattermost — the MCP tool server.
 type MattermostIdentity struct {
-	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
+	BotToken string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
 	// Username defaults to the seat handle when empty.
 	Username string `yaml:"username,omitempty" json:"username,omitempty"`
 	// Channel is a channel this seat's bot is added to at provisioning,
@@ -419,7 +419,7 @@ type SandboxSetupStep struct {
 	Name string `yaml:"name" json:"name"`
 
 	// Files are written into the box before Commands run.
-	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
+	Files map[string]string `secret:"true" yaml:"files,omitempty" json:"files,omitempty"`
 
 	// Commands run in order after the files land. A non-zero exit fails
 	// the whole acquisition — the coding agent's brief promises this
@@ -427,7 +427,7 @@ type SandboxSetupStep struct {
 	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty"`
 
 	// Env is merged into the coding agent's run environment.
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty"`
 
 	// Brief is the paragraph handed to the coding agent: what this step
 	// made TRUE about its box.
@@ -440,6 +440,13 @@ type SandboxSetupStep struct {
 	// [DefaultSetupTimeoutSeconds] — see [SetupTimeout].
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
 }
+
+// IdentityKey is the step's name, which is what the credentials in its files
+// and its env are found by ([secrets.Identified]): a step's are sealed under a
+// name derived from WHICH step holds them and restored from the same one, so
+// reordering two steps never hands one step's registry token to the other.
+// The authored step answers the same way, for the same reason.
+func (s SandboxSetupStep) IdentityKey() string { return s.Name }
 
 // DefaultSetupTimeoutSeconds gives a provisioning command room for a
 // dependency install or a cold image pull, which is what these steps
@@ -527,7 +534,7 @@ type RoleSandbox struct {
 	// private-registry token, a test DATABASE_URL): the engine names no
 	// tool-specific variable of its own, and only LLM credentials derive
 	// automatically.
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty"`
 }
 
 // Role is a SEAT in the org chart, held by an AI agent or a human.
@@ -679,7 +686,7 @@ type Role struct {
 	// or sensitive seat without disabling the subsystem.
 	LearningEnabled Toggle `yaml:"learning_enabled,omitempty" json:"learning_enabled,omitzero"`
 
-	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
+	MCPEnv MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
 	// Sandbox is the code-runtime gate; nil means this seat has none.
 	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
