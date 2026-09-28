@@ -101,17 +101,54 @@ type Subject struct {
 	ID     string `json:"id"`
 }
 
-// Validate refuses a subject that cannot address a row.
+// Validate refuses a subject that cannot address a row THIS BUILD writes.
+//
+// The SECOND PASS's check, never the envelope's: a kind is a fact about which
+// build wrote the record, and the envelope is the half every build must read —
+// see [Subject.wellFormed].
 func (s Subject) Validate() error {
+	if err := s.wellFormed(); err != nil {
+		return err
+	}
 	if !s.Source.Valid() {
 		return fmt.Errorf("search: %q is not a source this build embeds", s.Source)
 	}
-	if strings.TrimSpace(s.ID) == "" || strings.ContainsAny(s.ID, " \t\n*>") {
+	return nil
+}
+
+// wellFormed refuses a subject that cannot be a subject on the wire at all, and
+// nothing else.
+//
+// # Why the envelope asks only this
+//
+// The envelope is the half EVERY build reads, for ever ([statelog.Domain]'s
+// deferral contract), and a failure to read it STOPS the applier rather than
+// deferring the record — there is no position, kind or scope to file a record
+// under without one. Asking the envelope whether the kind is one THIS build
+// knows turned every kind a newer build adds into a stop on every older node
+// of a rolling upgrade, which is the opposite of what [Source] promises: a
+// newer build's source is a record this build DEFERS. So the envelope checks
+// only what makes a subject a subject — a kind and an id that are tokens, not
+// empty and not a wildcard — and the version-gated second pass ([Decode])
+// refuses a kind this build does not write at a version it does read.
+func (s Subject) wellFormed() error {
+	if !isToken(string(s.Source)) {
+		return fmt.Errorf("search: %q is not a subject kind — it is a subject "+
+			"token on the wire, so it can be neither empty nor a wildcard",
+			s.Source)
+	}
+	if !isToken(s.ID) {
 		return fmt.Errorf("search: %q is not a source id — it is a subject "+
 			"token on the wire, so it can be neither empty nor a wildcard",
 			s.ID)
 	}
 	return nil
+}
+
+// isToken reports whether s can be written into a subject: not empty, and
+// neither whitespace nor a wildcard anywhere in it.
+func isToken(s string) bool {
+	return strings.TrimSpace(s) != "" && !strings.ContainsAny(s, " \t\n*>")
 }
 
 // String renders a subject for a log line and for the wire.
@@ -253,7 +290,9 @@ func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 			"version %d — every record states its version, and one that does "+
 			"not cannot be told apart from a newer build's", env.V)
 	}
-	if err := env.Subject.Validate(); err != nil {
+	// WELL-FORMED, NOT KNOWN: see [Subject.wellFormed] for why a kind this
+	// build has never heard of is an envelope rather than a stop.
+	if err := env.Subject.wellFormed(); err != nil {
 		return RecordEnvelope{}, err
 	}
 	if env.Scope.Empty() {
@@ -290,6 +329,15 @@ func Decode(payload []byte) (VectorRecord, error) {
 		return VectorRecord{RecordEnvelope: env}, &ErrFutureVersion{
 			Got: env.V, Want: RecordVersion, Subject: env.Subject,
 		}
+	}
+	// A KIND THIS BUILD DOES NOT WRITE, AT A VERSION IT READS, is a writer
+	// fault rather than a newer build: a build that adds a kind states it at a
+	// version above every build that cannot read it, which is the branch
+	// above.
+	if err := env.Subject.Validate(); err != nil {
+		return VectorRecord{RecordEnvelope: env}, fmt.Errorf("search: the "+
+			"record at version %d names a subject this build reads that version "+
+			"of and does not write: %w", env.V, err)
 	}
 	var rec VectorRecord
 	if err := json.Unmarshal(payload, &rec); err != nil {
