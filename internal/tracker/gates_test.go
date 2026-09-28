@@ -104,6 +104,43 @@ func TestAWriteOnAPurgedTaskIsRefusedAsDeleted(t *testing.T) {
 	}
 }
 
+// A SECOND PURGE OF A PURGED TASK IS REFUSED AS PURGED, which is final — never
+// as "not on this node".
+//
+// That refusal is the one a caller retries and a router takes to another node,
+// and every node holding the task's deletion marker would say it again: an
+// operator re-running a purge to be sure was told the node was behind, of a
+// task every node had destroyed. The purge's own retry, under its own id, is
+// answered by the first purge's outcome instead, and nothing is appended.
+func TestASecondPurgeOfAPurgedTaskIsRefusedAsPurged(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+	first, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-1", "ENG", "spam")
+	if err != nil {
+		t.Fatalf("PurgeTask: %v", err)
+	}
+	r.drain()
+	end := r.logEnd(t)
+
+	_, err = r.writer.PurgeTask(t.Context(), "op-purge-again", "t-1", "ENG", "to be sure")
+	if !errors.Is(err, tracker.ErrNoTask) || errors.Is(err, statelog.ErrUnavailable) {
+		t.Fatalf("a second purge of a purged task answered %v, want the final "+
+			"ErrNoTask and never a refusal a caller would retry elsewhere", err)
+	}
+	if !strings.Contains(err.Error(), "was purged") {
+		t.Errorf("the refusal %q does not say the task was purged", err)
+	}
+	retry, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-1", "ENG", "spam")
+	if err != nil || retry.Position != first.Position {
+		t.Fatalf("the first purge's own retry = (%+v, %v), want its outcome at %s",
+			retry.Result, err, first.Position)
+	}
+	if got := r.logEnd(t); got != end {
+		t.Fatalf("purging a purged task put %d record(s) on the log", got-end)
+	}
+}
+
 // THE GATE COUNTS WHAT IT DROPS.
 //
 // The residual producers are replay-shaped — a deferred record reprocessed

@@ -1292,8 +1292,10 @@ A purge written by an earlier build is applied, on every node and on every
 replay, exactly as that build applied it: the object rows go, and the task's
 history, notices, turn records and mirror rows stay, because every node that
 applied it at the time kept them and a node applying it differently would hold
-rows its peers do not. No later gesture reaches them: the task is already
-gone, and purging it again answers with the first purge's outcome.
+rows its peers do not. This build has no gesture that reaches them: the task is
+already gone, so purging it again is refused as already purged — only a retry
+of the purge that did it, under its own operation id, is answered, with that
+purge's outcome.
 
 The confirmation is the task's **key**, not its id: the id is already on the
 command line, so repeating it confirms nothing, while the key has to be looked

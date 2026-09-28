@@ -409,6 +409,10 @@ func purgeExcerpt(task Task, reason, actor string) string {
 // without the confirmation present at that moment. A purge interrupted is a
 // purge that did not happen, and re-running it is the operator's own gesture
 // rather than a repair somebody's cron performs on their behalf.
+//
+// A task already purged is refused with [ErrNoTask], naming the purge: a retry
+// of the purge that did it is answered by its own operation id with that
+// purge's outcome, and any other purge of it has nothing left to destroy.
 func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string) (WriteResult, error) {
 	switch {
 	case id == "":
@@ -447,8 +451,15 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is "+
-					"not on this node: %w", id, statelog.ErrUnavailable)
+				// A TASK ALREADY PURGED IS FINAL, never "not on this
+				// node": that refusal is the one a caller retries and a
+				// router takes to another node, and every node that holds
+				// the marker would send it on again. A retry of the SAME
+				// purge never reaches here — its ledger row answers it
+				// with the first outcome before anything is decided.
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"there is nothing left to purge: its deletion marker is "+
+						"the account of it that survives")
 			case current.Project != project:
 				// THE SCOPE NAMES THE PROJECT THE CALLER SAID, for
 				// [Writer.UpdateTask]'s reason: filed under a

@@ -1026,7 +1026,7 @@ func (w *Writer) projectForTurn(ctx context.Context, id string) (string, error) 
 			return err
 		}
 		if !held {
-			return missingTask(ctx, tx, id)
+			return missingTask(ctx, tx, id, turnOnAPurgedTask)
 		}
 		project = task.Project
 		return nil
@@ -1035,23 +1035,26 @@ func (w *Writer) projectForTurn(ctx context.Context, id string) (string, error) 
 }
 
 // missingTask is the refusal of a task this node holds no row for: [ErrNoTask]
-// when a purge destroyed it, which is final, and [statelog.ErrUnavailable]
-// when this node has not applied its create, which a node that has will not
-// refuse.
-func missingTask(ctx context.Context, tx *sql.Tx, id string) error {
+// when a purge destroyed it, which is final — so the refusal says what the
+// gesture cannot do (refused, completing "task X was purged, and …") — and
+// [statelog.ErrUnavailable] when this node has not applied its create, which a
+// node that has will not refuse.
+func missingTask(ctx context.Context, tx *sql.Tx, id, refused string) error {
 	var purged int
 	err := tx.QueryRowContext(ctx,
 		`SELECT 1 FROM tracker_deletions WHERE task_id = ?`, id).Scan(&purged)
 	switch {
 	case err == nil:
-		return fmt.Errorf("%w: task %s was purged, and nothing it cost can "+
-			"be recorded against it", ErrNoTask, id)
+		return fmt.Errorf("%w: task %s was purged, and %s", ErrNoTask, id, refused)
 	case !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("tracker: read the deletion marker of %s: %w", id, err)
 	}
 	return fmt.Errorf("tracker: task %s is not on this node: %w", id,
 		statelog.ErrUnavailable)
 }
+
+// turnOnAPurgedTask is what [Writer.RecordTurn] cannot do on a purged task.
+const turnOnAPurgedTask = "nothing it cost can be recorded against it"
 
 // recordTurnIn is one attempt of [Writer.RecordTurn], scoped to project.
 func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
@@ -1074,7 +1077,7 @@ func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
 				return statelog.Decision{}, err
 			}
 			if !held {
-				return statelog.Decision{}, missingTask(ctx, tx, turn.Task)
+				return statelog.Decision{}, missingTask(ctx, tx, turn.Task, turnOnAPurgedTask)
 			}
 			if current.Project != project {
 				return statelog.Decision{}, fmt.Errorf("%w: task %s is in "+
