@@ -52,8 +52,8 @@ eighteen in full.
 | `remove_project_file` | Take a file out of a project; its content is deleted from storage |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
-| `write_page` | Create one. Titles are addresses and are unique per container |
-| `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe |
+| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash |
+| `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
 The writes on each side count as a **delivery** for the turn's own

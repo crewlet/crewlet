@@ -66,6 +66,7 @@ var sentinels = []sentinel{
 	{"pages.ErrInvalid", pages.ErrInvalid},
 	{"pages.ErrNoActivation", pages.ErrNoActivation},
 	{"pages.ErrNotFound", pages.ErrNotFound},
+	{"pages.ErrParent", pages.ErrParent},
 	{"pages.ErrReserved", pages.ErrReserved},
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},

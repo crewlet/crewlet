@@ -133,7 +133,14 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
 		Pattern: statelog.PatternCreate,
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// THE PARENT IS JUDGED IN THIS SNAPSHOT, beside the address:
+			// a pointer at a page that is not there, is elsewhere or is
+			// in the trash files the new page where no walk of its
+			// container finds it — see parent.go.
+			if err := checkParent(ctx, tx, page.ID, container, page.ParentID); err != nil {
+				return statelog.Decision{}, err
+			}
 			return s.decide(stamp, actor, subject, OpCreate, scope, opID, CreatePayload{
 				V: DocumentVersion, PageID: page.ID, Container: container,
 				Title: title, ParentID: page.ParentID, Body: page.Body,
@@ -253,6 +260,17 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 				return statelog.Decision{}, fmt.Errorf(
 					"%w: this edit is against version %d and the page is at %d",
 					ErrStaleVersion, save.BaseVersion, head.Version)
+			}
+			if save.ParentID != nil && *save.ParentID != head.ParentID {
+				// A MOVE IS JUDGED IN THE SNAPSHOT IT IS DECIDED IN,
+				// including the walk that finds this page above its new
+				// parent — see parent.go for what the applier does with
+				// the one shape two writers can still make.
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := checkParent(ctx, tx, pageID, head.Container,
+					*save.ParentID); err != nil {
+					return statelog.Decision{}, err
+				}
 			}
 			patch, kind, changed := s.patchOf(actor, &head, save, at)
 			// PATCHED OR NOT, THE HEAD IS THE ANSWER, and it is taken
@@ -512,6 +530,19 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 			}
 			out, read = head, revision
 			scope := ScopeSet{Subject: true, Container: head.Container}
+			if op == OpPurge {
+				// A PURGE WRITES ITS CHILDREN'S ROWS TOO: each is filed
+				// under the purged page's own parent, so none is left
+				// pointing at a row that is gone (see the applier's
+				// purge). Which pages those are is decided at the apply,
+				// against the rows at that position — a child can be
+				// filed under this page after this snapshot — so the
+				// scope is the CONTAINER, which covers every one of them
+				// whatever arrives.
+				scope = ScopeSet{Terms: []ScopeTerm{
+					{Kind: TermContainer, ID: head.Container},
+				}}
+			}
 			notify := s.notifyOf(false, kind, head, "", nil)
 			return s.decide(stamp, actor, subject, op, scope, opID, StatusPayload{
 				V: DocumentVersion, Reason: reason,

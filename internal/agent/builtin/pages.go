@@ -313,8 +313,10 @@ func (t *writePage) Parameters() map[string]any {
 				"description": "The container key. Defaults to your team's.",
 			},
 			"parent": map[string]any{
-				"type":        "string",
-				"description": "The id of the page this belongs under.",
+				"type": "string",
+				"description": "The id of the page this belongs under — a " +
+					"page in the same container that is not in the trash. " +
+					"Leave it out to file the page at the container's top.",
 			},
 			"labels": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"message": map[string]any{
@@ -413,9 +415,14 @@ func (t *savePage) Parameters() map[string]any {
 					"what makes somebody else's edit a refusal instead of a " +
 					"silent overwrite.",
 			},
-			"body":   map[string]any{"type": "string", "description": "Replaces the page."},
-			"title":  map[string]any{"type": "string", "description": "Renames it."},
-			"parent": map[string]any{"type": "string", "description": "Moves it under this page."},
+			"body":  map[string]any{"type": "string", "description": "Replaces the page."},
+			"title": map[string]any{"type": "string", "description": "Renames it."},
+			"parent": map[string]any{
+				"type": "string",
+				"description": "Moves it under this page: the id of a page in " +
+					"the same container, not in the trash and not beneath " +
+					"this one. An empty string moves it to the container's top.",
+			},
 			"labels": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
 				"description": "Replaces the whole label set.",

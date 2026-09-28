@@ -372,6 +372,20 @@ Two properties differ from the vendor path and both are visible:
   page's history and tells its watchers. Only a rename to the title the page
   already displays does nothing — and it reports success, because it has
   already happened.
+- **A container is a TREE, and a parent has to keep it one.** A page's
+  `parent` must be a page that exists, in the **same container**, not in the
+  trash, and neither the page itself nor one beneath it. Anything else is
+  refused when it is written, naming `parent_id` and what to do instead —
+  because the tree is read from the top down, and a page filed under a page
+  that is not there, or two pages filed under each other, are pages no walk of
+  the container ever reaches. An empty parent is the container's top.
+  Two moves that are each sound can still race — A under B on one node, B
+  under A on another — and so can a move and its parent's purge. Every node
+  then files the page where it can, identically: a move whose parent it can no
+  longer hold leaves the page where it was, a create lands at the top, and a
+  `pages_parent_salvaged` warning names the page. **Purging a page re-files
+  its children** under its own parent (or the top) rather than leaving them
+  pointing at nothing.
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 

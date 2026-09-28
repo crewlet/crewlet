@@ -525,9 +525,11 @@ func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]Revi
 
 // ancestorDepth bounds the parent walk.
 //
-// Sixteen. A page tree that deep is already unnavigable, and the cap is here
-// so a cycle — which a save that set a page's parent to its own descendant
-// would create — terminates rather than hanging the read that found it.
+// Sixteen. A page tree that deep is already unnavigable. The walk also keeps
+// a visited set, so a cycle terminates rather than hanging the read that found
+// it: nothing this build writes or applies can leave one — the decide refuses
+// a parent beneath the page and the applier salvages the race (see parent.go)
+// — but rows an older build applied may still hold one.
 const ancestorDepth = 16
 
 func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]Summary, error) {

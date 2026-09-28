@@ -253,6 +253,14 @@ var (
 
 	// ErrReserved reports a container the engine holds for itself.
 	ErrReserved = errors.New("pages: that container is reserved")
+
+	// ErrParent reports a parent a page cannot be filed under: a page that
+	// does not exist or was purged, one in the trash, one in another
+	// container, or the page itself or one beneath it. Every such refusal
+	// also answers [ErrInvalid], because it IS a refusal of one field — a
+	// caller handling field refusals handles it — and this sentinel is what
+	// tells "choose another parent" from every other field's remedy.
+	ErrParent = errors.New("pages: not a parent this page can have")
 )
 
 // Actor is who is making a write, on [tracker.Writer]'s terms — except that it

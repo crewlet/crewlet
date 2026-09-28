@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -52,6 +53,26 @@ func TestEverySentinelKeepsItsIdentityAcrossTheWire(t *testing.T) {
 				t.Errorf("%s: the rebuilt error also claims to be %s", s.code, other.code)
 			}
 		}
+	}
+}
+
+// A REFUSAL THAT IS TWO SENTINELS AT ONCE KEEPS BOTH.
+//
+// A page's bad parent is a field refusal ([pages.ErrInvalid], which a tool
+// renders as "refused that") AND the one fact [pages.ErrParent] names, in the
+// shape the pages store builds it. A stateless node's tool branches on either,
+// so the wire has to carry both rather than whichever it met first.
+func TestARefusalThatIsTwoSentinelsKeepsBoth(t *testing.T) {
+	t.Parallel()
+	original := fmt.Errorf("%w (%w)",
+		fmt.Errorf("%w: parent_id: page x is in the trash", pages.ErrInvalid),
+		pages.ErrParent)
+	got := throughWire(t, original)
+	if !errors.Is(got, pages.ErrInvalid) || !errors.Is(got, pages.ErrParent) {
+		t.Fatalf("a parent refusal lost an identity across the wire: %v", got)
+	}
+	if got.Error() != original.Error() {
+		t.Fatalf("the message became %q, want %q", got, original)
 	}
 }
 
