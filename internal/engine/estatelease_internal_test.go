@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -162,7 +163,8 @@ func TestTheEstateLeaseSaysLayoutZerosOnePartition(t *testing.T) {
 }
 
 // THE MEMBERSHIP IS GIVEN BACK AFTER THE RUNTIME HAS STOPPED: after the search
-// slices are withdrawn and the runtime's own loops have ended. A member is what
+// slices are withdrawn, the runtime's own loops have ended and its appliers
+// have stopped. A member is what
 // the estate map places partitions on and a capacity window waits for, so one
 // given back while its runtime still ran would read as gone while it served —
 // the drain-long reshuffle the lease exists to prevent.
@@ -177,7 +179,12 @@ func TestTheEstateLeaseIsGivenBackAfterTheRuntimeStops(t *testing.T) {
 	}
 	b := recordingLeases{Backend: coordmemory.New(), mu: &mu, order: &order}
 	run, stop := context.WithCancel(context.Background())
-	n := &native{run: run, stop: stop,
+	// THE STATE LOG'S OWN STOP, whose last step is ending the appliers: a
+	// log with no loops running and one apply context, whose cancel is the
+	// appliers stopping.
+	appliers := &stateLog{stop: func() {}}
+	appliers.applyStop = func() { record("appliers") }
+	n := &native{run: run, stop: stop, log: appliers,
 		stopSlices: func(context.Context) error { record("slices"); return nil },
 		lease: startMemberLease(t.Context(), b, memberLeaseSpec{
 			resource: coord.EstateResource("n1"), node: "n1", owner: "n1:inc",
@@ -199,8 +206,9 @@ func TestTheEstateLeaseIsGivenBackAfterTheRuntimeStops(t *testing.T) {
 	n.shutdown(t.Context())
 	mu.Lock()
 	defer mu.Unlock()
-	if len(order) != 3 || order[0] != "slices" || order[1] != "runtime" || order[2] != "membership" {
-		t.Fatalf("stopped in the order %v, want the slices, the runtime, then the membership", order)
+	if want := []string{"slices", "runtime", "appliers", "membership"}; !slices.Equal(order, want) {
+		t.Fatalf("stopped in the order %v, want %v: the membership last, once nothing "+
+			"of the runtime serves or applies", order, want)
 	}
 }
 
