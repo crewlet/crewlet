@@ -112,7 +112,7 @@ func (r *Reader) SealedNames(ctx context.Context, end uint64) (map[string]bool, 
 		if err != nil {
 			return fmt.Errorf("chart: read how much of the log these rows hold: %w", err)
 		}
-		if err := coversLog(prefix, end); err != nil {
+		if err = coversLog(prefix, end); err != nil {
 			return err
 		}
 		seats, err := readSeats(ctx, tx)
@@ -120,8 +120,8 @@ func (r *Reader) SealedNames(ctx context.Context, end uint64) (map[string]bool, 
 			return err
 		}
 		for _, seat := range seats {
-			held, err := seat.Sealed()
-			if err != nil {
+			var held []string
+			if held, err = seat.Sealed(); err != nil {
 				return fmt.Errorf("chart: seat %s: %w", seat.Handle, err)
 			}
 			for _, name := range held {
@@ -133,8 +133,8 @@ func (r *Reader) SealedNames(ctx context.Context, end uint64) (map[string]bool, 
 			return err
 		}
 		for _, unit := range units {
-			held, err := unit.Sealed()
-			if err != nil {
+			var held []string
+			if held, err = unit.Sealed(); err != nil {
 				return fmt.Errorf("chart: unit %s: %w", unit.Key, err)
 			}
 			for _, name := range held {
