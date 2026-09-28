@@ -206,19 +206,36 @@ count, and a node that does not say. Once a dead member is not coming back:
 crewlet fleet broker remove node-c -confirm node-c
 ```
 
+The group counts a voter by its raft **peer id**, which is derived from its
+node id, and a member hears another's *name* only from that server itself. So
+once the survivors have restarted since the member died — a rolling upgrade
+does it, and so do the restarts a capacity seal takes — none of them can name
+it: `list` shows it as `(name unknown)` with its peer id. Removing it by the
+node id you know still works, because the removal goes by the id the node id
+hashes to; if you no longer know which node it was, remove it by the peer id
+`list` shows:
+
+```
+crewlet fleet broker remove -peer 9iReXzcw -confirm 9iReXzcw
+```
+
 The node you ask forwards the removal to a live member, never the one being
-removed while another will do, because nats-server answers a membership change
-only on a member's own system account. It is refused while the named node
-still holds a live presence lease — a running member removed from the group
-rejoins it as a voter at its next restart — and `-force` overrides that for a
-member wedged in a way that still renews its lease. The dead member is often
-the one that was the group's **leader**, and only a leader answers a
+removed, because nats-server answers a membership change only on a member's own
+system account — and a member could not see itself dropped. It is refused while
+the voter's node still holds a live presence lease **as a member** — a running
+member removed from the group rejoins it as a voter at its next restart — and
+`-force` overrides that for a member wedged in a way that still renews its
+lease. A node that came back as a **leaf** or a **client** under the voter's
+name is removed without `-force`: its broker never rejoins. The dead member is
+often the one that was the group's **leader**, and only a leader answers a
 membership change — so the removal asks again every second while the
 survivors elect another, and returns once the member carrying it no longer
-counts the dead one. It fails only when nobody answers for the whole wait (two
-minutes): a group with no leader cannot change its own membership, so bring
-enough members back for a quorum first. The Fleet screen's **Broker members**
-panel offers the same removal.
+counts the dead one. The whole removal is bounded by one wait (two minutes and
+five seconds): nobody answering as leader for all of it is a group without a
+quorum, which cannot change its own membership, so bring enough members back
+first; a carrying member that goes silent ends it as an outcome nobody knows —
+read `list` before asking again. The Fleet screen's **Broker members** panel
+offers the same removal, by node id or by peer id.
 
 ## Node roles
 

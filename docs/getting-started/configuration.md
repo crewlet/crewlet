@@ -434,7 +434,14 @@ stream:
                                     #   defaults) keeps every item and every
                                     #   page there, so the engine refuses to
                                     #   boot it on an in-memory stream rather
-                                    #   than lose them at the first restart
+                                    #   than lose them at the first restart.
+                                    #   And a MEMBER OF A FLEET's broker —
+                                    #   embedded, no leaf urls, and naming a
+                                    #   cluster, peers or a leaf listener —
+                                    #   needs it WHATEVER its roles and its
+                                    #   company: it holds the fleet's streams
+                                    #   for every node that reaches it. A
+                                    #   leaf is refused one
   # store_max_bytes: 68719476736    # how much of that directory's volume the
                                     #   EMBEDDED broker may hold — the ONE number
                                     #   every stream ceiling on it is compared
@@ -520,24 +527,31 @@ stream:
                                     #   else's. A bare host keeps this member's
                                     #   own route port
   # leaf:                           # the LEAF LINK, and a node is on exactly
-                                    #   one side of it, decided by its roles.
-  #   urls:                         #   A node WITHOUT `data` dials the members'
-  #     - "nats-leaf://node-1:7422" #   leaf listeners here — any one that
-  #     - "nats-leaf://node-2:7422" #   answers will do — and its embedded
-                                    #   broker runs NO JetStream: no replica, no
-                                    #   vote, no stream store (`store_dir` and
-                                    #   `cluster` are refused beside it). Every
-                                    #   stream and bucket its clients use is a
-                                    #   member's, reached across this link.
-                                    #   REQUIRED on such a node on an embedded
-                                    #   stream, refused on a node with `data`
-  #   port: 7422                    #   A MEMBER's listener, where those nodes
-                                    #   join. Refused on a node without `data`.
-                                    #   A member that opens one must persist
-                                    #   (`store_dir` is required): the nodes that
+                                    #   one side of it. WHICH SIDE is its
+                                    #   BROKER KIND, derived from this block and
+                                    #   nothing else: `urls` makes it a leaf,
+                                    #   and any other embedded broker is a
+                                    #   member. `node.roles` is a separate
+                                    #   question: what the node's DISK keeps.
+  #   urls:                         #   A LEAF dials the members' leaf
+  #     - "nats-leaf://node-1:7422" #   listeners here — any one that answers
+  #     - "nats-leaf://node-2:7422" #   will do — and its embedded broker runs
+                                    #   NO JetStream: no replica, no vote, no
+                                    #   stream store (`store_dir`, `cluster` and
+                                    #   a leaf `port` are refused beside it).
+                                    #   Every stream and bucket its clients use
+                                    #   is a member's, reached across this link.
+                                    #   UNTIL THE PARTITIONED ESTATE IS LIVE a
+                                    #   node without `data` must be a leaf and a
+                                    #   node with it must not: every data node
+                                    #   holds the whole estate as a member, and
+                                    #   each refusal says it lasts that long
+  #   port: 7422                    #   A MEMBER's listener, where leaves join.
+                                    #   A member that opens one is in a fleet
+                                    #   even with no peers, so it must persist
+                                    #   (`store_dir`, as above: the leaves that
                                     #   join it keep nothing, so it keeps
-                                    #   everything they do. And it is in a fleet
-                                    #   even with no peers, so it needs
+                                    #   everything they do) and needs
                                     #   `coordination.type: embedded-kv`
   #   host: 10.0.0.11               #   the interface the listener binds. Like
                                     #   the route port it accepts any connection

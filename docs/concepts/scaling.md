@@ -79,8 +79,11 @@ and write the tracker and the knowledge base through a data node over the
 broker, carrying the node's own writes as a floor so whichever data node
 answers has applied them, and what it publishes about its turns is kept in a
 data node's event log. It is never counted as a copy: the trim, the eviction
-gate, the search fan-out and the capacity handshake all read the role off the
-presence lease. This is the shape for an agent host you want small and
+gate and the search fan-out read the role off the presence lease, and the
+capacity handshake reads the role AND the broker kind beside it — a broker
+member counts whatever its roles, and a presence that does not say counts as
+one (see [who has to acknowledge](../guides/retention.md#who-has-to-acknowledge)).
+This is the shape for an agent host you want small and
 disposable — see [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data)
 and [ADR-0018](https://github.com/crewlet/crewlet/blob/main/adr/0018-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md).
 
