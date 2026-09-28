@@ -288,7 +288,8 @@ curl -s "$CREWLET_URL/chart/seats/sre" -H "$AUTH" > sre.json
 # The seat as it will be: every field the read served, with the one you mean
 # to change changed.
 jq '.seat
-    | {unit, name, email, goal, project, space}
+    | {unit, name, email, backstory, goal, responsibilities,
+       behavioral_guidelines, project, space}
     | with_entries(select(.value != null))
     | .goal = "keep the platform boring"' sre.json > sre-edit.json
 
@@ -305,11 +306,10 @@ only the field you meant to change leaves out the seat's `email`, `project` and
 them, and an administrator holding `config:write` is **granted** it — the
 seat's address, its project and its space are cleared under a `200`.
 
-**Three prose fields are not in the read**: a seat's `backstory`,
-`responsibilities` and `behavioral_guidelines`. `GET /chart/seats/{handle}`
-does not serve them, so the body above sets them empty on a seat that has
-them. On such a seat, add the three to the body from the company file you
-author before you send it.
+**The read serves every field a content write takes** — a seat's
+`backstory`, `responsibilities` and `behavioral_guidelines` as much as its
+goal, and a unit's `knowledge_refs` as much as its purpose — so a body built
+from it changes only the field you changed.
 
 Leaving `runtime` out keeps the runtime half the seat has, which is what lets
 somebody who leads the seat correct its goal without holding, or seeing, its

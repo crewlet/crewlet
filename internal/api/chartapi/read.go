@@ -33,13 +33,27 @@ const RuntimeParam = "runtime"
 // the half that must not travel. A `json:"-"` is one edit away from being
 // removed by somebody who wanted the field in a log line, and the failure is
 // silent and total. Here a field reaches a reader because this file names it.
+//
+// EVERY FIELD A CONTENT WRITE TAKES IS HERE, because a content write is FULL
+// POST-STATE ([chart.SeatContent]): the ordinary edit is read, change one
+// field, send the object back, and a field the read leaves out is a field the
+// write sets to empty. The views carried a seat's goal and not its backstory,
+// responsibilities or guidelines, and a unit's purpose and not its knowledge
+// references — so a client correcting a goal from this answer erased the rest
+// of the seat's prompt, and the round trip /company/export promises dropped
+// the four from every file it wrote.
 type seatView struct {
-	Handle  string `json:"handle"`
-	Kind    string `json:"kind,omitempty"`
-	Unit    string `json:"unit,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Email   string `json:"email,omitempty"`
-	Goal    string `json:"goal,omitempty"`
+	Handle    string `json:"handle"`
+	Kind      string `json:"kind,omitempty"`
+	Unit      string `json:"unit,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Email     string `json:"email,omitempty"`
+	Backstory string `json:"backstory,omitempty"`
+	Goal      string `json:"goal,omitempty"`
+
+	Responsibilities     []string `json:"responsibilities,omitempty"`
+	BehavioralGuidelines []string `json:"behavioral_guidelines,omitempty"`
+
 	Project string `json:"project,omitempty"`
 	Space   string `json:"space,omitempty"`
 
@@ -65,6 +79,8 @@ type unitView struct {
 	Channel string   `json:"channel,omitempty"`
 	Project string   `json:"project,omitempty"`
 	Space   string   `json:"space,omitempty"`
+
+	KnowledgeRefs []string `json:"knowledge_refs,omitempty"`
 
 	FormerKeys []string `json:"former_keys,omitempty"`
 
@@ -110,14 +126,12 @@ func (s *Service) getUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	got, err := s.reader.Unit(r.Context(), r.PathValue("key"), fresh)
-	if err != nil {
-		s.readFailed(w, err)
+	if errors.Is(err, chart.ErrNotFound) {
+		notFound(w, "unit", r.PathValue("key"))
 		return
 	}
-	if got.Unit.Key == "" {
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
-			map[string]string{"detail": "this company has no unit " +
-				strconv.Quote(r.PathValue("key"))})
+	if err != nil {
+		s.readFailed(w, err)
 		return
 	}
 	runtime := s.runtimeAllowed(r)
@@ -143,14 +157,12 @@ func (s *Service) getSeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	got, err := s.reader.Seat(r.Context(), r.PathValue("handle"), fresh)
-	if err != nil {
-		s.readFailed(w, err)
+	if errors.Is(err, chart.ErrNotFound) {
+		notFound(w, "seat", r.PathValue("handle"))
 		return
 	}
-	if got.Seat.Handle == "" {
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
-			map[string]string{"detail": "this company has no seat " +
-				strconv.Quote(r.PathValue("handle"))})
+	if err != nil {
+		s.readFailed(w, err)
 		return
 	}
 	runtime := s.runtimeAllowed(r)
@@ -159,6 +171,20 @@ func (s *Service) getSeat(w http.ResponseWriter, r *http.Request) {
 		"history": got.History,
 		"answer":  answerOf(got.Answer), "runtime": runtime,
 	})
+}
+
+// notFound answers a read of one object the chart does not hold.
+//
+// THE READER SAYS SO WITH AN ERROR, [chart.ErrNotFound], and never with an
+// empty object: these routes checked for an empty key instead, which the
+// reader never returns, so an address nothing answers to fell through to
+// [Service.readFailed] and was answered `500 internal_error` — a screen asking
+// about a seat that had been removed was told the node was broken rather than
+// that the seat was gone.
+func notFound(w http.ResponseWriter, kind, address string) {
+	httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+		map[string]string{"detail": "this company has no " + kind + " " +
+			strconv.Quote(address)})
 }
 
 // runtimeAllowed reports whether this request gets the opaque half.
@@ -275,7 +301,7 @@ func viewOfUnit(u chart.Unit, runtime bool) unitView {
 		Key: u.Key, Name: u.Name, Type: u.Type, Purpose: u.Purpose,
 		Goals: u.Goals, Parent: u.ParentKey, Lead: u.Lead,
 		Channel: u.Channel, Project: u.Project, Space: u.Space,
-		FormerKeys: u.FormerKeys,
+		KnowledgeRefs: u.KnowledgeRefs, FormerKeys: u.FormerKeys,
 	}
 	if runtime && len(u.Runtime) > 0 {
 		out.Runtime = maskedRuntime(chart.KindUnit, u.Runtime)
@@ -292,8 +318,11 @@ func viewOfUnit(u chart.Unit, runtime bool) unitView {
 func viewOfSeat(seat chart.Seat, runtime bool) seatView {
 	out := seatView{
 		Handle: seat.Handle, Kind: string(seat.Kind), Unit: seat.UnitKey,
-		Name: seat.Name, Email: secrets.Mask(seat.Email), Goal: seat.Goal,
-		Project: seat.Project, Space: seat.Space,
+		Name: seat.Name, Email: secrets.Mask(seat.Email), Backstory: seat.Backstory,
+		Goal:                 seat.Goal,
+		Responsibilities:     seat.Responsibilities,
+		BehavioralGuidelines: seat.BehavioralGuidelines,
+		Project:              seat.Project, Space: seat.Space,
 		FormerHandles: seat.FormerHandles,
 	}
 	if runtime && len(seat.Runtime) > 0 {

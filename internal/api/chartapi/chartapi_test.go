@@ -1230,6 +1230,71 @@ func TestAFaultsOwnWordsStayInTheLog(t *testing.T) {
 	}
 }
 
+// AN ADDRESS NOTHING ANSWERS TO IS 404, not a fault.
+//
+// The reader says an object is absent with [chart.ErrNotFound]. These routes
+// checked for an empty object instead, which the reader never returns, so the
+// error fell through to the fault arm: a screen asking about a removed seat
+// was answered `500 internal_error`, which reads as a broken node. The control
+// is the same fault the reader returns for anything else, still a 500.
+func TestAnAddressNothingAnswersToIsNotFound(t *testing.T) {
+	t.Parallel()
+	absent := fmt.Errorf("chart: no seat answers to %q: %w", "gone", chart.ErrNotFound)
+	r := serve(t, &reader{err: absent}, leadOf(iam.GrantStateRead), leads())
+	for _, path := range []string{"/chart/seats/gone", "/chart/units/gone"} {
+		body := getJSON(t, r.mux, path, http.StatusNotFound)
+		if body["error"] != string(httpjson.CodeNotFound) {
+			t.Errorf("%s answered %v, want the not_found envelope", path, body)
+		}
+	}
+
+	faulted := serve(t, &reader{err: errors.New("disk I/O error")},
+		leadOf(iam.GrantStateRead), leads())
+	rec := httptest.NewRecorder()
+	faulted.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"http://x/chart/seats/sre", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("a read that faulted answered %d, want 500 — the not-found arm "+
+			"must be the reader's answer and nothing else", rec.Code)
+	}
+}
+
+// A READ SERVES EVERY FIELD A CONTENT WRITE TAKES.
+//
+// A content write is full post-state, so the ordinary edit — read, change one
+// field, send the object back — sets every field the read left out to empty.
+// The views carried a seat's goal but not its backstory, responsibilities or
+// guidelines, and a unit's purpose but not its knowledge references, so any
+// client editing a goal from this answer erased the rest of the seat's prompt.
+// read_internal_test.go holds the two field lists against each other; this
+// holds the values a reader actually receives.
+func TestAReadServesEveryFieldAContentWriteTakes(t *testing.T) {
+	t.Parallel()
+	company := nimbus()
+	company.Units[0].KnowledgeRefs = []string{"runbooks"}
+	company.Seats[0].Backstory = "paged at night"
+	company.Seats[0].Responsibilities = []string{"uptime"}
+	company.Seats[0].BehavioralGuidelines = []string{"write it down"}
+	r := serve(t, &reader{chart: company, seat: chart.SeatDetail{Seat: company.Seats[0]},
+		unit: chart.UnitDetail{Unit: company.Units[0]}}, leadOf(iam.GrantStateRead), leads())
+
+	for _, path := range []string{"/chart", "/chart/seats/sre", "/chart/units/engineering"} {
+		raw := string(mustMarshal(t, getJSON(t, r.mux, path, http.StatusOK)))
+		for _, want := range []string{"paged at night", "uptime", "write it down", "runbooks"} {
+			if path == "/chart/seats/sre" && want == "runbooks" {
+				continue // one seat's read carries no unit
+			}
+			if path == "/chart/units/engineering" && want != "runbooks" {
+				continue // and one unit's carries seats only when it holds some
+			}
+			if !strings.Contains(raw, want) {
+				t.Errorf("%s does not serve %q, which a content write would then "+
+					"clear:\n%s", path, want, raw)
+			}
+		}
+	}
+}
+
 // A RENAME IS A ONE-OPERATION STRUCTURAL BATCH, naming the object by the
 // address the route is addressed by and the address the body asks for.
 //
