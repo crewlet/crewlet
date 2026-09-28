@@ -154,6 +154,20 @@ export interface PhaseRecord {
    *  which is every phase but a sandbox-backed one, and every subscription
    *  CLI, where the marginal cost genuinely is nothing. */
   costUSD: number;
+  /**
+   * The detached coding run this phase collected, and what its box reported
+   * spending — BESIDE the phase's own `inputTokens`/`outputTokens`, which are
+   * what the engine's own model calls spent. Empty and zero on every phase that
+   * collected no run, and on a live one.
+   *
+   * A launch is spent ONCE and can ride more than one record: a resume retried
+   * after its phase completed publishes that phase again with the same run on
+   * it. So a figure summed over records counts it through [runTokens], once
+   * per launch — the rule the engine's own Tokens rollup and turns list apply.
+   */
+  launchId: string;
+  runInputTokens: number;
+  runOutputTokens: number;
   /** The branches and pull requests the phase delivered. */
   deliveredRefs: string[];
   /**
@@ -390,6 +404,9 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     // run is registered, and the cost and the refs are what it REPORTS back.
     sandboxId: "",
     costUSD: 0,
+    launchId: "",
+    runInputTokens: 0,
+    runOutputTokens: 0,
     deliveredRefs: [],
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     at: call.updated_at,
@@ -460,6 +477,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // pull requests the phase produced.
     sandboxId: String(p.sandbox_id ?? ""),
     costUSD: num(p.cost_usd),
+    launchId: String(p.launch_id ?? ""),
+    runInputTokens: num(p.run_input_tokens),
+    runOutputTokens: num(p.run_output_tokens),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     at: ev.timestamp,
@@ -693,6 +713,11 @@ export interface TurnGroup {
   iterations: number;
   live: boolean;
   failed: boolean;
+  /**
+   * Everything the turn spent: its own phases, its workers, and the detached
+   * coding runs it collected, each launch once ([runSpend]) — the same figure
+   * `store.Turns` lists and the Tokens view counts for this turn.
+   */
   totalTokens: number;
   trigger: PhaseRecord["trigger"];
 }
@@ -737,6 +762,39 @@ export function attempts(groups: readonly TurnGroup[]): Map<string, Attempt> {
     ordered.forEach((g, i) => out.set(g.turnId, { index: i + 1, total: ordered.length }));
   }
   return out;
+}
+
+/**
+ * What the detached coding runs among `records` spent in their boxes, and how
+ * many runs that is — counting each LAUNCH once, however many records carry it.
+ *
+ * ONCE PER LAUNCH, because a resume retried after its phase completed
+ * publishes that phase again with the same run on it: summed per record, a
+ * retried turn showed its run twice while the budgets, the task, the engine's
+ * Tokens rollup (`tokens.settleRuns`) and its turns list (`store.Turns`) each
+ * count it once. The values of one launch are the same on every record that
+ * carries it, so which record is counted does not matter here.
+ *
+ * A negative count is a bad payload rather than a refund, and counts nothing,
+ * as it does at the engine.
+ */
+export function runSpend(records: readonly PhaseRecord[]): { tokens: number; runs: number } {
+  const seen = new Set<string>();
+  let tokens = 0;
+  for (const r of records) {
+    if (!r.launchId || seen.has(r.launchId)) continue;
+    seen.add(r.launchId);
+    tokens += runTokens(r);
+  }
+  return { tokens, runs: seen.size };
+}
+
+/**
+ * What the coding run ONE phase collected spent in its box — the figure its
+ * card shows beside the phase's own. Summed over records, use [runSpend].
+ */
+export function runTokens(record: PhaseRecord): number {
+  return Math.max(0, record.runInputTokens) + Math.max(0, record.runOutputTokens);
 }
 
 /** Group phases into the turns they belong to, newest turn first. */
@@ -796,7 +854,9 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
         live: ordered.some((r) => r.live),
         failed: ordered.some((r) => r.failed),
-        totalTokens: ordered.reduce((n, r) => n + r.totalTokens, 0),
+        // THE RUNS WITH THE PHASES, each launch once — the figure the turns
+        // list and the Tokens view state for the same turn.
+        totalTokens: ordered.reduce((n, r) => n + r.totalTokens, 0) + runSpend(ordered).tokens,
         trigger: ordered.find((r) => r.trigger)?.trigger ?? null,
       };
     })

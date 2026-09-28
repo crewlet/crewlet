@@ -240,6 +240,8 @@ describe("turnFacts", () => {
       tokens: 0,
       workerTokens: 0,
       workerCount: 0,
+      runTokens: 0,
+      runCount: 0,
       iterations: 0,
       traceIds: [],
       story: tellStory([]),
@@ -313,6 +315,21 @@ describe("turnFacts", () => {
       "+400 in 3 workers",
     );
     expect(fact(view({ tokens: 900 }), "Tokens")?.note).toBe(undefined);
+  });
+
+  test("the token figure names its coding runs beside its workers", () => {
+    // What a detached run spent in its box is not the engine's own model
+    // calls, and the turns list and the Tokens view count it in this turn's
+    // figure — so a page that left it out stated a second total for one turn.
+    expect(fact(view({ tokens: 900, runTokens: 5700, runCount: 1 }), "Tokens")?.note).toBe(
+      `+${(5700).toLocaleString()} in 1 coding run`,
+    );
+    expect(
+      fact(
+        view({ tokens: 900, workerTokens: 400, workerCount: 2, runTokens: 700, runCount: 2 }),
+        "Tokens",
+      )?.note,
+    ).toBe("+400 in 2 workers · +700 in 2 coding runs");
   });
 
   test("a turn with no phase record in hand counts nothing, and notes nothing", () => {

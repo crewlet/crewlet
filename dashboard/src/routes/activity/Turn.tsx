@@ -102,6 +102,8 @@ import {
   groupTurns,
   mergePhases,
   phaseDuration,
+  runSpend,
+  runTokens,
   streamedPhases,
   turnSpan,
   type PhaseRecord,
@@ -285,6 +287,13 @@ export interface TurnView {
   tokens: number;
   workerTokens: number;
   workerCount: number;
+  /**
+   * What the detached coding runs this turn collected spent in their boxes,
+   * each launch once ([runSpend]), and how many runs — beside `tokens`, which
+   * is the engine's own model calls, for the reason `workerTokens` is.
+   */
+  runTokens: number;
+  runCount: number;
   /** The highest self-iterate round its own phases reached. */
   iterations: number;
   /**
@@ -438,6 +447,7 @@ export function useTurnView(turnId: string): TurnView {
   const nested = group?.nested ?? new Map<string, PhaseRecord[]>();
   const workerTokens = phases.reduce((n, p) => n + (p.hostPhase ? p.totalTokens : 0), 0);
   const workerCount = phases.filter((p) => p.hostPhase).length;
+  const runs = runSpend(phases);
 
   const running = phases.some((p) => p.live);
   const rec: TurnRecord = useMemo(
@@ -481,6 +491,8 @@ export function useTurnView(turnId: string): TurnView {
     tokens: own.reduce((n, p) => n + p.totalTokens, 0),
     workerTokens,
     workerCount,
+    runTokens: runs.tokens,
+    runCount: runs.runs,
     traceIds,
     // THE HIGHEST ITERATION ITS OWN PHASES REACHED, which is what a reader
     // means by "how many rounds did this take" and what the turns list counts
@@ -670,14 +682,32 @@ export function turnFacts(view: TurnView): Fact[] {
       // the very record shown further down this page. The split is also the
       // only thing that answers "how much of this turn was fan-out" when a
       // seat's spend jumps and its own rounds did not.
-      note:
-        counted && view.workerTokens > 0
-          ? `+${fmtCount(view.workerTokens)} in ${view.workerCount} worker${
-              view.workerCount === 1 ? "" : "s"
-            }`
-          : undefined,
+      //
+      // AND ITS CODING RUNS, for the same reason: what a detached run spent
+      // in its box is not the engine's own model calls, and it reached the
+      // budgets at its collect. The turns list and the Tokens view count it in
+      // the turn's figure, so this note is what makes the three agree.
+      note: counted ? tokenNote(view) : undefined,
     },
   ];
+}
+
+/** What the turn's token figure leaves out, or nothing when it leaves nothing. */
+function tokenNote(view: TurnView): string | undefined {
+  const parts: string[] = [];
+  if (view.workerTokens > 0) {
+    parts.push(
+      `+${fmtCount(view.workerTokens)} in ${view.workerCount} worker${
+        view.workerCount === 1 ? "" : "s"
+      }`,
+    );
+  }
+  if (view.runTokens > 0) {
+    parts.push(
+      `+${fmtCount(view.runTokens)} in ${view.runCount} coding run${view.runCount === 1 ? "" : "s"}`,
+    );
+  }
+  return parts.length ? parts.join(" · ") : undefined;
 }
 
 /**
@@ -1766,6 +1796,17 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
                 <span className="phase-meta" title="tokens this phase spent">
                   {fmtCount(p.totalTokens)}
                 </span>
+                {/* AND THE CODING RUN IT COLLECTED, apart from its own: the
+                    box's spend is not the engine's model calls, and the turn's
+                    figure above counts it once however many records carry it. */}
+                {runTokens(p) > 0 && (
+                  <span
+                    className="phase-meta"
+                    title="what the coding run this phase collected spent in its box"
+                  >
+                    +{fmtCount(runTokens(p))} run
+                  </span>
+                )}
                 {/* WHAT THE ENGINE MEASURED, and nothing where it measured
                     nothing: a live phase has no duration yet, and rendering
                     its zero would make the phase still running look like the

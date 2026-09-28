@@ -80,6 +80,7 @@ import {
   decisionTone,
   ledgerOf,
   phaseDuration,
+  runTokens,
   type PhaseRecord,
   type Round,
 } from "~/lib/phases.ts";
@@ -515,6 +516,19 @@ export function PhaseCard({
             {fmtCount(record.totalTokens)}
           </span>
         )}
+        {/* THE CODING RUN THIS PHASE COLLECTED, beside the phase's own and
+            never added into it: what a detached run spent in its box is not
+            the engine's own model calls, which is what the figure before it
+            is. Without it the card that collected a five-million-token run
+            read as the cheap phase it resumed into. */}
+        {runTokens(record) > 0 && (
+          <span
+            className="phase-meta t-num"
+            title="what the coding run this phase collected spent in its box"
+          >
+            +{fmtCount(runTokens(record))} run
+          </span>
+        )}
         {/* HOW LONG THIS PHASE TOOK, straight off `duration_ms` — the
             engine measures the phase where the clock is and puts the answer
             on the record. On a self-iterating turn that is the number that
@@ -699,6 +713,11 @@ export function PhaseCard({
             <span className="t-caption">
               {record.inputTokens ? `${fmtCount(record.inputTokens)} in` : ""}
               {record.outputTokens ? ` · ${fmtCount(record.outputTokens)} out` : ""}
+              {runTokens(record) > 0
+                ? ` · its run ${fmtCount(Math.max(0, record.runInputTokens))} in · ${fmtCount(
+                    Math.max(0, record.runOutputTokens),
+                  )} out`
+                : ""}
               {record.providerKey ? ` · provider ${record.providerKey}` : ""}
             </span>
             <span className="spacer" />
