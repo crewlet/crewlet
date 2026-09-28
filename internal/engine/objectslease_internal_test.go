@@ -68,7 +68,7 @@ func TestAnObjectsLeaseHeldElsewhereIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	b := coordmemory.New()
 	resource := coord.ObjectsResource("n1")
-	if _, err := b.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+	if _, _, err := b.TryAcquire(t.Context(), resource, coord.AcquireOptions{
 		Owner: "n1:old", TTL: time.Minute, Ungated: true,
 		Meta: objstore.ObjectsMeta{Weight: 1}.Encode(),
 	}); err != nil {

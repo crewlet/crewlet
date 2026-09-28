@@ -180,7 +180,7 @@ type MailboxQueue interface {
 
 // SeatLeases is the slice of the lease store a retirement claims a seat through.
 type SeatLeases interface {
-	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error)
+	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
 	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 }
 
@@ -631,7 +631,7 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	// subscriptions this is about to delete. So the retirement CLAIMS the
 	// lease, which is the one thing that node's claim loses to. A claim that
 	// cannot be answered is unknown, and unknown retires nothing.
-	lease, err := m.leases.TryAcquire(work, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, _, err := m.leases.TryAcquire(work, coord.SeatResource(handle), coord.AcquireOptions{
 		Owner: m.owner,
 		TTL:   m.leaseTTL,
 		// No Preferred: the hint records the last node that RAN the seat,

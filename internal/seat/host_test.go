@@ -783,12 +783,14 @@ func TestPresenceSurvivesAnOlderProtocolPeer(t *testing.T) {
 	// seats by a count that excludes it and each take a larger share — and
 	// its own capacity excludes it too.
 	f := newFleet(t)
-	if _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	if _, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 		Owner: "old-node:1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("stage an old peer: %v", err)
 	}
-	h := f.newHost("node-new", Config{Seats: seatsNamed("ceo"), Protocol: 2})
+	// A second seat nobody holds, so the gate — not the old peer's hold on
+	// "ceo" — is what refuses this node its seat claims.
+	h := f.newHost("node-new", Config{Seats: seatsNamed("ceo", "eng"), Protocol: 2})
 
 	h.renewNodePresence(f.ctx)
 	if f.leaseOf(coord.NodeResource("node-new")) == nil {
@@ -798,6 +800,83 @@ func TestPresenceSurvivesAnOlderProtocolPeer(t *testing.T) {
 	result := h.Sweep(f.ctx)
 	wantInt(t, len(result.Claimed), 0, "claims")
 	wantInt(t, result.BlockedByProtocol, 1, "protocol floor")
+}
+
+// floorCounter counts the protocol-floor reads a host makes.
+type floorCounter struct {
+	coord.Backend
+	floors atomic.Int64
+}
+
+func (c *floorCounter) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
+	c.floors.Add(1)
+	return c.Backend.FleetProtocolFloor(ctx)
+}
+
+// A SWEEP OVER SEATS ITS PEERS HOLD JUDGES NO GATE.
+//
+// A node whose share did not come out even has room for one more seat and
+// nothing free to take — the steady state of most of a fleet — and it used to
+// read the fleet's protocol floor on every sweep to rule the mixed-version
+// gate out. The floor is a question about every live lease, which the KV
+// backend answers from a view that takes in every lease write the fleet makes
+// while anybody asks it: asked every five seconds, the view never went idle,
+// and each such node took in the fleet's heartbeats — about 670 messages a
+// second at ten thousand seats — to learn what each refusal had already said.
+// So here every seat is held, by this node's peer and by a node that has
+// given up its presence (a drain's first step), this node has room, and its
+// sweeps must read no floor at all. And the gate half stands: once an
+// older-protocol lease is live and a seat comes free, the floor is read and
+// the stall reported.
+func TestASweepOverSeatsItsPeersHoldJudgesNoGate(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	peer := f.newHost("node-a", Config{Seats: seatsNamed("ceo", "eng", "ops")})
+	peer.renewNodePresence(f.ctx)
+	counter := &floorCounter{Backend: f.store}
+	h := f.newHost("node-b", Config{Backend: counter, Seats: seatsNamed("ceo", "eng", "ops")})
+	h.renewNodePresence(f.ctx)
+	peer.Sweep(f.ctx)
+	// The seat the peer's share left over, held by a node no longer
+	// counted in the fleet.
+	lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ops"), coord.AcquireOptions{
+		Owner: "draining:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
+	})
+	if err != nil || lease == nil {
+		t.Fatalf("stage a draining holder: lease=%v err=%v", lease, err)
+	}
+
+	for range 3 {
+		result := h.Sweep(f.ctx)
+		wantInt(t, len(result.Claimed), 0, "claims")
+		if result.Capacity <= len(h.Held()) {
+			t.Fatalf("the host has no room (capacity %d, holding %d), so the case "+
+				"tests nothing", result.Capacity, len(h.Held()))
+		}
+		if result.Blocked() {
+			t.Fatal("peers holding everything was reported as a protocol block")
+		}
+	}
+	if n := counter.floors.Load(); n != 0 {
+		t.Fatalf("three sweeps over seats peers hold read the protocol floor %d times", n)
+	}
+
+	// An older build's lease lands and a seat comes free: now the gate is
+	// what refuses, and the stall is named.
+	if _, _, err := f.store.TryAcquire(f.ctx, coord.NodeResource("old"), coord.AcquireOptions{
+		Owner: "old:1", TTL: time.Hour, Protocol: 1, Ungated: true,
+	}); err != nil {
+		t.Fatalf("stage an older build: %v", err)
+	}
+	if ok, err := f.store.Release(f.ctx, coord.SeatResource("ops"), "draining:1", lease.Epoch); err != nil || !ok {
+		t.Fatalf("free a seat: ok=%v err=%v", ok, err)
+	}
+	result := h.Sweep(f.ctx)
+	wantInt(t, len(result.Claimed), 0, "claims beside an older build")
+	wantInt(t, result.BlockedByProtocol, 1, "protocol floor")
+	if n := counter.floors.Load(); n != 1 {
+		t.Fatalf("a sweep the gate stopped read the protocol floor %d times, want once", n)
+	}
 }
 
 func TestSweepResultReportsBlockedOnlyWhenAFloorIsSet(t *testing.T) {

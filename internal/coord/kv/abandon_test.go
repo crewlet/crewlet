@@ -130,7 +130,7 @@ func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 
 				resource := coord.ClassSeat.Resource("ceo")
 				const owner = "node-a/1"
-				lease, err := s.TryAcquire(ctx, resource, coord.AcquireOptions{
+				lease, _, err := s.TryAcquire(ctx, resource, coord.AcquireOptions{
 					Owner: owner, TTL: coordtest.LongTTL, Ungated: true,
 				})
 				if err == nil || lease != nil {
@@ -144,7 +144,7 @@ func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 				if next == "a peer" {
 					claimant = "node-b/1"
 				}
-				lease, err = s.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+				lease, _, err = s.TryAcquire(t.Context(), resource, coord.AcquireOptions{
 					Owner: claimant, TTL: coordtest.LongTTL, Ungated: true,
 				})
 				switch {
@@ -257,7 +257,7 @@ func TestAClaimingWriteThatLandsAfterItsClaimGaveUpIsRefused(t *testing.T) {
 			const owner = "node-a/1"
 			opts := coord.AcquireOptions{Owner: owner, TTL: coordtest.LongTTL, Ungated: true}
 			if takeover {
-				first, err := s.TryAcquire(t.Context(), resource, opts)
+				first, _, err := s.TryAcquire(t.Context(), resource, opts)
 				if err != nil || first == nil {
 					t.Fatalf("the first tenure: (%v, %v)", first, err)
 				}
@@ -268,7 +268,7 @@ func TestAClaimingWriteThatLandsAfterItsClaimGaveUpIsRefused(t *testing.T) {
 			late := &latePublish{KeyValue: s.leases.kv}
 			s.leases.kv = late
 
-			if lease, err := s.TryAcquire(t.Context(), resource, opts); err == nil || lease != nil {
+			if lease, _, err := s.TryAcquire(t.Context(), resource, opts); err == nil || lease != nil {
 				t.Fatalf("the claim whose write was held back answered (%v, %v), want an error",
 					lease, err)
 			}
@@ -283,7 +283,7 @@ func TestAClaimingWriteThatLandsAfterItsClaimGaveUpIsRefused(t *testing.T) {
 				t.Fatal("a claiming write that landed after its claim gave up was accepted — " +
 					"a record carrying the claim that nothing will ever take back")
 			}
-			lease, err := s.TryAcquire(t.Context(), resource, opts)
+			lease, _, err := s.TryAcquire(t.Context(), resource, opts)
 			if err != nil || lease == nil {
 				t.Fatalf("the owner's next claim answered (%v, %v), want it granted", lease, err)
 			}

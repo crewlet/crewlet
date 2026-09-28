@@ -104,7 +104,7 @@ var readCases = []testCase{
 		} {
 			name := coord.SeatResource(handle)
 			owner := fmt.Sprintf("owner-%02d:1", i)
-			lease, err := h.b.TryAcquire(h.ctx, name, coord.AcquireOptions{
+			lease, _, err := h.b.TryAcquire(h.ctx, name, coord.AcquireOptions{
 				Owner: owner, TTL: LongTTL,
 			})
 			if err != nil {

@@ -1503,7 +1503,7 @@ func (r *estateRun) coordination(ctx context.Context, a *appliers) {
 			for _, n := range nodes {
 				wg.Go(func() {
 					for range r.shape.seats {
-						lease, err := n.store.TryAcquire(ctx, coord.ClassSeat.Resource(uuid.NewString()),
+						lease, _, err := n.store.TryAcquire(ctx, coord.ClassSeat.Resource(uuid.NewString()),
 							coord.AcquireOptions{Owner: n.owner, TTL: seat.SeatLeaseTTL,
 								Preferred: n.id, Ungated: true})
 						switch {
@@ -1545,7 +1545,7 @@ func gatedClaims(ctx context.Context, n *seatNode, count int) string {
 	for range count {
 		resource := coord.ClassSeat.Resource(uuid.NewString())
 		t0 := time.Now()
-		lease, err := n.store.TryAcquire(ctx, resource,
+		lease, _, err := n.store.TryAcquire(ctx, resource,
 			coord.AcquireOptions{Owner: n.owner, TTL: seat.SeatLeaseTTL, Preferred: n.id})
 		if err != nil || lease == nil {
 			failed++
@@ -1593,7 +1593,7 @@ func startFleet(ctx context.Context, nodes []*seatNode) *fleet {
 	for _, n := range nodes {
 		every(seat.HeartbeatInterval, func() {
 			t0 := time.Now()
-			if _, err := n.store.TryAcquire(ctx, coord.NodeResource(n.id), coord.AcquireOptions{
+			if _, _, err := n.store.TryAcquire(ctx, coord.NodeResource(n.id), coord.AcquireOptions{
 				Owner: n.owner, TTL: seat.SeatLeaseTTL, Preferred: n.id, Ungated: true,
 				Meta: map[string]any{"roles": []string{"agent"}},
 			}); err != nil {

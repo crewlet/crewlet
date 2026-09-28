@@ -251,7 +251,7 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	gate := e.native.Load().gate
 	identity := identityLogs(t, s)
 	const live = "node-live"
-	if _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),
+	if _, _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),
 		coord.AcquireOptions{Owner: live, TTL: time.Minute}); err != nil {
 		t.Fatalf("hold %s's presence lease: %v", live, err)
 	}

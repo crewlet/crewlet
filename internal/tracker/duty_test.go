@@ -318,7 +318,7 @@ func TestTheDutyLeavesAMergeWhoseWalkHoldsItsClaim(t *testing.T) {
 		markMerge(t, r, dup, "keep")
 	}
 	// A WALK RUNNING ON ANOTHER NODE: its claim, as that node holds it.
-	lease, err := r.claims.TryAcquire(t.Context(), tracker.MergeClaim("held"),
+	lease, _, err := r.claims.TryAcquire(t.Context(), tracker.MergeClaim("held"),
 		coord.AcquireOptions{Owner: "node-b", TTL: tracker.ClaimTTL})
 	if err != nil || lease == nil {
 		t.Fatalf("hold the running walk's claim: (%v, %v)", lease, err)

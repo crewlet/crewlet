@@ -35,7 +35,7 @@ func TestThePositionRegisterSurvivesASweepThatExpiresEverythingElse(t *testing.T
 	leases := openStore(t, nc, ttl)
 	s := openFleetWithTTL(t, nc, ttl)
 
-	if _, err := leases.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	if _, _, err := leases.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: ttl,
 	}); err != nil {
 		t.Fatalf("TryAcquire: %v", err)

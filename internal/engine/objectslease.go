@@ -106,7 +106,7 @@ func (l *objectsLease) beat(ctx context.Context) {
 	meta := l.meta().Encode()
 	ctx, cancel := context.WithTimeout(ctx, l.interval)
 	defer cancel()
-	lease, err := l.leases.TryAcquire(ctx, l.resource, coord.AcquireOptions{
+	lease, _, err := l.leases.TryAcquire(ctx, l.resource, coord.AcquireOptions{
 		Owner: l.owner, TTL: l.ttl, Preferred: l.node, Ungated: true, Meta: meta,
 	})
 	l.mu.Lock()

@@ -54,7 +54,7 @@ func holdersFixture(t *testing.T, leases map[string]map[string]any) *coordmemory
 	t.Helper()
 	b := coordmemory.New()
 	for resource, meta := range leases {
-		if _, err := b.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+		if _, _, err := b.TryAcquire(t.Context(), resource, coord.AcquireOptions{
 			Owner: resource + ":1", TTL: time.Minute, Ungated: true, Meta: meta,
 		}); err != nil {
 			t.Fatal(err)

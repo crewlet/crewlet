@@ -597,7 +597,7 @@ func TestNothingIsRetiredWhileTheActiveRevisionCannotBeRead(t *testing.T) {
 func TestAMailboxAHolderStillConsumesIsKept(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.removed()
-	lease, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
+	lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
 		coord.AcquireOptions{Owner: "lagging-node", TTL: time.Hour})
 	if err != nil || lease == nil {
 		t.Fatalf("TryAcquire = (%v, %v)", lease, err)
@@ -641,7 +641,7 @@ func TestNoNodeCanClaimASeatWhileItsMailboxIsRetired(t *testing.T) {
 
 	claim := func() *coord.Lease {
 		t.Helper()
-		lease, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
+		lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
 			coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
 		if err != nil {
 			t.Fatalf("TryAcquire: %v", err)
@@ -701,7 +701,7 @@ type slowSeatLeases struct {
 	delay    time.Duration
 }
 
-func (l *slowSeatLeases) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+func (l *slowSeatLeases) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	if resource == l.resource {
 		time.Sleep(l.delay)
 	}
@@ -1039,7 +1039,7 @@ func TestAFailedRetirementIsRetriedOnTheNextTick(t *testing.T) {
 func TestARetirementEndsTheSeatsCodingRunsBeforeItsSubscriptions(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.runs.observe = func(handle string) runRetirement {
-		lease, err := h.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
+		lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
 			coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
 		if err != nil {
 			t.Errorf("TryAcquire: %v", err)

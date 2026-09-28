@@ -376,7 +376,7 @@ func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backend.TryAcquire(ctx, coord.NodeResource("node-holding-a-lease"),
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource("node-holding-a-lease"),
 		coord.AcquireOptions{Owner: "node-holding-a-lease:boot-1", TTL: time.Minute,
 			Preferred: "node-holding-a-lease"}); err != nil {
 		t.Fatal(err)
@@ -987,7 +987,7 @@ func TestAStatelessNodeHasNoPartInACapacityOperation(t *testing.T) {
 	for id, roles := range map[string][]string{
 		"data-a": {"data", "seats"}, "agent-1": {"seats"},
 	} {
-		if _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
+		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
 			Owner: id + ":boot-1", TTL: time.Minute, Meta: map[string]any{"roles": roles},
 		}); err != nil {
 			t.Fatal(err)

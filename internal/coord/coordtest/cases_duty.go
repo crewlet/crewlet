@@ -57,16 +57,16 @@ var dutyCases = []testCase{
 		// Refused on EVERY backend, including one that could keep the
 		// deadline: a twin that accepted what the embedded KV refuses is
 		// exactly how the long duties passed every single-node test. An
-		// error, because nobody holds the duty and (nil, nil) would say
+		// error, because nobody holds the duty and a refusal would say
 		// somebody does.
 		duty := coord.WorkerResource("maintenance")
 		over := coord.MaxDutyTTL + time.Second
-		lease, err := h.b.TryAcquire(h.ctx, duty, coord.AcquireOptions{
+		lease, refused, err := h.b.TryAcquire(h.ctx, duty, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: over, Ungated: true,
 		})
 		if !errors.Is(err, coord.ErrTTLTooLong) {
-			h.t.Fatalf("TryAcquire(%q, ttl=%v) = (%v, %v), want an error wrapping coord.ErrTTLTooLong",
-				duty, over, lease, err)
+			h.t.Fatalf("TryAcquire(%q, ttl=%v) = (%v, %q, %v), want an error wrapping coord.ErrTTLTooLong",
+				duty, over, lease, refused, err)
 		}
 		if lease != nil {
 			h.t.Fatalf("TryAcquire(%q, ttl=%v) granted a lease beside its error", duty, over)

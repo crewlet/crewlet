@@ -308,33 +308,50 @@ func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
 }
 
 // claimUpTo takes at most room seats, and reports the fleet's protocol floor
-// when it took none because an older-protocol peer is live.
+// when the mixed-version gate stopped it.
+//
+// THE FLOOR IS ASKED ONLY WHEN THE GATE REFUSED A CLAIM, never because a pass
+// took nothing. A pass that took nothing because its peers hold every seat
+// it may run is the steady state of any node whose share did not come out
+// even — room for one more, and nothing free — and it used to ask the floor
+// on every sweep to rule the gate out. The floor is a question about every
+// live lease, which the KV backend answers from a view that takes in every
+// lease write the fleet makes while anybody asks it; asked every five seconds
+// the view never went idle, and the node took in the fleet's heartbeats (at
+// ten thousand seats, about 670 messages a second) to learn what each refusal
+// had already said: held. The refusal says which rule refused (see
+// coord.Refusal), so a pass that met only held seats judges no gate at all.
+//
+// A GATE REFUSAL ENDS THE PASS: the gate is fleet-wide, so every other claim
+// this pass could make would be refused the same way, and each of them would
+// judge the gate again to learn it.
 func (h *Host) claimUpTo(ctx context.Context, eligible []string, room int) ([]string, int) {
 	var claimed []string
 	for _, handle := range h.claimOrder(ctx, eligible) {
 		if len(claimed) >= room {
 			break
 		}
-		took, stop := h.tryClaim(ctx, handle)
+		took, refused, stop := h.tryClaim(ctx, handle)
 		if took {
 			claimed = append(claimed, handle)
+		}
+		if refused == coord.RefusedProtocol {
+			// "An older-protocol node is live and this build refuses to
+			// claim beside it" — an upgrade that has stalled, and
+			// invisible without this — rather than "peers hold
+			// everything", which is normal.
+			return claimed, h.protocolBlock(ctx)
 		}
 		if stop {
 			break
 		}
 	}
-	if len(claimed) > 0 {
-		return claimed, 0
-	}
-	// Nothing claimed. Distinguish "peers hold everything" (normal) from
-	// "an older-protocol node is live and this build refuses to claim
-	// beside it" (an upgrade that has stalled, and invisible without this).
-	return claimed, h.protocolBlock(ctx)
+	return claimed, 0
 }
 
-// tryClaim takes one seat, reporting whether it was established and whether
-// the pass must stop claiming altogether.
-func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
+// tryClaim takes one seat, reporting whether it was established, why it was
+// refused if it was, and whether the pass must stop claiming altogether.
+func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused coord.Refusal, stop bool) {
 	unlock := h.lockSeat(handle)
 	defer unlock()
 
@@ -343,10 +360,10 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 	_, alreadyDead := h.undead[handle]
 	h.mu.Unlock()
 	if alreadyHeld || alreadyDead {
-		return false, false // re-claimed under us while we waited
+		return false, "", false // re-claimed under us while we waited
 	}
 
-	lease, err := h.backend.TryAcquire(ctx, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, refused, err := h.backend.TryAcquire(ctx, coord.SeatResource(handle), coord.AcquireOptions{
 		Owner: h.owner,
 		TTL:   h.ttl,
 		// The STABLE node id, not the incarnation: the hint has to survive
@@ -363,10 +380,10 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 		// what this pass actually got. Distinct from a nil lease, which is
 		// a real refusal by a peer and only skips THIS seat.
 		log.WarnContext(ctx, "seat_claim_unavailable", "seat", handle, "error", err)
-		return false, true
+		return false, "", true
 	}
 	if lease == nil {
-		return false, false
+		return false, refused, false
 	}
 	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 
@@ -390,7 +407,7 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 		// hook the seat was never fully established, so it must tolerate
 		// half-spawned children and a consumer that was never attached.
 		h.releaseLocked(ctx, handle, ReasonAcquireFailed)
-		return false, false
+		return false, "", false
 	}
 
 	h.mu.Lock()
@@ -402,11 +419,8 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 	// Counted as claimed only once the seat is ESTABLISHED. The hook gives
 	// a failed takeover straight back — a bad MCP command, a credential
 	// resolving to nothing — so counting it earlier meant a seat nothing
-	// runs still burned a claim slot, still logged as claimed, and still
-	// made the pass non-empty, which suppresses the protocol-block probe: a
-	// stalled mixed-version upgrade then reported no block beside a claim
-	// that never happened.
-	return true, false
+	// runs still burned a claim slot and still logged as claimed.
+	return true, "", false
 }
 
 // claimOrder is the unheld seats this node may run, its preferred ones
@@ -483,18 +497,32 @@ func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
 	return append(mine, rest...)
 }
 
-// protocolBlock reports the fleet's protocol floor when it is what stopped
-// this node claiming, and zero otherwise.
+// protocolBlock reports the fleet's protocol floor once the mixed-version gate
+// has refused one of this pass's claims, and zero when the floor it names is no
+// longer below this node's.
+//
+// Asked only then, which is what makes it cheap: the claim the gate refused
+// has just judged the same view, so the floor is read from a view that is
+// already running rather than one started to answer it.
 func (h *Host) protocolBlock(ctx context.Context) int {
+	const hint = "an older-protocol node still holds leases; this node will claim nothing " +
+		"until it drains. Finish the rolling upgrade — do NOT roll back across a protocol " +
+		"bump without stopping the fleet first."
 	floor, found, err := h.backend.FleetProtocolFloor(ctx)
-	if err != nil || !found || floor >= h.protocol {
+	switch {
+	case err != nil:
+		// The gate DID refuse — that much the claim said — so the stall
+		// is reported even when the floor to name could not be read.
+		log.WarnContext(ctx, "seat_claims_blocked_by_older_protocol", "node", h.nodeID,
+			"fleet_floor", "unknown", "this_node", h.protocol, "error", err, "hint", hint)
+		return 0
+	case !found || floor >= h.protocol:
+		// The older lease went between the refusal and this read: the
+		// next pass claims.
 		return 0
 	}
 	log.WarnContext(ctx, "seat_claims_blocked_by_older_protocol", "node", h.nodeID,
-		"fleet_floor", floor, "this_node", h.protocol,
-		"hint", "an older-protocol node still holds leases; this node will claim nothing until "+
-			"it drains. Finish the rolling upgrade — do NOT roll back across a protocol bump "+
-			"without stopping the fleet first.")
+		"fleet_floor", floor, "this_node", h.protocol, "hint", hint)
 	return floor
 }
 
@@ -651,7 +679,7 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 	if h.Draining() {
 		return
 	}
-	lease, err := h.backend.TryAcquire(ctx, coord.NodeResource(h.nodeID), coord.AcquireOptions{
+	lease, _, err := h.backend.TryAcquire(ctx, coord.NodeResource(h.nodeID), coord.AcquireOptions{
 		Owner:     h.owner,
 		TTL:       h.ttl,
 		Preferred: h.nodeID,

@@ -456,13 +456,17 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 func (h *harness) claim(resource string, opts coord.AcquireOptions) *coord.Lease {
 	h.t.Helper()
 	h.lastClaimAt, h.lastClaimTTL, h.travelled = time.Now(), opts.TTL, false
-	lease, err := h.b.TryAcquire(h.ctx, resource, opts)
+	lease, refused, err := h.b.TryAcquire(h.ctx, resource, opts)
 	if err != nil {
 		h.t.Fatalf("TryAcquire(%q, owner=%q): unexpected error: %v", resource, opts.Owner, err)
 	}
 	if lease == nil {
-		h.t.Fatalf("TryAcquire(%q, owner=%q): refused, expected the claim to be granted",
-			resource, opts.Owner)
+		h.t.Fatalf("TryAcquire(%q, owner=%q): refused (%q), expected the claim to be granted",
+			resource, opts.Owner, refused)
+	}
+	if refused != "" {
+		h.t.Fatalf("TryAcquire(%q, owner=%q): granted AND refused %q — a claim has one answer",
+			resource, opts.Owner, refused)
 	}
 	if lease.Resource != resource || lease.Owner != opts.Owner {
 		h.t.Fatalf("TryAcquire(%q, owner=%q) returned a lease for (%q, %q)",
@@ -475,19 +479,26 @@ func (h *harness) claim(resource string, opts coord.AcquireOptions) *coord.Lease
 	return lease
 }
 
-// refused asserts the DEFINITE refusal — (nil, nil). An error here means the
-// backend collapsed "unknown" into "somebody else holds it", which is the
-// conflation the whole tri-state exists to prevent.
-func (h *harness) refused(resource string, opts coord.AcquireOptions) {
+// refused asserts the DEFINITE refusal, and that it names the rule that made
+// it. An error here means the backend collapsed "unknown" into a refusal,
+// which is the conflation the whole tri-state exists to prevent; the wrong
+// reason means a caller acts on the wrong fact — a seat host reading a held
+// seat as a protocol stall judges a gate on every sweep for nothing, and one
+// reading a stall as a held seat reports no stalled upgrade at all.
+func (h *harness) refused(resource string, opts coord.AcquireOptions, want coord.Refusal) {
 	h.t.Helper()
-	lease, err := h.b.TryAcquire(h.ctx, resource, opts)
+	lease, refused, err := h.b.TryAcquire(h.ctx, resource, opts)
 	if err != nil {
-		h.t.Fatalf("TryAcquire(%q, owner=%q): a genuine refusal must be (nil, nil), got error: %v",
+		h.t.Fatalf("TryAcquire(%q, owner=%q): a genuine refusal must not be an error, got: %v",
 			resource, opts.Owner, err)
 	}
 	if lease != nil {
 		h.t.Fatalf("TryAcquire(%q, owner=%q): granted at epoch %d, expected a refusal",
 			resource, opts.Owner, lease.Epoch)
+	}
+	if refused != want {
+		h.t.Fatalf("TryAcquire(%q, owner=%q): refused %q, want %q", resource, opts.Owner,
+			refused, want)
 	}
 }
 

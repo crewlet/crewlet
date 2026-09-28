@@ -26,7 +26,7 @@ func TestTheTrimAndTheGateCountOnlyDataNodes(t *testing.T) {
 		"agent-1": {"roles": []string{"seats"}},
 		"older":   nil,
 	} {
-		if _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
+		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
 			Owner: id + ":1", TTL: time.Minute, Meta: meta,
 		}); err != nil {
 			t.Fatal(err)

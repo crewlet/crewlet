@@ -55,7 +55,7 @@ var sharedCases = []struct {
 // is a read racing a replica that has not applied a write yet, which a quiet
 // replica rarely loses: measured on the KV backend before its fix, with two
 // handles on the members of a five-member cluster that hold no copy of the
-// bucket, a claim answered (nil, nil) for a lease it had won about once in a
+// bucket, a claim answered a refusal for a lease it had won about once in a
 // thousand claims at sixty-four in flight per handle, so two runs in three
 // failed — against 743 in 10,000 under the fleet-scale load that found it (a
 // hundred nodes claiming at once). A replica falls behind a burst far more
@@ -72,7 +72,7 @@ const sharedConcurrency = 64
 //
 // Every resource here is claimed by exactly one handle, once, so nobody else
 // can hold it: a claim may answer UNKNOWN — the contract's third answer — but
-// never (nil, nil), which tells the caller somebody else holds a lease that is
+// never a refusal, which tells the caller somebody else holds a lease that is
 // in fact its own. And a claim that returned a lease is at once the claimant's
 // to read (Get answers it at the same epoch) and to renew. Both halves are one
 // promise, [coord.Backend]'s "a backend must serve its own writes": a claim's
@@ -109,7 +109,7 @@ func testAClaimThatWonIsNeverAnsweredAsLost(t *testing.T, handles []coord.Backen
 			go func() {
 				defer wg.Done()
 				defer func() { <-slots }()
-				lease, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
+				lease, refused, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
 					Owner: owner, TTL: LongTTL, Ungated: k%2 == 0,
 				})
 				switch {
@@ -117,9 +117,9 @@ func testAClaimThatWonIsNeverAnsweredAsLost(t *testing.T, handles []coord.Backen
 					unknown.Add(1)
 					return
 				case lease == nil:
-					fail("%s: the only claim of %s answered (nil, nil) — nobody else "+
+					fail("%s: the only claim of %s was refused (%q) — nobody else "+
 						"claims it, so the claimant was told a peer holds a lease that "+
-						"is its own", owner, resource)
+						"is its own", owner, resource, refused)
 					return
 				}
 				won.Add(1)

@@ -20,13 +20,17 @@ var tristateCases = []testCase{
 		f := NewFaulty(h.b)
 		f.Break(nil)
 
-		lease, err := f.TryAcquire(h.ctx, "seat:ceo",
+		lease, refused, err := f.TryAcquire(h.ctx, "seat:ceo",
 			coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		if lease != nil {
 			h.t.Fatal("TryAcquire granted a lease from an unreachable store")
 		}
+		if refused != "" {
+			h.t.Fatalf("TryAcquire answered an unreachable store with a refusal (%q) beside "+
+				"its error — a claim has one answer", refused)
+		}
 		if err == nil {
-			h.t.Fatal("TryAcquire answered (nil, nil) — an unreachable store reads as a peer " +
+			h.t.Fatal("TryAcquire answered with no error — an unreachable store reads as a peer " +
 				"holding the resource, which is the conflation the tri-state exists to prevent")
 		}
 		if !errors.Is(err, coord.ErrUnavailable) {
@@ -39,17 +43,21 @@ var tristateCases = []testCase{
 		// definite, actionable answer, and turning it into an error
 		// would make a node quiesce over a race it simply lost.
 		f := NewFaulty(h.b)
-		if _, err := f.TryAcquire(h.ctx, "seat:ceo",
+		if _, _, err := f.TryAcquire(h.ctx, "seat:ceo",
 			coord.AcquireOptions{Owner: "node-a", TTL: LongTTL}); err != nil {
 			h.t.Fatalf("healthy claim errored: %v", err)
 		}
-		lease, err := f.TryAcquire(h.ctx, "seat:ceo",
+		lease, refused, err := f.TryAcquire(h.ctx, "seat:ceo",
 			coord.AcquireOptions{Owner: "node-b", TTL: LongTTL})
 		if err != nil {
 			h.t.Fatalf("a peer holding the resource reported an error: %v", err)
 		}
 		if lease != nil {
 			h.t.Fatal("second owner took a live lease")
+		}
+		if refused != coord.RefusedHeld {
+			h.t.Fatalf("a peer holding the resource was reported as %q, want %q", refused,
+				coord.RefusedHeld)
 		}
 	}},
 
@@ -62,7 +70,7 @@ var tristateCases = []testCase{
 		// retry; it has until the deadline to succeed.
 		ctx := h.ctx
 		f := NewFaulty(h.b)
-		lease, err := f.TryAcquire(ctx, "seat:ceo",
+		lease, _, err := f.TryAcquire(ctx, "seat:ceo",
 			coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		if err != nil || lease == nil {
 			h.t.Fatalf("setup claim failed: %v %v", lease, err)
@@ -128,11 +136,11 @@ var tristateCases = []testCase{
 			// Over TWICE the slowest warm claim, so a claim slower than
 			// those is still given up on part way rather than after it.
 			stop := time.AfterFunc(2*took*time.Duration(i)/attempts, cancel)
-			abandoned, abandonErr := h.b.TryAcquire(ctx, resource, opts)
+			abandoned, _, abandonErr := h.b.TryAcquire(ctx, resource, opts)
 			stop.Stop()
 			cancel()
 
-			lease, err := claimUntilDefinite(h, resource, opts)
+			lease, refused, err := claimUntilDefinite(h, resource, opts)
 			switch {
 			case err != nil:
 				h.t.Fatalf("attempt %d: after a claim of %s was given up on (%v, %v), its "+
@@ -140,8 +148,8 @@ var tristateCases = []testCase{
 					abandonErr, err)
 			case lease == nil:
 				h.t.Fatalf("attempt %d: after a claim of %s was given up on (%v, %v), its "+
-					"owner was refused a resource nobody else claims", i, resource,
-					abandoned, abandonErr)
+					"owner was refused (%q) a resource nobody else claims", i, resource,
+					abandoned, abandonErr, refused)
 			case abandoned != nil && lease.Epoch != abandoned.Epoch:
 				h.t.Fatalf("attempt %d: the abandoned claim returned epoch %d and the "+
 					"owner's next claim moved it to %d — an unbroken hold keeps its epoch",
@@ -197,9 +205,10 @@ var tristateCases = []testCase{
 	// --- arguments a caller got wrong ----------------------------------
 
 	{"blank_arguments_are_errors_not_refusals", func(h *harness) {
-		// (nil, nil) means "somebody else holds this". A blank owner has
-		// not lost a race to anybody, so answering it that way sends the
-		// caller hunting for a peer that does not exist. An error is the
+		// A refusal means "somebody else holds this" or "a gate stopped
+		// you", and nothing else. A blank owner has not lost a race to
+		// anybody, so answering it that way sends the caller hunting for
+		// a peer that does not exist. An error is the
 		// honest shape — the third answer is "the store did not give you
 		// an answer", and a caller retrying a programming error retries
 		// it loudly and forever instead of proceeding on a lie.
@@ -225,9 +234,9 @@ var tristateCases = []testCase{
 			{"negative TTL", "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: -time.Second}},
 		}
 		for _, c := range bad {
-			lease, err := h.b.TryAcquire(ctx, c.resource, c.opts)
+			lease, refused, err := h.b.TryAcquire(ctx, c.resource, c.opts)
 			if err == nil {
-				h.t.Fatalf("TryAcquire with a %s answered (%v, nil)", c.name, lease)
+				h.t.Fatalf("TryAcquire with a %s answered (%v, %q, nil)", c.name, lease, refused)
 			}
 			if lease != nil {
 				h.t.Fatalf("TryAcquire with a %s granted a lease", c.name)

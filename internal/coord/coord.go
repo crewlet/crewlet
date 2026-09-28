@@ -77,7 +77,9 @@
 //
 //	(lease, nil)  — held. Proceed.
 //	(nil, nil)    — definitively NOT held: lapsed, moved, or advanced.
-//	                Shed the work it covered, now.
+//	                Shed the work it covered, now. (A claim's definite
+//	                "no" also says why — see [Refusal] — and is still
+//	                never an error.)
 //	(nil, err)    — UNKNOWN. The store could not be reached or did not
 //	                answer. This says NOTHING about ownership: the record
 //	                is untouched and probably still held. Keep the seats,
@@ -147,6 +149,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -188,8 +191,8 @@ var ErrUnavailable = errors.New("coordination store unavailable")
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
 // honour.
 //
-// An ERROR, never a (nil, nil) refusal: nobody else holds the resource, the
-// caller asked for a deadline the store cannot keep. And never a silent clamp,
+// An ERROR, never a [Refusal]: nobody else holds the resource, the caller
+// asked for a deadline the store cannot keep. And never a silent clamp,
 // because a heartbeat computes its next tick from [Lease.ExpiresAt], so a
 // deadline quietly cut short has the holder renewing too late and losing what
 // it still holds.
@@ -227,8 +230,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // A backend that stores duties apart from seats (the embedded KV does) meets a
 // build that stored them together, and two builds locking one duty in two
 // places would both hold it. The rule every such backend follows: a duty claim
-// is REFUSED, as the ordinary (nil, nil), while any node of a build that
-// predates the move is live, and a holder's own re-claim is refused with it so
+// is REFUSED, [RefusedLayout], while any node of a build that predates the move
+// is live, and a holder's own re-claim is refused with it so
 // the duty stops at its next tick. An older node never looks for the newer
 // record, so this is the only side that can wait. See the kv package doc for
 // how a backend tells the two builds apart, and for the one window the check
@@ -453,24 +456,28 @@ type AcquireOptions struct {
 // store, which nothing has asked for. Taking it up means changing this
 // sentence deliberately, not discovering it.
 type Backend interface {
-	// TryAcquire claims resource for the owner, or reports that someone
-	// else holds it.
+	// TryAcquire claims resource for the owner, or reports why it may not.
+	//
+	// Exactly one of the three is set: the lease (granted), a [Refusal]
+	// (definitively not granted, and why), or an error (UNKNOWN).
 	//
 	// Succeeds when the resource is unclaimed, its lease has expired, or
 	// the owner already holds it — in which case it doubles as a renew and
 	// KEEPS the epoch. The epoch increments on every ownership change and
 	// on a same-owner re-acquire after expiry.
 	//
-	// Refuses — the same (nil, nil) — while any live lease is held at a
-	// lower protocol, unless Ungated. Ask FleetProtocolFloor once per
-	// claim sweep to tell a protocol refusal apart from a peer simply
-	// holding the resource. A duty claim may also be refused, Ungated or
-	// not, during the storage-layout upgrade [MaxDutyTTL] describes.
+	// Refuses [RefusedHeld] while another owner holds a live lease on the
+	// resource, WHATEVER THE GATES WOULD SAY: a claim that cannot write
+	// judges no gate. Otherwise refuses [RefusedProtocol] while any live
+	// lease is held at a lower protocol, unless Ungated, and a duty claim
+	// [RefusedLayout], Ungated or not, during the storage-layout upgrade
+	// [MaxDutyTTL] describes. See [Refusal] for why the reason is part of
+	// the answer.
 	//
 	// A duty (a `worker:` resource) is honoured at any TTL up to
 	// [MaxDutyTTL] whatever TTL the backend's seat leases run on, and
 	// refused beyond it with an error wrapping [ErrTTLTooLong].
-	TryAcquire(ctx context.Context, resource string, opts AcquireOptions) (*Lease, error)
+	TryAcquire(ctx context.Context, resource string, opts AcquireOptions) (*Lease, Refusal, error)
 
 	// Renew extends a lease the caller already holds at this epoch.
 	// Reports false when the lease is definitively no longer theirs. A
@@ -501,11 +508,52 @@ type Backend interface {
 	PreferredResources(ctx context.Context, class Class, nodeID string) (map[string]struct{}, error)
 
 	// FleetProtocolFloor returns the lowest protocol among live leases,
-	// and whether there were any. The observability half of the gate: it
-	// tells a node whether it is blocked by an older peer or simply lost
-	// a race.
+	// and whether there were any. The observability half of the gate: a
+	// claim refused [RefusedProtocol] asks it for the floor to name.
 	FleetProtocolFloor(ctx context.Context) (int, bool, error)
 }
+
+// Refusal is why a claim was definitively not granted.
+//
+// # Why the reason is part of the answer
+//
+// It was not: every refusal was the same (nil, nil), and a caller that needed
+// to tell "a peer holds it" from "the mixed-version gate stopped me" was told
+// to ask [Backend.FleetProtocolFloor] once per claim sweep. That read looks
+// cheap and is not — a gate is a question about EVERY live lease, which a
+// backend answers from a standing view of the fleet's lease writes (the KV
+// backend's gate view) — so a node with room to claim whose every candidate
+// was held by a peer asked it on every five-second sweep, and its view took in
+// every lease write the fleet made for as long as the node stayed below its
+// share: at ten thousand seats, about 670 messages a second on each such node,
+// for a question whose answer the claims already knew. The backend knows at
+// the moment it refuses which rule refused, at no cost, so it says so.
+//
+// The zero value is "not refused": a granted claim, or an unknown one.
+type Refusal string
+
+const (
+	// RefusedHeld is the refusal of a claim on a resource another owner
+	// holds a live lease on. It takes precedence over the gates, because a
+	// claim that cannot write has nothing for a gate to stop — and because
+	// it is what lets a claim on a held resource judge no gate at all.
+	RefusedHeld Refusal = "held"
+	// RefusedProtocol is the refusal of a claim while a live lease is held
+	// at a lower protocol than the claim's (ADR-0016). Every gated claim
+	// this node makes is refused the same way until that lease goes, which
+	// is what a caller reports.
+	RefusedProtocol Refusal = "protocol"
+	// RefusedLayout is the refusal of a duty claim while a node of a build
+	// that keeps duties in the seat lease bucket is live — see
+	// [MaxDutyTTL].
+	RefusedLayout Refusal = "layout"
+)
+
+// Refusals are the three.
+var Refusals = []Refusal{RefusedHeld, RefusedProtocol, RefusedLayout}
+
+// Valid reports whether a refusal is one this build knows.
+func (r Refusal) Valid() bool { return slices.Contains(Refusals, r) }
 
 // --- resource naming ------------------------------------------------------
 

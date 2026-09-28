@@ -17,7 +17,7 @@ import (
 func holdSeats(tb testing.TB, s *Store, n int) {
 	tb.Helper()
 	for i := range n {
-		lease, err := s.TryAcquire(context.Background(),
+		lease, _, err := s.TryAcquire(context.Background(),
 			coord.ClassSeat.Resource(fmt.Sprintf("held-%d", i)),
 			coord.AcquireOptions{Owner: "node-b/1", TTL: coordtest.LongTTL, Ungated: true})
 		if err != nil || lease == nil {
@@ -56,7 +56,7 @@ func TestAGatedClaimCostsTheSameWhateverIsHeld(t *testing.T) {
 		s := openStore(t, nc, coordtest.LongTTL)
 		holdSeats(t, s, held)
 		claim := func(name string) {
-			lease, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource(name),
+			lease, _, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource(name),
 				coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL})
 			if err != nil || lease == nil {
 				t.Fatalf("gated claim of %s with %d held: (%v, %v)", name, held, lease, err)
@@ -97,16 +97,16 @@ func TestALeaseWrittenJustBeforeAGateIsInIt(t *testing.T) {
 	t.Parallel()
 	for attempt := range 100 {
 		s := openStore(t, embeddedNATS(t), coordtest.LongTTL)
-		if lease, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("first"),
+		if lease, _, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("first"),
 			coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL}); err != nil || lease == nil {
 			t.Fatalf("start the view with a claim: (%v, %v)", lease, err)
 		}
-		if lease, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("older"),
+		if lease, _, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("older"),
 			coord.AcquireOptions{Owner: "old-node/1", TTL: coordtest.LongTTL,
 				Protocol: coord.ProtocolVersion - 1, Ungated: true}); err != nil || lease == nil {
 			t.Fatalf("an older build's lease: (%v, %v)", lease, err)
 		}
-		lease, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("next"),
+		lease, _, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("next"),
 			coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL})
 		if err != nil {
 			t.Fatalf("attempt %d: the gated claim: %v", attempt, err)
@@ -135,7 +135,7 @@ func TestTheViewStopsWhenIdleAndStartsAgainWhenAsked(t *testing.T) {
 	s := openStore(t, embeddedNATS(t), coordtest.LongTTL)
 	claim := func(name string, protocol int, ungated bool) {
 		t.Helper()
-		lease, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource(name),
+		lease, _, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource(name),
 			coord.AcquireOptions{Owner: "node-a/" + name, TTL: coordtest.LongTTL,
 				Protocol: protocol, Ungated: ungated})
 		if err != nil || lease == nil {
@@ -204,13 +204,13 @@ func BenchmarkAGatedClaim(b *testing.B) {
 			holdSeats(b, s, held)
 			// One claim first: the view's load of the buckets is paid once
 			// per run of it, not per claim.
-			if lease, err := s.TryAcquire(context.Background(), coord.ClassSeat.Resource("warm"),
+			if lease, _, err := s.TryAcquire(context.Background(), coord.ClassSeat.Resource("warm"),
 				coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL}); err != nil || lease == nil {
 				b.Fatalf("warm the view: (%v, %v)", lease, err)
 			}
 			b.ResetTimer()
 			for i := range b.N {
-				lease, err := s.TryAcquire(context.Background(),
+				lease, _, err := s.TryAcquire(context.Background(),
 					coord.ClassSeat.Resource(fmt.Sprintf("bench-%d", i)),
 					coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL})
 				if err != nil || lease == nil {

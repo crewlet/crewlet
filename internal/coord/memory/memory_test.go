@@ -45,7 +45,7 @@ func TestInjectedClockDecidesExpiry(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	b := &memory.Backend{Clock: func() time.Time { return now }}
 
-	lease, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	lease, _, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 		Owner: "node-a:1", TTL: 30 * time.Second,
 	})
 	if err != nil || lease == nil {
@@ -92,7 +92,7 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 		call func() error
 	}{
 		{"TryAcquire", func() error {
-			lease, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+			lease, _, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 				Owner: "node-a:1", TTL: time.Minute,
 			})
 			if lease != nil {
@@ -173,7 +173,7 @@ func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 		{"a value no encoder accepts", make(chan int)},
 		{"a value that encodes but will not decode", json.Number("1e1000")},
 	} {
-		lease, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner: "n1:a", TTL: time.Minute, Ungated: true,
 			Meta: map[string]any{"roles": []any{"seats"}, "bad": bad.value},
 		})

@@ -40,19 +40,19 @@ const churnTTL = 2 * time.Millisecond
 const contendedClaimBudget = 10 * time.Second
 
 // claimUntilDefinite retries an unknown answer until the backend gives a real
-// one: a lease, or a definite refusal. It reports the last error if the budget
-// runs out with the store still unable to answer.
-func claimUntilDefinite(h *harness, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+// one: a lease, or a definite refusal and its reason. It reports the last error
+// if the budget runs out with the store still unable to answer.
+func claimUntilDefinite(h *harness, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	deadline := time.Now().Add(contendedClaimBudget)
 	var last error
 	for attempt := 0; ; attempt++ {
-		lease, err := h.b.TryAcquire(h.ctx, resource, opts)
+		lease, refused, err := h.b.TryAcquire(h.ctx, resource, opts)
 		if err == nil {
-			return lease, nil
+			return lease, refused, nil
 		}
 		last = err
 		if h.ctx.Err() != nil || !time.Now().Before(deadline) {
-			return nil, fmt.Errorf("no definite answer in %v (%d attempts): %w",
+			return nil, "", fmt.Errorf("no definite answer in %v (%d attempts): %w",
 				contendedClaimBudget, attempt+1, last)
 		}
 		// A backoff, because the point of coming back is to arrive when
@@ -83,7 +83,7 @@ var concurrencyCases = []testCase{
 		for i := range claimants {
 			wg.Go(func() {
 				<-start
-				lease, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
+				lease, refused, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
 					Owner: fmt.Sprintf("node-%02d:1", i),
 					TTL:   LongTTL,
 				})
@@ -94,6 +94,12 @@ var concurrencyCases = []testCase{
 					failures = append(failures, fmt.Errorf("claimant %d: %w", i, err))
 				case lease != nil:
 					winners = append(winners, lease)
+				case refused != coord.RefusedHeld:
+					// Every loser lost to the winner's hold, and a
+					// seat host acts on the reason: read as a gate,
+					// it would judge one on every sweep.
+					failures = append(failures, fmt.Errorf("claimant %d: refused %q, want %q",
+						i, refused, coord.RefusedHeld))
 				}
 			})
 		}
@@ -128,7 +134,7 @@ var concurrencyCases = []testCase{
 		for range callers {
 			wg.Go(func() {
 				<-start
-				lease, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
+				lease, _, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
 					Owner: "node-a:1", TTL: LongTTL,
 				})
 				mu.Lock()
@@ -208,7 +214,7 @@ var concurrencyCases = []testCase{
 				for n := range iterations {
 					switch n % 3 {
 					case 0:
-						lease, err := h.b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+						lease, _, err := h.b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 							Owner: owner, TTL: churnTTL, Preferred: owner,
 						})
 						if err != nil {
@@ -381,11 +387,11 @@ var concurrencyCases = []testCase{
 			if _, err := h.b.Release(h.ctx, s, cell.lease.Owner, cell.lease.Epoch); err != nil {
 				return err
 			}
-			next, err := h.b.TryAcquire(h.ctx, s, coord.AcquireOptions{
+			next, refused, err := h.b.TryAcquire(h.ctx, s, coord.AcquireOptions{
 				Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",
 			})
 			if err == nil && next == nil {
-				err = fmt.Errorf("refused a resource its own owner had just released")
+				err = fmt.Errorf("refused (%q) a resource its own owner had just released", refused)
 			}
 			if err != nil {
 				return err

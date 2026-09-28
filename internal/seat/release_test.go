@@ -195,7 +195,7 @@ func TestAnUnprovenTeardownKeepsTheLease(t *testing.T) {
 		t.Fatalf("seat lease = %+v, want ours at epoch %d", lease, epoch)
 	}
 	// And a peer cannot take it.
-	taken, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	taken, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 		Owner: "peer:1", TTL: time.Minute, Protocol: coord.ProtocolVersion,
 	})
 	if err != nil || taken != nil {

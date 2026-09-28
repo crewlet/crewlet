@@ -221,7 +221,7 @@ func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	dotted := coord.SeatResource("alice.smith")
 	plain := coord.SeatResource("alice")
 	for _, r := range []string{dotted, plain} {
-		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
+		if _, _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: time.Minute, Preferred: "node-a",
 		}); err != nil {
 			t.Fatalf("claim %q: %v", r, err)
@@ -298,7 +298,7 @@ func TestATTLLongerThanTheBucketIsRefused(t *testing.T) {
 
 	// The refusal is an ERROR, not a (nil, nil) refusal: nobody else holds
 	// the seat, the caller asked for something the bucket cannot promise.
-	lease, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: 2 * time.Minute})
+	lease, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: 2 * time.Minute})
 	if err == nil {
 		t.Fatalf("TryAcquire with a TTL above the bucket's = (%v, nil), want an error", lease)
 	}
@@ -312,7 +312,7 @@ func TestATTLLongerThanTheBucketIsRefused(t *testing.T) {
 		t.Fatalf("Renew with a TTL above the bucket's = %v", err)
 	}
 	// Exactly the configured TTL is the normal case and must be accepted.
-	if _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute}); err != nil {
+	if _, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute}); err != nil {
 		t.Fatalf("TryAcquire at exactly the bucket TTL: %v", err)
 	}
 }
@@ -327,7 +327,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	const ttl = time.Second
 	s := openStore(t, nc, ttl)
 
-	first, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	first, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: ttl, Preferred: "node-a",
 	})
 	if err != nil || first == nil {
@@ -357,7 +357,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	}
 
 	// The peer's claim lands through Create, on a key the broker removed.
-	taken, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-b:1", TTL: ttl})
+	taken, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-b:1", TTL: ttl})
 	if err != nil || taken == nil {
 		t.Fatalf("takeover after a server-side expiry = (%v, %v)", taken, err)
 	}
@@ -387,7 +387,7 @@ func TestReleaseExpiresInPlaceAndKeepsTheKey(t *testing.T) {
 	nc := embeddedNATS(t)
 	s := openStore(t, nc, time.Minute)
 
-	lease, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute})
+	lease, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute})
 	if err != nil || lease == nil {
 		t.Fatalf("claim = (%v, %v)", lease, err)
 	}
@@ -417,12 +417,12 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 	// An older peer holds a seat. A presence registration must still land —
 	// membership is not work, and a newer node invisible in the membership
 	// read makes every peer divide the seats by a fleet that excludes it.
-	if _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	if _, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "old:1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("old claim: %v", err)
 	}
-	presence, err := s.TryAcquire(ctx, coord.NodeResource("new"), coord.AcquireOptions{
+	presence, _, err := s.TryAcquire(ctx, coord.NodeResource("new"), coord.AcquireOptions{
 		Owner: "new:1", TTL: time.Minute, Protocol: coord.ProtocolVersion, Ungated: true,
 		Meta: map[string]any{"roles": []any{"seats"}},
 	})
@@ -610,13 +610,13 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 	ctx := context.Background()
 
 	for _, r := range []string{"seat:ceo", "seat:eng", "seat:ops", "worker:scheduler"} {
-		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
+		if _, _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a", TTL: time.Minute, Preferred: "node-a",
 		}); err != nil {
 			t.Fatalf("claim %s: %v", r, err)
 		}
 	}
-	if _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
+	if _, _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
 		Owner: "node-a:1", TTL: time.Minute, Ungated: true,
 	}); err != nil {
 		t.Fatalf("claim presence: %v", err)

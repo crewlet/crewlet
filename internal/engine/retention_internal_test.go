@@ -854,7 +854,7 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 	e := &Engine{backends: &Backends{Coord: backend}, dataView: view}
 
 	for _, id := range []string{"node-b", "node-a"} {
-		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id),
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id),
 			coord.AcquireOptions{
 				Owner: id + ":1", TTL: time.Minute,
 				Meta: map[string]any{"roles": []string{"data", "seats"}},
@@ -865,7 +865,7 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 	// AND ONE THAT IS ALIVE AND HOLDS NOTHING. It has no index to scan
 	// and answers no slice, so a roster that counted it would hand it a
 	// range nobody scans on every search, exactly as a dead node would.
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("agent-1"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("agent-1"),
 		coord.AcquireOptions{
 			Owner: "agent-1:1", TTL: time.Minute,
 			Meta: map[string]any{"roles": []string{"seats"}},
@@ -874,7 +874,7 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 	}
 	// AND ONE THAT IS GONE. Its lease has expired, so it is not a
 	// participant — where the positions register would still name it.
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-dead"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-dead"),
 		coord.AcquireOptions{
 			Owner: "node-dead:1", TTL: time.Nanosecond,
 			Meta: map[string]any{"roles": []string{"data", "seats"}},

@@ -159,7 +159,7 @@ func TestTheDutyLeavesAMoveWhoseWalkHoldsItsClaim(t *testing.T) {
 		r.drain()
 	}
 	stopMoveOf(t, r, "n-root", "n-kid-b")
-	lease, err := r.claims.TryAcquire(t.Context(), tracker.MoveClaim("m-root"),
+	lease, _, err := r.claims.TryAcquire(t.Context(), tracker.MoveClaim("m-root"),
 		coord.AcquireOptions{Owner: "node-b", TTL: tracker.ClaimTTL})
 	if err != nil || lease == nil {
 		t.Fatalf("hold the running walk's claim: (%v, %v)", lease, err)

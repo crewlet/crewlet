@@ -42,7 +42,7 @@ func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 		{"skill-curator", coord.MaxDutyTTL},
 	} {
 		resource := coord.WorkerResource(duty.name)
-		lease, err := s.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := s.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: duty.ttl, Ungated: true,
 		})
 		if err != nil || lease == nil {
@@ -56,7 +56,7 @@ func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 
 	// The seat lease bucket keeps its own ceiling: moving duties out of it
 	// widened nothing for seats.
-	_, err := s.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	_, _, err := s.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 		Owner: "node-a:1", TTL: productionSeatTTL + time.Second,
 	})
 	if !errors.Is(err, errTTLTooLong) {
@@ -183,7 +183,7 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 
 	// This build's own records never gate its duties: every record it
 	// writes carries the layout, presence included.
-	if _, err := s.TryAcquire(ctx, coord.NodeResource("new"), coord.AcquireOptions{
+	if _, _, err := s.TryAcquire(ctx, coord.NodeResource("new"), coord.AcquireOptions{
 		Owner: "new:1", TTL: time.Minute, Ungated: true,
 	}); err != nil {
 		t.Fatalf("presence claim: %v", err)
@@ -194,14 +194,14 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 
 	putOlderBuildRecord(ctx, t, s, coord.NodeResource("old"), "old:1")
 
-	lease, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
+	lease, _, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
 		Owner: "new:1", TTL: 30 * time.Second, Ungated: true,
 	})
 	if err != nil || lease != nil {
 		t.Fatalf("a duty claim beside a live older build = (%v, %v), want the definite refusal (nil, nil)",
 			lease, err)
 	}
-	gated, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{Owner: "new:1", TTL: 30 * time.Second})
+	gated, _, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{Owner: "new:1", TTL: 30 * time.Second})
 	if err != nil || gated != nil {
 		t.Fatalf("a gated duty claim beside a live older build = (%v, %v), want (nil, nil)", gated, err)
 	}
@@ -217,7 +217,7 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 	if !s.dutiesWaiting.Load() {
 		t.Fatal("the store refused duties for an older build and did not report that it is waiting")
 	}
-	if seat, err := s.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	if seat, _, err := s.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 		Owner: "new:1", TTL: time.Minute,
 	}); err != nil || seat == nil {
 		t.Fatalf("a seat claim beside a live older build = (%v, %v); the layout gates duties only",
@@ -236,7 +236,7 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 	if _, err := s.leases.kv.Put(ctx, encodeResource(coord.NodeResource("old")), tomb); err != nil {
 		t.Fatalf("release the older node's presence: %v", err)
 	}
-	taken, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
+	taken, _, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
 		Owner: "new:1", TTL: 30 * time.Second, Ungated: true,
 	})
 	if err != nil || taken == nil {
@@ -259,7 +259,7 @@ func TestADutyHolderStopsWhenAnOlderBuildAppears(t *testing.T) {
 	s := openStore(t, embeddedNATS(t), time.Minute)
 	duty := coord.WorkerResource("maintenance")
 
-	held, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
+	held, _, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
 		Owner: "new:1", TTL: 45 * time.Minute, Ungated: true,
 	})
 	if err != nil || held == nil {
@@ -271,7 +271,7 @@ func TestADutyHolderStopsWhenAnOlderBuildAppears(t *testing.T) {
 		t.Fatalf("read the held duty: %v", err)
 	}
 
-	again, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
+	again, _, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
 		Owner: "new:1", TTL: 45 * time.Minute, Ungated: true,
 	})
 	if err != nil || again != nil {
@@ -307,16 +307,17 @@ func TestTheLayoutReCheckGivesBackOnlyANewClaim(t *testing.T) {
 			s := openStore(t, embeddedNATS(t), time.Minute)
 			duty := coord.WorkerResource("scheduler")
 			opts := coord.AcquireOptions{Owner: "new:1", TTL: 30 * time.Second, Ungated: true}
-			lease, err := s.TryAcquire(ctx, duty, opts)
+			lease, _, err := s.TryAcquire(ctx, duty, opts)
 			if err != nil || lease == nil {
 				t.Fatalf("claim = (%v, %v)", lease, err)
 			}
 			putOlderBuildRecord(ctx, t, s, coord.NodeResource("old"), "old:1")
 
 			want := leaseValue{Resource: duty, Owner: "new:1", Epoch: lease.Epoch}
-			got, err := s.settle(ctx, s.duties, duty, want, opts, coord.ProtocolVersion, tc.fresh)
-			if err != nil || got != nil {
-				t.Fatalf("settle beside an older build = (%v, %v), want (nil, nil)", got, err)
+			got, refused, err := s.settle(ctx, s.duties, duty, want, opts, coord.ProtocolVersion, tc.fresh)
+			if err != nil || got != nil || refused != coord.RefusedLayout {
+				t.Fatalf("settle beside an older build = (%v, %q, %v), want a refusal %q",
+					got, refused, err, coord.RefusedLayout)
 			}
 			current, err := s.Get(ctx, duty)
 			if err != nil {
@@ -383,7 +384,7 @@ func TestEveryWriteStampsTheLayout(t *testing.T) {
 	s := openStore(t, embeddedNATS(t), time.Minute)
 	seat := coord.SeatResource("ceo")
 
-	lease, err := s.TryAcquire(ctx, seat, coord.AcquireOptions{Owner: "new:1", TTL: time.Minute})
+	lease, _, err := s.TryAcquire(ctx, seat, coord.AcquireOptions{Owner: "new:1", TTL: time.Minute})
 	if err != nil || lease == nil {
 		t.Fatalf("claim = (%v, %v)", lease, err)
 	}

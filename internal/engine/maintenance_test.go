@@ -251,7 +251,7 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	// leaves the assertion below failing for a reason that is not the rule
 	// it is about.
 	hold := coord.WorkerResource(holdName)
-	if got, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
+	if got, _, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
 		Owner: owner, TTL: 5 * time.Minute, Ungated: true,
 	}); err != nil || got == nil {
 		t.Fatalf("precondition: take a setup hold: (%v, %v)", got, err)

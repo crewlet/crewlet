@@ -811,7 +811,7 @@ func TestAListingNeverMissesALeaseBeingRenewed(t *testing.T) {
 	nodes := []string{"n0", "n1", "n2", "n3", "n4"}
 	leases := map[string]*coord.Lease{}
 	for _, n := range nodes {
-		l, err := writer.TryAcquire(ctx, coord.NodeResource(n), coord.AcquireOptions{
+		l, _, err := writer.TryAcquire(ctx, coord.NodeResource(n), coord.AcquireOptions{
 			Owner: n + ":1", TTL: time.Minute, Ungated: true,
 		})
 		if err != nil || l == nil {

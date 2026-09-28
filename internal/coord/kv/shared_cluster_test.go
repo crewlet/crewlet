@@ -210,7 +210,7 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 	deadline := time.Now().Add(60 * time.Second)
 	for attempt := 0; ; attempt++ {
 		resource = coord.ClassSeat.Resource(fmt.Sprintf("claimed-after-the-cut-%d", attempt))
-		lease, err = onLeader.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err = onLeader.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner: owner, TTL: coordtest.LongTTL, Ungated: true,
 		})
 		if err == nil && lease != nil {

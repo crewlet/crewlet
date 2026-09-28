@@ -96,7 +96,7 @@ const (
 // third while a cross-project move fails closed over it. Collapsed to two
 // values, one of those two behaviours would have to be wrong.
 type Claims interface {
-	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error)
+	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)
 	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 	Get(ctx context.Context, resource string) (*coord.Lease, error)
@@ -1143,7 +1143,7 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 			"nodes rewriting one subtree", resource)
 	}
 	owner := w.claimOwner()
-	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+	lease, _, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: owner, TTL: ClaimTTL,
 	})
 	switch {
@@ -2126,7 +2126,7 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	// rather than being refused, and whichever finished first released the
 	// other's.
 	owner := w.claimOwner()
-	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+	lease, _, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: owner, TTL: ttl,
 	})
 	switch {

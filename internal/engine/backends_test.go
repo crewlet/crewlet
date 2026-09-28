@@ -108,7 +108,7 @@ func TestAnEmbeddedKVStoreRidesTheStreamsOwnConnection(t *testing.T) {
 	t.Cleanup(func() { back.Close(t.Context()) })
 
 	// It is a real store: a lease acquired through it is held.
-	lease, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+	lease, _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
 		coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second})
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
@@ -119,7 +119,7 @@ func TestAnEmbeddedKVStoreRidesTheStreamsOwnConnection(t *testing.T) {
 	// And it is EXCLUSIVE, which a memory backend standing in for it would
 	// also be — so the test above is what says it is the KV store, and this
 	// is what says it works.
-	if got, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+	if got, _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
 		coord.AcquireOptions{Owner: "owner-2", TTL: 30 * time.Second}); err != nil {
 		t.Fatalf("second Acquire: %v", err)
 	} else if got != nil {
@@ -144,7 +144,7 @@ func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
 	if back.Coord == nil {
 		t.Fatal("local coordination produced no backend")
 	}
-	if _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+	if _, _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
 		coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second}); err != nil {
 		t.Errorf("Acquire: %v", err)
 	}

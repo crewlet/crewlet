@@ -333,7 +333,7 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	backend := coordmemory.New()
 	claim := func(resource, owner string, meta map[string]any) {
 		t.Helper()
-		if _, err := backend.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+		if _, _, err := backend.TryAcquire(t.Context(), resource, coord.AcquireOptions{
 			Owner: owner, TTL: time.Minute, Meta: meta,
 		}); err != nil {
 			t.Fatal(err)
@@ -383,7 +383,7 @@ func TestFleetNamesTheSeatsNoNodeCanRun(t *testing.T) {
 	// config or starts a node that matches. A list of leases cannot say
 	// that, because the seat has no lease to appear in.
 	backend := coordmemory.New()
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute, Meta: map[string]any{
 			"roles": []any{"seats"}, "labels": map[string]any{"zone": "eu"},
 		}}); err != nil {
@@ -414,7 +414,7 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	// background duty, with no error anywhere. That silence is the whole
 	// reason this is a field.
 	backend := coordmemory.New()
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute, Meta: map[string]any{
 			"roles": []any{"seats"},
 		}}); err != nil {
@@ -624,7 +624,7 @@ func TestFleetCarriesEachNodesConfigState(t *testing.T) {
 	// looking for — without the timestamp its stale row is
 	// indistinguishable from one written a second ago.
 	backend := coordmemory.New()
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +670,7 @@ func TestAnUnreadableControlPlaneDoesNotBlankTheFleet(t *testing.T) {
 	// its columns is unreadable would blank the screen an operator opens
 	// when nodes are dying.
 	backend := coordmemory.New()
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +719,7 @@ func TestASeatOnAnIngressOnlyNodeIsStillUnplaceable(t *testing.T) {
 	// ingress-only has a seat nothing will ever claim — and a check that
 	// looked at labels alone would report it as merely unclaimed.
 	backend := coordmemory.New()
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("edge"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("edge"),
 		coord.AcquireOptions{Owner: "edge:1", TTL: time.Minute, Meta: map[string]any{
 			"roles": []any{"ingress"}, "labels": map[string]any{"zone": "eu"},
 		}}); err != nil {
@@ -748,13 +748,13 @@ func TestASeatThatIsHeldIsNotReportedUnplaceable(t *testing.T) {
 	// now — and reporting it as unplaceable would send somebody looking
 	// for a fault that does not exist.
 	backend := coordmemory.New()
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute, Meta: map[string]any{
 			"roles": []any{"seats"}, "labels": map[string]any{"zone": "eu"},
 		}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backend.TryAcquire(t.Context(), coord.SeatResource("cto"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.SeatResource("cto"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
@@ -782,7 +782,7 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 	backend := coordmemory.New()
 	claim := func(resource, owner string, meta map[string]any) {
 		t.Helper()
-		if _, err := backend.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+		if _, _, err := backend.TryAcquire(t.Context(), resource, coord.AcquireOptions{
 			Owner: owner, TTL: time.Minute, Meta: meta,
 		}); err != nil {
 			t.Fatal(err)
@@ -2126,7 +2126,7 @@ func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
 	pinned := time.Date(2026, 5, 4, 9, 30, 0, 0, time.UTC)
 	backend := coordmemory.New()
 	for _, node := range []string{"node-a", "node-b"} {
-		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
 			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute}); err != nil {
 			t.Fatal(err)
 		}
@@ -2199,7 +2199,7 @@ func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
 func TestAFleetWithNoActivationCarriesNoRecord(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
@@ -2229,7 +2229,7 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	backend := coordmemory.New()
 	claim := func(node string, meta map[string]any) {
 		t.Helper()
-		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
 			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute, Meta: meta},
 		); err != nil {
 			t.Fatal(err)

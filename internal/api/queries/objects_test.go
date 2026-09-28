@@ -88,7 +88,7 @@ func objectsLeases(t *testing.T) *coordmemory.Backend {
 		"data-f": {Weight: 1, Labels: map[string]string{"zone": "eu-2"},
 			Health: &objstore.ObjectsHealth{State: "ok", UsedPercent: 20}},
 	} {
-		if _, err := backend.TryAcquire(t.Context(), coord.ObjectsResource(node),
+		if _, _, err := backend.TryAcquire(t.Context(), coord.ObjectsResource(node),
 			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute, Meta: meta.Encode(),
 				Ungated: true}); err != nil {
 			t.Fatal(err)
@@ -358,7 +358,7 @@ func TestAMemberWhoseLeaseOffersNoShareIsNotLive(t *testing.T) {
 	t.Parallel()
 	state := placedFleet(t)
 	backend := objectsLeases(t)
-	if _, err := backend.TryAcquire(t.Context(), coord.ObjectsResource("data-b"),
+	if _, _, err := backend.TryAcquire(t.Context(), coord.ObjectsResource("data-b"),
 		coord.AcquireOptions{Owner: "data-b:1", TTL: time.Minute, Ungated: true,
 			Meta: map[string]any{"weight": 0.5}}); err != nil {
 		t.Fatal(err)
@@ -404,7 +404,7 @@ func TestTheFleetNamesEachStateOfTheMapApart(t *testing.T) {
 func TestNoNodeRowCarriesAnObjectShare(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("data-a"), coord.AcquireOptions{
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("data-a"), coord.AcquireOptions{
 		Owner: "data-a:1", TTL: time.Minute,
 		Meta: map[string]any{"roles": []any{"data"}, "object_weight": 4},
 	}); err != nil {

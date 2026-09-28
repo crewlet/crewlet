@@ -85,10 +85,13 @@ import (
 // INSTEAD is every lease write delivered to it while it runs — a fleet's
 // heartbeats, one per held lease per renew — so it runs only while this node
 // is judging gates and stops [gateViewIdle] after the last one. A node at its
-// share of seats claims nothing and pays nothing; one converging from cold
-// pays one load of the buckets and then the writes of the minutes it claims
-// through; a node holding a fleet duty re-claims it every tick and keeps its
-// view for as long as it holds one.
+// share of seats claims nothing and pays nothing, and neither does one with
+// room whose every candidate a peer holds: a claim on a held resource is
+// refused [coord.RefusedHeld] before any gate, and the seat host reads the
+// fleet's floor only after a claim the gate refused. One converging from
+// cold pays one load of the buckets and then the writes of the minutes it
+// claims through; a node holding a fleet duty re-claims it every tick and
+// keeps its view for as long as it holds one.
 type gateView struct {
 	s *Store
 

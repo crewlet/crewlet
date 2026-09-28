@@ -221,8 +221,8 @@
 // is that a backend serves its own writes per resource (coord.Backend), and
 // every lease answer rests on it: TryAcquire reads its own write back to learn
 // the store's deadline, and on the copy it read the claim's record was still
-// the claiming one it had just replaced, so a claim that WON answered
-// (nil, nil). Measured on a three-member cluster, a hundred leaf nodes
+// the claiming one it had just replaced, so a claim that WON answered a
+// refusal. Measured on a three-member cluster, a hundred leaf nodes
 // claiming at once: 743 of 10,000 claims on fresh resources answered "not
 // held" for a lease the store then held under their owner until its TTL — a
 // singleton duty dark on every node for a TTL, since the one node that won
@@ -288,9 +288,9 @@ import (
 
 var log = logging.Get("coord.kv")
 
-// Arguments a caller got wrong. They are errors rather than a (nil, nil)
-// refusal on purpose: (nil, nil) means "somebody else holds this", and a blank
-// owner has not lost a race to anybody. An error routes them to the contract's
+// Arguments a caller got wrong. They are errors rather than a refusal on
+// purpose: a refusal means "somebody else holds this" or "a gate stopped you",
+// and a blank owner has done neither. An error routes them to the contract's
 // third answer — "no answer" — which a caller retries loudly instead of acting
 // on a lie about a peer that does not exist.
 var (
@@ -793,10 +793,10 @@ func (s *Store) lanesFor(class coord.Class) []*lane {
 
 // TryAcquire claims resource for the owner, or reports that someone else holds
 // it.
-func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	l := s.laneFor(resource)
 	if err := s.validateTTL(l, resource, opts.Owner, opts.TTL); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	protocol := opts.EffectiveProtocol()
 	key := encodeResource(resource)
@@ -804,21 +804,22 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	for range casAttempts {
 		snap, err := s.readForClaim(ctx, l, resource)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 
 		mine := snap.mine
 		held := false
 		if mine != nil {
 			if held, err = s.held(ctx, *mine, snap.clock); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 		}
 		if held && mine.value.Owner != opts.Owner {
 			// A PEER HOLDS IT, which is the answer whatever the gate
-			// would say — the gate's own refusal is this same (nil, nil)
-			// — so no gate is judged for a claim that cannot write.
-			return nil, nil
+			// would say (coord.RefusedHeld), so no gate is judged for a
+			// claim that cannot write — which is what keeps a sweep over
+			// seats its peers hold from starting the gate view at all.
+			return nil, coord.RefusedHeld, nil
 		}
 		// The gate, fleet-wide: refuse while ANY live lease is held at an
 		// older protocol. The disagreement is about what HOLDING A LEASE
@@ -829,10 +830,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		if !opts.Ungated {
 			blocked, gateErr := s.gate.blocked(ctx, protocol)
 			if gateErr != nil {
-				return nil, gateErr
+				return nil, "", gateErr
 			}
 			if blocked {
-				return nil, nil
+				return nil, coord.RefusedProtocol, nil
 			}
 		}
 		if held && mine.value.Epoch == claimingEpoch {
@@ -853,10 +854,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// that lost the duty to a peer judges no gate for it.
 			waiting, layoutErr := s.olderLayoutHolds(ctx)
 			if layoutErr != nil {
-				return nil, layoutErr
+				return nil, "", layoutErr
 			}
 			if waiting {
-				return nil, nil
+				return nil, coord.RefusedLayout, nil
 			}
 		}
 
@@ -897,13 +898,13 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				// never behind the lease bucket — that ordering is what
 				// lets PreferredResources read one bucket.
 				if err = s.pinHint(ctx, resource, opts.Preferred); err != nil {
-					return nil, err
+					return nil, "", err
 				}
 			}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			data, err := encodeValue(value)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			// Update at the read revision is the fencing CAS: it fails if
 			// anything at all wrote the record since we read it.
@@ -911,7 +912,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 					continue
 				}
-				return nil, unavailable("renew lease "+resource, err)
+				return nil, "", unavailable("renew lease "+resource, err)
 			}
 			return s.settle(ctx, l, resource, value, opts, protocol, false)
 		}
@@ -948,7 +949,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		claiming.Claim = uuid.NewString()
 		claimData, err := encodeValue(claiming)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		var rev uint64
 		if mine == nil {
@@ -958,7 +959,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				}
 				err = unavailable("create lease "+resource, err)
 				s.abandon(ctx, l, resource, claiming, mine, err)
-				return nil, err
+				return nil, "", err
 			}
 		} else {
 			if rev, err = l.kv.Update(ctx, key, claimData, mine.revision); err != nil {
@@ -967,7 +968,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				}
 				err = unavailable("claim lease "+resource, err)
 				s.abandon(ctx, l, resource, claiming, mine, err)
-				return nil, err
+				return nil, "", err
 			}
 		}
 
@@ -981,14 +982,14 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// record: left claiming, it held the resource against every
 			// claimant — this owner's retries included — for its TTL.
 			s.abandon(ctx, l, resource, claiming, mine, err)
-			return nil, err
+			return nil, "", err
 		}
 		value.Epoch = epoch
 		value.Preferred = hint
 		data, err := encodeValue(value)
 		if err != nil {
 			s.abandon(ctx, l, resource, claiming, mine, err)
-			return nil, err
+			return nil, "", err
 		}
 		if _, err := l.kv.Update(ctx, key, data, rev); err != nil {
 			// Our claiming record was taken from us, which needs the
@@ -1004,11 +1005,11 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// this call's claiming one, and it goes back.
 			err = unavailable("commit lease "+resource, err)
 			s.abandon(ctx, l, resource, claiming, mine, err)
-			return nil, err
+			return nil, "", err
 		}
 		return s.settle(ctx, l, resource, value, opts, protocol, true)
 	}
-	return nil, contended("TryAcquire", resource)
+	return nil, "", contended("TryAcquire", resource)
 }
 
 // settle reads the record back and re-runs the gates.
@@ -1028,10 +1029,10 @@ func (s *Store) settle(
 	opts coord.AcquireOptions,
 	protocol int,
 	fresh bool,
-) (*coord.Lease, error) {
+) (*coord.Lease, coord.Refusal, error) {
 	snap, err := s.readForClaim(ctx, l, resource)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	mine := snap.mine
 	if mine == nil || mine.value.Owner != want.Owner || mine.value.Epoch != want.Epoch {
@@ -1039,27 +1040,33 @@ func (s *Store) settle(
 		// reachable with a TTL short enough to lapse inside one round
 		// trip — but the honest answer is the definite one: by the time we
 		// looked, it was not ours.
-		return nil, nil
+		return nil, coord.RefusedHeld, nil
 	}
 	if !opts.Ungated {
 		blocked, err := s.gate.blocked(ctx, protocol)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if blocked {
-			return nil, s.yield(ctx, resource, want, protocol, fresh, "coord_kv_claim_yielded_to_older_peer")
+			if err := s.yield(ctx, resource, want, protocol, fresh, "coord_kv_claim_yielded_to_older_peer"); err != nil {
+				return nil, "", err
+			}
+			return nil, coord.RefusedProtocol, nil
 		}
 	}
 	if l == s.duties {
 		waiting, err := s.olderLayoutHolds(ctx)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if waiting {
-			return nil, s.yield(ctx, resource, want, protocol, fresh, "coord_kv_duty_yielded_to_older_build")
+			if err := s.yield(ctx, resource, want, protocol, fresh, "coord_kv_duty_yielded_to_older_build"); err != nil {
+				return nil, "", err
+			}
+			return nil, coord.RefusedLayout, nil
 		}
 	}
-	return mine.lease(), nil
+	return mine.lease(), "", nil
 }
 
 // yield gives back a claim a gate's re-check refused, when the claim is new.
@@ -1583,7 +1590,7 @@ type snapshot struct {
 // The claim writes at its revision and settle judges the claim's own write by
 // it, so it must be the newest the quorum holds: a copy one write behind
 // hands settle the claiming record this very call replaced, which read as
-// "superseded" and answered (nil, nil) for a lease the store held under this
+// "superseded" and answered a refusal for a lease the store held under this
 // owner until its TTL. What the gates judge is not in the snapshot at all: the
 // gates' view answers them (gate.go).
 func (s *Store) readForClaim(ctx context.Context, l *lane, resource string) (snapshot, error) {
