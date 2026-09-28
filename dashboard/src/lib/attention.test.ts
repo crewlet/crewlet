@@ -43,20 +43,20 @@ describe("what it surfaces", () => {
     expect(items[0]?.detail).toContain("webhook");
   });
 
-  test("a refused token and an unreachable engine are different items", () => {
+  test("nobody signed in and an unreachable engine are different items", () => {
     // The repair differs: one comes back on its own, the other never does.
     expect(attentionQueue(input({ connected: false }))[0]?.id).toBe("offline");
     expect(attentionQueue(input({ authRejected: true }))[0]?.id).toBe("auth");
   });
 
-  // A REFUSED CREDENTIAL IS REPAIRED BY SIGNING IN AS OFTEN AS BY A TOKEN. The
-  // item said to "set a token matching one of the api.auth.tokens entries",
-  // which a person whose session had ended could not act on at all.
-  test("a refused credential names both repairs and no operator token", () => {
+  // THE REPAIR IS A SIGN-IN, WHATEVER THE CREDENTIAL. The item said to "set a
+  // token matching one of the api.auth.tokens entries", which a person whose
+  // session had ended could not act on at all — and there is no token to set
+  // any more: an API token is exchanged for a session on the sign-in screen.
+  test("nobody signed in is repaired by signing in, and names no token to set", () => {
     const auth = attentionQueue(input({ authRejected: true }))[0];
-    expect(auth?.detail).toContain("Sign in again");
-    expect(auth?.detail).toContain("crewlet iam token");
-    expect(`${auth?.title} ${auth?.detail}`).not.toMatch(/operator token/);
+    expect(auth?.detail).toContain("Sign in");
+    expect(`${auth?.title} ${auth?.detail}`).not.toMatch(/operator token|set a token/i);
   });
 
   // THE ENGINE'S OWN WORD. This case asserted `awaiting_input`, which

@@ -68,7 +68,8 @@ import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
+import { rest, RestError } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
 import type {
   EventRecord,
   IntegrationRow,
@@ -1769,12 +1770,12 @@ export function useSetup(): {
   // screen reporting an absence that is not there.
   // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST.
   //
-  // Four things start one — mount, a token change, the tab becoming visible
-  // and useRecheck, which deliberately fires the same read twice 700 ms
-  // apart — so several can be in flight at once. Every answer was written
-  // into state unconditionally, and nothing polls this route, so whichever
-  // landed last is what the screen held until the operator changed tabs or
-  // set a token. A generation counter is what useQuery in this same tree
+  // Three things start one — mount, the tab becoming visible and
+  // useRecheck, which deliberately fires the same read twice 700 ms apart —
+  // so several can be in flight at once. Every answer was written into state
+  // unconditionally, and nothing polls this route, so whichever landed last
+  // is what the screen held until the operator changed tabs or came back to
+  // the screen. A generation counter is what useQuery in this same tree
   // already uses for exactly this, and it is why its doc argues against a
   // second hand-rolled loader.
   const generation = useRef(0);
@@ -1813,10 +1814,9 @@ export function useSetup(): {
     })();
   }, []);
 
+  // A SIGN-IN FROM THIS SCREEN'S BANNER is a screen of its own that comes back
+  // here, so this mount is what reads again as the new reader.
   useEffect(reload, [reload]);
-  // A refusal here is the one the banner asks the reader to fix, so the fix
-  // has to land on this screen without a reload.
-  useEffect(() => onTokenChanged(reload), [reload]);
   // AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
   // listing is the only thing that carries the roster: nothing pushes it, and
   // no answer this screen holds says when a person finished creating an app.
@@ -3086,12 +3086,11 @@ export function Integrations({ kind }: { kind?: string }) {
             what it can read without it, and offers no way to connect.
           </span>
           <span className="spacer" />
-          {/* The same door QueryState opens, for the same reason: with
-              anonymous reads allowed the socket is never refused, so a banner
-              that only NAMES the missing credential leaves the reader with
-              nothing on the page that can supply it. */}
-          <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={requestToken}>
-            Set token
+          {/* The same door QueryState opens, for the same reason: a banner
+              that only NAMES the missing grant leaves the reader with nothing
+              on the page that can act on it. */}
+          <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={goSignIn}>
+            Sign in
           </Button>
         </Callout>
       )}

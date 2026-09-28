@@ -9,7 +9,7 @@
  *
  * There is no reveal button. The one route that returns a value needs an
  * explicit flag and logs the access, and putting that behind a click in a
- * dashboard that anyone with the token can open is not a trade worth making;
+ * dashboard that anyone signed in can open is not a trade worth making;
  * `crewlet secrets get` is the deliberate path. Storing, editing and removing
  * a row need no such trade: none of them reads a value back. THE PEEK INHERITS
  * THAT and may never grow one either — a rail is a smaller screen, not a
@@ -60,7 +60,7 @@ import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
+import { rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, QueryErrorCode, SecretRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -111,7 +111,7 @@ function refusal(err: unknown): string {
       : [];
     return grants.length > 0
       ? `This needs ${grants.join(" or ")}, which the credential you presented does not carry.`
-      : "This needs a credential that carries the grant to read it. Sign in, or set one from the command palette.";
+      : "This needs a credential that carries the grant to read it. Sign in as somebody who holds it.";
   }
   return err.detail || err.code || "the engine refused the read";
 }
@@ -164,8 +164,8 @@ function useCredentials(enabled = true): Credentials {
   // THE ANSWER THAT LANDS IS NOT ALWAYS AN ANSWER ANYBODY IS STILL WAITING
   // FOR, and this screen wrote every one of them into state unconditionally.
   //
-  // Three things start a read — mount, a token arriving, and the reader
-  // pressing refresh — so two can be in flight at once, and nothing here
+  // Two things start a read — mount (a sign-in comes back to one) and a write
+  // that finished — so two can be in flight at once, and nothing here
   // polls: whichever landed last was what the screen held. The same
   // generation counter [Integrations] uses for exactly this covers both
   // halves, because "superseded" and "unmounted" are one question to a read
@@ -240,18 +240,11 @@ function useCredentials(enabled = true): Credentials {
     await Promise.all([load(mine), loadReferences(mine)]);
   }, [load, loadReferences]);
 
+  // A SIGN-IN FROM THIS SCREEN'S REFUSAL is a screen of its own that comes
+  // back here, so this mount is what reads again as the new reader.
   useEffect(() => {
     if (enabled) void reload();
   }, [enabled, reload]);
-  // This screen's refusal names the missing token, so supplying one has to
-  // refresh it in place rather than waiting for a reload.
-  useEffect(
-    () =>
-      onTokenChanged(() => {
-        if (enabled) void reload();
-      }),
-    [enabled, reload],
-  );
 
   // Grouped by name, because one credential routinely has several readers: a
   // seat's bot_token and its mcp_env entry are two pointers at one row, and

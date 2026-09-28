@@ -124,6 +124,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   sessionRestored();
+  sessionStorage.clear();
   location.hash = "#/";
 });
 
@@ -172,27 +173,35 @@ describe("what the menu offers", () => {
 });
 
 describe("signing out", () => {
-  test("posts, and then reloads into the sign-in with nothing held", async () => {
+  // THE TAB'S OWN STORAGE GOES WITH THE SESSION, because a reload keeps it:
+  // a builder draft kept for the person leaving would otherwise be offered to
+  // whoever signs in here next, as theirs.
+  test("posts, forgets the tab's storage, and reloads into the sign-in", async () => {
     const sent = engine({
       "GET /auth/session": PERSON,
       "POST /auth/logout": { status: 200, body: {} },
     });
+    sessionStorage.setItem("crewlet_org_draft", "{}");
     mount(JANE);
     await openMenu("Jane Doe");
     choose("Sign out");
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
     expect(sent).toContainEqual({ method: "POST", path: "/auth/logout" });
+    expect(sessionStorage.length).toBe(0);
   });
 
   // NOTHING ANSWERED, so nothing cleared the cookie: reloading would put the
-  // person back where they were while telling them they had left.
+  // person back where they were while telling them they had left — and the
+  // draft they are still signed in to keep stays where it was.
   test("a sign-out the engine never answered is said, and the page stays", async () => {
     engine({ "GET /auth/session": PERSON, "POST /auth/logout": "offline" });
+    sessionStorage.setItem("crewlet_org_draft", "{}");
     mount(JANE);
     await openMenu("Jane Doe");
     choose("Sign out");
     expect(await screen.findByText(/Signing out did not go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
   });
 
   test("everywhere: a revocation nobody can confirm is said, never reloaded past", async () => {

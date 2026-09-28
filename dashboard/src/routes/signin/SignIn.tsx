@@ -238,18 +238,18 @@ function TokenForm({
   open: boolean;
   onSignedIn: (status: SessionStatus) => void;
 }) {
-  const [token, setToken] = useState("");
+  const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
   async function submit() {
-    const value = token.trim();
+    const value = typed.trim();
     if (busy || value === "") return;
     setBusy(true);
     setRefusal(null);
     try {
       const answer = await auth.exchangeToken(value);
-      setToken("");
+      setTyped("");
       onSignedIn(answer.status);
     } catch (err) {
       setRefusal(refusalText(err));
@@ -278,8 +278,8 @@ function TokenForm({
             autoComplete="off"
             width="full"
             spellCheck={false}
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
           />
         )}
       </FormField>
@@ -288,7 +288,7 @@ function TokenForm({
           {refusal}
         </Callout>
       )}
-      <Button type="submit" variant="secondary" disabled={busy || token.trim() === ""}>
+      <Button type="submit" variant="secondary" disabled={busy || typed.trim() === ""}>
         {busy ? "Signing in" : "Sign in with the token"}
       </Button>
     </form>

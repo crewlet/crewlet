@@ -31,12 +31,4 @@ export {
   setStepUpConfirmer,
 } from "./session.ts";
 export type { SessionNeed, StepUpConfirmer, StepUpWindow } from "./session.ts";
-export {
-  apiToken,
-  storeToken,
-  clearToken,
-  requestToken,
-  onTokenRequested,
-  onTokenChanged,
-} from "./authToken.ts";
 export type * from "./types.ts";

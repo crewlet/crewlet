@@ -18,7 +18,6 @@
  * use it.
  */
 
-import { apiToken } from "./authToken.ts";
 import type { Snapshot } from "./types.ts";
 
 export const api = {
@@ -34,11 +33,11 @@ export const api = {
    */
   async snapshot(): Promise<Snapshot | null> {
     try {
-      const stored = apiToken();
-      const response = await fetch(
-        location.origin + "/stream/snapshot",
-        stored ? { headers: { Authorization: "Bearer " + stored } } : undefined,
-      );
+      // The session cookie is the credential, as it is on every request this
+      // dashboard makes (see rest.ts).
+      const response = await fetch(location.origin + "/stream/snapshot", {
+        credentials: "same-origin",
+      });
       if (!response.ok) return null;
       return (await response.json()) as Snapshot;
     } catch {

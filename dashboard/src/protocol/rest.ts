@@ -4,11 +4,12 @@
  *
  * The socket remains the data channel for state. This is not a second one: it
  * carries the requests that are not questions about state at all. Writes never
- * go over the socket, deliberately — its token rides the query string on the
- * handshake, and a channel whose credential appears in a proxy log is not
- * where a credential-bearing write belongs (see internal/api/auth's own note
- * on that). And a handful of reads exist only as REST, `GET /secrets` above
- * all, because no query in the registry answers them.
+ * go over the socket, deliberately: a write is judged on its `Origin` by the
+ * engine's cross-site check before its handler runs, answers the three write
+ * outcomes as statuses with an op id to retry by, and may be refused for a
+ * step-up this module confirms and replays — none of which a frame on an open
+ * socket carries. And a handful of reads exist only as REST, `GET /secrets`
+ * above all, because no query in the registry answers them.
  *
  * ONE MODULE, for the reason `api.ts` states about itself: a screen reaching
  * for its own transport takes its client from somewhere, and the somewhere the
@@ -17,12 +18,14 @@
  * `location.origin`, which is where the dashboard is served from and the only
  * origin the engine answers on (it writes no CORS header at all).
  *
- * Every call carries the operator bearer token. The engine guards `/config`,
- * `/secrets` and `/setup` in full, reads included, whatever the anonymous-read
- * posture is, so a call with no token is refused rather than silently served.
+ * THE CREDENTIAL IS THE SESSION COOKIE, which the browser attaches to every
+ * same-origin request and this module never sees: it is `HttpOnly`, so no
+ * script on the page can read it, and there is no token in storage for one to
+ * take instead. A call that must present something else — the API token
+ * exchange at `POST /auth/token` — sets its own `Authorization` header for
+ * that one request, and nothing keeps it.
  */
 
-import { apiToken } from "./authToken.ts";
 import { confirmStepUp, needSession, type StepUpWindow } from "./session.ts";
 
 /**
@@ -77,11 +80,10 @@ export class RestError extends Error {
    * Both statuses, because a screen locks the same way for either and the
    * distinction is not one it can act on: 401 is "present a credential" and
    * 403 is "the one you presented does not carry this grant". What neither
-   * is, any more, is a reason to throw the stored token away — a reader
-   * holding a perfectly good credential meets 403 the moment they open a
-   * screen outside their grants, which is the ordinary case rather than the
-   * exceptional one. Discarding it is the socket probe's decision alone, on
-   * a 401 to the handshake.
+   * is, any more, is a reason to send the reader to sign in again — a reader
+   * holding a perfectly good session meets 403 the moment they open a screen
+   * outside their grants, which is the ordinary case rather than the
+   * exceptional one. Only a 401 says nobody is signed in (see [noteSession]).
    */
   get unauthorized(): boolean {
     return this.status === 401 || this.status === 403;
@@ -358,12 +360,14 @@ async function attempt(
   // for an answer, and sending the request anyway could still write.
   if (signal?.aborted) throw signal.reason;
 
-  const token = apiToken();
   const init: RequestInit = {
     method,
     cache: "no-store",
+    // Stated rather than left to the default, because it is the whole of how
+    // this request is authenticated: the session cookie, sent to this origin
+    // and to no other.
+    credentials: "same-origin",
     headers: {
-      ...(token ? { Authorization: "Bearer " + token } : {}),
       ...(contentType ? { "Content-Type": contentType } : {}),
       ...headers,
     },

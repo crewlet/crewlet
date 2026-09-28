@@ -9,8 +9,9 @@
  * The shell composes; it does not decide. Which workspace a route belongs to
  * is `nav.ts`, what the trail says is `workspaces/crumbs.ts`, what a
  * workspace's tree holds is `workspaces/sidebars.tsx`. This file wires them
- * together and owns exactly three things nothing else can: the palette, the
- * token dialog, and the one strip that reports a degraded connection.
+ * together and owns exactly two things nothing else can: the palette, and
+ * the one strip that reports a degraded connection. Who is signed in is the
+ * identity menu's, and signing in is a screen outside the frame (`App.tsx`).
  */
 
 import {
@@ -27,7 +28,6 @@ import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
-import { TokenDialog } from "./TokenDialog.tsx";
 import { AppRail, useRailCollapsed, useWorkspaceChords, type RailBadge } from "./frame/AppRail.tsx";
 import { WorkspaceSidebar, type SidebarSection } from "./frame/WorkspaceSidebar.tsx";
 import { PageBar, CopyLink, StarPage } from "./frame/PageBar.tsx";
@@ -52,7 +52,7 @@ import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/prefs.ts";
-import { onTokenRequested } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
 import { FillRequest } from "./fill.tsx";
@@ -208,7 +208,6 @@ export function Shell({ children }: { children: ReactNode }) {
   // makes it (the org builder's canvas lens), and while it holds, the
   // scroller stops being one and hands the column what is left of the window.
   const [filling, setFilling] = useState(false);
-  const [tokenOpen, setTokenOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
 
   const [labels, setLabels] = useState<Labels>({});
@@ -243,16 +242,6 @@ export function Shell({ children }: { children: ReactNode }) {
     return () => socket.watch("");
   }, [socket, viewer.owner]);
 
-  // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
-  // dialog forever. Everything after that is the state bar.
-  useEffect(() => {
-    socket.onAuthRejected(() => setTokenOpen(true));
-  }, [socket]);
-
-  // And from anywhere else that discovers it needs a credential — an
-  // auth-gated answer on a screen the socket was never refused for.
-  useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
-
   useKeyChords([
     { key: "k", meta: true, run: () => setPaletteOpen((v) => !v), whileTyping: true },
     // ESCAPE REACHES THE PALETTE FROM ITS OWN INPUT, which is the only field
@@ -278,11 +267,6 @@ export function Shell({ children }: { children: ReactNode }) {
   // Forward buttons, a phone's back gesture, a restored history entry. The
   // palette that survived one of those was still offering the objects it had
   // ranked for the screen the reader had just left.
-  //
-  // NOT THE TOKEN DIALOG, which is deliberately not in here: a credential
-  // prompt is about the reader's access rather than about where they are, and
-  // dismissing it on a navigation would lose the one thing the socket asked
-  // for.
   useEffect(() => {
     setDrawer(false);
     setPaletteOpen(false);
@@ -382,7 +366,7 @@ export function Shell({ children }: { children: ReactNode }) {
     connected,
     identityUnverifiable,
     configured: engine?.configured,
-    onSetToken: () => setTokenOpen(true),
+    onSignIn: goSignIn,
     onRetry: () => socket.reconnect(),
     onConfig: () => nav.to(["admin", "config"]),
   });
@@ -463,15 +447,6 @@ export function Shell({ children }: { children: ReactNode }) {
         <PeekHost />
 
         {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
-        {tokenOpen && (
-          <TokenDialog
-            onClose={() => setTokenOpen(false)}
-            onSaved={(token) => {
-              socket.setToken(token);
-              socket.reconnect();
-            }}
-          />
-        )}
       </div>
     </PeekNeighbours>
   );

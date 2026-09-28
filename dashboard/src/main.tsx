@@ -30,7 +30,7 @@ import { App } from "./app/App.tsx";
 import { Router } from "./app/router.tsx";
 import { ClientContext } from "./lib/store-hooks.ts";
 import { bootTheme } from "./lib/prefs.ts";
-import { LiveSocket, Store, apiToken } from "./protocol/index.ts";
+import { LiveSocket, Store } from "./protocol/index.ts";
 
 // OUR NAMES, RESOLVED TO THEIRS. Between uilet's variables and our
 // stylesheets: the targets have to exist before an alias can resolve, and
@@ -52,7 +52,6 @@ bootTheme();
 
 const store = new Store();
 const socket = new LiveSocket(store);
-socket.setToken(apiToken());
 socket.start();
 
 const host = document.getElementById("root");

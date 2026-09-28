@@ -29,7 +29,8 @@ import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { isLogRefusal, requestToken } from "~/protocol/index.ts";
+import { isLogRefusal } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
 import {
   roundLabel,
   runState,
@@ -344,12 +345,11 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       variant="warning"
       icon={<KeyGlyph size="md" />}
       action={
-        // The banner used to say "set a token" and offer nothing that could.
-        // With anonymous reads allowed the socket is never refused, so the
-        // dialog's only other doors — a socket refusal, and the palette —
-        // both stay shut on exactly the screen that needs it.
-        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
-          Set token
+        // A BANNER THAT NAMES A REPAIR OFFERS IT. The sign-in comes back to
+        // this screen, so somebody who holds the grant lands where the
+        // refusal was.
+        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
+          Sign in
         </Button>
       }
     >
@@ -359,7 +359,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
           signed in with a session and refused one grant was sent to find a
           token they have no use for. */}
       The credential you presented does not carry the grant this answer needs, or none was
-      presented. Sign in as somebody who holds it, or set a token that carries it.
+      presented. Sign in as somebody who holds it.
     </Callout>
   ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its
@@ -430,8 +430,8 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
       variant="warning"
       icon={<KeyGlyph size="md" />}
       action={
-        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
-          Set token
+        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
+          Sign in
         </Button>
       }
     >
@@ -445,7 +445,7 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
             </span>
           ))}
           , and the credential you presented carries none of them. Sign in as somebody who holds
-          one, or set a token that carries it.
+          one.
         </>
       ) : (
         <>

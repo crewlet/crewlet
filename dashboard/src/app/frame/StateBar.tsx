@@ -4,7 +4,7 @@
  * Three facts that were scattered across five screens and thrown away by five
  * more, in one place, on every screen:
  *
- *  - **Degradation** — the socket is down, the token was refused, no company
+ *  - **Degradation** — the socket is down, nobody is signed in, no company
  *    configuration is active. These are about the CONNECTION rather than about
  *    the answer, and they outrank it: a stale badge on a screen whose socket
  *    has been down for a minute is describing the wrong problem.
@@ -45,9 +45,11 @@ export interface Degradation {
  * The one degradation worth reporting, chosen in the order a reader can act
  * on them.
  *
- * A REFUSED TOKEN FIRST, because it is the only one that resolves for nobody:
- * every other degraded state repairs itself when the engine comes back, and
- * showing three banners at once buries the one with an affordance.
+ * NOBODY SIGNED IN FIRST, because it is the only one that resolves for
+ * nobody: every other degraded state repairs itself when the engine comes
+ * back, and showing three banners at once buries the one with an affordance.
+ * The app sends a reader it resolved nobody for to the sign-in screen as soon
+ * as it learns so, so this is the frame's word for the moment in between.
  */
 export function degradationOf({
   authRejected,
@@ -55,7 +57,7 @@ export function degradationOf({
   connected,
   identityUnverifiable = false,
   configured,
-  onSetToken,
+  onSignIn,
   onRetry,
   onConfig,
 }: {
@@ -66,7 +68,7 @@ export function degradationOf({
   /** The engine could not verify this socket's credential at its last check. */
   identityUnverifiable?: boolean;
   configured: boolean | undefined;
-  onSetToken: () => void;
+  onSignIn: () => void;
   /** Re-dial after a refusal an administrator has since repaired. */
   onRetry?: () => void;
   onConfig: () => void;
@@ -75,14 +77,14 @@ export function degradationOf({
     return {
       variant: "danger",
       icon: <KeyGlyph size="md" />,
-      message: "The engine refused this browser's credential.",
-      action: { label: "Set token", onClick: onSetToken },
+      message: "Nobody is signed in on this browser, or the session here has ended.",
+      action: { label: "Sign in", onClick: onSignIn },
     };
   }
   if (accessRefused !== null) {
-    // SECOND, beside the refused token: neither repairs itself. Unlike the
-    // token, signing in again reaches the same person with the same access,
-    // so the affordance is a retry for after an administrator has acted.
+    // SECOND, beside nobody signed in: neither repairs itself. Unlike that
+    // one, signing in again reaches the same person with the same access, so
+    // the affordance is a retry for after an administrator has acted.
     return {
       variant: "danger",
       icon: <KeyGlyph size="md" />,

@@ -1320,7 +1320,7 @@ test("a stale setup listing offers nothing rather than contradicting the tag", (
 // --- an agent's own app, in the two acts a person performs ---------------- //
 
 import { waitFor } from "@testing-library/react";
-import { beforeEach, vi } from "vitest";
+import { vi } from "vitest";
 import type { SetupSeatState } from "~/protocol/types.ts";
 
 const github = CATALOG.find((e) => e.key === "github")!;
@@ -1378,7 +1378,6 @@ function fieldsOf(form: HTMLFormElement): Record<string, string> {
   return Object.fromEntries([...form.querySelectorAll("input")].map((i) => [i.name, i.value]));
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();

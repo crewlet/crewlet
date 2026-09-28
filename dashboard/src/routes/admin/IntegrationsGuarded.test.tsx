@@ -1,22 +1,20 @@
 /**
- * A banner that names a missing credential has to offer the door to it.
+ * A banner that names a missing grant has to offer the door to it.
  *
- * `/setup` is guarded in full, reads included, so a reader with no operator
- * token gets a 401 on the listing and the screen falls back to what the
+ * `/setup` is guarded in full, reads included, so a reader the engine refuses
+ * gets a 401 or 403 on the listing and the screen falls back to what the
  * socket can see. That much is deliberate. What was not is that the banner
- * explaining it offered nothing that could set a token: with anonymous reads
- * allowed the socket is never refused, so the dialog's other two doors (a
- * socket refusal, and the palette) both stay shut on exactly the screen
- * that needs it. The reader is told what is missing and left with no way to
- * supply it.
+ * explaining it once offered nothing that could act on it: the reader was
+ * told what is missing and left with no way to supply it. The door is a
+ * sign-in, and it comes back to this screen.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Integrations } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, onTokenRequested } from "~/protocol/index.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -29,6 +27,7 @@ class InertWebSocket {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  location.hash = "#/admin/integrations";
   // The engine's own refusal, byte for byte: internal/api/auth answers 401
   // with this body, and RestError.unauthorized is what the screen branches on.
   vi.stubGlobal(
@@ -40,6 +39,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  location.hash = "#/";
 });
 
 function mount() {
@@ -55,13 +55,11 @@ function mount() {
   );
 }
 
-test("the guarded banner offers the token dialog", async () => {
-  const raised = vi.fn();
-  const stop = onTokenRequested(raised);
+test("the guarded banner offers a sign-in that comes back to this screen", async () => {
   mount();
 
-  const button = await screen.findByRole("button", { name: /set token/i });
-  fireEvent.click(button);
-  expect(raised).toHaveBeenCalled();
-  stop();
+  fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+  await waitFor(() =>
+    expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/admin/integrations")}`),
+  );
 });

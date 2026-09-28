@@ -16,11 +16,10 @@
  */
 
 import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
-import { storeToken } from "~/protocol/index.ts";
 
 /**
  * A screen renders inside the Router.
@@ -102,17 +101,15 @@ function ok(payload: unknown): Response {
   });
 }
 
-beforeEach(() => {
-  localStorage.setItem("crewlet_api_token", "operator-token");
-});
-
 afterEach(() => {
   cleanup();
-  localStorage.clear();
   vi.restoreAllMocks();
 });
 
-test("the list comes from GET /secrets, carrying the operator token", async () => {
+// THE SESSION COOKIE IS THE CREDENTIAL, which the browser attaches and no
+// script reads — so the request carries no `Authorization` header of its own,
+// and nothing in storage is where one could have come from.
+test("the list comes from GET /secrets, on the session and no header of its own", async () => {
   const spy = stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
   render(<Secrets />);
 
@@ -121,12 +118,13 @@ test("the list comes from GET /secrets, carrying the operator token", async () =
 
   const init = spy.mock.calls[0]?.[1];
   const headers = (init?.headers ?? {}) as Record<string, string>;
-  expect(headers.Authorization).toBe("Bearer operator-token");
+  expect(headers.Authorization).toBeUndefined();
+  expect(init?.credentials).toBe("same-origin");
 });
 
 // NO VALUE, EVER. The one route that returns one needs an explicit flag and
-// logs the access; a dashboard that anyone holding the token can open is not
-// where that trade gets made. This asserts the screen never asks.
+// logs the access; a dashboard that anyone signed in can open is not where
+// that trade gets made. This asserts the screen never asks.
 test("the screen never asks for a value", async () => {
   const spy = stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
   render(<Secrets />);
@@ -147,15 +145,15 @@ test("the screen never asks for a value", async () => {
 //
 // AND IT REPORTS THE CODE, NOT A SENTENCE. `QueryState` is a table over
 // `QueryErrorCode`; handing it prose missed the table on every refusal and
-// rendered the "code this build does not know" banner — with no way to set
-// the token the same banner exists to offer. This screen is guarded reads
+// rendered the "code this build does not know" banner — with no way to sign
+// in, which the same banner exists to offer. This screen is guarded reads
 // included, so a 401 is the refusal an operator actually arrives at.
 test("a 401 renders the refusal banner, with the button that fixes it", async () => {
   stubFetch(() => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }));
   render(<Secrets />);
 
   expect(await screen.findByText(/does not carry the grant/)).toBeDefined();
-  expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 
@@ -408,9 +406,13 @@ test("a read that answers after a newer one began does not overwrite it", async 
   });
 
   render(<Secrets />);
-  // A TOKEN ARRIVING starts the second read, which is one of the three real
-  // triggers rather than a lever invented for this case.
-  storeToken("operator-token-2");
+  // A STORED SECRET starts the second read, which is one of the two real
+  // triggers rather than a lever invented for this case: the button is on
+  // screen while the first read is still out.
+  fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "NEW_TOKEN" } });
+  fireEvent.change(screen.getByLabelText("Value"), { target: { value: "glpat-x" } });
+  fireEvent.click(screen.getByRole("button", { name: "Store" }));
   expect(await screen.findByText("GITHUB_TOKEN")).toBeTruthy();
 
   // NOW the first read answers, and the screen must ignore it.

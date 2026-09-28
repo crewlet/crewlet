@@ -18,7 +18,7 @@ import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRecentsByVisit, forgetAll } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
-import { requestToken } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 // PURE VALUES, no React and no DOM — so no cycle, and `Hit.icon` is already the
@@ -110,7 +110,7 @@ function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
     // fragment alone resolves against whatever the reader has open.
     void navigator.clipboard?.writeText(window.location.href);
   });
-  add("token", "key", "Set the API token", "for the operator-only screens", requestToken);
+  add("sign-in", "key", "Sign in as somebody else", "or with an API token", goSignIn);
   add("clear-recents", "schedule", "Clear recents", "this browser only", forgetAll);
   return out;
 }

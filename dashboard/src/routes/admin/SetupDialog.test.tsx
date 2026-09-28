@@ -26,7 +26,7 @@ import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-librar
 // context is no longer supplied anywhere, so a dialog tested under it would
 // pass while writing its confirmation into a hook nothing is listening to.
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   HELD,
   SetupDialog,
@@ -124,7 +124,6 @@ function sent(spy: ReturnType<typeof stubFetch>): RequestInit | undefined {
   return undefined;
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   localStorage.clear();

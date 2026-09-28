@@ -30,7 +30,7 @@ export function needsSentence(what: string, grants: readonly string[]): string {
   if (grants.length > 0) {
     return `${what} needs ${grants.join(" or ")}, which the credential you presented does not carry.`;
   }
-  return `${what} needs a credential the engine accepts. Sign in, or set a token.`;
+  return `${what} needs a credential the engine accepts. Sign in.`;
 }
 
 /** A phrase the engine wrote in its own lower case, as a sentence. */

@@ -19,9 +19,13 @@ import {
   DomainBlock,
   MaintenanceBanner,
   NodePositions,
+  RetentionPanels,
   ServedLevelBanner,
   Terms,
 } from "./Retention.tsx";
+import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
 afterEach(cleanup);
@@ -233,7 +237,6 @@ test("the evict gesture repeats the node id in the query the server checks", asy
       });
     }),
   );
-  localStorage.setItem("crewlet_api_token", "t");
 
   render(<GateDialog node="node-2" evict={true} onClose={() => {}} />);
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "node-2" } });
@@ -243,7 +246,6 @@ test("the evict gesture repeats the node id in the query the server checks", asy
   expect(sent[0]).toBe("/work/retention/evict/node-2?confirm=node-2");
 
   vi.unstubAllGlobals();
-  localStorage.clear();
 });
 
 // A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
@@ -308,4 +310,48 @@ test("a log's daily intake renders as measured, and an unmeasured one draws noth
   cleanup();
   render(<DomainBlock domain={domain()} />);
   expect(screen.queryByText(/a day/)).toBeNull();
+});
+
+/** The panels, for a reader holding `grants`; records the questions asked. */
+function mountPanels(grants: string[]): string[] {
+  const asked: string[] = [];
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) => {
+    asked.push(what);
+    if (what === "viewer") {
+      return {
+        login: "jane.doe",
+        grants,
+        handle: "jane",
+        name: "Jane",
+        kind: "human",
+        owner: "jane",
+      };
+    }
+    return { domains: [], nodes: [] };
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <RetentionPanels />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  return asked;
+}
+
+// THE GATE IS THE GRANT THE QUESTION TAKES. It was "this browser holds a
+// token", which a person signed in with `state:read` alone satisfies as well
+// as an operator does — and for them every poll would come back refused.
+test("the retention panels ask only for a reader who holds fleet:operate", async () => {
+  const reader = mountPanels(["state:read"]);
+  await waitFor(() => expect(reader).toContain("viewer"));
+  await new Promise((settled) => setTimeout(settled, 20));
+  expect(reader).not.toContain("retention");
+
+  cleanup();
+  // THE CONTROL: the operator is asked for.
+  const operator = mountPanels(["state:read", "fleet:operate"]);
+  await waitFor(() => expect(operator).toContain("retention"));
 });

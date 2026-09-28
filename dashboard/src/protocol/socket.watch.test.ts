@@ -145,14 +145,14 @@ describe("an inbox_changed frame", () => {
 });
 
 // A QUERY FRAME CARRIES NO CREDENTIAL. The engine decides every question by
-// the principal the handshake resolved and reads no token off a frame, so one
-// in the frame is the reader's bearer copied into every message for nothing —
-// and into whatever a proxy or a browser extension logs of the socket.
+// the principal the handshake resolved and reads none off a frame, so one in
+// the frame would be the reader's credential copied into every message for
+// nothing — and into whatever a proxy or a browser extension logs of the
+// socket.
 describe("a query frame", () => {
-  test("carries the question and not the token", () => {
+  test("carries the question and no credential", () => {
     const store = new Store();
     const socket = new LiveSocket(store);
-    socket.setToken("fixture-token-long-enough-to-pass");
     socket.start();
     dial(0).open();
     void socket.query("fleet");

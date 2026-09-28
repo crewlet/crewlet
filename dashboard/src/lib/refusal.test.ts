@@ -21,10 +21,8 @@ test("a refusal naming grants says which, and that the credential lacks them", (
 
 test("a refusal naming none asks for a credential, not an operator token", () => {
   const said = needsSentence("Reading one pass", []);
-  expect(said).toBe(
-    "Reading one pass needs a credential the engine accepts. Sign in, or set a token.",
-  );
-  expect(said).not.toMatch(/operator/);
+  expect(said).toBe("Reading one pass needs a credential the engine accepts. Sign in.");
+  expect(said).not.toMatch(/operator|token/);
 });
 
 // THE SIGN-IN SURFACE'S WORDS ARE THE ENGINE'S. A failed sign-in is one

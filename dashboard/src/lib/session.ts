@@ -124,6 +124,25 @@ export const page = {
  */
 export async function signOut(): Promise<void> {
   await auth.logout();
+  leave();
+}
+
+/**
+ * The tab, handed on with nothing of its last reader in it.
+ *
+ * THE TAB'S OWN STORAGE GOES FIRST, because a reload keeps it: `sessionStorage`
+ * belongs to the tab rather than the page, and what it holds is what this tab
+ * was in the middle of for the person leaving — the organization builder's
+ * kept draft above all, a log of changes to the company that whoever signs in
+ * here next would otherwise be offered as their own. A change of stored token
+ * used to forget that draft; a sign-out is the same hand-over.
+ */
+function leave(): void {
+  try {
+    sessionStorage.clear();
+  } catch {
+    // A browser that refuses storage holds nothing in it to leave behind.
+  }
   page.reloadInto("#/login");
 }
 
@@ -138,7 +157,7 @@ export async function signOut(): Promise<void> {
  */
 export async function signOutEverywhere(): Promise<void> {
   await auth.logoutEverywhere();
-  page.reloadInto("#/login");
+  leave();
 }
 
 /**
