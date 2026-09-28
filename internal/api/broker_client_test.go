@@ -61,6 +61,29 @@ func TestTheDashboardWaitsPastABrokerRemoval(t *testing.T) {
 	}
 }
 
+// AND THE SOCKET'S QUERY WAITS PAST THE NODE'S READ OF THE GROUP. The panel
+// asks the fleet_broker question over the socket, and the node spends up to
+// [engine.BrokerReadWait] asking members for the metadata group before it can
+// answer: a query that gave up first would draw an unread group as a failed
+// panel on exactly the fleet — a member wedged inside its lease — the panel
+// exists for.
+func TestTheDashboardWaitsPastAReadOfTheGroup(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Declaration(clientsource.Tree(t),
+		`const QUERY_TIMEOUT_MS = ([0-9_]+);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := strconv.ParseInt(strings.ReplaceAll(body, "_", ""), 10, 64)
+	if err != nil {
+		t.Fatalf("QUERY_TIMEOUT_MS = %q is not a number: %v", body, err)
+	}
+	if wait := time.Duration(ms) * time.Millisecond; wait <= engine.BrokerReadWait() {
+		t.Errorf("the dashboard waits %s for a query the node may spend %s reading "+
+			"the group for", wait, engine.BrokerReadWait())
+	}
+}
+
 // holdStrings compares the dashboard's declared list with the engine's, both ways.
 func holdStrings(t *testing.T, pattern string, want []string, what string) {
 	t.Helper()

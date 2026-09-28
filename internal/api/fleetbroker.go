@@ -23,10 +23,16 @@ import (
 //     one ([engine.FleetBroker.List]). It is the `fleet_broker` question, as
 //     a named read route: the dashboard asks it over the socket.
 //   - POST /fleet/broker/remove/{node}?confirm={node}[&force=true] removes a
-//     member from the metadata group through a live member's system account.
-//     Refused while the named node holds a live presence lease, unless forced:
-//     a running member removed from the group rejoins it as a voter at its
-//     next restart.
+//     member from the metadata group through a live member's system account,
+//     by the peer id its node id hashes to — which reaches it whether or not
+//     any member still remembers its name. Refused while the named node holds
+//     a live presence lease as a member (or without saying what its broker
+//     is), unless forced: a running member removed from the group rejoins it
+//     as a voter at its next restart.
+//   - POST /fleet/broker/remove-peer/{peer}?confirm={peer}[&force=true] is the
+//     same removal naming the voter by the raft peer id GET /fleet/broker
+//     shows, for a voter whose name no member has heard — which has no node
+//     id to give.
 
 // FleetBrokerControl is the broker-membership seam — see [engine.FleetBroker].
 // Every engine has one, so it is required like the capacity seam.
@@ -55,10 +61,11 @@ type BrokerRefusalBody struct {
 // `500 broker_remove_failed`.
 //
 // EACH SENDS AN OPERATOR SOMEWHERE DIFFERENT, which is why each has its own
-// code: a member still running is stopped first, a name the group does not
-// list is a typo or a removal already made, a change in flight is waited out,
-// a group with no leader is brought back to a quorum, and an external cluster
-// is its own operator's.
+// code: a member still running is stopped first, a voter the group does not
+// count is a typo or a removal already made, a change in flight is waited out,
+// a group with no leader is brought back to a quorum, a carrier that went
+// silent is read about before asking again, and an external cluster is its
+// own operator's.
 func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 	refuse := func(status int, code, hint string) (BrokerRefusal, bool) {
 		return BrokerRefusal{Status: status, Body: BrokerRefusalBody{
@@ -73,13 +80,18 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 		return refuse(http.StatusConflict, "member_live",
 			"stop the node first and remove it once its presence lease has lapsed; "+
 				"force it only for a member that is wedged but still renewing")
+	case errors.Is(err, engine.ErrRemovalOutcomeUnknown):
+		return refuse(http.StatusGatewayTimeout, "outcome_unknown",
+			"read GET /fleet/broker before asking again: the member carrying it may "+
+				"have committed the removal before it went silent")
 	case errors.Is(err, engine.ErrExternalBroker):
 		return refuse(http.StatusConflict, "external_broker",
 			"change the membership with the external cluster's own tools")
 	case errors.Is(err, jetstream.ErrNotAMetaPeer):
 		return refuse(http.StatusNotFound, "not_a_member",
-			"name a peer the metadata group lists — GET /fleet/broker shows them; "+
-				"a removal already made answers this too")
+			"the metadata group counts no voter by that peer id, so there is nothing "+
+				"to remove: it was never a member, or a removal already made it so — "+
+				"GET /fleet/broker lists every voter it counts")
 	case errors.Is(err, jetstream.ErrMembershipChanging):
 		return refuse(http.StatusConflict, "membership_changing",
 			"ask again once the change in flight has been committed")
@@ -96,48 +108,74 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 	return BrokerRefusal{}, false
 }
 
-// mountFleetBroker registers the removal. The listing is a named read route
-// over the `fleet_broker` question, so the socket's query channel and REST
-// answer it from one implementation — see rest.go.
+// mountFleetBroker registers the two removals. The listing is a named read
+// route over the `fleet_broker` question, so the socket's query channel and
+// REST answer it from one implementation — see rest.go.
 func (a *App) mountFleetBroker(mux *http.ServeMux) {
-	mux.Handle("POST /fleet/broker/remove/{node}", http.HandlerFunc(a.serveBrokerRemove))
+	mux.Handle("POST /fleet/broker/remove/{node}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.serveBrokerRemove(w, r, voterByNode, r.PathValue("node"))
+	}))
+	mux.Handle("POST /fleet/broker/remove-peer/{peer}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.serveBrokerRemove(w, r, voterByPeer, r.PathValue("peer"))
+	}))
 }
 
-// serveBrokerRemove answers POST /fleet/broker/remove/{node}.
-func (a *App) serveBrokerRemove(w http.ResponseWriter, r *http.Request) {
-	node := r.PathValue("node")
-	// THE CONFIRMATION ECHOES THE NODE ID, the shape every destructive
-	// gesture here takes: a removed member is no longer counted in any
-	// election, which is a change to the quorum every node runs on.
-	if node == "" || r.URL.Query().Get("confirm") != node {
+// voterName is how a removal route names the voter: the rule its path
+// segment is held to, and the removal it becomes.
+type voterName struct {
+	// what is the identifier's name in a sentence, and key its name in a
+	// log line.
+	what, key string
+	// valid is its spelling.
+	valid func(string) bool
+	// removal names the voter to the engine.
+	removal func(id string) engine.BrokerRemoval
+}
+
+var (
+	voterByNode = voterName{what: "node id", key: "node", valid: config.ValidNodeID,
+		removal: func(id string) engine.BrokerRemoval { return engine.BrokerRemoval{Node: id} }}
+	voterByPeer = voterName{what: "peer id", key: "peer", valid: jetstream.ValidPeerID,
+		removal: func(id string) engine.BrokerRemoval { return engine.BrokerRemoval{Peer: id} }}
+)
+
+// serveBrokerRemove answers both removal routes, the voter named by id as
+// the route's voterName reads it.
+func (a *App) serveBrokerRemove(w http.ResponseWriter, r *http.Request, by voterName, id string) {
+	// THE CONFIRMATION ECHOES THE ID, the shape every destructive gesture
+	// here takes: a removed member is no longer counted in any election,
+	// which is a change to the quorum every node runs on.
+	if id == "" || r.URL.Query().Get("confirm") != id {
 		writeJSON(w, http.StatusBadRequest, BrokerRefusalBody{
 			Error: "confirm_required",
-			Detail: "the node id was not repeated: removing a member changes the " +
-				"quorum every election and every create of the fleet's broker runs on",
-			Hint: "repeat the node id in ?confirm=",
+			Detail: "the " + by.what + " was not repeated: removing a member changes " +
+				"the quorum every election and every create of the fleet's broker runs on",
+			Hint: "repeat the " + by.what + " in ?confirm=",
 		})
 		return
 	}
-	if !config.ValidNodeID(node) {
+	if !by.valid(id) {
 		writeJSON(w, http.StatusBadRequest, BrokerRefusalBody{
-			Error: "node_invalid", Detail: node + " is not a node id",
-			Hint: "name the member by the node id GET /fleet/broker lists it under",
+			Error: "voter_invalid", Detail: id + " is not a " + by.what,
+			Hint: "name the voter by the node id GET /fleet/broker lists it under, or " +
+				"by its peer id through /fleet/broker/remove-peer where no member " +
+				"knows its name",
 		})
 		return
 	}
 	operator, _ := auth.OperatorFrom(r.Context())
 	force := r.URL.Query().Get("force") == "true"
-	done, err := a.fleetBroker.Remove(r.Context(), engine.BrokerRemoval{
-		Node: node, Force: force, By: operator,
-	})
+	removal := by.removal(id)
+	removal.Force, removal.By = force, operator
+	done, err := a.fleetBroker.Remove(r.Context(), removal)
 	if refusal, ok := RenderBrokerRefusal(err); ok {
-		log.Warn("api_broker_remove_refused", "operator", operator, "node", node,
+		log.Warn("api_broker_remove_refused", "operator", operator, by.key, id,
 			"force", force, "code", refusal.Body.Error, "error", err)
 		writeJSON(w, refusal.Status, refusal.Body)
 		return
 	}
 	if err != nil {
-		log.Warn("api_broker_remove_failed", "operator", operator, "node", node, "error", err)
+		log.Warn("api_broker_remove_failed", "operator", operator, by.key, id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, BrokerRefusalBody{
 			Error: "broker_remove_failed", Detail: err.Error(),
 			Hint: "read GET /fleet/broker before asking again: the removal may have " +
@@ -146,6 +184,6 @@ func (a *App) serveBrokerRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Warn("fleet_broker_member_removed_by_operator", "operator", operator,
-		"node", node, "force", force, "by", done.By)
+		"node", done.Node, "peer", done.Peer, "force", force, "by", done.By)
 	writeJSON(w, http.StatusOK, done)
 }

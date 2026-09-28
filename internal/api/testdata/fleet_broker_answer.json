@@ -45,7 +45,7 @@
     "peers": [
       {
         "name": "node-a",
-        "peer": "yrzKKRBu",
+        "peer": "ePFsSWs4",
         "self": true,
         "leader": true,
         "current": true,
@@ -53,13 +53,13 @@
       },
       {
         "name": "node-b",
-        "peer": "cnrtt3eg",
+        "peer": "NrtCLpuY",
         "current": true,
         "active": 412000000
       },
       {
         "name": "node-c",
-        "peer": "b4qKmd1Z",
+        "peer": "9iReXzcw",
         "current": false,
         "offline": true,
         "active": 5400000000000
@@ -71,6 +71,7 @@
     {
       "kind": "dead_member",
       "node": "node-c",
+      "peer": "9iReXzcw",
       "detail": "the metadata group counts it as a voter and no live node is it"
     },
     {

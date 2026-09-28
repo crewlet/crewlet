@@ -36,7 +36,7 @@ func (f *fakeFleetBroker) Remove(_ context.Context, req engine.BrokerRemoval) (e
 		return engine.BrokerRemoved{}, f.refuse
 	}
 	f.removed = append(f.removed, req)
-	return engine.BrokerRemoved{Node: req.Node, By: "node-a"}, nil
+	return engine.BrokerRemoved{Node: req.Node, Peer: req.Peer, By: "node-a"}, nil
 }
 
 // getAs runs one authenticated read and returns the status and decoded body.
@@ -128,6 +128,33 @@ func TestABrokerRemovalConfirmsAndNamesEachRefusal(t *testing.T) {
 		t.Fatal("a removal nobody forced reached the engine forced")
 	}
 
+	// A VOTER NOBODY CAN NAME is removed by the peer id the listing shows,
+	// confirmed the same way, and reaches the engine by that id alone.
+	peer := jetstream.PeerIDOf("node-e")
+	if status, body := removeBroker(t, a, "/fleet/broker/remove-peer/"+peer); status != http.StatusBadRequest ||
+		body["error"] != "confirm_required" {
+		t.Fatalf("an unconfirmed removal by peer id answered %d %v", status, body)
+	}
+	if status, body := removeBroker(t, a, "/fleet/broker/remove-peer/"+peer+"?confirm="+peer); status != http.StatusOK ||
+		body["peer"] != peer {
+		t.Fatalf("a confirmed removal by peer id answered %d %v", status, body)
+	}
+	if got := seam.removed[2]; got.Peer != peer || got.Node != "" {
+		t.Fatalf("the engine was asked %+v, want the voter by its peer id alone", got)
+	}
+	for _, path := range []string{
+		"/fleet/broker/remove-peer/node-e?confirm=node-e",
+		"/fleet/broker/remove/-node?confirm=-node",
+	} {
+		if status, body := removeBroker(t, a, path); status != http.StatusBadRequest ||
+			body["error"] != "voter_invalid" {
+			t.Errorf("%s answered %d %v, want the spelling refused", path, status, body)
+		}
+	}
+	if len(seam.removed) != 3 {
+		t.Fatalf("a refused spelling reached the engine: %+v", seam.removed)
+	}
+
 	for _, tc := range []struct {
 		err    error
 		status int
@@ -139,6 +166,7 @@ func TestABrokerRemovalConfirmsAndNamesEachRefusal(t *testing.T) {
 		{jetstream.ErrMembershipChanging, http.StatusConflict, "membership_changing"},
 		{jetstream.ErrNoMetaLeader, http.StatusServiceUnavailable, "no_leader"},
 		{engine.ErrNoBrokerMember, http.StatusServiceUnavailable, "no_member"},
+		{engine.ErrRemovalOutcomeUnknown, http.StatusGatewayTimeout, "outcome_unknown"},
 		{errors.New("something else"), http.StatusInternalServerError, "broker_remove_failed"},
 	} {
 		seam.refuse = tc.err
@@ -150,11 +178,18 @@ func TestABrokerRemovalConfirmsAndNamesEachRefusal(t *testing.T) {
 	}
 }
 
-// THE FLEET VIEW'S NODE ROWS CARRY THE BROKER KIND, and the dashboard's
-// fixture is the engine's own rendering of one: `unknown` for a row that did
-// not say, never an empty cell.
+// THE BROKER ANSWER'S JSON SHAPE, committed, is what the command line's and
+// the dashboard's own suites read as their fixture: the engine's [BrokerView]
+// marshalled as the route answers it — a dead member the group still counts,
+// with the peer id a removal of it names, and a node that does not say what
+// its broker is (`unknown`, never an empty cell). The peer ids are the ones
+// [jetstream.PeerIDOf] gives the names, as a real group's are, so a client
+// that forgets a voter's name — as a member that restarted after it died does
+// — still holds the id its removal takes. What each fleet ROW says about its
+// broker is held by the fleet question's own suite.
 func TestTheBrokerAnswerFixtureIsTheEnginesOwn(t *testing.T) {
 	t.Parallel()
+	peer := jetstream.PeerIDOf
 	view := engine.BrokerView{
 		Node: "node-a", Kind: "member",
 		Nodes: []engine.BrokerNode{
@@ -164,14 +199,14 @@ func TestTheBrokerAnswerFixtureIsTheEnginesOwn(t *testing.T) {
 			{Node: "sat-eu-1", Kind: "leaf", Roles: []string{"seats"}},
 		},
 		Group: &jetstream.MetaGroup{Cluster: "acme", Leader: "node-a", Peers: []jetstream.MetaPeer{
-			{Name: "node-a", Peer: "yrzKKRBu", Self: true, Leader: true, Current: true},
-			{Name: "node-b", Peer: "cnrtt3eg", Current: true, Active: 412000000},
-			{Name: "node-c", Peer: "b4qKmd1Z", Offline: true, Active: 5400000000000},
+			{Name: "node-a", Peer: peer("node-a"), Self: true, Leader: true, Current: true},
+			{Name: "node-b", Peer: peer("node-b"), Current: true, Active: 412000000},
+			{Name: "node-c", Peer: peer("node-c"), Offline: true, Active: 5400000000000},
 		}},
 		GroupFrom: "node-a",
 		Findings: []engine.BrokerFinding{
-			{Kind: engine.BrokerDeadMember, Node: "node-c", Detail: "the metadata group " +
-				"counts it as a voter and no live node is it"},
+			{Kind: engine.BrokerDeadMember, Node: "node-c", Peer: peer("node-c"),
+				Detail: "the metadata group counts it as a voter and no live node is it"},
 			{Kind: engine.BrokerUnknownKind, Node: "old-1", Detail: "its presence does " +
 				"not say what its broker is"},
 		},
@@ -199,6 +234,6 @@ func TestTheBrokerAnswerFixtureIsTheEnginesOwn(t *testing.T) {
 }
 
 // brokerGolden is GET /fleet/broker's answer for a fleet with a dead member and
-// a node on an older build, committed, and read by the dashboard's own suite as
-// its fixture.
+// a node on an older build, committed, and read by the command line's and the
+// dashboard's own suites as their fixture.
 const brokerGolden = "testdata/fleet_broker_answer.json"

@@ -97,7 +97,8 @@ node means nothing was done.
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/fleet/broker` | The fleet broker's membership: every live node's broker kind as its presence advertises it, the JetStream metadata group as a member reports it, and every disagreement between the two — a member gone for good first among them. **Always needs a token** (see [The broker's membership](#the-brokers-membership)) |
-| `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease unless `?force=true`. **Operator-only** |
+| `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Operator-only** |
+| `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Operator-only** |
 | `POST` | `/objects/out/{node}` | Take a data node out of the [object store's](../concepts/object-store.md) placement map: nothing new is placed on it, and its share is copied to the other members while it keeps serving what it holds. `?confirm=` repeats the node id; `?reason=` is recorded beside the operator. **Operator-only**, and absent on a node running no object store (see [Gestures on the placement map](#gestures-on-the-placement-map)) |
 | `POST` | `/objects/in/{node}` | Put a member back, or vouch for a node the map removed for being gone. `?confirm=` repeats the node id |
 | `POST` | `/objects/hold` | Hold the placement map for `?for=` (a duration, at most `24h`, required): no member is removed however long it is gone. `?reason=` is recorded |
@@ -2918,6 +2919,7 @@ the broker itself counts.
 ```
 GET  /fleet/broker
 POST /fleet/broker/remove/{node}?confirm={node}[&force=true]
+POST /fleet/broker/remove-peer/{peer}?confirm={peer}[&force=true]
 ```
 
 Two records say who the fleet broker's members are, and they can disagree.
@@ -2930,11 +2932,18 @@ is removed, so a three-member fleet that loses two for good has no quorum left
 to create anything with.
 
 **`GET /fleet/broker`** answers both and where they disagree. Any node answers
-it: only a member holds the metadata group, so a node that is not one asks a
-live member, and `group_from` names the member whose view `group` is. A fleet on
-an external cluster answers `external: true` and lists no group — that
-cluster's membership is its operator's. A group no member could report is
-absent with `group_error` saying why, never an empty one.
+it: only a member holds the metadata group, so a node that is not one asks
+every live member at once, and `group_from` names the member whose view `group`
+is. A fleet on an external cluster answers `external: true` and lists no group —
+that cluster's membership is its operator's. A group no member could report
+within five seconds is absent with `group_error` saying why, never an empty one.
+
+The group counts each voter by its raft **peer id**, which nats-server derives
+from the server's name — the node id. A member learns another's name only from
+that server itself, so a voter whose survivors have restarted since it died is
+listed with no `name` at all, by its `peer` alone; the two records are held
+against each other by peer id, so such a voter is still recognised as the live
+node it is where one is.
 
 ```json
 {
@@ -2945,12 +2954,14 @@ absent with `group_error` saying why, never an empty one.
     {"node": "sat-eu-1", "kind": "leaf", "roles": ["seats"]}
   ],
   "group": {"cluster": "acme", "leader": "node-a", "peers": [
-    {"name": "node-a", "peer": "yrzKKRBu", "self": true, "leader": true, "current": true, "active": 0},
-    {"name": "node-c", "peer": "b4qKmd1Z", "current": false, "offline": true, "active": 5400000000000}
+    {"name": "", "peer": "X57jblDH", "current": false, "offline": true, "active": 7200000000000},
+    {"name": "node-a", "peer": "ePFsSWs4", "self": true, "leader": true, "current": true, "active": 0},
+    {"name": "node-c", "peer": "9iReXzcw", "current": false, "offline": true, "active": 5400000000000}
   ]},
   "group_from": "node-a",
   "findings": [
-    {"kind": "dead_member", "node": "node-c", "detail": "the metadata group counts it as a voter and no live node is it"},
+    {"kind": "dead_member", "node": "", "peer": "X57jblDH", "detail": "the metadata group counts it as a voter, no live node is it, and the member that answered has not heard its name since it started"},
+    {"kind": "dead_member", "node": "node-c", "peer": "9iReXzcw", "detail": "the metadata group counts it as a voter and no live node is it"},
     {"kind": "unknown_kind", "node": "old-1", "detail": "its presence does not say what its broker is"}
   ]
 }
@@ -2969,35 +2980,49 @@ It is the `fleet_broker` question, so the [socket's query channel](#ws-wsstream)
 answers it too. A lease table that could not be reached answers `503
 unavailable` with a `Retry-After` rather than a fleet with no nodes.
 
-**`POST /fleet/broker/remove/{node}`** removes a member from the metadata group.
-nats-server answers that request only on the broker's **system account**, which
-a member reaches inside its own process and nothing else can — so the node that
-receives the request asks a live member, never the one being removed while
-another will do, and that member's system account carries it. The answer comes
-once the group has committed the change, and names the member that carried it
-and the group as it reads afterwards:
+**`POST /fleet/broker/remove/{node}`** removes a member from the metadata group,
+by the peer id its node id hashes to — so it reaches a member whose name no
+survivor remembers, as long as you know which node it was. nats-server answers
+that request only on the broker's **system account**, which a member reaches
+inside its own process and nothing else can — so the node that receives the
+request asks a live member, never the one being removed, and that member's
+system account carries it. The answer comes once the group has committed the
+change, and names the voter, the member that carried it and the group as it
+reads afterwards:
 
 ```json
-{"node": "node-c", "by": "node-a", "group": {"cluster": "acme", "leader": "node-a", "peers": [...]}}
+{"node": "node-c", "peer": "9iReXzcw", "by": "node-a", "group": {"cluster": "acme", "leader": "node-a", "peers": [...]}}
 ```
 
-It is **refused while the named node holds a live presence lease**: the node is
-running, and a running member removed from the group rejoins it as a voter at
-its next restart. `force=true` removes it anyway — for a member wedged in a way
-that still renews its lease. `crewlet fleet broker remove` is a client of this
-route. **Operator-only**, and refused during a [drain](#during-a-drain). Every
-refusal carries `detail` and `hint`:
+**`POST /fleet/broker/remove-peer/{peer}`** is the same removal naming the voter
+by the `peer` the listing shows — the form for a voter listed with no name,
+which has no node id to give. Its answer's `node` is empty unless a live node is
+that voter.
+
+A removal is **refused while the voter's node holds a live presence lease as a
+member**, or without saying what its broker is: the node is running, and a
+running member removed from the group rejoins it as a voter at its next restart.
+`force=true` removes it anyway — for a member wedged in a way that still renews
+its lease. A node alive as a **leaf** or a **client** under the voter's name is
+removed without force: the member it was is gone for good, and its broker never
+rejoins. The whole gesture is bounded by one wait — the carrying member's own
+commit budget and one round trip; a member that does not answer within it ends
+the gesture as `outcome_unknown` rather than another member proposing it again.
+`crewlet fleet broker remove` is a client of both routes. **Operator-only**, and
+refused during a [drain](#during-a-drain). Every refusal carries `detail` and
+`hint`:
 
 | Status | `error` | When |
 |---|---|---|
-| `400` | `confirm_required` | `?confirm=` does not repeat the node id |
-| `400` | `node_invalid` | The name is not a node id |
-| `404` | `not_a_member` | The metadata group lists no such server — a typo, or a removal already made |
-| `409` | `member_live` | The node holds a live presence lease; stop it first, or `force=true` |
+| `400` | `confirm_required` | `?confirm=` does not repeat the node id or the peer id |
+| `400` | `voter_invalid` | The name is not a node id (or, on `remove-peer`, not a peer id) |
+| `404` | `not_a_member` | The metadata group counts no voter by that peer id — a typo, or a removal already made |
+| `409` | `member_live` | The voter's node holds a live presence lease as a member (or does not say); stop it first, or `force=true` |
 | `409` | `membership_changing` | Another membership change is still being committed; ask again once it has |
 | `409` | `external_broker` | The fleet's broker is an external cluster, whose membership is its operator's |
 | `503` | `no_leader` | Nobody answered as the group's leader for the whole wait. The request is asked again every second, so an election alone does not end here: the group has lost its quorum and can change nothing about itself. A removal whose answer was lost may still have been committed — read the group first |
-| `503` | `no_member` | No live member could carry the removal |
+| `503` | `no_member` | No live member could carry the removal — including when the only live member is the one being removed, which never carries its own |
+| `504` | `outcome_unknown` | The member carrying it did not answer; it may have committed the removal first — read the group before asking again |
 | `500` | `broker_remove_failed` | Anything else; read the group before asking again |
 
 ### Gestures on the placement map
