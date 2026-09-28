@@ -1370,8 +1370,11 @@ its domain's logs, and the alarm fires on the one furthest past twice its share.
 Two excursions are designed for and do not alarm:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
-   year five bottoms the vector log's headroom at about 51 %. The alarm
-   threshold is 10 %, which is the first decile clear of it.
+   year five bottoms the vector log's headroom at about 75 % beside the 64 GiB
+   mutation log a large volume derives, and at about 58 % for a company as old
+   as its mutation log's ceiling lasts — the vector log is half that ceiling,
+   and the whole corpus is a fifth of what the mutation log takes over the same
+   years. The alarm threshold is 10 %, well clear of either.
 2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
    occupancy on every peer; see [Replication](replication.md).
 

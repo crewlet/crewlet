@@ -1467,30 +1467,43 @@ type Stream struct {
 	//
 	// SIZED FOR THE PEAK, NOT THE STEADY STATE, and the two differ by 93×.
 	// The stream keeps one message per source and bounds their age, so a
-	// week's minting is about 91 MB. But changing the embedding model or
-	// its width rewrites EVERY source in a few hours, and for the
-	// following week every source's current message is inside the window:
-	// 8.46 GB at the modelled year-five corpus. The default is twice that.
-	// Sizing this field from the steady state would refuse the one
-	// operation it exists to survive.
-	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state."`
+	// week's minting is about 91 MB at the reference company. But changing
+	// the embedding model or its width rewrites EVERY source in a few
+	// hours, and for the following week every source's current message is
+	// inside the window: the whole corpus, 1.69 GB per 100 seats per year
+	// of it — 8.46 GB at the reference company's fifth year. Sizing this
+	// field from the steady state would refuse the one operation it exists
+	// to survive.
+	//
+	// UNSET DERIVES HALF THE MUTATION LOG'S CEILING — the one set above, or
+	// the one derived from the volume — because both logs grow per
+	// seat-year, and at whatever horizon that ceiling covers the peak is
+	// 0.21 of it: half is twice the peak with room to spare. So it follows
+	// the company the mutation log was sized for, where the fixed 16 GiB it
+	// replaced was twice the peak of a 100-seat company and overflowed a
+	// 1 000-seat company's model change within its first year. The same
+	// share of the one budget, scaling and refusals the mutation log's
+	// field describes apply here unchanged.
+	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=2199023255552" desc:"Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives half the mutation log's ceiling, set or derived, 2 GiB..32 GiB from a volume alone."`
 
 	// PagesLogMaxBytes is the byte ceiling on the knowledge base's log, the
 	// ordered stream every native page write goes through.
 	//
 	// UNSET DERIVES IT beside the mutation log's, at a quarter of that
-	// derived value (1 GiB..16 GiB). The ratio is the corpus rather than a
-	// guess: a knowledge base is a few thousand pages against a tracker's
-	// hundreds of thousands of items and comments, and a page's records
-	// are dominated by saves, so its log grows at about a quarter of the
-	// rate and a blocked trim reaches either ceiling in the same time.
+	// log's ceiling as set or derived (1 GiB..16 GiB from a volume alone,
+	// up to 256 GiB beside a mutation log an operator sized). The ratio is
+	// the corpus rather than a guess: a knowledge base is a few thousand
+	// pages against a tracker's hundreds of thousands of items and
+	// comments, and a page's records are dominated by saves, so its log
+	// grows at about a quarter of the rate and a blocked trim reaches
+	// either ceiling in the same time.
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here unchanged: the value is the one the
 	// stream is CREATED with, a derived value is scaled with the others to
 	// fit the broker and a set one is not, and crossing it refuses the
 	// append rather than shedding history.
-	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB."`
+	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it

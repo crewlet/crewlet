@@ -717,7 +717,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB."
+          "description": "Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."
         },
         "replicas": {
           "anyOf": [
@@ -806,7 +806,7 @@
         "tracker_vectors_max_bytes": {
           "anyOf": [
             {
-              "maximum": 274877906944,
+              "maximum": 2199023255552,
               "minimum": 1073741824,
               "type": [
                 "integer",
@@ -818,7 +818,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state."
+          "description": "Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives half the mutation log's ceiling, set or derived, 2 GiB..32 GiB from a volume alone."
         },
         "type": {
           "anyOf": [

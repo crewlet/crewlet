@@ -187,78 +187,110 @@ func TestTheLogCeilingIsDerivedFromTheVolume(t *testing.T) {
 	}
 }
 
-// THE KNOWLEDGE BASE'S LOG IS DERIVED BESIDE THE MUTATION LOG'S, at a quarter
-// of it on every volume. It was a fixed 4 GiB once, reserved on top of a budget
-// the other two logs had already been scaled to fill, and on a small disk that
-// was the one reservation the broker refused.
-func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
+// THE CORPUS LOGS ARE DERIVED FROM THE MUTATION LOG'S CEILING — the one an
+// operator wrote, or the one the volume derives — at the ratio each corpus grows
+// at: a quarter for the knowledge base's log, a half for the vector changelog.
+//
+// Both were once something else. The knowledge base's log was a fixed 4 GiB,
+// reserved on top of a budget the other two logs had already been scaled to
+// fill, and later a quarter of the DERIVED value alone — so an operator who sized
+// the mutation log for their company left it sized for their disk. The vector
+// changelog was a fixed 16 GiB, twice the peak of one 100-seat company, which a
+// 1 000-seat company's model change overflowed in its first year.
+func TestTheCorpusLogsAreDerivedFromTheMutationLogsCeiling(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
-	for _, free := range []int64{0, 8 * gib, 200 * gib, 4000 * gib} {
-		got, derived := config.Stream{}.PagesMaxBytes(free)
-		if want := config.DerivedLogMaxBytes(free) / config.DerivedPagesLogDivisor; got != want || !derived {
-			t.Errorf("unset on %d free = (%d, derived %v), want (%d, true)", free, got, derived, want)
-		}
-		// NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE, or a node
-		// could derive a ceiling its own validation refuses to be told.
-		if got < config.PagesLogMaxBytesFloor {
-			t.Errorf("unset on %d free derives %d, under the floor %d",
-				free, got, config.PagesLogMaxBytesFloor)
-		}
+	for name, tc := range map[string]struct {
+		stream        config.Stream
+		free          int64
+		pages, vector int64
+	}{
+		"an unmeasured volume, at the floors": {free: 0, pages: 1 * gib, vector: 2 * gib},
+		"a small disk":                        {free: 8 * gib, pages: 1 * gib, vector: 2 * gib},
+		"an ordinary disk":                    {free: 200 * gib, pages: 12*gib + gib/2, vector: 25 * gib},
+		"a large array, at the clamp":         {free: 4000 * gib, pages: 16 * gib, vector: 32 * gib},
+		// THE OPERATOR'S FIGURE FOR THE COMPANY, on a disk that would
+		// have derived far less.
+		"a mutation log an operator sized": {stream: config.Stream{TrackerLogMaxBytes: 512 * gib},
+			free: 8 * gib, pages: 128 * gib, vector: 256 * gib},
+		"the largest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesCeiling},
+			free: 8 * gib, pages: config.PagesLogMaxBytesCeiling, vector: 512 * gib},
+		// AND NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE, or a
+		// node could derive a ceiling its own validation refuses to be
+		// told.
+		"the smallest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesFloor},
+			free: 4000 * gib, pages: config.PagesLogMaxBytesFloor, vector: config.TrackerVectorsMaxBytesFloor},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got, derived := tc.stream.PagesMaxBytes(tc.free); got != tc.pages || !derived {
+				t.Errorf("the knowledge base's log derives (%d, derived %v), want (%d, true)",
+					got, derived, tc.pages)
+			}
+			if got, derived := tc.stream.VectorsMaxBytes(tc.free); got != tc.vector || !derived {
+				t.Errorf("the vector changelog derives (%d, derived %v), want (%d, true)",
+					got, derived, tc.vector)
+			}
+		})
 	}
-	s := config.Stream{PagesLogMaxBytes: 3 * gib}
+
+	// AN OPERATOR'S OWN NUMBER IS NEITHER DERIVED NOR CAPPED. They named a
+	// limit for a broker they can see, and silently lowering it would be
+	// the engine deciding a limit an emergency grant had just raised.
+	s := config.Stream{PagesLogMaxBytes: 3 * gib, TrackerVectorsMaxBytes: 2 * gib}
 	if got, derived := s.PagesMaxBytes(200 * gib); got != 3*gib || derived {
-		t.Errorf("set = (%d, derived %v), want the configured value", got, derived)
+		t.Errorf("a set knowledge-base ceiling reads back (%d, derived %v)", got, derived)
+	}
+	if got, derived := s.VectorsMaxBytes(1 << 30); got != 2*gib || derived {
+		t.Errorf("a set vector ceiling reads back (%d, derived %v)", got, derived)
 	}
 }
 
 // THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, and the peak is a model change
-// republishing every source at once — 93× the steady state. A default sized
-// from the steady state would refuse the one operation it exists to survive.
+// republishing every source at once — the whole corpus inside the window, 93×
+// the steady state. A ceiling sized from the steady state would refuse the one
+// operation it exists to survive.
 //
-// AND THE PEAK IS CAPPED BY THE DISK, which is the other half: the default is
-// a number nobody chose for this volume, and a broker refuses a reservation it
-// cannot back — so a node with a small disk gets a ceiling that fits and boots,
-// rather than a ceiling that is right in principle and a refusal in fact.
+// The peak grows with the company exactly as the mutation log does, so the
+// check is the ratio at a horizon: whatever mutation-log ceiling a company was
+// sized with covers some number of years of its records, and the changelog
+// derived beside it must hold that company's model change over the same years
+// twice over. And the largest company the engine is sized for — 10 000 seats in
+// its fifth year — must be able to WRITE a ceiling that holds its peak twice.
 func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 	t.Parallel()
-	// The modelled year-five peak: every source's current message inside
-	// the window at once.
-	const yearFivePeak = int64(8_460_000_000)
-	// A volume with room for it.
-	const roomy = int64(512) << 30
-	var s config.Stream
-	got, capped := s.VectorsMaxBytes(roomy)
-	if float64(got) < 1.5*float64(yearFivePeak) {
-		t.Errorf("the default vector ceiling is %d on a roomy volume, under "+
-			"1.5× the modelled year-five peak of %d — a width change would be "+
-			"refused partway through", got, yearFivePeak)
+	const (
+		// Per 100 seats per year: the mutation log's records (the
+		// reference company's 156 MB `min_age` week, over the year) and
+		// the vector corpus (8.46 GB at its fifth year).
+		logPerYear    = 156_000_000 * 365 / 7
+		corpusPerYear = 8_460_000_000 / 5
+	)
+	for _, mutation := range []int64{config.DerivedLogMaxBytesFloor,
+		config.DerivedLogMaxBytesCeiling, 512 << 30, config.TrackerLogMaxBytesCeiling} {
+		s := config.Stream{TrackerLogMaxBytes: mutation}
+		got, _ := s.VectorsMaxBytes(0)
+		// The years of a 100-seat company's records this mutation log
+		// holds, and that company's peak over them.
+		years := float64(mutation) / logPerYear
+		peak := years * corpusPerYear
+		if float64(got) < 2*peak {
+			t.Errorf("beside a %d-byte mutation log (%.1f years of the reference "+
+				"company) the vector changelog derives %d, under twice the model "+
+				"change's %.0f over those years", mutation, years, got, peak)
+		}
 	}
-	if capped {
-		t.Error("the default was reported as capped on a volume with room for it")
+	const largest = 10_000 / 100 * 5 * corpusPerYear
+	if config.TrackerVectorsMaxBytesCeiling < 2*largest {
+		t.Errorf("Tier A accepts at most %d bytes of vector changelog, under twice "+
+			"the peak of 10 000 seats in their fifth year (%d)",
+			config.TrackerVectorsMaxBytesCeiling, int64(2*largest))
 	}
-
-	// AND ON A SMALL DISK IT IS CAPPED AND SAYS SO.
-	small, capped := config.Stream{}.VectorsMaxBytes(8 << 30)
-	if !capped {
-		t.Error("a ceiling the disk cannot back was not reported as capped")
-	}
-	if small >= config.DefaultTrackerVectorsMaxBytes {
-		t.Errorf("the capped ceiling is %d, which is not below the default %d",
-			small, config.DefaultTrackerVectorsMaxBytes)
-	}
-	if small < config.TrackerVectorsMaxBytesFloor {
-		t.Errorf("the capped ceiling is %d, under the floor %d — below it a log "+
-			"is a window that refuses appends within a week",
-			small, config.TrackerVectorsMaxBytesFloor)
-	}
-
-	// AN OPERATOR'S OWN NUMBER IS NOT CAPPED. They named a limit for a
-	// broker they can see, and silently lowering it would be the engine
-	// deciding a limit an emergency grant had just raised.
-	s.TrackerVectorsMaxBytes = 2 << 30
-	if got, capped := s.VectorsMaxBytes(1 << 30); got != 2<<30 || capped {
-		t.Errorf("a configured ceiling read back as %d (capped %v)", got, capped)
+	b := config.DefaultBootstrap()
+	b.Stream.TrackerVectorsMaxBytes = 2 * largest
+	if err := b.Validate(); err != nil {
+		t.Errorf("a vector changelog sized for 10 000 seats in their fifth year "+
+			"was refused: %v", err)
 	}
 }
 
@@ -277,8 +309,8 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"a log at a tebibyte":      {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024 * gib }, true, ""},
 		"a log past a tebibyte":    {func(b *config.Bootstrap) { b.Stream.TrackerLogMaxBytes = 1024*gib + 1 }, false, "tracker_log_max_bytes"},
 		"vectors below a gibibyte": {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = gib - 1 }, false, "tracker_vectors_max_bytes"},
-		"vectors at 256 GiB":       {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 256 * gib }, true, ""},
-		"vectors past 256 GiB":     {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 257 * gib }, false, "tracker_vectors_max_bytes"},
+		"vectors at 2 TiB":         {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 2048 * gib }, true, ""},
+		"vectors past 2 TiB":       {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 2048*gib + 1 }, false, "tracker_vectors_max_bytes"},
 		"pages below a gibibyte":   {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib - 1 }, false, "pages_log_max_bytes"},
 		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
 		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},

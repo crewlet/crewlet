@@ -32,10 +32,13 @@ const (
 	//
 	// ONE MESSAGE PER SOURCE, so the stream's size is the corpus rather
 	// than its history: at the packed 12 KiB a 3 072-wide vector costs,
-	// plus its envelope, ≈ 12.3 KB a source. The ceiling is the one
-	// config.DefaultTrackerVectorsMaxBytes states, for its reason — twice
-	// the modelled year-five peak of a model change republishing every
-	// source at once (8.46 GB) — so this harness and a node agree.
+	// plus its envelope, ≈ 12.3 KB a source. The ceiling is HALF the
+	// mutation log's declared one (the tracker domain's 16 GiB), which is
+	// the ratio a node derives it at for its reason
+	// (config.DerivedVectorsLogDivisor): a model change republishing every
+	// source at once puts the whole corpus in the window, and at any
+	// horizon that is a fifth of what the mutation log takes — so this
+	// harness sizes the two as a node does.
 	//
 	// It is NOT sized from the corpus one node can SEARCH, and it must
 	// not be: that is ≈ 345 000 sources idle and ≈ 136 000 under eight
@@ -49,7 +52,7 @@ const (
 	// Crossing it REFUSES an append rather than dropping the oldest
 	// record. A dropped vector is a document that silently stops being
 	// findable by meaning, with nothing to say so.
-	VectorLogMaxBytes = 16 << 30
+	VectorLogMaxBytes = 8 << 30
 
 	// VectorLogMaxAge is how long a message survives.
 	//

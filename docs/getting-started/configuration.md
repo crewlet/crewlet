@@ -639,22 +639,30 @@ stream:
                                     #   `store_max_bytes` wherever you set one,
                                     #   and Tier A refuses a limit smaller than
                                     #   the ceilings declared inside it
-  # tracker_vectors_max_bytes: 17179869184
-                                    #   the vector changelog's ceiling (default
-                                    #   16 GiB). SIZED FOR THE PEAK: the stream
-                                    #   keeps one message per source, so a
-                                    #   week's minting is ~91 MB — but changing
-                                    #   the embedding model rewrites EVERY source
-                                    #   in a few hours, and for the following
-                                    #   week all of them are in the window. A
-                                    #   ceiling sized from the steady state would
-                                    #   refuse the one operation it exists to
-                                    #   survive
+  # tracker_vectors_max_bytes: 34359738368
+                                    #   the vector changelog's ceiling
+                                    #   (1 GiB..2 TiB). SIZED FOR THE PEAK: the
+                                    #   stream keeps one message per source, so
+                                    #   a week's minting is ~91 MB — but
+                                    #   changing the embedding model rewrites
+                                    #   EVERY source in a few hours, and for the
+                                    #   following week all of them are in the
+                                    #   window: the whole corpus, ~17 MB per
+                                    #   agent seat per year of it. UNSET DERIVES
+                                    #   half the mutation log's ceiling, set or
+                                    #   derived (so 2..32 GiB from a volume
+                                    #   alone): both logs grow per seat-year,
+                                    #   and half is the peak twice over at any
+                                    #   horizon the mutation log's ceiling
+                                    #   covers. A ceiling sized from the steady
+                                    #   state would refuse the one operation it
+                                    #   exists to survive
   # pages_log_max_bytes: 4294967296 #   the knowledge base's log, the ordered
                                     #   stream every native page write goes
                                     #   through (1..256 GiB). UNSET DERIVES a
-                                    #   quarter of the mutation log's derived
-                                    #   value, so 1..16 GiB: a knowledge base is
+                                    #   quarter of the mutation log's ceiling,
+                                    #   set or derived (so 1..16 GiB from a
+                                    #   volume alone): a knowledge base is
                                     #   a few thousand pages against a tracker's
                                     #   hundreds of thousands of items, so its
                                     #   log grows at about a quarter of the rate

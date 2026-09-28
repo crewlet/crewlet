@@ -94,30 +94,32 @@ const MinDomainCeiling int64 = 1 << 30
 // and what this costs is that a new domain fails here, at boot, naming itself,
 // rather than reserving a default outside the budget.
 //
-// # Why the mutation log's is DERIVED and the vector changelog's is capped
+// # Why each is DERIVED, and from what
 //
 // A fixed default for the mutation log is wrong in both directions: the same
 // number is five years of history at the modelled write rate and one boot on a
 // small disk. So an unset value takes a quarter of the stream volume's free
-// space, clamped, and the knowledge base's log takes a quarter of that for the
-// ratio its corpus grows at.
+// space, clamped.
 //
-// The vector changelog's default is fixed because its peak is not a function
-// of the disk: the stream keeps one message per source and bounds their age, so
-// a week's minting is small, but changing the embedding model rewrites every
+// The other two are CORPUS logs, and a fixed default is wrong for them for the
+// same reason with a company's size in place of the disk: each grows per
+// seat-year exactly as the mutation log does, so an unset one takes the
+// mutation log's ceiling — set or derived — over the ratio the corpora grow at.
+// The knowledge base's log takes a quarter of it for the ratio its records
+// grow at; the vector changelog takes half, because its peak is not its steady
+// state: the stream keeps one message per source and bounds their age, so a
+// week's minting is small, but changing the embedding model rewrites every
 // source in a few hours, and for the following week every source's current
-// message is inside the window. The default is sized for that operation and
-// capped only by the disk, because sizing it from the steady state would refuse
-// the one operation it exists to survive.
+// message is inside the window. Half is that peak twice over at any horizon
+// the mutation log's ceiling covers (config.DerivedVectorsLogDivisor).
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
 		bytes, derived := stream.LogMaxBytes(free)
 		return domainCeiling{Bytes: bytes, Field: "stream.tracker_log_max_bytes", Explicit: !derived}, nil
 	case search.Domain{}.Name():
-		bytes, _ := stream.VectorsMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.tracker_vectors_max_bytes",
-			Explicit: stream.TrackerVectorsMaxBytes > 0}, nil
+		bytes, derived := stream.VectorsMaxBytes(free)
+		return domainCeiling{Bytes: bytes, Field: "stream.tracker_vectors_max_bytes", Explicit: !derived}, nil
 	case pages.Domain{}.Name():
 		bytes, derived := stream.PagesMaxBytes(free)
 		return domainCeiling{Bytes: bytes, Field: "stream.pages_log_max_bytes", Explicit: !derived}, nil

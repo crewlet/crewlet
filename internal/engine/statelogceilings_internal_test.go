@@ -361,10 +361,13 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 // they hold again.
 func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 	t.Parallel()
-	// 64 GiB free: the tracker and the vector changelog each ask for
-	// 16 GiB and the knowledge base's log for 4. The tracker's stream
-	// already holds 16.
-	const free = 64 * gib
+	// 40 GiB free: the tracker asks for 10 GiB, the vector changelog for
+	// 5 and the knowledge base's log for 2.5. The tracker's stream already
+	// holds 16 — more than its ask, so what the other two asked for does
+	// not fit what it leaves of any share below, and a sizing that counted
+	// the tracker at its ask, or added what it holds to free space, would
+	// hand them all of it.
+	const free = 40 * gib
 	const trackerHolds = 16 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
@@ -421,10 +424,12 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 // adding them back grew the pool on every restart by half of what the logs
 // hold: at 16 GiB free the first boot scaled 9 GiB of asks into an 8 GiB share,
 // and a restart divided 12 and reported every stream as a difference nobody
-// had made.
+// had made. At 8 GiB free the logs ask for 7 GiB (the mutation log's 4 GiB
+// floor, a quarter and a half of it) against a 4 GiB share, so the first boot
+// scales them, and a restart whose pool had grown would scale them less.
 func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	t.Parallel()
-	const free = 16 * gib
+	const free = 8 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
 		unread error
@@ -471,12 +476,15 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 // three, where every stream must be reported at exactly what it holds.
 func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 	t.Parallel()
-	// 64 GiB free under a 30 GiB limit: the tracker and the vector
-	// changelog each ask for 16 GiB and the knowledge base's log for 4,
-	// into a 15 GiB share.
+	// 64 GiB free under a limit four bytes past 30 GiB: the tracker asks
+	// for 16 GiB, the vector changelog for 8 and the knowledge base's log
+	// for 4, into a share of half of it. The four bytes are what put the
+	// rounding where it bites — the remainder the tracker's stream leaves
+	// divides to one byte past the vector changelog's fit (4601750675
+	// against 4601750674), where a limit of exactly 30 GiB divides evenly.
 	const free = 64 * gib
 	host := sizingHost{budget: jetstream.StorageBudget{
-		Limit: 30 * gib, Source: jetstream.BudgetServerStore,
+		Limit: 30*gib + 4, Source: jetstream.BudgetServerStore,
 	}}
 	boot := func() map[string]domainCeiling {
 		t.Helper()
