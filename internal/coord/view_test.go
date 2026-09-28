@@ -1,0 +1,234 @@
+package coord_test
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
+)
+
+// stubLister is a store whose listing a case controls, counting every call.
+type stubLister struct {
+	mu     sync.Mutex
+	leases []coord.Lease
+	err    error
+	calls  atomic.Int64
+	listed chan struct{}
+}
+
+func newStubLister(leases ...coord.Lease) *stubLister {
+	return &stubLister{leases: leases, listed: make(chan struct{}, 64)}
+}
+
+func (s *stubLister) ListLive(_ context.Context, class coord.Class) ([]coord.Lease, error) {
+	s.calls.Add(1)
+	defer func() {
+		select {
+		case s.listed <- struct{}{}:
+		default:
+		}
+	}()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if class != coord.ClassNode {
+		return nil, errors.New("listed the wrong class")
+	}
+	return append([]coord.Lease(nil), s.leases...), s.err
+}
+
+func (s *stubLister) set(err error, leases ...coord.Lease) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.leases, s.err = leases, err
+}
+
+// awaitListing waits for the lister's next call to complete.
+func (s *stubLister) awaitListing(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.listed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the view never listed")
+	}
+}
+
+// fakeClock is a clock a case moves by hand.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+func node(id string) coord.Lease {
+	return coord.Lease{Resource: coord.ClassNode.Resource(id), Owner: id}
+}
+
+// runView starts a view and stops it with the case, asserting it stops.
+func runView(t *testing.T, view *coord.LeaseView) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- view.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("a stopped view returned %v, want its context's end", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("a view outlived its context")
+		}
+	})
+}
+
+// A VIEW ANSWERS FROM MEMORY between listings, which is its whole reason to
+// exist: a stateless node's every tool call used to list every presence lease
+// in the fleet, across its leaf link, for an answer that changes only when a
+// node comes or goes.
+func TestAViewAnswersFromMemoryBetweenListings(t *testing.T) {
+	t.Parallel()
+	store := newStubLister(node("a"), node("b"))
+	view, err := coord.NewLeaseView(store, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	store.awaitListing(t)
+	for range 100 {
+		leases, _, err := view.Leases()
+		if err != nil || len(leases) != 2 {
+			t.Fatalf("the view answered %d lease(s), %v", len(leases), err)
+		}
+	}
+	if got := store.calls.Load(); got != 1 {
+		t.Fatalf("a hundred reads listed the store %d times, want once", got)
+	}
+}
+
+// A VIEW THAT HAS NOT LISTED, OR CANNOT, ANSWERS UNKNOWN — never an empty
+// roster and never one older than a lease survives.
+//
+// An empty roster reads as "no data node is live" and a stale one names a node
+// that let its lease lapse; both are answers, and the honest one is that the
+// store could not be read — which is the answer this package gives everywhere
+// else, and which a caller already knows how to act on.
+func TestAViewThatCannotListAnswersUnknown(t *testing.T) {
+	t.Parallel()
+	clock := &fakeClock{now: time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)}
+	store := newStubLister(node("a"))
+	view, err := coord.NewLeaseView(store, coord.ClassNode, coord.ViewOptions{
+		Every: 30 * time.Second, Trust: 45 * time.Second, Now: clock.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := view.Leases(); !errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("a view that has never listed answered %v, want unknown", err)
+	}
+
+	runView(t, view)
+	store.awaitListing(t)
+	if leases, _, err := view.Leases(); err != nil || len(leases) != 1 {
+		t.Fatalf("after its first listing the view answered %d, %v", len(leases), err)
+	}
+
+	// THE STORE STOPS ANSWERING. Inside the trust the last listing is
+	// still the answer; past it, the answer is unknown and says why.
+	store.set(errors.New("the store is unreachable"))
+	clock.advance(30 * time.Second)
+	view.Invalidate()
+	store.awaitListing(t)
+	if leases, _, err := view.Leases(); err != nil || len(leases) != 1 {
+		t.Fatalf("a failed listing inside the trust replaced the answer: %d, %v",
+			len(leases), err)
+	}
+	clock.advance(16 * time.Second)
+	_, _, err = view.Leases()
+	if !errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("a listing older than a lease survives answered %v, want unknown", err)
+	}
+	if want := "the store is unreachable"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("the unknown answer %q does not say why (%q)", err, want)
+	}
+
+	// AND IT RECOVERS WITH THE STORE.
+	store.set(nil, node("a"), node("b"))
+	view.Invalidate()
+	store.awaitListing(t)
+	if leases, _, err := view.Leases(); err != nil || len(leases) != 2 {
+		t.Fatalf("after the store came back the view answered %d, %v", len(leases), err)
+	}
+}
+
+// AN INVALIDATION LISTS AGAIN, and a stream of them is one listing per
+// [coord.MinViewRefresh].
+//
+// A request to a node the view named went unanswered: a node that released its
+// lease on a clean stop should leave the roster at once rather than at the
+// next heartbeat. But a node that never answers would otherwise make every
+// request a listing, which is what the view exists to stop.
+func TestAnInvalidationListsAgainAndAStreamOfThemIsHeldApart(t *testing.T) {
+	t.Parallel()
+	store := newStubLister(node("a"), node("gone"))
+	view, err := coord.NewLeaseView(store, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	store.awaitListing(t)
+
+	first := time.Now()
+	store.set(nil, node("a"))
+	for range 50 {
+		view.Invalidate()
+	}
+	store.awaitListing(t)
+	gap := time.Since(first)
+	if leases, _, err := view.Leases(); err != nil || len(leases) != 1 {
+		t.Fatalf("after an invalidation the view still answered %d, %v", len(leases), err)
+	}
+	// NOT SOONER THAN THE FLOOR after the listing before it — a node that
+	// never answers would otherwise make every failed request a listing.
+	if gap < coord.MinViewRefresh*9/10 {
+		t.Fatalf("the invalidated listing came %v after the last one, inside "+
+			"the %v floor", gap, coord.MinViewRefresh)
+	}
+	// AND FIFTY INVALIDATIONS ARE ONE LISTING.
+	time.Sleep(2 * coord.MinViewRefresh)
+	if got := store.calls.Load(); got != 2 {
+		t.Fatalf("fifty invalidations listed %d times, want one more than the first", got-1)
+	}
+}
+
+// A VIEW IS REFUSED A TRUST SHORTER THAN ITS CADENCE, which would answer
+// unknown between every two listings on a healthy store.
+func TestAViewRefusesATrustShorterThanItsCadence(t *testing.T) {
+	t.Parallel()
+	if _, err := coord.NewLeaseView(newStubLister(), coord.ClassNode,
+		coord.ViewOptions{Every: time.Minute, Trust: time.Second}); err == nil {
+		t.Fatal("a view that trusts a listing for less than its cadence was built")
+	}
+	if _, err := coord.NewLeaseView(newStubLister(), "",
+		coord.ViewOptions{Every: time.Minute, Trust: time.Minute}); err == nil {
+		t.Fatal("a view of no class was built")
+	}
+}

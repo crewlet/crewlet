@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -112,33 +113,128 @@ func (r *remoteNative) admitted(ctx context.Context) bool {
 	return ready
 }
 
-// dataRoster is every live node that holds data, by id.
+// dataRoster is every live node that holds data, by id, as this node's WATCHED
+// VIEW of the presence leases answers it — for the questions asked PER
+// REQUEST: which data node a stateless node's tool call goes to, and which
+// nodes a search divides its buckets between.
 //
-// ONE READING FOR EVERY QUESTION ABOUT DATA NODES — which nodes a stateless
-// node may ask, which nodes the search fan-out divides the buckets between,
-// whose positions the trim waits on and who the gate may evict — because a
-// second reading of "which nodes hold data" is how one of them comes to count
-// a stateless node and wait for ever on a position it will never publish.
+// FROM MEMORY, because it is asked per request. It used to list every presence
+// lease in the fleet on every call — an O(fleet) read of the coordination
+// store, crossing the leaf link on a stateless node, per tool call and per
+// search — for an answer that changes only when a node joins, leaves or lets
+// its lease lapse. The view lists on the presence heartbeat's own cadence and
+// answers UNKNOWN rather than an old or an empty roster once its last listing
+// is older than a lease survives; see [coord.LeaseView] and [newDataView].
+//
+// ONE FILTER FOR EVERY QUESTION ABOUT DATA NODES — [dataNodesOf], which the
+// trim, the eviction gate and the capacity handshake apply to a listing of
+// their own — because a second reading of "which nodes hold data" is how one
+// of them comes to count a stateless node and wait for ever on a position it
+// will never publish. Those three list the store directly and deliberately:
+// each runs on a duty's tick rather than per request, and each decides
+// something a roster up to a heartbeat old must not — what may be trimmed,
+// who may be evicted, whether a fleet-wide operation may proceed.
 func (e *Engine) dataRoster(ctx context.Context) ([]string, error) {
-	if e.backends == nil || e.backends.Coord == nil {
-		return nil, nil
-	}
-	return dataNodes(ctx, e.backends.Coord)
+	return viewRoster{view: e.dataView}.DataNodes(ctx)
 }
 
-// dataNodes is [Engine.dataRoster] over any lease reader.
+// viewRoster is the watched view as the estate client's roster.
+type viewRoster struct{ view *coord.LeaseView }
+
+// DataNodes implements [estate.Roster]. A node with no view has no
+// coordination and so no fleet: nobody else to ask, which is an answer rather
+// than an unknown.
+func (r viewRoster) DataNodes(context.Context) ([]string, error) {
+	if r.view == nil {
+		return nil, nil
+	}
+	leases, _, err := r.view.Leases()
+	if err != nil {
+		return nil, fmt.Errorf("engine: which nodes hold data: %w", err)
+	}
+	return dataNodesOf(leases), nil
+}
+
+// Unanswered implements [estate.Roster]: a node the view named went silent,
+// so it lists again rather than waiting out its heartbeat.
+func (r viewRoster) Unanswered(string) {
+	if r.view != nil {
+		r.view.Invalidate()
+	}
+}
+
+// newDataView builds the watched view of the fleet's presence leases, or nil
+// where there is no coordination.
+//
+// ON THE PRESENCE LEASE'S OWN TERMS, from the TTL in force: it lists once per
+// heartbeat (the TTL over [seat.HeartbeatRatio], which is how often a node
+// renews the lease the view reads, so a listing more often would find nothing
+// new) and trusts a listing for one TTL (past which a lease it named may have
+// lapsed and one it missed may have been held all along). Neither is a knob
+// of its own: both move with `coordination.lease_ttl_seconds`, as the leases
+// do.
+func newDataView(b *config.Bootstrap, backend coord.Backend) (*coord.LeaseView, error) {
+	if backend == nil {
+		return nil, nil
+	}
+	ttl := effectiveLeaseTTL(b, backend)
+	view, err := coord.NewLeaseView(backend, coord.ClassNode, coord.ViewOptions{
+		Every: ttl / seat.HeartbeatRatio, Trust: ttl,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: watch the fleet's data nodes: %w", err)
+	}
+	return view, nil
+}
+
+// startDataView runs the view until [Engine.stopWatchingDataNodes], detached
+// from ctx like every loop a node owns.
+func (e *Engine) startDataView(ctx context.Context) {
+	if e.dataView == nil || e.stopDataView != nil {
+		return
+	}
+	loop, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = e.dataView.Run(loop)
+	}()
+	e.stopDataView = func() {
+		cancel()
+		<-done
+	}
+}
+
+// stopWatchingDataNodes ends the view's loop and waits for it. Nil-safe, and
+// safe to call twice.
+func (e *Engine) stopWatchingDataNodes() {
+	if e.stopDataView == nil {
+		return
+	}
+	e.stopDataView()
+	e.stopDataView = nil
+}
+
+// dataNodes is every live data node, listed from the store NOW — for the duty
+// ticks that decide something a heartbeat-old roster must not; see
+// [Engine.dataRoster].
 func dataNodes(ctx context.Context, leases liveLeases) ([]string, error) {
 	held, err := leases.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, err
 	}
+	return dataNodesOf(held), nil
+}
+
+// dataNodesOf is the data nodes among a listing of presence leases.
+func dataNodesOf(held []coord.Lease) []string {
 	out := make([]string, 0, len(held))
 	for _, lease := range held {
 		if profile, ok := placement.FromLease(lease); ok && profile.HoldsData() {
 			out = append(out, profile.ID)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // serveEstate makes this data node answer the fleet's stateless nodes.

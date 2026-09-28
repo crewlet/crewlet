@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -844,7 +845,13 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 	t.Parallel()
 	backend := coordmem.New()
-	e := &Engine{backends: &Backends{Coord: backend}}
+	lister := &countingLister{Backend: backend}
+	view, err := coord.NewLeaseView(lister, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{backends: &Backends{Coord: backend}, dataView: view}
 
 	for _, id := range []string{"node-b", "node-a"} {
 		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id),
@@ -875,9 +882,34 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 		t.Fatalf("register the dead node: %v", err)
 	}
 
-	roster, err := e.searchRoster(t.Context())
-	if err != nil {
-		t.Fatalf("roster: %v", err)
+	// UNKNOWN UNTIL THE VIEW HAS LISTED, never an empty fleet: a search
+	// handed an empty roster would take every bucket and report complete.
+	if _, err := e.searchRoster(t.Context()); !errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("a roster read before the view listed answered %v, want unknown", err)
+	}
+	e.startDataView(t.Context())
+	t.Cleanup(e.stopWatchingDataNodes)
+	var roster []string
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if roster, err = e.searchRoster(t.Context()); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("roster: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// AND EVERY LATER READ IS ANSWERED FROM MEMORY: this is asked per
+	// search and per tool call, and a listing each time is an O(fleet)
+	// read of the coordination store per request.
+	for range 50 {
+		if _, err := e.searchRoster(t.Context()); err != nil {
+			t.Fatalf("roster: %v", err)
+		}
+	}
+	if got := lister.calls.Load(); got != 1 {
+		t.Fatalf("fifty roster reads listed the fleet %d times, want once", got)
 	}
 	slices.Sort(roster)
 	if want := []string{"node-a", "node-b"}; !slices.Equal(roster, want) {
@@ -1214,4 +1246,15 @@ func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
 		return
 	}
 	t.Fatal("the report carries no pages row")
+}
+
+// countingLister counts the listings a view makes of the store.
+type countingLister struct {
+	coord.Backend
+	calls atomic.Int64
+}
+
+func (c *countingLister) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	c.calls.Add(1)
+	return c.Backend.ListLive(ctx, class)
 }

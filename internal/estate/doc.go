@@ -39,6 +39,20 @@
 // not established, or it could not reach the caller's floor in time — did not
 // execute anything, so every class moves on from it.
 //
+// # Which nodes to ask is answered from memory
+//
+// Every request starts by asking the [Roster] which data nodes are live, so
+// the roster must answer from what the node already knows: listing the fleet's
+// presence leases per request was an O(fleet) read of the coordination store,
+// across the leaf link, on every tool call. The engine's roster is a WATCHED
+// view of those leases that lists once per heartbeat, answers UNKNOWN rather
+// than an empty or stale fleet once its last listing is older than a lease
+// survives, and is told when a node it named went unanswered
+// ([Roster.Unanswered]) so a node that left on a clean stop drops out at once.
+// An unknown roster fails the request with the roster's own reason, never with
+// [ErrNoDataNode]: "give a node the data role" is the wrong remedy for a fleet
+// whose coordination blinked.
+//
 // # Read-your-writes across nodes: the session floor
 //
 // On a data node a write goes to the fleet's log and every read to this

@@ -18,9 +18,24 @@ type Asker interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 }
 
-// Roster is every live node that holds data, as this node currently sees the
-// fleet. The client never asks itself: a stateless node holds nothing.
-type Roster func(ctx context.Context) ([]string, error)
+// Roster is which live nodes hold data, as this node currently sees the fleet.
+// The client never asks itself: a stateless node holds nothing.
+//
+// ASKED ON EVERY REQUEST, so it must answer from what the node already knows
+// rather than from a listing of the fleet per call — the engine's is a
+// watched view of the presence leases (coord.LeaseView), which lists once per
+// heartbeat.
+type Roster interface {
+	// DataNodes is every live data node — or an error when that is not
+	// known, and never an empty list standing in for it, which would read
+	// as "no data node is live" and refuse every request by name.
+	DataNodes(ctx context.Context) ([]string, error)
+
+	// Unanswered tells the roster a node it named did not answer, so a node
+	// that left the fleet on a clean stop is gone from the next answer
+	// rather than from the one a heartbeat later. It must not block.
+	Unanswered(node string)
+}
 
 // ClientOptions are a client's dependencies.
 type ClientOptions struct {
@@ -154,7 +169,7 @@ func (c *Client) forget(streams []string) {
 // answered last, then a rendezvous order that spreads stateless nodes across
 // the members, with every suspect node last.
 func (c *Client) candidates(ctx context.Context) ([]string, error) {
-	nodes, err := c.roster(ctx)
+	nodes, err := c.roster.DataNodes(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -301,11 +316,14 @@ func attemptContext(ctx context.Context, budget time.Duration) (context.Context,
 
 func (c *Client) markSuspect(node string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.suspect[node] = c.now().Add(suspectFor)
 	if c.sticky == node {
 		c.sticky = ""
 	}
+	c.mu.Unlock()
+	// OUTSIDE THE LOCK: the roster is somebody else's, and a request path
+	// must not hold this client's session mutex across it.
+	c.roster.Unanswered(node)
 }
 
 func (c *Client) markAnswered(node string) {

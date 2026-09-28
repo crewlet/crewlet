@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -129,6 +130,10 @@ func (f *fakeNode) backend() Backend {
 type fleet struct {
 	nodes  map[string]*fakeNode
 	client *Client
+
+	// unanswered is every node the client told the roster did not answer.
+	mu         sync.Mutex
+	unanswered []string
 }
 
 func newFleet(t *testing.T, names ...string) *fleet {
@@ -156,13 +161,27 @@ func newFleet(t *testing.T, names ...string) *fleet {
 		t.Cleanup(func() { _ = stop(context.Background()) })
 	}
 	client, err := NewClient(ClientOptions{Queue: start(), Self: "agent-1",
-		Roster: func(context.Context) ([]string, error) { return slices.Sorted(keys(f.nodes)), nil }})
+		Roster: fleetRoster{f: f}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	client.readBudget, client.writeBudget = 300*time.Millisecond, 300*time.Millisecond
 	f.client = client
 	return f
+}
+
+// fleetRoster is every node the fleet started, and a record of every one the
+// client reported unanswered.
+type fleetRoster struct{ f *fleet }
+
+func (r fleetRoster) DataNodes(context.Context) ([]string, error) {
+	return slices.Sorted(keys(r.f.nodes)), nil
+}
+
+func (r fleetRoster) Unanswered(node string) {
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	r.f.unanswered = append(r.f.unanswered, node)
 }
 
 // silencer registers an answerer that answers nothing while its node is
@@ -254,7 +273,44 @@ func TestAnUnansweredReadMovesOnAndTheSilentNodeIsAskedLast(t *testing.T) {
 	if next == firstName {
 		t.Errorf("the silent node %s is still asked first", firstName)
 	}
+	// AND THE ROSTER IS TOLD, so a node that left on a clean stop is gone
+	// from its next answer rather than from the one a heartbeat later.
+	f.mu.Lock()
+	told := slices.Clone(f.unanswered)
+	f.mu.Unlock()
+	if !slices.Contains(told, firstName) {
+		t.Errorf("the roster was told %v went unanswered, want %s among them",
+			told, firstName)
+	}
 }
+
+// A ROSTER THAT CANNOT SAY WHO HOLDS DATA IS AN ERROR THAT SAYS SO, never an
+// empty fleet: "no data node is live" names a role to give a node, and giving
+// one to a node on a fleet whose coordination blinked is the wrong remedy.
+func TestAnUnknownRosterIsNotAnEmptyFleet(t *testing.T) {
+	t.Parallel()
+	client, err := NewClient(ClientOptions{Queue: memory.NewBroker().Client(),
+		Self: "agent-1", Roster: unknownRoster{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	if err == nil || errors.Is(err, ErrNoDataNode) {
+		t.Fatalf("an unknown roster answered %v, want the roster's own error "+
+			"rather than ErrNoDataNode", err)
+	}
+	if !strings.Contains(err.Error(), "the leases could not be listed") {
+		t.Fatalf("the error %q does not carry the roster's reason", err)
+	}
+}
+
+type unknownRoster struct{}
+
+func (unknownRoster) DataNodes(context.Context) ([]string, error) {
+	return nil, errors.New("the leases could not be listed")
+}
+
+func (unknownRoster) Unanswered(string) {}
 
 // A NODE THAT IS NOT ESTABLISHED, OR BEHIND THE CALLER'S FLOOR, RAN NOTHING,
 // so even a write moves on from it.

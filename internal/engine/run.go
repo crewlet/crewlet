@@ -293,6 +293,15 @@ type Engine struct {
 	// where it serves none. See [Engine.serveEstate].
 	stopEstate queue.Unsubscribe
 
+	// dataView watches the fleet's presence leases, and it is what every
+	// per-request question about data nodes is answered from — which one
+	// a stateless node's tool call goes to, and which divide a search.
+	// Nil where there is no coordination and so no fleet. Built in [New],
+	// run from [Engine.startDataView] and stopped by [Engine.teardown];
+	// see remote.go.
+	dataView     *coord.LeaseView
+	stopDataView func()
+
 	// objects is this node's part in the fleet's object store: its own
 	// chunks on a data node, and on every node the map it places by and
 	// the client it writes and reads through. See objects.go.
@@ -722,13 +731,24 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// claim map each, which guards nothing.
 	e.setupRunner = sync.OnceValue(e.newSetupRunner)
 
+	// THE VIEW OF THE FLEET'S DATA NODES, built before the estate client
+	// that asks it on every request. Building it lists nothing: it runs
+	// once the boot's failure path is armed below, and answers unknown
+	// until its first listing — see remote.go.
+	if e.dataView, err = newDataView(opts.Bootstrap, backends.Coord); err != nil {
+		if ownsBackends {
+			backends.Close(ctx)
+		}
+		return nil, err
+	}
+
 	// A NODE WITHOUT `data` ASKS A DATA NODE FOR EVERYTHING IT DOES NOT
 	// HOLD, and hands it the record of what it did — built before anything
 	// publishes, because the custody listener must be in place before the
 	// first turn a restarted node picks up off its durable inbox.
 	if !holdsData(opts.Bootstrap) {
 		if e.estate, err = estate.NewClient(estate.ClientOptions{
-			Queue: backends.Queue, Roster: e.dataRoster, Self: nodeID,
+			Queue: backends.Queue, Roster: viewRoster{view: e.dataView}, Self: nodeID,
 		}); err != nil {
 			if ownsBackends {
 				backends.Close(ctx)
@@ -775,6 +795,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 				"admission are stopped, and any backends this engine opened "+
 				"itself are closed")
 	}()
+	// THE FIRST THING THAT OUTLIVES THIS CALL, so the failure path above
+	// is what stops it if the boot goes no further.
+	e.startDataView(ctx)
 
 	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose page
 	// projection nudges it from a post-commit hook: a nudge with nothing to
@@ -1504,6 +1527,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// wrote are in the buffer, and BEFORE the broker closes under the
 	// shipment.
 	e.stopCustody(ctx)
+	// AFTER THE CUSTODY, whose last shipment asks it which data node to
+	// send to, and BEFORE backends.Close, which closes the store it lists.
+	e.stopWatchingDataNodes()
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
