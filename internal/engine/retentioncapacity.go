@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -195,6 +196,7 @@ func (r *retention) space(out *statelog.Reading) {
 		measure = measureVolume
 	}
 	var files []storedFile
+	var unmeasured []string
 	for _, db := range storeFiles(r.db) {
 		if wal, err := fileBytes(db.Path() + walSuffix); err == nil {
 			// THE LARGEST, NOT THE SUM. The alarm is about ONE
@@ -203,17 +205,26 @@ func (r *retention) space(out *statelog.Reading) {
 			// where a gibibyte in one is the fault.
 			out.WALBytes = max(out.WALBytes, wal)
 		}
+		// A FILE THAT CANNOT BE MEASURED IS SAID, never skipped: skipped,
+		// the node is judged on its other volume alone, which is the very
+		// blind spot measuring each file's own volume exists to close.
+		// Each error names the path it could not read.
 		size, err := fileBytes(db.Path())
 		if err != nil {
+			unmeasured = append(unmeasured, err.Error())
 			continue
 		}
-		vol, free, err := measure(filepath.Dir(db.Path()))
+		dir := filepath.Dir(db.Path())
+		vol, free, err := measure(dir)
 		if err != nil {
+			unmeasured = append(unmeasured, err.Error())
 			continue
 		}
-		files = append(files, storedFile{volume: vol, free: free, size: size})
+		files = append(files, storedFile{volume: vol, dir: dir, free: free, size: size})
 	}
-	out.FreeBytes, out.StoreBytes = tightestVolume(files)
+	tightest := tightestVolume(files)
+	out.FreeBytes, out.StoreBytes, out.StoreVolume = tightest.free, tightest.stored, tightest.dir
+	out.StoreVolumeUnmeasured = strings.Join(unmeasured, "; ")
 }
 
 // measureVolume is the volume dir is on — the filesystem's own device number,
@@ -235,10 +246,18 @@ func measureVolume(dir string) (string, int64, error) {
 }
 
 // storedFile is one database file as the volume alarm weighs it: the volume it
-// is on, what that volume has free, and how large the file is.
+// is on, the directory it is in — what an operator is told to grow — what that
+// volume has free, and how large the file is.
 type storedFile struct {
-	volume     string
-	free, size int64
+	volume, dir string
+	free, size  int64
+}
+
+// storeVolume is one volume as the alarm reads it: a directory on it, what it
+// has free, and what the databases on it occupy.
+type storeVolume struct {
+	dir          string
+	free, stored int64
 }
 
 // tightestVolume is the free space and the stored bytes of the volume with the
@@ -254,28 +273,35 @@ type storedFile struct {
 // disk of somebody else's fired for bytes that were not there. Two files on one volume are one volume's bytes, so the
 // volumes are told apart by what the filesystem says they are, never by their
 // paths.
-func tightestVolume(files []storedFile) (free, stored int64) {
-	type volume struct{ free, stored int64 }
-	byVolume := map[string]*volume{}
+//
+// Named by the directory of the first file found on it, in the files' order —
+// the node estate before the replicated one — so the same volume is named the
+// same way on every reading.
+func tightestVolume(files []storedFile) storeVolume {
+	var order []string
+	byVolume := map[string]*storeVolume{}
 	for _, f := range files {
 		v, ok := byVolume[f.volume]
 		if !ok {
-			v = &volume{free: f.free}
+			v = &storeVolume{dir: f.dir, free: f.free}
 			byVolume[f.volume] = v
+			order = append(order, f.volume)
 		}
 		v.stored += f.size
 	}
-	found := false
-	for _, v := range byVolume {
+	var out storeVolume
+	for i, id := range order {
+		v := byVolume[id]
 		// THE SMALLEST RATIO OF FREE TO STORED is the volume nearest the
 		// alarm's own condition — free below a multiple of stored — and
 		// comparing across multiplies rather than divides, so an empty
-		// volume is never a division by zero.
-		if !found || float64(v.free)*float64(stored) < float64(free)*float64(v.stored) {
-			free, stored, found = v.free, v.stored, true
+		// volume is never a division by zero. In floating point, because
+		// the cross products of tens of terabytes overflow an int64.
+		if i == 0 || float64(v.free)*float64(out.stored) < float64(out.free)*float64(v.stored) {
+			out = *v
 		}
 	}
-	return free, stored
+	return out
 }
 
 // semanticCoverage is the fraction of this node's sources carrying a current

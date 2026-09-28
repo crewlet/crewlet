@@ -74,8 +74,9 @@ var alarmMeaning = map[Kind]string{
 		"redelivers for ever, so every wake behind it is waiting too.",
 	KindMaintenanceOpen: "A maintenance operation has been open for an hour. " +
 		"Maintenance stops every publisher on every node.",
-	KindVolumeLow: "The volume has less free space than the next restore, " +
-		"vacuum or snapshot needs for a second copy.",
+	KindVolumeLow: "A volume holding this node's databases has less free space " +
+		"than the next restore, vacuum or snapshot needs for a second copy — or " +
+		"could not be measured at all. The alarm names the volume.",
 	KindWALLarge: "The write-ahead log has grown past a gibibyte, which means " +
 		"a checkpoint is not happening.",
 	KindPoolStarved: "Callers are queuing for a database connection before " +

@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,7 +83,10 @@ func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 // both files' bytes: a replicated estate filling its own disk never fired. Here
 // the replicated estate sits on a nearly full volume and the node estate on an
 // empty one, and the reading is the nearly full one's — its free space against
-// its own file, never the other volume's space or both files' bytes.
+// its own file, never the other volume's space or both files' bytes — and the
+// alarm NAMES it, since an operator has two disks and must know which to grow.
+// A volume that cannot be measured is said and alarmed on, never skipped: the
+// node would otherwise be judged on its roomy volume alone.
 func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 	t.Parallel()
 	nodeDir, replicatedDir := t.TempDir(), t.TempDir()
@@ -109,13 +114,38 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 	}}
 	var reading statelog.Reading
 	r.space(&reading)
-	if reading.FreeBytes != 1<<10 || reading.StoreBytes != replicatedSize {
-		t.Fatalf("the reading is %d free against %d stored, want the replicated volume's "+
-			"%d against its own %d", reading.FreeBytes, reading.StoreBytes, 1<<10, replicatedSize)
+	if reading.FreeBytes != 1<<10 || reading.StoreBytes != replicatedSize ||
+		reading.StoreVolume != replicatedDir {
+		t.Fatalf("the reading is %d free against %d stored on %q, want the replicated "+
+			"volume's %d against its own %d on %q", reading.FreeBytes, reading.StoreBytes,
+			reading.StoreVolume, 1<<10, replicatedSize, replicatedDir)
 	}
 	alarms := statelog.Evaluate(reading)
 	if len(alarms) != 1 || alarms[0].Kind != statelog.KindVolumeLow {
-		t.Errorf("a nearly full volume raised %v, want volume_low", alarms)
+		t.Fatalf("a nearly full volume raised %v, want volume_low", alarms)
+	}
+	if !strings.Contains(alarms[0].Detail, replicatedDir) {
+		t.Errorf("volume_low does not name the volume to grow: %q", alarms[0].Detail)
+	}
+
+	// A VOLUME THAT CANNOT BE MEASURED beside a roomy one is the alarm,
+	// naming it — not a node judged on the roomy one alone.
+	r.volumes = func(dir string) (string, int64, error) {
+		if dir == replicatedDir {
+			return "", 0, fmt.Errorf("engine: measure the free space on %s: input/output error", dir)
+		}
+		return dir, 1 << 40, nil
+	}
+	reading = statelog.Reading{}
+	r.space(&reading)
+	if reading.StoreVolume != nodeDir || !strings.Contains(reading.StoreVolumeUnmeasured, replicatedDir) {
+		t.Fatalf("the reading is of %q with %q unmeasured, want the node volume read and the "+
+			"replicated one named", reading.StoreVolume, reading.StoreVolumeUnmeasured)
+	}
+	alarms = statelog.Evaluate(reading)
+	if len(alarms) != 1 || alarms[0].Kind != statelog.KindVolumeLow ||
+		!strings.Contains(alarms[0].Detail, replicatedDir) {
+		t.Errorf("an unmeasurable store volume raised %v, want volume_low naming it", alarms)
 	}
 
 	// ONE VOLUME UNDER BOTH is one volume's bytes, summed.
@@ -132,26 +162,33 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 // volume holding nothing is never it.
 func TestTheTightestVolumeIsTheOneNearestItsAlarm(t *testing.T) {
 	t.Parallel()
+	file := func(volume string, free, size int64) storedFile {
+		return storedFile{volume: volume, dir: "/" + volume, free: free, size: size}
+	}
 	for name, tc := range map[string]struct {
-		files        []storedFile
-		free, stored int64
+		files []storedFile
+		want  storeVolume
 	}{
-		"no files":              {nil, 0, 0},
-		"two files, one volume": {[]storedFile{{"a", 100, 10}, {"a", 100, 30}}, 100, 40},
+		"no files": {nil, storeVolume{}},
+		"two files, one volume": {[]storedFile{file("a", 100, 10), file("a", 100, 30)},
+			storeVolume{"/a", 100, 40}},
 		"the smaller ratio, not the smaller free": {
-			[]storedFile{{"big", 1000, 900}, {"small", 50, 5}}, 1000, 900},
+			[]storedFile{file("big", 1000, 900), file("small", 50, 5)}, storeVolume{"/big", 1000, 900}},
 		"an empty volume beside a full one": {
-			[]storedFile{{"empty", 1, 0}, {"full", 10, 100}}, 10, 100},
+			[]storedFile{file("empty", 1, 0), file("full", 10, 100)}, storeVolume{"/full", 10, 100}},
+		"a full volume beside an empty one": {
+			[]storedFile{file("full", 10, 100), file("empty", 1, 0)}, storeVolume{"/full", 10, 100}},
 		// Tens of terabytes each: the cross products overflow an int64,
 		// and wrapped they choose the roomier volume in either order.
 		"sizes past what a product of int64s holds": {
-			[]storedFile{{"a", 14773780071959, 34330076720781}, {"b", 27431250736051, 18740855235886}},
-			14773780071959, 34330076720781},
+			[]storedFile{file("a", 14773780071959, 34330076720781), file("b", 27431250736051, 18740855235886)},
+			storeVolume{"/a", 14773780071959, 34330076720781}},
+		"sizes past what a product of int64s holds, reversed": {
+			[]storedFile{file("b", 27431250736051, 18740855235886), file("a", 14773780071959, 34330076720781)},
+			storeVolume{"/a", 14773780071959, 34330076720781}},
 	} {
-		free, stored := tightestVolume(tc.files)
-		if free != tc.free || stored != tc.stored {
-			t.Errorf("%s: %d free against %d stored, want %d against %d", name,
-				free, stored, tc.free, tc.stored)
+		if got := tightestVolume(tc.files); got != tc.want {
+			t.Errorf("%s: %+v, want %+v", name, got, tc.want)
 		}
 	}
 }

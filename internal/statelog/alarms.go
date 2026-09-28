@@ -350,9 +350,20 @@ type Reading struct {
 	MaintenanceOpenFor time.Duration
 	MaintenancePhase   string
 
-	// FreeBytes and StoreBytes are the volume's free space and what this
-	// node's databases occupy. WALBytes is the write-ahead log's size.
+	// FreeBytes and StoreBytes are one volume's free space and what this
+	// node's databases occupy ON IT, and StoreVolume the directory that
+	// names it: of the volumes the databases are on — the two files need
+	// not share one — the one with the least room for a second copy of what
+	// it holds. WALBytes is the larger write-ahead log's size.
 	FreeBytes, StoreBytes, WALBytes int64
+	StoreVolume                     string
+
+	// StoreVolumeUnmeasured says which database, or which volume, could not
+	// be measured and why — empty when every one was. It is the alarm, not
+	// an absence: a volume nobody can measure is one nothing shows has
+	// room, and leaving it out would judge the node on its other volume,
+	// which is the blind spot measuring each file's own volume removed.
+	StoreVolumeUnmeasured string
 
 	// PoolWaitP95 is how long a caller queues for a database connection.
 	PoolWaitP95 time.Duration
@@ -701,13 +712,20 @@ var table = []rule{
 	{
 		kind: KindVolumeLow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%s free against %s of store, and the next restore, "+
-					"vacuum or snapshot needs room for a second copy",
-					bytesHuman(r.FreeBytes), bytesHuman(r.StoreBytes)),
+			if r.StoreVolumeUnmeasured != "" {
+				return fmt.Sprintf("a store volume could not be measured (%s), so nothing "+
+					"shows the next restore, vacuum or snapshot has room for a second "+
+					"copy", r.StoreVolumeUnmeasured), true
+			}
+			return fmt.Sprintf("%s free on the volume holding %s against %s of store "+
+					"there, and the next restore, vacuum or snapshot needs room for a "+
+					"second copy", bytesHuman(r.FreeBytes), r.StoreVolume,
+					bytesHuman(r.StoreBytes)),
 				r.StoreBytes > 0 && float64(r.FreeBytes) < VolumeHeadroomFactor*float64(r.StoreBytes)
 		},
-		remedy: "Add space. A backup, a vacuum and a peer's join all need it, and " +
-			"each fails partway through without it.",
+		remedy: "Add space to the volume the alarm names — or, where it could not be " +
+			"measured, fix what stops it being read. A backup, a vacuum and a peer's " +
+			"join all need the room, and each fails partway through without it.",
 	},
 	{
 		kind: KindWALLarge,

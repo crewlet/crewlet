@@ -124,8 +124,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a volume with no room for a second copy": {
 			statelog.KindVolumeLow,
-			statelog.Reading{FreeBytes: 1 << 30, StoreBytes: 4 << 30},
-			"free against",
+			statelog.Reading{FreeBytes: 1 << 30, StoreBytes: 4 << 30, StoreVolume: "/var/lib/crewlet"},
+			"1.0 GiB free on the volume holding /var/lib/crewlet",
+		},
+		"a store volume nobody can measure": {
+			statelog.KindVolumeLow,
+			statelog.Reading{StoreVolumeUnmeasured: "measure the free space on /mnt/estate: input/output error"},
+			"/mnt/estate",
 		},
 		"a write-ahead log nothing is checkpointing": {
 			statelog.KindWALLarge,
