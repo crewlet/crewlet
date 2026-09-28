@@ -2083,6 +2083,9 @@ details > summary.int-summary::-webkit-details-marker {
     overflow-x: auto;
     scrollbar-width: none;
   }
+  .work-tabs > .work-tabs-group:first-child::-webkit-scrollbar {
+    display: none;
+  }
   .work-tabs-sep {
     display: none;
   }
@@ -2123,6 +2126,12 @@ details > summary.int-summary::-webkit-details-marker {
 .work-bar {
   column-gap: var(--spacing-3);
 }
+/* THE RUN IS NO BOX OF ITS OWN on a wide screen: its children are the band's
+   flex items, wrapping as the band wraps. On a phone it is the scroller — see
+   below and `ItemsView.tsx`. */
+.work-bar-run {
+  display: contents;
+}
 .work-bar-end {
   margin-left: auto;
   display: inline-flex;
@@ -2151,10 +2160,23 @@ details > summary.int-summary::-webkit-details-marker {
 @container page (width < 640px) {
   .work-bar {
     flex-wrap: nowrap;
+  }
+  /* THE RUN SCROLLS, NOT THE BAND: the band is the opaque sticky strip rows
+     scroll under, and the fade on the edge with more past it has to fade the
+     controls without fading the band. */
+  .work-bar-run {
+    display: flex;
+    align-items: center;
+    column-gap: var(--spacing-3);
+    flex: 1 1 auto;
+    min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .work-bar > *,
+  .work-bar-run::-webkit-scrollbar {
+    display: none;
+  }
+  .work-bar-run > *,
   .work-bar-end,
   .work-bar .work-chips,
   .work-arrange {
@@ -2948,21 +2970,30 @@ span.list-position-step {
      glyph of a fixed size and does not. A literal 32px would be right at one
      setting and wrong at the other two. */
   grid-template-columns: calc(var(--row-inline) + 16px) 74px auto minmax(0, 1fr) auto auto auto auto;
-  /* AND THE NARROW SET IS THE SAME FOUR, DECLARED ONCE. Two different
-     questions ask for it — a WINDOW too small to hold eight columns, and a
-     BOX too small whatever the window is doing (a list inside a 420px peek)
-     — and neither can be asked in the other's terms, so there are two rules
-     at the foot of this file. What there may not be is two track lists: a
-     track list is POSITIONAL, so a set that drifts from the order above
-     hands a cell the wrong column and says nothing about it. Priority, key,
-     status, title — the same three opening tracks a reader scans down.
+  /* AND THE NARROW SET IS THE SAME OPENING THREE, DECLARED ONCE, with the
+     TITLE on a line of its own under them (the phone rule at the foot of this
+     file places it). A track list is POSITIONAL, so a set that drifts from
+     the order above hands a cell the wrong column and says nothing about it.
+     Priority, key, status — the three a reader scans down — and the status's
+     track is the flexible one, since on this line nothing follows it.
+
+     THE TITLE HAS ITS OWN LINE BECAUSE A PHONE HAS NO ROOM FOR IT BESIDE
+     THEM. Four tracks in a 358px list left the title about fifty pixels once
+     the status badge had its width, and what it drew there was clipped at the
+     panel's edge with no ellipsis — every row of every embedded list read as
+     a key and a badge and the first word of a sentence.
 
      AND ITS FIRST TRACK CARRIES THE INSET TOO, for the reason the wide
      list gives above: the row pads itself by `--row-inline` and a subgrid
      item's padding comes out of the first track it spans, so a bare `16px`
      resolved to nothing and the mark came to rest on the key beside it. */
-  --work-rows-narrow: calc(var(--row-inline) + 16px) 70px auto minmax(0, 1fr);
-  /* THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
+  --work-rows-narrow: calc(var(--row-inline) + 16px) 70px minmax(0, 1fr) auto;
+  /* AND WHO HOLDS IT STAYS, in the last track of the first line. A list of
+     somebody's priorities says how many of its rows are theirs, and on a
+     phone that sentence sat over rows that no longer said whose each one
+     was; the holder's badge is the one trailing fact narrow enough to keep.
+
+     THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
      row's own `column-gap` is ignored and the parent's is used — so declared
      on the row it silently became zero, and a type icon sat on top of the
      key beside it. */
@@ -2985,16 +3016,62 @@ span.list-position-step {
   grid-template-columns:
     calc(var(--row-inline) + 20px) 16px 74px auto minmax(0, 1fr)
     auto auto auto auto;
-  --work-rows-narrow: calc(var(--row-inline) + 20px) 16px 70px auto minmax(0, 1fr);
+  --work-rows-narrow: calc(var(--row-inline) + 20px) 16px 70px minmax(0, 1fr) auto;
+}
+/* A LIST THE READER CAN REARRANGE opens with the grip AND the place, in one
+   track — the grip is what says the rows lift, and it sits in the place's own
+   cell because the place is what a drag changes. 14px of glyph and a 4px gap
+   before the two tabular digits the ordinal track already holds. Both sets,
+   for the positional reason the ordinal rule above gives. */
+.work-rows[data-reorder="true"] {
+  grid-template-columns:
+    calc(var(--row-inline) + 38px) 16px 74px auto minmax(0, 1fr)
+    auto auto auto auto;
+  --work-rows-narrow: calc(var(--row-inline) + 38px) 16px 70px minmax(0, 1fr) auto;
 }
 /* THE PLACE READS FROM THE ROW'S OWN LEFT EDGE, like the mark beside it, and
    it is TABULAR: a 9 that becomes a 10 in a proportional face moves the key
    column under the pointer on the one list a reader is scanning down. */
 .work-cell-ord {
   justify-content: flex-start;
+  gap: 4px;
   font-size: var(--font-size-2xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
+}
+.work-row-grip {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--color-text-tertiary);
+}
+.work-row[draggable="true"] {
+  cursor: grab;
+}
+.work-row[draggable="true"]:hover .work-row-grip,
+.work-row[draggable="true"]:focus-visible .work-row-grip {
+  color: var(--color-text-secondary);
+}
+/* A MOVE THE ENGINE HAS NOT ANSWERED, as a board card draws one: at the place
+   it was dropped, visibly not settled, until the answer redraws it or puts it
+   back. */
+.work-row[data-pending="true"] {
+  opacity: 0.6;
+  background: var(--color-surface-hover);
+}
+/* THE GAP A DROP WILL OPEN — the accent, because it is the reader's own
+   gesture — drawn on the edge of the row it opens beside, INSIDE the row: a
+   pseudo-element that took a place in the grid would take a track with it. */
+.work-row[data-drop="above"] {
+  box-shadow: inset 0 3px 0 var(--color-brand-accent);
+}
+.work-row[data-drop="below"] {
+  box-shadow: inset 0 -3px 0 var(--color-brand-accent);
+}
+/* WHILE A ROW IS LIFTED, THE REST DO NOT LIGHT UP UNDER THE POINTER: a hover
+   tint moving down the list reads as a second drop target. */
+.work-rows[data-dragging="true"] .work-row:hover {
+  background: transparent;
 }
 .work-row {
   display: grid;
@@ -3023,6 +3100,14 @@ span.list-position-step {
 .work-cell-type,
 .work-cell-who {
   justify-content: flex-end;
+}
+/* THE HOLDER'S CELL IS A BADGE TALL WHETHER OR NOT ONE IS DRAWN — the kit's
+   small badge, 26px — so a row's height is the list's and not its holder's.
+   The unassigned mark is a 20px square, and every row without a holder was
+   four pixels shorter than the rows round it: a list of mixed rows stepped
+   39, 43, 39 as a reader scanned down it. */
+.work-cell-who {
+  min-height: 26px;
 }
 /* THE PRIORITY OPENS THE ROW, so it reads from the row's own left edge — the
    same rule the status pill one column over follows. */
@@ -3060,9 +3145,10 @@ span.list-position-step {
 
 /* THE PANEL A RUN OF `.work-row`s SITS IN. The work screen's own list is a
    `DataGrid` now — one renderer, two column sets, see `shapes/Grid.tsx` — and
-   so is My work's Assigned tab, which is that same grid narrowed to one
-   person. What draws this is the EMBEDDED lists that are not a grid at all:
-   My work's six bounded claims, an item's subtasks, a seat's queue. */
+   so are My work's Queue and Asked by me, which are that same grid narrowed to
+   one person. What draws this is the EMBEDDED lists that are not a grid at
+   all: My work's bounded claims and its priorities, an item's subtasks, a
+   seat's queue. */
 .work-list {
   display: flex;
   flex-direction: column;
@@ -3084,6 +3170,33 @@ span.list-position-step {
      `frame.css` sticks the same way and for the same reason. */
   overflow: clip;
   min-width: 0;
+}
+
+/* ---- My work ------------------------------------------------------------ */
+
+/* THE QUESTIONS PUT TO ONE PERSON, as the rows Home's decisions card draws —
+   on the same raised panel as every other embedded list here, so a section of
+   asks reads as one of My work's lists rather than as Home's card moved. */
+.me-asks {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  overflow: clip;
+  min-width: 0;
+}
+/* A PAGE SAYING IT IS ONE, under the rows it holds — see `PageFoot`. */
+.me-page-foot {
+  margin: 0;
+  color: var(--color-text-tertiary);
+}
+/* WHOSE DAY: SIX PEOPLE BEFORE IT SCROLLS. The kit's panel is 12rem, "six rows
+   and a scroll" of one line each; every option here is two (the name, then
+   the handle and how much is open), so at 1440×900 it showed three and cut
+   the "Anybody" group's heading in half at its foot. Twice the kit's height
+   is its six rows at two lines each. Two classes, so it outranks the kit's
+   own declaration on the same element whichever sheet is bundled first. */
+.crewlet-select__menu.whose-day-menu {
+  --crewlet-select-menu-max-height: 24rem;
 }
 
 /* ---- The census, and a meter in a cell ---------------------------------- */
@@ -4045,11 +4158,6 @@ span.list-position-step {
   white-space: nowrap;
 }
 
-/* A comment carrying a QUESTION wears the caution rail: somebody owes it an
-   answer, which is the one state in a thread that is about the reader. */
-.work-ask {
-  box-shadow: inset 2px 0 0 var(--color-feedback-warning);
-}
 /* The activity feed's own grid: when, what, which item, who. */
 .work-feed-row {
   display: grid;
@@ -4150,9 +4258,10 @@ a.work-cal-chip {
 @media (width < 640px) {
   /* The rail becomes a scrolling strip of chips above the head: a company
      with nine projects still needs to reach all nine. */
-  /* FOUR COLUMNS ON A PHONE: priority, key, status, title. The tracks are
+  /* FOUR COLUMNS ON A PHONE, and the title under them: priority, key,
+     status and who holds it, then the title on its own line. The tracks are
      re-declared on the LIST, since that is where they live — a row is a
-     subgrid of whatever the list has — and the four cells that are gone are
+     subgrid of whatever the list has — and the three cells that are gone are
      dropped rather than emptied, or they would each still hold a column of
      nothing.
 
@@ -4167,9 +4276,22 @@ a.work-cal-chip {
   .work-rows {
     grid-template-columns: var(--work-rows-narrow);
   }
+  /* THE TITLE ON ITS OWN LINE, the width of the row — under the place, where
+     the list is numbered, so the numbers stay a column. Allowed to WRAP there:
+     it is the one cell a reader came for, and it has the line to itself. */
+  .work-row .work-row-title {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    flex-wrap: wrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    padding-top: var(--spacing-1);
+  }
+  .work-rows[data-ordinals="true"] .work-row .work-row-title {
+    grid-column: 2 / -1;
+  }
   .work-cell-due,
   .work-cell-type,
-  .work-cell-who,
   .work-row .work-row-when {
     display: none;
   }
@@ -5436,9 +5558,6 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2);
   padding: 6px var(--spacing-4);
-}
-.inbox-chips-note {
-  color: var(--color-text-tertiary);
 }
 .inbox-rows {
   display: flex;

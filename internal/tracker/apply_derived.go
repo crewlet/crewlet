@@ -15,7 +15,7 @@ import (
 // The derived columns: values the applier COMPUTES from the rows it already
 // holds rather than copies out of a record.
 //
-// Four today, and the rule all follow is [statelog.Deriver]'s: maintained
+// Six today, and the rule all follow is [statelog.Deriver]'s: maintained
 // INCREMENTALLY by the apply, and REDERIVED by [Applier.Rederive] the first
 // time a build whose rules differ from the checkpoint's boots — in this Go,
 // never a second copy in a migration's SQL.
@@ -35,6 +35,9 @@ import (
 //   - A task's `updated_at`, the effective instant of the newest record that
 //     changed it — the `effective_at` of its newest history row — written by
 //     [Applier.applyTask] and recomputed by [restampUpdated].
+//   - WHO a commit's notification rows are written for: every candidate but
+//     the person who made the change ([Applier.writeInbox]), which
+//     [rederiveOwnNotices] restores over rows written before that rule.
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
@@ -43,11 +46,13 @@ import (
 // inbox entry's position was whatever the caller sent. 3 is a project's
 // `active_count`, the part of its open work somebody has started. 4 is a task
 // history row's `reassignments`, the hand-off count that commit left. 5 is a
-// task's `updated_at`, which only its create had ever written. Bumped by ANY change to
-// what a derived column holds, the first one a column adds included — the bump
-// is what fills a new column on a node upgrading onto rows its predecessor
-// wrote without it.
-const DerivationVersion = 5
+// task's `updated_at`, which only its create had ever written. 6 is the
+// notification rows written for everybody a commit concerned BUT its own
+// author, who had been told about their own change in their own inbox. Bumped
+// by ANY change to what a derived column holds, the first one a column adds
+// included — the bump is what fills a new column on a node upgrading onto rows
+// its predecessor wrote without it.
+const DerivationVersion = 6
 
 var _ statelog.Deriver = (*Applier)(nil)
 
@@ -100,7 +105,8 @@ func countReopen(ctx context.Context, tx *sql.Tx, subject Subject, fields string
 
 // Rederive implements [statelog.Deriver]: every derived column recomputed from
 // the rows this transaction holds — a task's `reopens`, a person's positions,
-// a project's `active_count` and each task history row's hand-off count.
+// a project's `active_count`, each task history row's hand-off count, a task's
+// `updated_at`, and which of a commit's notification rows are its author's own.
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOptions) (int, error) {
 	reopens, err := rederiveReopens(ctx, tx)
 	if err != nil {
@@ -122,7 +128,37 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 	if err != nil {
 		return 0, err
 	}
-	return reopens + persons + active + handOffs + updated, nil
+	own, err := rederiveOwnNotices(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return reopens + persons + active + handOffs + updated + own, nil
+}
+
+// rederiveOwnNotices removes the notification rows a predecessor wrote for the
+// person who made the change — see [Applier.writeInbox] for the rule and what
+// breaking it cost.
+//
+// THE SAME TEST THE WRITE MAKES, over what the history row kept of the record:
+// the actor and the seat a bound token wrote for, which are exactly the two
+// names [MutationRecord.ActorParty] holds, and the one reason that is news to
+// the actor ([ReasonUnblocked], [Reason.WakesActor]) left alone. A row this
+// build wrote matches nothing, so an upgrade with nothing to repair reports
+// none.
+func rederiveOwnNotices(ctx context.Context, tx *sql.Tx) (int, error) {
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM tracker_notifications
+		WHERE reason <> ?
+		  AND EXISTS (
+		      SELECT 1 FROM tracker_history h
+		      WHERE h.id = tracker_notifications.record_id
+		        AND (h.actor = tracker_notifications.recipient
+		             OR (h.actor_seat <> '' AND h.actor_seat = tracker_notifications.recipient)))`,
+		string(ReasonUnblocked))
+	if err != nil {
+		return 0, fmt.Errorf("tracker: remove the notices written for their own author: %w", err)
+	}
+	return affected(res)
 }
 
 // restampUpdated is every task's `updated_at` recomputed as the newest

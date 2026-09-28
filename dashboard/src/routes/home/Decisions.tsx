@@ -96,7 +96,7 @@ export function Decisions({
                 <DecisionRow
                   key={subjectKey(subject)}
                   subject={subject}
-                  viewerHandle={viewer.handle}
+                  decider={{ handle: viewer.handle }}
                   now={now}
                 />
               ))}

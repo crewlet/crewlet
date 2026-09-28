@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Inbox } from "./Inbox.tsx";
+import { PAGE_LOCAL_CHIPS } from "./NoticeList.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -263,6 +264,37 @@ describe("the list", () => {
     expect(screen.queryByText("U0ANON")).toBeNull();
   });
 
+  // AND THE SENTENCE NAMES THEM AS THE ROW DOES. The engine writes a lead's
+  // reorder with the person's HANDLE, for the seat it wakes; the row's head said
+  // "Maya Ops" over "maya put PROD-91 at position 1 of your priorities".
+  test("a sentence the engine wrote names its author as the row does", async () => {
+    mount({
+      answers: {
+        work_inbox: inboxOf([
+          notice("r-1", {
+            kind: "prioritised",
+            reason: "prioritised",
+            subject_kind: "person",
+            subject_id: "jane",
+            actor: "U0MAYA",
+            actor_kind: "operator",
+            actor_seat: "maya",
+            excerpt: "maya put PROD-91 at position 1 of your priorities",
+          }),
+          // A COMMENT IS SOMEBODY'S OWN WORDS, and a handle in it stays.
+          notice("r-2", { excerpt: "maya will pick this up" }),
+        ]),
+      },
+    });
+    await settle();
+    // THE ROW AND THE PANE IT OPENS, both.
+    const said = "Maya Ops put PROD-91 at position 1 of your priorities";
+    expect(document.querySelector(".inbox-row-line")?.textContent).toBe(said);
+    expect(screen.getAllByText(said).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^maya put/)).toBeNull();
+    expect(screen.getAllByText("maya will pick this up").length).toBeGreaterThan(0);
+  });
+
   test("the Snoozed scope asks for only what was put off, and lists no decisions", async () => {
     mount({
       answers: {
@@ -292,7 +324,7 @@ describe("the list", () => {
     expect(screen.queryByText("something about r-1")).toBeNull();
   });
 
-  test("the chips narrow the rows loaded and say the counts are the page's", async () => {
+  test("the chips narrow the rows loaded, and a whole page draws no page note", async () => {
     mount({
       answers: {
         decisions: {
@@ -318,8 +350,13 @@ describe("the list", () => {
       },
     });
     await settle();
-    expect(screen.getByText("counts on this page")).toBeTruthy();
     const chip = (name: RegExp) => screen.getByRole("radio", { name });
+    // THE PAGE IS THE WHOLE (no cursor behind it), so the counts are totals
+    // and nothing says otherwise — neither the stray muted line the row once
+    // carried under it, nor a description on any chip.
+    expect(screen.queryByText(/on this page/)).toBeNull();
+    expect(chip(/Mentions/).getAttribute("aria-describedby")).toBeNull();
+    expect(chip(/Mentions/).getAttribute("title")).toBeNull();
     expect(chip(/Decisions/).textContent).toContain("2");
     expect(chip(/Reviews/).textContent).toContain("1");
     expect(chip(/Mentions/).textContent).toContain("1");
@@ -331,6 +368,63 @@ describe("the list", () => {
     const today = within(screen.getByRole("region", { name: "Today" }));
     expect(today.getByText("something about r-1")).toBeTruthy();
     expect(screen.queryByText("something about r-2")).toBeNull();
+  });
+});
+
+// WHERE THE PAGE STOPPED WITH MORE BEHIND IT the chip counts are the page's,
+// and each chip SAYS so — in its accessible description, which is read with it,
+// and in its title — rather than in a line of muted text under the row, which
+// read like debug output and was read by nobody with the chip.
+test("a page with more behind it says so on each chip, not under the row", async () => {
+  mount({
+    answers: {
+      work_inbox: inboxOf([notice("r-1", { reason: "mention" })], { next_cursor: "c-50" }),
+    },
+  });
+  await settle();
+  const mentions = screen.getByRole("radio", { name: /Mentions/ });
+  expect(mentions.getAttribute("title")).toBe(PAGE_LOCAL_CHIPS);
+  const described = mentions.getAttribute("aria-describedby");
+  expect(described).toBeTruthy();
+  expect(document.getElementById(described!)?.textContent).toBe(PAGE_LOCAL_CHIPS);
+  // NOT ONE LINE BESIDE THE ROW: the sentence is only the chips' own.
+  expect(screen.queryByText(PAGE_LOCAL_CHIPS, { selector: ":not(.sr-only)" })).toBeNull();
+});
+
+// AND A DECISIONS PAGE THAT IS NOT THE WHOLE is the other read the chips count
+// over: its Decisions and Reviews counts are the page's too.
+test("a decisions page short of its total says so on the chips", async () => {
+  mount({
+    answers: { decisions: { handle: "jane", items: [askItem()], total: 30, capped: false } },
+  });
+  await settle();
+  const decisions = screen.getByRole("radio", { name: /Decisions/ });
+  expect(decisions.getAttribute("title")).toBe(PAGE_LOCAL_CHIPS);
+});
+
+// THE UNREAD COUNT IS INSIDE THE UNREAD OPTION, as the approved Inbox draws it
+// ("Unread 5") — beside the group it read as a fact about all three — and where
+// the page stopped with more behind it the option draws a floor, never an
+// exact figure.
+describe("the unread count", () => {
+  test("is drawn inside the Unread option", async () => {
+    mount({ answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2"), notice("r-3")]) } });
+    await settle();
+    const unread = screen.getByRole("radio", { name: /Unread/ });
+    expect(unread.querySelector(".count-chip")?.textContent).toBe("3");
+    expect(screen.queryByText(/unread$/)).toBeNull();
+  });
+
+  test("is a floor inside the option where the page has more behind it", async () => {
+    mount({
+      answers: { work_inbox: inboxOf([notice("r-1"), notice("r-2")], { next_cursor: "c-50" }) },
+    });
+    await settle();
+    const unread = screen.getByRole("radio", { name: /Unread/ });
+    expect(unread.querySelector(".count-chip")?.textContent).toBe("2+");
+    expect(unread.getAttribute("title")).toContain("more lie past this page");
+    // AND NOTHING BESIDE THE GROUP: the old "2+ unread" caption is gone.
+    expect(screen.queryByText("2+ unread")).toBeNull();
   });
 });
 

@@ -47,6 +47,7 @@ import {
   SearchGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useSearchTarget } from "~/app/searchTarget.ts";
+import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { href } from "~/app/router.tsx";
 import { SORTS, groupAxisOptions, type Scope, type Shape } from "~/lib/work.ts";
 import type { WorkView } from "~/protocol/index.ts";
@@ -69,8 +70,12 @@ export const SHAPES: { value: Shape; label: string; Glyph: typeof ListGlyph }[] 
  * not have.
  */
 export function ShapeTabs({ shape, onShape }: { shape: Shape; onShape: (shape: Shape) => void }) {
+  // ON A PHONE THE SHAPES ARE ONE LINE THAT SCROLLS (the sheet's container
+  // query), and the edge with more past it fades — see `useScrollEdges`.
+  const row = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(row);
   return (
-    <div className="work-tabs-group" role="group" aria-label="Draw as">
+    <div ref={row} className="work-tabs-group" role="group" aria-label="Draw as" {...edges}>
       {SHAPES.map(({ value, label, Glyph }) => (
         <button
           key={value}

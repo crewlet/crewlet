@@ -385,55 +385,47 @@ describe("the sidebar's figures", () => {
     expect(pin.getAttribute("aria-current")).toBe("page");
   });
 
-  // MY WORK'S FIGURE IS WHAT IS ASKED OF YOU, counted IN FULL by the engine —
-  // never the length of the twenty-row page it drew — and a count that stopped
-  // at the engine's ceiling is written as the floor it is.
-  function myWork(total: number, capped?: boolean) {
-    const block = { total };
-    return {
-      handle: "ada",
-      priorities: [],
-      assigned: [],
-      asked_of_me: [],
-      checklist_items: [],
-      collaborating: [],
-      watching_recent: [],
-      unblocked_recent: [],
-      complete: true,
-      totals: {
-        priorities: block,
-        assigned: block,
-        asked_of_me: capped ? { total, capped: true } : { total },
-        checklist_items: block,
-        collaborating: block,
-        watching_recent: block,
-        unblocked_recent: block,
-      },
-    };
+  // MY WORK'S FIGURE IS THE QUEUE'S: the open work assigned to the viewer,
+  // counted IN FULL by the engine — `total_hint` over the whole matching set,
+  // never the length of a page — and a count that stopped at the engine's
+  // ceiling is written as the floor it is. It is the figure the Queue tab
+  // carries on the viewer's own day, read once by the frame for both; it used
+  // to count the questions asked of the viewer, so the row said 1 over a tab
+  // that said 2.
+  function queue(total: number, capped?: boolean) {
+    return { items: [], groups: [], total_hint: total, total_capped: capped, complete: true };
   }
 
-  test("My work shows the engine's total of what is asked of the viewer", async () => {
+  test("My work shows the engine's count of the open work assigned to the viewer", async () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     // THE PAGE IS EMPTY AND THE TOTAL IS NOT: the figure is the total.
-    const { store, socket } = answering({ work_my_work: myWork(3) }, asked);
+    const { store, socket } = answering({ work_items: queue(3) }, asked);
     mountShell(store, socket);
     await settle();
-    expect(asked.find((a) => a.what === "work_my_work")?.params).toMatchObject({ handle: "ada" });
+    const read = asked.find((a) => a.what === "work_items" && a.params?.assignee === "ada");
+    expect(read?.params).toMatchObject({
+      assignee: "ada",
+      status_group: "not_started,active",
+      subtasks: "separate",
+      limit: 1,
+    });
+    // AND ONLY THAT: the seven-block day is the screen's to read, not the row's.
+    expect(asked.some((a) => a.what === "work_my_work")).toBe(false);
     const row = screen.getByRole("link", { name: /^My work/ });
-    expect(row.textContent).toContain("3 asked of you");
+    expect(row.textContent).toContain("3 open, assigned to you");
   });
 
   test("a count that stopped at the engine's ceiling is drawn as a floor", async () => {
-    const { store, socket } = answering({ work_my_work: myWork(200, true) });
+    const { store, socket } = answering({ work_items: queue(10000, true) });
     mountShell(store, socket);
     await settle();
     expect(screen.getByRole("link", { name: /^My work/ }).textContent).toContain(
-      "200+ asked of you",
+      `${(10000).toLocaleString()}+ open, assigned to you`,
     );
   });
 
-  test("nothing asked, or no answer yet, draws no figure", async () => {
-    const { store, socket } = answering({ work_my_work: myWork(0) });
+  test("nothing on you, or no answer yet, draws no figure", async () => {
+    const { store, socket } = answering({ work_items: queue(0) });
     mountShell(store, socket);
     await settle();
     expect(screen.getByRole("link", { name: /^My work/ }).textContent).toBe("My work");

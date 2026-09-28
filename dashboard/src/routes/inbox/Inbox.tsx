@@ -24,8 +24,10 @@
  * token) are the sidebar's health card and Home's sentence, on every screen,
  * and a stalled round or the company's parked runs are Live's; this list
  * holds only what a person decides (`WHERE_OF`). The scope is a question to
- * the engine (Unread, All, Snoozed — `snoozed=exclude|include|only`); the
- * chips narrow the rows loaded and say so ("counts on this page").
+ * the engine (Unread, All, Snoozed — `snoozed=exclude|include|only`), and the
+ * Unread option carries the page's unread count inside it, as the approved
+ * design draws it; the chips narrow the rows loaded, and where the page is not
+ * every row each chip says its count is the page's.
  *
  * # Every mark is a gesture, made as you
  *
@@ -227,6 +229,15 @@ export function Inbox() {
             loading={bound && inbox.loading && !inbox.data}
             quiet={quiet}
             more={Boolean(inbox.data?.next_cursor)}
+            // THE CHIPS COUNT ROWS LOADED FROM TWO READS, and either can be
+            // the one that stopped: the notices at their page, the decisions
+            // at theirs (fewer items than the total the engine counted).
+            pageLocal={
+              (bound && Boolean(inbox.data?.next_cursor)) ||
+              // READ AS `decisionSubjects` READS IT, so an answer with no
+              // items is an empty page rather than a crash.
+              (decisions.data?.items ?? []).length < (decisions.data?.total ?? 0)
+            }
             showDecisions={scope !== "snoozed"}
             showNotices={bound}
             refusal={

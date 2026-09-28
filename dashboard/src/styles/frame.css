@@ -898,43 +898,60 @@ a.user-block-who:focus-visible {
    A workspace's sections, under the bar, as LINKS: each goes to its own
    address, so the current one is `aria-current="page"` and is drawn from that
    attribute — the underline and the primary ink, no hue — and the two cannot
-   come apart. The row scrolls sideways where it is wider than the header,
-   which on a phone it is. */
+   come apart. The row never scrolls: the tabs that do not fit fold into the
+   "More" menu at its end (`SectionTabs` in PageHeader.tsx measures which). It
+   is the containing block of the folded ones, which sit at its start, out of
+   the flow and invisible, so they can be measured again when it grows. */
 .section-tabs {
+  position: relative;
   display: flex;
   align-items: stretch;
   gap: var(--spacing-5);
   min-height: var(--size-control-lg);
   padding: 0 var(--spacing-5);
   border-bottom: 1px solid var(--color-border-default);
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
+  overflow: hidden;
 }
 
-.section-tabs::-webkit-scrollbar {
-  display: none;
+.section-tab[data-folded],
+.section-tabs-more[data-folded] {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* "More" is the kit's own quiet menu button — the one the page bar's "More"
+   is — centred on the tabs' line. */
+.section-tabs-more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
 }
 
 /* THE EDGE THAT HAS MORE PAST IT FADES. A row that scrolls with its bar hidden
-   cut a control at the edge ("All wo"), which read as a broken label rather
-   than as more to swipe to. `useScrollEdges` in PageHeader.tsx writes the two
-   attributes from the scroll position, so a row that fits — every row above
+   cut a control at the edge ("All wo", a list's "Ta" and "No g"), which read
+   as a broken label rather than as more to swipe to. `lib/useScrollEdges.ts`
+   writes the two attributes from the scroll position, so a row that fits — every row above
    the phone's width — carries neither and fades nothing. A MASK rather than an
    overlay: it fades whatever is under it on every ground, in both themes, with
    no colour of its own to keep in step with the surface. */
 .page-controls[data-more-end],
-.section-tabs[data-more-end] {
+.work-tabs-group[data-more-end],
+.work-bar-run[data-more-end] {
   mask-image: linear-gradient(to right, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
 .page-controls[data-more-start],
-.section-tabs[data-more-start] {
+.work-tabs-group[data-more-start],
+.work-bar-run[data-more-start] {
   mask-image: linear-gradient(to left, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
 .page-controls[data-more-start][data-more-end],
-.section-tabs[data-more-start][data-more-end] {
+.work-tabs-group[data-more-start][data-more-end],
+.work-bar-run[data-more-start][data-more-end] {
   mask-image: linear-gradient(
     to right,
     transparent,
@@ -967,8 +984,8 @@ a.user-block-who:focus-visible {
   border-bottom-color: var(--color-text-primary);
 }
 
-/* INSIDE ITS OWN BOX, because the row is a horizontal scroller and an outset
-   ring on the first tab is clipped at its edge. */
+/* INSIDE ITS OWN BOX, because the row clips at its edges and an outset ring on
+   the first tab would be cut there. */
 .section-tab:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: var(--size-focus-ring-inset-offset);

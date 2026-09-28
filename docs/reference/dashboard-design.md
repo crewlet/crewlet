@@ -424,8 +424,9 @@ switching a saved board to a list must not throw the saved filters away.
 **And a narrowing the SCREEN is is not a filter either — it is LOCKED.** One
 list serves three screens, and two of them are that list narrowed to something
 the reader did not choose: `#/work/{KEY}` is the work in one project, `#/me`'s
-Assigned tab is the work on one person. A locked narrowing is held to four
-rules, and each one is a way the same defect appears if it is broken:
+Queue is the work one person holds and its Asked by me the work one person is
+waiting on an answer about. A locked narrowing is held to four rules, and each
+one is a way the same defect appears if it is broken:
 
 - It is **applied under everything else**, after every key the reader set and
   every default a saved view supplied, so nothing can widen the list past the
@@ -524,7 +525,7 @@ what it knows and what it spent, and the machine last.
 |---|---|---|
 | **Home** | `#/home` | — |
 | **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY — the only filled figure in the chrome. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+") |
-| **My work** | `#/me` | questions asked of you, the engine's own total — counted in full, never the length of the page it drew, and written as a floor ("200+") where the count stopped at the engine's ceiling; nothing asked draws no figure |
+| **My work** | `#/me` | the open work assigned to you — the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
 | **Work** | `#/work` | — |
 | **Agents** | `#/agents` | agents working now, beside the working mark |
 | **Live** | `#/live` | — |
@@ -711,8 +712,9 @@ a screen, and every workspace and section the code declares is below.
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
 | `#/inbox` | **Inbox** — what waits on your decision, and what reached you and why | `scope=unread\|all\|snoozed` · `reason=decisions\|reviews\|mentions\|assigned` (the chip) · `row=` (which row the pane is on) |
-| `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it | `order=due\|priorities` · `handle=` (an operator reading somebody else's day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
-| `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
+| `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it, reordered by dragging a row | `order=due\|priorities` · `handle=` (an operator reading somebody else's day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
+| `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
+| `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
 | `#/work` | **Work › Tasks** — every task, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
 | `#/work/projects` | **Projects** — the directory: every project, its lead, its target date and its four counts. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
@@ -1554,9 +1556,18 @@ every screen under it, a sparse one included.
   container query on the header, because what overflows is the header and a
   viewport query cannot see a sidebar or a peek. Rows of controls stacked under
   the trail would push the screen a third of the way down a phone. The edge
-  with more past it FADES (so does the section tabs'): with the scrollbar
-  hidden, a control cut at the edge read as a broken label rather than as more
-  to swipe to. A row that fits carries no fade.
+  with more past it FADES: with the scrollbar hidden, a control cut at the edge
+  read as a broken label rather than as more to swipe to. A row that fits
+  carries no fade.
+- **The section tabs never scroll: what does not fit folds into "More".** A
+  fade was too quiet for a strip of places — at 1280 My work cut "Checklist 0"
+  at the edge and nothing said a section was past it — so the strip draws the
+  tabs that fit, in the workspace's order, and a "More" menu at its end holds
+  the rest, each with its figure. The tab you are on is always drawn, taking
+  the last place that fits; a tab only ever leaves from the end, so the order
+  never changes with the width. The widths are measured, and measured again
+  whenever the strip or a tab changes size (a figure arriving, the web font
+  loading, the density preference).
 - **The star is on every page that is one.** A workspace's own page is already
   a sidebar row, so the star there cannot keep it — but it is drawn,
   unavailable and saying "Already in the sidebar", rather than left out: left
@@ -1588,6 +1599,37 @@ clamped to the height that exists, so one attempt lands short — and abandoned
 the moment the reader touches the page.
 
 Both of these shipped wrong once, and neither is visible in a URL.
+
+**A thing worth linking to gets an address, not a scroll position.** The
+previous dashboard revealed a unit by scrolling the org screen to it
+(`#/org?unit=Backend`, with a router-level reveal hook); this tree gives a unit
+its own page instead — `#/agents/teams/{unit}` — so it can be linked to, opened
+in a peek, and carry its own state. There is no reveal-on-arrival hook here.
+Where a selection genuinely belongs in the URL rather than in the path it stays
+a filter: the Builder lens reads `unit=` and `seat=` to name the selected node
+on its canvas (see the builder's toolbar below), and a `DataGrid` scrolls its
+selected row into view. The ring is static: nothing on a live screen animates
+for data.
+
+**Work that exists nowhere else is not left behind unasked.** A surface
+holding it registers a leave guard (`useLeaveGuard`, the org builder's node
+editor while it has typed changes), and every move to another entry is put to
+that guard first: a push from code, a link, and Back or Forward. A guard is
+handed the route the move goes to and holds only a move that would lose its
+work: the org builder keeps its draft and an open editor through a move within
+the lens (a view or a chart), so its guards let that go
+(`BuilderContext.keepsTheLens`). A replace is never held, because by the table
+above it stays on the entry. Back has already happened by the time a page
+hears of it, so a held one is undone at once and made again only when the
+reader agrees to lose the work; every entry carries its place in the session
+(`crewletIndex`) beside its scroll key, which is how the router knows which
+way to undo it. The guard that began to hold last is asked first, and agreeing
+to it asks the next one before the move is made. A reload or a closed tab gets
+the browser's own prompt while any guard holds, and `useUnloadGuard` asks for
+that prompt alone, for work a move within the page keeps but a closed tab does
+not (the builder's draft, kept in session storage). The page listens for a
+reload only while something holds, because some browsers keep a page with a
+`beforeunload` listener out of their back-forward cache.
 
 ### Home is the landing screen
 
@@ -1703,7 +1745,11 @@ being listed again under Today, and Done and Snooze on the decision mark it.
 **Every row has the same three lines.** Who — the seat behind it, drawn with
 its avatar and state ring; a token's change is drawn as the person
 (`actor_seat`), never as the token id, and one bound to nobody as "An
-operator" — what (the question, the stop, the excerpt), and why (a pill). A
+operator" — what (the question, the stop, the excerpt), and why (a pill). An
+excerpt the engine COMPOSED names its author by name as the row's head does:
+the engine writes "maya-ops put LEAD-3 at position 1 of your priorities" with a
+handle, for the seat it wakes, and the row reads "Maya Ops put LEAD-3 …" — a
+comment's excerpt is somebody's own words and is left as they typed it. A
 notice's pill is its wake reason in the engine's eighteen words
 (`contract/reasons.ts`); the rows that are not notices take theirs from
 `CONDITION_PILLS` beside the Inbox, kept out of that table because they are
@@ -1715,14 +1761,22 @@ question put to `work_inbox` (`unread`, and `snoozed=exclude|only`), so the
 engine narrows the scan rather than the page and an empty page is an empty
 scope. Snoozed lists only what was put off, each row saying "Snoozed until …",
 and no decisions: a decision leaves when it is answered, not when it is put
-off. An unknown `scope=` resolves to `unread`.
+off. An unknown `scope=` resolves to `unread`. The unread count is drawn
+INSIDE the Unread option ("Unread 5"), as the approved design draws it — beside
+the group it read as a fact about all three — and it is the page's, so where
+the page stopped with more behind it the option says `50+` and its title says
+the engine answers fifty at a time.
 
 **The chips are four questions of the list** — Decisions (every row that is
 not a notice), Reviews (the asks put to the person as `approver`), Mentions
-and Assigned — and they narrow the rows LOADED, so their counts are the page's
-and the row says "counts on this page". `reason=decisions` is where Home's
-**Review** and **Open inbox** land. Every notice still names its own reason on
-its row.
+and Assigned — and they narrow the rows LOADED. Where that is every row their
+counts are totals and nothing more is said; where the page stopped with more
+behind it, each chip says its count is the page's in its own description and
+title — read with the chip, rather than as a muted line under the row that read
+like debugging output. `reason=decisions` is where Home's **Review** and
+**Open inbox** land. Every notice still names its own reason on its row. A
+change the person made themselves — under either of their names — is never one
+of the notices.
 
 **The pane is the decision, answered in place.** The question is the heading;
 under it who asked, when, and the role the person is asked in ("You are the
@@ -1793,36 +1847,76 @@ person decides are listed for all three; a person's notices and decisions need
 a credential bound to their seat, and every write control is drawn for all
 three, disabled with the reason.
 
-**A thing worth linking to gets an address, not a scroll position.** The
-previous dashboard revealed a unit by scrolling the org screen to it
-(`#/org?unit=Backend`, with a router-level reveal hook); this tree gives a unit
-its own page instead — `#/agents/teams/{unit}` — so it can be linked to, opened
-in a peek, and carry its own state. There is no reveal-on-arrival hook here.
-Where a selection genuinely belongs in the URL rather than in the path it stays
-a filter: the Builder lens reads `unit=` and `seat=` to name the selected node
-on its canvas (see the builder's toolbar below), and a `DataGrid` scrolls its
-selected row into view. The ring is static: nothing on a live screen animates
-for data.
+### My work is one person's day
 
-**Work that exists nowhere else is not left behind unasked.** A surface
-holding it registers a leave guard (`useLeaveGuard`, the org builder's node
-editor while it has typed changes), and every move to another entry is put to
-that guard first: a push from code, a link, and Back or Forward. A guard is
-handed the route the move goes to and holds only a move that would lose its
-work: the org builder keeps its draft and an open editor through a move within
-the lens (a view or a chart), so its guards let that go
-(`BuilderContext.keepsTheLens`). A replace is never held, because by the table
-above it stays on the entry. Back has already happened by the time a page
-hears of it, so a held one is undone at once and made again only when the
-reader agrees to lose the work; every entry carries its place in the session
-(`crewletIndex`) beside its scroll key, which is how the router knows which
-way to undo it. The guard that began to hold last is asked first, and agreeing
-to it asks the next one before the move is made. A reload or a closed tab gets
-the browser's own prompt while any guard holds, and `useUnloadGuard` asks for
-that prompt alone, for work a move within the page keeps but a closed tab does
-not (the builder's draft, kept in session storage). The page listens for a
-reload only while something holds, because some browsers keep a page with a
-`beforeunload` listener out of their back-forward cache.
+`#/me` is everything one person is expected to look at, as the SECTIONS of
+the page header: the **Queue**, **Asked of me**, **Asked by me**,
+**Unblocked**, **Collaborating**, **Watching** and **Checklist**. Every tab
+carries the engine's own count of its claim — `work_my_work`'s `totals`, or
+`total_hint` for the two that are the work list — written as a floor (`20+`)
+only where the engine stopped counting, absent while its read is in flight, and
+drawn at zero rather than hidden, because a tab that vanished when it was
+empty is what the page was rebuilt to stop. A section holds at most twenty
+rows of its claim, and one holding fewer than its count says which ones. The
+page opens straight on its sections, as the working screens do: no paragraph
+explains it, and each empty section says in its own words what would fill it.
+
+**Every figure for one person's day counts one named thing.** The Queue's is
+the open work ASSIGNED to the person, and on your own day it is the same
+reading the sidebar's My work figure draws, so the two cannot disagree. The
+questions put to you have their own tab. And the priorities reading, below,
+says above its first row what IT counts, because it is a different list from
+the one the tab counts.
+
+**Two sections are the work list, held to the person.** The Queue is
+`ItemsView` with the ASSIGNEE locked — its shapes, Filter, Display, scope,
+grouping and count line, opening banded by the engine's `due:bucket` — and
+Asked by me is the same list with the ASKER locked instead (`asked_by=`, and
+`viewer=` naming the same person, so the questions put through their own
+token are theirs too), opening on every status. A lock is not a chip and not a
+key on the address: it is what the section IS.
+
+**The Queue's other reading is the order somebody put it in**
+(`order=priorities`): the person's stored list, numbered, never re-sorted —
+and reordered by dragging a row, or with `Alt` and an arrow on a focused row.
+It is a list somebody WROTE, and it can name a task a colleague holds as
+readily as one of the person's own, so it is not the set the Queue's tab
+counts: its first line says how many open tasks it holds and how many of them
+are assigned to the person ("5 open tasks on your list, in the order to work
+them — 2 of them assigned to you. The Queue counts only the work assigned to
+you.").
+The write is `set_priorities` as the reader, carrying the WHOLE stored list
+with the moved row at its new place (entries the page does not draw keep
+theirs) and `if_match` the record's version; the row sits at its new place
+with a pending mark until the engine answers, and a refusal puts it back in
+the engine's words. Nothing is optimistic — and nothing else moves while the
+write is out: the next move is held, but every row keeps its grip, so the
+list does not step sideways and back. A person's seat page counts the same
+list as **Priorities** in its "Their day" card, never as their Queue: the
+Queue is the open work assigned to them, everywhere it is named.
+
+**Asked of me is the decision row Home draws** (`DecisionRow`): who asked,
+the role, what they recommend, and the options as buttons that send the
+choice. It is shared rather than restated, so the rule for which option is
+primary is one rule.
+
+The whose-day picker in the page bar lists yours, then your line, then
+anybody, each person on two lines (the name, then the handle and how much is
+open on that desk), and its panel is tall enough for six of them before it
+scrolls. Every row of a list is the same height whether or not somebody holds
+its task — the holder's cell keeps a badge's height with nobody in it.
+
+**Whose day it is decides the pronoun and the controls.** The band above the
+sections names whose day is on screen and carries the stamp when somebody else
+put the queue in order — by the person's name. On somebody ELSE's day every
+row speaks about them ("Rui is the approver") and every change on the page is
+HELD (`HoldWrites`): drawn, disabled, and explained once in words above the
+rows, because the questions put to them are theirs to answer and their work is
+changed from the work screens. The one change released there is a LEAD's
+reorder — anybody above them in the chart, as the tracker defines a lead — and
+the page says before the press that the reorder is stamped with the reader's
+name and tells them what is now first. Where the engine sent no hierarchy,
+whether the reader leads them is unknown and the sentence says so.
 
 ### A task's page is one reading
 
@@ -3441,7 +3535,11 @@ is one of the rules on this page applied to a tracker.
   control's title on a board). On a phone the
   row is the sticky band, so it stays ONE line that scrolls sideways, like the
   shape tabs above it: wrapped, it stood three rows tall and covered the
-  board's lane heads as the page scrolled under it.
+  board's lane heads as the page scrolled under it. Both fade the edge with
+  more past it, as the page bar's controls do — cut at the edge with nothing
+  said, "Ta" and "No g" read as broken labels — and what scrolls in the bar is
+  the run of controls inside it, never the opaque band, which a fade would let
+  the rows beneath show through.
 - **The landing shape is the CLIENT's fallback, not a builtin the engine marks
   `default`.** Why it is the list is under [the sparse state](#the-sparse-state);
   why it lives here is that exactly one view row may carry `default` and the
@@ -4124,6 +4222,8 @@ a tool arrives in it with the control that sends it. The controls
 | Send / Send answer | The Inbox's composer | `comment_on_work_item{item, body, reply_to}` for a reply, `{item, body, answers}` for an answer |
 | Link a task · Attach a page | The Inbox's composer | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
 | Answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
+| An option · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
+| Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 
 A change to the **company document** — a seat, a budget ceiling, an MCP
 server, a model — is not an act: it is a new configuration revision, and every

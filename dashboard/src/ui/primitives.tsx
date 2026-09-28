@@ -321,11 +321,16 @@ export function Segmented<T extends string>({
    * the chip. `0` is a value and draws — "Archived 0" is exactly what a
    * reader needs to know before they click it — so an option with nothing
    * to say passes no count at all.
+   *
+   * `capped` says the number is a FLOOR — the page it was counted on stopped
+   * with more behind it — and it is drawn `50+`, never as an exact figure.
+   * A flag rather than a string for the same reason the count is a number.
    */
   options: {
     value: T;
     label: ReactNode;
     count?: number;
+    capped?: boolean;
     icon?: GlyphName;
     title?: string;
   }[];
@@ -393,7 +398,9 @@ export function Segmented<T extends string>({
         >
           {o.icon && <Mark name={o.icon} size="xs" />}
           {o.label}
-          {o.count != null && <span className="count-chip t-num">{o.count}</span>}
+          {o.count != null && (
+            <span className="count-chip t-num">{`${o.count.toLocaleString()}${o.capped ? "+" : ""}`}</span>
+          )}
         </button>
       ))}
     </div>

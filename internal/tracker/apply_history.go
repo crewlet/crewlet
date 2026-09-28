@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -426,6 +427,21 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // which is a decision the routing filter makes, later, with a registry this
 // applier deliberately does not have.
 //
+// # BUT NEVER THE PERSON WHO MADE THE CHANGE
+//
+// Except under the one reason that is news to them ([Reason.WakesActor]):
+// the same step [Route] takes, over the same [MutationRecord.ActorParty], so
+// under EITHER of their names. It needs no registry — who wrote the record is
+// on the record — so it belongs here rather than only in the routing, and
+// here is the only place it can be kept: this table is what `work_inbox`
+// reads, and a row written for the actor is a notice in their own inbox
+// about what they just did. A founder who commented on her own task through
+// her assistant found it in her inbox, unread, as "assigned to you", and
+// every such row inflated her unread count. It is also what
+// `work_routing`'s `nobody` has always claimed of this table: "every
+// candidate was the actor" — which was true of the wake and false of the
+// rows. Rows written before this rule are removed by [rederiveOwnNotices].
+//
 // The retention horizon is applied AROUND the candidate computation rather
 // than inside it, which is what keeps that function free of a clock: a record
 // older than the horizon writes no inbox rows at all, so a whole-log replay
@@ -452,8 +468,12 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		}
 	}
 	candidates := Candidates(notify, c.record.Batched())
+	own := c.record.ActorParty().Handles()
 	written := 0
 	for _, candidate := range candidates {
+		if slices.Contains(own, candidate.Handle) && !candidate.Reason.WakesActor() {
+			continue
+		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO tracker_notifications
 				(record_id, recipient, subject_id, subject_key, kind, reason,

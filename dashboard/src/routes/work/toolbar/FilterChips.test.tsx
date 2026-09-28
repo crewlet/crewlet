@@ -246,9 +246,9 @@ const task: WorkSummary = {
 
 const answered = { items: [task], groups: [], total_hint: 1, complete: true };
 
-/** A host screen's narrowing: what `#/me`'s Assigned tab hands down. */
+/** A host screen's narrowing: what `#/me`'s Queue hands down. */
 const HOST: ItemsHost = {
-  assignee: "rui",
+  lock: { assignee: "rui" },
   opens: {},
   empty: () => ({ title: "Nothing here", description: "Nothing is assigned." }),
 };
@@ -279,6 +279,28 @@ test("the locked assignee draws no chip, and an assignee key on the address draw
   for (const call of items) {
     expect((call[1] as Record<string, unknown>).assignee).toBe("rui");
   }
+});
+
+// A LIST HELD TO WHAT SOMEBODY ASKED IS HELD TO THE PERSON, NOT TO A HANDLE.
+// `viewer` is what gives the asker their second name — the questions put
+// through their own credential — so the lock carries both, whatever the
+// address says; and it leaves the ASSIGNEE the reader's to narrow by, since
+// who holds the work a question waits on is an ordinary thing to ask.
+test("an asked-by lock reaches the wire as the person, and keeps the assignee a filter", async () => {
+  location.hash = "#/me/asked-by-me?assignee=ada&asked_by=bo";
+  const query = serving({ work_items: answered });
+  mountList({ ...HOST, lock: { asked_by: "rui" } });
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  const items = query.mock.calls.filter((c) => c[0] === "work_items");
+  expect(items.length).toBeGreaterThan(0);
+  for (const call of items) {
+    const params = call[1] as Record<string, unknown>;
+    expect(params.asked_by).toBe("rui");
+    expect(params.viewer).toBe("rui");
+    expect(params.assignee).toBe("ada");
+  }
+  // THE ASSIGNEE IS A CHIP HERE, because it is the reader's own narrowing.
+  expect(document.querySelector(".work-chips")?.textContent).toContain("Assignee");
 });
 
 /** Every key on the address at once: the filters, and the arrangement. */

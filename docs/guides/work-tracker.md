@@ -1751,14 +1751,20 @@ real hand-off goes through.
 Somebody else's write is **stamped** with who made it, so a person who starts
 the day on work they did not choose can see who chose it, and their own next
 change clears the stamp — taking your queue back is the gesture that says you
-have seen it. The lead relation is any ancestor in the management chain, not
-just the direct manager: a founder leads everybody.
+have seen it. The stamp names the **person**: a lead reordering a report's
+queue through their own token (from the dashboard, or their assistant) is
+stamped as their seat, never as the credential's id, which is nobody the report
+knows — the history row that write leaves still names the token, because
+attribution is the audit trail's question and "who decided this order" is the
+queue's. The lead relation is any ancestor in the management chain, not just
+the direct manager: a founder leads everybody.
 
 It also **wakes the seat**, and that is the other half of the same authority:
 a stamp is seen by somebody who opens a screen, and a seat has no screen. The
-wake names the task now at the top of the list, and it is the one notification
-in this section that **asks for an answer** — take it up, or say why you
-cannot. Going silent on it looks exactly like a message that was lost.
+wake names the task now at the top of the list and the person who put it
+there, and it is the one notification in this section that **asks for an
+answer** — take it up, or say why you cannot. Going silent on it looks exactly
+like a message that was lost.
 
 **A mark is one move, and it moves nothing else.** `mark_inbox` takes what a
 person actually says about their inbox, naming each notice by the `record_id`
@@ -1835,6 +1841,10 @@ about every entry at once. `set_priorities` takes the whole list, and
 `if_match` — the `version` `get_person` answered — makes it conditional: a
 reorder made from a screen that read an older record is refused
 `stale_version` rather than putting back an order somebody has since replaced.
+The dashboard's reorder is exactly this call: the list it sends is the
+person's **stored** one with the moved entry at its new place, so the entries
+a screen does not draw — finished ones, and open ones past the twentieth —
+keep theirs.
 
 **A due snooze is reported, never promoted.** Putting one back in the unread
 list is a write, and a read that performed one would change the fleet's state
@@ -1843,7 +1853,11 @@ which snoozes are due and your next inbox write is what moves them.
 
 **The feed and the marks are two reads.** `work_inbox` is what the company
 *asked of you*: one entry per routed change, newest first, carrying the single
-reason it reached you under, the subject, who made it, and an excerpt. It is
+reason it reached you under, the subject, who made it, and an excerpt. A
+change **you** made is never one of them — under either of your names, so the
+work your assistant files on your own seat is not waiting for you in your own
+inbox — except for the one reason that is news to its author: `unblocked`, a
+blocker of yours that you finished yourself. It is
 written by the applier when the change lands — so it is there whether or not
 anybody was online, and a person who has marked nothing still has an inbox.
 `get_person` is your own *marks over that feed*: what you have read, what you
@@ -1877,14 +1891,39 @@ eighteen that routed it, beside what is waiting on a decision. Which person is
 decided by the API token — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
 alphabetically first seat's — and `#/me` is that same person's own work: one
-section per claim on their attention (the Queue, Asked of me, Unblocked,
-Collaborating, Watching, Checklist), each carrying the engine's own total on
-its tab so an unanswered question is visible without opening it. The Queue is
-read by due date or in the order somebody put it (`order=due|priorities`).
-Above the list a band says whose day is on screen, links to that person's
-seat, and carries the one thing here that asks to be answered — a queue
-somebody *else* put in order, with a flag on the Priorities choice. See
+section per claim on their attention (the Queue, Asked of me, Asked by me,
+Unblocked, Collaborating, Watching, Checklist), each carrying the engine's own
+total on its tab so an unanswered question is visible without opening it. A
+section shows at most twenty rows of its claim, and one that holds fewer than
+its total says which twenty ("the 20 most recently changed of 130"). The
+Queue is read by due date or in the order somebody put it
+(`order=due|priorities`). Above the list a band says whose day is on screen,
+links to that person's seat, and carries the one thing here that asks to be
+answered — a queue somebody *else* put in order, named by the person who did,
+with a flag on the Priorities choice. See
 [Humans in the org](../concepts/humans-in-the-org.md) for the binding.
+
+**Asked of me is answered where it stands.** Each question put to the person
+is the same row the landing screen's "Needs your decision" draws — who asked,
+the role they are asked in, what the asker recommends — with its options as
+buttons that send the choice (`comment_on_work_item{answers, choice}`), or a
+Reply for a question with no options. **Asked by me** is the other end: the
+work this person asked a question on that is still waiting for its answer
+(`asked_by=`, every task status, since an open question on finished work is
+still one somebody is waiting on). It asks under both of the person's names —
+`viewer=` is the person themselves — so the questions they put through their
+own assistant are there beside the ones they asked from the dashboard.
+
+**Somebody else's day is read, not worked.** An operator can open anybody's
+day with the whose-day picker, and there every change on the page is held,
+disabled with a sentence saying whose day it is: the questions put to them are
+theirs to answer — the engine refuses anybody else — and their work is changed
+from the work screens. The one exception is the authority the tracker grants
+across people: somebody **above them in the chart** may reorder their queue,
+and the page says before the press that the reorder is stamped with the
+reader's name and tells them what is now first. Where the engine did not
+report its hierarchy, who leads whom is unknown and the page says that rather
+than refusing a lead.
 
 **The Queue is the work list, narrowed to one person.** It is the same
 screen `#/work` is — the five shapes, the Filter and Display menus, the
@@ -1911,12 +1950,19 @@ nobody has scheduled is the one most likely to be forgotten; and it is the one
 band no `due=` filter can reach, since every date comparison in this grammar is
 written over a date that exists.
 
-The **Priorities** tab is numbered, in the order it was stored. That order is
-the content — it is what somebody decided — so nothing re-sorts it, and the
-place is drawn rather than left for a reader to count. There is no drag: a rank
-is a value on the task, so `set_priorities` is the gesture and it is
-somebody's own — called by their assistant, or through `/operator/act` as the
-person their token is bound to.
+The **Priorities** reading is numbered, in the order it was stored. That order
+is the content — it is what somebody decided — so nothing re-sorts it, and the
+place is drawn rather than left for a reader to count. It is a list somebody
+wrote, and it can hold a task a colleague is assigned as well as your own, so
+it is not what the Queue's tab counts: its first line says how many open tasks
+it holds and how many of them are assigned to you, and the Queue's count — the
+same figure the sidebar's My work row carries — is only the work assigned to
+you. **Drag a row to a new
+place**, or press `Alt` with the up or down arrow on a focused row, and the
+dashboard sends `set_priorities` as you, conditional on the version of the
+record it drew: the row is drawn at its new place with a pending mark until the
+engine answers, and a refusal — somebody changed the list since you looked —
+puts it back and says so. Nothing moves before the engine does.
 
 **Your own writes count as yours, under either name.** A write you make
 through your token is attributed to the **token**, with author kind
@@ -1976,8 +2022,7 @@ attributed to somebody, and a write as "the dashboard" would be attributed to
 nobody — so `mark_inbox` is called either by your assistant over
 `/operator/mcp`, or through `/operator/act`, which admits only a token bound
 to a seat and records the write exactly as your assistant's would be. The
-screen shows what the engine recorded. Each notice offers the call that would
-mark it, pre-filled and copyable.
+screen shows what the engine recorded.
 
 **And the same rows answer the other way round.** `work_inbox` reads them by
 recipient — one person, every change. `work_routing` reads them by *record* —

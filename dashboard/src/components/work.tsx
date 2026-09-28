@@ -16,7 +16,12 @@
 import { useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
 import { Callout, Card, Tag, cx } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { CalendarGlyph, CircleAlertGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CalendarGlyph,
+  CircleAlertGlyph,
+  GripVerticalGlyph,
+  UserGlyph,
+} from "@crewlethq/icons/glyphs";
 // STILL OURS: a task TYPE's mark is named by the company's own type table as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays in
 // `~/ui/Icon.tsx`, which is where one change moves every caller at once.
@@ -45,7 +50,13 @@ import {
   typeIcon,
   typeName,
 } from "~/lib/work.ts";
-import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
+import type {
+  WorkChecklistRow,
+  WorkIncomplete,
+  WorkStatusDef,
+  WorkSummary,
+  WorkTypeDef,
+} from "~/protocol/index.ts";
 
 export interface RowChrome {
   /** What a handle is called. The chart's, so a row shows a person's name. */
@@ -679,6 +690,9 @@ export function WorkRow({
   chrome = {},
   keyOf,
   ordinal,
+  drag,
+  pending,
+  drop,
 }: {
   row: WorkSummary;
   href: string;
@@ -698,12 +712,26 @@ export function WorkRow({
    * omitted where the list has none.
    */
   ordinal?: number;
+  /**
+   * What makes the row draggable, where its list can be rearranged by the
+   * reader and they may — the shape [WorkCard] takes for a board. The place
+   * cell then carries the grip, so a row that moves looks like one.
+   */
+  drag?: HTMLAttributes<HTMLAnchorElement>;
+  /** A move of this row is in flight and the engine has not answered. */
+  pending?: boolean;
+  /** Where a row being dragged would land, drawn as a rule on this row's edge. */
+  drop?: "above" | "below";
 }) {
   return (
     <a
       className={cx("work-row", selected && "selected")}
+      data-pending={pending ? "true" : undefined}
+      data-drop={drop}
+      aria-busy={pending || undefined}
       href={href}
       onClick={rowPeekHandler(onOpen)}
+      {...drag}
     >
       {/* EVERY CELL EXISTS EVEN WHEN ITS VALUE DOES NOT. The marks below each
           render nothing for an absent value — which is right on a CARD, where
@@ -715,7 +743,12 @@ export function WorkRow({
       {/* THE PLACE SOMEBODY PUT THIS ROW IN, where the list has an order that
           IS its content. Absent everywhere else, and the track with it — a
           subgrid row's cells have to match the tracks the list declared. */}
-      {ordinal !== undefined && <span className="work-cell work-cell-ord">{ordinal}</span>}
+      {ordinal !== undefined && (
+        <span className="work-cell work-cell-ord">
+          {drag && <GripVerticalGlyph size="xs" aria-hidden="true" className="work-row-grip" />}
+          {ordinal}
+        </span>
+      )}
       <span className="work-cell work-cell-prio">
         <PriorityMark priority={row.priority} />
       </span>
@@ -1003,5 +1036,43 @@ export function TaskBlock({
       </Card.Header>
       <RowList rows={rows} now={now} chrome={chrome} hrefOf={hrefOf} />
     </Card>
+  );
+}
+
+/**
+ * Sub-items claimed by one person on tasks that are not theirs.
+ *
+ * ITS OWN LIST because no assignee filter over tasks reaches one: a person
+ * holding six checklist items and no assignment reads their queue as empty.
+ * Drawn by My work's Checklist section and by a seat's page, which is why it
+ * is here rather than in either screen — a route importing another route's
+ * module pulls that workspace's whole chunk into its own.
+ *
+ * Nothing when there are none: what an empty one draws is the caller's
+ * decision — a section must say something, a card stacked among others must
+ * not.
+ */
+export function ChecklistClaims({
+  rows,
+  hrefOf,
+}: {
+  rows: readonly WorkChecklistRow[];
+  /** Where a task key goes. The screen owns the address. */
+  hrefOf: (key: string) => string;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="col">
+      {rows.map((item) => (
+        <div key={`${item.task}:${item.item}`} className={cx("work-check", item.done && "done")}>
+          <a className="mono t-link" href={hrefOf(item.task_key)}>
+            {item.task_key}
+          </a>
+          <span className="work-check-name">{item.name}</span>
+          <span className="spacer" />
+          <span className="muted truncate">{item.task_title}</span>
+        </div>
+      ))}
+    </div>
   );
 }

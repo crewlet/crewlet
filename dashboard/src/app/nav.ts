@@ -174,6 +174,13 @@ export const WORKSPACES: WorkspaceRow[] = [
         hint: "Questions waiting on this person",
       },
       {
+        key: "asked-by-me",
+        label: "Asked by me",
+        icon: "send",
+        path: ["me", "asked-by-me"],
+        hint: "Work where this person asked a question still waiting for its answer",
+      },
+      {
         key: "unblocked",
         label: "Unblocked",
         icon: "zap",
@@ -540,6 +547,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "history",
   "search",
   "asked-of-me",
+  "asked-by-me",
   "unblocked",
   "collaborating",
   "watching",

@@ -31,7 +31,9 @@ import {
   calendarWeeks,
   dayKey,
   defaultView,
+  authorOf,
   describeChange,
+  nameAuthor,
   foldChartReapplies,
   endNote,
   LANDING_SHAPE,
@@ -531,6 +533,36 @@ test("a sentence written for one seat is re-addressed to whoever is reading it",
   // NOBODY IN PARTICULAR IS NOT THE OWNER: an anonymous reader is told whose
   // queue it is rather than being addressed as them.
   expect(describeChange(woken, {})).toContain("agent-swe's priorities");
+});
+
+// AND ITS AUTHOR IS NAMED AS THE LOG NAMES PEOPLE. The engine writes the
+// person's HANDLE, for the seat it wakes; the log's reader is a person, who
+// read "maya put ENG-1…" beside rows naming everybody else by name.
+test("an engine-written sentence names its author by name, and a comment is left as typed", () => {
+  const seatName = (h: string) => ({ maya: "Maya Ops", "agent-swe": "Sam Wu" })[h] ?? h;
+  const reordered = record({
+    kind: "prioritised",
+    subject_kind: "person",
+    subject_id: "agent-swe",
+    actor: "U0MAYA",
+    actor_kind: "operator",
+    actor_seat: "maya",
+    excerpt: "maya put ENG-1 at position 1 of your priorities",
+  });
+  expect(describeChange(reordered, { viewer: "ada", seatName })).toBe(
+    "Maya Ops put ENG-1 at position 1 of Sam Wu's priorities",
+  );
+  // A WHOLE HANDLE, never a part of a longer one.
+  expect(nameAuthor("maya-ops-2 and maya", "maya", seatName)).toBe("maya-ops-2 and Maya Ops");
+  // A CREDENTIAL IS NOBODY: an operator with no bound seat is not renamed.
+  expect(authorOf({ actor: "U0ANON", actor_kind: "operator" })).toBe("");
+  // AND A COMMENT IS WHAT SOMEBODY TYPED.
+  expect(
+    describeChange(
+      record({ kind: "comment", subject_key: "ENG-1", actor: "maya", excerpt: "maya will do it" }),
+      { viewer: "ada", seatName },
+    ),
+  ).toBe("maya will do it");
 });
 
 // SCOPED TO A PERSON SUBJECT, because that is the only kind of record the engine
@@ -1562,7 +1594,7 @@ test("the scope segment and the query read one mapping", () => {
 // ---------------------------------------------------------------------------
 
 // A LOCKED NARROWING IS THE LAST WORD, on every branch and over every other
-// source of the same key. `#/me`'s Assigned tab IS one person's work, so a
+// source of the same key. `#/me`'s Queue IS one person's work, so a
 // saved default, a custom field or a hand-edited `?assignee=` must not widen
 // it past that person — and three of this builder's branches return early, so
 // a lock written inside one of them is a lock two shapes do not have.
@@ -1580,6 +1612,30 @@ test("the host's lock outranks every other source of the key it names", () => {
       lock: { assignee: "ada" },
     });
     expect(params.assignee, shape).toBe("ada");
+  }
+});
+
+// AND AN ASKER'S LOCK IS THE PERSON, ON EVERY SHAPE. Asked by me is held to the
+// questions somebody is waiting on — and `viewer` IS that person, because the
+// engine gives an `asked_by` its second name (the token their assistant writes
+// under) only for the viewer. A branch that dropped the viewer answered a
+// founder's asked-by-me with half their questions; one that dropped the asker
+// answered with the whole company's work.
+test("an asker's lock carries the asker and the same person as the viewer, on every shape", () => {
+  const shapes: Shape[] = ["list", "table", "board", "calendar", "timeline"];
+  for (const shape of shapes) {
+    const params = buildItemsParams({
+      container: "workspace",
+      shape,
+      view: { asked_by: "rui", viewer: "rui" },
+      filters: { ...NO_FILTERS, assignee: "cto" },
+      range: shape === "calendar" ? { from: "2026-03-01", to: "2026-04-05" } : undefined,
+      lock: { asked_by: "ada" },
+    });
+    expect(params.asked_by, shape).toBe("ada");
+    expect(params.viewer, shape).toBe("ada");
+    // THE ASSIGNEE STAYS THE READER'S OWN FILTER under an asker's lock.
+    expect(params.assignee, shape).toBe("cto");
   }
 });
 

@@ -4,7 +4,8 @@
  * # One machine, three frames
  *
  * `#/work` is this over the whole company, `#/work/{KEY}`'s Items lens is this
- * over one project, and `#/me`'s Assigned tab is this over one person. They
+ * over one project, and `#/me`'s Queue and Asked by me are this over one
+ * person. They
  * ask the same question with one parameter different, so they are one
  * component: written twice, the second copy is the one that quietly falls
  * behind, and a reader who narrowed a board and then opened a project — or
@@ -13,7 +14,8 @@
  * # A HOST fixes what its screen IS, and the reader keeps the rest
  *
  * A [ItemsHost] is the third frame's whole difference: one narrowing the
- * screen cannot be without (the assignee on `#/me`), what the list OPENS on
+ * screen cannot be without (on `#/me`, the person who holds the work, or the
+ * person waiting on an answer about it), what the list OPENS on
  * (grouped by due band, soonest first), and what an empty one says in that
  * screen's own voice. Everything else — the shape, the grouping, the second
  * axis, the order, the columns, every other filter — stays the reader's and
@@ -104,6 +106,7 @@ import {
   type SeatRing,
 } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
+import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import {
   anyFilter,
   asScope,
@@ -136,6 +139,7 @@ import {
   URL_HOMES,
   viewParams,
   viewQuery,
+  type ItemsLock,
   type Scope,
   type Shape,
   type TrackerFilters,
@@ -177,12 +181,13 @@ function useFieldFilters(): Record<string, string> {
  */
 export interface ItemsHost {
   /**
-   * The one assignee every read here is narrowed to.
+   * The one narrowing every read here is held to — the person who holds the
+   * work, or the person waiting on an answer about it.
    *
    * Handed to [buildItemsParams] as its lock rather than as a filter — see
    * that function and this file's head for what the difference buys.
    */
-  assignee: string;
+  lock: ItemsLock;
   /**
    * What this list OPENS on, as `work_items` parameters.
    *
@@ -275,8 +280,12 @@ export function ItemsView({
   // grammar — nothing on the screen writes it, no chip draws it and the lock
   // overwrites it on the way to the wire — so one left on the address by hand
   // is inert rather than a second, silent narrowing under the person's name.
+  // ONLY WHERE THE HOST LOCKS THE ASSIGNEE: a list held to what somebody
+  // ASKED keeps the assignee as an ordinary filter, since who holds the work
+  // a question is waiting on is a fair thing to narrow by.
   const [assigneeKey] = useParam("assignee", "");
-  const assignee = host ? "" : assigneeKey;
+  const lockedAssignee = host && "assignee" in host.lock ? host.lock.assignee : "";
+  const assignee = lockedAssignee ? "" : assigneeKey;
   const [tag] = useParam("tag", "");
   // THE TEAM, which arrives from an item's own "Filed into" line rather than
   // from a control — see [TrackerFilters.unit]. An ordinary filter key from
@@ -457,7 +466,7 @@ export function ItemsView({
         view: viewOwn,
         filters,
         range: weeks.length ? gridRange(weeks) : undefined,
-        lock: host ? { assignee: host.assignee } : undefined,
+        lock: host?.lock,
       }),
     // The filters object is a fresh literal on every render; its content is
     // what the query depends on. THE LOCK IS A DEPENDENCY IN ITS OWN RIGHT: it
@@ -465,7 +474,16 @@ export function ItemsView({
     // not name it kept asking for the previous person's work when `#/me`'s
     // whose-day picker moved.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [container, shape, chosenView, views, viewOwn, host?.assignee, weeks, JSON.stringify(filters)],
+    [
+      container,
+      shape,
+      chosenView,
+      views,
+      viewOwn,
+      JSON.stringify(host?.lock),
+      weeks,
+      JSON.stringify(filters),
+    ],
   );
 
   // A change to an item publishes onto the seat inbox rather than to the
@@ -562,6 +580,10 @@ export function ItemsView({
     .map((r) => r.key)
     .join(",");
   const wasRunning = useRef("");
+  // THE BAR'S RUN, which scrolls on a phone and fades the edge with more past
+  // it — see the markup below.
+  const barRun = useRef<HTMLDivElement>(null);
+  const barEdges = useScrollEdges(barRun);
   const { refetch } = paged;
   useEffect(() => {
     const before = wasRunning.current ? wasRunning.current.split(",") : [];
@@ -844,60 +866,67 @@ export function ItemsView({
           the grid's column heads, a band head, the peek — offsets itself by
           it. */}
       <div className="toolbar work-bar">
-        {/* THE CHIPS OPEN THE ROW, ending in "+ Filter": what narrows the
+        {/* THE RUN IS ITS OWN BOX so a phone can scroll it and fade the edge
+            with more past it while the band stays opaque: a fade on the
+            sticky band itself would let the rows scrolling under it show
+            through. Wider, the run is `display: contents` and its children lay
+            out on the band exactly as they did. */}
+        <div ref={barRun} className="work-bar-run" {...barEdges}>
+          {/* THE CHIPS OPEN THE ROW, ending in "+ Filter": what narrows the
             answer is what a reader reads first, and the control that adds a
             narrowing sits after the ones it adds to — the approved board's
             one bar, with the arrangement at its far end. */}
-        <FilterChips
-          chips={anyFilter({ ...filters, scope: "open" }) ? chips : []}
-          onRemove={(param) => setFilter(param, "")}
-          onClear={clearFilters}
-          add={
-            <FilterMenu
-              filters={filters}
-              shape={shape}
-              onSet={setFilter}
-              lockedAssignee={host?.assignee}
-              types={catalogue.data?.types}
-              statuses={detail?.statuses}
-              tags={detail?.tags}
-              fields={catalogue.data?.fields}
-              seats={roster}
-            />
-          }
-        />
-        {/* THE ARRANGEMENT AND THE COUNT ARE ONE CLUSTER at the far end, so a
+          <FilterChips
+            chips={anyFilter({ ...filters, scope: "open" }) ? chips : []}
+            onRemove={(param) => setFilter(param, "")}
+            onClear={clearFilters}
+            add={
+              <FilterMenu
+                filters={filters}
+                shape={shape}
+                onSet={setFilter}
+                lockedAssignee={lockedAssignee || undefined}
+                types={catalogue.data?.types}
+                statuses={detail?.statuses}
+                tags={detail?.tags}
+                fields={catalogue.data?.fields}
+                seats={roster}
+              />
+            }
+          />
+          {/* THE ARRANGEMENT AND THE COUNT ARE ONE CLUSTER at the far end, so a
             narrow row — an open peek, a 1280 window — moves them down
             together rather than leaving the count alone on a line. */}
-        <span className="work-bar-end">
-          <ScopeControl scope={scope} onScope={setScope} />
-          <ArrangeControls
-            shape={shape}
-            workspace={!project}
-            groupBy={axis}
-            sort={order}
-            manual={manualOrder(order, project)}
-            onGroupBy={onGroupBy}
-            onSort={(next) => setSort(next || off(viewOwn.sort))}
-          />
-          {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
+          <span className="work-bar-end">
+            <ScopeControl scope={scope} onScope={setScope} />
+            <ArrangeControls
+              shape={shape}
+              workspace={!project}
+              groupBy={axis}
+              sort={order}
+              manual={manualOrder(order, project)}
+              onGroupBy={onGroupBy}
+              onSort={(next) => setSort(next || off(viewOwn.sort))}
+            />
+            {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
               rather than on a row of their own above the lanes: see
               `shapes/Board.tsx`, which draws them into this slot. */}
-          <span className="work-bar-lanes" ref={setLaneSlot} />
-          <span className="work-summary">
-            <Coverage answer={data} />
-            {!loading && !error && (
-              <span>
-                {countedLabel(
-                  shown.length,
-                  params,
-                  SCOPE_OPTIONS.find((o) => o.value === scope)?.label,
-                )}{" "}
-                {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
-              </span>
-            )}
+            <span className="work-bar-lanes" ref={setLaneSlot} />
+            <span className="work-summary">
+              <Coverage answer={data} />
+              {!loading && !error && (
+                <span>
+                  {countedLabel(
+                    shown.length,
+                    params,
+                    SCOPE_OPTIONS.find((o) => o.value === scope)?.label,
+                  )}{" "}
+                  {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
+                </span>
+              )}
+            </span>
           </span>
-        </span>
+        </div>
       </div>
 
       {data?.groups_overlap && (
@@ -966,7 +995,7 @@ export function ItemsView({
                 onAdd={(lane) =>
                   openNewTask({
                     ...(project ? { project } : {}),
-                    ...(host?.assignee ? { assignee: host.assignee } : {}),
+                    ...(lockedAssignee ? { assignee: lockedAssignee } : {}),
                     ...lane,
                   })
                 }

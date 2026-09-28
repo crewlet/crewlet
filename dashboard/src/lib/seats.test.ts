@@ -23,6 +23,7 @@ import {
   handleLabel,
   indexOrg,
   labelOf,
+  leadsInLine,
   stoppedLine,
   llmChain,
   mcpEnvOf,
@@ -139,6 +140,54 @@ const index = indexOrg(org);
 /** The same company, from an engine that reports no derived hierarchy. */
 const { derived: _omitted, ...older } = org;
 const authored = indexOrg(older);
+
+// A LEAD IS ANYBODY ABOVE IN THE CHART, as the engine reads "somebody in
+// their line" (`leadsOf` walks every ancestor): a founder leads everybody. And
+// WITHOUT THE ENGINE'S HIERARCHY THE ANSWER IS UNKNOWN, never "no" — a screen
+// that turned an undescribed chart into a refusal would tell a founder they do
+// not lead their own company.
+describe("who leads whom", () => {
+  test("a direct manager and every manager above are in the line", () => {
+    expect(leadsInLine(index, "ceo", "dev-a")).toBe(true);
+    expect(leadsInLine(index, "jane-founder", "dev-a")).toBe(true);
+    expect(leadsInLine(index, "jane-founder", "designer")).toBe(true);
+  });
+
+  test("a peer, a report and the person themselves are not", () => {
+    expect(leadsInLine(index, "dev-a", "dev-b")).toBe(false);
+    expect(leadsInLine(index, "dev-a", "ceo")).toBe(false);
+    expect(leadsInLine(index, "ceo", "ceo")).toBe(false);
+  });
+
+  test("a chart the engine did not derive answers unknown, not no", () => {
+    expect(leadsInLine(authored, "jane-founder", "dev-a")).toBeNull();
+  });
+
+  // A CONFIG CAN EXPRESS A CYCLE, which the engine's own walk ends; so does
+  // this one, rather than hanging the tab.
+  test("a management cycle ends the walk", () => {
+    const loop = indexOrg({
+      name: "Loop",
+      roles: [
+        { name: "A", handle: "a" },
+        { name: "B", handle: "b" },
+        { name: "C", handle: "c" },
+      ],
+      units: [],
+      derived: {
+        units: [],
+        seats: [
+          seat({ handle: "a", name: "A", managers: ["b"], reports: ["b"] }),
+          seat({ handle: "b", name: "B", managers: ["a"], reports: ["a"] }),
+          seat({ handle: "c", name: "C" }),
+        ],
+      },
+    });
+    expect(loop.hierarchy).toBe(true);
+    expect(leadsInLine(loop, "c", "a")).toBe(false);
+    expect(leadsInLine(loop, "b", "a")).toBe(true);
+  });
+});
 
 describe("the engine's hierarchy", () => {
   test("every role becomes a seat, wherever the document wrote it", () => {

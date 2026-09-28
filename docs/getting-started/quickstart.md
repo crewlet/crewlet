@@ -404,12 +404,14 @@ how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 human seat `contact.crewlet_operator_id` matching one of your
 `api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
 person. My work is one tab per claim on somebody's attention — what they hold,
-the order somebody put it in, the questions waiting on them — with every count
-on the strip, and a band above it naming whose day is on screen. **Assigned**
-is the work list narrowed to that person: the same Filter, Display and scope
-controls, opening grouped by when each task is due. Until then the dashboard
-says so rather than guessing: an unbound token is an ordinary state, not a
-fault.
+the order somebody put it in, the questions waiting on them and the ones they
+are waiting on — with every count on the strip, and a band above it naming
+whose day is on screen. The **Queue** is the work list narrowed to that
+person: the same Filter, Display and scope controls, opening grouped by when
+each task is due; read in priority order, its rows are reordered by dragging
+them. A question put to them is answered on its row in **Asked of me**. Until
+then the dashboard says so rather than guessing: an unbound token is an
+ordinary state, not a fault.
 
 **⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
 screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,

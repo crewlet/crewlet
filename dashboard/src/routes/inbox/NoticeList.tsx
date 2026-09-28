@@ -10,16 +10,27 @@
  */
 
 import { firstLine } from "~/lib/format.ts";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { EmptyValue, FilterChip, FilterChipGroup, Skeleton, Tag } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Mark } from "~/ui/glyph.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { plainText } from "~/lib/markdown.ts";
+import { ENGINE_SENTENCES, authorOf, nameAuthor } from "~/lib/work.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
+import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { CHIPS, rowPill, type Chip, type DayGroup, type InboxRow, type Scope } from "./model.ts";
+import type { WorkInboxNotice } from "~/protocol/index.ts";
+
+/**
+ * What a chip's count is, where it is not the whole: said on each chip, as its
+ * description and its title. About what was LOADED rather than naming a page
+ * size, because two reads fill the list — the notices, a page of fifty, and
+ * the decisions, a page of their own — and either may be the one that stopped.
+ */
+export const PAGE_LOCAL_CHIPS = "Counted over what this page loaded — more lie past it.";
 
 /** Who a row is about, as its badge and its first words draw it. */
 export interface Who {
@@ -93,8 +104,23 @@ export function rowKey(row: InboxRow): string {
   return "";
 }
 
+/**
+ * What a notice SAYS, in this screen's words.
+ *
+ * The excerpt, flattened — and, where the engine composed it (a reorder of
+ * the reader's priorities), with its author named as the row above it names them:
+ * the engine writes a HANDLE, because a seat reads the same sentence, and the
+ * row read "Maya Ops on LEAD-3" over "maya-ops put LEAD-3 at position 1 of
+ * your priorities". The Inbox is the reader's own, so "your" is theirs.
+ */
+export function noticeText(notice: WorkInboxNotice, index: OrgIndex): string {
+  const said = plainText(notice.excerpt ?? "");
+  if (!ENGINE_SENTENCES.has(notice.kind)) return said;
+  return nameAuthor(said, authorOf(notice), (h) => index.byHandle.get(h)?.name ?? h);
+}
+
 /** The row's one line of what it is. */
-export function rowLine(row: InboxRow): string {
+export function rowLine(row: InboxRow, index: OrgIndex): string {
   switch (row.kind) {
     case "decision":
       switch (row.subject.kind) {
@@ -117,7 +143,7 @@ export function rowLine(row: InboxRow): string {
     case "condition":
       return row.item.title;
     case "notice":
-      return plainText(row.notice.excerpt ?? "") || humanize(row.notice.kind);
+      return noticeText(row.notice, index) || humanize(row.notice.kind);
   }
   return "";
 }
@@ -170,6 +196,7 @@ export function NoticeList({
   loading,
   quiet,
   more,
+  pageLocal,
   showDecisions,
   showNotices,
   refusal,
@@ -193,6 +220,11 @@ export function NoticeList({
   quiet: { title: string; hint: string } | null;
   /** More notices lie past the page. */
   more: boolean;
+  /**
+   * The chip counts are the page's rather than the whole: the notices, or the
+   * decisions, stopped with more behind them.
+   */
+  pageLocal: boolean;
   /** Whether the decisions group is part of this view (not under Snoozed). */
   showDecisions: boolean;
   /** Whether the notices are part of this view (a bound reader). */
@@ -200,6 +232,7 @@ export function NoticeList({
   /** A read's refusal, drawn where its rows would be. */
   refusal?: React.ReactNode;
 }) {
+  const chipsNoteID = useId();
   const chips = useMemo(
     () =>
       // Under Snoozed there are no decisions, so the two chips that are only
@@ -210,6 +243,10 @@ export function NoticeList({
   return (
     <div className="inbox-list">
       <div className="inbox-list-head">
+        {/* THE UNREAD COUNT IS INSIDE ITS OWN OPTION, as the approved Inbox
+            draws it ("Unread 5") — a number beside the group read as a fact
+            about all three. It is the page's, so where the page stopped with
+            more behind it the option says so (`50+`) and its title says why. */}
         <Segmented<Scope>
           value={scope}
           onChange={onScope}
@@ -219,8 +256,10 @@ export function NoticeList({
             {
               value: "unread",
               label: "Unread",
-              title: "What you have not read yet.",
-              ...(unread && !unread.floor ? { count: unread.count } : {}),
+              title: unread?.floor
+                ? `What you have not read yet. The engine answers ${INBOX_PAGE} at a time, and more lie past this page.`
+                : "What you have not read yet.",
+              ...(unread ? { count: unread.count, capped: unread.floor } : {}),
             },
             { value: "all", label: "All", title: "Everything that reached you, read or not." },
             {
@@ -230,13 +269,19 @@ export function NoticeList({
             },
           ]}
         />
-        {unread?.floor && (
-          <span className="t-caption" title="The page holds 50; more lie past it">
-            {`${unread.count}+ unread`}
-          </span>
-        )}
       </div>
       <div className="inbox-chips">
+        {/* A PAGE IS A PAGE: the chip counts are over the rows LOADED. Where
+            that is not every row — the notices stopped at the page with more
+            behind them — each chip says so in its own description (read with
+            it) and its title (shown on hover), rather than in a line of muted
+            text under the row that read like a debugging aid. Where the page
+            holds everything the counts are the whole, and nothing is said. */}
+        {pageLocal && (
+          <span id={chipsNoteID} className="sr-only">
+            {PAGE_LOCAL_CHIPS}
+          </span>
+        )}
         <FilterChipGroup
           label="Show"
           hideLabel
@@ -246,14 +291,17 @@ export function NoticeList({
           onValueChange={(value) => onChip((value ?? "") as Chip)}
         >
           {chips.map((c) => (
-            <FilterChip key={c.value} value={c.value} count={c.value ? counts[c.value] : undefined}>
+            <FilterChip
+              key={c.value}
+              value={c.value}
+              count={c.value ? counts[c.value] : undefined}
+              title={pageLocal && c.value ? PAGE_LOCAL_CHIPS : undefined}
+              aria-describedby={pageLocal && c.value ? chipsNoteID : undefined}
+            >
               {c.label}
             </FilterChip>
           ))}
         </FilterChipGroup>
-        {/* A PAGE IS A PAGE: the counts are over the rows loaded, and the
-            chip row says so rather than drawing them as totals. */}
-        <span className="t-caption inbox-chips-note">counts on this page</span>
       </div>
 
       <div className="inbox-rows">
@@ -295,8 +343,7 @@ export function NoticeList({
         )}
         {showNotices && more && (
           <p className="t-caption inbox-more">
-            More notices exist beyond this page — the engine returns 50 at a time. Mark these read
-            and the next ones come up.
+            {`More notices exist beyond this page — the engine returns ${INBOX_PAGE} at a time. Mark these read and the next ones come up.`}
           </p>
         )}
       </div>
@@ -365,7 +412,7 @@ function Row({
               {shortWhen(row.at, now) || <EmptyValue label="No time recorded" />}
             </span>
           </span>
-          <span className="inbox-row-line">{rowLine(row)}</span>
+          <span className="inbox-row-line">{rowLine(row, index)}</span>
           <span className="inbox-row-foot">
             <Tag size="xs" variant={pill.tone} appearance="soft">
               {pill.label}

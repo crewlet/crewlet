@@ -47,12 +47,13 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { unfinished, viewRun } from "~/lib/work.ts";
+import { pageCount, unfinished, viewRun } from "~/lib/work.ts";
 import { routeProject } from "../palette/hits.ts";
 import { useOpenNewTask } from "../newTask.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
+import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
 import { HealthCard, healthReading } from "./HealthCard.tsx";
 import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
@@ -93,11 +94,9 @@ export function Sidebar({
   // own reading of a seat's call state.
   const working = agents.filter((a) => a.activity === "working").length;
 
-  const mine = useQuery("work_my_work", viewer.handle ? { handle: viewer.handle } : undefined, {
-    enabled: viewer.handle !== "",
-    pollMs: 60_000,
-  });
-  const asks = mine.data?.totals?.asked_of_me;
+  // THE FIGURE THE QUEUE TAB CARRIES on the reader's own day, read once by
+  // the frame for both: see `lib/useQueueCount.ts`.
+  const queue = useOwnQueueCount();
 
   const seatName = useMemo(
     () => indexOrg(org).byHandle.get(viewer.handle)?.name ?? "",
@@ -109,10 +108,21 @@ export function Sidebar({
       inbox.waiting !== null && inbox.waiting > 0
         ? { badge: { value: inboxFigure(inbox), label: "unread, waiting on you" } }
         : {},
-    // NOTHING ASKED IS NO FIGURE, as nothing waiting is no badge: a zero
+    // NOTHING ON YOU IS NO FIGURE, as nothing waiting is no badge: a zero
     // beside the row is a mark a reader checks, and it would be there for
     // good on a quiet day.
-    me: asks && asks.total > 0 ? { count: { value: figure(asks), label: "asked of you" } } : {},
+    me:
+      queue && queue.total > 0
+        ? // WRITTEN AS THE TAB WRITES IT (`pageCount`), grouped and with a
+          // `+` where the engine stopped counting: the row said "10000+"
+          // beside a tab that said "10,000+".
+          {
+            count: {
+              value: pageCount(queue.total, queue.capped === true),
+              label: "open, assigned to you",
+            },
+          }
+        : {},
     agents:
       working > 0
         ? {
@@ -248,11 +258,6 @@ export function Sidebar({
       </SidebarNav>
     </AppShell.Rail>
   );
-}
-
-/** A figure the engine counted, written as a floor where it stopped counting. */
-function figure(claim: { total: number; capped?: boolean }): string {
-  return claim.capped ? `${claim.total}+` : String(claim.total);
 }
 
 interface NavRowProps {

@@ -514,8 +514,65 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
   //
   // RE-ADDRESSED, because a cross-item log is read by everybody and an excerpt
   // was written for one recipient. See [readdress].
-  if (record.excerpt) return readdress(plainText(record.excerpt), record, ctx);
+  if (record.excerpt) {
+    const said = plainText(record.excerpt);
+    return readdress(
+      ENGINE_SENTENCES.has(record.kind) ? nameAuthor(said, authorOf(record), ctx.seatName) : said,
+      record,
+      ctx,
+    );
+  }
   return record.kind.replaceAll("_", " ");
+}
+
+/**
+ * The change kinds whose excerpt is a sentence the ENGINE composed naming a
+ * PERSON by handle, rather than somebody's own prose: a reorder of somebody's
+ * list (`tracker.prioritisedWake`, "<person> put ENG-1 at position 1 of your
+ * priorities"). Every other excerpt is a comment or a description, whose
+ * words are whoever wrote them — and a purge's line names the operator's
+ * CREDENTIAL (`tracker.purgeExcerpt`; the purge route binds no seat), which
+ * no screen renames and every row draws as "An operator".
+ */
+export const ENGINE_SENTENCES: ReadonlySet<string> = new Set(["prioritised"]);
+
+/**
+ * Who made a change, as the handle the engine's own sentence names them by:
+ * the person a bound token acted as, else the author where the author is a
+ * seat — never a credential's id.
+ */
+export function authorOf(change: {
+  actor?: string;
+  actor_kind?: string;
+  actor_seat?: string;
+}): string {
+  if (change.actor_seat) return change.actor_seat;
+  return change.actor_kind === "operator" ? "" : (change.actor ?? "");
+}
+
+/**
+ * An engine-written sentence with its author named as the company names them.
+ *
+ * THE ENGINE WRITES HANDLES, because a SEAT reads the sentence — a woken agent
+ * is told "maya-ops put LEAD-3 at position 1 of your priorities" and a handle
+ * is what it can ask. A screen names every person by name, so the Inbox row
+ * whose head read "Maya Ops on LEAD-3" read "maya-ops put LEAD-3…" under it:
+ * one person, two ways, in one row.
+ *
+ * ONLY THE AUTHOR, matched as a WHOLE handle (a hyphen is part of one, so
+ * `maya-ops` never matches inside `maya-ops-2`), and only where a caller has
+ * decided the sentence is the engine's ([ENGINE_SENTENCES]): a handle in a
+ * comment is what somebody typed. A handle the company has no name for stays.
+ */
+export function nameAuthor(
+  text: string,
+  author: string,
+  seatName?: (handle: string) => string,
+): string {
+  const name = author && seatName ? seatName(author) : "";
+  if (!name || name === author) return text;
+  const handle = author.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`(?<![\\w-])${handle}(?![\\w-])`, "g"), name);
 }
 
 /**
@@ -1414,6 +1471,16 @@ export const URL_HOMES: Record<string, ControlHome> = {
  * unpaged page ordered by start: its axis is derived from the rows present, so
  * a second page would redraw the first one's window.
  */
+/**
+ * THE ONE NARROWING A HOST SCREEN FIXES, and each is a person.
+ *
+ * `#/me`'s Queue is the work one person HOLDS (`assignee`), and its Asked by
+ * me is the work one person is WAITING ON an answer for (`asked_by`). One of
+ * the two, never both and never neither, which is what the union says: a lock
+ * naming nobody would be the screen that is not a host, spelled a second way.
+ */
+export type ItemsLock = { assignee: string } | { asked_by: string };
+
 export function buildItemsParams(args: {
   container: string;
   shape: Shape;
@@ -1425,23 +1492,45 @@ export function buildItemsParams(args: {
    * THE HOST SCREEN'S OWN NARROWING, and it is the last word on the key it
    * names.
    *
-   * `#/me`'s Assigned tab IS one person's work, so the assignee is not a
-   * filter the reader set and can take off — it is what the screen is. Applied
-   * after everything else and on every branch, so no saved default, no `f.`
-   * key and no hand-edited address can widen the list past the person it is
-   * about. It is deliberately NOT routed through [TrackerFilters]: counted
-   * there it would make [anyFilter] true on an unfiltered day, and the empty
-   * panel would blame a narrowing with no chip to take off.
+   * `#/me`'s Queue IS one person's work, so the assignee is not a filter the
+   * reader set and can take off — it is what the screen is. Applied after
+   * everything else and on every branch, so no saved default, no `f.` key and
+   * no hand-edited address can widen the list past the person it is about.
+   * It is deliberately NOT routed through [TrackerFilters]: counted there it
+   * would make [anyFilter] true on an unfiltered day, and the empty panel
+   * would blame a narrowing with no chip to take off.
    */
-  lock?: { assignee?: string };
+  lock?: ItemsLock;
 }): Record<string, unknown> {
   const params = itemsParams(args);
   // LAST, ON EVERY BRANCH. Three of them return early — the calendar, the
   // timeline and the grid pair — so a lock written inside would have to be
   // written three times, and the one that was forgotten is the one nobody
   // would see: a list drawing somebody else's work under this person's name.
-  if (args.lock?.assignee) params.assignee = args.lock.assignee;
+  const lock = args.lock;
+  if (lock && "assignee" in lock) params.assignee = lock.assignee;
+  if (lock && "asked_by" in lock) Object.assign(params, askedByParams(lock.asked_by));
   return params;
+}
+
+/**
+ * The work one person is waiting on an answer for, as `work_items` asks it.
+ *
+ * `viewer` IS THAT PERSON, and it is what makes the question whole. A question
+ * somebody put through their own credential is authored by the TOKEN rather
+ * than their seat, and the engine gives an `asked_by` its second name only for
+ * the reader it knows both names of — the viewer (`forViewer` in
+ * `internal/tracker/expand.go`), resolved from the chart. Asked without it,
+ * "Asked by me" held every question a person asked as a colleague and none
+ * they asked through their assistant. On somebody else's day the viewer is
+ * THEM, for the same reason: the person asked about owns the two names, never
+ * the credential in the reader's hand.
+ *
+ * ONE PLACE for the list the section draws and the count its tab carries, so
+ * the two cannot ask different questions.
+ */
+export function askedByParams(handle: string): { asked_by: string; viewer: string } {
+  return { asked_by: handle, viewer: handle };
 }
 
 /** [buildItemsParams] before its lock, which is every other rule it has. */

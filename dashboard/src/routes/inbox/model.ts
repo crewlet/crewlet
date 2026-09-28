@@ -145,8 +145,9 @@ export function rowMatches(row: InboxRow, chip: Chip): boolean {
 }
 
 /**
- * How many rows each chip holds, OVER THE ROWS LOADED — which the chip row
- * says in words, because a page of fifty notices is a page, not a total.
+ * How many rows each chip holds, OVER THE ROWS LOADED — which each chip says
+ * of itself wherever the page is not every row, because a page of fifty
+ * notices is a page, not a total.
  */
 export function chipCounts(rows: InboxRows): Record<Chip, number> {
   const all = [...rows.decisions, ...rows.notices];

@@ -20,9 +20,16 @@ import { WindowMeters } from "~/components/budget.tsx";
 // screens pick the density — and a per-seat list that drew its own columns is
 // exactly how the board came to know a task could be blocked while the
 // personal page did not.
-import { Coverage, RowList, TaskBlock, type RowChrome } from "~/components/work.tsx";
+import {
+  ChecklistClaims,
+  Coverage,
+  RowList,
+  TaskBlock,
+  type RowChrome,
+} from "~/components/work.tsx";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
-import { Asks, Checklist } from "~/routes/me/MyWork.tsx";
+import { AskList } from "~/components/DecisionRow.tsx";
+import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import {
@@ -1006,7 +1013,11 @@ export function SeatScreen({ handle }: { handle: string }) {
               />
               <StatCard
                 icon={<LayersGlyph size="xs" />}
-                label="Queue"
+                // THE LIST SOMEBODY WROTE, called what My work calls it. It
+                // said "Queue", where My work and the sidebar say Queue for
+                // the open work ASSIGNED to the person — "Queue 5" here beside
+                // "Queue 2" there, the same word naming two numbers.
+                label="Priorities"
                 value={person.data.priorities?.length ?? 0}
                 // WHO CHOSE IT is the one thing a queue cannot say for
                 // itself. A lead may set what somebody in their line does
@@ -1480,7 +1491,34 @@ export function SeatScreen({ handle }: { handle: string }) {
                 they are reading somebody else's queue. */}
             {mayReadPerson ? (
               <>
-                <Asks rows={mine.data?.asked_of_me ?? []} now={now} chrome={chrome} />
+                {/* THE QUESTIONS PUT TO THIS SEAT, as the row Home and My
+                    work draw — answerable only by the seat they are put to,
+                    which the engine enforces: so on anybody else's page the
+                    row is written about them and its answers are HELD with
+                    that sentence, rather than offered and refused. */}
+                {(mine.data?.asked_of_me.length ?? 0) > 0 && (
+                  <Card padding="none">
+                    <Card.Header count={mine.data?.totals?.asked_of_me.total}>
+                      <Card.Title>Waiting on their answer</Card.Title>
+                    </Card.Header>
+                    <HoldWrites
+                      reason={
+                        viewer.handle === handle
+                          ? null
+                          : `Asked of ${seat.name} — only they can answer it.`
+                      }
+                    >
+                      <AskList
+                        rows={mine.data?.asked_of_me ?? []}
+                        decider={{
+                          handle,
+                          name: viewer.handle === handle ? undefined : seat.name,
+                        }}
+                        now={now}
+                      />
+                    </HoldWrites>
+                  </Card>
+                )}
                 <TaskBlock
                   title="What they mean to do first"
                   hint="Their own order, as they set it."
@@ -1497,7 +1535,10 @@ export function SeatScreen({ handle }: { handle: string }) {
                   chrome={chrome}
                   hrefOf={(row) => href(["work", row.key])}
                 />
-                <Checklist rows={mine.data?.checklist_items ?? []} />
+                <ChecklistClaims
+                  rows={mine.data?.checklist_items ?? []}
+                  hrefOf={(key) => href(["work", key])}
+                />
               </>
             ) : (
               <p className="t-caption">

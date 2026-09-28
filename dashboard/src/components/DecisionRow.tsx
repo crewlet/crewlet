@@ -17,8 +17,20 @@
  *    the item it was on, and the two ways out — raise the ceiling, or hand
  *    the item to somebody else.
  *
- * Shared by Home and the Inbox, which is why it lives here: two copies of the
- * rule for which button is primary would disagree the first time it moved.
+ * Shared by Home and My work's Asked of me, which is why it lives here: two
+ * copies of the rule for which button is primary would disagree the first
+ * time it moved.
+ *
+ * # Whose decision it is
+ *
+ * Usually the reader's, and the row speaks to them: "you are the approver",
+ * "reports to you", "woken with your answer". My work is also read on
+ * somebody ELSE's day, and there the same row is about THAT person — so the
+ * caller names whose decisions these are ([Decider]), and a decider who is not
+ * the reader turns every line into the third person. The controls are the
+ * caller's to hold (`lib/useWriteAccess.ts`' `HoldWrites`): an ask put to Rui
+ * is Rui's to answer, which the engine enforces, and the row says so rather
+ * than offering a button the engine would refuse.
  */
 
 import { firstLine } from "~/lib/format.ts";
@@ -150,26 +162,70 @@ export function subjectKey(s: DecisionSubject): string {
   }
 }
 
+/**
+ * Whose decisions a row is about.
+ *
+ * `name` is set exactly when they are NOT the reader: the row is then written
+ * in the third person under that name. Absent, the decider is the reader and
+ * the row says "you".
+ */
+export interface Decider {
+  handle: string;
+  name?: string;
+}
+
 export function DecisionRow({
   subject,
-  viewerHandle,
+  decider,
   now,
 }: {
   subject: DecisionSubject;
   /** Whose decisions these are: a line says so when the asker reports to them. */
-  viewerHandle: string;
+  decider: Decider;
   now: number;
 }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   switch (subject.kind) {
     case "ask":
-      return <AskRow ask={subject.ask} index={index} viewerHandle={viewerHandle} now={now} />;
+      return <AskRow ask={subject.ask} index={index} decider={decider} now={now} />;
     case "run":
       return <RunRow run={subject.run} index={index} now={now} />;
     case "seat":
       return <SeatRow seat={subject.seat} index={index} now={now} />;
   }
+}
+
+/**
+ * The asks put to one person, each a [DecisionRow] answerable where it stands.
+ *
+ * THE LIST MY WORK'S "ASKED OF ME" AND A SEAT'S PAGE BOTH DRAW, newest first
+ * as the engine answers them (`work_my_work.asked_of_me`). Nothing when there
+ * are none: what an empty one says is the caller's — a section must say
+ * something, a card stacked among others must not.
+ */
+export function AskList({
+  rows,
+  decider,
+  now,
+}: {
+  rows: readonly WorkAskRow[];
+  decider: Decider;
+  now: number;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <ul className="decision-list">
+      {rows.map((ask) => (
+        <DecisionRow
+          key={ask.comment}
+          subject={{ kind: "ask", at: ask.asked_at, ask }}
+          decider={decider}
+          now={now}
+        />
+      ))}
+    </ul>
+  );
 }
 
 function Row({
@@ -227,12 +283,12 @@ function joined(parts: ReactNode[]): ReactNode {
 function AskRow({
   ask,
   index,
-  viewerHandle,
+  decider,
   now,
 }: {
   ask: WorkAskRow;
   index: OrgIndex;
-  viewerHandle: string;
+  decider: Decider;
   now: number;
 }) {
   // THE PERSON, NEVER THE TOKEN: an ask a person's credential wrote is
@@ -242,14 +298,19 @@ function AskRow({
   const decision = ask.decision;
   const question = decision?.question || firstLine(ask.body) || ask.title;
   const recommended = decision?.options.find((o) => o.id === decision.recommended);
+  // WHO THE LINES ARE ABOUT: "you" on the reader's own decisions, the
+  // decider's name on anybody else's — see [Decider].
+  const them = decider.name;
   // "REPORTS TO YOU" is DERIVED from the chart, never stated by the asker:
   // it is the reason the question came to this person, where the ask's
   // role says only what they are asked AS.
-  const reports = index.byHandle.get(askerHandle)?.managers.some((m) => m.handle === viewerHandle);
+  const reports = index.byHandle
+    .get(askerHandle)
+    ?.managers.some((m) => m.handle === decider.handle);
   const sub = joined([
     <Key key="k" value={ask.key} />,
-    decision ? `you are the ${decision.role}` : "asked you",
-    reports ? `${asker.name} reports to you` : "",
+    decision ? `${them ? `${them} is` : "you are"} the ${decision.role}` : `asked ${them ?? "you"}`,
+    reports ? `${asker.name} reports to ${them ?? "you"}` : "",
     recommended ? (
       <span key="r">
         recommends <strong>{recommended.label}</strong>
@@ -262,10 +323,11 @@ function AskRow({
   // WHAT THE ANSWER SETS OFF, said beside the buttons that send it: a person
   // choosing an option should know the asker is woken with it and — where the
   // ask promised one — that it is posted to a channel people read.
+  const whose = them ? `${them}’s` : "your";
   const line = decision
     ? decision.inform
-      ? `${asker.name} is woken with your answer and posts it to #${decision.inform.channel}`
-      : `${asker.name} continues from your answer`
+      ? `${asker.name} is woken with ${whose} answer and posts it to #${decision.inform.channel}`
+      : `${asker.name} continues from ${whose} answer`
     : undefined;
   return (
     <Row

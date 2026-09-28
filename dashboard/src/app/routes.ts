@@ -54,10 +54,17 @@ export const CONTAINER_SHAPE = /^[^a-z]+$/;
 
 /** My work's sections below its queue. */
 export type MeSection =
-  "queue" | "asked-of-me" | "unblocked" | "collaborating" | "watching" | "checklist";
+  | "queue"
+  | "asked-of-me"
+  | "asked-by-me"
+  | "unblocked"
+  | "collaborating"
+  | "watching"
+  | "checklist";
 
 const ME_SECTIONS: readonly MeSection[] = [
   "asked-of-me",
+  "asked-by-me",
   "unblocked",
   "collaborating",
   "watching",

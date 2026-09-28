@@ -469,3 +469,131 @@ func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 			got.Notices[0].SubjectKey, detail.Task.Key)
 	}
 }
+
+// createOf is the history row id of the create that minted `key` — what the
+// notification rows of that change are filed under.
+func createOf(r *roundTrip, key string) string {
+	r.t.Helper()
+	ids := r.strings(`SELECT h.id FROM tracker_history h
+		JOIN tracker_tasks t ON t.id = h.subject_id
+		WHERE t.key = ? AND h.kind = 'created'`, key)
+	if len(ids) != 1 {
+		r.t.Fatalf("the create of %s left history rows %v, want one", key, ids)
+	}
+	return ids[0]
+}
+
+// A CHANGE IS NOT NEWS TO THE PERSON WHO MADE IT — under EITHER of their
+// names. A founder who files work on her own seat through her assistant must
+// not find it in her own inbox, unread, as "assigned to you": that is a
+// notice about what she just did, and every one inflated her unread count.
+// The wake already dropped her ([tracker.Route]); the inbox rows did not.
+func TestYourOwnChangeIsNotInYourInbox(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder", Seat: "jane-founder",
+	})
+	routeAs(t, r, token, "t-own", "ENG-1", "jane-founder")
+	// AND A COLLEAGUE'S CHANGE STILL REACHES HER, or the rule would be
+	// emptying the inbox rather than keeping her own actions out of it.
+	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
+	routeAs(t, r, bob, "t-bob", "ENG-2", "jane-founder")
+
+	got := r.inbox(tracker.InboxQuery{
+		Who: tracker.Party{Handle: "jane-founder", OperatorID: "founder"},
+	})
+	var keys []string
+	for _, n := range got.Notices {
+		keys = append(keys, n.SubjectKey)
+	}
+	if !slices.Equal(keys, []string{"ENG-2"}) {
+		t.Fatalf("jane's inbox holds %v, want only the task bob filed on her", keys)
+	}
+	// AND NO ROW WAS WRITTEN FOR HER: `work_routing` reads this table by
+	// record, and "every candidate was the actor" is what it says an empty
+	// one means.
+	if rows := r.strings(`SELECT recipient FROM tracker_notifications
+		WHERE record_id = ?`, createOf(r, "ENG-1")); len(rows) != 0 {
+		t.Errorf("the change jane made wrote notification rows for %v", rows)
+	}
+	// AND THE COLLEAGUE'S DID, or the check above proves nothing.
+	if rows := r.strings(`SELECT recipient FROM tracker_notifications
+		WHERE record_id = ?`, createOf(r, "ENG-2")); !slices.Contains(rows, "jane-founder") {
+		t.Errorf("bob's change wrote notification rows for %v, want jane among them", rows)
+	}
+}
+
+// AN UPGRADE REMOVES THE ROWS A PREDECESSOR WROTE FOR A CHANGE'S OWN AUTHOR —
+// and nothing else: a colleague's notice stays, and so does the one reason
+// that IS news to the actor (their own blocker cleared, `unblocked`).
+func TestAnUpgradeRemovesTheNoticesAPredecessorWroteForTheirAuthor(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "founder", Seat: "jane-founder",
+	})
+	routeAs(t, r, token, "t-own", "ENG-1", "jane-founder")
+	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
+	routeAs(t, r, bob, "t-bob", "ENG-2", "jane-founder")
+
+	rederive := func() int {
+		var repaired int
+		if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			n, err := r.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
+			repaired = n
+			return err
+		}); err != nil {
+			t.Fatalf("re-derive: %v", err)
+		}
+		return repaired
+	}
+	if n := rederive(); n != 0 {
+		t.Errorf("re-deriving rows this build wrote repaired %d of them", n)
+	}
+	own, theirs := createOf(r, "ENG-1"), createOf(r, "ENG-2")
+
+	// THE PREDECESSOR'S ROWS for the change jane made: one telling her about
+	// it under her seat — which the upgrade removes — and one under her
+	// credential for the one reason that IS news to an author, her own
+	// blocker cleared, which it keeps. Copied from a row the applier wrote,
+	// so every other column is one a real apply produces.
+	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		for _, row := range []struct{ recipient, reason string }{
+			{"jane-founder", "assignee"},
+			{"founder", "unblocked"},
+		} {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO tracker_notifications
+					(record_id, recipient, subject_id, subject_key, kind, reason,
+					 addressed, fallback_only, fallback_rank, excerpt, created_at,
+					 log_seq, log_stream, log_generation)
+				SELECT ?, ?, subject_id, subject_key, kind, ?, addressed,
+				       fallback_only, fallback_rank, excerpt, created_at, log_seq,
+				       log_stream, log_generation
+				FROM tracker_notifications
+				WHERE record_id = ? AND recipient = 'jane-founder'`,
+				own, row.recipient, row.reason, theirs); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("write the predecessor's rows: %v", err)
+	}
+	if n := rederive(); n != 1 {
+		t.Errorf("re-deriving one of the author's own rows repaired %d", n)
+	}
+	if left := r.strings(`SELECT recipient || '/' || reason FROM tracker_notifications
+		WHERE record_id = ?`, own); !slices.Equal(left, []string{"founder/unblocked"}) {
+		t.Errorf("after the upgrade the author's change holds %v, want only the "+
+			"unblocked notice, which is news to its author", left)
+	}
+	if kept := r.strings(`SELECT recipient FROM tracker_notifications
+		WHERE record_id = ? AND recipient = 'jane-founder'`, theirs); len(kept) != 1 {
+		t.Errorf("the colleague's notice to jane is %v after the upgrade, want kept", kept)
+	}
+	if tracker.DerivationVersion < 6 {
+		t.Error("who a notification row is written for is derived and the derivation version did not move")
+	}
+}

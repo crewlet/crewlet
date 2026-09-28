@@ -65,6 +65,7 @@ import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { ViewerProvider, useViewer } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
+import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { densityScale, listReserve, peekColumnMin } from "./layout.ts";
@@ -251,13 +252,15 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
 
 /**
  * What the frame reads ONCE for every surface in it: who this browser is,
- * and how much is waiting on them.
+ * how much is waiting on them, and how much open work is on them.
  *
- * Both are standing reads, and both used to be made per caller — the viewer
- * by the frame, the sidebar and the Inbox count, the count by the sidebar,
- * Home and the Inbox — so one tab held up to six slots of the socket's four
- * on two facts, and the badge and the screen beside it polled on separate
- * minutes and could name two numbers. Mounted here, every caller reads one
+ * All three are standing reads, and the first two used to be made per caller
+ * — the viewer by the frame, the sidebar and the Inbox count, the count by the
+ * sidebar, Home and the Inbox — so one tab held up to six slots of the
+ * socket's four on two facts, and the badge and the screen beside it polled on
+ * separate minutes and could name two numbers. The third is the same case: the
+ * sidebar's My work figure and the Queue tab on the reader's own day are one
+ * number (`lib/useQueueCount.ts`). Mounted here, every caller reads one
  * answer. A suite that mounts a screen without the frame mounts this around
  * it, because a hook that fell back to its own read would bring the
  * per-caller reads back without a sound.
@@ -265,7 +268,9 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
 export function FrameReadings({ children }: { children: ReactNode }) {
   return (
     <ViewerProvider>
-      <InboxCountsProvider>{children}</InboxCountsProvider>
+      <InboxCountsProvider>
+        <QueueCountProvider>{children}</QueueCountProvider>
+      </InboxCountsProvider>
     </ViewerProvider>
   );
 }

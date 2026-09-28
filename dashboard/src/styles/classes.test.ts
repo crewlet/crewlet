@@ -538,6 +538,11 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-select__menu",
+    why: "uilet's Select writes it on its listbox panel, which it portals out of the field. styles/screens.css raises the panel's height for My work's whose-day picker (`.whose-day-menu`, the Select's `menuClassName`), whose options are two lines each where the kit sizes the panel for six one-line rows — at 1440×900 it showed three people and cut a group heading in half. The kit's variable is declared on the panel itself, so only a rule on the panel can set it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-listbox__heading",
     why: "uilet's Listbox writes it on a group's heading, which is what the CommandPalette draws over each group of results. styles/frame.css sets it in sentence case at the small label step inside the palette (`.palette`), as the approved palette writes its group names, where the listbox's own register is the uppercase micro-label. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

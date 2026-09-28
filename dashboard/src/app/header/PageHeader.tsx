@@ -55,13 +55,14 @@ import {
 } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
+  ChevronDownGlyph,
   ChevronRightGlyph,
   CopyGlyph,
   EllipsisGlyph,
   KeyGlyph,
   StarGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, samePath, useRoute } from "../router.tsx";
+import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
 import { sectionOf, type Section, type WorkspaceRow } from "../nav.ts";
@@ -70,6 +71,7 @@ import { glyphFor } from "~/ui/glyph.tsx";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
 import { plural } from "~/lib/format.ts";
+import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 
 /** How many working seats the header draws before "+n". */
 const WORKING_FACES = 4;
@@ -199,6 +201,24 @@ export function WorkingNow({ project }: { project: string }) {
  * which a set of addresses cannot keep. Drawn only on a section's own page and
  * only for a workspace with more than one section, because a strip of one tab
  * is a heading wearing a control's clothes.
+ *
+ * # What does not fit goes into "More"
+ *
+ * A strip wider than the header used to scroll, with its bar hidden and a
+ * fade at the edge — and a fade is too quiet to read as "there is more": at
+ * 1280 My work cut "Checklist 0" at the edge and nothing said a section was
+ * past it. So the strip draws the tabs that FIT, in order, and folds the rest
+ * into a "More" menu at its end, each entry with its figure. The tab the
+ * reader is on is always drawn: it takes the last place that fits rather than
+ * disappearing into the menu, because "where am I" is the one question the
+ * strip must answer at every width. Nothing is dropped and nothing moves: the
+ * order is the workspace's, and a tab leaves the strip only from the end.
+ *
+ * MEASURED, NOT GUESSED. The widths are the tabs' own, read after layout
+ * ([useTabFit]) — a folded tab stays in the document, out of the flow and
+ * invisible, so it can be measured again when the strip grows — and they are
+ * read again whenever the strip or any tab changes size: a figure arriving, a
+ * font finishing loading, the density preference.
  */
 export function SectionTabs({
   row,
@@ -211,27 +231,39 @@ export function SectionTabs({
   query: URLSearchParams;
   counts: Record<string, string>;
 }) {
+  const nav = useNavigator();
   const tabs = row.sections.filter((s) => s.tab !== false && !s.elsewhere);
   const current = tabs.find((s) => samePath(s.path, path));
   const strip = useRef<HTMLElement>(null);
-  const edges = useScrollEdges(strip);
+  const folded = useTabFit(
+    strip,
+    tabs.map((s) => s.key),
+    current?.key,
+  );
   if (tabs.length < 2 || !current) return null;
   const kept: Record<string, string> = {};
   for (const key of row.keep ?? []) {
     const value = query.get(key);
     if (value) kept[key] = value;
   }
+  const out = tabs.filter((s) => folded.includes(s.key));
   return (
-    <nav ref={strip} className="section-tabs" aria-label={`${row.label} sections`} {...edges}>
+    <nav ref={strip} className="section-tabs" aria-label={`${row.label} sections`}>
       {tabs.map((s) => {
         const Glyph = glyphFor(s.icon);
         const figure = counts[s.key];
+        const off = folded.includes(s.key);
         return (
           <a
             key={s.key}
             className="section-tab"
+            data-section={s.key}
             href={href(s.path, kept)}
             aria-current={s === current ? "page" : undefined}
+            // FOLDED INTO "MORE": still here to be measured, and out of reach
+            // of the pointer, the keyboard and a screen reader, which meet it
+            // in the menu instead.
+            {...(off ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
           >
             <Glyph size="sm" aria-hidden="true" />
             <span>{s.label}</span>
@@ -239,8 +271,129 @@ export function SectionTabs({
           </a>
         );
       })}
+      {/* ALWAYS IN THE DOCUMENT, so its width is known before it is needed;
+          folded itself while every tab fits. */}
+      <span
+        className="section-tabs-more"
+        data-section-more=""
+        {...(out.length === 0 ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
+      >
+        <Menu
+          label={`More sections of ${row.label}`}
+          // THE CHEVRON SAYS IT OPENS, as a select's does: a bare "More" at
+          // the end of a row of links read as one more link.
+          trigger={
+            <span className="row gap-1">
+              More
+              <ChevronDownGlyph size="xs" aria-hidden="true" />
+            </span>
+          }
+          triggerVariant="ghost"
+          align="end"
+          // NO GLYPHS: a section's glyph at the head of a menu row sits where
+          // a menu draws its check, and Checklist's IS a check — the row read
+          // as a chosen answer. The name and its figure are the row.
+          items={out.map((s) => ({
+            key: s.key,
+            label: s.label,
+            hint: counts[s.key] || undefined,
+            onSelect: () => nav.to(s.path, kept),
+          }))}
+        />
+      </span>
     </nav>
   );
+}
+
+/**
+ * Which tabs fold into "More", from their widths — the arithmetic, apart from
+ * the DOM it is measured in, so it can be held to its rules directly.
+ *
+ * `widths` are the tabs' own, in order; `space` is the strip's inner width,
+ * `gap` the space between two items and `more` the "More" trigger's width.
+ * Returns the INDEXES that fold. Everything fits → none. Otherwise the strip
+ * keeps the tab the reader is on (`current`) and, before it, as long a run of
+ * the others FROM THE START as fits beside it and the trigger — a run, never a
+ * pick of whichever narrower tabs would squeeze in further along, because a
+ * strip whose order changes with its width is one a reader cannot learn.
+ */
+export function foldTabs({
+  widths,
+  current,
+  space,
+  gap,
+  more,
+}: {
+  widths: readonly number[];
+  current: number;
+  space: number;
+  gap: number;
+  more: number;
+}): number[] {
+  const all = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
+  if (all <= space) return [];
+  let used = more + (current >= 0 ? (widths[current] ?? 0) + gap : 0);
+  const kept = new Set<number>(current >= 0 ? [current] : []);
+  for (let i = 0; i < widths.length; i++) {
+    if (i === current) continue;
+    const next = used + (widths[i] ?? 0) + gap;
+    if (next > space) break;
+    used = next;
+    kept.add(i);
+  }
+  return widths.map((_, i) => i).filter((i) => !kept.has(i));
+}
+
+/**
+ * The keys of the tabs that fold into "More", measured after layout and again
+ * whenever the strip or anything in it changes size — see [SectionTabs].
+ */
+function useTabFit(
+  strip: RefObject<HTMLElement | null>,
+  keys: readonly string[],
+  current: string | undefined,
+): string[] {
+  const [folded, setFolded] = useState<string[]>([]);
+  const signature = keys.join("\n");
+  useLayoutEffect(() => {
+    const node = strip.current;
+    if (!node) return;
+    const measure = () => {
+      const style = getComputedStyle(node);
+      const space =
+        node.clientWidth -
+        (parseFloat(style.paddingLeft) || 0) -
+        (parseFloat(style.paddingRight) || 0);
+      const gap = parseFloat(style.columnGap) || 0;
+      const width = (el: Element | null) => (el ? el.getBoundingClientRect().width : 0);
+      const widths = keys.map((key) => width(node.querySelector(`[data-section="${key}"]`)));
+      const more = width(node.querySelector("[data-section-more]"));
+      const next = foldTabs({
+        widths,
+        current: current ? keys.indexOf(current) : -1,
+        space,
+        gap,
+        more,
+      })
+        .map((i) => keys[i]!)
+        .filter(Boolean);
+      setFolded((was) => (was.join("\n") === next.join("\n") ? was : next));
+    };
+    measure();
+    // THE STRIP AND EVERY ITEM IN IT: the strip for the window, each item for
+    // what changes its own width without resizing the strip — a figure
+    // arriving, a web font replacing its fallback, a density step.
+    const watch = new ResizeObserver(measure);
+    watch.observe(node);
+    for (const item of node.querySelectorAll("[data-section], [data-section-more]")) {
+      watch.observe(item);
+    }
+    return () => watch.disconnect();
+    // `keys` is read through its signature: a new array with the same tabs is
+    // the same strip.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strip, signature, current]);
+  return folded;
 }
 
 /**
@@ -397,45 +550,6 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
       })}
     </nav>
   );
-}
-
-/**
- * Which ends of a sideways scroller have more past them, as the two data
- * attributes the sheet fades an edge on (`data-more-start`, `data-more-end`).
- *
- * A ROW THAT SCROLLS WITH NO SCROLLBAR HAS TO SAY SO. On a phone the page's
- * controls and the section tabs each take one line and scroll rather than
- * stack, with the bar hidden because it would sit on the text — and a control
- * cut at the edge ("All wo") read as a broken label rather than as more to
- * swipe to. A fade on the edge that has more is the hint; measured again on
- * every scroll and resize, and absent entirely on a row that fits.
- */
-function useScrollEdges(el: RefObject<HTMLElement | null>): {
-  "data-more-start"?: "";
-  "data-more-end"?: "";
-} {
-  const [edges, setEdges] = useState({ start: false, end: false });
-  useLayoutEffect(() => {
-    const node = el.current;
-    if (!node) return;
-    const measure = () => {
-      const start = node.scrollLeft > 1;
-      const end = node.scrollLeft + node.clientWidth < node.scrollWidth - 1;
-      setEdges((was) => (was.start === start && was.end === end ? was : { start, end }));
-    };
-    measure();
-    const watch = new ResizeObserver(measure);
-    watch.observe(node);
-    node.addEventListener("scroll", measure, { passive: true });
-    return () => {
-      watch.disconnect();
-      node.removeEventListener("scroll", measure);
-    };
-  });
-  return {
-    ...(edges.start ? { "data-more-start": "" as const } : {}),
-    ...(edges.end ? { "data-more-end": "" as const } : {}),
-  };
 }
 
 /**

@@ -52,7 +52,7 @@ import type {
   WorkDecisionEvidence,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
-import { rowKey, rowWho, type Who } from "./NoticeList.tsx";
+import { noticeText, rowKey, rowWho, type Who } from "./NoticeList.tsx";
 import { firstLine } from "~/lib/format.ts";
 import { NoticeActions } from "./SnoozeMenu.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
@@ -224,7 +224,7 @@ function OpenPane({
       body = <ConditionBody item={row.item} />;
       break;
     case "notice":
-      body = <NoticeBody notice={row.notice} who={who} now={now} />;
+      body = <NoticeBody notice={row.notice} who={who} index={index} now={now} />;
       break;
   }
 
@@ -662,13 +662,16 @@ function ConditionBody({ item }: { item: Attention }) {
 function NoticeBody({
   notice,
   who,
+  index,
   now,
 }: {
   notice: WorkInboxNotice;
   who: Who | null;
+  index: OrgIndex;
   now: number;
 }) {
-  const said = plainText(notice.excerpt ?? "");
+  // THE LIST'S OWN SENTENCE, so the pane heads with what the row said.
+  const said = noticeText(notice, index);
   const ask = notice.ask;
   return (
     <>

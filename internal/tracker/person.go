@@ -457,7 +457,18 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 				// own delivery per call.
 				return nil, nil
 			}
-			post.PrioritiesSetBy, post.PrioritiesSetAt = w.Actor, at
+			// THE PERSON WHO CHOSE IT, NOT THE CREDENTIAL THEY HELD —
+			// the same reading `own` takes above. The stamp is a fact
+			// shown to the person whose queue it is ("Jane put this
+			// order in place"), and a lead reordering a report's queue
+			// from the dashboard writes through their bound token: keyed
+			// on [Writer.Actor] the stamp named the token's id, which is
+			// a secret's label rather than anybody the report knows,
+			// and no screen can resolve it back to a seat. The HISTORY
+			// row this write leaves still names the token with author
+			// kind `operator` — attribution stays the credential; this
+			// is who the queue says decided it.
+			post.PrioritiesSetBy, post.PrioritiesSetAt = w.Record(), at
 			// AND THE WAKE, which is the other half of the same
 			// authority: the stamp is seen by somebody who opens the
 			// screen, and a SEAT has no screen. Being told what to do
@@ -507,15 +518,18 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 			// them and the seat would otherwise open the task to learn
 			// whether the thing it has just been told to do first is
 			// already done.
-			Project:       top.Project,
-			Status:        top.Status,
-			StatusGroup:   top.StatusGroup,
-			Assignee:      top.Assignee,
-			PrioritisedBy: w.Actor,
+			Project:     top.Project,
+			Status:      top.Status,
+			StatusGroup: top.StatusGroup,
+			Assignee:    top.Assignee,
+			// THE PERSON, as the stamp names them — see the write above.
+			// A seat woken with "3f9c… put ENG-42 at position 1" is told
+			// its instruction came from a credential it cannot ask.
+			PrioritisedBy: w.Record(),
 			Position:      1,
 		},
 		Excerpt: fmt.Sprintf("%s put %s at position 1 of your priorities",
-			w.Actor, top.Key),
+			w.Record(), top.Key),
 	}, nil
 }
 

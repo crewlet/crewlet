@@ -12,6 +12,8 @@
  * also why the board can be drawn inside a peek panel.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Work } from "./Work.tsx";
@@ -141,6 +143,26 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
   // And a card whose only fact is that it is blocked still has a foot, which
   // is what says the predicate reads every mark rather than the assignee.
   expect(card({ blocked: true }).container.querySelector(".work-card-foot")).toBeTruthy();
+});
+
+// A ROW IS AS TALL WITH NOBODY HOLDING IT AS WITH SOMEBODY. The holder's
+// badge is 26px and the unassigned mark a 20px square, so a list of mixed rows
+// stepped 39, 43, 39 as a reader scanned down it. jsdom lays nothing out, so
+// the cascade over the holder's cell is what is read: it keeps a badge's
+// height whichever it holds.
+test("a row's holder cell keeps a badge's height with nobody in it", () => {
+  const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
+  const style = document.createElement("style");
+  style.textContent = read("src/styles/screens.css");
+  document.head.append(style);
+  try {
+    const { container } = render(<WorkRow row={row("1")} href="#/work/ENG-1" now={NOW} />);
+    const cell = container.querySelector<HTMLElement>(".work-cell-who")!;
+    expect(cell.querySelector(".work-nobody")).toBeTruthy();
+    expect(getComputedStyle(cell).minHeight).toBe("26px");
+  } finally {
+    style.remove();
+  }
 });
 
 // A CARD IS A REAL ANCHOR, so middle-click and ⌘-click open the item's own
@@ -1404,7 +1426,7 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   const filters = within(bar).getByRole("group", { name: "Filters" });
   expect(within(filters).getByRole("button", { name: "Filter" })).toBeTruthy();
   expect(within(tabs).queryByRole("button", { name: "Filter" })).toBeNull();
-  expect(bar.firstElementChild).toBe(filters);
+  expect(bar.querySelector(".work-bar-run")?.firstElementChild).toBe(filters);
   expect(within(bar).getByRole("combobox", { name: "Which work" }).textContent).toContain("Open");
   expect(within(bar).getByRole("combobox", { name: "Group by" })).toBeTruthy();
   expect(within(bar).getByRole("combobox", { name: "Sort" })).toBeTruthy();
@@ -1413,6 +1435,55 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   expect(within(bar).queryByLabelText("Status")).toBeNull();
   expect(within(bar).queryByLabelText("Priority")).toBeNull();
   expect(within(bar).queryByLabelText("Assignee")).toBeNull();
+});
+
+// ON A PHONE THE BAR'S RUN AND THE SHAPES SCROLL, AND SAY SO: the edge with
+// more past it carries the attribute the sheet fades — a control cut at the
+// edge ("Ta", "No g") with nothing to say more was past it read as a broken
+// label. The RUN fades, never the sticky band it sits on.
+test("a list scroller wider than its box marks the edge with more past it", async () => {
+  const had = {
+    scroll: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth"),
+    client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth"),
+  };
+  const widths = (el: HTMLElement) =>
+    el.classList.contains("work-bar-run")
+      ? [745, 356]
+      : el.classList.contains("work-tabs-group")
+        ? [381, 356]
+        : [0, 0];
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return widths(this)[0];
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return widths(this)[1];
+    },
+  });
+  try {
+    serving({ work_items: { items: [], groups: [], complete: true } });
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".work-bar-run")).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector(".work-bar-run")?.hasAttribute("data-more-end")).toBe(true),
+    );
+    expect(container.querySelector(".work-bar")?.hasAttribute("data-more-end")).toBe(false);
+    const shapes = screen.getByRole("group", { name: "Draw as" });
+    expect(shapes.hasAttribute("data-more-end")).toBe(true);
+    expect(shapes.hasAttribute("data-more-start")).toBe(false);
+  } finally {
+    for (const [key, d] of [
+      ["scrollWidth", had.scroll],
+      ["clientWidth", had.client],
+    ] as const) {
+      if (d) Object.defineProperty(HTMLElement.prototype, key, d);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key];
+    }
+  }
 });
 
 // A CHIP IS DRAWN ONLY WHERE A FILTER IS APPLIED, so an unfiltered list's chip

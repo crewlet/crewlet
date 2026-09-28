@@ -6,11 +6,12 @@
  *
  * A person who saw only their assignments would miss six other things asking
  * for their time: what a lead put at the top of their list, the questions
- * waiting on an answer, the sub-items they claimed on somebody else's task,
- * the work they were brought onto without owning, what moved on what they
- * follow, and what became workable while they were not looking.
+ * waiting on an answer from them, the questions THEY are waiting on, the
+ * sub-items they claimed on somebody else's task, the work they were brought
+ * onto without owning, what moved on what they follow, and what became
+ * workable while they were not looking.
  *
- * # Why they are sections now, and what keeps the old promise
+ * # Why they are sections, and what keeps the old promise
  *
  * They were seven stacked cards under four stat tiles that restated the counts
  * of the cards below them, and each card was ABSENT when empty — so the page's
@@ -32,92 +33,80 @@
  *
  * THE HEADER DRAWS EVERY SECTION AND ITS COUNT WHATEVER THE DAY HOLDS, zeros
  * included, and that does not change on a company's first week. A tab that
- * vanished when it was empty is what this screen was rebuilt to stop, and the
- * Inbox settles the same question the same way one workspace up: its pulse
- * strip draws every figure whatever the queue holds, so an empty band below
- * MEANS something rather than looking like a product that does not have that.
- * A branch keyed on the seven counts summing to zero would also be wrong about
- * its own subject — the sum is ONE PERSON's day, so a quiet seat inside a busy
- * company would be told the company was empty.
+ * vanished when it was empty is what this screen was rebuilt to stop. A branch
+ * keyed on the counts summing to zero would also be wrong about its own
+ * subject — the sum is ONE PERSON's day, so a quiet seat inside a busy company
+ * would be told the company was empty.
  *
  * What a sparse day gets instead is a page that says something TRUE before its
- * first count: the banner above the strip names whose day this is, their seat
- * and the way to it, and carries the one thing on this screen that asks for an
- * acknowledgement. Each empty tab names what would fill it, in that person's
- * voice. And a count is WITHHELD rather than drawn as a zero while its read is
- * in flight, because "nothing is on you" is a claim and it is false until an
- * answer arrives.
+ * first count: the banner names whose day this is, their seat and the way to
+ * it, and carries the one thing on this screen that asks for an
+ * acknowledgement. Each empty section names what would fill it, in that
+ * person's voice. And a count is WITHHELD rather than drawn as a zero while its
+ * read is in flight, because "nothing is on you" is a claim and it is false
+ * until an answer arrives.
  *
  * # The Inbox is not one of them
  *
  * What REACHED somebody is a different question from what is ON them, and it
- * has a workspace of its own (`#/inbox`). The card that drew it
- * here was the inbox in a narrower column with a smaller bound.
+ * has a workspace of its own (`#/inbox`).
  *
- * # Assigned is the work list, narrowed to one person
+ * # Two sections are the work list, narrowed to one person
  *
- * It is `routes/work/ItemsView.tsx` — the same component `#/work` and a
- * project's Items lens are — held here by an [ItemsHost] that fixes the one
- * thing this tab IS (the assignee) and what it opens on, and leaves the shape,
+ * The Queue and Asked by me are `routes/work/ItemsView.tsx` — the same
+ * component `#/work` and a project's Items lens are — held here by an
+ * [ItemsHost] that fixes the one thing the section IS (who holds the work; who
+ * is waiting on an answer about it) and what it opens on, and leaves the shape,
  * the grouping, the order, the columns and every other filter to the reader,
- * in the URL, exactly as they are on the other two screens. Written as a
- * second renderer it had no Filter menu, no Display menu, no scope switch, no
- * chips, no count line and no way past its two hundredth row, and each of
- * those was a rule the work list already kept.
+ * in the URL, exactly as on the other two screens. Written as a second
+ * renderer the Queue had no Filter menu, no Display menu, no scope switch, no
+ * chips, no count line and no way past its two hundredth row.
  *
- * IT OPENS BANDED BY WHEN. "What have I missed, what is today, what is this
- * week" is the question somebody opens their own work to ask, where a status
- * grouping answers one nobody asked — every task they hold is in progress or
- * about to be. The bands are the ENGINE's `due:bucket` axis, cut against the
- * COMPANY's day start like the row's own overdue flag and every `due=` filter,
- * so the heading a task is under and the flag beside it can never disagree.
- * They were computed here, from the browser's own midnight and the browser's
- * own week, and only the bands that held rows were drawn — so a reader west of
- * the company saw a task banded Earlier that the same answer called due today,
- * and nothing said which of the six bands a quiet day was missing.
+ * THE QUEUE OPENS BANDED BY WHEN. "What have I missed, what is today, what is
+ * this week" is the question somebody opens their own work to ask. The bands
+ * are the ENGINE's `due:bucket` axis, cut against the COMPANY's day start like
+ * the row's own overdue flag, so the heading a task is under and the flag
+ * beside it can never disagree.
+ *
+ * # It writes, as the reader — on their own day
+ *
+ * The questions put to a person are answered on their row (`DecisionRow`), and
+ * their priorities are reordered by dragging a row (`Priorities.tsx`), each as
+ * the person the token is bound to (ADR-0024). On SOMEBODY ELSE's day every
+ * control here is HELD, disabled with the sentence that says whose day it is
+ * (`HoldWrites`): what is asked of Rui is Rui's to answer — the engine refuses
+ * anybody else — and the work on Rui's queue is changed from the work screens,
+ * where it is the company's rather than one person's. The ONE exception is the
+ * one the tracker grants a lead: reordering the queue of somebody in their
+ * line, which is released exactly where it is drawn.
  *
  * # Whose day it is decides the pronoun, everywhere
  *
- * Including the wake reasons. `reasonPhrase` is the second person — "assigned
- * to you" — and on an operator reading a report's day that is a sentence about
- * the reader, who is not on the list.
- *
- * # Read-only, like every other work screen
- *
- * Nothing here writes. A priority list is reordered through the engine's own
- * write path, attributed to whoever did it; a button here would write as "the
- * dashboard", which is not a person and cannot be asked why.
+ * Including the wake reasons and the decision lines. "You are the approver" on
+ * an operator reading a report's day is a sentence about the reader, who is not
+ * on the list.
  */
 
-import { useMemo, type ReactNode } from "react";
-import { renderMarkdown } from "~/lib/markdown.ts";
+import { useMemo } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
-import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import {
-  Callout,
-  EmptyState,
-  InlineCode,
-  Select,
-  Skeleton,
-  Tag,
-  type SelectOption,
-} from "@crewlethq/ui";
+import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
+import { ChecklistClaims, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
+import { AskList, decisionsHref } from "~/components/DecisionRow.tsx";
+import { Callout, EmptyState, Select, Skeleton, Tag, type SelectOption } from "@crewlethq/ui";
 import { KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { indexOrg, leadsInLine, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
-import { pageCount, type Scope } from "~/lib/work.ts";
+import { askedByParams, pageCount, type Scope } from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type {
-  WorkAskRow,
-  WorkChecklistRow,
   WorkClaimTotal,
   WorkMyWork,
   WorkPersonState,
@@ -125,21 +114,11 @@ import type {
   WorkSummary,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
+import { PriorityQueue } from "./Priorities.tsx";
+import { listTotal, useOwnQueueCount, useQueueCountRead } from "~/lib/useQueueCount.ts";
 
 /**
- * The scope the Assigned tab's own COUNT is taken over.
- *
- * The tracker's default — unfinished work — because a day is about what is
- * still to do, and it is spelled here rather than read off the list's scope
- * segment on purpose: the strip's number says how much is on this person, and
- * a reader who presses Closed to check something finished has not emptied
- * their day. `SCOPE_GROUPS.open` is the same two groups on the list's side.
- */
-const ASSIGNED_SCOPE = "not_started,active";
-
-/**
- * What the Assigned tab OPENS on, as the list's own parameters.
+ * What the Queue OPENS on, as the list's own parameters.
  *
  * A MODULE CONSTANT rather than a literal in the render, which
  * [ItemsHost.opens] requires: the list memoises its question on this object,
@@ -152,6 +131,31 @@ const ASSIGNED_SCOPE = "not_started,active";
  * either, and the address keeps whichever the reader chose.
  */
 const ASSIGNED_OPENS: Record<string, string> = { group_by: "due:bucket", sort: "due" };
+
+/**
+ * What Asked by me OPENS on: every status, most recently changed first.
+ *
+ * EVERY STATUS, because the filter the section IS — a question this person
+ * asked that is still waiting for its answer — is already the "still open"
+ * test, and it is about the QUESTION rather than the task: a question left
+ * unanswered on a task somebody finished is exactly the one most likely to be
+ * forgotten, and the Open segment would hide it. The scope switch still
+ * narrows it, like every other default here.
+ *
+ * MOST RECENTLY CHANGED FIRST, because a task somebody touched is the one
+ * where an answer may be about to arrive.
+ */
+const ASKED_OPENS: Record<string, string> = { show_closed: "true", sort: "-updated" };
+
+/**
+ * A COUNT READ ASKS FOR ONE ROW. The two tabs the tracker counts (the Queue and
+ * Asked by me) read `total_hint`, which the engine counts over the whole
+ * matching set whatever the page is — so the rows are waste. The Queue's count
+ * asked for a full default page (fifty rows, with every card fact) every thirty
+ * seconds to read one number off it. The Queue's own question is
+ * `lib/useQueueCount.ts`'s, shared with the sidebar.
+ */
+const COUNT_ONLY = 1;
 
 /**
  * What the Queue section draws: the assignments banded by when they are due,
@@ -192,6 +196,15 @@ export function MyWork({ section }: { section: MeSection }) {
   const whose = handle || viewer.handle;
   const ownDay = whose !== "" && whose === viewer.handle;
   const they = ownDay ? "you" : "them";
+  const whoseName = index.byHandle.get(whose)?.name ?? whose;
+
+  // WHICH CHANGES THIS READER MAY MAKE HERE — see the file head. On their own
+  // day, all of them; on anybody else's, none but a lead's reorder.
+  const holds = dayHolds({
+    ownDay,
+    name: whoseName,
+    lead: ownDay ? null : leadsInLine(index, viewer.handle, whose),
+  });
 
   // WHO IS CARRYING HOW MUCH, for the picker. One read over every handle at
   // once — the alternative is a `work_my_work` per colleague, which is a round
@@ -199,14 +212,11 @@ export function MyWork({ section }: { section: MeSection }) {
   // so it does not move when the day being read does.
   //
   // POLLED ONLY WHERE THE PICKER IS DRAWN, which is the same condition: an
-  // anonymous reader is offered no picker, and a read over every handle in the
-  // company once a minute for a control nobody can see is a minute's work per
-  // minute for nothing. The FIRST read still goes out, because until the
-  // viewer answers this reader is indistinguishable from one who gets a
-  // picker — and delaying the counts for everybody to spare that one read is
-  // the wrong trade. 60s is the interval both other readers of this question
-  // already take (`routes/inbox/Inbox.tsx`, `routes/agents/People.tsx`): a
-  // load is read, not watched.
+  // anonymous reader is offered no picker. The FIRST read still goes out,
+  // because until the viewer answers this reader is indistinguishable from one
+  // who gets a picker. 60s is the interval both other readers of this question
+  // already take (`routes/inbox/Inbox.tsx`, `routes/agents/People.tsx`): a load
+  // is read, not watched.
   const workload = useQuery("work_workload", undefined, {
     enabled: !viewer.anonymous,
     pollMs: 60_000,
@@ -220,69 +230,71 @@ export function MyWork({ section }: { section: MeSection }) {
   });
   const mine = state.data;
 
-  // AND THE ASSIGNMENTS AS THE TRACKER'S OWN QUESTION, asked whichever tab is
-  // open: its total is what the Assigned tab's count says, and a count that
-  // appeared only once its tab was opened would be a strip that changes as you
-  // walk it.
+  // THE TWO SECTIONS THAT ARE THE WORK LIST, counted as the tracker's own
+  // question, asked whichever section is open: a count that appeared only once
+  // its section was opened would be a strip that changes as you walk it.
   //
-  // THE SAME QUESTION THE TAB'S OWN LIST ASKS, and deliberately not the same
-  // READ: this one is the strip's count and carries no arrangement at all, so
-  // it stays put while the reader groups, sorts and narrows the list under it.
-  // A count that moved with the filters would answer "how much is on this
-  // person" with "how much is on screen", which is what the other six tabs'
-  // own bounded blocks would then disagree with.
+  // THE SAME QUESTION EACH SECTION'S LIST ASKS, and deliberately not the same
+  // READ: this one carries no arrangement at all, so the number stays put
+  // while the reader groups, sorts and narrows the list under it — a count
+  // that moved with the filters would answer "how much is on this person" with
+  // "how much is on screen". And EVERY TASK ON ITS OWN, as the list counts
+  // them (`subtasks=separate`): in the grammar's default a root this person
+  // holds brings its whole subtree along unfiltered, so the count took in
+  // sub-tasks held by somebody else, and finished ones, the list never drew.
   //
-  // AND EVERY TASK ON ITS OWN, as the list counts them (`subtasks=separate`,
-  // `lib/work.ts`). In the grammar's default a root this person holds brings
-  // its whole subtree along unfiltered, so the strip counted sub-tasks held
-  // by somebody else — and finished ones — that the list under it never drew.
-  const assigned = useQuery(
+  // THE QUEUE'S IS THE FRAME'S ON THE READER'S OWN DAY — the one reading the
+  // sidebar's My work figure draws, so the two can never name two numbers —
+  // and this screen's own read of the same question on anybody else's.
+  const ownQueue = useOwnQueueCount();
+  const theirQueue = useQueueCountRead(whose, !ownDay);
+  const askedBy = useQuery(
     "work_items",
     whose
       ? {
           container: "workspace",
-          assignee: whose,
-          status_group: ASSIGNED_SCOPE,
+          ...askedByParams(whose),
+          show_closed: ASKED_OPENS.show_closed,
           subtasks: "separate",
+          limit: COUNT_ONLY,
         }
       : undefined,
     { enabled: whose !== "", pollMs: 30_000 },
   );
 
-  // AND THIS PERSON'S OWN RECORD, read ONCE for the page rather than inside
-  // the tab that draws part of it.
-  //
-  // IT USED TO LIVE IN THE PRIORITIES PANEL, which is the one place it cannot:
-  // the stamp it carries says somebody ELSE ordered this queue, and that is
-  // the one thing on this screen asking to be acknowledged — visible only to a
-  // reader who had already acknowledged it by opening the tab, while their own
-  // next write to the queue cleared it for good. Lifted here it feeds the
-  // banner above the strip, the mark on the tab nobody opened, and the
-  // coverage the frame publishes.
+  // AND THIS PERSON'S OWN RECORD, read ONCE for the page: the stamp it carries
+  // (somebody ELSE ordered this queue) feeds the banner on every section and
+  // the mark on the order switch, and its stored list and version are what a
+  // reorder is made from and conditional on.
   const person = useQuery("work_person", whose ? { handle: whose } : undefined, {
     enabled: whose !== "",
     pollMs: 60_000,
   });
 
   // AND THE FRAME GETS THE COVERAGE OF THE READ THAT IDENTIFIES THIS OBJECT.
-  // Only a SCREEN publishes — the frame holds one slot with one setter, so a
-  // body that published from inside a screen fights that screen's answer
-  // (`routes/work/History.tsx` records what that cost) — and `#/me`'s object
-  // is a PERSON, so the person's own record is the answer whose honesty
-  // belongs in the state bar. The other two reads on this screen state their
-  // own beside the rows they drew: `work_my_work`'s under the strip it fills,
-  // and the list's inside the list.
+  // Only a SCREEN publishes — the frame holds one slot with one setter — and
+  // `#/me`'s object is a PERSON, so the person's own record is the answer whose
+  // honesty belongs in the state bar. `work_my_work` states its own beside the
+  // sections it fills, and the lists theirs inside themselves.
   usePageCoverage(person.data);
 
-  // WHAT THE ASSIGNED TAB IS, handed to the list that draws it — see
-  // [ItemsHost]. Memoised on the two values it reads, because the list asks
-  // the engine again whenever the lock moves and a fresh object every render
-  // would be a fresh question every render.
-  const host = useMemo<ItemsHost>(
+  // WHAT THE TWO LIST SECTIONS ARE, handed to the list that draws them — see
+  // [ItemsHost]. Memoised on the values they read, because the list asks the
+  // engine again whenever the lock moves and a fresh object every render would
+  // be a fresh question every render.
+  const queueHost = useMemo<ItemsHost>(
     () => ({
-      assignee: whose,
+      lock: { assignee: whose },
       opens: ASSIGNED_OPENS,
       empty: (scope: Scope) => assignedEmpty(scope, they),
+    }),
+    [whose, they],
+  );
+  const askedHost = useMemo<ItemsHost>(
+    () => ({
+      lock: { asked_by: whose },
+      opens: ASKED_OPENS,
+      empty: (scope: Scope) => askedEmpty(scope, they),
     }),
     [whose, they],
   );
@@ -293,18 +305,17 @@ export function MyWork({ section }: { section: MeSection }) {
   // its ceiling is a floor — `pageCount` writes it with a `+`, which a bare
   // number would report as a fact about somebody's day — and it is absent,
   // never "0", while its read is in flight.
-  const assignedTotal: WorkClaimTotal | undefined = assigned.data
-    ? { total: assigned.data.total_hint, capped: assigned.data.total_capped }
-    : undefined;
+  const listed = { assigned: ownDay ? ownQueue : theirQueue, askedBy: listTotal(askedBy.data) };
   useSectionCounts(
     mine
       ? figures({
-          queue: countFor("assigned", mine, assignedTotal),
-          "asked-of-me": countFor("asked-of-me", mine, assignedTotal),
-          unblocked: countFor("unblocked", mine, assignedTotal),
-          collaborating: countFor("collaborating", mine, assignedTotal),
-          watching: countFor("watching", mine, assignedTotal),
-          checklist: countFor("checklist", mine, assignedTotal),
+          queue: countFor("assigned", mine, listed),
+          "asked-of-me": countFor("asked-of-me", mine, listed),
+          "asked-by-me": countFor("asked-by-me", mine, listed),
+          unblocked: countFor("unblocked", mine, listed),
+          collaborating: countFor("collaborating", mine, listed),
+          watching: countFor("watching", mine, listed),
+          checklist: countFor("checklist", mine, listed),
         })
       : {},
   );
@@ -314,20 +325,26 @@ export function MyWork({ section }: { section: MeSection }) {
   // with it, since it is the one thing on this page that is not the section's.
   const showPriorities = () =>
     nav.to(["me"], { order: "priorities", ...(handle ? { handle } : {}) });
+  // THE TWO WAYS OUT, as the bar's "More" offers them on a phone — the same
+  // two links the bar draws inline everywhere wider.
+  usePageMenu([
+    { key: "inbox", label: "Inbox", onSelect: () => nav.to(["inbox"]) },
+    { key: "all-work", label: "All work", onSelect: () => nav.to(["work"]) },
+  ]);
+  const setBy = person.data?.priorities_set_by;
+  const setByName = setBy ? (chrome.seatName?.(setBy) ?? setBy) : "";
+  const workHref = (row: WorkSummary) => href(["work", row.key]);
 
   return (
     <>
       {/* THE BAR HOLDS WHAT YOU CAN DO. Whose day this is is what the object
-          IS, so it is the band above the strip rather than a pill up here —
+          IS, so it is the band above the sections rather than a pill up here —
           see [WhoseDay]. */}
       <PageActions>
         {/* IN THE PAGE BAR RATHER THAN IN A SIDEBAR. Whose day this is a
             FILTER on the screen you are on, and the product's grammar puts a
             filter in the page's own bar and keeps the sidebar for destinations
-            with paths of their own (`app/nav.ts`). The bar is where a screen's
-            own controls go, and choosing whose day to read is something you
-            DO — which is the other half of the same rule that moved the
-            whose-day pill out of it.
+            with paths of their own (`app/nav.ts`).
 
             NOT OFFERED TO A READER THE ENGINE WILL REFUSE. `work_my_work` and
             `work_person` are scoped: naming anybody's handle needs a
@@ -346,12 +363,16 @@ export function MyWork({ section }: { section: MeSection }) {
             // the page always looked narrowed. Somebody else's day is.
             active={handle !== "" && handle !== viewer.handle}
             options={whoseDayOptions(index, viewer.handle, workload.data)}
+            // TWO LINES AN OPTION — the name, then the handle and the open
+            // count — where the kit's panel is sized for six ONE-line rows.
+            menuClassName="whose-day-menu"
           />
         )}
         {/* THE QUEUE'S TWO READINGS. A section switch rather than a filter:
             the priorities are a different panel, the order a lead put the
             queue in, and the flag on it is the one mark on this page that
-            asks to be seen — somebody else ordered this queue. */}
+            asks to be seen — somebody else ordered this queue. The title
+            names the PERSON, as the banner does, never the handle. */}
         {section === "queue" && (
           <Segmented<Order>
             ariaLabel="Order the queue by"
@@ -362,26 +383,25 @@ export function MyWork({ section }: { section: MeSection }) {
               {
                 value: "priorities",
                 label: "Priorities",
-                icon: person.data?.priorities_set_by ? "flag" : "list",
-                title: person.data?.priorities_set_by
-                  ? `Ordered by ${person.data.priorities_set_by}`
-                  : undefined,
+                icon: setBy ? "flag" : "list",
+                title: setBy ? `Ordered by ${setByName}` : undefined,
               },
             ]}
           />
         )}
-        <a className="t-link" href={href(["inbox"])}>
-          Inbox →
-        </a>
-        <a className="t-link" href={href(["work"])}>
-          All work →
-        </a>
+        {/* FOLDED ON A PHONE into the bar's "More" (published above): the
+            whose-day picker and the Queue's order switch are what a reader
+            uses here, and with the two links beside them the bar ran past a
+            390px screen's edge. */}
+        <span className="page-action-folds row gap-3">
+          <a className="t-link" href={href(["inbox"])}>
+            Inbox →
+          </a>
+          <a className="t-link" href={href(["work"])}>
+            All work →
+          </a>
+        </span>
       </PageActions>
-      <PageNote>
-        Everything one person is expected to look at — what they hold, the order somebody put it in,
-        the questions waiting on them, and what became workable while they were away.
-      </PageNote>
-
       {/* THREE STATES, and they are not one empty state. A reader with no
           token, a reader whose token names no seat, and a reader who simply has
           not chosen somebody need three different sentences — and only the last
@@ -407,10 +427,6 @@ export function MyWork({ section }: { section: MeSection }) {
           />
         ))}
 
-      {/* WHOSE DAY THIS IS, above the strip, before any count.
-          Drawn from the chart and from this person's own record — see
-          [WhoseDay] for why an identity band belongs here rather than in the
-          page bar. */}
       {whose && (
         <WhoseDay
           handle={whose}
@@ -418,9 +434,9 @@ export function MyWork({ section }: { section: MeSection }) {
           ownDay={ownDay}
           they={they}
           stamp={person.data ?? undefined}
+          setByName={setByName}
           onPriorities={tab === "priorities" ? undefined : () => showPriorities()}
           now={now}
-          chrome={chrome}
         />
       )}
 
@@ -428,50 +444,68 @@ export function MyWork({ section }: { section: MeSection }) {
         <QueryState error={state.error} loading={state.loading}>
           {state.loading && !mine && <Skeleton variant="text" rows={6} label="Loading the day" />}
           {mine && (
-            <>
+            // EVERY CHANGE ON SOMEBODY ELSE'S DAY IS HELD, with the sentence
+            // that says whose it is — see the file head. `null` on your own.
+            <HoldWrites reason={holds.all}>
               {/* AND `work_my_work`'S OWN COVERAGE, beside what it drew. The
-                  section counts and six of the seven panels come off this one
+                  section counts and five of the panels come off this one
                   answer, so its honesty belongs here rather than in the state
-                  bar, which carries the person's own record. The list on the
-                  Queue states its own inside itself. */}
+                  bar, which carries the person's own record. The two lists
+                  state their own inside themselves. */}
               <Coverage answer={mine} />
 
               {/* THE WORK LIST, NARROWED TO ONE PERSON — not a second
                   renderer. `ItemsView` brings its own Filter and Display
                   menus, its chips, its scope switch, its count line and its
                   five shapes; what this screen supplies is the one narrowing
-                  the tab IS and what it opens on. */}
-              {tab === "assigned" && <ItemsView host={host} />}
+                  the section IS and what it opens on. */}
+              {tab === "assigned" && <ItemsView host={queueHost} />}
               {tab === "priorities" && (
-                <Priorities mine={mine} now={now} chrome={chrome} they={they} />
+                // THE ONE CHANGE A LEAD MAKES ON A REPORT'S DAY is released
+                // here and nowhere else — see [dayHolds].
+                <HoldWrites reason={holds.reorder}>
+                  <PriorityQueue
+                    rows={mine.priorities}
+                    stored={
+                      person.data
+                        ? { ids: person.data.priorities ?? [], version: person.data.version }
+                        : undefined
+                    }
+                    whose={whose}
+                    they={they}
+                    theirs={ownDay ? undefined : whoseName}
+                    total={mine.totals?.priorities.total}
+                    now={now}
+                    chrome={chrome}
+                    hrefOf={workHref}
+                  />
+                </HoldWrites>
               )}
               {tab === "asked-of-me" && (
-                <Asks
-                  rows={mine.asked_of_me}
+                <AskedOfMe
+                  mine={mine}
+                  whose={whose}
+                  name={ownDay ? undefined : whoseName}
+                  held={holds.all}
+                  they={they}
                   now={now}
-                  chrome={chrome}
-                  ownDay={ownDay}
-                  whenEmpty={
-                    <EmptyState
-                      size="compact"
-                      title={`Nothing is waiting on ${they}`}
-                      description="A question is a comment that asks something of somebody rather than informing them, and the engine records which."
-                    />
-                  }
                 />
               )}
+              {tab === "asked-by-me" && <ItemsView host={askedHost} />}
               {tab === "unblocked" && (
                 <Block
                   rows={mine.unblocked_recent}
+                  total={mine.totals?.unblocked_recent}
                   now={now}
                   chrome={chrome}
-                  hint="Work whose blockers have all finished — the one tab about a change rather than a state."
+                  hint="Work whose blockers have all finished — the one section about a change rather than a state."
                   empty={`Nothing that was waiting on something else has become workable for ${they}.`}
                 />
               )}
               {tab === "collaborating" && (
                 <Block
                   rows={mine.collaborating}
+                  total={mine.totals?.collaborating}
                   now={now}
                   chrome={chrome}
                   hint="Brought on without owning."
@@ -481,25 +515,34 @@ export function MyWork({ section }: { section: MeSection }) {
               {tab === "watching" && (
                 <Block
                   rows={mine.watching_recent}
+                  total={mine.totals?.watching_recent}
                   now={now}
                   chrome={chrome}
                   hint="Followed, and changed recently."
                   empty={`Nothing ${ownDay ? "you follow" : "they follow"} has moved lately.`}
                 />
               )}
-              {tab === "checklist" && (
-                <Checklist
-                  rows={mine.checklist_items}
-                  whenEmpty={
-                    <EmptyState
-                      size="compact"
-                      title="Nothing is claimed"
-                      description={`A checklist item on somebody else's task can name ${they} as the one who does it.`}
+              {tab === "checklist" &&
+                (mine.checklist_items.length === 0 ? (
+                  <EmptyState
+                    size="compact"
+                    title="Nothing is claimed"
+                    description={`A checklist item on somebody else's task can name ${they} as the one who does it.`}
+                  />
+                ) : (
+                  <>
+                    <ChecklistClaims
+                      rows={mine.checklist_items}
+                      hrefOf={(key) => href(["work", key])}
                     />
-                  }
-                />
-              )}
-            </>
+                    <PageFoot
+                      shown={mine.checklist_items.length}
+                      claim={mine.totals?.checklist_items}
+                      order="by-task"
+                    />
+                  </>
+                ))}
+            </HoldWrites>
           )}
         </QueryState>
       )}
@@ -508,36 +551,63 @@ export function MyWork({ section }: { section: MeSection }) {
 }
 
 /**
- * Whose day this is, above the strip, and what has been decided about it.
+ * Which changes a reader may make on the day they are reading.
+ *
+ * `all` holds every control on the page; `reorder` is what the priorities are
+ * held with INSIDE that — `null` releases them.
+ *
+ * YOUR OWN DAY HOLDS NOTHING. SOMEBODY ELSE'S HOLDS EVERYTHING — the questions
+ * put to them are theirs to answer, which the engine enforces, and their work
+ * is changed from the work screens — except the reorder a lead may make. A lead
+ * is anybody above them in the chart (`leadsInLine`), which is the tracker's
+ * own reading of "somebody in their line"; where the engine did not report its
+ * hierarchy that is unknown, and the sentence says so rather than telling a
+ * reader who may well lead the person that they do not.
+ */
+export function dayHolds({
+  ownDay,
+  name,
+  lead,
+}: {
+  ownDay: boolean;
+  name: string;
+  /** Whether the reader leads the person in the chart, or null for unknown. */
+  lead: boolean | null;
+}): { all: string | null; reorder: string | null } {
+  if (ownDay) return { all: null, reorder: null };
+  const all = `This is ${name}’s day — what is asked of them is theirs to answer, and their work is changed from the work screens.`;
+  if (lead === true) return { all, reorder: null };
+  return {
+    all,
+    reorder:
+      lead === null
+        ? `Only somebody in ${name}’s line reorders their queue, and this engine did not report who reports to whom.`
+        : `Only ${name}, or somebody they report to, reorders their queue.`,
+  };
+}
+
+/**
+ * Whose day this is, above the sections, and what has been decided about it.
  *
  * # It is what the object IS, so it is not in the page bar
  *
  * A page bar holds what you can DO and an object's own identity goes in the
  * page — which is the rule the turn screen records after portalling five of
  * its marks into the bar and finding the reader's eye travelling to the far
- * corner and back for a fact named forty pixels below. The whose-day pill was
- * in the bar; it is here, beside the seat it names.
+ * corner and back for a fact named forty pixels below.
  *
  * ONE NEUTRAL BAND, WHATEVER IT SAYS. Colour carries state and never identity,
  * and whose day this is is identity — so the two readings are told apart by
- * the WORDS and by the name beside them, not by a hue. The reader who must not
- * miss this is an operator on somebody ELSE's day.
+ * the WORDS and by the name beside them, not by a hue.
  *
- * # And it carries the stamp, on every tab
+ * # And it carries the stamp, on every section
  *
  * A queue somebody else ordered is the one thing on this screen that asks for
  * an acknowledgement, and the acknowledgement is the person's own next change
  * to it — which clears the stamp for good. Drawn inside the Priorities panel
- * it was visible only to a reader who had already opened that tab, so the one
- * fact that needed announcing was the one fact a busy person never saw. The
- * `Priorities →` control is withheld on the Priorities tab itself, because a
- * link to the page you are on is a lie.
- *
- * # A sparse day still has one
- *
- * This band is TRUE on a company's first morning, when every count under it is
- * zero: somebody is who they are, their seat is where it is, and the way to it
- * is the same link. See this file's head for the rest of that decision.
+ * it was visible only to a reader who had already opened it. The
+ * `Priorities →` control is withheld on the Priorities reading itself, because
+ * a link to the page you are on is a lie.
  */
 function WhoseDay({
   handle,
@@ -545,9 +615,9 @@ function WhoseDay({
   ownDay,
   they,
   stamp,
+  setByName,
   onPriorities,
   now,
-  chrome,
 }: {
   handle: string;
   /** The chart's own row, absent for a handle it does not name. */
@@ -556,27 +626,26 @@ function WhoseDay({
   they: string;
   /** This person's own record, where it has answered. */
   stamp?: WorkPersonState;
-  /** Opens the Priorities tab, or absent where that tab is already open. */
+  /** Who set the order, by name, or "" where nobody else did. */
+  setByName: string;
+  /** Opens the Priorities reading, or absent where it is already open. */
   onPriorities?: () => void;
   now: number;
-  chrome: RowChrome;
 }) {
-  const setBy = stamp?.priorities_set_by;
   return (
     <>
       <div className="row gap-2 wrap">
         {/* THE CHIP IS THE WAY TO THE SEAT PAGE, and the product's one way a
-            person appears in a list — a second anchor to the same address
-            beside it would be chrome duplicating chrome. A handle the chart
-            does not name still gets one: the name falls back to the handle,
-            which is what the seat page resolves on too. */}
+            person appears in a list. A handle the chart does not name still
+            gets one: the name falls back to the handle, which is what the
+            seat page resolves on too. */}
         <SeatChip name={seat?.name ?? handle} handle={handle} kind={seat?.kind} size="md" />
         <span className="mono t-caption">{handle}</span>
         <Tag>{ownDay ? "yours" : "their day"}</Tag>
       </div>
-      {setBy && (
+      {setByName && (
         <Callout variant="info">
-          {chrome.seatName?.(setBy) ?? setBy} put this order in place
+          {setByName} put this order in place
           {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}. The next
           change {they === "you" ? "you make" : "they make"} to it clears the stamp.{" "}
           {onPriorities && (
@@ -685,19 +754,6 @@ export function whoseDayOptions(
 }
 
 /**
- * What a section's count says, and what it is a count OF.
- *
- * THE BLOCKS ARE PAGES AND THE COUNTS ARE NOT. Each block comes back capped at
- * the engine's `tracker.MyWorkRows`, so a bare length is the CEILING on anybody
- * busy; the engine counts every block in full beside its page (`totals`), by
- * the predicate that drew it, and that is the number a tab carries. `pageCount`
- * writes a `+` only where the engine's own count stopped at its ceiling.
- * The queue asks the tracker, whose `total_hint` is the count over the list
- * the section opens onto and whose `total_capped` is the same ceiling; while
- * that read is in flight there is no number to draw and the tab carries none
- * rather than a zero, which would read as an empty day.
- */
-/**
  * The sections that have a figure, and no others: a section whose count has
  * not answered is ABSENT from what the header is handed, never an empty string
  * it has to know to skip.
@@ -706,44 +762,83 @@ function figures(all: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(all).filter(([, figure]) => figure !== ""));
 }
 
-/** How many things are behind one section, as its tab spells it. */
-function countFor(tab: Tab, mine: WorkMyWork, assignedTotal: WorkClaimTotal | undefined): string {
+/**
+ * How many things are behind one section, as its tab spells it.
+ *
+ * THE BLOCKS ARE PAGES AND THE COUNTS ARE NOT. Each block comes back capped at
+ * the engine's `tracker.MyWorkRows`, so a bare length is the CEILING on anybody
+ * busy; the engine counts every block in full beside its page (`totals`), by
+ * the predicate that drew it, and that is the number a tab carries. The Queue
+ * and Asked by me ask the tracker, whose `total_hint` is the count over the
+ * list the section opens onto and whose `total_capped` is the same ceiling.
+ * `pageCount` writes a `+` only where the engine's own count stopped; while a
+ * read is in flight there is no number and the tab carries none rather than a
+ * zero, which would read as an empty day.
+ */
+function countFor(
+  tab: Exclude<Tab, "priorities">,
+  mine: WorkMyWork,
+  listed: { assigned?: WorkClaimTotal; askedBy?: WorkClaimTotal },
+): string {
   // `totals` is optional on the wire: a node from before the engine counted
   // the blocks answers without it, and a tab with no count is honest where a
   // page length would be a ceiling read as a total.
   const totals = mine.totals;
-  const claim =
-    tab === "assigned"
-      ? assignedTotal
-      : tab === "priorities"
-        ? totals?.priorities
-        : tab === "asked-of-me"
-          ? totals?.asked_of_me
-          : tab === "unblocked"
-            ? totals?.unblocked_recent
-            : tab === "collaborating"
-              ? totals?.collaborating
-              : tab === "watching"
-                ? totals?.watching_recent
-                : totals?.checklist_items;
+  const claim: WorkClaimTotal | undefined = {
+    assigned: listed.assigned,
+    "asked-by-me": listed.askedBy,
+    "asked-of-me": totals?.asked_of_me,
+    unblocked: totals?.unblocked_recent,
+    collaborating: totals?.collaborating,
+    watching: totals?.watching_recent,
+    checklist: totals?.checklist_items,
+  }[tab];
   if (claim === undefined) return "";
   return pageCount(claim.total, claim.capped === true);
 }
 
 /**
- * What the Assigned tab says when it holds nothing and nothing is narrowing it.
+ * What one of `work_my_work`'s bounded blocks says under itself when it holds
+ * less than its count — "The 20 most recently changed of 130" — and nothing
+ * where it holds all of them.
+ *
+ * A PAGE IS LABELLED AS A PAGE, never as the whole: the tab above says 130, and
+ * twenty rows under it with nothing said would read as the tab being wrong. The
+ * ORDER is named because it is what decided which twenty these are — the
+ * engine's own, per block (`internal/tracker/mywork.go`).
+ */
+function PageFoot({
+  shown,
+  claim,
+  order,
+}: {
+  shown: number;
+  claim?: WorkClaimTotal;
+  /** How the engine ordered the block: by last change, or by task and place. */
+  order: "recent" | "by-task";
+}) {
+  if (!claim || claim.total <= shown) return null;
+  const of = pageCount(claim.total, claim.capped === true);
+  return (
+    <p className="t-caption me-page-foot">
+      {order === "recent"
+        ? `The ${shown} most recently changed of ${of}.`
+        : `The first ${shown} of ${of}, by task.`}
+    </p>
+  );
+}
+
+/**
+ * What the Queue says when it holds nothing and nothing is narrowing it.
  *
  * IN THIS PERSON'S VOICE, and one sentence per scope, because the list's own
  * three container sentences cannot say either half: they are about what has
- * been filed in a project or opened in a company, and this tab is about one
- * desk inside both. "Nothing has been filed yet" over a company with four
- * hundred tasks and one idle seat is false about the only subject the reader
- * came for.
+ * been filed in a project or opened in a company, and this section is about
+ * one desk inside both.
  *
  * THE SECOND PERSON IS NOT THE DEFAULT. `they` is "you" on somebody's own day
  * and "them" on a report's, which is the same rule every other claim on this
- * screen keeps — an operator reading a colleague's day must not be told their
- * own queue is empty.
+ * screen keeps.
  */
 function assignedEmpty(scope: Scope, they: string): { title: string; description: string } {
   if (scope === "closed") {
@@ -768,79 +863,108 @@ function assignedEmpty(scope: Scope, they: string): { title: string; description
 }
 
 /**
- * The order somebody means to work in — theirs, or a lead's for them.
- *
- * IN THE STORED ORDER, never re-sorted: the order is the content — it is what
- * somebody decided — and sorting it discards the decision. Which is why the
- * rows are NUMBERED: a decision nothing on screen shows is a decision the
- * reader cannot act on, and there is no drag here for the same reason nothing
- * else on this screen writes — a rank is a value on the task, and dragging one
- * would be the dashboard deciding a team's order. `set_priorities` is the
- * gesture, and it is somebody's own.
+ * What Asked by me says when it holds nothing and nothing is narrowing it —
+ * in this person's voice, per scope, for the reason [assignedEmpty] gives.
  */
-function Priorities({
+function askedEmpty(scope: Scope, they: string): { title: string; description: string } {
+  const who = they === "you" ? "You are" : "They are";
+  const subject = they === "you" ? "you" : "they";
+  if (scope === "all") {
+    return {
+      title: `${who} not waiting on an answer`,
+      description: `A question ${subject} put to somebody on a task stays here until it is answered or resolved.`,
+    };
+  }
+  return {
+    title: `${who} not waiting on an answer here`,
+    description: `Nothing ${subject} asked is still open on work in this scope. All shows every task a question is still waiting on.`,
+  };
+}
+
+/**
+ * The questions waiting on this person — each a decision they answer in
+ * place, on their own day.
+ *
+ * THE ONE SECTION WHERE SOMEBODY ELSE IS BLOCKED ON THIS PERSON rather than the
+ * other way round, which is why it is the shared [DecisionRow] Home draws: the
+ * question, who asked and in what role, what they recommend, and the answer —
+ * an option, or a reply — sent from the row. On somebody else's day the row is
+ * written about them and its controls are held (see the file head).
+ */
+function AskedOfMe({
   mine,
-  now,
-  chrome,
+  whose,
+  name,
+  held,
   they,
+  now,
 }: {
   mine: WorkMyWork;
-  now: number;
-  chrome: RowChrome;
+  whose: string;
+  /** Set on somebody else's day, for the third person. */
+  name?: string;
+  /** Why the answers are held here, or null where they are the reader's. */
+  held: string | null;
   they: string;
+  now: number;
 }) {
-  // THE STAMP IS NOT DRAWN HERE. It is the banner above the strip, on every
-  // tab, because it is the one thing on this screen that asks to be
-  // acknowledged and a reader who has already opened this tab has answered it
-  // — and a second copy of it under the banner would be the same sentence
-  // twice on the one tab where both would be on screen at once.
+  const rows = mine.asked_of_me;
+  if (rows.length === 0) {
+    return (
+      <EmptyState
+        size="compact"
+        title={`Nothing is waiting on ${they}`}
+        description="A question is a comment that asks something of somebody rather than informing them, and the engine records which."
+      />
+    );
+  }
+  const claim = mine.totals?.asked_of_me;
   return (
-    <>
-      {mine.priorities.length === 0 ? (
-        <EmptyState
-          size="compact"
-          title={`Nothing is at the top of ${they === "you" ? "your" : "their"} list`}
-          description="A queue is written with set_priorities — by the person whose it is, or by a lead in their line."
-        />
-      ) : (
-        <div className="work-list">
-          {/* NUMBERED, because the order IS the content here. Every other tab
-              on this screen is a SET somebody has a claim on; this one is a
-              SEQUENCE somebody decided, and drawn as an ordinary run of rows
-              it reads exactly like the Watching list beside it — the one thing
-              the tab is about, invisible. */}
-          <RowList
-            rows={mine.priorities}
-            now={now}
-            chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
-            ordinals
-          />
-        </div>
+    <div className="col gap-2">
+      {/* WHY THE ANSWERS DO NOT PRESS, said once above them — each button
+          carries it too, but only on hover or to a screen reader, and a row
+          of dimmed options with nothing said reads as a broken screen. */}
+      {held && <p className="t-caption work-write-note">{`Answering is off. ${held}`}</p>}
+      <div className="me-asks">
+        <AskList rows={rows} decider={{ handle: whose, name }} now={now} />
+      </div>
+      {claim && claim.total > rows.length && (
+        <p className="t-caption me-page-foot">
+          {`The newest ${rows.length} of ${pageCount(claim.total, claim.capped === true)}.`}{" "}
+          {/* THE REST ARE THE INBOX'S DECISIONS, which page past this block —
+              on your own day. Somebody else's are theirs to read. */}
+          {!name && (
+            <a className="t-link" href={decisionsHref()}>
+              All of them in the Inbox →
+            </a>
+          )}
+        </p>
       )}
-    </>
+    </div>
   );
 }
 
-/** One of the six bounded blocks, drawn as the same list as everything else. */
+/** One of the bounded blocks, drawn as the same list as everything else. */
 function Block({
   rows,
+  total,
   now,
   chrome,
   hint,
   empty,
 }: {
   rows: WorkSummary[];
+  total?: WorkClaimTotal;
   now: number;
   chrome: RowChrome;
   hint: string;
   empty: string;
 }) {
   if (rows.length === 0) {
-    // A TAB IS DRAWN EVEN WHEN IT IS EMPTY, which is the whole difference from
-    // the stacked cards this replaces: they vanished, taking their own name
-    // with them, so a reader could not tell "nothing here" from "this product
-    // does not have that".
+    // A SECTION IS DRAWN EVEN WHEN IT IS EMPTY, which is the whole difference
+    // from the stacked cards this replaces: they vanished, taking their own
+    // name with them, so a reader could not tell "nothing here" from "this
+    // product does not have that".
     return <EmptyState size="compact" title="Nothing here" description={empty} />;
   }
   return (
@@ -849,102 +973,7 @@ function Block({
       <div className="work-list">
         <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
       </div>
+      <PageFoot shown={rows.length} claim={total} order="recent" />
     </>
-  );
-}
-
-/**
- * The questions waiting on this person.
- *
- * THE ONE TAB WHERE SOMEBODY ELSE IS BLOCKED ON THIS PERSON rather than the
- * other way round, which is why each row carries the literal call that answers
- * it: a model handed a comment id still has to compose the call, and every one
- * it composes differently is a round spent being refused.
- *
- * ITS COUNT IS NOT TONED, and the sentence above used to say it was. A `Count`
- * is never tinted — the design system states the rule and gives the reason,
- * that three of something is not a warning — and the word "Asks" already
- * carries the meaning a tint would repeat.
- */
-export function Asks({
-  rows,
-  now,
-  chrome,
-  // WHOSE QUESTIONS THESE ARE, and the DEFAULT IS SOMEBODY ELSE'S. This block
-  // is rendered on a report's day here and on every seat page, which is written
-  // in the third person throughout — so a caller that says nothing is a caller
-  // that has not claimed the rows are the reader's.
-  ownDay = false,
-  // AND WHAT AN EMPTY ONE DRAWS IS THE CALLER'S DECISION, never a default that
-  // suits one of them: a TAB must say something, because a tab that rendered
-  // nothing would leave its own name on the strip over a blank panel; a block
-  // STACKED among other cards must say nothing, because three "nothing here"
-  // panels on a quiet seat bury the one card that has something.
-  whenEmpty,
-}: {
-  rows: WorkAskRow[];
-  now: number;
-  chrome?: RowChrome;
-  ownDay?: boolean;
-  whenEmpty?: ReactNode;
-}) {
-  if (rows.length === 0) return <>{whenEmpty ?? null}</>;
-  return (
-    <div className="col gap-3">
-      {rows.map((ask) => (
-        // THE CAUTION RAIL, the same mark a question wears in a thread.
-        <div key={ask.comment} className="comment work-ask">
-          <div className="row gap-2 wrap">
-            <a className="mono t-link" href={href(["work", ask.key])}>
-              {ask.key}
-            </a>
-            <span className="truncate">{ask.title}</span>
-            <span className="spacer" />
-            <SeatChip
-              name={chrome?.seatName?.(ask.asked_by) ?? ask.asked_by}
-              handle={ask.asked_by}
-              kind={chrome?.seatKind?.(ask.asked_by)}
-            />
-            <span className="muted">{relTime(ask.asked_at, now)}</span>
-          </div>
-          <div className="prose md">{renderMarkdown(ask.body)}</div>
-          {/* THE CALL THAT ANSWERS IT, pre-filled. The dashboard writes
-              nothing, so what it offers is the gesture somebody's own
-              assistant makes on their behalf. */}
-          {ask.answer_with && <InlineCode>{ask.answer_with}</InlineCode>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Sub-items claimed on somebody else's task.
- *
- * Its own tab because no assignee filter over tasks reaches one: a person
- * holding six checklist items and no assignment reads their queue as empty.
- */
-export function Checklist({
-  rows,
-  whenEmpty,
-}: {
-  rows: WorkChecklistRow[];
-  /** As [Asks]'s: what an empty one draws is the caller's decision. */
-  whenEmpty?: ReactNode;
-}) {
-  if (rows.length === 0) return <>{whenEmpty ?? null}</>;
-  return (
-    <div className="col">
-      {rows.map((item) => (
-        <div key={`${item.task}:${item.item}`} className={`work-check${item.done ? " done" : ""}`}>
-          <a className="mono t-link" href={href(["work", item.task_key])}>
-            {item.task_key}
-          </a>
-          <span className="work-check-name">{item.name}</span>
-          <span className="spacer" />
-          <span className="muted truncate">{item.task_title}</span>
-        </div>
-      ))}
-    </div>
   );
 }

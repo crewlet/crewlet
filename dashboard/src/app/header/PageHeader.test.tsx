@@ -9,10 +9,18 @@
  * that looked broken.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { Breadcrumb, CopyLink, StarPage, WorkingNow } from "./PageHeader.tsx";
+import {
+  Breadcrumb,
+  CopyLink,
+  SectionTabs,
+  StarPage,
+  WorkingNow,
+  foldTabs,
+} from "./PageHeader.tsx";
+import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -198,5 +206,130 @@ describe("who is working", () => {
   test("a project nobody is working on draws nothing", () => {
     const { container } = mount("LEAD");
     expect(container.querySelector(".working-now")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The section tabs
+// ---------------------------------------------------------------------------
+
+// WHAT DOES NOT FIT FOLDS INTO "MORE", from the end, and the tab the reader is
+// on is always drawn. A strip that scrolled behind a fade cut "Checklist 0" at
+// 1280 with nothing to say a section was past it.
+describe("the section tabs fold what does not fit into More", () => {
+  // Seven tabs of 100, 20 apart: 820 in all.
+  const widths = [100, 100, 100, 100, 100, 100, 100];
+
+  test("a strip that fits folds nothing", () => {
+    expect(foldTabs({ widths, current: 0, space: 820, gap: 20, more: 60 })).toEqual([]);
+    expect(foldTabs({ widths, current: 0, space: 819, gap: 20, more: 60 })).not.toEqual([]);
+  });
+
+  test("past the space, the last tabs fold and More takes their room", () => {
+    // 700 of room: More (60) + five tabs and their gaps (5 × 120 = 600) = 660;
+    // a sixth would be 780.
+    expect(foldTabs({ widths, current: 0, space: 700, gap: 20, more: 60 })).toEqual([5, 6]);
+  });
+
+  test("the tab the reader is on is drawn, taking the last place that fits", () => {
+    expect(foldTabs({ widths, current: 6, space: 700, gap: 20, more: 60 })).toEqual([4, 5]);
+  });
+
+  // A RUN FROM THE START, never a pick: a narrow tab further along does not
+  // jump the queue, or the strip's order would change with its width.
+  test("a narrower tab further along does not skip ahead of a wider one", () => {
+    expect(
+      foldTabs({ widths: [100, 100, 300, 20], current: 0, space: 400, gap: 20, more: 60 }),
+    ).toEqual([2, 3]);
+  });
+
+  describe("drawn", () => {
+    const row = WORKSPACES.find((w) => w.key === "me")!;
+    const had = {
+      rect: HTMLElement.prototype.getBoundingClientRect,
+      client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth"),
+    };
+    // EVERY TAB 120 WIDE, "More" 70, and the strip `space` wide; no gap.
+    function lay(space: number): void {
+      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+        const w = this.hasAttribute("data-section")
+          ? 120
+          : this.hasAttribute("data-section-more")
+            ? 70
+            : 0;
+        return {
+          width: w,
+          height: 20,
+          top: 0,
+          left: 0,
+          right: w,
+          bottom: 20,
+          x: 0,
+          y: 0,
+        } as DOMRect;
+      };
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.classList.contains("section-tabs") ? space : 0;
+        },
+      });
+    }
+    afterEach(() => {
+      HTMLElement.prototype.getBoundingClientRect = had.rect;
+      if (had.client) Object.defineProperty(HTMLElement.prototype, "clientWidth", had.client);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+      location.hash = "#/";
+    });
+    function mount(path: string[]) {
+      return render(
+        <Router>
+          <SectionTabs
+            row={row}
+            path={path}
+            query={new URLSearchParams()}
+            counts={{ queue: "2", checklist: "0" }}
+          />
+        </Router>,
+      );
+    }
+    const strip = () => screen.getByRole("navigation", { name: "My work sections" });
+    const drawn = () =>
+      [...strip().querySelectorAll("a.section-tab:not([data-folded])")].map(
+        (a) => a.querySelector("span")?.textContent,
+      );
+
+    // 800 of room: More (70) and six tabs (720) is 790; seven tabs alone are
+    // 840.
+    test("seven tabs in 800 of room draw six and fold the last into More", async () => {
+      lay(800);
+      mount(["me"]);
+      await waitFor(() => expect(drawn()).toHaveLength(6));
+      expect(drawn().at(-1)).toBe("Watching");
+      // THE FOLDED TAB IS OUT OF REACH on the strip, and in the menu instead.
+      const folded = strip().querySelector("a[data-folded]")!;
+      expect(folded.getAttribute("aria-hidden")).toBe("true");
+      expect(screen.queryByRole("link", { name: /Checklist/ })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "More" }));
+      const item = await screen.findByRole("menuitem", { name: /Checklist/ });
+      expect(item.textContent).toContain("0");
+      fireEvent.click(item);
+      await waitFor(() => expect(location.hash).toBe("#/me/checklist"));
+    });
+
+    test("on a folded section, its own tab is drawn in the last place that fits", async () => {
+      lay(800);
+      mount(["me", "checklist"]);
+      await waitFor(() => expect(drawn()).toHaveLength(6));
+      expect(drawn().at(-1)).toBe("Checklist");
+      expect(drawn()).not.toContain("Watching");
+    });
+
+    test("a strip with room for every tab draws no More", async () => {
+      lay(2000);
+      mount(["me"]);
+      await waitFor(() => expect(drawn()).toHaveLength(7));
+      expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+    });
   });
 });

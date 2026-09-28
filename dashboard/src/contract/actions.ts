@@ -127,6 +127,18 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  set_priorities: {
+    // MY WORK'S REORDER: a row of somebody's priorities dragged, or moved
+    // with Alt and an arrow, to a new place. The WHOLE list is sent, made
+    // from the person's own stored one (`routes/me/reorder.ts`), and it is
+    // conditional on the record's `version` — a reorder from a screen that
+    // read an older order is refused rather than putting that order back.
+    // `handle` is whose queue: the reader's own, or a report's for a lead.
+    args: ["handle", "items", "if_match"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
   comment_on_work_item: {
     // A DECISION ANSWERED IN PLACE: the option button sends the choice as an
     // answer to the ask it belongs to, which closes the ask and wakes the

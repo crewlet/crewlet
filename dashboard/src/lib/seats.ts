@@ -581,6 +581,42 @@ export function reportsCaption(seat: Seat, hierarchy: boolean): string {
 }
 
 /**
+ * Whether `lead` is anywhere above `handle` in the chart — a lead in their
+ * LINE — or null where this client cannot say.
+ *
+ * ANY ANCESTOR, not only the direct manager, which is the engine's own reading
+ * of "a lead may set what somebody in their line does next" (`leadsOf` in
+ * `cmd/crewlet/main.go` walks every manager up the chain): a founder leads
+ * everybody, and an authority that stopped one level up would make a line mean
+ * the people directly under you. The walk is over [Seat.managers], the
+ * engine's derived relation, never a second reading of `manages:` here.
+ *
+ * NULL IS NOT FALSE. Without the engine's derived hierarchy every reporting
+ * line is unknown ([OrgIndex.hierarchy]), and a screen that turned that into
+ * "you do not lead them" would refuse somebody the chart simply did not
+ * describe — so the caller says which of the two it is.
+ */
+export function leadsInLine(index: OrgIndex, lead: string, handle: string): boolean | null {
+  if (!index.hierarchy) return null;
+  if (!lead || !handle || lead === handle) return false;
+  const start = index.byHandle.get(handle);
+  if (!start) return false;
+  // A CONFIG CAN EXPRESS A MANAGEMENT CYCLE, which the engine's own walk
+  // ends rather than refuses (`internal/org/hierarchy.go`), so this one
+  // remembers where it has been rather than looping the tab forever.
+  const seen = new Set<string>([start.key]);
+  const queue = [...start.managers];
+  while (queue.length > 0) {
+    const next = queue.shift()!;
+    if (next.handle === lead) return true;
+    if (seen.has(next.key)) continue;
+    seen.add(next.key);
+    queue.push(...next.managers);
+  }
+  return false;
+}
+
+/**
  * WHICH ROUND A LIVE CALL IS ON, as a reader reads it — and the one value that
  * is not a round at all.
  *

@@ -58,3 +58,21 @@ test("a bound person the engine serves acts as their own seat", () => {
 test("a handle with an empty acts list acts for nobody", () => {
   expect(writeAccess("set_pins", { ...BOUND, acts: [] }, true).can).toBe(false);
 });
+
+// A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its
+// own sentence — but LAST: a reader who is offline, anonymous or unbound is
+// told the thing they can clear first, and a hold is a fact about the screen.
+test("a hold is the screen's sentence, and it ranks after everything a person can clear", () => {
+  const hold = "This is Rui Santos’s day.";
+  expect(writeAccess("set_pins", BOUND, true, hold)).toEqual({
+    can: false,
+    block: "held",
+    reason: hold,
+  });
+  expect(writeAccess("set_pins", BOUND, false, hold)).toMatchObject({ block: "offline" });
+  expect(
+    writeAccess("set_pins", { ...BOUND, handle: "", unbound: true, acts: [] }, true, hold),
+  ).toMatchObject({ block: "unbound" });
+  // AND NO HOLD IS NO HOLD: the empty value of the context is `null`.
+  expect(writeAccess("set_pins", BOUND, true, null).can).toBe(true);
+});

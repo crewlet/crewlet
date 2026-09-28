@@ -102,6 +102,13 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "for a writer, the value and one sentence above the grid for everybody else",
     suite: "routes/work/shapes/cells.test.tsx",
   },
+  "routes/me/Priorities.tsx": {
+    why:
+      "a priority row dragged, or moved with Alt and an arrow, to a new place — a " +
+      "gesture with no button, so the reason it cannot act is one line above the rows; " +
+      "held on somebody else's day but for a lead's own reorder",
+    suite: "routes/me/MyWork.test.tsx",
+  },
   "app/palette/answer.ts": {
     why:
       "the palette's answer from the company's knowledge, asked only for a reader " +
