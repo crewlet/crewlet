@@ -311,6 +311,11 @@ type Engine struct {
 	// the client it writes and reads through. See objects.go.
 	objects *objectStore
 
+	// estateMaintainer is the estate map duty's loop, nil until the node
+	// that claims it exists, and on a node that publishes nothing. See
+	// estatemap.go.
+	estateMaintainer *loop
+
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because a node that meets its first native
 	// company at an apply brings the state log up then, and the log's
@@ -1140,6 +1145,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.startObjectMap(ctx); err != nil {
 		return nil, err
 	}
+	// AND THE ESTATE MAP'S, a singleton on the same terms. Under the
+	// single-file layout it writes nothing but its own duty lease — see
+	// estatemap.go — and it is armed all the same, so a map a partitioned
+	// node writes is maintained, and the duty is the one a partitioned
+	// fleet runs rather than one first armed on the day it matters.
+	if err := e.startEstateMap(ctx); err != nil {
+		return nil, err
+	}
 	// THE LOG'S OWN TRIM, beside the sweep and after the node exists for
 	// the same reason: its duty is claimed under the node's incarnation,
 	// and a trim that ran before the lease existed would run on every node
@@ -1531,6 +1544,8 @@ func (e *Engine) teardown(ctx context.Context) {
 	// and the node exits holding the placement map. The passes, the chunk
 	// server and the directory stay below, for their own reasons.
 	e.stopObjectMap()
+	// AND THE ESTATE MAP'S, for the same reason.
+	e.stopEstateMap()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
 	// tick of this node runs once a peer can take the duty, and no turn of
 	// this node can claim one again once it is given back.

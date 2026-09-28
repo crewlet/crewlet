@@ -223,16 +223,16 @@ func TestTheMapDutyCountsAnAbsenceOnlyATickApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	duty := mapDuty{tick: m.Tick}
+	duty := mapDuty{event: "object_map", tick: objectMapTick(m)}
 
 	// NO MAP YET: the poll, so a fresh fleet can store files within a
 	// second of its first data node — the tick that writes the map
 	// included, since it found none either.
-	if wait := duty.turn(t.Context()); wait != objectMapUnplacedPoll {
+	if wait := duty.turn(t.Context()); wait != mapAwaitedPoll {
 		t.Fatalf("a tick with no data node waits %v, want the poll", wait)
 	}
 	live = []upkeep.Presence{{Node: "data-a", Weight: 1}, {Node: "data-b", Weight: 1}}
-	if wait := duty.turn(t.Context()); wait != objectMapUnplacedPoll {
+	if wait := duty.turn(t.Context()); wait != mapAwaitedPoll {
 		t.Fatalf("the tick that wrote the first map waits %v, want the poll", wait)
 	}
 
@@ -240,8 +240,8 @@ func TestTheMapDutyCountsAnAbsenceOnlyATickApart(t *testing.T) {
 	// tick at zero is the last to see data-b.
 	var clock time.Duration
 	wait := duty.turn(t.Context())
-	if wait != objectMapInterval {
-		t.Fatalf("a tick over a map waits %v, want %v", wait, objectMapInterval)
+	if wait != mapInterval {
+		t.Fatalf("a tick over a map waits %v, want %v", wait, mapInterval)
 	}
 	const lastSeen = time.Duration(0)
 	clock += wait
@@ -278,30 +278,35 @@ func TestTheMapDutyCountsAnAbsenceOnlyATickApart(t *testing.T) {
 
 // THE DUTY'S PACE IS WHAT ITS OWN TICK FOUND: the tick interval after a tick
 // that found a map, whatever else happened to it; the poll only after one that
-// read the store cleanly and found none; and the interval after a turn that
-// did not hold the duty or a tick that failed before it could say — neither
-// counted anything, and neither is a reason to ask the store every second.
+// read the store cleanly and found no map where one is wanted; and the interval
+// after a turn that did not hold the duty, a tick that failed before it could
+// say, or one that found no map and wants none — none of them counted anything,
+// and none is a reason to ask the store every second. The last is the estate
+// map under the single-file layout, which is never written: a duty that polled
+// for it would read the store every second for ever.
 func TestTheMapDutyPacesOnWhatItsTickFound(t *testing.T) {
 	t.Parallel()
 	failed := errors.New("the store did not answer")
+	mapped, awaited := mapTick{mapped: true}, mapTick{awaited: true}
 	for name, tc := range map[string]struct {
 		claim  func(context.Context) (bool, error)
-		result upkeep.TickResult
+		result mapTick
 		err    error
 		ticks  bool
 		want   time.Duration
 	}{
-		"found a map":                      {result: upkeep.TickResult{Mapped: true}, ticks: true, want: objectMapInterval},
-		"found a map, then failed":         {result: upkeep.TickResult{Mapped: true}, err: failed, ticks: true, want: objectMapInterval},
-		"found none":                       {ticks: true, want: objectMapUnplacedPoll},
-		"failed before it read the store":  {err: failed, ticks: true, want: objectMapInterval},
-		"held the duty and found a map":    {claim: dutyAnswers(true, nil), result: upkeep.TickResult{Mapped: true}, ticks: true, want: objectMapInterval},
-		"held the duty and found none":     {claim: dutyAnswers(true, nil), ticks: true, want: objectMapUnplacedPoll},
-		"did not hold the duty":            {claim: dutyAnswers(false, nil), want: objectMapInterval},
-		"could not ask whether it held it": {claim: dutyAnswers(false, failed), want: objectMapInterval},
+		"found a map":                      {result: mapped, ticks: true, want: mapInterval},
+		"found a map, then failed":         {result: mapped, err: failed, ticks: true, want: mapInterval},
+		"found none where one is wanted":   {result: awaited, ticks: true, want: mapAwaitedPoll},
+		"found none, and wants none":       {ticks: true, want: mapInterval},
+		"failed before it read the store":  {err: failed, ticks: true, want: mapInterval},
+		"held the duty and found a map":    {claim: dutyAnswers(true, nil), result: mapped, ticks: true, want: mapInterval},
+		"held the duty and found none":     {claim: dutyAnswers(true, nil), result: awaited, ticks: true, want: mapAwaitedPoll},
+		"did not hold the duty":            {claim: dutyAnswers(false, nil), want: mapInterval},
+		"could not ask whether it held it": {claim: dutyAnswers(false, failed), want: mapInterval},
 	} {
 		ticked := false
-		duty := mapDuty{claim: tc.claim, tick: func(context.Context) (upkeep.TickResult, error) {
+		duty := mapDuty{event: "test_map", claim: tc.claim, tick: func(context.Context) (mapTick, error) {
 			ticked = true
 			return tc.result, tc.err
 		}}
@@ -678,8 +683,8 @@ func TestTheFleetIsSettledAsItsLeasesSay(t *testing.T) {
 	}
 }
 
-// THE MAP DUTY'S LOOP IS STOPPED BEFORE THE DUTY IS GIVEN BACK, so a node that
-// stops never exits holding it.
+// EACH MAP DUTY'S LOOP IS STOPPED BEFORE THE DUTY IS GIVEN BACK, so a node that
+// stops never exits holding it — the object map's and the estate map's alike.
 //
 // The loop claims the duty afresh on every turn, and a claim of a released
 // lease simply succeeds. Stopped after the release, a turn in flight across it
@@ -695,49 +700,59 @@ func TestTheFleetIsSettledAsItsLeasesSay(t *testing.T) {
 // held, for the release to give back.
 func TestTheMapDutyIsNotTakenBackAsTheNodeStops(t *testing.T) {
 	t.Parallel()
-	e := newSandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))
-	leases := e.backends.Coord
-	resource := coord.WorkerResource(objectMapDuty)
-	eventually(t, "the map duty", func() bool {
-		lease := held(t, leases, resource)
-		return lease != nil && lease.Owner == e.incarnation
-	})
+	for duty, loopOf := range map[string]func(*Engine) **loop{
+		objectMapDuty: func(e *Engine) **loop { return &e.objects.maintainer },
+		estateMapDuty: func(e *Engine) **loop { return &e.estateMaintainer },
+	} {
+		t.Run(duty, func(t *testing.T) {
+			t.Parallel()
+			e := newSandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))
+			leases := e.backends.Coord
+			resource := coord.WorkerResource(duty)
+			eventually(t, "the map duty", func() bool {
+				lease := held(t, leases, resource)
+				return lease != nil && lease.Owner == e.incarnation
+			})
 
-	e.objects.maintainer.stop()
-	claim := e.workerDuty(objectMapDuty, objectMapDutyTTL)
-	claimed := make(chan error, 1)
-	e.objects.maintainer = startLoop(t.Context(), sleep, func(ctx context.Context) time.Duration {
-		// THE READ AND THE CLAIM OUTLIVE THE STOP: they are the turn
-		// already in flight, which a stop waits out rather than aborts.
-		inFlight := context.WithoutCancel(ctx)
-		for {
-			lease, err := leases.Get(inFlight, resource)
-			if err == nil && lease == nil {
-				_, err := claim(inFlight)
-				select {
-				case claimed <- err:
-				default:
+			running := loopOf(e)
+			(*running).stop()
+			claim := e.workerDuty(duty, mapDutyTTL)
+			claimed := make(chan error, 1)
+			*running = startLoop(t.Context(), sleep, func(ctx context.Context) time.Duration {
+				// THE READ AND THE CLAIM OUTLIVE THE STOP: they are the
+				// turn already in flight, which a stop waits out rather
+				// than aborts.
+				inFlight := context.WithoutCancel(ctx)
+				for {
+					lease, err := leases.Get(inFlight, resource)
+					if err == nil && lease == nil {
+						_, err := claim(inFlight)
+						select {
+						case claimed <- err:
+						default:
+						}
+						return time.Millisecond
+					}
+					if ctx.Err() != nil {
+						return 0
+					}
+					time.Sleep(time.Millisecond)
 				}
-				return time.Millisecond
-			}
-			if ctx.Err() != nil {
-				return 0
-			}
-			time.Sleep(time.Millisecond)
-		}
-	})
+			})
 
-	e.Stop(context.Background())
-	select {
-	case err := <-claimed:
-		if err != nil {
-			t.Fatalf("the turn in flight could not ask for the duty: %v", err)
-		}
-	default:
-	}
-	if lease := held(t, leases, resource); lease != nil && lease.Owner == e.incarnation {
-		t.Errorf("the map duty is held by %s after it stopped: no node maintains "+
-			"the placement map until the lease lapses", lease.Owner)
+			e.Stop(context.Background())
+			select {
+			case err := <-claimed:
+				if err != nil {
+					t.Fatalf("the turn in flight could not ask for the duty: %v", err)
+				}
+			default:
+			}
+			if lease := held(t, leases, resource); lease != nil && lease.Owner == e.incarnation {
+				t.Errorf("the %s duty is held by %s after it stopped: no node maintains "+
+					"its map until the lease lapses", duty, lease.Owner)
+			}
+		})
 	}
 }
 

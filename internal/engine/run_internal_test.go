@@ -424,10 +424,11 @@ func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
 		coord.NodeResource("node-7"),
 		coord.SeatResource("ceo"),
 		coord.WorkerResource(objectMapDuty),
+		coord.WorkerResource(estateMapDuty),
 		coord.ObjectsResource("node-7"),
 		coord.EstateResource("node-7"),
 	}
-	eventually(t, "the presence, a seat, the map duty and the memberships", func() bool {
+	eventually(t, "the presence, a seat, the map duties and the memberships", func() bool {
 		for _, resource := range resources {
 			if held(t, leases, resource) == nil {
 				return false
