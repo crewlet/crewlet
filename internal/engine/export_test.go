@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -17,6 +18,16 @@ import (
 // four share: the no-op at an equal cursor, and the view a rebuild publishes.
 func RefreshChartForTest(ctx context.Context, e *Engine) (org.ViewPosition, error) {
 	return e.refreshChart(ctx)
+}
+
+// CollectChartSealsForTest runs the orphan sweep's collection once, as of now.
+//
+// EXPORTED FOR A TEST ONLY: in production it runs under the retention sweep's
+// duty on a fifteen-minute tick, and what a case asserts is the judgement and
+// the delete, not the timer — so it hands in the instant the sweep would run
+// at, which is how a case steps past the grace without waiting an hour.
+func CollectChartSealsForTest(ctx context.Context, e *Engine, now time.Time) (int64, error) {
+	return e.collectChartSeals(ctx, now)
 }
 
 // ForgetPersonBlinderForTest drops this node's resolved blinder, so the next

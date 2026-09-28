@@ -146,6 +146,16 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 				jobs = append(jobs, maintenance.StatelogJobs(
 					e.native.log.opsLedgers())...)
 			}
+			// THE ORG CHART'S SEALED VALUES THAT NOTHING NAMES ANY
+			// MORE — a cleared address, a token replaced by the
+			// operator's own reference, a removed seat's credentials.
+			// A FLEET job: the store is one shared bucket, and the
+			// judgement is proved from this node's rows against the
+			// chart log before anything is deleted. See
+			// chartsweep.go.
+			if e.native.chartReader != nil && e.backends.Fleet != nil {
+				jobs = append(jobs, e.chartSealJob())
+			}
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
 			// absence is a consequence rather than an omission. Its
 			// three passes were a change retention, a revision prune
