@@ -225,6 +225,46 @@ func (h *fleetHarness) through(ch <-chan coord.EstateMapRecord, written map[uint
 }
 
 var estateMapCases = append(casCases(estateMaps), []fleetCase{{
+	// THE TWO MAPS ARE TWO RECORDS. They share every verb's shape and, in a
+	// backend, most of an implementation — which is exactly how one ends up
+	// writing the other's key: every estate-map change would then overwrite
+	// the object store's placement, and a watch of the estate map would hand
+	// a router the object map. Neither map's write moves the other's value or
+	// version, and the watch delivers the estate map's own versions only.
+	name: "the estate map and the object map are separate records",
+	fn: func(h *fleetHarness) {
+		objects, ok, err := h.f.CreateObjectMap(h.ctx, []byte(`{"objects":1}`))
+		if err != nil || !ok {
+			h.t.Fatalf("CreateObjectMap = (%v, %v)", ok, err)
+		}
+		if _, found, readErr := h.f.EstateMap(h.ctx); readErr != nil || found {
+			h.t.Fatalf("writing the object map wrote an estate map (found=%v, err=%v)", found, readErr)
+		}
+		ch, _ := h.watch()
+		e1 := h.writeEstate(`{"estate":1}`, 0)
+		requireObjects := func(value string, version uint64) {
+			h.t.Helper()
+			got, found, readErr := h.f.ObjectMap(h.ctx)
+			if readErr != nil || !found || string(got.Value) != value || got.Version != version {
+				h.t.Fatalf("the object map reads %s at %d (found=%v, err=%v), want %s at %d",
+					got.Value, got.Version, found, readErr, value, version)
+			}
+		}
+		requireObjects(`{"objects":1}`, objects.Version)
+		objects, ok, err = h.f.UpdateObjectMap(h.ctx, []byte(`{"objects":2}`), objects.Version)
+		if err != nil || !ok {
+			h.t.Fatalf("UpdateObjectMap = (%v, %v)", ok, err)
+		}
+		if got, _, readErr := h.f.EstateMap(h.ctx); readErr != nil ||
+			string(got.Value) != `{"estate":1}` || got.Version != e1 {
+			h.t.Fatalf("an object-map write moved the estate map to %s at %d (err=%v)",
+				got.Value, got.Version, readErr)
+		}
+		e2 := h.writeEstate(`{"estate":2}`, e1)
+		requireObjects(`{"objects":2}`, objects.Version)
+		h.through(ch, map[uint64]string{e1: `{"estate":1}`, e2: `{"estate":2}`}, e2)
+	},
+}, {
 	// A NODE THAT STARTS WATCHING IS HANDED WHERE THE MAP IS, then how it
 	// moves: a router routes by the current map at once, and a joiner
 	// learns it was named by the write that named it, not an interval
