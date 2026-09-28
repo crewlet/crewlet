@@ -189,8 +189,11 @@ recorded under — which is why an enrolment names one whatever path creates
 it, and why an invitation's form proposes one from the address. A **Tier A token** acts under the login `token:<id>`, so it acts as a
 seat when the directory holds a row under that login bound to one: enrol it as
 a machine (`crewlet iam create -kind machine -login token:<id>`) and bind that
-row. The bind is a claim on the seat itself, so two people can never be bound
-to one seat — they contend and exactly one wins.
+row. Typed into the dashboard's sign-in screen, a Tier A token is exchanged for
+a one-hour session that acts exactly as the token does, its binding included —
+the browser keeps the session and never the token. The bind is a claim on the
+seat itself, so two people can never be bound to one seat — they contend and
+exactly one wins.
 
 What the binding buys:
 

@@ -798,11 +798,12 @@ credential:
 | `/otlp/*`, `/mcp/*` | The signed per-run token in the path *is* the credential. Both are reached from inside a sandbox, where the API's own token must never go |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that prompts for a credential cannot itself require one. It ships no data: every byte it renders comes from an authenticated fetch |
 
-`/ws/stream` follows the same rule as every other route, and browsers cannot
-set headers on a `WebSocket` — so it accepts `?token=…` as well as the
-`Authorization` header, and the session cookie a signed-in browser sends on its
-own. Prefer the header where a client can send one, since query strings tend to
-land in proxy access logs. The socket takes **the guard's own answer** for who
+`/ws/stream` follows the same rule as every other route: the session cookie a
+signed-in browser sends on its own — a browser cannot set a header on a
+`WebSocket`, so the cookie is the whole of what the dashboard presents — or an
+`Authorization` header from any other client. **Nothing is read off the URL**:
+a `?token=…` authenticates nobody, here or anywhere, because a query string
+lands in proxy access logs and browser history. The socket takes **the guard's own answer** for who
 is calling rather than re-reading the credential itself, so it can never accept
 a narrower set than the REST routes beside it — it used to read the token arm
 alone, and refused every browser signed in with a cookie. A handshake

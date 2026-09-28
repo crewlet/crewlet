@@ -708,6 +708,7 @@ none of it:
 | `AppRail` | the workspaces, the badges, the engine pill, theme and density. `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link. It SHRINKS rather than wraps — see [The page bar shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width) |
+| `IdentityMenu` | who is signed in, at the page bar's end: the seat they hold (or that they hold none), their second factor and a new set of recovery codes — offered to a person's session and to nothing else, since a machine holds no second factor — and both sign-outs. With nobody signed in it is a **Sign in** button back to the screen they are on. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
 | `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
@@ -746,7 +747,7 @@ one.
 ### The page bar shrinks, and breaks on its own width
 
 The bar holds four things: the trail, the screen's own controls (portalled in
-by `PageActions`), the viewer chip and the search trigger. On a busy screen
+by `PageActions`), the identity menu and the search trigger. On a busy screen
 they do not all fit, and what it used to do about that was `flex-wrap: wrap`
 at every width.
 
@@ -756,8 +757,9 @@ line that is already drawn — so `wrap` meant "never ellipsise the trail, alway
 break", and every ellipsis rule the breadcrumb carries was unreachable at the
 width it was written for. The break then lands in source order, which put it
 after the screen's controls: on `#/activity/turns/<id>` at a 1919 px window
-with the rail and the sidebar open, the viewer chip and the search trigger —
-the command palette's only pointer affordance — sat alone at the left of a
+with the rail and the sidebar open, the viewer's name (the identity menu's
+trigger now) and the search trigger — the command palette's only pointer
+affordance — sat alone at the left of a
 second line under the breadcrumb, with a hundred pixels spare on the first.
 
 So the bar does not wrap, and three rules make that safe:
@@ -767,7 +769,7 @@ So the bar does not wrap, and three rules make that safe:
   at a floor of 20ch, and then it SCROLLS. The floor is what the narrowest line
   the trail ever sits on can give it — 178.8 px, 20.25ch, so 21ch is already
   over it, measured at a 310 px and a 350 px viewport where the trail shares a
-  line with the drawer toggle, the viewer chip and the search trigger — which
+  line with the drawer toggle, the identity menu and the search trigger — which
   is a different number from what the deepest address needs, and deliberately
   the smaller of the two: a floor a line cannot honour does not widen the
   trail, it pushes the search trigger onto a row of its own. So the floor is
@@ -825,6 +827,84 @@ clamped to the height that exists, so one attempt lands short — and abandoned
 the moment the reader touches the page.
 
 Both of these shipped wrong once, and neither is visible in a URL.
+
+### Signing in is a screen outside the frame
+
+Three routes draw no rail, no sidebar and no page bar — `#/login`,
+`#/invite/{id}.{secret}` and `#/enrol` (`FRAMELESS` in `app/nav.ts`): a frame
+whose every row is locked is a frame showing a person what they cannot open.
+
+**The session cookie is the browser's only credential.** The dashboard keeps
+no token anywhere — not in storage, not in a URL — and every REST call and the
+socket's handshake carry the cookie the browser attaches on its own, which no
+script on the page can read. An API token typed on the sign-in screen (for a
+deployment whose only credential so far is a Tier A token, or somebody who
+signs in as a machine) is sent once, in the `Authorization` header of
+`POST /auth/token`, exchanged for a one-hour session, and held nowhere but the
+form while it is typed.
+
+**A refused session sends the reader to sign in, and back.** A `401` from any
+REST call, or from the socket's plain-HTTP re-ask, raises a session need
+(`protocol/session.ts`) that the app follows by replacing the current entry
+with `#/login?next=<where they were>`. The need is STATE rather than an event,
+because the socket can learn it before React has mounted, and a sign-in clears
+it. A `403 second_factor_enrolment_required` does the same toward `#/enrol`. A
+`4403`, a `seat_unavailable` and a refusal that names a grant do NOT: the
+person is signed in, and signing in again reaches the same person with the
+same access.
+
+**`next` is an address on this page, or nothing.** It is the one parameter of
+a sign-in an outsider can choose for somebody else — a `#/login?next=…` link in
+a message — so `lib/session.ts` accepts only a hash route of this dashboard: no
+`//`, no backslash, no control character, never one of the three screens above.
+Anything it refuses lands on the Inbox.
+
+**A sign-in replaces the history entry it was made from**, re-dials the socket
+so the next handshake carries the new cookie, and goes to `next` — through
+`#/enrol` first when the engine opened the session only for enrolling a second
+factor. The screen prints the engine's own sentence for a refusal and nothing it
+composed itself: a failed sign-in is one refusal on purpose, and a
+distinguishing message would be a roster. `second_factor_required` asks for the
+six-digit code or a recovery code and resubmits the same details with it; a
+`429` says how many seconds its `Retry-After` names; a deployment whose
+`/auth/config` names no local sign-in offers the API token alone. Somebody
+already signed in is told who, and offered to continue as them.
+
+**An invitation is read, never spent, by opening it.** The link carries the
+whole credential in the fragment, which no browser sends to a server, and the
+screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header on
+the view, the body on the redemption — never in a request URL. The view names
+who it is for, who sent it and the seat it binds; the form proposes the login
+the engine suggested and states the password length `/auth/config` asks for. A
+spent, withdrawn or mistyped link is one screen (`410`), and a login or address
+somebody else holds is the engine's own sentence (`409`) over the form as
+typed.
+
+**A required second factor is enrolled before anything else opens.** `#/enrol`
+asks `POST /auth/totp` for a seed — shown as the key, grouped for typing, and
+the `otpauth://` address, with no QR code: a QR library is a dependency for
+what an authenticator app's "enter a key" field already does — confirms a code
+from the app, and shows the first recovery codes once. The identity menu offers
+the same two steps, and a new set of recovery codes, to a person who wants to
+add or replace one later.
+
+**A step-up is one modal, and the refused request is replayed.** A
+`403 step_up_required` is not a screen's to handle: `protocol/rest.ts` asks the
+one confirmer the app installed (`app/StepUp.tsx`), which opens a single
+"Confirm it is you" dialog however many requests were refused at once, posts
+the password — and a code where the person holds a second factor — to
+`POST /auth/step-up`, and on success replays each refused request exactly
+once. Cancelled, each request fails with the refusal it had. A refusal of
+`/auth/step-up` itself is never confirmed, so a confirmation cannot ask for
+another.
+
+**A sign-out reloads.** `POST /auth/logout` — or `POST /auth/logout/all` for
+every device — and, only once the engine has answered, a reload into
+`#/login`: a route change would leave the store, every cached answer and the
+socket's last snapshot in memory for whoever sits down next. The tab's
+`sessionStorage`, which holds the org builder's kept draft, is emptied first,
+because a reload keeps it. A sign-out nothing answered, or a revocation the
+engine could not confirm (`503` with an `op_id`), is said, and the page stays.
 
 ### The Inbox is the landing screen
 
@@ -1064,7 +1144,7 @@ keystroke:
 | *(nothing)* | screens, seats, units, tools, and any event / trace / turn id pasted out of a log |
 | `#` | the company's **work**, ranked — a server query, which is why it cannot be folded into the index above |
 | `@` | **people** — seats and units only, so a colleague is not buried under four tools whose names happen to match |
-| `>` | **commands** — theme, density, copy link, set token — which have no name to search for at all |
+| `>` | **commands** — theme, density, copy link, sign in as somebody else — which have no name to search for at all |
 
 The scopes are named in the palette's footer with the one in use marked: a
 sigil nobody is told about is a feature that does not exist.
@@ -1120,8 +1200,9 @@ Picking a row closes it on the way out, so what this covers is every other way
 the route can move while it is open — Back, Forward, a phone's back gesture, a
 restored history entry. A palette that survives one of those is left ranking
 the objects of the screen the reader just left, over a screen it knows nothing
-about. The token dialog is deliberately not in that rule: a credential prompt
-is about the reader's access rather than about where they are.
+about. The step-up confirmation is deliberately not in that rule: it is holding
+a refused request open until the reader answers it, and a navigation answers
+nothing.
 
 ---
 
@@ -1741,7 +1822,7 @@ distinction is what the pointer did: a fill that changes because somebody moved
 onto a row is a response and should look like one, and a fill that changes
 because the engine said something must land on the frame it is told. Almost
 every interactive surface in the frame — the rail's rows, the sidebar's links,
-a grid row, a crumb, the viewer chip, a work row, a turn row, a feed row — used
+a grid row, a crumb, a work row, a turn row, a feed row — used
 to snap, and a whole product of instant fills reads as a thing that jerks
 rather than a thing that responds. It is ONE declaration in `base.css` naming
 those surfaces rather than a `transition:` on each of them: written per rule it
@@ -2592,8 +2673,9 @@ rendered idle from the first phase to the last.
   and a body that breaks part way through is status 0 (an answer never fully
   heard, so a write's outcome is unknown) rather than an empty success. A
   screen that reads a REST answer uses `lib/useRest.ts`, which aborts a
-  superseded read, re-reads when the stored token changes and, where asked,
-  when the tab comes back.
+  superseded read and, where asked, re-reads when the tab comes back. A
+  sign-in needs no re-read of its own: it is a screen outside the frame, so
+  the screen it returns to mounts again and reads as the new reader.
   A refusal replaces what is on screen; a request that never reached the
   engine keeps the last answer with the error beside it; and an answer belongs
   to its path, so a read whose path changed reports nothing until the new path
@@ -2619,8 +2701,11 @@ rendered idle from the first phase to the last.
   answers 401 never reaches the page as `close(1008)` — a connection that never
   opened has no frames, so the browser reports 1006, the same code it gives for
   an engine that is simply down. A plain `GET /ws/stream` runs the same guard
-  and stops one line short of the upgrade: 401 is a refused credential, 426
-  means it was accepted.
+  with the same cookie and stops one line short of the upgrade: 401 is nobody
+  signed in, and sends the reader to the sign-in; 426 means the session was
+  accepted; a `403 second_factor_enrolment_required` stops the dialling and
+  sends them to the enrolment. The loop otherwise keeps dialling on its
+  backoff, because a sign-in in another tab gives this one the cookie too.
 - **A frame arrives already encoded, and two tabs in the same posture get the
   byte-identical one.** The engine marshals a push once per POSTURE present on
   the node, not once per connection: what a client receives is decided by the
@@ -2693,19 +2778,19 @@ rendered idle from the first phase to the last.
 - **One stack decides which surface a key belongs to.** Dialogs, sheets,
   menus and listbox popups register on the design system's layer stack
   (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the
-  shell's own token dialog, its command palette and the narrow layout's
-  sidebar drawer: no modal hand-rolls its veil or listens for Escape beside
+  app's step-up confirmation, the shell's command palette and the narrow
+  layout's sidebar drawer: no modal hand-rolls its veil or listens for Escape beside
   the stack. That drawer is the workspace sidebar itself, a dialog only while
   it is open; closed, the stylesheet hides it rather than only sliding it
   away, so its links leave the tab order, and it closes on a route change and
   when a resize takes the layout past the breakpoint. Only the topmost
   surface handles Escape or a press outside, so a prompt over the node editor
-  closes on its own Escape and leaves the editor open, a token dialog raised
-  by a refused request over that editor does the same, and an open menu
+  closes on its own Escape and leaves the editor open, a step-up confirmation
+  raised by a refused request over that editor does the same, and an open menu
   closes before the dialog it sits in. A modal traps Tab, moves focus in when
   it opens (honouring a field's `autoFocus`) and returns it to whatever opened
   it. When that control has gone with a modal that closed as this one opened
-  (a panel's "Set token" handing over to the token dialog), focus goes back
+  (a menu entry handing over to the dialog it opens), focus goes back
   where that modal would have sent it; when it has gone from a modal that is
   still open, or is still there but can no longer take focus (disabled by the
   action the modal confirmed), to that modal rather than behind its veil. A
@@ -2815,13 +2900,16 @@ while the screen binds the real canvas, outline, editor and dialogs, and
 `surfaces.test.tsx` mounts the lens with exactly those.
 
 - **The posture is what the engine answers.** `GET /config` is read on mount
-  and on every token change, and its answer decides edit mode, create mode,
-  a node that has not caught up, a request for a token, a process that does
-  not serve the configuration, or an unreachable engine
+  and whenever the reader changes, and its answer decides edit mode, create
+  mode, a node that has not caught up, a request to sign in, a process that
+  does not serve the configuration, or an unreachable engine
   ([the guide](../guides/org-builder.md#opening-the-builder) has the table).
-  A stored token is never the test: holding one says nothing about whether
-  this engine accepts it, and the only thing that can answer is the engine.
-  A token change mid-edit keeps the draft and checks it again.
+  Being signed in is never the test: it says nothing about whether this
+  person's grants reach the configuration, and the only thing that can answer
+  is the engine. The reader changes when the viewer's login does — another
+  tab signing in as somebody else, because the cookie is the browser's — and a
+  change mid-edit keeps the draft on screen, forgets the kept copy and checks
+  it again.
 - **Every draft is a dry run of the write a save would send.** The same
   `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),
   plus `dry_run=true` and without the audit summary. A draft that changes
@@ -2838,8 +2926,8 @@ while the screen binds the real canvas, outline, editor and dialogs, and
 - **Fullscreen takes the builder container**, never the canvas: the toolbar,
   the view, the dialog host, a toast outlet of its own and the live region all
   render inside it, because a fullscreen element renders only its subtree.
-  The control is not drawn where the Fullscreen API is missing. The shell's
-  token dialog is outside it, so asking for a token leaves fullscreen first.
+  The control is not drawn where the Fullscreen API is missing. The sign-in
+  is a screen outside the frame, so asking to sign in leaves fullscreen first.
 - **The selection is in the URL, and the toolbar mirrors it.** `unit=` and
   `seat=` are filters that name the selected node; a link naming one selects
   it, a rename rewrites it, and a removed node clears it. The toolbar carries
@@ -2881,8 +2969,9 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   offers Keep or Discard for the same revision (read-only until answered),
   restores through the update flow for another, and discards one kept for the
   other mode. It writes nothing before that decision, because the plan for an
-  empty log is to clear. A token change or a refused token clears it and
-  withdraws an offer. A draft with changes asks the browser's prompt before
+  empty log is to clear. A change of reader or a refused credential clears it and
+  withdraws an offer, and a sign-out empties the tab's storage before it
+  reloads. A draft with changes asks the browser's prompt before
   the tab goes (session storage does not outlive the tab), and one that
   storage cannot keep at all asks before the lens is left, since that loses it
   too; a move within the lens keeps the Builder and asks nothing.
@@ -3068,12 +3157,18 @@ to.
    `protocol/rest.ts` and reports its outcome: a toast on success, and the
    engine's own refusal beside the field it names. A button whose result is
    invisible is a button an operator presses twice.
-8. **No screen renders a credential.** The setup dialog shows the `${VAR}` a
-   field points at, or — for a hand-written literal — an empty box whose
-   PLACEHOLDER is dots saying one is held. Never a value, because no route
-   returns one, and never dots as the value: a placeholder cannot be
+8. **No screen renders a credential it read back.** The setup dialog shows
+   the `${VAR}` a field points at, or — for a hand-written literal — an empty
+   box whose PLACEHOLDER is dots saying one is held. Never a value, because no
+   route returns one, and never dots as the value: a placeholder cannot be
    submitted, and a sentinel that has to be recognised on the way out is one
-   an edit can defeat.
+   an edit can defeat. The one exception is a secret the engine has just
+   MINTED for the person looking at it, which exists to be written down: a
+   second factor's key at enrolment (with Copy) and a set of recovery codes
+   (with Copy and Download), each shown once, never stored by the page and
+   never read back — no route returns either again, and the screen says so. A
+   token the reader types is the other direction: it is sent once and kept
+   nowhere.
 9. **A card is one object in two states.** The Integrations screen draws one
    bordered card per tool rather than rows in a shared panel, so a connected
    one can grow a body and still read as the thing it already was. A row that
