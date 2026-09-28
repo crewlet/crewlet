@@ -45,7 +45,7 @@ var dutyTTLs = map[string]struct {
 	// THE IDENTITY DUTIES' LEASE is three of their intervals, and the
 	// longest of those — the sweep's and the claim report's — is an hour.
 	"identityDutyTTL(interval)": {identityDutyTTL(max(IdentitySweepInterval,
-		IdentityKeysInterval, IdentityClaimsInterval)), true},
+		IdentityClaimsInterval)), true},
 	"setup.LeaseTTL":          {setup.LeaseTTL, true},
 	"companyKeyHoldTTL":       {companyKeyHoldTTL, true},
 	"schedule.DutyTTL(tick)":  {schedule.DutyTTL(schedule.MaxTick), true},

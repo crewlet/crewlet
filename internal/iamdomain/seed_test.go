@@ -12,7 +12,7 @@ import (
 // A second factor's seed is the one credential this estate keeps as a secret,
 // and every row it touches — the credential's own, the person's document, the
 // trail entry the write leaves — is replicated to every node, snapshotted,
-// backed up and donated. Sealed by the writer under the person's key, the
+// backed up and donated. Sealed by the writer under the fleet keyring, the
 // applier writes it through as bytes it cannot read, so none of the three holds
 // the seed; and the credential's row opens back to it as that credential.
 //
@@ -35,13 +35,11 @@ func TestASealedSeedIsTheOnlyFormOfItAnyRowHolds(t *testing.T) {
 			rig := newWriteRig(t)
 			const id = "018f3a9c-0000-7000-8000-00000000a0b1"
 			enrolSarah(t, rig, id)
-			sealer, err := iamdomain.NewSealer(rig.keys)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sealer := rig.sealer
 			stored := seed
+			var err error
 			if tc.sealed {
-				if stored, err = sealer.SealCredential(t.Context(), id, "app",
+				if stored, err = sealer.SealCredential(id, "app",
 					iamdomain.FieldTOTP, seed); err != nil {
 					t.Fatalf("seal: %v", err)
 				}
@@ -91,7 +89,7 @@ func TestASealedSeedIsTheOnlyFormOfItAnyRowHolds(t *testing.T) {
 			if len(verifier) != 1 {
 				t.Fatalf("the person holds %d second factors, want 1", len(verifier))
 			}
-			opened, err := sealer.OpenCredential(t.Context(), id, "app",
+			opened, err := sealer.OpenCredential(id, "app",
 				iamdomain.FieldTOTP, verifier[0])
 			if err != nil || opened != seed {
 				t.Errorf("the stored seed opens as (%q, %v), want the seed", opened, err)

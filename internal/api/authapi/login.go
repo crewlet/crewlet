@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -558,33 +557,30 @@ type factorUse struct {
 //
 // # The app's seed is opened here and nowhere else
 //
-// It is stored SEALED under the person's key and bound to the credential
-// ([iamdomain.Sealer.SealCredential]), and opened only to check a code. A seed
-// that does not open is never a match, and which of two things it is decides
-// the answer: a value that is not this credential's seed — moved, forged, or
-// enrolled in the clear before seeds were sealed — and a key a removal
-// destroyed are refusals like a wrong code, while a key store this node could
-// not read is an ERROR, the unknown arm, because answering an outage as a
-// wrong code would send somebody to re-type a code that was right.
+// It is stored SEALED under the fleet keyring and bound to its person and its
+// credential ([iamdomain.Sealer.SealCredential]), and opened only to check a
+// code. A seed that does not open is never a match — a value that is not this
+// credential's seed (moved, forged, or enrolled in the clear) or one sealed
+// under a key this node's ring no longer holds — and it is logged, because it
+// is a row somebody has to repair: nothing a retry of the code could change,
+// so there is no third answer to give. Opening fetches nothing, which is why
+// there is no outage to tell from a wrong code.
 func (s *Service) checkSecondFactor(ctx context.Context, held iamdomain.Sighting,
-	code string) (factorUse, bool, error) {
+	code string) (factorUse, bool) {
 
 	var app, recovery factorUse
 	appOK, recoveryOK := false, false
 	if c, ok := firstCredential(held.Credentials, iamdomain.MethodTOTP); ok {
-		seed, err := s.sealer.OpenCredential(ctx, held.ID, c.ID,
+		seed, err := s.sealer.OpenCredential(held.ID, c.ID,
 			iamdomain.FieldTOTP, c.Verifier)
 		switch {
-		case errors.Is(err, secrets.ErrDecrypt):
+		case err != nil:
 			log.ErrorContext(ctx, "api_totp_seed_unopenable",
 				"person", held.ID, "credential", c.ID, "error", err,
-				"hint", "the seed on this credential is not one sealed for it; "+
-					"reset the person's second factor so they enrol again")
-		case errors.Is(err, iamdomain.ErrShredded):
-			log.InfoContext(ctx, "api_totp_seed_shredded",
-				"person", held.ID, "credential", c.ID)
-		case err != nil:
-			return factorUse{}, false, err
+				"hint", "the seed on this credential is not one sealed for it "+
+					"under a key this node's keyring holds; put the key back "+
+					"on the ring, or reset the person's second factor so they "+
+					"enrol again")
 		default:
 			// THE LAST ACCEPTED STEP is what makes a code single-use,
 			// and it is read from the credential rather than kept in
@@ -605,11 +601,11 @@ func (s *Service) checkSecondFactor(ctx context.Context, held iamdomain.Sighting
 	}
 	switch {
 	case appOK:
-		return app, true, nil
+		return app, true
 	case recoveryOK:
-		return recovery, true, nil
+		return recovery, true
 	}
-	return factorUse{}, false, nil
+	return factorUse{}, false
 }
 
 // errFactorSpent reports a second factor that checked out and had been spent
@@ -749,16 +745,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 	}
 	defer curve.Release()
 
-	use, ok, err := s.checkSecondFactor(r.Context(), held, code)
-	if err != nil {
-		// THE SEED COULD NOT BE OPENED because this node could not reach
-		// the person's key — the unknown arm, never a wrong code. Nothing
-		// was decided about the code, so presenting it again decides it.
-		log.WarnContext(r.Context(), "api_second_factor_unchecked",
-			"person", held.ID, "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
-		return factorUse{}, false
-	}
+	use, ok := s.checkSecondFactor(r.Context(), held, code)
 	if !ok {
 		// STILL THE GENERIC REFUSAL, because a wrong CODE and a wrong
 		// password must not be distinguishable to somebody who has

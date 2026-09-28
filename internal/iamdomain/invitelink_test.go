@@ -339,17 +339,16 @@ func TestASeatBoundSinceTheIssueRefusesTheRedemptionBeforeAnything(t *testing.T)
 	}
 }
 
-// AN INVITATION'S SEAT IS CLAIMED FIRST, before the key and the address.
+// AN INVITATION'S SEAT IS CLAIMED FIRST, before the address.
 //
 // It is the one claim nothing about the redemption can vouch for — the seat is
 // the chart's, and a colleague's bind is ordered against nothing on this log —
-// so a redemption that stops at it must leave nothing behind: no key minted
-// for a person who may never exist, and no reservation holding the invited
-// address. Here the seat claim's outcome is one nobody can establish, which is
-// where a sequence stops.
+// so a redemption that stops at it must leave nothing behind: no reservation
+// holding the invited address. Here the seat claim's outcome is one nobody can
+// establish, which is where a sequence stops.
 //
 // Mutation: claim the seat after the address and the address is held by a
-// reservation (and the person has a key) when the redemption stops.
+// reservation when the redemption stops.
 func TestAnInvitationsSeatIsClaimedFirst(t *testing.T) {
 	t.Parallel()
 	var broker *silentBroker
@@ -377,16 +376,6 @@ func TestAnInvitationsSeatIsClaimedFirst(t *testing.T) {
 	if rows := rig.column(`SELECT id FROM iam_people WHERE email_blind <> '' ` +
 		`OR login <> ''`); len(rows) != 0 {
 		t.Errorf("the address or the login was claimed before the seat: %v", rows)
-	}
-	keys, err := rig.keys.Keys(t.Context(), "iam/person/")
-	if err != nil {
-		t.Fatalf("list the keys: %v", err)
-	}
-	for _, key := range keys {
-		if strings.Contains(key.Name, person) {
-			t.Errorf("a key was minted for the invited person before the seat "+
-				"claim: %s", key.Name)
-		}
 	}
 
 	// THE RETRY, once the broker answers, is the same redemption and lands.

@@ -7,7 +7,8 @@
 // Every value this package puts in front of the identity estate is something a
 // presented secret is checked AGAINST and which cannot be presented to
 // anything: an argon2id digest with its own parameters beside it, a SHA-256 of
-// a machine token, a TOTP shared secret sealed under the credential's own key.
+// a machine token, a TOTP shared secret sealed under the fleet keyring and
+// bound to its person and its credential.
 // The estate is replicated to every node, snapshotted, backed up and donated
 // to joining peers — so a value that could be replayed out of it would be a
 // credential every operator with a backup holds.

@@ -624,8 +624,9 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 // # The writer acts as THE NODE, and every surface narrows it
 //
 // Exactly as the chart's does. What is left acting as the node is what the
-// node itself does: minting the bootstrap code on a fresh estate, and the
-// duties that sweep and probe. A person's own sign-in acts as that person.
+// node itself does: redeeming an invitation into a person who does not exist
+// yet, the duty that sweeps, and the re-seal a keyring rotation moves every
+// person's values with. A person's own sign-in acts as that person.
 func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	running := sl.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
@@ -652,14 +653,14 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	}
 	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 		Publisher: running.publisher, DB: e.backends.Store,
-		// THE BLINDER AND THE SEALER ARE BOTH OPTIONAL, and each
-		// absence is a documented posture rather than a fault: a node
-		// with no company secret store cannot derive a blind or seal a
-		// name, and the writes that need one are refused BY NAME at the
-		// call rather than at boot. A node that refused to start would
-		// take down a fleet over a company setting. The blinder is a
-		// SOURCE, resolved at the write that needs it, because the key
-		// behind it is minted by whichever node needs one first.
+		// THE BLINDER IS A SOURCE, resolved at the write that needs it,
+		// because the key behind it is minted by whichever node needs
+		// one first; a node with no company secret store cannot derive
+		// a blind, and the writes that need one are refused BY NAME at
+		// the call rather than at boot. THE SEALER is over the keyring
+		// every node holds, so it is nil only on an engine built by hand
+		// without one — and the writes that seal are refused by name
+		// there too.
 		Blinds: e.PersonBlinder(),
 		Sealer: e.PersonSealer(),
 		// WHAT A LANDED RECORD DECIDED — a grant delta, a session
@@ -669,15 +670,17 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		Actor:     nodeID,
 		ActorKind: iam.KindMachine,
 		// THE NODE IS THE DEPLOYMENT, so it authors the classes only the
-		// deployment has: the bootstrap mint, the sweeps, the probe.
-		// Every surface replaces these with [iamdomain.Writer.As].
+		// deployment has: the sweeps, and the re-seal a keyring rotation
+		// moves everybody's values with. Every surface replaces these
+		// with [iamdomain.Writer.As].
 		//
-		// AND people:manage BESIDE IT, because two of those classes are
-		// enrolments performed on somebody's behalf — the first person
-		// a bootstrap code creates, and the person an invitation
-		// redeems into — and neither has a principal of their own yet.
-		// Without it the sign-in surface's own writer was refused by
-		// the domain, so a fresh deployment could not create anybody.
+		// AND people:manage BESIDE IT, because two of the node's writes
+		// are about people with no principal of their own in the
+		// gesture: the person an invitation redeems into, who does not
+		// exist until the enrolment lands — the company's first person
+		// included — and every person a re-seal rewrites. Without it
+		// the sign-in surface's own writer was refused by the domain, so
+		// nobody could redeem an invitation at all.
 		Grants: nodeWriterGrants,
 	})
 	if err != nil {
@@ -692,8 +695,8 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 // A PACKAGE-LEVEL VALUE so a test can hold it against
 // [iamdomain.AdminGrant] rather than a reader having to remember the pairing:
 // the two halves live in different packages, nothing else compares them, and
-// the failure when they drift is that a fresh deployment cannot create its
-// first person.
+// the failure when they drift is that nobody can redeem an invitation — the
+// company's first person included, since they are invited like anybody else.
 var nodeWriterGrants = []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}
 
 // IAM is this node's identity read side, or nil on an engine with no native

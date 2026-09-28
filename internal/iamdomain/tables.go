@@ -22,12 +22,11 @@ import "slices"
 // same reason and is not this domain's to name.
 //
 // WHAT A REPLAY REPRODUCES IS CIPHERTEXT, not cleartext. A person's name and
-// address are sealed under that person's own key BEFORE publication, so the
-// bytes a replay writes are the bytes the writer published — which is what
-// keeps the identity claim a byte comparison rather than a claim about which
-// nodes hold which keys. A replay on a node whose key store has lost the
-// person's key still rebuilds the row; it just cannot read it, which is
-// exactly what a removal is supposed to leave behind.
+// address are sealed under the fleet keyring BEFORE publication, so the bytes
+// a replay writes are the bytes the writer published — which is what keeps
+// the identity claim a byte comparison rather than a claim about which nodes
+// hold which keys. A replay on a node whose ring no longer holds the key a
+// value was sealed under still rebuilds the row; it just cannot read it.
 var ReproducibleTables = []string{
 	// The person, and the three claims denormalised onto their row.
 	//

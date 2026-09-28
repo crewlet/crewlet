@@ -422,14 +422,13 @@ func (s *Service) spendInvitation(r *http.Request, held iamdomain.InvitationRow,
 
 // openSealed opens the invitation's address for this one answer.
 //
-// UNDER THE INVITATION'S OWN KEY rather than a person's, because there is no
-// person yet — minting one for an invitation that may never be redeemed would
-// leave a key behind for every address anybody ever typed.
+// AS THE INVITATION'S and never a person's, because there is no person yet —
+// see [iamdomain.Sealer.SealInvitation].
 func (s *Service) openSealed(r *http.Request, held iamdomain.InvitationRow) (string, error) {
 	if held.Sealed == "" {
 		return "", nil
 	}
-	email, err := s.sealer.Open(r.Context(), held.ID, iamdomain.FieldEmail, held.Sealed)
+	email, err := s.sealer.OpenInvitation(held.ID, held.Sealed)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_unseal_failed",
 			"error", err, "invitation", held.ID)

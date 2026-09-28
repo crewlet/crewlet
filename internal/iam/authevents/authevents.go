@@ -137,8 +137,8 @@ type Failure struct {
 	// Subject is WHAT WAS PRESENTED AS WHO: the login or address typed, or
 	// the bearer value sent. It is keyed under this process's own secret
 	// the moment it arrives and never held, logged or published — see the
-	// package doc. Empty for an attempt that named nobody (a missing
-	// flight, a wrong founder code), which is then not a subject at all.
+	// package doc. Empty for an attempt that named nobody (an invitation
+	// link nobody issued), which is then not a subject at all.
 	Subject string
 
 	// Person is the id of somebody the ENGINE resolved the attempt to —

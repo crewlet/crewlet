@@ -11,9 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// applyLog is the applier's own voice, apart from the read side's: the one
-// thing it says is that a removal's key outlived the removal, and an operator
-// grepping for that should not have to know it was filed under reads.
+// applyLog is the applier's own voice, apart from the read side's: what it says
+// is about a record applied here, and an operator grepping for that should not
+// have to know it was filed under reads.
 var applyLog = logging.Get("iam.apply")
 
 // The applier, and the four rules that make it a PURE FUNCTION of the log.
@@ -41,23 +41,14 @@ var applyLog = logging.Get("iam.apply")
 // # The one rule this applier has that no sibling needs
 //
 // IT NEVER DECRYPTS. Every sealed value the record carries is written through
-// as bytes. That is not a convenience — it is what keeps rule 1 true in a
-// domain whose values are encrypted: opening one would mean reading a key out
-// of the fleet secret store, inside the apply transaction, on a path that must
-// produce identical rows on a node whose key store is unreachable. An applier
-// that could fail on a coordination read is an applier that stalls the log
-// when coordination is down, which is the failure every three-valued rule in
-// this tree exists to avoid.
+// as bytes, and a removal ERASES the values it reaches by their shape without
+// opening one ([eraseSealed]). That is what keeps rule 1 true in a domain whose
+// values are encrypted: an applier that opened a value would be one whose rows
+// depended on which keyring keys this node holds — and two nodes a rotation
+// has not yet reached would write different rows from one record.
 //
-// A SHRED IS THE EXCEPTION AND IT IS POST-COMMIT. Destroying a removed
-// person's key is a consequence of a record here that is not a row, so it
-// happens in [Applier.Committed], after the rows are durable — and if it
-// fails, the row says removed while the key lives, which the identity duties
-// retry. The other order would be a key destroyed for a removal that then
-// rolled back.
-//
-// THE DIRECTORY SIGNAL IS THE OTHER, and it is post-commit for the same
-// reason. A suspension withdraws the seat's contact identities from this
+// THE DIRECTORY SIGNAL IS POST-COMMIT, because it is a consequence of a record
+// here that is not a row. A suspension withdraws the seat's contact identities from this
 // node's notify registry with no org-chart record at all, and the apply is the
 // only thing that sees that happen on EVERY node — the change feed relays a
 // record to one. So a committed batch that moved a seat's standing tells the
@@ -68,20 +59,6 @@ type Applier struct {
 	// NodeID is this node's own id, which the eviction gate compares a
 	// record's writer against.
 	NodeID string
-
-	// shredder destroys a removed person's key. Nil is a test's: every
-	// node running this domain holds the keyring and the fleet store its
-	// key store is built from, and the registration is what supplies it.
-	// With none, a removal deletes rows and leaves the key to the identity
-	// key duty ([ShredRemoved]), which destroys every removed person's key
-	// that still lives.
-	shredder Shredder
-
-	// shred is filled inside Apply and drained by Committed. NOT guarded
-	// by a mutex, and the framework's contract is why: an applier is ONE
-	// writer, and Apply and Committed are called from the same goroutine
-	// with the commit in between.
-	shred []string
 
 	// directory is told, after a committed batch, that who holds which
 	// seat — or at what stage — may have moved. Nil is legal and means
@@ -96,20 +73,13 @@ type Applier struct {
 
 	// directoryMoved is set inside Apply when a record wrote a row the
 	// directory's standing is read from — a person's stage, a seat claim
-	// or its release, a removal — and drained by Committed, on shred's
-	// terms. A SIGN-IN SETS NOTHING: it is the bulk of this log's traffic
-	// and it moves no seat's standing, so a rebuild per session would be a
-	// registry rebuilt per login for nothing.
+	// or its release, a removal — and drained by Committed. NOT guarded by
+	// a mutex, and the framework's contract is why: an applier is ONE
+	// writer, and Apply and Committed are called from the same goroutine
+	// with the commit in between. A SIGN-IN SETS NOTHING: it is the bulk of
+	// this log's traffic and it moves no seat's standing, so a rebuild per
+	// session would be a registry rebuilt per login for nothing.
 	directoryMoved bool
-}
-
-// Shredder destroys a person's key, which is what removing them does.
-//
-// CONSUMER-DEFINED and one method wide: [Sealer] satisfies it, and the applier
-// needs nothing else from it. A seam this narrow is also what lets the suite
-// watch what a removal asked for without standing up a coordination backend.
-type Shredder interface {
-	Shred(ctx context.Context, personID string) (bool, error)
 }
 
 // NewApplier builds the identity estate's applier for one node.
@@ -119,57 +89,22 @@ type Shredder interface {
 // reason internal/chart's view trigger gives: the store re-runs the body of an
 // attempt that failed transiently, and a listener told about rows that then
 // rolled back would rebuild from rows no node holds.
-func NewApplier(nodeID string, shredder Shredder, directory func()) *Applier {
-	return &Applier{NodeID: nodeID, shredder: shredder, directory: directory}
+func NewApplier(nodeID string, directory func()) *Applier {
+	return &Applier{NodeID: nodeID, directory: directory}
 }
 
-// Committed is the post-commit half: the two consequences of a record here
-// that are not rows — this node's contact routing hearing that a seat's
-// standing may have moved, and a removed person's key being destroyed.
-//
-// IT IS BEST EFFORT AND SAYS SO. A shred that fails leaves a person removed
-// from every node's rows with their key still live, which is a state the
-// identity duties find and retry — and the alternative, failing the apply,
-// would stall the whole fleet's log on a coordination outage, for a deletion
-// that is already durable everywhere it matters.
-func (a *Applier) Committed(ctx context.Context) {
-	// THE DIRECTORY FIRST, and reset before the call: the listener is a
-	// non-blocking signal, and the shreds below are network round trips a
-	// suspension's contact withdrawal must not wait behind.
-	if a.directoryMoved {
-		a.directoryMoved = false
-		if a.directory != nil {
-			a.directory()
-		}
-	}
-	if len(a.shred) == 0 {
+// Committed is the post-commit half: the consequence of a record here that is
+// not a row — this node's contact routing hearing that a seat's standing may
+// have moved.
+func (a *Applier) Committed(context.Context) {
+	if !a.directoryMoved {
 		return
 	}
-	// RESET BEFORE THE CALLS, not after. One of them may take long enough
-	// for the next batch to be waiting behind it, and a set drained
-	// afterwards would either be lost or delivered twice.
-	people := a.shred
-	a.shred = nil
-	if a.shredder == nil {
-		return
-	}
-	for _, id := range people {
-		// THE FAILURE IS SAID AND NOT RETURNED. There is no caller to
-		// return it to — this runs after the commit, on the applier's
-		// own goroutine — and the durable record of what still needs
-		// destroying is the `iam_removed` row, which [ShredRemoved]
-		// reads on every pass of the key duty until the delete lands.
-		// Said at WARN, because until then the person's name and
-		// address can still be opened wherever their ciphertext is —
-		// the log, every donated snapshot, every backup, and not only
-		// one taken before the removal — and an operator asked "is that
-		// person gone" deserves a log that says not yet.
-		if _, err := a.shredder.Shred(ctx, id); err != nil {
-			applyLog.WarnContext(ctx, "iam_key_shred_deferred",
-				"person", id, "node", a.NodeID, "error", err.Error(),
-				"detail", "the removal is applied and this person's key "+
-					"still exists; the key duty retries until it is destroyed")
-		}
+	// RESET BEFORE THE CALL, so a signal the listener raises while it runs
+	// is one the next batch delivers rather than one this reset erases.
+	a.directoryMoved = false
+	if a.directory != nil {
+		a.directory()
 	}
 }
 

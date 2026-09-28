@@ -185,8 +185,27 @@ func TestTheDirectoryNeedsATrail(t *testing.T) {
 		Authority: func(iam.Principal) iamapi.Writer {
 			return &fakeWriter{}
 		},
+		Opener: fakeOpener{},
 	})
 	if err == nil || !strings.Contains(err.Error(), "audit") {
 		t.Fatalf("building without a trail answered %v, want a refusal naming it", err)
+	}
+}
+
+// THE SURFACE IS REFUSED WITHOUT THE KEYRING'S OPENER, by name, rather than
+// built to render every person in the company as sealed — a posture no running
+// node is in, since every node holds the keyring.
+func TestTheDirectoryNeedsTheKeyringsOpener(t *testing.T) {
+	t.Parallel()
+	_, err := iamapi.New(iamapi.Options{
+		Directory: &fakeDirectory{},
+		Authority: func(iam.Principal) iamapi.Writer {
+			return &fakeWriter{}
+		},
+		Audit: &recordingAudit{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "opener") {
+		t.Fatalf("building without an opener answered %v, want a refusal naming it",
+			err)
 	}
 }

@@ -242,30 +242,29 @@ func unresolved(w http.ResponseWriter, r *http.Request, event string,
 		})
 }
 
-// Sealer is the sealing this surface does, and nothing else of the estate's
-// key machinery.
+// Sealer is the sealing this surface does, and nothing else of the estate's.
 //
 // CONSUMER-DEFINED AND THREE METHODS, like every other seam here: it opens an
 // invitation's address, and seals and opens a second factor's seed — the one
-// credential this estate keeps as a secret rather than a verifier. It takes no
-// mint, no shred and no listing, so a sign-in route can reach a value it was
-// handed and never a key.
+// credential this estate keeps as a secret rather than a verifier. Nothing
+// here opens a person's name or address, so a sign-in route can reach only
+// the values it was handed.
 //
-// [iamdomain.Sealer] is what a running node hands in.
+// NO CONTEXT, because nothing is fetched: [iamdomain.Sealer], which a running
+// node hands in, seals under the fleet keyring this process already holds.
 type Sealer interface {
-	// Open opens one of an owner's values — here, an invitation's address,
-	// under the invitation's own key.
-	Open(ctx context.Context, owner string, field iamdomain.Field, sealed string) (string, error)
+	// OpenInvitation opens the address an invitation was issued to, bound
+	// to that invitation ([iamdomain.Sealer.OpenInvitation]).
+	OpenInvitation(invitationID, sealed string) (string, error)
 
 	// SealCredential and OpenCredential seal and open a credential secret
-	// under its PERSON's key, bound to the credential it belongs to — see
-	// [iamdomain.Sealer.SealCredential] for why both halves, and
-	// [iamdomain.Sealer.OpenCredential] for the three answers the second
-	// one gives.
-	SealCredential(ctx context.Context, person, credential string,
-		field iamdomain.Field, plaintext string) (string, error)
-	OpenCredential(ctx context.Context, person, credential string,
-		field iamdomain.Field, sealed string) (string, error)
+	// under the keyring, bound to its person AND to the credential it
+	// belongs to — see [iamdomain.Sealer.SealCredential] for why both
+	// halves.
+	SealCredential(person, credential string, field iamdomain.Field,
+		plaintext string) (string, error)
+	OpenCredential(person, credential string, field iamdomain.Field,
+		sealed string) (string, error)
 }
 
 // Blinds is where the keyed blind an address is matched on comes from.

@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -62,13 +61,13 @@ type Writer struct {
 	db *store.DB
 
 	// blinds derives the subject a claim on an address arbitrates on, and
-	// sealer seals the values that belong to one person.
+	// sealer seals the values that belong to somebody.
 	//
 	// A WRITER WITH NEITHER CAN STILL DO MOST OF THIS. Ending a session,
 	// bumping an epoch, suspending somebody and removing them need no key
 	// at all — which is what lets access be revoked while the company's
-	// secret store cannot be reached, the one operation an outage must
-	// never block.
+	// secret store, which holds the blind-index key, cannot be reached:
+	// the one operation an outage must never block.
 	//
 	// THE BLINDER IS RESOLVED PER WRITE and never held from construction:
 	// see [Blinds] for what holding it cost.
@@ -80,12 +79,6 @@ type Writer struct {
 	// this domain's own records carry.
 	Actor     string
 	ActorKind iam.Kind
-
-	// authorKind is the same party in the vocabulary every OTHER trail
-	// records an author in — iam.ActorFor's agent, human, operator or
-	// system — for the one write this domain makes outside its own log: a
-	// key in the company's secret store ([Writer.secretAuthor]).
-	authorKind iam.ActorKind
 
 	// OperatorID is the credential this writer's party acts THROUGH —
 	// [iam.Actor.OperatorID], a machine token's `pat:<id>` beside the owner
@@ -193,8 +186,8 @@ type WriterDeps struct {
 	Publisher *statelog.Publisher
 	DB        *store.DB
 
-	// Blinds derives claim subjects, and Sealer seals a person's own
-	// values. Both optional: see [Writer.blinds].
+	// Blinds derives claim subjects, and Sealer seals the values that
+	// belong to somebody. Both optional: see [Writer.blinds].
 	Blinds Blinds
 	Sealer *Sealer
 
@@ -242,8 +235,6 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 		publisher: deps.Publisher, db: deps.DB,
 		blinds: deps.Blinds, sealer: deps.Sealer,
 		Actor: deps.Actor, ActorKind: deps.ActorKind,
-		authorKind: iam.ActorFor(iam.Principal{
-			Kind: deps.ActorKind, Login: deps.Actor}).Kind,
 		Grants: deps.Grants, Now: now, events: deps.Events,
 	}, nil
 }
@@ -276,7 +267,6 @@ func (w *Writer) As(p iam.Principal) *Writer {
 	next := *w
 	next.Actor = actor.Name
 	next.ActorKind = p.Kind
-	next.authorKind = actor.Kind
 	next.Grants = p.Grants
 	next.OperatorID = actor.OperatorID
 	next.Principal = ""
@@ -285,14 +275,6 @@ func (w *Writer) As(p iam.Principal) *Writer {
 	}
 	next.seq = &sequence{}
 	return &next
-}
-
-// secretAuthor is this writer's party as the company's secret store records
-// an author: the name, its kind in the actor vocabulary, and the credential it
-// acted through — empty for the node's own writer, which acted through none.
-func (w *Writer) secretAuthor() secrets.Author {
-	return secrets.Author{Name: w.Actor, Kind: string(w.authorKind),
-		OperatorID: w.OperatorID}
 }
 
 // sequence is one party's high-water mark across the calls of a request.

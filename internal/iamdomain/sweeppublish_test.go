@@ -277,7 +277,7 @@ func newFollower(t *testing.T, nodeID string, now time.Time) *follower {
 			t.Errorf("close the second node's store: %v", err)
 		}
 	})
-	return &follower{t: t, db: db, applier: iamdomain.NewApplier(nodeID, nil, nil), now: now}
+	return &follower{t: t, db: db, applier: iamdomain.NewApplier(nodeID, nil), now: now}
 }
 
 // follow applies whatever the rig's log holds past what this node has.

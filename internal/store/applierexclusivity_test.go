@@ -405,11 +405,12 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/iamdomain/apply", Kind: mechanism,
 		Why: "The identity estate's applier, across the files it is split " +
 			"over: the record and its two gates, the person and their " +
-			"credentials, the claims, the sessions and the bootstrap, the " +
-			"log's own gates, and the authentication trail. It is also the " +
-			"one applier in the tree that NEVER DECRYPTS — every sealed " +
-			"value it writes passes through as bytes, because opening one " +
-			"would mean a fleet-secret read inside the apply transaction.",
+			"credentials, the claims, the sessions, the log's own gates, " +
+			"the authentication trail, and the erasure a removal performs " +
+			"on the rows that outlive the person. It is also the one " +
+			"applier in the tree that NEVER DECRYPTS — every sealed value " +
+			"it writes passes through as bytes, and the erasure finds one " +
+			"by its envelope's shape, so no apply depends on a keyring.",
 	},
 	{
 		Prefix: "internal/iamdomain/sweep.go", Kind: mechanism,

@@ -86,26 +86,14 @@ func (e *ErrClaimed) Error() string {
 // administrator's is, so the first person is invited, and bounded, the way
 // everybody after them is.
 //
-// # A refused enrolment leaves its key, and the key duty collects it
-//
-// The key is minted before the first claim, because the claim carries the
-// address sealed under it — so an enrolment refused on its address has minted a
-// key for somebody who never existed. It is NOT destroyed here, and the reason
-// is [Sealer.Mint]'s: a mint that finds a key keeps it, so the id this call was
-// handed may be a LIVE person's (a retry, or a caller that reused an id), and a
-// refusal that shredded "its" key would destroy theirs. Only a pass that has
-// proved nobody owns the id may destroy it, which is [ShredKeys]: past
-// [OrphanKeyGrace], on rows that have applied everything the log held
-// ([CoversLog]).
-//
 // # A seat is claimed first
 //
-// An enrolment that binds a seat ([Enrolment.Seat]) claims it BEFORE the key,
-// the address and the login. It is the one claim nothing about the enrolment
+// An enrolment that binds a seat ([Enrolment.Seat]) claims it BEFORE the
+// address and the login. It is the one claim nothing about the enrolment
 // can vouch for — the seat is the chart's, and a colleague's bind to it is
 // ordered against nothing on this log — and claimed first, a refusal leaves
-// nothing behind at all: no key, and no reservation holding the address the
-// enrolment would have claimed next. Claimed after the address, a seat
+// nothing behind at all: no reservation holding the address the enrolment
+// would have claimed next. Claimed after the address, a seat
 // somebody bound in the meantime would leave the invited address held by a
 // person who could never finish, and the next invitation to that address
 // would be refused as "claimed" by the first.
@@ -139,10 +127,8 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 			"to the person, and a node that guessed at either would put two "+
 			"people on one address", w.missingKeys())
 	}
-	// THE BLINDER BEFORE THE KEY. One that cannot be established refuses
-	// the enrolment before anything is written; resolved after the
-	// person's key was minted, the refusal would leave a key behind for
-	// somebody who never existed.
+	// THE BLINDER BEFORE ANYTHING IS WRITTEN: one that cannot be
+	// established refuses the enrolment with nothing claimed.
 	var blind string
 	if in.Email != "" {
 		blinder, err := w.blinds.Blinder(ctx)
@@ -165,8 +151,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// refused too, and a refusal met only at the person record is met after
 	// the address and the login are already claimed, leaving a reservation
 	// that holds them against the redeemer's own next attempt. BEFORE THE
-	// KEY, too, for the blinder's reason: a refusal after the mint leaves a
-	// key behind for somebody who never existed.
+	// FIRST CLAIM, too, for the blinder's reason.
 	basis := w.basisOf(ctx, in, blind)
 	if basis != nil {
 		// A REDEMPTION'S IS A READ: it decides nothing the record does
@@ -177,8 +162,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		}
 	}
 
-	// THE SEAT FIRST, BEFORE THE KEY — see "A seat is claimed first"
-	// above. Its op id names the seat's own claim, so a retry of the
+	// THE SEAT FIRST — see "A seat is claimed first" above. Its op id names the seat's own claim, so a retry of the
 	// gesture collapses into the first attempt's.
 	if in.Seat != "" {
 		seated, seatErr := w.claim(ctx, at, KindSeat, in.Seat, in.PersonID,
@@ -191,21 +175,18 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		}
 	}
 
-	if err := w.sealer.Mint(ctx, in.PersonID, w.secretAuthor(), w.Now()); err != nil {
-		return statelog.Result{}, err
-	}
-	sealedName, err := w.sealer.Seal(ctx, in.PersonID, FieldName, in.Name)
+	sealedName, err := w.sealer.Seal(in.PersonID, FieldName, in.Name)
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	// AN ADDRESS IS OPTIONAL AND A KEY IS NOT. A machine identity has no
-	// mailbox, so there is nothing to blind, nothing to seal and no
-	// address claim to take — but its NAME is still sealed, under a key
-	// minted for it like anybody else's, because a removal has to be able
-	// to shred `Release pipeline, raised by Dana` as surely as a person.
+	// AN ADDRESS IS OPTIONAL AND A SEALED NAME IS NOT. A machine identity
+	// has no mailbox, so there is nothing to blind, nothing to seal and no
+	// address claim to take — but its NAME is still sealed like anybody
+	// else's, because `Release pipeline, raised by Dana` names a person
+	// too, and a removal erases it as surely.
 	var sealedEmail string
 	if in.Email != "" {
-		if sealedEmail, err = w.sealer.Seal(ctx, in.PersonID, FieldEmail,
+		if sealedEmail, err = w.sealer.Seal(in.PersonID, FieldEmail,
 			in.Email); err != nil {
 			return statelog.Result{}, err
 		}
@@ -258,8 +239,8 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// invitation somebody spent a moment ago with a person it then creates.
 	// Nil for the writer's own authority, which was checked above.
 	decide := func(tx *sql.Tx) error {
-		if err := w.createsNobodyTwice(ctx, tx, in); err != nil {
-			return err
+		if refused := w.createsNobodyTwice(ctx, tx, in); refused != nil {
+			return refused
 		}
 		if basis != nil {
 			return basis(tx)
@@ -965,8 +946,7 @@ func chartPositionOf(ctx context.Context, tx *sql.Tx) uint64 {
 func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
 	opID, reason string) (statelog.Result, error) {
 
-	switch kind {
-	case KindLogin:
+	if kind == KindLogin {
 		return statelog.Result{}, fmt.Errorf("%w: a login is never released "+
 			"on its own — every principal holds one, and it is the name their "+
 			"changes are recorded under. Rename it instead", ErrInvalidLogin)
@@ -1593,11 +1573,11 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 func (w *Writer) missingKeys() string {
 	switch {
 	case w.blinds == nil && w.sealer == nil:
-		return "neither a blind-index key nor a key store"
+		return "neither a blind-index key nor a keyring to seal with"
 	case w.blinds == nil:
 		return "no blind-index key"
 	default:
-		return "no key store"
+		return "no keyring to seal with"
 	}
 }
 
@@ -2333,7 +2313,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	if err != nil {
 		return InviteIssued{}, err
 	}
-	// THE SEAT BY ITS IDENTITY, resolved before anything is minted — a
+	// THE SEAT BY ITS IDENTITY, resolved before anything is published — a
 	// typo or an unreadable chart refuses the issue with nothing left
 	// behind — and confirmed again in the issue's own snapshot below.
 	var seat string
@@ -2342,18 +2322,10 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 			return InviteIssued{}, err
 		}
 	}
-	// SEALED UNDER THE INVITATION'S OWN ID rather than a person's, because
-	// there is no person yet. The key is minted here and destroyed by the
-	// key duty once no invitation row owns it ([ShredKeys]) — a refused
-	// invitation's past the grace, a collected one's after the sweep deletes
-	// its row — so an address somebody typed and never sent leaves no
-	// cleartext anywhere, which is the same promise a removal makes, one
-	// object earlier.
-	if err = w.sealer.Mint(ctx, id, w.secretAuthor(), w.Now()); err != nil {
-		return InviteIssued{}, fmt.Errorf("iamdomain: mint an "+
-			"invitation's key: %w", err)
-	}
-	sealed, err := w.sealer.Seal(ctx, id, FieldEmail, in.Email)
+	// SEALED AS THE INVITATION'S OWN, because there is no person yet: bound
+	// to the invitation's id, so it opens as nothing else
+	// ([Sealer.SealInvitation]).
+	sealed, err := w.sealer.SealInvitation(id, in.Email)
 	if err != nil {
 		return InviteIssued{}, fmt.Errorf("iamdomain: seal an "+
 			"invitation's address: %w", err)
@@ -2656,20 +2628,19 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 			"snapshot — a caller holding the current one read it in another " +
 			"transaction, which is the pairing the write authority forbids")
 	}
-	// THE NAME IS SEALED BEFORE THE DECIDE, never inside it. Sealing is a
-	// fleet-secret read, and a decide that performed one would be a
-	// transaction whose commit depends on a coordination round trip — the
-	// same reason the applier never decrypts. So it happens here, once,
-	// and the decide only places the ciphertext.
+	// THE NAME IS SEALED BEFORE THE DECIDE, once. It depends on nothing the
+	// snapshot holds, and a decide may run again against a fresh one: sealed
+	// inside it, every run would draw a fresh nonce for the same name, and
+	// the ciphertext the record carries would be whichever run landed.
 	sealedName := ""
 	if in.Name != nil {
 		if w.sealer == nil {
 			return statelog.Result{}, fmt.Errorf("iamdomain: this node "+
-				"cannot change a name: it has %s, and a name is sealed under "+
-				"the person's own key before it is published", w.missingKeys())
+				"cannot change a name: it has %s, and a name is sealed "+
+				"before it is published", w.missingKeys())
 		}
 		var err error
-		if sealedName, err = w.sealer.Seal(ctx, in.PersonID, FieldName,
+		if sealedName, err = w.sealer.Seal(in.PersonID, FieldName,
 			*in.Name); err != nil {
 			return statelog.Result{}, err
 		}
@@ -2762,11 +2733,10 @@ type PersonUpdate struct {
 	// clearing a name they would rather not have here — and a plain
 	// string could not tell it from a caller who never mentioned one.
 	//
-	// IT IS NOT [PersonUpdate.Apply]'s TO SET. A name is sealed under
-	// this person's own key, which is a fleet-secret read, and the apply
-	// runs inside the decide's transaction — so it is sealed before,
-	// placed on the document the apply is handed, and the apply may still
-	// overwrite it if that is genuinely what the caller means.
+	// IT IS NOT [PersonUpdate.Apply]'s TO SET. A name is sealed once,
+	// before the decide that may run more than once — so it is sealed
+	// before, placed on the document the apply is handed, and the apply
+	// may still overwrite it if that is genuinely what the caller means.
 	Name *string
 
 	// Apply forms the new document from the current one, INSIDE the

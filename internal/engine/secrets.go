@@ -301,41 +301,65 @@ func (c *chartSealer) Seal(ctx context.Context, name, value string,
 	return c.store.Set(ctx, name, value, by, chart.SealSource, c.now())
 }
 
-// PersonSealer is the per-person key store, which seals a person's own values
-// AND is what the identity applier shreds through.
+// PersonSealer is what this node seals and opens a person's own values with:
+// their name, their address, an invitation's address and a second factor's
+// seed, all under the fleet keyring ([iamdomain.Sealer]).
 //
-// ONE CONSTRUCTION FOR BOTH, deliberately: a sealer IS a shredder, because
-// destroying somebody's key is what a removal does — and two constructions
-// would be two key stores that have to agree about which key belongs to whom,
-// with nothing comparing them.
+// OVER THE ENGINE'S OWN CIPHER, the one that seals the company's secret store
+// and signs every state-log record, so a keyring rotation is one gesture for
+// all of them.
 //
-// NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
-// [New] refuses a node without a keyring or a fleet backend. Returning a
-// sealer over a nil cipher instead would make every shred report success while
-// destroying nothing, which is the failure a removal exists to prevent.
+// NIL ONLY ON AN ENGINE WITH NO KEYRING — one built by hand in a test, since
+// [New] refuses a node without one — and every write that seals is then
+// refused BY NAME at the call, where a sealer over nothing would have written
+// cleartext.
 func (e *Engine) PersonSealer() *iamdomain.Sealer {
-	if e == nil || e.cipher == nil || e.backends.Fleet == nil {
+	if e == nil || e.cipher == nil {
 		return nil
 	}
-	sealer, err := iamdomain.NewSealer(fleetsecrets.New(e.backends.Fleet, e.cipher).Estate())
+	sealer, err := iamdomain.NewSealer(e.cipher)
 	if err != nil {
 		return nil
 	}
 	return sealer
 }
 
-// personKeys is [Engine.PersonSealer] as the applier's seam.
+// IdentityKeyring is the identity estate's half of a keyring rotation, or nil
+// on an engine with no native runtime (one that started with no active company,
+// or one a test built by hand).
 //
-// THE CONVERSION IS EXPLICIT because a typed nil in an interface is not nil:
-// returning the pointer directly would hand the applier a non-nil Shredder
-// wrapping a nil Sealer, and every shred would panic on exactly the engine
-// this is meant to answer nil for.
-func (e *Engine) personKeys() iamdomain.Shredder {
-	sealer := e.PersonSealer()
-	if sealer == nil {
+// ITS OWN HALF, because a store write cannot do it: the same keyring seals
+// every person's name, address and second factor, in rows derived from the
+// identity log — a node that rewrote its own would disagree with its peers, and
+// a replay would write the old ciphertext back — so a rekey moves them with a
+// RECORD per person, through the node's own writer ([iamdomain.Writer.Reseal]).
+// The node and not the caller, for the secret store's reason: a rekey re-seals
+// values it did not choose, and whoever rotated the keyring is the rotation's
+// own fact, which the rekey route logs.
+func (e *Engine) IdentityKeyring() *IdentityKeyring {
+	reader, writer := e.IAM(), e.IAMWriter()
+	if reader == nil || writer == nil {
 		return nil
 	}
-	return sealer
+	return &IdentityKeyring{reader: reader, writer: writer}
+}
+
+// IdentityKeyring counts and moves what the keyring seals in the identity
+// estate — see [Engine.IdentityKeyring].
+type IdentityKeyring struct {
+	reader *iamdomain.Reader
+	writer *iamdomain.Writer
+}
+
+// SealedKeys counts the values this node's identity rows hold that anything
+// opens, by the keyring key each is sealed under, as of now.
+func (k *IdentityKeyring) SealedKeys(ctx context.Context) (iamdomain.SealedCount, error) {
+	return k.reader.SealedKeys(ctx, time.Now().UTC())
+}
+
+// Reseal moves every person's values onto this node's active keyring key.
+func (k *IdentityKeyring) Reseal(ctx context.Context) (iamdomain.ResealReport, error) {
+	return k.writer.Reseal(ctx, k.reader)
 }
 
 // PersonBlinder is where this node gets the company's address blind, or nil.

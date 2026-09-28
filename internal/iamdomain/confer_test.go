@@ -305,21 +305,6 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 // a uuid7, as every one the surfaces mint is.
 func operationKey() string { return uuid.Must(uuid.NewV7()).String() }
 
-// invitationIDOf is the invitation an operation key issues under the rig's
-// company key.
-func invitationIDOf(t *testing.T, key string) string {
-	t.Helper()
-	blinder, err := iamdomain.NewBlinder(testBlindKey)
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
-	id, err := blinder.InvitationID(key)
-	if err != nil {
-		t.Fatalf("derive the invitation of %s: %v", key, err)
-	}
-	return id
-}
-
 // blindOf is the keyed blind this rig's writer derives an address's subject
 // from, which is what an invitation's spend arbitrates on.
 func blindOf(t *testing.T, address string) string {

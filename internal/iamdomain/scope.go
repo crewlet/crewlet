@@ -72,7 +72,7 @@ const (
 // it is THIS DOMAIN'S OWN division — unrelated to the corpus shards
 // [search.ShardOf] computes, which partition documents rather than people and
 // must never be assumed to line up. What a bucket buys here is three things a
-// per-person key cannot: a scope term a deferring node can compute, a sweep
+// per-person scope path cannot: a scope term a deferring node can compute, a sweep
 // that is sixty-four bounded transactions rather than one unbounded one, and a
 // duplicate-claim scan whose cost is measurable per bucket rather than per
 // company.

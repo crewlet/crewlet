@@ -32,12 +32,10 @@ import (
 //
 // # And nothing here opens anything
 //
-// Opening a sealed name costs a fleet-secret read per person and the key may
-// be gone. Both are the CALLER's to deal with: [PersonRow] carries the
-// ciphertext and whether this deployment can still open it, and the surface
-// decides how many rows it is willing to pay for. A reader that opened
-// eagerly would make every listing a fan-out of coordination reads with no
-// bound anybody could see.
+// Opening a sealed name is the CALLER's to do: [PersonRow] carries the
+// ciphertext, and the surface opens what it is about to show somebody. A
+// reader that opened eagerly would put every name and address in the clear in
+// the memory of every read that only needed to know who may do what.
 
 // PersonRow is one directory row as an administrator reads it.
 //
@@ -55,12 +53,11 @@ type PersonRow struct {
 	// their own audit trail for nothing.
 	Login string
 
-	// NameSealed and EmailSealed are ciphertext, under this person's own
-	// key. There is no row for somebody removed — a removal deletes it and
+	// NameSealed and EmailSealed are ciphertext, under the fleet keyring.
+	// There is no row for somebody removed — a removal deletes it and
 	// leaves the tombstone in `iam_removed` — so a value that will not open
-	// because its key is gone ([ErrShredded]) is a removal this node has
-	// not applied yet, and one that will not open for any other reason is a
-	// keyring or a store this node cannot reach.
+	// is a key this node's ring does not hold: dropped before the value
+	// was moved off it, or a restore under a different keyring.
 	NameSealed  []byte
 	EmailSealed []byte
 
@@ -125,13 +122,12 @@ type PeopleQuery struct {
 // DefaultPageSize and MaxPageSize bound a directory page.
 //
 // FIFTY AND TWO HUNDRED, and the numbers come from what the caller does with
-// a row rather than from the SQL. A surface renders a person by OPENING their
-// sealed name and address, which is one fleet-secret read each — deliberately
-// uncached, because a cache would go on opening values for somebody whose key
-// a removal has just destroyed. So a page is a fan-out of that many
-// coordination reads: fifty is about one round trip's worth of latency for a
-// screen, and two hundred is the point past which an operator is better served
-// by narrowing than by waiting.
+// a row rather than from the SQL: a surface renders every row it is given,
+// opening its name and address, and a directory row is the largest answer
+// this estate serves — a name, an address, a seat, a grant list, a stage and
+// an epoch. Fifty is a screen of people; two hundred is the point past which
+// an operator is better served by narrowing (`q=`, `stage=`) than by paging a
+// response the size of the whole company.
 const (
 	DefaultPageSize = 50
 	MaxPageSize     = 200
@@ -598,10 +594,9 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 // DefaultHistoryPage and MaxHistoryPage bound a page of the trail.
 //
 // A HUNDRED AND A THOUSAND, and they are larger than the directory's for one
-// reason: a trail entry is a ROW, opened from nothing and joined to nothing,
-// while a directory row costs a fleet-secret read per person before anybody
-// can render it. What bounds this one is the response size rather than a
-// fan-out.
+// reason: a trail entry is a small ROW, opened from nothing and joined to
+// nothing, while a directory row carries a person whole and is opened before
+// anybody can render it. What bounds both is the response size.
 const (
 	DefaultHistoryPage = 100
 	MaxHistoryPage     = 1000

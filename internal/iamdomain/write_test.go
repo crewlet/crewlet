@@ -51,9 +51,9 @@ type writeRig struct {
 	// directory counts the applier's post-commit directory signals.
 	directory atomic.Int64
 
-	// keys is the fleet secret store this node's sealer and shredder use,
-	// held so a case can reach inside it — a person's key, a store blip.
-	keys *keyStore
+	// sealer is what this node seals and opens somebody's values with,
+	// over [testKeyring] — held so a case can open what a row carries.
+	sealer *iamdomain.Sealer
 
 	// publisher is the rig's one, for a case that needs a second writer
 	// over the same log with a different seam.
@@ -169,8 +169,7 @@ func newWriteRigWith(t *testing.T,
 	if err != nil {
 		t.Fatalf("build the blinder: %v", err)
 	}
-	keys := newKeyStore()
-	sealer, err := iamdomain.NewSealer(keys)
+	sealer, err := iamdomain.NewSealer(testCipher(t, testKeyring))
 	if err != nil {
 		t.Fatalf("build the sealer: %v", err)
 	}
@@ -207,11 +206,11 @@ func newWriteRigWith(t *testing.T,
 		t: t, db: db, log: log, writer: writer, waiter: waiter,
 		events:   announced,
 		verifier: testVerifier(t),
-		keys:     keys, publisher: publisher, node: node, nodeDeps: nodeDeps,
+		sealer:   sealer, publisher: publisher, node: node, nodeDeps: nodeDeps,
 	}
 	// THE DIRECTORY SIGNAL IS COUNTED, so a case can say which records
 	// told this node its seats' standing may have moved.
-	rig.applier = iamdomain.NewApplier("node-a", sealer,
+	rig.applier = iamdomain.NewApplier("node-a",
 		func() { rig.directory.Add(1) })
 	return rig
 }
@@ -487,6 +486,34 @@ func (w *rigWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 	return w.WaitCommitted(ctx, p)
 }
 
+// testKeyring is the fleet keyring this rig's node holds: the one key every
+// value it seals is sealed under.
+var testKeyring = secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{
+	"k1": []byte(strings.Repeat("1", 32)),
+}}
+
+// testCipher is a keyring as a node holds it.
+func testCipher(t *testing.T, ring secrets.Keyring) secrets.Cipher {
+	t.Helper()
+	cipher, err := secrets.NewCipher(ring)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	return cipher
+}
+
+// end is the identity log's last sequence as the broker holds it, which is what
+// a node that has drained the log is proved against.
+func (r *writeRig) end(ctx context.Context) (uint64, error) { return r.log.End(ctx) }
+
+// behind is the log's end as a node that has not applied its tail sees it —
+// the state every node is in for a moment after it boots: records past what
+// this rig drained.
+func (r *writeRig) behind(ctx context.Context) (uint64, error) {
+	end, err := r.log.End(ctx)
+	return end + 3, err
+}
+
 func testSigner(t *testing.T) *statelog.Signer {
 	t.Helper()
 	signer, err := statelog.NewSigner(iamdomain.Domain{}.Name(),
@@ -659,8 +686,9 @@ func TestAnEnrolmentWritesOnePersonWhoseValuesAreSealed(t *testing.T) {
 	}
 }
 
-// A REMOVAL DELETES THE ROWS, LEAVES THE TOMBSTONE, AND SHREDS THE KEY.
-func TestARemovalLeavesATombstoneAndDestroysTheKey(t *testing.T) {
+// A REMOVAL DELETES THE ROWS AND LEAVES THE TOMBSTONE. What it erases from
+// the rows that outlive the person is [TestARemovalLeavesNoValueOfTheirsThatOpens]'s.
+func TestARemovalLeavesATombstone(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const id = "018f3a9c-0000-7000-8000-00000000000a"
@@ -1148,35 +1176,6 @@ func TestAnAdministrativeRecordNeedsPeopleManageAndNotTheCompanysGrant(t *testin
 	}
 }
 
-// A PERSON'S KEY IS MINTED UNDER THE PARTY WHOSE GESTURE NEEDED IT, with the
-// credential that party acted through beside them — the three every trail of
-// the secret store records. It was the writer's bare name, so a key minted by
-// an administrator's machine token recorded the token's owner and nothing to
-// say a token was used. Mutation: mint under w.Actor alone and the credential
-// half fails.
-func TestAPersonsKeyIsMintedUnderTheWritersParty(t *testing.T) {
-	t.Parallel()
-	rig := newWriteRig(t)
-	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
-	admin := principalNamed("ana.admin", iam.KindPerson, iam.AllGrants)
-	admin.Via = pat
-	person := "018f3a9c-0000-7000-8000-0000000000c1"
-	if err := rig.draining(func() error {
-		_, err := rig.writer.As(admin).Enrol(rig.t.Context(), iamdomain.Enrolment{
-			PersonID: person, Kind: iam.KindMachine, Stage: iam.StageActive,
-			Login: "svc:keys", OpID: "op-keys", Reason: "a hire",
-		})
-		return err
-	}); err != nil {
-		t.Fatalf("enrol: %v", err)
-	}
-	want := secrets.Author{Name: "ana.admin", Kind: string(iam.ActorOperator),
-		OperatorID: pat}
-	if got := rig.keys.author(iamdomain.PersonDEKName(person)); got != want {
-		t.Errorf("the key records %+v, want %+v", got, want)
-	}
-}
-
 // A CALLER MAY NOT CONFER A GRANT THEY DO NOT HOLD, on anybody.
 //
 // One rule rather than the two the design states — "not onto your own record"
@@ -1315,8 +1314,8 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 		t.Errorf("the address-less rows are %v, want exactly [svc:ci]", got)
 	}
 	// AND IT IS STILL SEALED. A machine's NAME is a person's words —
-	// "Release pipeline, raised by Dana" — so a removal has to be able to
-	// shred it exactly as it shreds anybody else's.
+	// "Release pipeline, raised by Dana" — so it is kept exactly as
+	// anybody else's is, and a removal erases it the same way.
 	if got := rig.column(
 		`SELECT length(name_sealed) FROM iam_people WHERE login = 'svc:ci'`); //
 	len(got) != 1 || got[0] == "0" {

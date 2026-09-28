@@ -72,13 +72,9 @@ type Directory interface {
 	// earlier step landed.
 	PersonByLogin(ctx context.Context, login string) (iamdomain.Sighting, error)
 
-	// Claims and KeyCensus are the two identity duties' own readings,
-	// which the report shows on demand: a duplicate or an orphan the claim
-	// duty warns about, and a key the key duty has not yet destroyed — a
-	// removed person's, or one nobody owns.
+	// Claims is the claim duty's own reading, which the report shows on
+	// demand: a duplicate or an orphan the duty warns about.
 	Claims(ctx context.Context, now time.Time) (iamdomain.ClaimReport, error)
-	KeyCensus(ctx context.Context, keys iamdomain.KeyIndex) (
-		iamdomain.KeyCensus, error)
 }
 
 // Writer is one party's authority to change the identity estate, as this
@@ -145,15 +141,14 @@ type Writer interface {
 // domain's rule exactly as strong as this one route.
 type Authority func(principal iam.Principal) Writer
 
-// Opener opens one sealed value for the caller this surface is answering.
+// Opener opens one of a person's sealed values — [iamdomain.Sealer], over this
+// node's keyring.
 //
-// TWO METHODS' WORTH IN ONE, and both arms are answers rather than failures:
-// a value this deployment's keyring cannot open and a value whose key a
-// removal destroyed are different sentences on a screen, and neither is an
-// outage. See [Service.open].
+// NO CONTEXT, because nothing is fetched: the keyring is this process's own,
+// so opening a value is arithmetic that either succeeds or names a value this
+// ring cannot open. See [Service.open].
 type Opener interface {
-	Open(ctx context.Context, personID string, field iamdomain.Field,
-		sealed string) (string, error)
+	Open(personID string, field iamdomain.Field, sealed string) (string, error)
 }
 
 // Audit is where this surface's identity facts go: a credential minted or
@@ -176,10 +171,10 @@ type Options struct {
 	Directory Directory
 	Authority Authority
 
-	// Opener opens a person's sealed name and address. Optional, and its
-	// absence is a real posture rather than a fault: a node with no
-	// company secret store holds the ciphertext and no key, so a row
-	// renders as sealed rather than being refused.
+	// Opener opens a person's sealed name and address. REQUIRED: every
+	// node holds the keyring, so a surface that opened nothing would
+	// render every person in the company as sealed — a posture no running
+	// node is in, and the look of a keyring nobody has.
 	Opener Opener
 
 	// ExternalBase is `api.external_url`, which is what an invitation's
@@ -214,20 +209,6 @@ type Options struct {
 	// silent about the writes an investigation looks for first.
 	Audit Audit
 
-	// Keys lists the person keys the company's secret store holds, for
-	// the report's two key arms. NIL-ABLE, and the absence is the third
-	// value — see [Keys].
-	Keys Keys
-
-	// LogEnd reads the identity log's last sequence — the engine's
-	// `IdentityLogEnd` — which the report's UNOWNED-KEY arm proves an
-	// absence against ([iamdomain.KeyCensus.Judge]): on rows that have not
-	// applied the whole log, behind or holding a record they retained, a
-	// person whose enrolment has not been applied owns nothing here and
-	// their key reads as nobody's. NIL-ABLE: absent, or answering an
-	// error, the arm is counted as unchecked rather than answered.
-	LogEnd func(ctx context.Context) (uint64, error)
-
 	// Now is the clock, injectable so a case can pin an expiry.
 	Now func() time.Time
 }
@@ -241,8 +222,6 @@ type Service struct {
 	bindings  Bindings
 	ceiling   []iam.Grant
 	audit     Audit
-	keys      Keys
-	logEnd    func(ctx context.Context) (uint64, error)
 	now       func() time.Time
 }
 
@@ -256,6 +235,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("iamapi: this surface needs an authority — a " +
 			"writer per caller, because an identity record's author is a " +
 			"property of the writer and never of the call")
+	case opts.Opener == nil:
+		return nil, errors.New("iamapi: this surface needs the keyring's " +
+			"opener — without it every person in the directory would render " +
+			"as sealed")
 	case opts.Audit == nil:
 		return nil, errors.New("iamapi: this surface needs an audit trail — it " +
 			"mints and revokes credentials and ends other people's sessions, " +
@@ -266,9 +249,8 @@ func New(opts Options) (*Service, error) {
 		directory: opts.Directory, authority: opts.Authority,
 		opener:   opts.Opener,
 		external: opts.ExternalBase, bindings: opts.Bindings,
-		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, keys: opts.Keys,
-		logEnd: opts.LogEnd,
-		now:    opts.Now,
+		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit,
+		now: opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -291,32 +273,25 @@ func (s *Service) writerFor(ctx context.Context) (Writer, bool) {
 	return s.authority(principal), true
 }
 
-// open opens one sealed value into something a screen can render.
+// open opens one sealed value into something a screen can render, and whether
+// it did.
 //
-// THREE ANSWERS, NOT TWO, and the middle one is why this is not a plain call:
-//
-//   - opened → the value.
-//   - shredded → the empty string with `removed` true. A removal destroyed
-//     the key, which is permanent and fleet-wide, so this is a STATE rather
-//     than a failure and a caller that retried would retry for ever.
-//   - anything else → the empty string with `removed` false, logged. A node
-//     whose keyring cannot reach the store still knows who this row is; it
-//     simply cannot read their name, and refusing the whole listing over one
-//     unreadable row would take the directory down for a coordination blip.
+// A VALUE THAT DOES NOT OPEN IS NOT AN OUTAGE: it is ciphertext this node's
+// keyring holds no key for — dropped from the ring before the values were
+// moved off it, or a restore under a different keyring — and the person is
+// still somebody this node knows. So it renders as sealed, is logged, and
+// never takes the listing down over one row.
 func (s *Service) open(ctx context.Context, personID string,
-	field iamdomain.Field, sealed []byte) (value string, removed bool) {
+	field iamdomain.Field, sealed []byte) (string, bool) {
 
-	if len(sealed) == 0 || s.opener == nil {
-		return "", false
-	}
-	opened, err := s.opener.Open(ctx, personID, field, string(sealed))
-	switch {
-	case err == nil:
-		return opened, false
-	case errors.Is(err, iamdomain.ErrShredded):
+	if len(sealed) == 0 {
 		return "", true
 	}
-	log.WarnContext(ctx, "api_iam_unseal_failed",
-		"person", personID, "field", string(field), "error", err)
-	return "", false
+	opened, err := s.opener.Open(personID, field, string(sealed))
+	if err != nil {
+		log.WarnContext(ctx, "api_iam_unseal_failed",
+			"person", personID, "field", string(field), "error", err)
+		return "", false
+	}
+	return opened, true
 }

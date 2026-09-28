@@ -171,11 +171,10 @@ func TestTheObservedLagIsWhatTheRequestPathReads(t *testing.T) {
 
 // THE NODE'S OWN WRITER MAY ENROL SOMEBODY WHO HAS NO PRINCIPAL YET.
 //
-// Two identity gestures are performed on behalf of a person who does not
-// exist: the first person a bootstrap code creates, and the person an
-// invitation redeems into. Both go through this node's own writer, and the
-// domain refuses an administrative record from a party without
-// [iamdomain.AdminGrant].
+// An identity gesture is performed on behalf of a person who does not exist:
+// the person an invitation redeems into, the company's first person included.
+// It goes through this node's own writer, and the domain refuses an
+// administrative record from a party without [iamdomain.AdminGrant].
 //
 // This pairing had already drifted: the writer held fleet:operate and the
 // domain asked for config:write, so every bootstrap and every redemption was

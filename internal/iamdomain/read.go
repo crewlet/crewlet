@@ -41,11 +41,10 @@ import (
 //
 // # Nothing here decrypts
 //
-// A person's name and address are SEALED under their own key, and opening one
-// means a fleet-secret read. Every read below returns the sealed bytes and
-// leaves opening them to a surface that has a reason to — which is also what
-// keeps an identity read a keyed lookup rather than a round trip, and why
-// internal/store's reserved connection is enough for it.
+// A person's name and address are SEALED under the fleet keyring. Every read
+// below returns the sealed bytes and leaves opening them to a surface that has
+// a reason to — so a value is opened only where somebody is shown it, and a
+// read that decides who may do what never touches one.
 
 // Reader answers questions about this node's copy of the identity estate.
 type Reader struct {
@@ -715,6 +714,45 @@ func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
 		return nil
 	})
 	return held, err
+}
+
+// ErrNotCurrent reports a snapshot of the identity estate that cannot vouch for
+// an absence: it has not applied every record the log held when the question
+// was asked, whether because it is behind or because it RETAINED one.
+//
+// A SENTINEL, because the question that turns on it is answered by a row being
+// missing — whether a blind was ever derived ([Reader.HoldsBlinds]) — and on
+// such a snapshot a missing row is the one observation that proves nothing.
+var ErrNotCurrent = errors.New("iamdomain: this node's identity rows do not " +
+	"hold every record the log held when it was asked, so a row missing from " +
+	"them proves nothing")
+
+// CoversLog proves, from one snapshot's prefix and the log's last sequence read
+// BEFORE that snapshot, that the snapshot's rows hold every record the log held
+// — or says, wrapping [ErrNotCurrent], why they do not.
+//
+// THE END IS READ FIRST, so a record landing between the two can only make the
+// answer "not current", never let a snapshot that missed it vouch for it.
+//
+// AND THE COMPARISON IS AGAINST WHAT THE SNAPSHOT APPLIED, never its
+// checkpoint. The applier's checkpoint moves past a record it RETAINS — one
+// at a record version this build cannot read, one signed under a keyring key
+// this node does not hold (a rotation half done), and every later record in a
+// bucket one of those covers — and a node holding such a record reads that
+// record's rows as rows nobody wrote.
+func CoversLog(prefix statelog.Prefix, end uint64) error {
+	if prefix.Applied().Seq >= end {
+		return nil
+	}
+	if prefix.Retains && prefix.Retained.Position.Seq <= end {
+		return fmt.Errorf("%w: it holds a record at %s it could not apply "+
+			"(record version %d) — a newer build's, or one signed under a "+
+			"keyring key this node does not hold — and every record the log "+
+			"held when it was asked is not applied here until it can",
+			ErrNotCurrent, prefix.Retained.Position, prefix.Retained.Version)
+	}
+	return fmt.Errorf("%w: it has applied %d of the %d records the log held",
+		ErrNotCurrent, prefix.Applied().Seq, end)
 }
 
 // HoldsBlinds reports whether any row this node holds carries a value derived

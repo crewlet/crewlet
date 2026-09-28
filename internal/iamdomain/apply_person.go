@@ -293,9 +293,10 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 // because a cascade is a delete nobody committed: the deletion is part of this
 // record's own effect and is therefore identical on every node.
 //
-// AND THE KEY IS DESTROYED AFTER THE COMMIT, not here. Destroying it inside
-// the transaction would destroy it for a removal that then rolled back, and
-// nothing could put it back.
+// AND EVERY SEALED VALUE OF THEIRS IS ERASED, in the same transaction: the
+// rows it deletes take their name, address and seeds with them, and the rows
+// that outlive them — an invitation addressed to them, their authentication
+// trail — keep every column but the sealed ones ([eraseSealed]).
 func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string) (int, error) {
 
@@ -338,10 +339,10 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 		{"credentials", `DELETE FROM iam_credentials WHERE person_id = ?`},
 		{"person", `DELETE FROM iam_people WHERE id = ?`},
 	} {
-		deleted, err := tx.ExecContext(ctx, statement.sql, id)
-		if err != nil {
+		deleted, execErr := tx.ExecContext(ctx, statement.sql, id)
+		if execErr != nil {
 			return int(written), fmt.Errorf("iamdomain: delete person %s's %s: %w",
-				id, statement.what, err)
+				id, statement.what, execErr)
 		}
 		n, _ := deleted.RowsAffected()
 		written += n
@@ -349,9 +350,15 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 
 	// THE HISTORY IS NOT DELETED, and that is the whole reason the id
 	// outlives the person: an authentication trail whose authors evaporate
-	// is not an audit trail. What makes the removal real is that their NAME
-	// and ADDRESS are unrecoverable — the key, destroyed after the commit.
-	a.shred = append(a.shred, id)
+	// is not an audit trail. What makes the removal real is that their
+	// NAME, ADDRESS and SEEDS are gone from every row — erased here, in the
+	// transaction that deletes the rest.
+	erased, err := eraseSealed(ctx, tx, id, removal.Released.EmailBlind)
+	written += int64(erased)
+	if err != nil {
+		return int(written), fmt.Errorf("iamdomain: erase person %s's "+
+			"sealed values: %w", id, err)
+	}
 	if written > 0 {
 		// A REMOVAL RELEASES THE SEAT with every other claim, and the
 		// tombstone is what the directory then reads as the seat's

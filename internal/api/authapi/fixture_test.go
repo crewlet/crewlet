@@ -2,7 +2,6 @@ package authapi_test
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -183,50 +182,48 @@ func fixtureBlinder(t *testing.T) *iamdomain.Blinder {
 }
 
 // stubSealer opens every invitation's address as one fixed value, and seals a
-// credential secret for real — under one fixture key, with the DOMAIN's own
-// associated data ([iamdomain.AADForCredential]) — so a seed sealed for one
-// person's credential opens as that credential and as nothing else, exactly as
-// a running node's per-person sealer answers.
+// credential secret for real — through the domain's own [iamdomain.Sealer] over
+// one fixture keyring — so a seed sealed for one person's credential opens as
+// that credential and as nothing else, exactly as a running node's answers.
 type stubSealer struct{ address string }
 
-func (s stubSealer) Open(context.Context, string, iamdomain.Field, string) (string, error) {
+func (s stubSealer) OpenInvitation(string, string) (string, error) {
 	return s.address, nil
 }
 
-func (stubSealer) SealCredential(_ context.Context, person, credentialID string,
-	field iamdomain.Field, plaintext string) (string, error) {
+func (stubSealer) SealCredential(person, credentialID string, field iamdomain.Field,
+	plaintext string) (string, error) {
 
-	return fixtureCipher.Encrypt(plaintext,
-		iamdomain.AADForCredential(person, credentialID, field))
+	return fixtureSealer.SealCredential(person, credentialID, field, plaintext)
 }
 
-func (stubSealer) OpenCredential(_ context.Context, person, credentialID string,
-	field iamdomain.Field, sealed string) (string, error) {
+func (stubSealer) OpenCredential(person, credentialID string, field iamdomain.Field,
+	sealed string) (string, error) {
 
-	plain, err := fixtureCipher.Decrypt(sealed,
-		iamdomain.AADForCredential(person, credentialID, field))
-	if err != nil {
-		return "", fmt.Errorf("open %s's %s %s: %w", person, field, credentialID, err)
-	}
-	return plain, nil
+	return fixtureSealer.OpenCredential(person, credentialID, field, sealed)
 }
 
-// fixtureCipher is the one key [stubSealer] seals under.
-var fixtureCipher = func() secrets.Cipher {
+// fixtureSealer is the domain's sealer over the one key [stubSealer] seals
+// under.
+var fixtureSealer = func() *iamdomain.Sealer {
 	cipher, err := secrets.NewCipher(secrets.Keyring{
 		ActiveID: "k1", Keys: map[string][]byte{"k1": []byte(strings.Repeat("s", 32))},
 	})
 	if err != nil {
 		panic(err)
 	}
-	return cipher
+	sealer, err := iamdomain.NewSealer(cipher)
+	if err != nil {
+		panic(err)
+	}
+	return sealer
 }()
 
 // sealedSeed is a TOTP seed sealed as a person's credential, as enrolment
 // stores it.
 func sealedSeed(t *testing.T, person, credentialID, seed string) string {
 	t.Helper()
-	sealed, err := stubSealer{}.SealCredential(t.Context(), person, credentialID,
+	sealed, err := stubSealer{}.SealCredential(person, credentialID,
 		iamdomain.FieldTOTP, seed)
 	if err != nil {
 		t.Fatalf("seal a seed: %v", err)

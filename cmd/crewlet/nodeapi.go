@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -163,6 +164,13 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	// balancer rotates across the fleet meets each node's separately, which
 	// is the residual internal/iam/credential's throttle states and bounds.
 	throttle := credential.NewThrottle(credential.ThrottleDeps{})
+	// THE SEALER, checked here for the directory's reason: a typed nil in
+	// the surface's interface would pass its own refusal.
+	sealer := e.PersonSealer()
+	if sealer == nil {
+		return nil, nil, errors.New("api: the sign-in surface: this node " +
+			"holds no keyring to seal a second factor with")
+	}
 	surface, err := authapi.New(authapi.Options{
 		Bootstrap: boot,
 		Directory: reader,
@@ -176,7 +184,7 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 		Hasher:   credential.NewHasher(credential.Default(), credential.VerifyCap()),
 		Throttle: throttle,
 		Blinder:  e.PersonBlinder(),
-		Sealer:   e.PersonSealer(),
+		Sealer:   sealer,
 		Sessions: reader,
 		// THE SAME PURE FUNCTION THE GUARD USES over the same Tier A,
 		// which is one PARSER rather than one instance — see
@@ -262,6 +270,15 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (surfaceMounter,
 			"hint", "activate a company revision and restart the node")
 		return nil, nil
 	}
+	// THE KEYRING'S OPENER, checked here rather than handed in as a typed
+	// nil: an interface holding a nil pointer is not nil, so the surface's
+	// own refusal would never see it and the first name it opened would
+	// panic.
+	sealer := e.PersonSealer()
+	if sealer == nil {
+		return nil, errors.New("api: the identity directory: this node holds " +
+			"no keyring to open anybody's name with")
+	}
 	surface, err := iamapi.New(iamapi.Options{
 		Directory: reader,
 		// ONE WRITER PER CALLER. The node's own writer acts as the
@@ -273,7 +290,7 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (surfaceMounter,
 		Authority: func(principal iam.Principal) iamapi.Writer {
 			return writer.As(principal)
 		},
-		Opener:       e.PersonSealer(),
+		Opener:       sealer,
 		ExternalBase: boot.API.ExternalBase(),
 		// THIS NODE'S OWN CEILING, which the report compares a person's
 		// declared grants against: it is applied at decision time and
@@ -284,14 +301,6 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (surfaceMounter,
 		// What an administrator did — a token minted or revoked, a
 		// session ended, a person removed — on the node's audit feed.
 		Audit: e.AuthEvents(),
-		// AND WHICH PERSON KEYS EXIST, so a removal whose key outlived it
-		// and a key nobody owns are named while the key duty has yet to
-		// destroy them — nil on a node with no fleet store, which skips
-		// both arms — and how far the identity log goes, which the
-		// report proves an owner's absence against: without it a key
-		// whose owner has not been applied here reads as nobody's.
-		Keys:   e.PersonKeyIndex(),
-		LogEnd: e.IdentityLogEnd,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: the identity directory: %w", err)

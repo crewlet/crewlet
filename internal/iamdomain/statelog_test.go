@@ -19,24 +19,15 @@ import (
 // different ciphertext for one record would pass a count and fail the claim
 // that their tables are byte-identical. That the comparison holds at all is
 // what says the sealing happens at the WRITER rather than on each node, which
-// is the property the whole removal mechanism rests on.
-//
-// It is also the first domain whose declaration NARROWS: it runs on ingress
-// and workers and not on a seats-only satellite. The suite does not exercise
-// participation — that is the engine's — but the declaration half checks the
-// pairing that makes narrowing legal, which is that a domain gating seat
-// admission may not be one a node might not run.
+// is what keeps a name, an address and a seed ciphertext on the log and in
+// every node's rows alike.
 func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain: iamdomain.Domain{},
-			// NO SHREDDER, which is the honest shape here rather than a
-			// saving: the suite has no key store, and a removal on a
-			// node with none deletes the rows and leaves the key to a
-			// peer. That is the documented behaviour of a nil one, so
-			// the suite exercises it rather than a stub that pretends.
-			Applier: iamdomain.NewApplier("suite-node", nil, nil),
+			// NO DIRECTORY SIGNAL: nothing here rebuilds a registry.
+			Applier: iamdomain.NewApplier("suite-node", nil),
 			// Migrate is nil: these tables ship in the replicated
 			// estate's own migrations, so a fresh store already has
 			// them. A domain that created its tables from test code

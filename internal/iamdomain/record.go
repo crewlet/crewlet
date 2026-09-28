@@ -275,10 +275,10 @@ const (
 	// removed person again, so a node that deferred a removal would go on
 	// admitting somebody every peer has off-boarded.
 	//
-	// WHAT IT ACTUALLY DESTROYS is the person's data encryption key, which
-	// is what makes their name and address unrecoverable from an artefact
-	// taken before it. The row and the id outlive it, because the audit
-	// trail names them.
+	// WHAT IT ERASES is every sealed value of theirs the estate holds —
+	// their rows go, and the invitation and trail rows that outlive them
+	// keep every column but the sealed ones. The tombstone and the id
+	// outlive it, because the audit trail names them.
 	OpRemove OpKind = "remove"
 
 	// OpOpen begins one session. Its subject is [KindSession], create-only
@@ -366,8 +366,8 @@ func (o OpKind) Valid() bool { return slices.Contains(OpKinds, o) }
 // build could not decode: a deferral row, a stalled-log report, a broker
 // listing. So none of them carries a name, an address or a login — the subject
 // is a blind or an opaque id, and the scope is a bucket number. A person's own
-// values live in the payload, sealed under their own key, which the envelope
-// pass never opens.
+// values live in the payload, sealed under the fleet keyring, which the
+// envelope pass never opens.
 type RecordEnvelope struct {
 	// V is the record version. Refused for the PAYLOAD when unknown, never
 	// for this struct.
@@ -446,11 +446,10 @@ type MutationRecord struct {
 	// BYTES when the version is above this build's.
 	//
 	// IT IS WHERE EVERY SEALED VALUE LIVES. A person's name and address are
-	// sealed under that person's own key BEFORE publication, with their id
-	// as the additional authenticated data, so the bytes on the broker, in
-	// every node's deferred table and in every snapshot are ciphertext that
-	// only a node holding the key can open — and destroying the key is what
-	// a removal actually does.
+	// sealed under the fleet keyring BEFORE publication, with their id and
+	// the field as the additional authenticated data, so the bytes on the
+	// broker, in every node's deferred table and in every snapshot are
+	// ciphertext that only a holder of the keyring can open.
 	Mutation json.RawMessage `json:"mutation,omitempty"`
 
 	// Person is the id every row this record writes belongs to, IN THE

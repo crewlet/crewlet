@@ -52,7 +52,7 @@ Usage:
   crewlet iam grant ID [-grants G,...] [-colleague L]  Change what somebody carries
   crewlet iam suspend ID                               Stop them acting, keep the row
   crewlet iam activate ID                              Let them act again
-  crewlet iam remove ID                                Tombstone them and destroy their key
+  crewlet iam remove ID                                Tombstone them and erase what is theirs
   crewlet iam revoke ID                                End every session and token they hold
   crewlet iam sessions ID                              Their sessions, newest first
   crewlet iam credentials [-person ID]                 What somebody proves themselves with
@@ -372,8 +372,7 @@ var iamKeyed = map[string]bool{
 // saying what to do instead: sent anyway, the key would be ignored and the
 // operator told nothing, which is the one outcome worse than the refusal.
 func iamUnkeyed(sub string) error {
-	switch sub {
-	case "token":
+	if sub == "token" {
 		return errors.New("a mint takes no -idempotency-key: its retry would " +
 			"answer the first attempt's record beside a value that verifies " +
 			"against nothing, so a mint whose outcome was unknown is minted " +
@@ -675,18 +674,14 @@ func (p *iamPrinter) people(answer map[string]any, err error) error {
 
 // personName is what to show where a name would go.
 //
-// THE THREE STATES ARE THREE SENTENCES. A removed person's key is destroyed
-// and their name is gone everywhere, for ever; a sealed one is ciphertext
-// this deployment's keyring cannot open, which somebody else's can; and an
-// empty one is somebody who gave none. Rendering all three as blank would
-// make a restore under the wrong keyring look like a company of anonymous
-// people.
+// THE TWO STATES ARE TWO SENTENCES. A sealed one is ciphertext this node's
+// keyring cannot open — a key dropped before the values were re-sealed, or a
+// restore under a different keyring — which the right keyring can; an empty
+// one is somebody who gave none. Rendering both as blank would make a restore
+// under the wrong keyring look like a company of anonymous people.
 func personName(row map[string]any) string {
-	switch {
-	case truthy(row["removed"]):
-		return "(removed)"
-	case truthy(row["sealed"]):
-		return "(sealed under a key this deployment does not have)"
+	if truthy(row["sealed"]) {
+		return "(sealed under a key this node's keyring does not hold)"
 	}
 	return str(row["name"])
 }
@@ -773,16 +768,6 @@ func (p *iamPrinter) check(answer map[string]any, err error) error {
 		fmt.Fprintf(p.w, "%d seat binding(s) could not be checked: this "+
 			"node's org chart could not say whether their seats exist — ask "+
 			"a node whose chart applier is current\n", int(unchecked))
-	}
-	// AND A KEY IT COULD NOT JUDGE, for the same reason: a node that has not
-	// applied the whole identity log — behind it, or holding a record it
-	// could not apply — cannot tell a key nobody owns from one whose owner
-	// it has not applied.
-	if unchecked, _ := answer["keys_unchecked"].(float64); unchecked > 0 {
-		fmt.Fprintf(p.w, "%d key(s) no row here owns could not be judged: "+
-			"this node has not applied the whole identity log (it is behind, "+
-			"or holds a record it could not apply) — ask a node that has\n",
-			int(unchecked))
 	}
 	if len(rows) == 0 {
 		fmt.Fprintf(p.w, "nothing to report, as of %s\n",

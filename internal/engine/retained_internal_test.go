@@ -11,18 +11,17 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE KEY DUTY, THE BLIND-KEY MINT AND THE SESSION COLLECTION EACH DECIDE FROM
-// AN ABSENT ROW — and on a real node the applier's checkpoint moves past a
-// record it RETAINS, so "caught up" off the checkpoint read a retained
-// record's rows as rows nobody wrote. These cases put a real node into that
-// state the two ways it happens and ask each decision on it.
+// THE BLIND-KEY MINT AND THE SESSION COLLECTION EACH DECIDE FROM AN ABSENT ROW
+// — and on a real node the applier's checkpoint moves past a record it
+// RETAINS, so "caught up" off the checkpoint read a retained record's rows as
+// rows nobody wrote. These cases put a real node into that state the two ways
+// it happens and ask each decision on it.
 
 // retentionCause is why a node keeps a record at its position instead of
 // applying it.
@@ -127,83 +126,6 @@ func claimRecord(t *testing.T, person, login string) iamdomain.MutationRecord {
 		},
 		Mutation: mutation, Person: person,
 		Actor: "node-peer", ActorKind: "machine",
-	}
-}
-
-// A LIVE PERSON'S KEY SURVIVES ON A NODE THAT RETAINED THEIR ENROLMENT.
-//
-// A peer enrols somebody and mints their key; this node retains the enrolment's
-// records — signed under a key it was not restarted with, or at a version it
-// cannot read — and moves its checkpoint past them. An hour later the key duty
-// runs HERE: the store holds the person's key, no row here owns it, and the
-// checkpoint is at the log's end. Judged "caught up" off that checkpoint the
-// key was destroyed — every copy of a live person's name and address,
-// irreversibly, for somebody nobody removed.
-//
-// The CONTROL runs first on the same node before anything is retained: a
-// refused enrolment's key, past the grace and owned by nobody, IS collected —
-// so what spares the live person's key is the retention and nothing else.
-func TestALivePersonsKeySurvivesOnANodeThatRetainedTheirEnrolment(t *testing.T) {
-	t.Parallel()
-	for _, why := range []retentionCause{retainedUnderUnknownKey, retainedFromNewerBuild} {
-		t.Run(string(why), func(t *testing.T) {
-			t.Parallel()
-			ctx := t.Context()
-			e, b := retentionNode(t)
-			store := fleetsecrets.New(e.backends.Fleet, e.cipher).Estate()
-			sealer, err := iamdomain.NewSealer(store)
-			if err != nil {
-				t.Fatalf("sealer: %v", err)
-			}
-			pass := func() iamdomain.ShredReport {
-				t.Helper()
-				report, err := iamdomain.ShredKeys(ctx, e.native.iamReader,
-					e.PersonKeyIndex(), sealer, time.Now(), e.IdentityLogEnd)
-				if err != nil {
-					t.Fatalf("the key duty's pass: %v", err)
-				}
-				return report
-			}
-			past := time.Now().Add(-2 * iamdomain.OrphanKeyGrace)
-
-			// THE CONTROL.
-			refused := uuid.Must(uuid.NewV7()).String()
-			if err := sealer.Mint(ctx, refused, secrets.Author{Name: "node-a", Kind: string(iam.ActorSystem)}, past); err != nil {
-				t.Fatalf("mint the refused enrolment's key: %v", err)
-			}
-			if report := pass(); len(report.Collected) != 1 || report.Collected[0] != refused {
-				t.Fatalf("before anything was retained the pass reported %+v, want "+
-					"the refused enrolment's key collected — without that this "+
-					"case proves nothing about what spares the other", report)
-			}
-
-			// THE PEER'S ENROLMENT, RETAINED HERE.
-			person := uuid.Must(uuid.NewV7()).String()
-			if err := sealer.Mint(ctx, person, secrets.Author{Name: "node-peer", Kind: string(iam.ActorSystem)}, past); err != nil {
-				t.Fatalf("mint the person's key: %v", err)
-			}
-			retain(t, e, b, why, claimRecord(t, person, "dana.sre"))
-			end, err := e.IdentityLogEnd(ctx)
-			if err != nil {
-				t.Fatalf("read the log's end: %v", err)
-			}
-			if got := e.native.log.Domain(iamdomain.Domain{}.Name()).runner.Committed().Seq; got < end {
-				t.Fatalf("the checkpoint is at %d of %d — the node is behind, not "+
-					"holding a retained record, so this case is not the one it names",
-					got, end)
-			}
-
-			report := pass()
-			if _, err := store.Get(ctx, iamdomain.PersonDEKName(person)); err != nil {
-				t.Fatalf("the key duty destroyed a live person's key on a node that "+
-					"retained their enrolment (%v) — report %+v", err, report)
-			}
-			if len(report.Collected) != 0 || report.Unproven != 1 ||
-				!errors.Is(report.Unjudged, iamdomain.ErrNotCurrent) {
-				t.Errorf("the pass reported %+v, want the key counted as unproven "+
-					"because this node's rows cannot vouch for an absence", report)
-			}
-		})
 	}
 }
 

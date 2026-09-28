@@ -826,8 +826,8 @@ func TestHealthNamesTheIdentityDutiesThisNodeArmed(t *testing.T) {
 		want  map[string]any
 	}{
 		{"a worker node", map[string]time.Duration{
-			"iam_sweep": time.Hour, "iam_key_shred": 15 * time.Minute,
-		}, map[string]any{"iam_sweep": 3600.0, "iam_key_shred": 900.0}},
+			"iam_sweep": time.Hour, "iam_claims": time.Hour,
+		}, map[string]any{"iam_sweep": 3600.0, "iam_claims": 3600.0}},
 		{"a node that armed none", nil, map[string]any{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1,17 +1,15 @@
 package authapi_test
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // A SECOND FACTOR'S SEED IS SEALED BEFORE IT ENTERS ANY RECORD, AND STILL
@@ -21,8 +19,8 @@ import (
 // into the credential set in the clear — so into the person's document, their
 // credential row and the trail entry, on every node, in every snapshot and
 // every backup, and readable off the cluster port by whoever could read a
-// stream. The enrolment now seals it under the person's key, bound to the
-// credential it is enrolled as, before the write is formed: nothing the writer
+// stream. The enrolment now seals it under the fleet keyring, bound to the
+// person and the credential it is enrolled as, before the write is formed: nothing the writer
 // is handed carries it, and the credential opens back to it as that credential
 // only. And sealing costs nothing at the door: the next sign-in checks a code
 // against it as before.
@@ -63,7 +61,7 @@ func TestASecondFactorsSeedIsSealedBeforeItEntersAnyRecord(t *testing.T) {
 	if app.ID == "" || app.ID == "app" {
 		t.Fatalf("no new second factor was stored: %+v", held)
 	}
-	opened, err := stubSealer{}.OpenCredential(t.Context(), r.estate.person.ID,
+	opened, err := stubSealer{}.OpenCredential(r.estate.person.ID,
 		app.ID, iamdomain.FieldTOTP, app.Verifier)
 	if err != nil || opened != secret {
 		t.Fatalf("the stored seed opens as (%q, %v), want the seed enrolled", opened, err)
@@ -79,47 +77,44 @@ func TestASecondFactorsSeedIsSealedBeforeItEntersAnyRecord(t *testing.T) {
 	}
 }
 
-// A SEED THAT DOES NOT OPEN IS NEVER A MATCH — AND AN OUTAGE IS NOT A WRONG
-// CODE.
+// A SEED THAT DOES NOT OPEN IS NEVER A MATCH.
 //
-// A seed that is not this credential's — pasted from another credential, or
-// enrolled in the clear before seeds were sealed — is refused exactly as a
-// wrong code is: the one generic refusal, and no session. A key store this node
-// cannot reach is the unknown arm: 503 with a Retry-After, because answering
-// it as a wrong code would send somebody to re-type a code that was right.
+// A seed that is not this credential's — pasted from another credential,
+// enrolled in the clear, or sealed under a key this node's ring no longer
+// holds — is refused exactly as a wrong code is: the one generic refusal, and
+// no session. Opening fetches nothing, so there is no outage to tell apart from
+// it.
 //
 // The CONTROL is the rig's own seed, sealed as its credential, which signs in.
 // Mutation: fall back to the stored value when it does not open and the
-// in-the-clear row signs in; answer an unreachable store as a refusal and its
-// row is 401.
+// in-the-clear row signs in.
 func TestASeedThatDoesNotOpenIsNeverAMatch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		seed   func(t *testing.T, person string) string
-		sealer authapi.Sealer
 		status int
 		code   httpjson.Code
 	}{
 		{"the credential's own sealed seed (the control)",
 			func(t *testing.T, person string) string {
 				return sealedSeed(t, person, "app", totpSeed)
-			}, stubSealer{}, http.StatusOK, ""},
+			}, http.StatusOK, ""},
 		{"a seed sealed for another credential",
 			func(t *testing.T, person string) string {
 				return sealedSeed(t, person, "a-replaced-credential", totpSeed)
-			}, stubSealer{}, http.StatusUnauthorized, httpjson.CodeSignInRefused},
+			}, http.StatusUnauthorized, httpjson.CodeSignInRefused},
 		{"a seed written in the clear",
 			func(*testing.T, string) string { return totpSeed },
-			stubSealer{}, http.StatusUnauthorized, httpjson.CodeSignInRefused},
-		{"a key store this node cannot reach",
+			http.StatusUnauthorized, httpjson.CodeSignInRefused},
+		{"a seed sealed under a key this node's ring does not hold",
 			func(t *testing.T, person string) string {
-				return sealedSeed(t, person, "app", totpSeed)
-			}, unreachableKeys{}, http.StatusServiceUnavailable, httpjson.CodeUnavailable},
+				return sealedUnderAnotherRing(t, person, "app", totpSeed)
+			}, http.StatusUnauthorized, httpjson.CodeSignInRefused},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r := newSignInRigWith(t, func(o *authapi.Options) { o.Sealer = tc.sealer })
+			r := newSignInRig(t)
 			r.estate.mu.Lock()
 			for i, c := range r.estate.person.Credentials {
 				if c.Method == iamdomain.MethodTOTP {
@@ -139,10 +134,6 @@ func TestASeedThatDoesNotOpenIsNeverAMatch(t *testing.T) {
 			if answer["error"] != string(tc.code) {
 				t.Errorf("answered %v, want %s", answer["error"], tc.code)
 			}
-			if tc.status == http.StatusServiceUnavailable &&
-				rec.Header().Get("Retry-After") == "" {
-				t.Error("an outage answered 503 with no Retry-After")
-			}
 			r.estate.mu.Lock()
 			opened := len(r.estate.starts)
 			r.estate.mu.Unlock()
@@ -153,12 +144,24 @@ func TestASeedThatDoesNotOpenIsNeverAMatch(t *testing.T) {
 	}
 }
 
-// unreachableKeys is a sealer whose key store cannot be reached: every open of
-// a credential secret fails with an error that is neither refusal.
-type unreachableKeys struct{ stubSealer }
-
-func (unreachableKeys) OpenCredential(context.Context, string, string,
-	iamdomain.Field, string) (string, error) {
-
-	return "", errors.New("the coordination store is unreachable")
+// sealedUnderAnotherRing is a seed sealed as the right credential under a
+// keyring key the rig's ring does not hold — a key dropped before the seed was
+// re-sealed.
+func sealedUnderAnotherRing(t *testing.T, person, credentialID, seed string) string {
+	t.Helper()
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k0", Keys: map[string][]byte{"k0": []byte(strings.Repeat("0", 32))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealer, err := iamdomain.NewSealer(cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := sealer.SealCredential(person, credentialID, iamdomain.FieldTOTP, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sealed
 }

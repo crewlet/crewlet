@@ -102,7 +102,7 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 // what makes a walk visible. It meets no curve: a link carries 256 bits of
 // secret, so there is nothing a curve would slow, and a curve keyed on the
 // address a link was presented from let one stranger there hold every
-// colleague's invitation and founder's code at 429.
+// colleague's invitation at 429.
 //
 // Mutation: drop the count from the 410 and the tally is empty; key the
 // invitation on its source and the walk meets 429.

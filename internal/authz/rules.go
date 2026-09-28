@@ -516,14 +516,13 @@ var rules = map[Action]rule{
 	// refuses conferring what the caller does not hold, and this refuses
 	// the gesture before it gets there.
 	//
-	// THE ORDINARY WINDOW for enrolling somebody, inviting them, removing
-	// them and issuing the bootstrap code — the design's own: every
+	// THE ORDINARY WINDOW for enrolling somebody, inviting them and removing
+	// them — the design's own: every
 	// identity-directory write asks `step_up`, and the sensitive window is
 	// kept for the gestures that hand over a value or change an authority
 	// somebody already holds, below. Each of these is bounded another way:
 	// an enrolment and an invitation confer only what their writer holds
-	// (internal/iamdomain), a removal is announced and audited, and the
-	// bootstrap code opens only an engine nobody is enrolled in. Asking the
+	// (internal/iamdomain), and a removal is announced and audited. Asking the
 	// sensitive window of all of them sent an administrator who proved half
 	// an hour ago to re-prove for every invitation they sent.
 	ActionDirectoryWrite: {class: ClassOperator, grant: iam.GrantPeopleManage, recency: iam.RecencyStepUp},

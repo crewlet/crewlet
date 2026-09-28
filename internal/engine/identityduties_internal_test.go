@@ -20,7 +20,6 @@ func TestEveryIdentityDutysLeaseFitsTheDutyCeiling(t *testing.T) {
 	t.Parallel()
 	for name, every := range map[string]time.Duration{
 		identitySweepDuty:  IdentitySweepInterval,
-		identityKeysDuty:   IdentityKeysInterval,
 		identityClaimsDuty: IdentityClaimsInterval,
 	} {
 		if ttl := identityDutyTTL(every); ttl > coord.MaxDutyTTL {

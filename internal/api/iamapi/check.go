@@ -2,7 +2,6 @@ package iamapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"slices"
 
@@ -58,34 +57,12 @@ const (
 	// taken for somebody whose content record never followed. Removing the
 	// reservation's id releases them.
 	KindOrphanedClaim FindingKind = "claim_orphaned"
-
-	// KindKeyOutlivedRemoval is somebody removed whose key still exists,
-	// because the removal's own delete of it failed. Until the key duty
-	// lands it their name and address can still be opened wherever their
-	// ciphertext is — the log, every donated snapshot, every backup, and not
-	// only one taken before the removal — which is the answer to "is that
-	// person gone" that an operator needs to be told is "not yet".
-	KindKeyOutlivedRemoval FindingKind = "removal_key_live"
-
-	// KindKeyUnowned is a key no person, reservation, invitation or
-	// removal owns, older than [iamdomain.OrphanKeyGrace]: minted for an
-	// enrolment or an invitation refused after the mint, or left by an
-	// invitation the sweep collected. Whatever it sealed can be opened
-	// wherever it landed until the key duty destroys it, which its next
-	// pass on a node that has applied the whole log does — and a backup
-	// taken before then carries the key for as long as it is kept. Reported
-	// only by such a node, because on one behind the log — or holding a
-	// record it retained, which moves its checkpoint past rows it never
-	// wrote — a person whose enrolment has not been applied owns nothing
-	// yet.
-	KindKeyUnowned FindingKind = "key_unowned"
 )
 
-// FindingKinds are the eight, in the order the report renders them.
+// FindingKinds are the six, in the order the report renders them.
 var FindingKinds = []FindingKind{
 	KindNoManageHolder, KindNoCredential, KindDanglingBinding,
 	KindClampedGrant, KindDuplicateClaim, KindOrphanedClaim,
-	KindKeyOutlivedRemoval, KindKeyUnowned,
 }
 
 // Finding is one row of the report.
@@ -104,12 +81,6 @@ type Finding struct {
 
 	Detail string `json:"detail"`
 }
-
-// Keys is the company's secret store as the report reads it: which person keys
-// exist. NIL-ABLE, and the absence is the THIRD VALUE for [Bindings]' reason —
-// a node with no secret store cannot tell a removed person's key from no key,
-// so the arm is skipped rather than answered.
-type Keys = iamdomain.KeyIndex
 
 // Bindings is what the report asks about one person's seat binding: whether it
 // dangles, and if so the sentence that says which seat, why and what to do.
@@ -190,16 +161,6 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	findings = append(findings, claims...)
-	keysUnchecked := 0
-	if s.keys != nil {
-		keys, notJudged, err := s.keyFindings(r)
-		if err != nil {
-			s.unavailable(w, r, "read which keys outlive their owners", err)
-			return
-		}
-		findings = append(findings, keys...)
-		keysUnchecked = notJudged
-	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"findings":                  findings,
 		"position":                  position,
@@ -210,10 +171,6 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		// "nothing to report" during exactly the chart stall that
 		// hides a residue.
 		"bindings_unchecked": unchecked,
-		// THE SAME FOR A KEY NOBODY OWNS: this node holds keys no row
-		// here owns and cannot say whether that is because nobody does
-		// or because their owner has not arrived.
-		"keys_unchecked": keysUnchecked,
 	})
 }
 
@@ -298,59 +255,6 @@ func (s *Service) claimFindings(r *http.Request) ([]Finding, error) {
 		})
 	}
 	return out, nil
-}
-
-// keyFindings is every removed person whose key outlived the removal and every
-// key this node proves nobody owns, and how many keys nobody owns here this
-// node could not judge.
-//
-// THE UNOWNED ARM IS THE KEY DUTY'S OWN RULE, [iamdomain.KeyCensus.Judge], and
-// never a restatement of it: the log's end is read BEFORE the census, and a key
-// is named only when the census's own snapshot has applied everything that end
-// covers and the key is past [iamdomain.OrphanKeyGrace]. A key inside the grace
-// is a gesture that may be running and is no finding at all; one this node's
-// rows cannot vouch for — behind, holding a record they retained, or a key with
-// no recorded write time — is counted as unchecked. A report that restated the
-// rule had drifted from the duty once already: it read the node as current off
-// the applier's checkpoint, which moves past a record the node retained, and
-// named live people's keys as nobody's.
-func (s *Service) keyFindings(r *http.Request) (out []Finding, unchecked int,
-	err error) {
-
-	var end uint64
-	endErr := errors.New("this surface was given no way to read how far the " +
-		"identity log goes, which an absence is proved against")
-	if s.logEnd != nil {
-		end, endErr = s.logEnd(r.Context())
-	}
-	census, err := s.directory.KeyCensus(r.Context(), s.keys)
-	if err != nil {
-		return nil, 0, err
-	}
-	for _, id := range census.OutlivedRemoval {
-		out = append(out, Finding{
-			Kind: KindKeyOutlivedRemoval, Person: id,
-			Detail: "this person was removed and their key still exists, so " +
-				"their name and address are readable from every backup taken " +
-				"before the removal; the key duty retries until it is destroyed",
-		})
-	}
-	judged := census.Judge(end, endErr, s.now())
-	for _, key := range judged.Nobodys {
-		out = append(out, Finding{
-			Kind: KindKeyUnowned, Person: key.ID,
-			Detail: "no person, reservation, invitation or removal owns " +
-				"this key — an enrolment or an invitation refused after " +
-				"it was minted, or an invitation the sweep collected — so " +
-				"what it sealed is readable from every backup; the key " +
-				"duty destroys it on its next pass",
-		})
-	}
-	if judged.Why != nil {
-		log.DebugContext(r.Context(), "api_iam_check_keys_unjudged",
-			"unowned", judged.Unproven, "reason", judged.Why.Error())
-	}
-	return out, judged.Unproven, nil
 }
 
 // hasCredential reports whether somebody can prove themselves at all.

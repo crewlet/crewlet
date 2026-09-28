@@ -15,13 +15,12 @@ import (
 
 // THE IDENTITY DUTIES ARE ARMED WHERE THEIR INPUTS ARE, and nowhere else.
 //
-// Each of the three had no loop behind it until it was armed here — a sweep
-// record nothing published, a failed key delete nobody retried, three indexes
-// nobody read — and each of those looked, from every other vantage point,
-// exactly like a duty quietly finding nothing to do. So the arming decision is
-// held three ways:
+// Each of the two had no loop behind it until it was armed here — a sweep
+// record nothing published, three indexes nobody read — and each of those
+// looked, from every other vantage point, exactly like a duty quietly finding
+// nothing to do. So the arming decision is held three ways:
 //
-//  1. A node running the identity domain arms all three, at their stated
+//  1. A node running the identity domain arms both, at their stated
 //     intervals.
 //  2. A seats-only satellite RUNS the domain, as every node does, and arms
 //     nothing, for the reason the next one does.
@@ -35,9 +34,8 @@ func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	}
 	want := map[string]time.Duration{
-		"iam_sweep":     engine.IdentitySweepInterval,
-		"iam_claims":    engine.IdentityClaimsInterval,
-		"iam_key_shred": engine.IdentityKeysInterval,
+		"iam_sweep":  engine.IdentitySweepInterval,
+		"iam_claims": engine.IdentityClaimsInterval,
 	}
 
 	t.Run("a node running the domain", func(t *testing.T) {

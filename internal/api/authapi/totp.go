@@ -154,21 +154,21 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	// event that says which was enrolled. It is also what the seed is
 	// sealed AS, so it has to exist before the seal.
 	id := uuid.New().String()
-	// THE SEED IS SEALED BEFORE IT ENTERS ANY RECORD, under the person's
-	// own key and bound to this credential: the record is replicated to
-	// every node, snapshotted, backed up and donated to joining peers, and
-	// a seed in the clear there is a second factor everybody with a copy
-	// holds. Nothing past this line carries it in the clear.
-	sealed, err := s.sealer.SealCredential(r.Context(), person, id,
-		iamdomain.FieldTOTP, in.Secret)
+	// THE SEED IS SEALED BEFORE IT ENTERS ANY RECORD, under the fleet
+	// keyring and bound to this person and this credential: the record is
+	// replicated to every node, snapshotted, backed up and donated to
+	// joining peers, and a seed in the clear there is a second factor
+	// everybody with a copy holds. Nothing past this line carries it in the
+	// clear.
+	sealed, err := s.sealer.SealCredential(person, id, iamdomain.FieldTOTP,
+		in.Secret)
 	if err != nil {
-		// THE PERSON'S KEY COULD NOT BE REACHED, which no retry of
-		// this caller's typing fixes and a moment of the key store
-		// usually does. Nothing was stored, and the code proved the
-		// seed, so presenting both again enrols it.
+		// A FAULT OF THIS NODE'S, never of the caller's typing — the
+		// keyring's cipher refused to seal — and nothing was stored.
+		// A 500, because no wait clears it.
 		log.ErrorContext(r.Context(), "api_totp_seal_failed",
 			"person", person, "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
 	const reason = "enrolled a second factor"

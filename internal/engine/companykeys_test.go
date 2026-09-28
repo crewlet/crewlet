@@ -34,7 +34,7 @@ func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Estate) {
 }
 
 // enrolAddress enrols one person with an address through the node's own
-// writer, which is what a bootstrap code and an invitation redemption do.
+// writer, which is what an invitation redemption does.
 func enrolAddress(t *testing.T, e *engine.Engine, login, email string) (string, error) {
 	t.Helper()
 	id := uuid.New().String()
@@ -118,8 +118,11 @@ func TestAMissingBlindKeyIsNeverMintedOverAnEstateThatUsedOne(t *testing.T) {
 	if _, err := enrolAddress(t, e, "ada.lovelace", "ada@example.com"); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
-	if removed, err := store.Unset(t.Context(), iamdomain.BlindKeyName); err != nil ||
-		!removed {
+	// DELETED UNDER THE ENGINE, in the coordination store itself: no
+	// surface of the engine's deletes its own key, which is exactly why a
+	// deletion is somebody else's mistake the mint has to survive.
+	if removed, err := e.Backends().Fleet.DeleteSecret(t.Context(),
+		iamdomain.BlindKeyName); err != nil || !removed {
 		t.Fatalf("delete the key: removed=%v, %v", removed, err)
 	}
 	// A NODE THAT RESTARTED after the deletion, which holds no blinder.

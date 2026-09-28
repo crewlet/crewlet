@@ -187,14 +187,9 @@ type fakeDirectory struct {
 	err    error
 
 	// claims is what the claim report reads, and claimsErr a report this
-	// node could not read. liveKeys are the removed people whose key the
-	// key duty has not yet destroyed, and unowned the keys nobody owns.
+	// node could not read.
 	claims    iamdomain.ClaimReport
 	claimsErr error
-	liveKeys  []string
-	unowned   []iamdomain.UnownedKey
-	// prefix is how much of the identity log the census's snapshot holds.
-	prefix statelog.Prefix
 
 	// history is the trail `GET /iam/audit` pages.
 	history []iamdomain.HistoryRow
@@ -282,20 +277,6 @@ func (d *fakeDirectory) Claims(context.Context, time.Time) (iamdomain.ClaimRepor
 		return iamdomain.ClaimReport{}, d.claimsErr
 	}
 	return d.claims, d.err
-}
-
-func (d *fakeDirectory) KeyCensus(_ context.Context, keys iamdomain.KeyIndex) (
-	iamdomain.KeyCensus, error) {
-
-	if keys == nil {
-		// A REPORT THAT ASKS WITHOUT A STORE is the bug this fake names:
-		// the arm is meant to be skipped when there is nothing to ask.
-		return iamdomain.KeyCensus{}, errors.New("asked with no key index")
-	}
-	return iamdomain.KeyCensus{
-		Keys:            len(d.liveKeys) + len(d.unowned),
-		OutlivedRemoval: d.liveKeys, Unowned: d.unowned, Prefix: d.prefix,
-	}, d.err
 }
 
 // fakeWriter records what the surface asked of it.
@@ -497,8 +478,7 @@ func (w *fakeWriter) Remove(_ context.Context, _, _, _ string) (
 
 type fakeOpener struct{}
 
-func (fakeOpener) Open(_ context.Context, _ string, field iamdomain.Field,
-	sealed string) (string, error) {
+func (fakeOpener) Open(_ string, field iamdomain.Field, sealed string) (string, error) {
 
 	if sealed == "" {
 		return "", nil
@@ -635,43 +615,34 @@ func TestTheListingOpensNamesAndNeverCarriesAVerifier(t *testing.T) {
 	}
 }
 
-// A REMOVED PERSON IS A STATE, NOT A FAILURE.
+// A VALUE THIS NODE'S KEYRING CANNOT OPEN RENDERS AS SEALED, NOT AS A FAILURE.
 //
-// A removal deletes the row, so the one place a removed person is still read is
-// a node that has not applied the removal yet — while the key, destroyed by the
-// node that applied it first, is already gone everywhere. The plaintext is then
-// unrecoverable in the log, in every artefact and on every node, and a surface
-// that reported that as a decrypt failure would send an operator to look for an
-// outage that cannot end. The control is a value that will not open for any
-// OTHER reason, which is a keyring this node lacks and renders as sealed.
-func TestARemovedPersonRendersAsRemovedRatherThanAsAFailure(t *testing.T) {
+// A key dropped from the ring before the values were moved off it, or a restore
+// under a different keyring, leaves ciphertext this node cannot open for a
+// person it still knows. The row is served, marked sealed — never an empty name,
+// which would read as somebody who never gave one — and the listing is not taken
+// down over it. The CONTROL is the person beside them, whose values open.
+func TestAValueTheKeyringCannotOpenRendersAsSealed(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name    string
-		fails   error
-		removed bool
-		sealed  bool
-	}{
-		{"a destroyed key", iamdomain.ErrShredded, true, false},
-		{"a keyring this node lacks", errors.New("no key k2 in this keyring"),
-			false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			r := newRig(t, func(o *iamapi.Options) {
-				o.Opener = failingOpener{person: bob.String(), err: tc.fails}
-			})
-			got := r.as(administrator(), http.MethodGet, "/iam/people/"+bob.String(), nil)
-			if got.status != http.StatusOK {
-				t.Fatalf("status %d (body %v)", got.status, got.body)
-			}
-			removed, _ := got.body["removed"].(bool)
-			sealed, _ := got.body["sealed"].(bool)
-			if removed != tc.removed || sealed != tc.sealed {
-				t.Errorf("rendered removed=%v sealed=%v, want removed=%v "+
-					"sealed=%v: %v", removed, sealed, tc.removed, tc.sealed, got.body)
-			}
-		})
+	r := newRig(t, func(o *iamapi.Options) {
+		o.Opener = failingOpener{person: bob.String(),
+			err: fmt.Errorf("no key k2 on this ring: %w", secrets.ErrDecrypt)}
+	})
+	got := r.as(administrator(), http.MethodGet, "/iam/people/"+bob.String(), nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	if sealed, _ := got.body["sealed"].(bool); !sealed {
+		t.Errorf("a value the keyring cannot open rendered unsealed: %v", got.body)
+	}
+	if _, ok := got.body["removed"]; ok {
+		t.Errorf("a person this node holds a row for rendered as removed: %v",
+			got.body)
+	}
+	got = r.as(administrator(), http.MethodGet, "/iam/people", nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("the listing answered %d over one unreadable row: %v",
+			got.status, got.body)
 	}
 }
 
@@ -682,13 +653,13 @@ type failingOpener struct {
 	err    error
 }
 
-func (o failingOpener) Open(ctx context.Context, person string, field iamdomain.Field,
+func (o failingOpener) Open(person string, field iamdomain.Field,
 	sealed string) (string, error) {
 
 	if person == o.person {
 		return "", o.err
 	}
-	return fakeOpener{}.Open(ctx, person, field, sealed)
+	return fakeOpener{}.Open(person, field, sealed)
 }
 
 // A READ THIS NODE COULD NOT PERFORM IS 503 AND NEVER AN EMPTY LIST.
@@ -1014,121 +985,6 @@ func TestAnUnreadableClaimReportIsAnOutageNotACleanBill(t *testing.T) {
 	}
 }
 
-// A REMOVED PERSON WHOSE KEY STILL LIVES IS NAMED — where the node can ask.
-//
-// Until the key duty lands a failed delete, a removed person's name is
-// readable from every backup taken before the removal, and "is that person
-// gone" has to be answerable as "not yet". A node with no secret store cannot
-// tell, and SKIPS the arm rather than asking with nothing — the fake refuses a
-// question asked without a store, so a report that asked anyway fails here.
-func TestTheReportNamesALiveKeyOfARemovedPersonWhereItCanAsk(t *testing.T) {
-	t.Parallel()
-	gone := "018f3a9c-0000-7000-8000-0000000000ee"
-
-	without := newRig(t)
-	without.directory.liveKeys = []string{gone}
-	got := without.as(administrator(), http.MethodGet, "/iam/check", nil)
-	if got.status != http.StatusOK {
-		t.Fatalf("a node with no secret store answered %d: %v", got.status, got.body)
-	}
-	if hasFinding(got.body, string(iamapi.KindKeyOutlivedRemoval)) {
-		t.Error("a node that cannot list keys reported one")
-	}
-
-	with := newRig(t, func(o *iamapi.Options) { o.Keys = listedKeys{} })
-	with.directory.liveKeys = []string{gone}
-	got = with.as(administrator(), http.MethodGet, "/iam/check", nil)
-	if !hasFinding(got.body, string(iamapi.KindKeyOutlivedRemoval)) {
-		t.Fatalf("a removed person's live key was not named: %v", got.body)
-	}
-}
-
-// A KEY NOBODY OWNS IS NAMED ONLY BY A NODE THAT CAN PROVE IT.
-//
-// A key no row owns is either a refused gesture's residue — its sealed value
-// readable from every backup until the key duty destroys it — or the key of
-// somebody whose enrolment this node has not applied. Only rows that have
-// APPLIED the whole log can tell those apart, so the report names one only
-// there, and only past the grace a running gesture needs; everywhere else it
-// COUNTS what it could not judge rather than printing a clean report, and it
-// never calls a young key a finding.
-//
-// The retained case is the one the report used to get wrong: its checkpoint is
-// at the log's end, because the applier moves past a record it retains, and it
-// read that as current — naming as nobody's the key of a person whose
-// enrolment it had merely retained.
-func TestTheReportNamesAnUnownedKeyOnlyWhereTheNodeCanProveIt(t *testing.T) {
-	t.Parallel()
-	const (
-		old   = "018f3a9c-0000-7000-8000-0000000000e1"
-		young = "018f3a9c-0000-7000-8000-0000000000e2"
-	)
-	unowned := []iamdomain.UnownedKey{
-		{ID: old, WrittenAt: at.Add(-2 * iamdomain.OrphanKeyGrace)},
-		{ID: young, WrittenAt: at.Add(-iamdomain.OrphanKeyGrace / 4)},
-	}
-	settled := func(seq uint64) statelog.Prefix {
-		return statelog.Prefix{Settled: statelog.Position{Seq: seq}}
-	}
-	retained := settled(9)
-	retained.Retains = true
-	retained.Retained = statelog.Deferral{Position: statelog.Position{Seq: 6}, Version: 3}
-	end := func(seq uint64, err error) func(context.Context) (uint64, error) {
-		return func(context.Context) (uint64, error) { return seq, err }
-	}
-	for _, tc := range []struct {
-		name      string
-		logEnd    func(context.Context) (uint64, error)
-		prefix    statelog.Prefix
-		wantNamed bool
-		unchecked float64
-	}{
-		{"a node given no way to read the log's end", nil, settled(9), false, 2},
-		{"a node that could not read the log's end",
-			end(0, errors.New("no responders")), settled(9), false, 2},
-		{"a node behind the log", end(9, nil), settled(4), false, 2},
-		{"a node at the log's end holding a record it retained", end(9, nil),
-			retained, false, 2},
-		{"a node that has applied the whole log", end(9, nil), settled(9), true, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			r := newRig(t, func(o *iamapi.Options) {
-				o.Keys = listedKeys{}
-				o.LogEnd = tc.logEnd
-			})
-			r.directory.unowned = unowned
-			r.directory.prefix = tc.prefix
-			got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
-			if got.status != http.StatusOK {
-				t.Fatalf("status %d: %v", got.status, got.body)
-			}
-			var named []string
-			for _, f := range findingsOf(got.body, string(iamapi.KindKeyUnowned)) {
-				named = append(named, f["person"].(string))
-			}
-			switch {
-			case tc.wantNamed && (len(named) != 1 || named[0] != old):
-				t.Errorf("named %v, want exactly the key past the grace", named)
-			case !tc.wantNamed && len(named) != 0:
-				t.Errorf("named %v on a node that cannot tell an absent "+
-					"owner from one it has not applied", named)
-			}
-			if got.body["keys_unchecked"] != tc.unchecked {
-				t.Errorf("keys_unchecked = %v, want %v", got.body["keys_unchecked"],
-					tc.unchecked)
-			}
-		})
-	}
-}
-
-// listedKeys is a key index the fake directory is asked with.
-type listedKeys struct{}
-
-func (listedKeys) Keys(context.Context, string) ([]secrets.Record, error) {
-	return nil, nil
-}
-
 func hasFinding(body map[string]any, kind string) bool {
 	return findingOf(body, kind) != nil
 }
@@ -1143,19 +999,6 @@ func findingOf(body map[string]any, kind string) map[string]any {
 		}
 	}
 	return nil
-}
-
-// findingsOf is every finding of a kind, in the order the report gave them.
-func findingsOf(body map[string]any, kind string) []map[string]any {
-	var out []map[string]any
-	rows, _ := body["findings"].([]any)
-	for _, raw := range rows {
-		row, _ := raw.(map[string]any)
-		if held, _ := row["kind"].(string); held == kind {
-			out = append(out, row)
-		}
-	}
-	return out
 }
 
 // --- the table ----------------------------------------------------------- //
@@ -1173,6 +1016,7 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 			return &fakeWriter{}
 		},
 		Audit:        &recordingAudit{},
+		Opener:       fakeOpener{},
 		ExternalBase: "https://crewlet.example.com",
 	})
 	if err != nil {

@@ -41,16 +41,12 @@ type personView struct {
 	Name  string `json:"name,omitempty"`
 	Email string `json:"email,omitempty"`
 
-	// Removed reports a person whose key a removal destroyed, which is
-	// why their name and address are absent. It is a STATE rather than a
-	// failure: the plaintext is unrecoverable in the log, in every
-	// artefact and on every node, and nothing will ever open it again.
-	Removed bool `json:"removed,omitempty"`
-
-	// Sealed reports ciphertext this DEPLOYMENT cannot open — a restore
-	// under a different keyring. Distinct from Removed, because the two
-	// send an operator to opposite places: one is finished and the other
-	// is a keyring somebody still has.
+	// Sealed reports ciphertext this node's keyring cannot open — a key
+	// dropped from the ring before `crewlet secrets rekey` moved the
+	// values off it, or a restore under a different keyring. A STATE the
+	// operator can end by putting the key back, and never an empty name,
+	// which would read as somebody who never gave one. There is no
+	// "removed" row to render: a removal deletes the row it would be.
 	Sealed bool `json:"sealed,omitempty"`
 
 	// Reserved reports an enrolment whose claims landed and whose content
@@ -86,17 +82,10 @@ func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personVie
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		Version: row.Version, Reserved: row.Reserved,
 	}
-	name, removedName := s.open(ctx, row.ID, iamdomain.FieldName, row.NameSealed)
-	email, removedEmail := s.open(ctx, row.ID, iamdomain.FieldEmail, row.EmailSealed)
+	name, openedName := s.open(ctx, row.ID, iamdomain.FieldName, row.NameSealed)
+	email, openedEmail := s.open(ctx, row.ID, iamdomain.FieldEmail, row.EmailSealed)
 	out.Name, out.Email = name, email
-	out.Removed = removedName || removedEmail
-	// SEALED IS WHAT IS LEFT: ciphertext on the row, no removal, and
-	// nothing opened. That is a keyring this deployment does not have,
-	// and it renders as "sealed" rather than as an empty name — which
-	// would read as somebody who never gave one.
-	out.Sealed = !out.Removed &&
-		((len(row.NameSealed) > 0 && name == "") ||
-			(len(row.EmailSealed) > 0 && email == ""))
+	out.Sealed = !openedName || !openedEmail
 	return out
 }
 
@@ -466,8 +455,8 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	updated, err := writer.UpdatePerson(r.Context(), iamdomain.PersonUpdate{
 		PersonID: id,
 		// THE NAME GOES TO THE WRITER rather than through Apply: it is
-		// sealed under this person's own key, which is a fleet-secret
-		// read, and the apply runs inside the decide's transaction.
+		// sealed once, before the decide, and a decide may run again —
+		// sealed inside Apply it would be sealed afresh on every run.
 		Name: in.Name,
 		Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
 			if in.Grants != nil {

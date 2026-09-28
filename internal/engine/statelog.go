@@ -18,7 +18,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -274,22 +273,6 @@ type stateLog struct {
 	// applyHooks is what each domain's applier calls after a committed
 	// batch — see [applyHooks].
 	applyHooks
-
-	// shredder destroys a removed person's data encryption key, which is
-	// what the IDENTITY APPLIER does to a person after the rows that
-	// removed them are durable. Threaded down for nudgeChart's reason: the
-	// apply is the only thing that sees every removal on every node.
-	//
-	// IT IS THE ONE CONSEQUENCE OF A RECORD IN THAT DOMAIN THAT IS NOT A
-	// ROW, and it happens POST-COMMIT — destroying a key inside the apply
-	// transaction would destroy it for a removal that then rolled back,
-	// and nothing could put it back.
-	//
-	// Nil only on an Engine with no key store — one built by hand in a
-	// test, since [New] refuses a node without a keyring or a fleet
-	// backend. The applier then deletes the rows and leaves the key to the
-	// identity key duty, which finds every removed person whose key lives.
-	shredder iamdomain.Shredder
 
 	// ceilings is the byte ceiling each domain's stream is CREATED with,
 	// sized from Tier A inside the broker's budget ([ceilingsFor]). It is
@@ -550,7 +533,6 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		metrics: e.metrics,
 		witness: e.stateLogWitness(),
 		skills:  skillDetector{}, applyHooks: e.applyHooks(),
-		shredder: e.personKeys(),
 		ceilings: ceilings, volume: streamVolume(boot),
 		run: runCtx, stop: cancel,
 	}

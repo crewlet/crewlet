@@ -24,8 +24,8 @@ import (
 //
 // A NAME OR AN ADDRESS IS ALWAYS SEALED. Never the cleartext, on any payload,
 // at any version: the record is on the broker, in every node's deferred table,
-// in every snapshot and in every backup, and sealing at the WRITER is what
-// makes all of those unreadable the moment a removal destroys the key.
+// in every snapshot and in every backup, and sealing at the WRITER under the
+// fleet keyring is what keeps every one of those ciphertext. See [Sealer].
 //
 // A BLIND IS ALWAYS THE MATCHED FORM. Never the address it was derived from —
 // a blind is what a claim arbitrates on and what a lookup compares, and the
@@ -58,8 +58,8 @@ type Person struct {
 	// answers false, and a denylist would have admitted it.
 	Stage iam.Stage `json:"stage"`
 
-	// NameSealed and EmailSealed are sealed under this person's own key
-	// with (id, field) as the associated data. See [Sealer].
+	// NameSealed and EmailSealed are sealed under the fleet keyring with
+	// (id, field) as the associated data. See [Sealer].
 	NameSealed  string `json:"name_sealed,omitempty"`
 	EmailSealed string `json:"email_sealed,omitempty"`
 
@@ -124,9 +124,9 @@ type Claim struct {
 	// which is what makes a release readable as one without an op lookup.
 	Person string `json:"person,omitempty"`
 
-	// Sealed is the cleartext form of the claimed token, sealed under the
-	// person's key, for the ONE claim whose token is not readable: an
-	// address. A login and a seat id are their own subject and are not
+	// Sealed is the cleartext form of the claimed token, sealed as the
+	// person's address ([Sealer.Seal]), for the ONE claim whose token is
+	// not readable: an address. A login and a seat id are their own subject and are not
 	// secret, so they carry nothing here.
 	//
 	// IT IS WHAT LETS A PERSON READ BACK THE ADDRESS THEY ENROLLED WITH.
@@ -167,10 +167,9 @@ type Invitation struct {
 	// ID is the invitation's own id, which is what a redemption names.
 	ID string `json:"id"`
 
-	// Sealed is the address, sealed under the INVITATION's own key rather
-	// than a person's — there is no person yet, and minting one for an
-	// invitation that may never be redeemed would leave a key behind for
-	// every address anybody ever typed.
+	// Sealed is the address, sealed as the INVITATION's own rather than a
+	// person's — there is no person yet — so it opens as nothing else
+	// ([Sealer.SealInvitation]).
 	Sealed string `json:"sealed,omitempty"`
 
 	// InvitedBy is the actor who issued it, and Grants what redeeming it
@@ -366,8 +365,8 @@ const (
 	// WHAT THAT COSTS IS STATED RATHER THAN GLOSSED: a leaked estate
 	// yields second factors, where it yields nothing usable for a
 	// password. What bounds it is the same thing that bounds every other
-	// secret this company holds — the seed is SEALED under the person's
-	// own key before it reaches a payload, exactly as their name and
+	// secret this company holds — the seed is SEALED under the fleet
+	// keyring before it reaches a payload, exactly as their name and
 	// address are, so a row is not a secret and the applier that writes
 	// it cannot read it.
 	//
