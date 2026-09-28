@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -508,6 +509,55 @@ func TestOfflineStoreCommandsRefuseAScratchStore(t *testing.T) {
 	for _, entry := range entries {
 		if entry.Name() != "config.yaml" {
 			t.Errorf("a refused command left %s behind", entry.Name())
+		}
+	}
+}
+
+// THE OFFLINE COMMANDS TOUCH THE REPLICATED ESTATE WHERE THE CONFIG PUTS IT, OR
+// NOT AT ALL.
+//
+// store.replicated_path moves that database to another volume, and a command
+// that derived its path from store.path alone reported and migrated a fresh
+// database it had just created beside the node's own — leaving the one the
+// engine opens exactly as far behind as it found it, and a stray estate on the
+// wrong disk. `config` and `secrets` read nothing a state log applies, so they
+// must not open it at all.
+func TestOfflineCommandsHonourTheReplicatedPath(t *testing.T) {
+	dir := t.TempDir()
+	elsewhere := filepath.Join(t.TempDir(), "estate.db")
+	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n  replicated_path: %s\n"+
+		"secrets:\n  active_key_id: k1\n  keys:\n    - id: k1\n      material: %q\n",
+		filepath.Join(dir, "index.db"), elsewhere,
+		base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := cli(t, "migrate", "-config", cfg); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	schema, err := store.PendingEstate(context.Background(), store.EstateReplicated,
+		elsewhere, store.Options{})
+	if err != nil {
+		t.Fatalf("read the configured replicated estate: %v", err)
+	}
+	if len(schema.Applied) == 0 || len(schema.Pending) != 0 {
+		t.Errorf("the configured replicated estate has %d applied and %d pending: "+
+			"migrate did not migrate the file the engine opens",
+			len(schema.Applied), len(schema.Pending))
+	}
+
+	stray := filepath.Join(dir, "crewlet-replicated.db")
+	for _, args := range [][]string{
+		{"config", "show", "-config", cfg},
+		{"secrets", "list", "-config", cfg},
+	} {
+		_, _, _ = cli(t, args...)
+		if _, err := os.Stat(stray); err == nil {
+			t.Errorf("%v created %s beside store.path, which "+
+				"store.replicated_path moved elsewhere", args, stray)
+			_ = store.RemoveCopy(stray)
 		}
 	}
 }

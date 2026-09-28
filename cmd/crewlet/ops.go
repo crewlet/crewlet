@@ -81,7 +81,14 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	opts := store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout:  boot.Store.BusyTimeout(),
+		// WHERE THE ENGINE PUTS IT. Left out, the store derives the
+		// replicated estate's path from store.path alone — so on a node
+		// whose store.replicated_path names another volume, this command
+		// reported and migrated a fresh database it created beside
+		// store.path, and left the one the engine opens exactly as far
+		// behind as it found it.
+		ReplicatedPath: boot.Store.ReplicatedPath,
+		BusyTimeout:    boot.Store.BusyTimeout(),
 	}
 	ctx := context.Background()
 
