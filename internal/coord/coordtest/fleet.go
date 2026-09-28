@@ -37,7 +37,6 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T, ages FleetAges) coord.Fl
 		{"valve", valveCases},
 		{"claims", claimCases},
 		{"setup_states", setupCases},
-		{"attempts", attemptCases},
 		{"ledger", ledgerCases},
 		{"cooldowns", cooldownCases},
 		{"budgets", budgetCases},
@@ -106,11 +105,6 @@ type FleetAges struct {
 
 	// Setup is the setup-state bucket's age.
 	Setup time.Duration
-
-	// Attempt is the authentication-attempt window, which is both how
-	// long a record lives and the span a count is judged over — one
-	// number, because on a KV it is one bucket's age.
-	Attempt time.Duration
 }
 
 // LapseAge is the bucket age a case asks for when it intends to WATCH a
@@ -132,7 +126,7 @@ const LapseAge = 500 * time.Millisecond
 // it to, and short enough that a backend sizing real buckets from it is not
 // reserving anything a test run would notice.
 func LongAges() FleetAges {
-	return FleetAges{Claim: 10 * time.Minute, Setup: 10 * time.Minute, Attempt: 10 * time.Minute}
+	return FleetAges{Claim: 10 * time.Minute, Setup: 10 * time.Minute}
 }
 
 // orLong fills the zero fields from [LongAges].
@@ -140,7 +134,6 @@ func (a FleetAges) orLong() FleetAges {
 	long := LongAges()
 	a.Claim = cmp.Or(a.Claim, long.Claim)
 	a.Setup = cmp.Or(a.Setup, long.Setup)
-	a.Attempt = cmp.Or(a.Attempt, long.Attempt)
 	return a
 }
 
@@ -190,35 +183,6 @@ func (h *fleetHarness) claimSetup(key string, at time.Time) bool {
 		h.t.Fatalf("ClaimSetup(%s): %v", key, err)
 	}
 	return ok
-}
-
-func (h *fleetHarness) fail(subject string, at time.Time) {
-	h.t.Helper()
-	if err := h.f.Fail(h.ctx, subject, at); err != nil {
-		h.t.Fatalf("Fail(%s): %v", subject, err)
-	}
-}
-
-// window is what the attempts window holds against a subject.
-func (h *fleetHarness) window(subject string, at time.Time) coord.Attempted {
-	h.t.Helper()
-	got, err := h.f.Failures(h.ctx, subject, at)
-	if err != nil {
-		h.t.Fatalf("Failures(%s): %v", subject, err)
-	}
-	return got
-}
-
-func (h *fleetHarness) failures(subject string, at time.Time) int {
-	h.t.Helper()
-	return h.window(subject, at).Count()
-}
-
-func (h *fleetHarness) flush(subject string) {
-	h.t.Helper()
-	if err := h.f.Flush(h.ctx, subject); err != nil {
-		h.t.Fatalf("Flush(%s): %v", subject, err)
-	}
 }
 
 // report hands the errors a shared check found to the test.
@@ -546,213 +510,6 @@ var setupCases = []fleetCase{{
 			return h.f.ClaimSetup(h.ctx, "github-app-state:lapsing", at)
 		}, "ClaimSetup", "github-app-state:lapsing", h.ages.Setup, at); err != nil {
 			h.t.Fatal(err)
-		}
-	},
-}}
-
-// ---- the authentication attempts ---------------------------------------- //
-
-var attemptCases = []fleetCase{{
-	// A guessing run reaches whichever ingress node a load balancer picks,
-	// so a per-process counter is one the attacker divides by the number
-	// of nodes without knowing it: five tries per node is twenty per
-	// fleet, and the fleet counted five.
-	name: "a failed attempt counts for every node",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		h.fail("token:op-1", at)
-		if got := h.failures("token:op-1", at); got != 1 {
-			h.t.Fatalf("Failures after one attempt = %d, want 1", got)
-		}
-		h.fail("token:op-1", at)
-		if got := h.failures("token:op-1", at); got != 2 {
-			h.t.Fatalf("Failures = %d, want the 2 just recorded — a node seeds "+
-				"its curve from this, so a count only the writer can see "+
-				"throttles nobody on the next node", got)
-		}
-	},
-}, {
-	// EVERY ATTEMPT IS ANSWERED, OLDEST FIRST, and not a count and the
-	// newest. A delay runs from the last failure, so a node seeding its
-	// curve from a count alone has to date every failure made elsewhere to
-	// the moment it asked; and every instant is its writer's clock, so a
-	// reader judges each against its own — summarised to the newest, one
-	// written by a clock running fast hid every failure after it.
-	name: "the window answers every attempt, oldest first",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		later := at.Add(h.ages.Attempt / 4)
-		h.fail("token:op-1", at)
-		h.fail("token:op-1", later)
-		h.fail("token:op-1", at.Add(time.Second))
-		got := h.window("token:op-1", later)
-		if want := []time.Time{at, at.Add(time.Second), later}; !slices.EqualFunc(
-			got.At, want, time.Time.Equal) {
-			h.t.Fatalf("window = %v, want every attempt oldest first: %v",
-				got.At, want)
-		}
-		if got.Count() != 3 || !got.Last().Equal(later) {
-			h.t.Fatalf("window = %+v, want 3 attempts, the newest at %v",
-				got, later)
-		}
-		if empty := h.window("token:never-seen", later); empty.Count() != 0 ||
-			!empty.Last().IsZero() {
-			h.t.Fatalf("an untouched subject's window = %+v, want the zero one",
-				empty)
-		}
-		// AND AN ATTEMPT THAT AGED OUT IS NOT THE NEWEST.
-		h.fail("token:op-2", at)
-		if got := h.window("token:op-2", at.Add(h.ages.Attempt+time.Second)); //
-		got.Count() != 0 || !got.Last().IsZero() {
-			h.t.Fatalf("a window whose only attempt aged out = %+v, want the "+
-				"zero one", got)
-		}
-	},
-}, {
-	name: "one caller's attempts do not count against another",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		h.fail("token:op-1", at)
-		h.fail("token:op-1", at)
-		if got := h.failures("token:op-2", at); got != 0 {
-			h.t.Fatalf("Failures for an untouched subject = %d, want 0", got)
-		}
-	},
-}, {
-	// A FLUSH IS FLEET-VISIBLE, which is the half a per-process throttle
-	// cannot do: the credential that proves the caller is who the throttle
-	// was protecting has to lift the wait everywhere, or a person who has
-	// just signed in is still made to wait by the next node the balancer
-	// picks.
-	name: "a successful authentication flushes the window for every reader",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		h.fail("token:op-1", at)
-		h.fail("token:op-1", at)
-		h.flush("token:op-1")
-		if got := h.failures("token:op-1", at); got != 0 {
-			h.t.Fatalf("Failures after a flush = %d, want 0", got)
-		}
-		// AND THE RECORD IS USABLE AGAIN. A flush that left a tombstone
-		// nothing could write past would make the next failed attempt
-		// uncountable — the throttle switched off by the one gesture
-		// that is supposed to reset it.
-		h.fail("token:op-1", at)
-		if got := h.failures("token:op-1", at); got != 1 {
-			h.t.Fatalf("Failures after a flush and one attempt = %d, want 1", got)
-		}
-	},
-}, {
-	name: "flushing a subject nobody has failed against is not an error",
-	fn: func(h *fleetHarness) {
-		h.flush("token:never-seen")
-		if got := h.failures("token:never-seen", h.now()); got != 0 {
-			h.t.Fatalf("Failures = %d for a subject nobody touched, want 0", got)
-		}
-	},
-}, {
-	// THE WINDOW AGES OUT. A window that never ended would lock a caller
-	// out for the life of the deployment over two typos, and nothing here
-	// sweeps a counter or resets one: the record's own instant is what
-	// leaves it behind.
-	name: "an attempt outside the window no longer counts",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		h.fail("token:op-1", at)
-		h.fail("token:op-1", at)
-		inside := at.Add(h.ages.Attempt - time.Second)
-		if got := h.failures("token:op-1", inside); got != 2 {
-			h.t.Fatalf("Failures a second before the window closes = %d, want 2", got)
-		}
-		outside := at.Add(h.ages.Attempt + time.Second)
-		if got := h.failures("token:op-1", outside); got != 0 {
-			h.t.Fatalf("Failures a second after the window closes = %d, want 0", got)
-		}
-	},
-}, {
-	// THE CAP DISCARDS THE OLDEST, and the count is the only place that
-	// shows which one went. Both policies saturate at the cap while
-	// everything is inside the window, so this ages the FIRST attempt out
-	// and asks again: a record that kept the newest has coord.AttemptCap
-	// attempts left, one that kept the oldest has one fewer. One apart —
-	// and the one that is wrong is a caller who stops being throttled
-	// under the flood that filled the record.
-	name: "the cap discards the oldest attempt, not the newest",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		h.fail("token:flood", at)
-		later := at.Add(h.ages.Attempt / 2)
-		for range coord.AttemptCap {
-			h.fail("token:flood", later)
-		}
-		if got := h.failures("token:flood", later); got != coord.AttemptCap {
-			h.t.Fatalf("Failures with %d attempts recorded = %d, want the cap (%d)",
-				coord.AttemptCap+1, got, coord.AttemptCap)
-		}
-		// The first attempt is outside the window now and the rest are
-		// not, so what is left says which one the cap dropped.
-		past := at.Add(h.ages.Attempt + time.Second)
-		switch got := h.failures("token:flood", past); got {
-		case coord.AttemptCap:
-			// The oldest went. Correct.
-		case coord.AttemptCap - 1:
-			h.t.Fatalf("Failures = %d once the oldest attempt aged out, want %d: the "+
-				"record kept the OLDEST attempt and refused the newest, so a caller "+
-				"being hammered stops being counted as its old attempts expire",
-				got, coord.AttemptCap)
-		default:
-			h.t.Fatalf("Failures = %d, want %d: %d attempts were recorded against a cap "+
-				"of %d", got, coord.AttemptCap, coord.AttemptCap+1, coord.AttemptCap)
-		}
-	},
-}, {
-	// THE CAP KEEPS THE NEWEST BY INSTANT, NOT BY ARRIVAL. Two nodes'
-	// failures reach the store in whichever order it takes them, so an
-	// older failure can land after a record is already full of newer ones —
-	// and the one to drop is that older one, since the newest failures are
-	// what a curve's count and its wait are read from. Dropped by arrival,
-	// the record loses a newer attempt to make room for a failure that
-	// ages out first, and the count reads one short once it has.
-	name: "the cap keeps the newest attempts whatever order they arrive in",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		later := at.Add(h.ages.Attempt / 2)
-		for range coord.AttemptCap {
-			h.fail("token:late-arrival", later)
-		}
-		h.fail("token:late-arrival", at)
-		past := at.Add(h.ages.Attempt + time.Second)
-		if got := h.window("token:late-arrival", past); got.Count() != coord.AttemptCap ||
-			!got.Last().Equal(later) {
-			h.t.Fatalf("window once the late-arriving older attempt aged out = %+v, "+
-				"want the %d newer attempts at %v: the cap dropped a newer attempt to "+
-				"keep an older one", got, coord.AttemptCap, later)
-		}
-	},
-}, {
-	// Two nodes refusing the same caller in the same instant record two
-	// attempts. A counter they had to agree on would lose one of them,
-	// which is the per-process throttle's own arithmetic wearing a fleet's
-	// clothes.
-	name: "concurrent failures all count",
-	fn: func(h *fleetHarness) {
-		at := h.now()
-		var wg sync.WaitGroup
-		errs := make(chan error, 8)
-		for range 8 {
-			wg.Go(func() {
-				errs <- h.f.Fail(h.ctx, "token:concurrent", at)
-			})
-		}
-		wg.Wait()
-		close(errs)
-		for err := range errs {
-			if err != nil {
-				h.t.Fatalf("a concurrent Fail failed: %v", err)
-			}
-		}
-		if got := h.failures("token:concurrent", at); got != 8 {
-			h.t.Fatalf("Failures after 8 concurrent attempts = %d, want 8", got)
 		}
 	},
 }}

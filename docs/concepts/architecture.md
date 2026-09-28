@@ -517,7 +517,7 @@ flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
     DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written by a state log's applier</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>eighteen buckets on the stream's own connection</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>nineteen buckets on the stream's own connection</i>"]
     STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
@@ -602,10 +602,10 @@ exceptions are `adr/0002`, held by
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
 | **`crewlet_status`** | One key per node: which revision it applied |
-| **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` · `crewlet_setup_once` · `crewlet_iam_attempts` | Turn completions, webhook delivery claims, scheduled-fire claims, one-shot setup states, and the fleet-wide window the sign-in throttle seeds each (subject, source) pair's curve from |
+| **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` · `crewlet_setup_once` | Turn completions, webhook delivery claims, scheduled-fire claims, and one-shot setup states |
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
-| `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
+| `crewlet_integrations` · `crewlet_mailboxes` · `crewlet_follows` | Each surface's reconcile status, the seat mailboxes that may exist so a removed seat's can be retired, and the chat threads each seat follows |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
 **In flight, or keyed — the event stream.**

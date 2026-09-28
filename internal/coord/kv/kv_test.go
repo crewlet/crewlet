@@ -424,7 +424,6 @@ func TestFleetContract(t *testing.T) {
 			// under a case that did not ask it to.
 			ClaimTTL:           ages.Claim,
 			SetupOnceRetention: ages.Setup,
-			AttemptWindow:      ages.Attempt,
 			RateWindow:         time.Minute,
 			LedgerRetention:    10 * time.Minute,
 			FireRetention:      10 * time.Minute,
@@ -443,8 +442,7 @@ func TestFleetContract(t *testing.T) {
 func payloadFleet(t *testing.T) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(t.Context(), embeddedNATS(t), FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute,
-		SetupOnceRetention: time.Minute, AttemptWindow: time.Minute,
+		RateWindow: time.Minute, ClaimTTL: time.Minute, SetupOnceRetention: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute,
 		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
@@ -822,8 +820,7 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute,
-		SetupOnceRetention: time.Minute, AttemptWindow: time.Minute,
+		RateWindow: time.Minute, ClaimTTL: time.Minute, SetupOnceRetention: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute,
 		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
@@ -1184,8 +1181,7 @@ func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
 func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute,
-		SetupOnceRetention: time.Minute, AttemptWindow: time.Minute,
+		RateWindow: time.Minute, ClaimTTL: time.Minute, SetupOnceRetention: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute,
 		CooldownMax:     time.Minute, StatusFreshness: time.Minute,

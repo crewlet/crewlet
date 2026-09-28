@@ -46,7 +46,6 @@ type Fleet struct {
 	windows      map[windowKey]int
 	claims       map[string]time.Time
 	setup        map[string]time.Time
-	attempts     map[string][]time.Time
 	worked       map[string]workedEntry
 	cooldowns    map[string]time.Time
 	applies      map[string]coord.NodeApply
@@ -106,22 +105,12 @@ type FleetAges struct {
 
 	// Setup is the setup-state bucket's age — coord.SetupOnceRetention.
 	Setup time.Duration
-
-	// Attempt is the authentication-attempt window — coord.AttemptWindow.
-	// It is both the age of the records and the window a count is judged
-	// over, because on the KV those are one number (the bucket's) and a
-	// twin with two would answer differently.
-	Attempt time.Duration
 }
 
 // DefaultFleetAges are the horizons coord itself declares: what every caller
 // but the contract suite runs at.
 func DefaultFleetAges() FleetAges {
-	return FleetAges{
-		Claim:   coord.ClaimTTL,
-		Setup:   coord.SetupOnceRetention,
-		Attempt: coord.AttemptWindow,
-	}
+	return FleetAges{Claim: coord.ClaimTTL, Setup: coord.SetupOnceRetention}
 }
 
 // NewFleet returns an empty twin at [DefaultFleetAges].
@@ -134,13 +123,11 @@ func NewFleetWithAges(ages FleetAges) *Fleet {
 	defaults := DefaultFleetAges()
 	ages.Claim = cmp.Or(ages.Claim, defaults.Claim)
 	ages.Setup = cmp.Or(ages.Setup, defaults.Setup)
-	ages.Attempt = cmp.Or(ages.Attempt, defaults.Attempt)
 	return &Fleet{
 		ages:         ages,
 		windows:      map[windowKey]int{},
 		claims:       map[string]time.Time{},
 		setup:        map[string]time.Time{},
-		attempts:     map[string][]time.Time{},
 		worked:       map[string]workedEntry{},
 		cooldowns:    map[string]time.Time{},
 		applies:      map[string]coord.NodeApply{},
@@ -228,61 +215,6 @@ func (f *Fleet) Release(_ context.Context, key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.claims, key)
-	return nil
-}
-
-// Fail records one failed authentication.
-func (f *Fleet) Fail(_ context.Context, subject string, now time.Time) error {
-	if subject == "" {
-		return errors.New("coord/memory: an attempt needs a subject")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.attempts[subject] = append(f.attempts[subject], now)
-	at := f.attempts[subject]
-	// THE NEWEST BY INSTANT, which is what the KV backend's record keeps:
-	// two nodes' failures land in whichever order the store takes them,
-	// so the one dropped on overflow is the OLDEST instant, never merely
-	// the first to arrive. The other direction — refusing the newest —
-	// would leave the record frozen at attempts that then age out, and the
-	// caller un-throttled under the flood that filled it. Deleted in place,
-	// so the backing array stays the cap's size under a flood.
-	slices.SortStableFunc(at, time.Time.Compare)
-	if over := len(at) - coord.AttemptCap; over > 0 {
-		at = slices.Delete(at, 0, over)
-	}
-	f.attempts[subject] = at
-	return nil
-}
-
-// Failures reports what the window holds against subject.
-func (f *Fleet) Failures(_ context.Context, subject string, now time.Time) (coord.Attempted, error) {
-	if subject == "" {
-		return coord.Attempted{}, errors.New("coord/memory: an attempt needs a subject")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	cutoff := now.Add(-f.ages.Attempt)
-	var out coord.Attempted
-	// Held oldest first ([Fleet.Fail] sorts on the way in), so the window
-	// answers in the order the contract states.
-	for _, at := range f.attempts[subject] {
-		if at.After(cutoff) {
-			out.At = append(out.At, at)
-		}
-	}
-	return out, nil
-}
-
-// Flush forgets every attempt against subject.
-func (f *Fleet) Flush(_ context.Context, subject string) error {
-	if subject == "" {
-		return errors.New("coord/memory: an attempt needs a subject")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.attempts, subject)
 	return nil
 }
 

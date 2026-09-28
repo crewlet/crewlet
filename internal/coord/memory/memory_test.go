@@ -198,7 +198,7 @@ func TestFleetContract(t *testing.T) {
 		// property the suite could not see while a claim carried a TTL
 		// of its own.
 		return memory.NewFleetWithAges(memory.FleetAges{
-			Claim: ages.Claim, Setup: ages.Setup, Attempt: ages.Attempt,
+			Claim: ages.Claim, Setup: ages.Setup,
 		})
 	})
 }
