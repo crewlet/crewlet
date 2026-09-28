@@ -88,6 +88,17 @@ type Meta struct {
 	// comparable with a holder's Since only within one generation — a map
 	// recreated after its key was lost starts its epochs again, and an old
 	// generation's epoch 57 is no proof of having read a new one's epoch 3.
+	//
+	// ACTED IS A PROMISE ABOUT Partitions, written in the same lease: a node
+	// names epoch E only once Partitions says what it did about every
+	// partition E names it for. A partition E has it joining is listed as
+	// adopting or later — never a released left over from an earlier
+	// tenure, which beside E reads as a join given up, and the map lets it
+	// go — and one E has it leaving is listed as it stands, serving while
+	// the node's own re-check of the leave refuses it. The maintainer reads
+	// every state beside this epoch; a node that named an epoch before
+	// acting on it would be promoted, released or let go on a word it had
+	// not yet given.
 	MapGeneration uuid.UUID
 	MapEpoch      uint64
 
