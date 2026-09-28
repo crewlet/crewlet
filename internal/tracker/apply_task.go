@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -1012,6 +1013,23 @@ func bucketOf(task Task) string {
 // grandparent, or the root when the purged task was one — and its subtree's
 // ancestry is rebuilt. Depth can only fall, so no cap is crossed by the move.
 //
+// # What it writes of OTHER tasks, it writes into their DOCUMENTS
+//
+// A task's derived rows — its parent pointer, its relations, its dependency
+// edges and its mirror of who waits on it — are a pure function of its own
+// document, re-derived wholesale by every record about it. So a purge that
+// fixed only the ROWS was undone by the other task's next edit: a re-parented
+// child's next record put the purged task back as its parent, a dependent's
+// next record put the purged blocker back — OPEN, since a blocker with no row
+// reads as open — and blocked it for ever on a task that no longer existed.
+// Each of those tasks' documents is rewritten here, beside its rows, and
+// stamped `scoped_through` rather than `version`: a record may move only its
+// own subject's version ([Task]).
+//
+// Those tasks are named in the purge's SCOPE, which the writer enumerates
+// ([purgeReach]); the list of what a purge writes of another task is the
+// package doc's "What a purge writes beside its own task".
+//
 // AND IT IS DONE IN THE APPLIER RATHER THAN REFUSED AT THE WRITER, because a
 // refusal cannot close the race: a child is created by a write to the CHILD's
 // subject, which does not contend with a write to this one, so a purge decided
@@ -1058,6 +1076,13 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		}
 		written += n
 	}
+	// THE OTHER TASKS' DOCUMENTS FIRST, while the rows that say which ones
+	// name this task are still here to be read.
+	named, err := a.unnameInOthers(ctx, tx, id, c)
+	if err != nil {
+		return 0, err
+	}
+	written += named
 	for _, statement := range []struct {
 		sql  string
 		args []any
@@ -1105,7 +1130,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	moved, err := a.reparent(ctx, tx, children, task.Parent)
+	moved, err := a.reparent(ctx, tx, children, task.Parent, c)
 	if err != nil {
 		return 0, err
 	}
@@ -1179,24 +1204,149 @@ func forgetRecords(ctx context.Context, tx *sql.Tx, id, keep string) (int, error
 // AFTER THE DELETES, deliberately: [Applier.maintainClosure] walks the parent
 // chain, and run before them it would walk through the row this purge is
 // removing and write an ancestry naming it.
+//
+// THE CHILD'S DOCUMENT MOVES WITH ITS POINTER ([rewriteOther]): its next record
+// derives `parent_id` from the document, and a pointer moved on the row alone
+// was moved back to the purged task by it.
 func (a *Applier) reparent(ctx context.Context, tx *sql.Tx, children []string,
-	parent *string) (int, error) {
+	parent *string, c applyContext) (int, error) {
 
 	written := 0
 	for _, child := range children {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET parent_id = ? WHERE id = ?`,
-			parent, child); err != nil {
+		n, err := rewriteOther(ctx, tx, child, c, func(task *Task) bool {
+			if parent == nil {
+				task.Parent = nil
+			} else {
+				moved := *parent
+				task.Parent = &moved
+			}
+			return true
+		})
+		if err != nil {
 			return 0, fmt.Errorf("tracker: re-parent %s: %w", child, err)
 		}
-		written++
-		n, err := a.maintainClosure(ctx, tx, Task{ID: child, Parent: parent})
+		written += n
+		n, err = a.maintainClosure(ctx, tx, Task{ID: child, Parent: parent})
 		if err != nil {
 			return 0, err
 		}
 		written += n
 	}
 	return written, nil
+}
+
+// unnameInOthers takes the purged task out of every OTHER task's document that
+// names it — a relation to it (its dependents' `waiting_on` edges included) and
+// a mirror listing it as a dependent — so the rows the purge deletes are not
+// re-derived from those documents by the next record about each task.
+//
+// READ BEFORE THE DELETES: the relation rows and the mirror rows are what say
+// which tasks name it, and they are about to go.
+func (a *Applier) unnameInOthers(ctx context.Context, tx *sql.Tx, id string,
+	c applyContext) (int, error) {
+
+	relating, err := idsOf(ctx, tx, `
+		SELECT DISTINCT task_id FROM tracker_relations
+		WHERE other_id = ? AND task_id <> ? ORDER BY task_id`, id, id)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: read the tasks relating to %s: %w", id, err)
+	}
+	mirroring, err := idsOf(ctx, tx, `
+		SELECT task_id FROM tracker_task_dependents
+		WHERE dependent_id = ? AND task_id <> ? ORDER BY task_id`, id, id)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: read the blockers listing %s: %w", id, err)
+	}
+	written := 0
+	for _, other := range relating {
+		n, err := rewriteOther(ctx, tx, other, c, func(task *Task) bool {
+			kept := slices.DeleteFunc(slices.Clone(task.Relations), func(r Relation) bool {
+				return r.Other == id
+			})
+			if len(kept) == len(task.Relations) {
+				return false
+			}
+			task.Relations = kept
+			return true
+		})
+		if err != nil {
+			return 0, fmt.Errorf("tracker: take %s out of %s's relations: %w", id, other, err)
+		}
+		written += n
+	}
+	for _, other := range mirroring {
+		n, err := rewriteOther(ctx, tx, other, c, func(task *Task) bool {
+			kept := slices.DeleteFunc(slices.Clone(task.Dependents), func(d string) bool {
+				return d == id
+			})
+			if len(kept) == len(task.Dependents) {
+				return false
+			}
+			task.Dependents = kept
+			return true
+		})
+		if err != nil {
+			return 0, fmt.Errorf("tracker: take %s out of %s's dependents: %w", id, other, err)
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// rewriteOther applies change to ANOTHER task's document, from a record on
+// some other subject, and reports the rows written.
+//
+// `scoped_through` AND NEVER `version`, for the reason [Task] gives: the
+// version is the task's own subject's arbitration anchor, and stamping it from
+// here would make the task's next write form an expectation the broker refuses
+// for ever. The guard is the rank move's (see [Applier.applyRankOrder]): a row
+// already at or past this record — this record's own redelivery — is left as
+// it is.
+//
+// The pointer column is rewritten from the document with it, because the
+// document is what every later record derives the column from; a change that
+// moves no parent writes the value it read.
+func rewriteOther(ctx context.Context, tx *sql.Tx, id string, c applyContext,
+	change func(*Task) bool) (int, error) {
+
+	task, held, err := readTask(ctx, tx, id)
+	if err != nil || !held {
+		return 0, err
+	}
+	if !change(&task) {
+		return 0, nil
+	}
+	task.ScopedThrough = uint64(c.packed)
+	document, err := json.Marshal(task)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: encode task %s at %s: %w", id, c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_tasks SET document = ?, parent_id = ?, scoped_through = ?
+		WHERE id = ? AND ? > MAX(version, scoped_through)`,
+		document, nullableStringPtr(task.Parent), c.packed, id, c.packed)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: rewrite task %s at %s: %w", id, c.position, err)
+	}
+	return affected(res)
+}
+
+// idsOf reads one column of ids.
+func idsOf(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // childrenOf reads a task's DIRECT children.

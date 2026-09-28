@@ -439,8 +439,11 @@ half-done leaves the old nodes holding records they cannot apply and refusing
 reads about the objects those records touched, and writes to them — with
 `deferred` naming exactly what to do, which is finish the upgrade. What a record
 touched includes where it sits: a record about a knowledge space's settings
-covers every page in that space, and a page purge covers the whole space it
-re-files the page's children in.
+covers every page in that space, a page purge covers the whole space it
+re-files the page's children in, and a task purge covers every task it
+rewrites — its dependents, the blockers it waits on, the tasks related to it
+or referencing it, and its subtree — each by name, or by its project once
+there are too many to name.
 
 **A record is written at the lowest version that can apply it whole**, never at
 the newest the build knows, so what an older node holds back is exactly the

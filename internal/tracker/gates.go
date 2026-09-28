@@ -404,7 +404,15 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			w.ActorKind)
 	}
 	subject := TaskSubject(id)
-	scope := ScopeSet{Subject: true, Container: project}
+	// EVERY TASK ITS APPLY WRITES, not the purged task alone: the apply
+	// rewrites its dependents, the blockers that list it, the tasks relating
+	// to it or referencing it, and its subtree ([purgeReach]), and a scope
+	// that named only the task let a record deferred under any of them be
+	// overtaken by the purge on the node that deferred it.
+	scope, err := w.scopeForPurge(ctx, id, project)
+	if err != nil {
+		return WriteResult{}, err
+	}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
 		Subject: wire(subject),
@@ -419,6 +427,27 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			case !held:
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is "+
 					"not on this node: %w", id, statelog.ErrUnavailable)
+			case current.Project != project:
+				// THE SCOPE NAMES THE PROJECT THE CALLER SAID, for
+				// [Writer.UpdateTask]'s reason: filed under a
+				// container the task is not in, a deferral on its real
+				// project would not hold the purge back.
+				return statelog.Decision{}, fmt.Errorf("tracker: task %s is in "+
+					"project %s, not %s — resolve it again and name the "+
+					"project it is in", id, current.Project, project)
+			}
+			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS PURGE,
+			// checked against the rows it decides on: a dependent, a
+			// relation or a child that arrived since the scope was read
+			// is one the apply will write.
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+			reach, err := readPurgeReach(ctx, tx, id)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := scope.coversReach(reach); err != nil {
+				return statelog.Decision{}, err
 			}
 			decision, err := w.decide(stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`

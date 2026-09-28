@@ -25,6 +25,48 @@
 // possible for a record that failed to decode at all, because such a record
 // yields no id, no kind and no subject to file it under. A rolling upgrade
 // puts exactly that record on the wire.
+//
+// # What a purge writes beside its own task
+//
+// A record's scope is the COMPLETE set of objects its apply may write, stated
+// by the writer (see [ScopeSet]), and a purge is the record that writes the
+// most objects that are not its subject. Every one of them is a CROSS-OBJECT
+// effect, listed here so a layout that splits tasks across partitions can route
+// each one rather than rediscover it:
+//
+//   - its DEPENDENTS: their `waiting_on` relation to it is taken out of their
+//     documents, and their dependency edges naming it deleted;
+//   - the BLOCKERS it waits on: it is taken out of the mirror their documents
+//     keep of who waits on them;
+//   - every task with any other RELATION to it: the relation is taken out of
+//     that task's document;
+//   - every task whose body REFERENCES it: the reference row is deleted (the
+//     key it named resolves to nothing afterwards, so no later record of that
+//     task writes it back);
+//   - its SUBTREE: each direct child is re-parented onto the purged task's own
+//     parent, document and pointer, and every descendant's ancestry is
+//     rebuilt.
+//
+// Within one estate the writer names all of them ([purgeReach]) and the decide
+// refuses a purge whose scope comes up short of the rows it decides on. Under
+// the partitioned layout a scope may not cross partitions, so the first four
+// become facts the purge's partition hands to the others' — the dependents'
+// and relations' through the propagation feed, as every other cross-project
+// dependency does — while the subtree stays inside the purge's own partition,
+// because that layout refuses a parent in another project. (Today it is not
+// refused, which is why a descendant in another project is named at its own
+// project's path here.)
+//
+// WHAT NO SCOPE CAN NAME is a task that comes to name the purged one AFTER the
+// purge was decided and before it lands — a relation, a dependency or a child
+// written on that task's own subject, which does not contend with the purge's.
+// The apply rewrites such a task too, since it reads the rows at its own
+// position, and a node that deferred the record which made it name the purged
+// task does not hold the purge back for it. The window is one decide-to-append
+// round trip on each side, and it is the one every widened scope in this
+// package shares ([Writer.scopeForDependents] has it for a dependent arriving
+// the same way); only a write that contended with the purge's own subject
+// could close it.
 package tracker
 
 import (
