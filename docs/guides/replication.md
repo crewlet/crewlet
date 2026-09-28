@@ -451,9 +451,11 @@ objects whose shape — or whose apply — changed. These records are written ab
 version 1 today: a change to a knowledge container's settings, which carries the
 activation that wrote them, and a task write carrying a cross-project move's
 mid-move mark (both at version 2); a project file (version 3); and a board drag
-and a task purge (version 4), whose shape did not change but whose effect on
-the OTHER tasks they touch did — from version 4 each writes those tasks'
-documents rather than only their rows. So during an upgrade from a build before
+and a task purge (version 4), whose shape did not change but whose apply did —
+from version 4 each writes the OTHER tasks it touches into their documents
+rather than only their rows, and a purge also destroys what the purged task's
+own records left beside its rows: its history, the inbox notices that history
+routed, its turn records and its dependency mirror. So during an upgrade from a build before
 them, an older node holds back a container a newer node renamed or re-described,
 with the page writes in it, the root of a subtree being moved, a file, and a
 project whose board somebody dragged, until it is upgraded — and nothing else.
@@ -461,8 +463,10 @@ A task purge is the exception to holding back: it installs a gate, and a gate a
 node cannot apply stops that node's tracker (its seats move to a node that can)
 rather than being deferred, so **purge nothing while a rolling upgrade across
 version 4 is in progress**. A drag or a purge written before version 4 keeps
-the rule every node applied it by when it is replayed, so a node catching up
-from a snapshot holds exactly what its peers do. A container record that only re-stamps unchanged settings with a
+the rule every node applied it by when it is replayed — a purge from an older
+build leaves that history, those notices, turn records and mirror rows where
+they are, because its peers kept them — so a node catching up from a snapshot
+holds exactly what its peers do. A container record that only re-stamps unchanged settings with a
 later activation stays at version 1, because an older node applies it whole;
 written at 2, the first upgraded node's stamping of every chart-named space
 would have stalled every page write in all of them on every older node. Every barrier and

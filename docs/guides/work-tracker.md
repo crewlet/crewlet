@@ -1289,9 +1289,9 @@ than what it is about:
 | `purged` | the lead of the project the task was filed in | nothing — the task is gone from every node and nothing restores it |
 
 `purge_task` is the one operation in this engine with no inverse, and for a
-long time it told **nobody**: a task, its comments, its revisions, its history
-and its turn records were destroyed on every node and the person accountable
-for that project heard nothing. The wake names the key, who ran it and their
+long time it told **nobody**: a task, its comments and its revisions were
+destroyed on every node and the person accountable for that project heard
+nothing. The wake names the key, who ran it and their
 stated reason — and nothing else. It quotes neither the title nor the body,
 because the record outlives the rows: an excerpt of what was purged would keep
 a copy of exactly that, on the log, for its whole retention window.
@@ -1591,6 +1591,12 @@ crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 Its **children move rather than being destroyed**: each direct child
 re-parents onto the purged task's own parent, or becomes a root when the purged
 task was one. Destroying the subtree would destroy work nobody confirmed.
+
+**What its own records wrote goes with it** — its history, the inbox notices
+that history routed, its turn records and its dependency mirror — leaving the
+purge's own history row and the lead's notice as the one account of it. That
+is a purge this build writes; one an earlier build wrote keeps those rows on
+every node, as that build applied it ([Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach)).
 
 **Every other task that named it stops naming it**, for good: a task that
 waited on it is no longer blocked by it, a task it waited on no longer lists it

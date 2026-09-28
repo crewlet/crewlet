@@ -1033,6 +1033,17 @@ func bucketOf(task Task) string {
 // node that replays it would give that node documents no other node holds
 // ([rewriteVersion]).
 //
+// # From version 4, it destroys what the task's own records wrote
+//
+// The object tables are the smaller half of what a task leaves: every history
+// row keeps its record's whole mutation, every inbox notice an excerpt, every
+// turn record its spend, and the dependency mirror its edges
+// ([forgetRecords], [purgeDeletes]). A version-4 purge deletes them in the same
+// transaction. A purge BELOW version 4 leaves every one of them exactly where
+// every build before it left them — the rows its nodes hold — because the
+// same record applied two ways is the divergence this log exists to prevent;
+// its content stays readable until the rows are otherwise replaced.
+//
 // Those tasks are named in the purge's SCOPE, which the writer enumerates
 // ([purgeReach]); the list of what a purge writes of another task is the
 // package doc's "What a purge writes beside its own task".
@@ -1091,25 +1102,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 			return 0, err
 		}
 	}
-	for _, statement := range []struct {
-		sql  string
-		args []any
-	}{
-		{`DELETE FROM tracker_references WHERE from_task = ? OR to_task = ?`, []any{id, id}},
-		{`DELETE FROM tracker_task_keys WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_watchers WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_collaborators WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_task_tags WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_relations WHERE task_id = ? OR other_id = ?`, []any{id, id}},
-		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
-		{`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`, []any{id, id}},
-		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
-		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
-	} {
+	for _, statement := range purgeDeletes(id, c.record.V) {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, statement.sql, statement.args...)
 		if err != nil {
@@ -1154,16 +1147,68 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	forgotten, err := forgetRecords(ctx, tx, id, historyID(c))
-	if err != nil {
-		return 0, fmt.Errorf("tracker: purge %s at %s: %w", id, c.position, err)
+	// WHAT ITS OWN RECORDS WROTE, from version 4 alone — see the doc above.
+	forgotten := 0
+	if c.record.V >= rewriteVersion {
+		if forgotten, err = forgetRecords(ctx, tx, id, historyID(c)); err != nil {
+			return 0, fmt.Errorf("tracker: purge %s at %s: %w", id, c.position, err)
+		}
 	}
 	return written + marker + moved + history + forgotten, nil
 }
 
+// purgeStatement is one DELETE a purge issues, with its arguments.
+type purgeStatement struct {
+	sql  string
+	args []any
+}
+
+// purgeDeletes is every DELETE a purge of id at record version v issues
+// against the object tables, in the order it issues them.
+//
+// BELOW VERSION 4, EXACTLY THE LIST EVERY BUILD BEFORE IT ISSUED, and nothing
+// else: that list is what the nodes that applied such a record hold, and a
+// node replaying one — after adopting a snapshot, or on this build beside an
+// older one in a rolling upgrade — must write the same rows or hold ones no
+// other node does ([rewriteVersion]). It left the DEPENDENCY MIRROR standing,
+// because the mirror table arrived after the list was written: the purged
+// task's own list of who waits on it, and every blocker's entry naming it.
+//
+// FROM VERSION 4 THE MIRROR GOES WITH THE REST, both halves, which is the
+// version-4 purge's half of the same fix [forgetRecords] is: a row keyed on
+// an id nothing resolves any more is a copy of the task's edges nobody can
+// reach and nothing removes.
+func purgeDeletes(id string, v int) []purgeStatement {
+	statements := []purgeStatement{
+		{`DELETE FROM tracker_references WHERE from_task = ? OR to_task = ?`, []any{id, id}},
+		{`DELETE FROM tracker_task_keys WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_watchers WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_collaborators WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_task_tags WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_relations WHERE task_id = ? OR other_id = ?`, []any{id, id}},
+		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
+	}
+	if v >= rewriteVersion {
+		statements = append(statements, purgeStatement{
+			`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`,
+			[]any{id, id},
+		})
+	}
+	return append(statements,
+		purgeStatement{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
+		purgeStatement{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
+		purgeStatement{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
+		purgeStatement{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
+		purgeStatement{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
+		purgeStatement{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
+	)
+}
+
 // forgetRecords deletes what a purged task's own records wrote beside its
 // rows: every history row but the purge's own (keep), the inbox notices those
-// rows routed, and the turn records.
+// rows routed, and the turn records. A VERSION-4 PURGE'S alone: below it a
+// purge leaves them, as every build before version 4 did ([purgeDeletes] says
+// why).
 //
 // THESE HOLD THE CONTENT, which is what a purge is for. A history row keeps
 // its record's whole mutation in `document` — every title, every body and

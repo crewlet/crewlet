@@ -49,6 +49,9 @@
 //     parent, document and pointer, and every descendant's ancestry is
 //     rebuilt.
 //
+// A purge below version 4 writes the rows alone, and leaves the blockers'
+// mirror rows standing, as every build before it did ([purgeDeletes]).
+//
 // Within one estate the writer names all of them ([purgeReach]) and the decide
 // refuses a purge whose scope comes up short of the rows it decides on.
 //

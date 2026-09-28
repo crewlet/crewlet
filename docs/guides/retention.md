@@ -1279,11 +1279,21 @@ crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 ```
 
 It removes every row the task's own records wrote, not only the task's: its
-comments and body revisions, and every history row, inbox notice and turn
-record about it — a history row carries its record's whole change, so leaving
-those would leave the text the purge was run to destroy. One account survives,
-and it is the purge's own: its history row and the project lead's `purged`
-notice, which say that it happened, to which key, by whom and why.
+comments and body revisions, and every history row, inbox notice, turn record
+and dependency-mirror row about it — a history row carries its record's whole
+change, so leaving those would leave the text the purge was run to destroy. One
+account survives, and it is the purge's own: its history row and the project
+lead's `purged` notice, which say that it happened, to which key, by whom and
+why.
+
+That is what a purge **this build writes** does (a task purge at record version
+4 — see [what a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks)).
+A purge written by an earlier build is applied, on every node and on every
+replay, exactly as that build applied it: the object rows go, and the task's
+history, notices, turn records and mirror rows stay, because every node that
+applied it at the time kept them and a node applying it differently would hold
+rows its peers do not. No later gesture reaches them: the task is already
+gone, and purging it again answers with the first purge's outcome.
 
 The confirmation is the task's **key**, not its id: the id is already on the
 command line, so repeating it confirms nothing, while the key has to be looked

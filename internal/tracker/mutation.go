@@ -26,7 +26,10 @@ import (
 //     ([TaskPatch.Moving]).
 //   - 3: the file kind ([KindFile]).
 //   - 4: a rank order and a purge write each OTHER task they change into
-//     that task's document as well as its rows ([rewriteVersion]).
+//     that task's document as well as its rows, and a purge destroys what
+//     the purged task's own records wrote beside its rows — its history,
+//     the notices it routed, its turn records and its dependency mirror
+//     ([rewriteVersion]).
 //
 // A record is WRITTEN at the lowest version a reader can apply without
 // losing anything it says, never simply at this constant — see
@@ -55,7 +58,10 @@ const fileVersion = 3
 
 // rewriteVersion is the version from which a record that changes ANOTHER task
 // — a rank order moving it, a purge taking itself out of it — writes that
-// task's DOCUMENT beside its rows ([rewriteOther]). See [recordVersionOf].
+// task's DOCUMENT beside its rows ([rewriteOther]), and from which a purge
+// destroys the rows the purged task's own records wrote: its history, the
+// notices those routed, its turn records and its dependency mirror
+// ([forgetRecords], [purgeDeletes]). See [recordVersionOf].
 //
 // # Why the rule is chosen by the record and not by the build
 //
