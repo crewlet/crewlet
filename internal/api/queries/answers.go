@@ -82,6 +82,11 @@ type Sources struct {
 	// than reporting a fleet with no map.
 	Objects ObjectMapReader
 
+	// FleetBroker is the fleet broker's membership — what every live node
+	// advertises against what the metadata group counts. Nil leaves the
+	// question unregistered.
+	FleetBroker BrokerLister
+
 	// Runs is the schedule dispatch ledger. Nil still answers the
 	// schedules question — the configured schedules are a projection of
 	// the org — with an empty history, because "no ledger" and "nothing
@@ -368,6 +373,12 @@ func Register(r *Registry, s Sources) {
 			s.layouts = &objectLayouts{}
 		}
 		r.RegisterOperator("fleet", s.fleet)
+	}
+	if s.FleetBroker != nil {
+		// OPERATOR-ONLY, for the fleet question's reason: node ids, their
+		// roles and which member the broker counts are the deployment's
+		// shape, not the company's work.
+		r.RegisterOperator("fleet_broker", s.fleetBroker)
 	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company
 	// still has a credential presented to it, and "this token resolves to

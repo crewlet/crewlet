@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -126,7 +127,16 @@ func everySeam(t *testing.T) queries.Sources {
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.
 		Retention: func(context.Context) any { return nil },
+		// THE FLEET BROKER'S MEMBERSHIP, which every engine serves.
+		FleetBroker: emptyBroker{},
 	}
+}
+
+// emptyBroker is a fleet broker with nothing to list, on emptyWork's terms.
+type emptyBroker struct{}
+
+func (emptyBroker) List(context.Context) (engine.BrokerView, error) {
+	return engine.BrokerView{}, nil
 }
 
 // emptyFiles is a project with no files.
@@ -324,6 +334,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 		// than an entity browser, so no room asks — which is not the same as
 		// nobody reading it.
 		"config_entities": "docs/guides/configure-via-api.md reads it over REST, not a room",
+		// The operator's CLI: `crewlet fleet broker list` is a client of
+		// GET /fleet/broker, the named route over this question.
+		"fleet_broker": "`crewlet fleet broker list` reads it over REST, not a room",
 	}
 
 	asked := roomQueries(t)

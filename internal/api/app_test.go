@@ -155,6 +155,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Capacity == nil {
 		opts.Capacity = &fakeStateLog{}
 	}
+	if opts.FleetBroker == nil {
+		opts.FleetBroker = &fakeFleetBroker{}
+	}
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
 	}
@@ -177,7 +180,8 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	for _, field := range []string{
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
+		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "FleetBroker",
+		"Backup",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

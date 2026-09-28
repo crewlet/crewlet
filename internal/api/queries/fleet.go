@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -68,8 +69,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		id := nameIn(coord.ClassNode, lease.Resource)
 		profile := placement.FromMeta(id, lease.Meta)
 		row := map[string]any{
-			"id":         id,
-			"roles":      profile.Roles.Names(),
+			"id":    id,
+			"roles": profile.Roles.Names(),
+			// HOW ITS BROKER TAKES PART — member, leaf, client, or
+			// `unknown` for a row that does not say (a build older than
+			// the field) — which the roles no longer imply: a node's
+			// broker is what its stream block makes it.
+			"broker":     profile.Broker.String(),
 			"labels":     profile.Labels,
 			"owner":      lease.Owner,
 			"protocol":   lease.Protocol,
@@ -166,6 +172,23 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		out["objects"] = s.objectMap(ctx, live[coord.ClassObjects])
 	}
 	return out, nil
+}
+
+// BrokerLister is the fleet broker's membership as the fleet_broker question
+// reads it — see [engine.FleetBroker.List]. Declared here, by the consumer.
+type BrokerLister interface {
+	List(ctx context.Context) (engine.BrokerView, error)
+}
+
+// fleetBroker answers the fleet_broker question.
+//
+// A PRESENCE LISTING THAT FAILED IS AN ERROR, never an empty answer: with no
+// presence rows there is nothing to hold the metadata group against, and an
+// answer with no nodes would read as a broker nobody is a member of. A lease
+// table that could not be reached is the coordination contract's own third
+// answer and reaches the caller as unavailable — a blip to ask again about.
+func (s Sources) fleetBroker(ctx context.Context, _ Params) (any, error) {
+	return s.FleetBroker.List(ctx)
 }
 
 // applyStatus is each node's last config outcome, keyed by node id.

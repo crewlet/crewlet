@@ -1712,6 +1712,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the difference between an operator reading a procedure and an
 		// operator looking for a version mismatch.
 		Capacity: e,
+		// THE FLEET BROKER'S MEMBERSHIP: what every node advertises
+		// against what the metadata group counts, read through a member,
+		// and the removal of one gone for good through a member's system
+		// account — which is reachable only from inside a member.
+		FleetBroker: e.FleetBroker(),
 		// THE ONE OPERATION NOTHING UNDOES, and it had no caller at
 		// all until this line: no verb, no route, no tool. A company
 		// could not destroy a task under any circumstances.

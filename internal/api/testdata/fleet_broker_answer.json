@@ -1,0 +1,82 @@
+{
+  "node": "node-a",
+  "kind": "member",
+  "external": false,
+  "nodes": [
+    {
+      "node": "node-a",
+      "kind": "member",
+      "roles": [
+        "data",
+        "ingress",
+        "seats",
+        "workers"
+      ]
+    },
+    {
+      "node": "node-b",
+      "kind": "member",
+      "roles": [
+        "data",
+        "seats"
+      ]
+    },
+    {
+      "node": "old-1",
+      "kind": "unknown",
+      "roles": [
+        "data",
+        "ingress",
+        "seats",
+        "workers"
+      ]
+    },
+    {
+      "node": "sat-eu-1",
+      "kind": "leaf",
+      "roles": [
+        "seats"
+      ]
+    }
+  ],
+  "group": {
+    "cluster": "acme",
+    "leader": "node-a",
+    "peers": [
+      {
+        "name": "node-a",
+        "peer": "yrzKKRBu",
+        "self": true,
+        "leader": true,
+        "current": true,
+        "active": 0
+      },
+      {
+        "name": "node-b",
+        "peer": "cnrtt3eg",
+        "current": true,
+        "active": 412000000
+      },
+      {
+        "name": "node-c",
+        "peer": "b4qKmd1Z",
+        "current": false,
+        "offline": true,
+        "active": 5400000000000
+      }
+    ]
+  },
+  "group_from": "node-a",
+  "findings": [
+    {
+      "kind": "dead_member",
+      "node": "node-c",
+      "detail": "the metadata group counts it as a voter and no live node is it"
+    },
+    {
+      "kind": "unknown_kind",
+      "node": "old-1",
+      "detail": "its presence does not say what its broker is"
+    }
+  ]
+}

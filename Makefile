@@ -175,7 +175,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -565,6 +565,10 @@ gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate 
 objects-answer: ## regenerate internal/api/testdata/objects_answer.json from the object store's renderers
 	CREWLET_REGENERATE_OBJECTS_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheObjectsAnswerMatchesItsGoldenFile
+
+broker-answer: ## regenerate internal/api/testdata/fleet_broker_answer.json from the engine's broker view
+	CREWLET_REGENERATE_BROKER_ANSWER=1 $(GO) test ./internal/api -count=1 \
+	  -run TestTheBrokerAnswerFixtureIsTheEnginesOwn
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.

@@ -93,6 +93,10 @@ type App struct {
 	// answer an operator needs.
 	capacity capacityRunner
 
+	// fleetBroker reads and changes the fleet broker's membership. See
+	// fleetbroker.go.
+	fleetBroker FleetBrokerControl
+
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
 	company func() *config.Company
@@ -116,8 +120,8 @@ type routeMounter interface {
 //
 // Runtime, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
 // Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets,
-// Retention, Capacity and Backup are REQUIRED, and [New] refuses a missing one
-// by name.
+// Retention, Capacity, FleetBroker and Backup are REQUIRED, and [New] refuses a
+// missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -236,6 +240,10 @@ type Options struct {
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
 
+	// FleetBroker reads and changes the fleet broker's membership — see
+	// [FleetBrokerControl].
+	FleetBroker FleetBrokerControl
+
 	// Objects makes the operator's gestures on the object store's
 	// placement map. Nil leaves the routes unmounted — see
 	// [ObjectsControl].
@@ -326,6 +334,11 @@ func New(opts Options) (*App, error) {
 	if sources.State == nil {
 		sources.State = state
 	}
+	// THE BROKER'S MEMBERSHIP IS READ THROUGH THE SAME SEAM ITS REMOVAL IS
+	// MADE THROUGH, so one wiring serves the question and the gesture.
+	if sources.FleetBroker == nil {
+		sources.FleetBroker = opts.FleetBroker
+	}
 	// Only the engine knows which parsers registered and what its ${VAR}s
 	// resolved to, so both are read off the runtime rather than taken from
 	// the caller: one source for each, and the one that actually knows.
@@ -342,6 +355,7 @@ func New(opts Options) (*App, error) {
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
 	a.files = opts.Files
 	a.capacity = opts.Capacity
+	a.fleetBroker = opts.FleetBroker
 	a.objects = opts.Objects
 
 	mux := http.NewServeMux()
@@ -375,6 +389,10 @@ func New(opts Options) (*App, error) {
 	// and it is why the verb can run at all on a topology whose broker
 	// binds no socket. See retention.go.
 	a.mountCapacity(mux)
+	// The fleet broker's membership: what every node advertises against
+	// what the metadata group counts, and the removal of a member that is
+	// gone for good. See fleetbroker.go.
+	a.mountFleetBroker(mux)
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
 	// The OPERATOR MCP surface: the same tracker and knowledge tools a
 	// seat holds, offered to a person's own assistant. Under its own
@@ -466,6 +484,7 @@ func (o Options) missing() error {
 		{"Budgets", o.Budgets == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
+		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},
 	} {
 		if field.absent {

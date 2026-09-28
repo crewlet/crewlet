@@ -96,6 +96,8 @@ node means nothing was done.
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
+| `GET` | `/fleet/broker` | The fleet broker's membership: every live node's broker kind as its presence advertises it, the JetStream metadata group as a member reports it, and every disagreement between the two — a member gone for good first among them. **Always needs a token** (see [The broker's membership](#the-brokers-membership)) |
+| `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease unless `?force=true`. **Operator-only** |
 | `POST` | `/objects/out/{node}` | Take a data node out of the [object store's](../concepts/object-store.md) placement map: nothing new is placed on it, and its share is copied to the other members while it keeps serving what it holds. `?confirm=` repeats the node id; `?reason=` is recorded beside the operator. **Operator-only**, and absent on a node running no object store (see [Gestures on the placement map](#gestures-on-the-placement-map)) |
 | `POST` | `/objects/in/{node}` | Put a member back, or vouch for a node the map removed for being gone. `?confirm=` repeats the node id |
 | `POST` | `/objects/hold` | Hold the placement map for `?for=` (a duration, at most `24h`, required): no member is removed however long it is gone. `?reason=` is recorded |
@@ -1694,6 +1696,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
+| `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Operator-only** |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read |
 | `budgets` | `{}` | `GET /budgets` |
@@ -2753,7 +2756,7 @@ claim, and a store blip is not evidence for it.
 {
   "nodes": [
     {
-      "id": "core-1", "roles": ["ingress", "seats", "workers"], "labels": {},
+      "id": "core-1", "roles": ["ingress", "seats", "workers"], "broker": "member", "labels": {},
       "owner": "core-1:8f2a", "protocol": 3, "seats": 4, "expires_in": 41.2,
       "config_epoch": 7, "config_status": "ok", "config_error": ""
     }
@@ -2901,6 +2904,101 @@ operator's to lift, the other the map's.
 
 A node row carries no object share: a data node's membership in the object
 store is its own lease, not its presence.
+
+Each node row carries `broker`: how the node's broker takes part in the
+fleet's — `member` (embedded, a voter in the JetStream cluster), `leaf`
+(embedded, joining the members through `stream.leaf.urls`, holding nothing),
+`client` (`stream.type: nats`) — or `unknown` for a node running a build older
+than the field. It is derived from the node's own `stream` block, never from
+its roles; [`GET /fleet/broker`](#the-brokers-membership) holds it against what
+the broker itself counts.
+
+### The broker's membership
+
+```
+GET  /fleet/broker
+POST /fleet/broker/remove/{node}?confirm={node}[&force=true]
+```
+
+Two records say who the fleet broker's members are, and they can disagree.
+Every node advertises its broker kind on its presence lease; the broker's
+**metadata group** — the raft group that places every stream and consumer —
+counts its voters for itself. A member that is gone for good is the
+disagreement that matters: its presence lapses with its process, while the
+metadata group goes on counting it in every election and every create until it
+is removed, so a three-member fleet that loses two for good has no quorum left
+to create anything with.
+
+**`GET /fleet/broker`** answers both and where they disagree. Any node answers
+it: only a member holds the metadata group, so a node that is not one asks a
+live member, and `group_from` names the member whose view `group` is. A fleet on
+an external cluster answers `external: true` and lists no group — that
+cluster's membership is its operator's. A group no member could report is
+absent with `group_error` saying why, never an empty one.
+
+```json
+{
+  "node": "node-a", "kind": "member", "external": false,
+  "nodes": [
+    {"node": "node-a", "kind": "member", "roles": ["data", "ingress", "seats", "workers"]},
+    {"node": "old-1", "kind": "unknown", "roles": ["data", "ingress", "seats", "workers"]},
+    {"node": "sat-eu-1", "kind": "leaf", "roles": ["seats"]}
+  ],
+  "group": {"cluster": "acme", "leader": "node-a", "peers": [
+    {"name": "node-a", "peer": "yrzKKRBu", "self": true, "leader": true, "current": true, "active": 0},
+    {"name": "node-c", "peer": "b4qKmd1Z", "current": false, "offline": true, "active": 5400000000000}
+  ]},
+  "group_from": "node-a",
+  "findings": [
+    {"kind": "dead_member", "node": "node-c", "detail": "the metadata group counts it as a voter and no live node is it"},
+    {"kind": "unknown_kind", "node": "old-1", "detail": "its presence does not say what its broker is"}
+  ]
+}
+```
+
+`active` is nanoseconds since the answering member last heard from the peer.
+The finding kinds:
+
+| `kind` | Means |
+|---|---|
+| `dead_member` | A voter no live node is — its process is gone, or its node came back as a leaf or a client. It is counted in every election until it returns or is removed |
+| `not_in_group` | A live node advertising a member that the group does not count: still joining, or removed while it ran, in which case it rejoins as a voter at its next restart |
+| `unknown_kind` | A live node whose presence does not say what its broker is — a build older than the field. It is counted as a member wherever that is the safe reading, a [capacity seal](../guides/retention.md#who-has-to-acknowledge) included |
+
+It is the `fleet_broker` question, so the [socket's query channel](#ws-wsstream)
+answers it too. A lease table that could not be reached answers `503
+unavailable` with a `Retry-After` rather than a fleet with no nodes.
+
+**`POST /fleet/broker/remove/{node}`** removes a member from the metadata group.
+nats-server answers that request only on the broker's **system account**, which
+a member reaches inside its own process and nothing else can — so the node that
+receives the request asks a live member, never the one being removed while
+another will do, and that member's system account carries it. The answer comes
+once the group has committed the change, and names the member that carried it
+and the group as it reads afterwards:
+
+```json
+{"node": "node-c", "by": "node-a", "group": {"cluster": "acme", "leader": "node-a", "peers": [...]}}
+```
+
+It is **refused while the named node holds a live presence lease**: the node is
+running, and a running member removed from the group rejoins it as a voter at
+its next restart. `force=true` removes it anyway — for a member wedged in a way
+that still renews its lease. `crewlet fleet broker remove` is a client of this
+route. **Operator-only**, and refused during a [drain](#during-a-drain). Every
+refusal carries `detail` and `hint`:
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `confirm_required` | `?confirm=` does not repeat the node id |
+| `400` | `node_invalid` | The name is not a node id |
+| `404` | `not_a_member` | The metadata group lists no such server — a typo, or a removal already made |
+| `409` | `member_live` | The node holds a live presence lease; stop it first, or `force=true` |
+| `409` | `membership_changing` | Another membership change is still being committed; ask again once it has |
+| `409` | `external_broker` | The fleet's broker is an external cluster, whose membership is its operator's |
+| `503` | `no_leader` | Nobody answered as the group's leader for the whole wait. The request is asked again every second, so an election alone does not end here: the group has lost its quorum and can change nothing about itself. A removal whose answer was lost may still have been committed — read the group first |
+| `503` | `no_member` | No live member could carry the removal |
+| `500` | `broker_remove_failed` | Anything else; read the group before asking again |
 
 ### Gestures on the placement map
 

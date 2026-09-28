@@ -154,7 +154,10 @@ func wireAPI(
 		Budgets:   backends.Fleet,
 		Retention: backends.Fleet,
 		Capacity:  e,
-		Backup:    copier,
+		// THE FLEET BROKER'S MEMBERSHIP, through the engine's own surface,
+		// as `crewlet run` wires it.
+		FleetBroker: e.FleetBroker(),
+		Backup:      copier,
 		// THE FILE BYTE ROUTES, through the adapter `crewlet run` uses, so
 		// an upload on one member and a download from another cross the
 		// object store the way a deployment's do.

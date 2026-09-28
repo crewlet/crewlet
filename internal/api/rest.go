@@ -71,6 +71,10 @@ var namedRoutes = []struct {
 	// histories into one list.
 	{method: "GET", pattern: "/schedules/{scope_type}/{scope_id}/{name}/runs", what: "schedule_runs", path: map[string]string{"scope_type": "scope_type", "scope_id": "scope_id", "name": "name"}},
 	{method: "GET", pattern: "/fleet", what: "fleet"},
+	// THE BROKER'S MEMBERSHIP, beside the fleet view rather than inside it:
+	// it asks a member for the metadata group, which the lease table the
+	// fleet view is read from cannot say.
+	{method: "GET", pattern: "/fleet/broker", what: "fleet_broker"},
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
