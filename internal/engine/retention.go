@@ -479,7 +479,7 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 		BackupMaxAge:    r.cfg.BackupMaxAge(),
 		HoldStale:       statelog.TrimHoldStale,
 	}
-	in.Counted = statelog.CountedSet(shared.at, name,
+	in.Counted = statelog.CountedSet(shared.at,
 		reportedPositions(shared.positions, name),
 		shared.live, r.tombstones(ctx, running, generation))
 	in.Holds = holdsFor(shared.holds, running.domain.Stream().Name)
