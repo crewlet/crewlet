@@ -10,23 +10,27 @@ import (
 // The org projection: the company's identity and its seat and unit tree, as
 // GET /org, the socket snapshot's `org` key and the `org` push carry it.
 //
-// # An explicit public type, never a marshal of the config's own structs
+// # An explicit type, never a marshal of the config's own structs
 //
-// These three surfaces are ANONYMOUSLY READABLE under the default posture
-// (`api.auth.allow_anonymous_read: true`), and the only surface that shows the
-// whole document, /config, is guarded in full. The projection used to marshal
-// config.Role and config.Unit verbatim and rely on nothing else, which made it
-// deny-by-omission: every field somebody added to a role was public the day it
-// landed. That had already happened. Contact identities (a person's Slack
-// member id, GitHub login, email), `${VAR}` names in a Mattermost username,
-// placement labels and sandbox setup commands (routinely the place a registry
-// credential is written) all reached an anonymous reader, and the secret tags
-// redaction relies on covered none of them because none of them is a
-// credential in the narrow sense.
+// These three surfaces answer every principal holding `state:read` — the
+// READER's grant, which a colleague who may change nothing about the
+// deployment holds — while the only surface that shows the whole document,
+// /config, asks `config:read`. Every route and socket is authenticated; there
+// is no anonymous reader any more (`api.auth.allow_anonymous_read` is a named
+// refusal in internal/config), but the audience here is still far wider than
+// the configuration's. The projection used to marshal config.Role and
+// config.Unit verbatim and rely on nothing else, which made it
+// deny-by-omission: every field somebody added to a role reached this audience
+// the day it landed. That had already happened, back when the audience was
+// anybody at all. Contact identities (a person's Slack member id, GitHub
+// login, email), `${VAR}` names in a Mattermost username, placement labels and
+// sandbox setup commands (routinely the place a registry credential is
+// written) all reached it, and the secret tags redaction relies on covered
+// none of them because none of them is a credential in the narrow sense.
 //
-// So the public shape is spelled out here field by field, and a field reaches
-// an anonymous reader only by being written into one of these types on
-// purpose. Everything else stays behind the guarded `config` query, which is
+// So the reader's shape is spelled out here field by field, and a field
+// reaches a `state:read` holder only by being written into one of these types
+// on purpose. Everything else stays behind the `config:read` answers, which is
 // where the dashboard reads it. Configured work that has a read surface of its
 // own is not repeated here either: schedules are described by /schedules and a
 // seat's token cap by /budgets, each under the same read posture as this one.
@@ -42,7 +46,7 @@ import (
 // fact with a different shape, and mixing the two into one field would leave a
 // reader unable to tell a declared lead from an inherited one.
 
-// OrgProjection is the anonymous view of a company.
+// OrgProjection is the reader's view of a company: what `state:read` sees.
 //
 // Every field is omitted when empty, so a node with no active company answers
 // `{}`, which is the shape the dashboard already reads as "nothing loaded".
@@ -65,8 +69,8 @@ type OrgProjection struct {
 	// The fields above stay as WRITTEN, so a reader can still tell a
 	// declared lead from an inherited one.
 	//
-	// WITHOUT PATHS, which is the one difference from the guarded answers:
-	// an anonymous reader is given no document to point into, and membership
+	// WITHOUT PATHS, which is the one difference from the `config:read`
+	// answers: a reader is given no document to point into, and membership
 	// is in each unit's seats. Nothing else here is a fact the fields above
 	// do not already carry, so it needs no classification of its own beyond
 	// this: it is those values, resolved.
@@ -116,7 +120,7 @@ type OrgUnit struct {
 	Children  []OrgUnit `json:"children,omitempty"`
 }
 
-// orgProjection builds the anonymous view of the current company.
+// orgProjection builds the reader's view of the current company.
 //
 // Read through the source on every call rather than captured, because an apply
 // replaces the company and a projection built at boot would keep showing a

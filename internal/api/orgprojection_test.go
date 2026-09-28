@@ -16,8 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The org projection is ANONYMOUSLY READABLE, so what it carries is a security
-// decision made one field at a time. These tests are what keep it one.
+// The org projection is read by every `state:read` holder, an audience far
+// wider than the configuration's, so what it carries is a security decision
+// made one field at a time. These tests are what keep it one.
 
 // exposure is the decision recorded for one authored field.
 type exposure int
@@ -25,7 +26,7 @@ type exposure int
 const (
 	// exposurePublic: founder prose and structure, carried by /org.
 	exposurePublic exposure = iota + 1
-	// exposureGuarded: read only through the guarded `config` query.
+	// exposureGuarded: read only through the `config:read` answers.
 	exposureGuarded
 )
 
@@ -40,12 +41,12 @@ type classified struct {
 // A tracker project and a knowledge space are the decision here that is not
 // about credentials: `project` and `space` hold neither a secret nor a ${VAR},
 // and both are guarded anyway. A project key or a space key names a
-// THIRD-PARTY CONTAINER, so handing one to an anonymous reader says where this
+// THIRD-PARTY CONTAINER, so handing one to every reader says where this
 // company files its work and writes its pages, and what to go looking at. It
 // is the reasoning internal/api/setupapi's package doc records for guarding
 // even its reads: what a company has wired up, and to what, is a map of what
 // to attack. They are read with the rest of the integration picture instead,
-// through the operator-only `config` and `integrations` answers.
+// through the `config:read` answers, `config` and `integrations`.
 
 // roleFields classifies every field of config.Role.
 var roleFields = map[string]classified{
@@ -101,7 +102,7 @@ var unitFields = map[string]classified{
 // the projection carries.
 //
 // A field added to config.Role fails the first half until somebody decides
-// whether an anonymous reader may see it. Marking it public without adding it
+// whether every `state:read` holder may see it. Marking it public without adding it
 // to the projection (or the reverse) fails the second half, so the table and
 // the type cannot drift apart.
 func TestEveryOrgFieldIsClassified(t *testing.T) {
@@ -122,8 +123,8 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 				seen[field.Name] = true
 				decision, ok := tc.table[field.Name]
 				if !ok {
-					t.Errorf("config.%s.%s is not classified. Decide whether an anonymous "+
-						"reader of /org may see it: add it to this test's table as public "+
+					t.Errorf("config.%s.%s is not classified. Decide whether every "+
+						"state:read reader of /org may see it: add it to this test's table as public "+
 						"(and to api.%s) or guarded (and read it through the config query)",
 						tc.authored.Name(), field.Name, tc.projection.Name())
 					continue
@@ -156,7 +157,7 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 	}
 }
 
-// NOTHING GUARDED REACHES AN ANONYMOUS READER, whatever it holds.
+// NOTHING GUARDED REACHES A `state:read` READER, whatever the company holds.
 //
 // Every guarded field of every seat and unit (and every field of the company
 // outside its charter) is filled, all the way down through pointers, slices
@@ -178,7 +179,7 @@ func TestTheOrgProjectionCarriesNothingGuarded(t *testing.T) {
 
 			res := fetch(t, a, "/org", nil)
 			if res.StatusCode != http.StatusOK {
-				t.Fatalf("GET /org = %d, want an anonymous 200", res.StatusCode)
+				t.Fatalf("GET /org = %d, want 200", res.StatusCode)
 			}
 			rest, err := io.ReadAll(res.Body)
 			if err != nil {
