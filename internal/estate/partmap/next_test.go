@@ -169,6 +169,51 @@ func TestTheMapConvergesAsTheFleetGrows(t *testing.T) {
 	}
 }
 
+// THE JOIN RATION COSTS A TICK PER TRANSFER, AND NO MORE — the figures
+// MaxJoinsPerNode's doc states. A join into a served partition is named on
+// one tick and its node's next one on the tick that promotes it, so with an
+// executor that finishes every join within the tick a node's transfers take
+// one tick each: a fourth data node joining three at the owner's layout, and
+// the survivors of four re-replicating what the lost one held once
+// membership removes it. Measured here rather than asserted from the doc, and
+// bounded so a change that made a transfer cost two ticks fails rather than
+// doubling a figure nobody re-reads.
+func TestTheJoinRationCostsATickPerTransfer(t *testing.T) {
+	t.Parallel()
+	grow := newSim(t, ownerLayout, 3, nodeIDs(3)...)
+	grow.settleAtOnce(100)
+	grow.add("data-03", 1, nil)
+	ticks := grow.settleAtOnce(1000)
+	held := grow.holding("data-03")[Serving]
+	t.Logf("a fourth data node takes %d copies in %d ticks (%v at the %v tick)", held, ticks,
+		time.Duration(ticks)*membership.TickInterval, membership.TickInterval)
+	if held == 0 || ticks > held+4 {
+		t.Fatalf("a fourth data node took %d copies in %d ticks, want at most one tick per "+
+			"transfer and four to start and finish", held, ticks)
+	}
+
+	lose := newSim(t, ownerLayout, 3, nodeIDs(4)...)
+	lose.settleAtOnce(100)
+	lose.check = lose.checkCopies
+	survivors := nodeIDs(4)[1:]
+	before := map[string]int{}
+	for _, node := range survivors {
+		before[node] = lose.holding(node)[Serving]
+	}
+	lose.nodes["data-00"].down = true
+	ticks = lose.settleAtOnce(1000) - membership.OutTicks
+	most := 0
+	for _, node := range survivors {
+		most = max(most, lose.holding(node)[Serving]-before[node])
+	}
+	t.Logf("the survivors of four take up to %d copies each in %d ticks past the removal (%v)",
+		most, ticks, time.Duration(ticks)*membership.TickInterval)
+	if most == 0 || ticks > most+4 {
+		t.Fatalf("restoring the lost node's copies took %d ticks, and no survivor took more "+
+			"than %d transfers", ticks, most)
+	}
+}
+
 // THE TWO LEAVE CONDITIONS. A copy the target no longer names is let go only
 // when every node of the target serves the partition by the map's account AND
 // by its own — (a) — and has itself acted on the map that made it a server:

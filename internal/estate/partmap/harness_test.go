@@ -281,3 +281,53 @@ func nodeIDs(n int) []string {
 	}
 	return out
 }
+
+// actAtOnce is [sim.act] for an executor that finishes every step within one
+// tick: a joiner serves, and a leaver has released, by the next tick. It is
+// what measures the maintainer's own cadence, with nothing of the executor's
+// in it.
+func (s *sim) actAtOnce() bool {
+	changed := false
+	for _, node := range slices.Sorted(maps.Keys(s.nodes)) {
+		n := s.nodes[node]
+		if n.down {
+			continue
+		}
+		m := s.state.Map
+		before := maps.Clone(n.meta.Partitions)
+		beforeEpoch := n.meta.MapEpoch
+		for _, table := range m.Partitions {
+			h := holderOf(&table, node)
+			cur, held := n.meta.Partitions[table.ID]
+			switch {
+			case h == nil:
+				if held && cur == PartReleased {
+					delete(n.meta.Partitions, table.ID)
+				}
+			case h.State == Joining || h.State == Serving:
+				n.meta.Partitions[table.ID] = PartServing
+			case h.State == Leaving:
+				n.meta.Partitions[table.ID] = PartReleased
+			}
+		}
+		n.meta.MapGeneration, n.meta.MapEpoch = m.Generation, m.Epoch
+		changed = changed || !maps.Equal(before, n.meta.Partitions) || beforeEpoch != m.Epoch
+	}
+	return changed
+}
+
+// settleAtOnce is [sim.settle] with [sim.actAtOnce], answering the ticks it
+// took.
+func (s *sim) settleAtOnce(limit int) int {
+	s.t.Helper()
+	start := s.ticks
+	for round := 1; round <= limit; round++ {
+		changed := s.tick()
+		s.check()
+		if acted := s.actAtOnce(); !changed && !acted {
+			return s.ticks - start
+		}
+	}
+	s.t.Fatalf("the map had not settled after %d rounds", limit)
+	return limit
+}

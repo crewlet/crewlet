@@ -27,6 +27,28 @@ import (
 // first record — and is not counted, or a new fleet would take one join at a
 // time per node to serve its estate at all: 963 copies over three nodes, 321
 // in a row each.
+//
+// WHAT IT COSTS IS TICKS, NOT BYTES, whenever a transfer is shorter than a
+// tick. A join is named on one maintainer tick and the node's next on the
+// tick that promotes it, so a node takes at most one transfer per
+// [membership.TickInterval] however small the partition. Measured at the
+// owner's layout (321 partitions, three copies) with an executor that
+// finishes every join within the tick (TestTheJoinRationCostsATickPerTransfer):
+// a fourth data node joining three takes its 243 copies in 247 ticks, an hour
+// at the fifteen-second tick; and when one of four is lost, the survivors
+// take up to 81 copies each in 82 ticks past its removal — twenty minutes
+// more at two copies, on top of membership's ten-minute grace. The bandwidth
+// argument for ONE holds only while a transfer outlasts a tick, which a
+// partition of a few hundred megabytes on a local network does not.
+//
+// KEPT AT ONE ALL THE SAME, because the cure is not a larger ration: two or
+// ten transfers per tick shorten the small-partition case by that factor and
+// hand the large-partition case — the one where a copy is actually at risk —
+// the shared pipe above. The cure is a ration that knows what it rations: a
+// convergence the maintainer runs again when an estate lease changes, rather
+// than a tick later, with absence still counted on the tick; or a ration by
+// bytes in flight once the lease says how large each partition is. Both are
+// decided where the lease is written and the map maintained, not here.
 const MaxJoinsPerNode = 1
 
 // Input is what one maintainer tick reads.
