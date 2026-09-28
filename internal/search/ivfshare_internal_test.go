@@ -2,11 +2,14 @@ package search
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -75,7 +78,9 @@ func TestATrainingRunsOnItsShareOfTheCores(t *testing.T) {
 		if err != nil {
 			t.Fatalf("train: %v", err)
 		}
-		_ = index.Assign(codes)
+		if _, err := index.Assign(t.Context(), codes); err != nil {
+			t.Fatalf("file: %v", err)
+		}
 		wall, spent = time.Since(started), cpuTime(t)-before
 	})
 	cores := spent.Seconds() / wall.Seconds()
@@ -150,36 +155,39 @@ func cpuTime(t *testing.T) time.Duration {
 	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
 }
 
-// THE RANGES ARE AT MOST THE WORKERS ASKED FOR, and cover every index exactly
-// once.
+// THE RANGES RUN ON AT MOST THE WORKERS ASKED FOR, and cover every index
+// exactly once.
 //
-// The first half is the bound [ivfWorkers] chooses actually binding: every
-// range is a goroutine, so a split into more ranges than workers would put the
-// training back on every core. The second is what makes the answer independent
-// of the split.
+// The first half is the bound [ivfWorkers] chooses actually binding: a split
+// onto more goroutines than workers would put the training back on every core.
+// It counts the GOROUTINES fn ran on rather than its calls, because a range is
+// walked in strides ([ivfStride]) and one worker calls fn once a stride. The
+// second is what makes the answer independent of the split.
 func TestParallelRangesRunsAtMostItsWorkers(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ workers, n int }{
 		{1, 1000}, {2, 1000}, {3, 1000}, {7, 1000}, {4, 5}, {4, 3}, {3, 0}, {0, 10},
+		{2, 5*ivfStride + 3}, {3, 7 * ivfStride},
 	} {
 		t.Run(fmt.Sprintf("%d workers over %d", tc.workers, tc.n), func(t *testing.T) {
 			t.Parallel()
 			var (
-				mu     sync.Mutex
-				seen   = make([]int, tc.n)
-				ranges int
+				mu   sync.Mutex
+				seen = make([]int, tc.n)
+				ran  = map[string]bool{}
 			)
-			parallelRanges(tc.workers, tc.n, func(from, to int) {
+			if err := parallelRanges(t.Context(), tc.workers, tc.n, func(from, to int) {
 				mu.Lock()
 				defer mu.Unlock()
-				ranges++
+				ran[goroutineOf(t)] = true
 				for i := from; i < to; i++ {
 					seen[i]++
 				}
-			})
-			if limit := max(tc.workers, 1); ranges > limit {
-				t.Errorf("split into %d ranges, each its own goroutine, want at "+
-					"most %d", ranges, limit)
+			}); err != nil {
+				t.Fatalf("split: %v", err)
+			}
+			if limit := max(tc.workers, 1); len(ran) > limit {
+				t.Errorf("split onto %d goroutines, want at most %d", len(ran), limit)
 			}
 			for i, n := range seen {
 				if n != 1 {
@@ -188,6 +196,93 @@ func TestParallelRangesRunsAtMostItsWorkers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// goroutineOf names the goroutine it runs on, from the first line of its own
+// stack ("goroutine 42 [running]:").
+func goroutineOf(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 64)
+	line, _, _ := bytes.Cut(buf[:runtime.Stack(buf, false)], []byte(" ["))
+	if !bytes.HasPrefix(line, []byte("goroutine ")) {
+		t.Fatalf("a stack that does not start by naming its goroutine: %q", line)
+	}
+	return string(line)
+}
+
+// A TRAINING CUT OFF HANDS ITS CORES BACK WITHIN A STRIDE of its tick ending,
+// in every CPU-bound step it takes.
+//
+// The duty's tick is bounded — by its budget, and by the lease it renews as it
+// runs — and a step that overran it publishes nothing. The k-means looked at
+// its context only between rounds and the filing not at all, so a tick cut off
+// as the filing began went on filing every code on its share of the cores for
+// the better part of a minute, for a result it then threw away, on a node that
+// might no longer hold the duty.
+//
+// The split itself is held to it exactly: a worker reads the context before
+// each stride, so after it ends no worker starts another, and what was covered
+// is at most the stride each worker was in.
+func TestATrainingStopsWithinAStrideOfItsTickEnding(t *testing.T) {
+	t.Parallel()
+	t.Run("the split", func(t *testing.T) {
+		t.Parallel()
+		for _, workers := range []int{1, 2, 3} {
+			ctx, cancel := context.WithCancel(t.Context())
+			var covered atomic.Int64
+			err := parallelRanges(ctx, workers, 64*ivfStride, func(from, to int) {
+				cancel()
+				covered.Add(int64(to - from))
+			})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("on %d workers a split whose context ended answered %v, "+
+					"want the context's error", workers, err)
+			}
+			if got, most := covered.Load(), int64(workers*ivfStride); got > most {
+				t.Errorf("on %d workers the split went on for %d indices after its "+
+					"context ended, want at most a stride a worker (%d)", workers, got, most)
+			}
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := parallelRanges(ctx, 2, 10*ivfStride, func(int, int) {
+			t.Error("a split whose context had already ended ran a stride")
+		}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("a split whose context had already ended answered %v", err)
+		}
+	})
+
+	f := NewTopicalFixture(4_000, 11)
+	codes := NewCodes(len(f.Codes[0]), f.Len())
+	for _, code := range f.Codes {
+		codes.Append(code)
+	}
+	lists := IVFLists(codes.Len())
+	index, err := TrainIVF(t.Context(), codes, lists, IVFSeed("S", 0), nil)
+	if err != nil {
+		t.Fatalf("train: %v", err)
+	}
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	t.Run("the k-means", func(t *testing.T) {
+		t.Parallel()
+		if _, err := TrainIVF(ended, codes, lists, IVFSeed("S", 0), nil); !errors.Is(err, context.Canceled) {
+			t.Fatalf("a training whose tick had ended answered %v, want the "+
+				"context's error", err)
+		}
+	})
+	t.Run("the filing", func(t *testing.T) {
+		t.Parallel()
+		filed, err := index.Assign(ended, codes)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("a filing whose tick had ended answered %v, want the "+
+				"context's error", err)
+		}
+		if filed != nil {
+			t.Fatalf("a filing cut off answered %d rows beside its error — a "+
+				"partial filing is one the caller could install", len(filed))
+		}
+	})
 }
 
 // THE INDEX IS THE SAME BYTES ON ANY NUMBER OF WORKERS, and so is its filing.
@@ -214,7 +309,10 @@ func TestTheIndexIsTheSameOnAnyNumberOfWorkers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("train on %d workers: %v", workers, err)
 		}
-		rows := index.assign(codes, workers)
+		rows, err := index.assign(t.Context(), codes, workers)
+		if err != nil {
+			t.Fatalf("file on %d workers: %v", workers, err)
+		}
 		if want == nil {
 			want, wantRows = index.Bytes(), rows
 			continue
@@ -274,7 +372,9 @@ func BenchmarkIVFTrainingShare(b *testing.B) {
 					}
 					kmeans := time.Since(started)
 					started = time.Now()
-					_ = index.assign(codes, arm.workers)
+					if _, err := index.assign(b.Context(), codes, arm.workers); err != nil {
+						b.Fatal(err)
+					}
 					filing := time.Since(started)
 					close(stop)
 					b.ReportMetric(kmeans.Seconds(), "kmeans-s")

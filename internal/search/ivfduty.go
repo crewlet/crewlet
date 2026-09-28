@@ -404,11 +404,12 @@ func (e *Embedder) trainFrom(ctx context.Context, dim int, set trainingSet, basi
 	if err != nil {
 		return 0, err
 	}
-	byList := GroupByList(index.Assign(codes), lists)
-	if err = ctx.Err(); err != nil {
+	filed, err := index.Assign(ctx, codes)
+	if err != nil {
 		return 0, fmt.Errorf("search: the index's training stopped filing the "+
 			"corpus: %w", err)
 	}
+	byList := GroupByList(filed, lists)
 	choice, err := ChooseProbes(ctx, &set.corpus, byList, index, set.trials)
 	if err != nil {
 		return 0, err

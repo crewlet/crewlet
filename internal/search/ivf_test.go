@@ -82,7 +82,7 @@ func TestIVFRecallMeetsTheFloorCurve(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			byList := search.GroupByList(index.Assign(c.Codes), lists)
+			byList := search.GroupByList(filedIn(t, index, c.Codes), lists)
 
 			// THE TRAINING'S OWN HELD-OUT QUERIES, drawn from a seed range
 			// the gate's never uses.
@@ -474,7 +474,7 @@ func TestTheProbeIsThePoolTheTrainingMeasured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byList := search.GroupByList(index.Assign(c.Codes), head.lists)
+	byList := search.GroupByList(filedIn(t, index, c.Codes), head.lists)
 
 	shapes := []struct {
 		name       string
@@ -869,7 +869,7 @@ func TestAnIndexTrainedOverDuplicatesComesToRest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		largest := search.LargestList(search.GroupByList(index.Assign(codes), lists))
+		largest := search.LargestList(search.GroupByList(filedIn(t, index, codes), lists))
 		if largest*lists <= search.IVFImbalance*n {
 			t.Fatalf("seed %d left a largest list of %d against a mean of %d — "+
 				"the case needs a training that cannot balance its lists",
@@ -914,7 +914,7 @@ func TestAProbeCountThatLosesTheHeadIsNotChosen(t *testing.T) {
 		c.Sources = append(c.Sources, search.SourceTask)
 		c.Containers = append(c.Containers, 0)
 	}
-	byList := search.GroupByList(index.Assign(c.Codes), index.Lists())
+	byList := search.GroupByList(filedIn(t, index, c.Codes), index.Lists())
 	want := []int{199}
 	for row := range 149 {
 		want = append(want, row)
@@ -1237,7 +1237,7 @@ func trainedIndex(t testing.TB, db *store.DB, model string, dim int) search.Vect
 	if err != nil {
 		t.Fatal(err)
 	}
-	byList := search.GroupByList(index.Assign(codes), lists)
+	byList := search.GroupByList(filedIn(t, index, codes), lists)
 	choice, err := search.ChooseProbes(context.Background(), &reading.Corpus, byList,
 		index, reading.Trials)
 	if err != nil {
@@ -1586,4 +1586,14 @@ func unpackFloats(b []byte) []float32 {
 		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[4*i:]))
 	}
 	return out
+}
+
+// filedIn is every code's list in index, as the duty's training files them.
+func filedIn(t testing.TB, index search.IVF, codes search.Codes) []int32 {
+	t.Helper()
+	filed, err := index.Assign(context.Background(), codes)
+	if err != nil {
+		t.Fatalf("file %d codes: %v", codes.Len(), err)
+	}
+	return filed
 }

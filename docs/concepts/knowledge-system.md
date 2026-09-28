@@ -268,8 +268,9 @@ and make one exact pass, plus a k-means and a filing of every code that run on
 **half the node's cores** — so the seats and the searches on that node keep the
 other half — which comes to a little over three minutes at the largest
 partition an index serves. It renews the duty's
-lease as it runs, stops publishing the moment it cannot, and is cut off at
-five minutes, so a wedged tick never holds the duty.
+lease as it runs, stops publishing — and hands its cores back within a fraction
+of a second — the moment it cannot, and is cut off at five minutes, so a wedged
+tick never holds the duty.
 Both source kinds are covered: the tracker's work items and the knowledge
 base's published pages. A **rename does not re-embed a page** — the vector is
 stored against the page's own edit number rather than the log version a rename

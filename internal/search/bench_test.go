@@ -313,7 +313,7 @@ func BenchmarkIVFRecallAtScale(b *testing.B) {
 						b.Fatal(err)
 					}
 					trained := time.Since(started)
-					byList := search.GroupByList(index.Assign(c.Codes), lists)
+					byList := search.GroupByList(filedIn(b, index, c.Codes), lists)
 					choice, err := search.ChooseProbes(b.Context(), c, byList, index,
 						gateTrials(f, c, 5000, search.EvalQueries))
 					if err != nil {
@@ -664,7 +664,7 @@ func BenchmarkIndexTraining(b *testing.B) {
 				}
 				kmeans := time.Since(started)
 				started = time.Now()
-				byList := search.GroupByList(index.Assign(codes), lists)
+				byList := search.GroupByList(filedIn(b, index, codes), lists)
 				filing := time.Since(started)
 				started = time.Now()
 				if _, err := search.ChooseProbes(b.Context(), &reading.Corpus, byList,

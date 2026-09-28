@@ -355,19 +355,29 @@ func (x IVF) ProbeOrder(code []uint64) []int {
 // and the centroids alone, and every worker writes a disjoint range of the
 // answer, so the result does not depend on how many workers ran or in what
 // order they finished.
-func (x IVF) Assign(codes Codes) []int32 {
-	return x.assign(codes, ivfWorkers())
+//
+// It stops within a stride ([ivfStride]) of ctx ending and answers ctx's
+// error, never a partial filing: at the largest partition an index serves the
+// filing is the longest step a training takes without returning — tens of
+// seconds on its share of the cores — and a duty tick cut off, at its budget
+// or by a lease it could not renew, must not go on spending those cores on a
+// result it will discard.
+func (x IVF) Assign(ctx context.Context, codes Codes) ([]int32, error) {
+	return x.assign(ctx, codes, ivfWorkers())
 }
 
 // assign is [IVF.Assign] on the given number of workers.
-func (x IVF) assign(codes Codes, workers int) []int32 {
+func (x IVF) assign(ctx context.Context, codes Codes, workers int) ([]int32, error) {
 	out := make([]int32, codes.Len())
-	parallelRanges(workers, codes.Len(), func(from, to int) {
+	if err := parallelRanges(ctx, workers, codes.Len(), func(from, to int) {
 		for i := from; i < to; i++ {
 			out[i] = int32(x.Nearest(codes.At(i)))
 		}
-	})
-	return out
+	}); err != nil {
+		return nil, fmt.Errorf("search: filing %d codes in %d lists stopped: %w",
+			codes.Len(), x.Lists(), err)
+	}
+	return out, nil
 }
 
 // Bytes is the index as it is stored and carried: every centroid's words,
@@ -466,10 +476,12 @@ const ivfStream = 0x1CEB00DA
 // the list it is filed in is a query the index was fitted to answer, and the
 // recall it measured would describe that fit rather than a search.
 //
-// It stops between rounds when ctx ends — a training runs inside a duty tick
-// whose lease is bounded, and one that would outlive it must publish nothing
-// ([Embedder.Tick]). The caller chooses lists ([IVFLists]); codes must hold at
-// least that many rows outside heldOut. It runs on [ivfWorkers] of the cores.
+// It stops within a stride ([ivfStride]) of ctx ending — a training runs
+// inside a duty tick whose lease is bounded, and one that would outlive it
+// must publish nothing ([Embedder.Tick]), so the cores it holds are released
+// as soon as that is known rather than at the end of the round. The caller
+// chooses lists ([IVFLists]); codes must hold at least that many rows outside
+// heldOut. It runs on [ivfWorkers] of the cores.
 func TrainIVF(ctx context.Context, codes Codes, lists int, seed uint64, heldOut []int) (IVF, error) {
 	return trainIVF(ctx, codes, lists, seed, heldOut, ivfWorkers())
 }
@@ -502,27 +514,32 @@ func trainIVF(ctx context.Context, codes Codes, lists int, seed uint64, heldOut 
 		assignment[i] = -1
 	}
 	for round := range IVFTrainIterations {
-		if err := ctx.Err(); err != nil {
-			return IVF{}, fmt.Errorf("search: the index's training stopped "+
-				"after %d of %d rounds: %w", round, IVFTrainIterations, err)
-		}
-		changed := x.assignInto(points, assignment, distance, workers)
-		if round > 0 && changed == 0 {
+		changed, err := x.assignInto(ctx, points, assignment, distance, workers)
+		if err == nil && round > 0 && changed == 0 {
 			// CONVERGED: the update below would rebuild these same
 			// centroids, since every tie keeps the bit it has.
 			break
 		}
-		x.update(points, assignment, distance, workers)
+		if err == nil {
+			err = x.update(ctx, points, assignment, distance, workers)
+		}
+		if err != nil {
+			return IVF{}, fmt.Errorf("search: the index's training stopped "+
+				"in round %d of %d: %w", round+1, IVFTrainIterations, err)
+		}
 	}
 	return x, nil
 }
 
 // assignInto files every point in its nearest list, recording its distance,
-// and reports how many moved.
-func (x IVF) assignInto(points Codes, assignment, distance []int32, workers int) int {
+// and reports how many moved — or ctx's error, having stopped within a stride
+// of it ending.
+func (x IVF) assignInto(ctx context.Context, points Codes, assignment, distance []int32,
+	workers int) (int, error) {
+
 	var mu sync.Mutex
 	changed := 0
-	parallelRanges(workers, points.Len(), func(from, to int) {
+	err := parallelRanges(ctx, workers, points.Len(), func(from, to int) {
 		moved := 0
 		for i := from; i < to; i++ {
 			code := points.At(i)
@@ -541,12 +558,15 @@ func (x IVF) assignInto(points Codes, assignment, distance []int32, workers int)
 		changed += moved
 		mu.Unlock()
 	})
-	return changed
+	return changed, err
 }
 
 // update moves every centroid to its list's per-bit majority, and re-seeds the
-// lists that emptied.
-func (x IVF) update(points Codes, assignment, distance []int32, workers int) {
+// lists that emptied — or answers ctx's error, having stopped within a stride
+// of it ending and left the centroids for the caller to discard.
+func (x IVF) update(ctx context.Context, points Codes, assignment, distance []int32,
+	workers int) error {
+
 	lists := x.Lists()
 	// THE MEMBERS OF EACH LIST, by a counting sort, so the per-list pass
 	// below reads its own rows and needs one bit counter rather than one per
@@ -566,7 +586,7 @@ func (x IVF) update(points Codes, assignment, distance []int32, workers int) {
 	}
 
 	bitsPerCode := 64 * x.words
-	parallelRanges(workers, lists, func(from, to int) {
+	if err := parallelRanges(ctx, workers, lists, func(from, to int) {
 		counter := make([]int32, bitsPerCode)
 		for j := from; j < to; j++ {
 			own := members[start[j]:start[j+1]]
@@ -595,7 +615,9 @@ func (x IVF) update(points Codes, assignment, distance []int32, workers int) {
 				// centroid and so lets the loop stop.
 			}
 		}
-	})
+	}); err != nil {
+		return err
+	}
 
 	// AN EMPTY LIST IS RE-SEEDED, never left: a centroid nothing is nearest
 	// to is a list every document skips, and the count the corpus was sized
@@ -608,7 +630,7 @@ func (x IVF) update(points Codes, assignment, distance []int32, workers int) {
 		}
 	}
 	if len(empty) == 0 {
-		return
+		return nil
 	}
 	far := make([]int, len(assignment))
 	for i := range far {
@@ -623,6 +645,7 @@ func (x IVF) update(points Codes, assignment, distance []int32, workers int) {
 		}
 		copy(x.Centroid(j), points.At(far[k]))
 	}
+	return nil
 }
 
 // sampleRows is up to k distinct rows of [0, n) outside skip (ascending), in
@@ -692,18 +715,41 @@ func ivfWorkers() int { return workersFor(runtime.GOMAXPROCS(0)) }
 // workersFor is [ivfWorkers] for a process allowed procs cores.
 func workersFor(procs int) int { return max(procs/ivfCoreShare, 1) }
 
+// ivfStride is how many indices a training worker covers between two readings
+// of whether its tick has ended: ONE THOUSAND AND TWENTY-FOUR.
+//
+// The costliest index is a row being filed, which ranks it against every
+// list — at [IVFMaxLists] measured at about 110 µs idle and 170 µs on a busy
+// node (BenchmarkIVFTrainingShare's filing, per row per worker) — so a stride
+// is a sixth of a second of one worker's time at most, and a training cut off
+// hands its cores back within that. A reading of the context costs a lock and
+// a load, under a millionth of the stride it guards, so nothing is saved by a longer
+// one; a shorter one buys a release no reader of a tick's log could tell from
+// this one.
+const ivfStride = 1024
+
 // parallelRanges splits [0, n) into at most workers contiguous ranges and runs
-// fn on each, returning when all have.
+// fn over each in strides of [ivfStride], returning when all have — or ctx's
+// error, once every worker has finished the stride it was in when ctx ended.
 //
 // Every caller writes a disjoint range, which is what keeps the answer
 // independent of the number of workers — so a training's cost can be bounded
 // ([ivfWorkers]) without its result depending on the bound, or on the cores
-// of whichever node holds the duty.
-func parallelRanges(workers, n int, fn func(from, to int)) {
+// of whichever node holds the duty. A caller handed an error discards what
+// the ranges wrote: a stride finished is not a range finished.
+func parallelRanges(ctx context.Context, workers, n int, fn func(from, to int)) error {
+	strided := func(from, to int) {
+		for at := from; at < to; at += ivfStride {
+			if ctx.Err() != nil {
+				return
+			}
+			fn(at, min(at+ivfStride, to))
+		}
+	}
 	workers = min(workers, max(n, 1))
 	if workers <= 1 {
-		fn(0, n)
-		return
+		strided(0, n)
+		return ctx.Err()
 	}
 	var wg sync.WaitGroup
 	step := (n + workers - 1) / workers
@@ -711,10 +757,11 @@ func parallelRanges(workers, n int, fn func(from, to int)) {
 		wg.Add(1)
 		go func(from, to int) {
 			defer wg.Done()
-			fn(from, to)
+			strided(from, to)
 		}(from, min(from+step, n))
 	}
 	wg.Wait()
+	return ctx.Err()
 }
 
 // IVFCandidates is the first stage over an index, as a pure function: the
