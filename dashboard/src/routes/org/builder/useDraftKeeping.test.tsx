@@ -95,7 +95,7 @@ test("a kept draft of the same revision waits for Keep or Discard, and Keep rest
 
 // A NEWER REVISION WHILE THE OFFER STANDS. The offer was made against the
 // base on screen, so the base is not moved under it, and keeping the draft
-// then leads into the update flow rather than a lens that is paused with no
+// then leads into the update flow rather than a builder that is paused with no
 // way forward.
 test("a kept draft offered as a colleague saves is kept, then offered as an update", async () => {
   keep({});
@@ -276,10 +276,10 @@ test("a draft with changes asks before the tab goes, and one without does not", 
   await waitFor(() => expect(unload()).toBe(true));
 });
 
-// WHERE NOTHING KEEPS THE DRAFT, leaving the lens loses it like a reload, so
-// that move is asked about first; a move within the lens keeps the Builder
+// WHERE NOTHING KEEPS THE DRAFT, leaving the builder loses it like a reload, so
+// that move is asked about first; a move within the builder keeps the Builder
 // and the draft, and is not.
-test("a draft this browser cannot keep asks before the lens is left, not before a view changes", async () => {
+test("a draft this browser cannot keep asks before the builder is left, not before a view changes", async () => {
   const refusing: DraftStorage = {
     getItem: () => null,
     setItem: () => {
@@ -319,7 +319,7 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
   expect(start.startsWith("#/agents/edit")).toBe(true);
 });
 
-test("coming back to the lens restores this page's own draft without asking", async () => {
+test("coming back to the builder restores this page's own draft without asking", async () => {
   const engine = new Engine(company());
   const first = mountBuilder({ engine });
   await screen.findByText("No problems");

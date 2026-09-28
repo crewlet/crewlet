@@ -16,7 +16,7 @@
  * replay every operation onto the operator's own revision. While an outcome
  * is unknown the Builder records nothing, for the same reason.
  *
- * A WRITE IN FLIGHT IS NEVER ABORTED. Leaving the lens mid-save unmounts the
+ * A WRITE IN FLIGHT IS NEVER ABORTED. Leaving the builder mid-save unmounts the
  * Builder, but aborting the request would only turn a write that may land
  * into one nobody hears about. The answer is still handled, and a save that
  * landed after the Builder went away is still recorded and clears the kept
@@ -25,7 +25,7 @@
  * AND ONE WHOSE ANSWER IS LOST IS SETTLED LATER. Before a save is sent the
  * Builder marks the kept log with its write id (`onSending`), and the mark is
  * cleared only once the save is known not to have landed (`onNotLanded`). A
- * save whose outcome is still unknown when the lens is left, or the tab
+ * save whose outcome is still unknown when the builder is left, or the tab
  * reloaded, leaves the mark behind, and the next visit hands that attempt to
  * [Save.resume], which settles it exactly as a lost answer is settled here.
  * A save this page still has OUT is waited for first (see [outstanding]).
@@ -109,7 +109,7 @@ export interface Save {
  * The saves this page has sent and not yet finished handling, by write id.
  *
  * MODULE STATE, because a save outlives the Builder that sent it: leaving the
- * lens never aborts a write, and coming back while the write is still out
+ * builder never aborts a write, and coming back while the write is still out
  * mounts a new Builder that finds the kept log marked with its id. Settled
  * from the revision history at that moment, the write may simply not be
  * stored YET: it reads as not landed, the log is given back, and it is saved

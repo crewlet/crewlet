@@ -3,7 +3,7 @@
  * Every screen the builder links out to exists, and every name it offers is
  * used.
  *
- * WHY THIS SUITE EXISTS AT ALL. The lens links out to five screens it does
+ * WHY THIS SUITE EXISTS AT ALL. The builder links out to five screens it does
  * not own — the configuration, the fleet, Integrations, Schedules and the
  * company's credentials — and a link to a screen that moved is the one
  * navigation failure with NO symptom before the click: it renders, it has the
@@ -13,7 +13,7 @@
  * said a word.
  *
  * `app/source.test.ts` catches the shapes it can read — `href([…])`,
- * `nav.to([…])`, `path: […]` — and it could not read this lens's, because a
+ * `nav.to([…])`, `path: […]` — and it could not read this builder's, because a
  * destination went through `ScreenLink to={[…]}`, a fourth spelling. The
  * answer is not a fourth pattern in that gate: it is that the path stops
  * being written at the call site at all. [SCREENS] is now the one place a
@@ -34,14 +34,14 @@ import { resolves } from "~/app/routes.ts";
 import { modules } from "~/test/source.ts";
 import { SCREENS, screenPath, type ScreenName } from "./dialogParts.tsx";
 
-/** This lens's directory, relative to `src/`. */
-const LENS = "routes/org/builder/";
+/** This builder's directory, relative to `src/`. */
+const BUILDER = "routes/org/builder/";
 
-/** This lens's own source, the suites excluded, by path relative to the lens. */
+/** This builder's own source, the suites excluded, by path relative to the builder. */
 function sources(): { path: string; text: string }[] {
   return modules()
-    .filter(({ path }) => path.startsWith(LENS))
-    .map(({ path, text }) => ({ path: path.slice(LENS.length), text }));
+    .filter(({ path }) => path.startsWith(BUILDER))
+    .map(({ path, text }) => ({ path: path.slice(BUILDER.length), text }));
 }
 
 const names = Object.keys(SCREENS) as ScreenName[];
@@ -64,7 +64,7 @@ test("every destination resolves to a screen", () => {
  * AND THE WHOLE PATH, not just its head: `["settings", "integrations"]` and
  * `["settings", "integration"]` have the same first segment and only one of them
  * is a screen. `nav.ts` is where a destination is declared, so a builder
- * destination has to BE one — which is also what makes the sidebar and this lens
+ * destination has to BE one — which is also what makes the sidebar and this builder
  * agree about where Integrations is when it next moves.
  */
 test("every destination is a destination this application declares", () => {
@@ -79,15 +79,15 @@ test("every destination is a destination this application declares", () => {
 /*
  * THE OTHER DIRECTION. An entry nothing links to is a route nobody has
  * clicked and therefore nobody has checked — exactly the state all five of
- * these were in when the lens arrived.
+ * these were in when the builder arrived.
  */
-test("every destination is linked to by something in the lens", () => {
-  const lens = sources();
-  const text = lens
+test("every destination is linked to by something in the builder", () => {
+  const builder = sources();
+  const text = builder
     .filter((f) => f.path !== "dialogParts.tsx")
     .map((f) => f.text)
     .join("\n");
-  const table = lens.find((f) => f.path === "dialogParts.tsx")?.text ?? "";
+  const table = builder.find((f) => f.path === "dialogParts.tsx")?.text ?? "";
   // Named at a `ScreenLink`, at a `ReadOnlyFact`'s link, or through
   // `screenPath` where the caller builds the href itself.
   const used = (name: string) =>
@@ -105,7 +105,7 @@ test("every destination is linked to by something in the lens", () => {
 /*
  * THE MUTATION, run against the same values the cases above read rather than
  * a re-spelling of them: a table that named a flat route — which is what this
- * lens shipped with — has to come back red from both directions.
+ * builder shipped with — has to come back red from both directions.
  */
 test("the check can tell: a flat route is caught, head and whole", () => {
   const declared = new Set(DESTINATIONS.map((d) => d.path.join("/")));
@@ -116,6 +116,6 @@ test("the check can tell: a flat route is caught, head and whole", () => {
   expect(resolves(["settings", "integration"])).toBe(false);
   expect(declared.has("settings/integration")).toBe(false);
   expect(declared.has("settings/integrations")).toBe(true);
-  // And the address this lens's destinations lived at before this tree.
+  // And the address this builder's destinations lived at before this tree.
   expect(resolves(["admin", "integrations"])).toBe(false);
 });

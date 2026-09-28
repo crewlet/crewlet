@@ -1,16 +1,16 @@
 // @vitest-environment node
 /**
- * Which moves keep the Builder lens mounted, over the addresses THIS frame
+ * Which moves keep the builder mounted, over the addresses THIS frame
  * makes.
  *
  * WHY THIS IS ITS OWN FILE. [keepsTheLens] is the whole of what every guard in
- * the lens asks — the draft's and the node editor's both — and it is a pure
+ * the builder asks — the draft's and the node editor's both — and it is a pure
  * function of a route, so the cases that matter are cheap here and expensive
- * anywhere else. It is also the one thing in the lens that a move between
+ * anywhere else. It is also the one thing in the builder that a move between
  * screens silently invalidates: the predicate names an address, and an address
  * that has moved does not fail, it simply answers `false` for everything, and
  * a guard that answers `false` for everything HOLDS EVERY MOVE — including the
- * ones inside the lens it was written to let through. The builder came here
+ * ones inside the builder it was written to let through. The builder came here
  * from a screen at `#/org`, so that is not a hypothetical.
  *
  * The frame around it is this tree's: the sidebar, the Agents workspace's
@@ -28,12 +28,12 @@ import { keepsTheLens } from "./BuilderContext.tsx";
 const to = (hash: string) => parseHash(hash);
 
 /*
- * THE MOVES INSIDE THE LENS. Each is a `section` — the router PUSHES for one,
+ * THE MOVES INSIDE THE BUILDER. Each is a `section` — the router PUSHES for one,
  * so each really is put to the guard — and each keeps the Builder, its draft
  * and whatever dialog is open exactly as they were. Asking about any of them
  * would put "discard your changes?" in front of a reader who chose a view.
  */
-test("a move within the lens keeps it: the view, the chart and a selection", () => {
+test("a move within the builder keeps it: the view, the chart and a selection", () => {
   for (const hash of [
     "#/agents/edit",
     "#/agents/edit?view=table",
@@ -56,7 +56,7 @@ test("a move within the lens keeps it: the view, the chart and a selection", () 
  * departure as another workspace is: the Builder unmounts and takes the draft
  * with it.
  */
-test("a move off the lens does not keep it, including to its own workspace's sections", () => {
+test("a move off the builder does not keep it, including to its own workspace's sections", () => {
   for (const hash of [
     // The workspace's own sections, from the tabs in the page header.
     "#/agents",
@@ -86,7 +86,7 @@ test("a move off the lens does not keep it, including to its own workspace's sec
  * one that says a reader choosing a view is not leaving — went red. This is
  * that failure written down, so the next move of this screen reads it.
  */
-test("the old address is not this one, and would hold every move in the lens", () => {
+test("the old address is not this one, and would hold every move in the builder", () => {
   const atCompany = (route: ReturnType<typeof to>) =>
     route.path[0] === "company" && route.query.get("lens") === "builder";
   const inside = to("#/agents/edit?view=table");

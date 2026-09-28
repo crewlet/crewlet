@@ -1,5 +1,5 @@
 /**
- * The org builder's context: what every view and dialog of the Builder lens
+ * The org builder's context: what every view and dialog of the builder
  * reads, and the only way they change anything.
  *
  * ONE DOOR. The canvas, the outline, the node editor and the dialogs never
@@ -150,7 +150,7 @@ export interface BuilderApi {
    * Where a view or dialog that creates a node mints its key, in its own event
    * handler (see `model/keys.ts`). The Builder's own source, which is the
    * browser's random one (`runtime.randomKeys`) unless a suite injects
-   * another, so every key and write id the lens makes comes from one place.
+   * another, so every key and write id the builder makes comes from one place.
    */
   keys: KeySource;
   /**

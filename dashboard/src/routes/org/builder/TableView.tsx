@@ -59,7 +59,7 @@ import {
   seatKindLabel,
   unitTypeLabel,
 } from "./nodeMarks.tsx";
-import { nodeTone } from "./nodeTone.ts";
+import { addLabel } from "./AddNodeDialog.tsx";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
 import { TrashGlyph, PencilGlyph, EllipsisVerticalGlyph } from "@crewlethq/icons/glyphs";
@@ -96,7 +96,12 @@ const COLUMNS: readonly TreeGridColumn[] = [
   // share as well: what a row IS is the word under its name, which is where
   // the console writes it and where the chart's own cards write it, and a
   // column repeating that word cost 145px of a 1269px table to say it twice.
-  { key: "name", header: "Name", width: "minmax(0, 5.25fr)" },
+  //
+  // ON A PHONE IT IS THE SCROLLER'S OWN WIDTH (`--btable-name-track`, set by
+  // screens.css below the phone breakpoint): the grid keeps its columns and
+  // scrolls sideways there, and five and a quarter shares of it was 417px on a
+  // 356px screen, so every seat's state pill sat cut in half at the edge.
+  { key: "name", header: "Name", width: "var(--btable-name-track, minmax(0, 5.25fr))" },
   { key: "handle", header: "Handle", width: "minmax(0, 1.75fr)" },
   { key: "lead", header: "Lead or reports to", width: "minmax(0, 1.75fr)" },
   { key: "problems", header: "Problems", width: "minmax(0, 1fr)" },
@@ -208,7 +213,6 @@ export function TableView() {
               // its room: a push twice a tool-loop round changes a word here
               // and never the row.
               trailing={view.type === "seat" ? <LiveState api={api} view={view} /> : undefined}
-              tone={nodeTone(view)}
             />
           );
         /*
@@ -285,7 +289,7 @@ export function TableView() {
       /*
        * THE PAIR LIVES IN THE PAGE TOOLBAR, on both views. The design system
        * draws its own Expand all and Collapse all over this table, and the
-       * lens draws the same two in its toolbar: one action pair, two
+       * builder draws the same two in its toolbar: one action pair, two
        * implementations, each hidden on the view where the other was drawn,
        * so the control moved 800px when a reader changed view.
        */
@@ -293,7 +297,6 @@ export function TableView() {
       columns={COLUMNS}
       rows={structure.tree}
       ref={grid}
-      tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
       renderCell={cell}
       cellHasControl={(_id, column) => column === ACTIONS_COLUMN}
       onRowKey={onRowKey}
@@ -357,7 +360,7 @@ function RowControls({
           only the pencil and the trash behind the reveal. */}
       {view.type !== "seat" && (
         <OrgTableAdd
-          label={`Add to ${name}`}
+          label={addLabel(view.name)}
           onOpen={() => grid.opened(view.key, ACTIONS_COLUMN)}
           sections={addSections(api, view)}
         />

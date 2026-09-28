@@ -75,7 +75,7 @@ describe("the save", () => {
   });
 
   // THE SAVED REVISION IS READ BACK, NEVER OVER WORK. The save's own answer
-  // keys the base, so the lens is editable while that read is out, and an
+  // keys the base, so the builder is editable while that read is out, and an
   // edit made then already stands on the saved revision.
   test("an edit made while the saved revision is read back is kept", async () => {
     const engine = new Engine(company());
@@ -197,7 +197,7 @@ describe("a save whose answer never arrives", () => {
     expect(engine.revisions.size).toBe(1);
   });
 
-  test("a save that lands after the lens was left still clears the kept draft", async () => {
+  test("a save that lands after the builder was left still clears the kept draft", async () => {
     const engine = new Engine(company());
     let answer: (response: Response) => void = () => {};
     engine.script = (r, e) => {
@@ -226,8 +226,8 @@ describe("a save whose answer never arrives", () => {
   // LEFT BEFORE THE ANSWER CAME, AND THE ANSWER NEVER CAME. The save may have
   // landed, and its kept log offered as an update onto its own revision would
   // replay every operation a second time; so the next visit settles it first.
-  describe("after the lens was left", () => {
-    /** Saves an edit of the CEO, leaves the lens while the save is out, and loses its answer. */
+  describe("after the builder was left", () => {
+    /** Saves an edit of the CEO, leaves the builder while the save is out, and loses its answer. */
     async function loseTheAnswer(engine: Engine, { lands }: { lands: boolean }) {
       let offline = false;
       let lose: () => void = () => {};
@@ -250,7 +250,7 @@ describe("a save whose answer never arrives", () => {
       cleanup();
       const asked = engine.sent("GET").length;
       lose();
-      // Settling from the unmounted lens could not reach the engine either.
+      // Settling from the unmounted builder could not reach the engine either.
       await waitFor(() => expect(engine.sent("GET").length).toBeGreaterThan(asked));
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(/^[0-9a-f]+$/);
@@ -271,7 +271,7 @@ describe("a save whose answer never arrives", () => {
       const checked = engine.checks().length;
       await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
       expect(engine.sent("GET", "/config/revisions/r-saved").length).toBeGreaterThan(0);
-      // The lens read the saved revision when it opened, so it stands on it
+      // The builder read the saved revision when it opened, so it stands on it
       // already and nothing is read or checked over again.
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(engine.checks()).toHaveLength(checked);
@@ -285,7 +285,7 @@ describe("a save whose answer never arrives", () => {
     // have stored it yet, so settling it from the history then would find
     // nothing, give the log back, and have it saved or updated a second time
     // once the first attempt landed. The page waits for its own save instead.
-    test("a save still out when the lens opens again is waited for, never settled beside it", async () => {
+    test("a save still out when the builder opens again is waited for, never settled beside it", async () => {
       const engine = new Engine(company());
       let answerWrite: () => void = () => {};
       engine.script = (r, e) =>
@@ -327,7 +327,7 @@ describe("a save whose answer never arrives", () => {
     // here a colleague's revision built on the save, and settling the save
     // must not relabel that document with the save's revision: every check
     // then named a revision the document was not, and met a conflict.
-    test("a save that landed under a later revision leaves the lens on the later one", async () => {
+    test("a save that landed under a later revision leaves the builder on the later one", async () => {
       const engine = new Engine(company());
       await loseTheAnswer(engine, { lands: true });
       engine.commit({
@@ -409,7 +409,7 @@ describe("a save whose answer never arrives", () => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
 
-    test("while the engine still cannot say, the lens waits and edits nothing", async () => {
+    test("while the engine still cannot say, the builder waits and edits nothing", async () => {
       const engine = new Engine(company());
       await loseTheAnswer(engine, { lands: true });
       engine.script = (r) =>

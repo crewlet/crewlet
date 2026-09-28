@@ -186,7 +186,7 @@ test("a company created meanwhile is offered instead of the draft, never written
   expect(engine.checks().at(-1)!.body).toEqual({});
 });
 
-// KEEPING THE DRAFT IS NOT A DEAD END. It can never be saved, and the lens is
+// KEEPING THE DRAFT IS NOT A DEAD END. It can never be saved, and the builder is
 // read-only over it, so what it offers instead has to stay on screen after
 // the dialog is closed: without it the only way out was a reload.
 test("a create draft kept after a company appeared still offers the company", async () => {

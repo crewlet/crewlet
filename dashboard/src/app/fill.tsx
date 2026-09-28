@@ -1,8 +1,8 @@
 /**
  * How a screen asks the shell to stop scrolling and hand it the height.
  *
- * THREE SCREENS NEED THIS, each for part of its life. The org builder's
- * chart lens is a canvas, and a canvas fills the box its screen gives it
+ * THREE SCREENS NEED THIS, each for part of its life. Edit org's
+ * visualization is a canvas, and a canvas fills the box its screen gives it
  * rather than growing the page — a wheel turned over a page that scrolls
  * lands in a canvas half off screen. The Inbox and a task's page are two
  * columns that each scroll on their own (a list and its pane; a task and its
@@ -30,7 +30,7 @@ export const FillRequest = createContext<(on: boolean) => void>(() => {});
  * Ask the shell for the window's remaining height while `on` is true.
  *
  * The request is withdrawn when it turns false and when the screen unmounts,
- * so a reader who leaves the canvas lens, or the screen, gets the scroller
+ * so a reader who leaves the canvas view, or the screen, gets the scroller
  * back. A screen that asked and never withdrew would leave every screen after
  * it unable to scroll.
  */

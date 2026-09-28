@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * The builder's stylesheet keeps the promises its views rely on and a
- * browser-free suite cannot observe: a live state badge never resizes the card
+ * browser-free suite cannot observe: a live state badge never resizes the row
  * it sits in, no builder card or row is coloured by what it holds, and nothing
  * here redraws what the design system's chart and table already draw.
  *
@@ -23,8 +23,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 /*
- * THE SCREEN'S STYLESHEET IS `screens.css` IN THIS TREE. The builder is a lens
- * of the company screen (`#/agents/edit`), and every screen's recipes
+ * THE SCREEN'S STYLESHEET IS `screens.css` IN THIS TREE. The builder is Agents
+ * › Edit org (`#/agents/edit`), and every screen's recipes
  * live in one sheet here, so the builder's sit beside the chart's rather than
  * in a file of their own — which is what `org.css` was before the two screens
  * became one. Reading the whole sheet costs nothing: every assertion below is
@@ -47,11 +47,9 @@ const rule = (selector: string) =>
     .map(([, body]) => body)
     .join(";");
 
-test("the live state and problem count slots neither shrink nor wrap", () => {
-  for (const slot of [".bnode-state", ".bnode-count"]) {
-    expect(rule(slot), slot).toMatch(/flex:\s*none/);
-    expect(rule(slot), slot).toMatch(/white-space:\s*nowrap/);
-  }
+test("the live state's slot neither shrinks nor wraps", () => {
+  expect(rule(".bnode-state")).toMatch(/flex:\s*none/);
+  expect(rule(".bnode-state")).toMatch(/white-space:\s*nowrap/);
 });
 
 /*
@@ -97,6 +95,25 @@ test("the card width the chart is drawn at is declared", () => {
 });
 
 /*
+ * ON A PHONE A ROW'S IDENTITY IS ITS FIRST SCREEN. The table scrolls sideways
+ * there, and its name track was five and a quarter shares of a 45rem grid:
+ * 417px on a 356px screen, so every seat's state pill was cut in half at the
+ * scroller's edge. The phone rule sizes the track to what the scroller shows,
+ * and the table reads it — both halves, because either alone does nothing.
+ * jsdom evaluates neither a media query nor a container unit, so both are read
+ * as text.
+ */
+test("on a phone the table's name track is the width the scroller shows", () => {
+  const phone = /@media \(width < 640px\)\s*\{([\s\S]*?)\n\}/g;
+  const blocks = [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(phone)].map((m) => m[1]!);
+  const body = blocks.map((b) => /\.org-builder-body\s*\{([^}]*)\}/.exec(b)?.[1] ?? "").join(";");
+  expect(body).toMatch(/container-type:\s*inline-size/);
+  expect(body).toMatch(/--btable-name-track:\s*calc\(100cqi\b/);
+  const table = readFileSync(fileURLToPath(new URL("./TableView.tsx", import.meta.url)), "utf8");
+  expect(table).toContain('width: "var(--btable-name-track, minmax(0, 5.25fr))"');
+});
+
+/*
  * THE CHART'S FRAME IS NOT DRAWN HERE ANY MORE, and the chart's whole shape
  * went with it. The card, its dashed variant, the inset on each node, the focus
  * ring, the accent ring on the selection, the connectors and the reveal of the
@@ -137,19 +154,18 @@ test("no builder rule redraws what the design system's chart and table draw", ()
 const CARRIED_HUE = /var\(--color-(?:feedback|data)-[-\w]*\)/;
 
 /*
- * A NODE HUE IS NOT ONE OF THESE, and it does not come from here. An agent
- * seat is tinted with one of the design system's six node hues, chosen from
- * the seat's own key (`nodeTone.ts`) and handed to the chart as a NAME, which
- * the design system turns into that hue's four measured steps. So the hue
- * still reaches no rule in this stylesheet, and this guard means what it
- * always meant: nothing here paints a builder node by what it holds.
+ * NOTHING HERE PAINTS A BUILDER NODE BY WHAT IT HOLDS, and nothing anywhere
+ * else does either: every node is the chart's neutral surface (the canvas asks
+ * the design system for no `cardTone`, which `CanvasView.test.tsx`'s "colour
+ * is not identity" holds), so the only colour a builder card or row takes is
+ * the accent of the selection.
  */
 test("a builder node or row takes no status or data hue, only the accent for the selection", () => {
   const builder = rules(css).filter(([selector]) => /\.(bchart|btable|bnode)/.test(selector));
   // The filter really reaches this screen's own rules: a pattern that matched
   // nothing would make the guard below pass on an empty list.
   expect(builder.map(([selector]) => selector)).toEqual(
-    expect.arrayContaining([".bchart", ".bnode-state,\n.bnode-count", ".bnode-mark"]),
+    expect.arrayContaining([".bchart", ".bnode-state", ".bnode-mark"]),
   );
   const hues = builder.filter(([, body]) => CARRIED_HUE.test(body)).map(([selector]) => selector);
   expect(hues).toEqual([]);

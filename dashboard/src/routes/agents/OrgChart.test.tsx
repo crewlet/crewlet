@@ -9,7 +9,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { LEGIBLE_ZOOM, OrgChart } from "./OrgChart.tsx";
+import { OrgChart } from "./OrgChart.tsx";
+import { LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
 import { ADD_SEAT_REASON, findSeats } from "./header.tsx";
 import { Router } from "~/app/router.tsx";
 import { PeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -329,10 +330,10 @@ test("a peek that narrows the canvas fits the whole chart into it, centred", asy
 
 // BUT NEVER SHRUNK PAST READING. Fitted into what a peek left, the chart was
 // drawn at 54% at 1280, its state lines seven pixels. A fit that falls below
-// the floor is held at it — the first zoom step at or above it — with the seat
-// the peek is on in view; the rest of the company is a pan away. At 700 this
-// chart would fit at 80%.
-test("a chart the peek would shrink past reading is held at the floor, the seat in view", async () => {
+// the floor is drawn AT it — exactly, not at whichever zoom step came next —
+// with the seat the peek is on centred across the canvas; the rest of the
+// company is a pan away. At 700 this chart would fit at 80%.
+test("a chart the peek would shrink past reading is drawn at the floor, the seat centred across it", async () => {
   standCanvasAt(VIEWPORT.width);
   await mount();
   await act(async () => {
@@ -341,10 +342,8 @@ test("a chart the peek would shrink past reading is held at the floor, the seat 
   standCanvasAt(700);
   await settleChart();
   const drawn = onScreen("DevRel");
-  expect(drawn.scale).toBeGreaterThanOrEqual(LEGIBLE_ZOOM);
-  expect(drawn.scale).toBeLessThan(LEGIBLE_ZOOM * 1.2);
-  expect(drawn.left).toBeGreaterThanOrEqual(0);
-  expect(drawn.right).toBeLessThanOrEqual(700);
+  expect(drawn.scale).toBeCloseTo(LEGIBLE_ZOOM, 6);
+  expect((drawn.left + drawn.right) / 2).toBeCloseTo(350, 3);
 });
 
 // AND THE FIRST VIEW IS HELD TOO. A chart opened straight onto a peek (a
@@ -356,9 +355,8 @@ test("a chart first drawn beside a peek is held at the floor, the seat in view",
   await mount();
   await settleChart();
   const drawn = onScreen("DevRel");
-  expect(drawn.scale).toBeGreaterThanOrEqual(LEGIBLE_ZOOM);
-  expect(drawn.left).toBeGreaterThanOrEqual(0);
-  expect(drawn.right).toBeLessThanOrEqual(700);
+  expect(drawn.scale).toBeCloseTo(LEGIBLE_ZOOM, 6);
+  expect((drawn.left + drawn.right) / 2).toBeCloseTo(350, 3);
 });
 
 // ONLY THE READER GOES BELOW IT. Fit pressed by the reader is a request for

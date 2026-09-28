@@ -34,7 +34,7 @@
  * that matches it.
  *
  * A SAVE WHOSE ANSWER IS LOST IS KEPT WITH ITS LOG. A save can land without
- * its answer, and the lens that sent it may be gone by then (the operator
+ * its answer, and the builder that sent it may be gone by then (the operator
  * left it, or the tab reloaded). A kept log of a save that DID land, offered
  * again as an update onto its own revision, would replay every operation a
  * second time. So a save marks the kept log with its write id before it is

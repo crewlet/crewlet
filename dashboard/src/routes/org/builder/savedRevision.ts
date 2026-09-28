@@ -5,8 +5,8 @@
  * A SAVE IS NOT AN APPLY. The engine answers a write once the revision is
  * stored and activated; each node applies it on its own reconcile tick, and
  * may refuse it. Until this node has applied it, the org projection every
- * read lens draws from still describes the previous revision, and the lens
- * the operator switches to right after saving has to say so. The Builder is
+ * read screen draws from still describes the previous revision, and the
+ * screen the operator switches to right after saving has to say so. The Builder is
  * unmounted by that switch, so what it saved is kept here, outside any one
  * screen, rather than in the Builder's own state.
  *

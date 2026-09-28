@@ -25,6 +25,7 @@ import {
   fmtPct,
   humanize,
   inTime,
+  inTimeExact,
   newestFirst,
   oldestFirst,
   parseUTC,
@@ -126,6 +127,22 @@ describe("relative time", () => {
     expect(inTime("2026-01-20T12:00:00Z", now)).toBe("in 19d");
     expect(inTime("2026-01-31T11:00:00Z", now)).toBe("in 29d");
     expect(inTime("2026-01-31T12:00:00Z", now)).toBe(fmtDate("2026-01-31T12:00:00Z"));
+  });
+
+  // A SERIES IS READ ROW AGAINST ROW. Rounded to one unit, a schedule every
+  // twenty minutes listed the fires at 13:20 and 13:40 both as "in 1h" — the
+  // one list whose point is the spacing between its rows.
+  test("an exact forward reading tells apart two instants twenty minutes apart", () => {
+    expect(inTime("2026-01-01T13:20:00Z", now)).toBe(inTime("2026-01-01T13:40:00Z", now));
+    expect(inTimeExact("2026-01-01T13:20:00Z", now)).toBe("in 1h 20m");
+    expect(inTimeExact("2026-01-01T13:40:00Z", now)).toBe("in 1h 40m");
+    // A whole hour says no minutes, and under an hour it is `inTime`'s own.
+    expect(inTimeExact("2026-01-01T14:00:00Z", now)).toBe("in 2h");
+    expect(inTimeExact("2026-01-01T12:30:00Z", now)).toBe(inTime("2026-01-01T12:30:00Z", now));
+    // Days carry their hours, and the terminus is the same thirty days.
+    expect(inTimeExact("2026-01-03T15:00:00Z", now)).toBe("in 2d 3h");
+    expect(inTimeExact("2026-01-31T12:00:00Z", now)).toBe(fmtDate("2026-01-31T12:00:00Z"));
+    expect(inTimeExact("", now)).toBe(EMPTY_VALUE);
   });
 });
 

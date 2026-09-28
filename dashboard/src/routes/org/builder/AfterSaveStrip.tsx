@@ -5,7 +5,7 @@
  * revision is stored and activated; each node then applies it on its own
  * reconcile tick, and a node can refuse it (a provider it cannot build, an
  * MCP server it cannot start) and go on serving the previous epoch. Until
- * then the seats, the routing and every read lens still run the revision
+ * then the seats, the routing and every read screen still run the revision
  * before this one, and a strip that said "Saved" and stopped would be the
  * dashboard claiming an outcome nobody has had yet.
  *

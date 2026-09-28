@@ -271,31 +271,26 @@ describe("the head", () => {
 });
 
 /*
- * THE HUE, STATED RATHER THAN OFFERED. The console's agent editor ends with a
- * picker over six colour schemes and stores the answer on the node; a Crewlet
- * company document has no colour field, so this dashboard derives the hue from
- * the seat's own key. The derivation is right; the silence was not, and an
- * operator who saw the console's picker found neither the control nor a reason
- * it was gone.
+ * NO NODE HAS A COLOUR TO STATE. Colour on this dashboard says what a seat is
+ * DOING, never who it is, so the chart draws every node on its own neutral
+ * surface and there is no hue for an editor to explain. It used to end an
+ * agent seat's form with a read-only "Colour" fact naming a hue hashed from
+ * the seat's key — a legend for a decoration the live chart never drew.
  */
-describe("the colour", () => {
-  test("an agent seat says which hue it is drawn in, and why it cannot be set", () => {
-    edit(keyedState(fixtureCompany()), "seat:dev");
-    expect(screen.getByText("Colour")).toBeDefined();
-    expect(screen.getByText(/hue follows the seat's own identity/)).toBeDefined();
-    // Stated, never written: there is no control to change it.
+test("no node's editor states or offers a colour", () => {
+  const human = fixtureCompany();
+  human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+  for (const [doc, key] of [
+    [fixtureCompany(), "seat:dev"],
+    [human, "seat:dev"],
+    [fixtureCompany(), "unit:Engineering"],
+  ] as const) {
+    edit(keyedState(doc), key);
+    expect(screen.queryByText("Colour"), key).toBeNull();
+    expect(screen.queryByText(/\bhue\b/i), key).toBeNull();
     expect(screen.queryByRole("radio", { name: /purple|cyan|green|amber|rose|blue/i })).toBeNull();
-  });
-
-  test("a human seat and a unit have no hue to say", () => {
-    const doc = fixtureCompany();
-    doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
-    edit(keyedState(doc), "seat:dev");
-    expect(screen.queryByText("Colour")).toBeNull();
     cleanup();
-    edit(keyedState(fixtureCompany()), "unit:Engineering");
-    expect(screen.queryByText("Colour")).toBeNull();
-  });
+  }
 });
 
 describe("the unsaved-changes prompt", () => {
@@ -381,12 +376,12 @@ describe("the unsaved-changes prompt", () => {
   /*
    * AND A MOVE THAT IS NOT A DEPARTURE IS NOT ASKED ABOUT. Choosing the table
    * view, or the reporting chart, is a `section` — the router PUSHES for one,
-   * so it really does reach the guard — and it keeps the lens, the draft and
+   * so it really does reach the guard — and it keeps the builder, the draft and
    * this form exactly as they are. A guard that asked here would be a
    * departure prompt over a reader who chose a view, which is the shape a
    * predicate naming the wrong screen produces for EVERY move.
    */
-  test("a move within the lens is not a departure, and asks nothing", async () => {
+  test("a move within the builder is not a departure, and asks nothing", async () => {
     history.replaceState(null, "", "#/agents/edit?view=visualization");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
@@ -654,6 +649,23 @@ describe("seat fields", () => {
     expect(box("Daily token ceiling").value).toBe("1500");
     expect(box("Weekly token ceiling").value).toBe("");
     expect(box("Monthly token ceiling").value).toBe("40000");
+  });
+
+  // THE THREE WINDOWS ARE WRITTEN AS THE ENGINE READS THEM: one key per
+  // calendar window on the seat's `token_budget`, each a number of tokens —
+  // never a single lifetime ceiling, which the periodic budgets replaced.
+  test("the budget editor writes the day, week and month the reader typed", () => {
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    type("Daily token ceiling", "2000");
+    type("Weekly token ceiling", "10000");
+    type("Monthly token ceiling", "40000");
+    apply();
+    expect(view.state().log.ops).toHaveLength(1);
+    expect(seatData(view.state(), "seat:dev").token_budget).toEqual({
+      day: 2000,
+      week: 10000,
+      month: 40000,
+    });
   });
 
   test("changing the kind is its own step: the editor closes and opens it, unless the form has changes", () => {

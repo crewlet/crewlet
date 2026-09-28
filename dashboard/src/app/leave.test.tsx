@@ -163,9 +163,9 @@ test("a guard that lets a move go is not in its way, and no guard holds nothing"
   expect(asked).toEqual(["#/agents/roster"]);
 });
 
-// An editor's question is asked over the lens's: the guard that began to
+// An editor's question is asked over the builder's: the guard that began to
 // hold last is asked first, and agreeing to it asks the next one down, so an
-// editor that lets its form go never also lets the lens's work go unasked.
+// editor that lets its form go never also lets the builder's work go unasked.
 test("the guard that began to hold last is asked first, and every guard before the move", () => {
   const outer = holdAll();
   const inner = holdAll();

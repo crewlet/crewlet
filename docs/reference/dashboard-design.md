@@ -726,7 +726,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/agents/roster` | **Roster** — every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
-| `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(operator)* | `view=visualization\|table` · `chart=` · `unit=` · `seat=` |
+| `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(operator)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) |
 | `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/live` | **Live › Now running** — what the company is doing at this moment | `window=15m\|1h\|6h` |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — every turn, round by round; one turn | |
@@ -886,7 +886,12 @@ word is a value the reader cannot tell was ever there. The work sets give up
 what a task's own page answers one click away — when it last moved, then the
 dates and sizes a reader switched on, then the due date, then the marks — and
 never the key, the status, the title or who holds it — and the status word is
-drawn whole rather than cut to a column's share. None of it happens on a
+drawn whole rather than cut to a column's share. The schedules' grids keep a
+schedule's name whole (`12rem`, a slug like `morning-tracker-review`) in both:
+beside a peek at 1280 the recent runs drew it 35px wide ("b.") as the one
+flexible column among five sized to their content, so a run gives up its Scope
+first (a role schedule's scope is the seat it woke), then the tick it was for,
+then whom it woke. None of it happens on a
 phone, where a row is a card that shows every value.
 
 **A band may hold bands.** A second grouping is a heading under a heading,
@@ -1632,9 +1637,10 @@ previous dashboard revealed a unit by scrolling the org screen to it
 its own page instead — `#/agents/teams/{unit}` — so it can be linked to, opened
 in a peek, and carry its own state. There is no reveal-on-arrival hook here.
 Where a selection genuinely belongs in the URL rather than in the path it stays
-a filter: the Builder lens reads `unit=` and `seat=` to name the selected node
-on its canvas (see the builder's toolbar below), and a `DataGrid` scrolls its
-selected row into view. The ring is static: nothing on a live screen animates
+a filter: Edit org reads `unit=` and `seat=` to name the selected node on its
+chart (see the builder's toolbar below) — and an address it is OPENED on names
+the node whose editor it opens, once — and a `DataGrid` scrolls its selected
+row into view. The ring is static: nothing on a live screen animates
 for data.
 
 **Work that exists nowhere else is not left behind unasked.** A surface
@@ -1643,7 +1649,7 @@ editor while it has typed changes), and every move to another entry is put to
 that guard first: a push from code, a link, and Back or Forward. A guard is
 handed the route the move goes to and holds only a move that would lose its
 work: the org builder keeps its draft and an open editor through a move within
-the lens (a view or a chart), so its guards let that go
+the builder (a view or a chart), so its guards let that go
 (`BuilderContext.keepsTheLens`). A replace is never held, because by the table
 above it stays on the entry. Back has already happened by the time a page
 hears of it, so a held one is undone at once and made again only when the
@@ -2082,12 +2088,13 @@ takes a share of it — so whenever the canvas's width changes (the peek opening
 or closing, the window resized) a chart still at the view it was last fitted to
 is fitted again, all of it and centred, as the approved chart draws it beside a
 peek. **But never shrunk past reading**: a view the chart chooses on its own —
-its first fit and every refit — is held at 85% where the fit would fall below
-it (the card's 12 px place and state lines then draw at 10 px), with the seat
-the peek is on revealed at that size, or the root the company hangs from where
-nobody is selected. Beside a peek the Nimbus chart is whole at 94% at 1440 and
-held at 91% at 1280, where a fit was 54%; only a Fit the reader presses draws
-it smaller. A view the reader moved — zoomed in to read the cards, say — stays
+its first fit and every refit — is drawn at exactly 85% where the fit would
+fall below it (the card's 12 px place and state lines then draw at 10 px),
+centred across on the seat the peek is on, or on the root the company hangs
+from where nobody is selected, and down the canvas where the kit's own fit
+would put the chart, pulled just far enough to keep that seat on it. Beside a peek
+the Nimbus chart is whole at 94% at 1440 and drawn at 85% at 1280, where a fit
+was 54%; only a Fit the reader presses draws it smaller. A view the reader moved — zoomed in to read the cards, say — stays
 theirs. Either way the card the peek is about is revealed (the least pan that
 shows it), and a reader stepping in the peek keeps their focus. **On a phone the chart is rows**: a chart of
 cards has no size a phone can read it at, so below the phone breakpoint the
@@ -2539,12 +2546,24 @@ The schedules screen printed `0 9 * * 1-5` and nothing else. A reader who
 knows cron reads it; a founder reads five numbers and a dash on the one screen
 that says when the company wakes itself up.
 
-`lib/cron.ts` reads the five fields twice over: a **sentence** beside each
-expression in the list ("at 09:00 on weekdays"), and the **next five instants**
-on the schedule a reader has opened. The instants matter because the engine
-sends one next fire and "every 4 hours" and "at 4am" have the same next fire
-for most of the day — it is the fires after the next that say whether an
-expression means what its author thought.
+`lib/cron.ts` reads the five fields twice over: a **sentence** under each
+expression ("at 09:00 on weekdays"), and the **next five instants** on the
+schedule a reader has opened. The instants matter because the engine sends one
+next fire and "every 4 hours" and "at 4am" have the same next fire for most of
+the day — it is the fires after the next that say whether an expression means
+what its author thought.
+
+The expression and its sentence are ONE drawing wherever a schedule is shown
+(`CronReading`): the chip over the sentence, in the grid, on a phone's card and
+as the Cron fact of the schedule's own header, where the fact is drawn whole
+rather than clamped (`Fact.whole`) — run on after the chip and cut at two
+lines, "every 20 minutes every day" read "every 20 minutes…". The sentence is
+said once per page: the definition under the header carries no "Means" row.
+The instants carry how far away each one is to the MINUTE ("in 1h 20m",
+`inTimeExact`), because the rows of a series are read against each other and a
+one-unit reading put "in 1h" beside "in 1h" for two fires twenty minutes apart.
+A schedule's eyebrow names its scope in words ("Seat · Agent PM", "Unit ·
+Core"), never its address (`role:agent-pm`).
 
 Two rules keep it honest:
 
@@ -4902,7 +4921,14 @@ brings that carries a design-system rule.
   gives the finger back; two fingers pinch at any time. `+`, `-` and `0` zoom
   and fit only while the viewport element itself holds focus, so an item's
   own keys are never taken. The view fits once, on the first measured layout,
-  and after that moves only when the operator moves it. The canvas is a
+  and after that moves only when the operator moves it. The two charts of the
+  organization — the live org chart and Edit org's — hold that first fit at the
+  LEGIBILITY FLOOR (`ui/canvasView.ts`, 85%): a company too wide to read
+  whole is drawn at exactly the floor, in one ctrl-and-wheel gesture solved
+  for the point that centres the node the reader is on (or the root) across
+  the canvas and puts the chart down it where the kit's own fit would, pulled
+  just far enough to keep that node on screen; only the reader's own Fit goes
+  below it. The canvas is a
   `LayerHost`, so a menu or picker opened from an item renders in an
   untransformed layer over it rather than inside the transform, and the zoom
   neither scales nor clips them; the canvas tells that layer whenever the
@@ -4941,7 +4967,7 @@ brings that carries a design-system rule.
   card's height. Nothing is shown before the first measurement, and a relayout
   keeps the node the operator acted on where it was on screen.
 
-### The org builder lens
+### The org builder
 
 `routes/org/builder/Builder.tsx` is the one component with a lifetime in the
 builder: the reducer over the pure model in `routes/org/builder/model/`, the
@@ -4950,8 +4976,8 @@ that is open. Its views and dialogs are handed in (`BuilderSurfaces`, bound
 in `routes/org/builder/surfaces.ts`) and reach all of it through
 `BuilderContext`, so no view or dialog starts a request or touches storage.
 Every surface is required: a Builder suite stands a view in with a fake,
-while the screen binds the real canvas, outline, editor and dialogs, and
-`surfaces.test.tsx` mounts the lens with exactly those.
+while the screen binds the real chart, table, editor and dialogs, and
+`surfaces.test.tsx` mounts the builder with exactly those.
 
 - **The posture is what the engine answers.** `GET /config` is read on mount
   and on every token change, and its answer decides edit mode, create mode,
@@ -4967,12 +4993,22 @@ while the screen binds the real canvas, outline, editor and dialogs, and
 - **The canvas is handed the chart it draws.** `chart=structure|reporting` is
   the Builder's own section param, chosen in its toolbar, so the canvas is
   given the answer as a prop rather than reading the URL a second time.
-- **The canvas view fills the screen.** With `view=canvas` the lens asks the
-  shell for the window's height (`useFillScreen`), and it and the tab panel it
-  sits in become flex columns of definite height, so the canvas takes what is
-  left under the toolbar and the shell's scroller has nothing to scroll. The
-  outline view withdraws the request, and so does the posture screen the lens
-  draws before the engine has answered.
+- **The visualization fills the screen.** With `view=visualization` the
+  builder asks the shell for the window's height (`useFillScreen`), and it and
+  the tab panel it sits in become flex columns of definite height, so the
+  canvas takes what is left under the toolbar and the shell's scroller has
+  nothing to scroll. The table view withdraws the request, and so does the
+  posture screen the builder draws before the engine has answered.
+- **Every node is neutral.** Colour is state, and a draft is doing nothing:
+  the chart asks the design system for no `cardTone`, so no seat carries a hue
+  of its own, a person's seat is told from an agent's by its badge's outline,
+  and the one colour a node takes is the selection's accent ring. Its branches
+  are the design system's elbows, the shape the live org chart draws, so the
+  chart a reader edits and the one they watch are one drawing
+  (`CanvasView.test.tsx`, "colour is not identity"). They are drawn at the
+  weight the design system gives a chart of NODES, twice a card chart's,
+  because a node is half a card's height and the branch keeps its ratio to
+  what it joins; the builder sets no stroke of its own.
 - **Fullscreen takes the builder container**, never the canvas: the toolbar,
   the view, the dialog host, a toast outlet of its own and the live region all
   render inside it, because a fullscreen element renders only its subtree.
@@ -4980,7 +5016,14 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   token dialog is outside it, so asking for a token leaves fullscreen first.
 - **The selection is in the URL, and the toolbar mirrors it.** `unit=` and
   `seat=` are filters that name the selected node; a link naming one selects
-  it, a rename rewrites it, and a removed node clears it. The toolbar carries
+  it, a rename rewrites it, and a removed node clears it. **The address the
+  builder was MOUNTED on is also a request**: `seat=` or `unit=` opens that
+  node's editor and `add=unit|agent|human` opens the Add (under `unit=`, or at
+  the top level), once, as soon as the builder can edit — loaded, keyed by the
+  engine's handles, in edit mode and not paused — and `add=` then leaves the
+  address. Only the arrival does it, because the builder writes `seat=` and
+  `unit=` on every selection and a Back restores an older one; a reader who
+  selects another node first has spent the link (`editWiring.test.tsx`). The toolbar carries
   the selected node's own actions, because a canvas tree item may contain no
   tab stops of its own, and they are the card's and the row's own list
   (`nodeActions.nodeMenu`) rather than a copy: the same entries, order, names
@@ -5022,21 +5065,21 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   empty log is to clear. A token change or a refused token clears it and
   withdraws an offer. A draft with changes asks the browser's prompt before
   the tab goes (session storage does not outlive the tab), and one that
-  storage cannot keep at all asks before the lens is left, since that loses it
-  too; a move within the lens keeps the Builder and asks nothing.
+  storage cannot keep at all asks before the builder is left, since that loses
+  it too; a move within the builder keeps it and asks nothing.
 - **A save is the checked write, signed, and never believed blindly.**
   `useSave.ts` sends the model's save request with the audit summary signed by
   a write id minted when the review opens and kept for as long as the draft
   does not change, so a second press after a lost answer carries the same id.
   A lost answer is settled from the revision history before anything else
-  happens; while it is unknown the lens records nothing. A write in flight is
-  never aborted, and a save that lands after the lens was left still records
+  happens; while it is unknown the builder records nothing. A write in flight is
+  never aborted, and a save that lands after the builder was left still records
   the revision and clears the kept draft. The kept log is marked with the
   write id before the save is sent and unmarked once the save is known not to
-  have landed, so an answer lost after the lens was left, or across a reload,
+  have landed, so an answer lost after the builder was left, or across a reload,
   is settled on the next visit (`useSave.resume`) before the kept log is
   offered: replayed onto its own revision it would apply every change twice.
-  A save this page still has out when the lens opens again is waited for
+  A save this page still has out when the builder opens again is waited for
   first, because the engine may not have stored it yet and settling it then
   would read as not landed. Such a save is not the draft on screen, so the revision it stored is read
   like any newer revision rather than made the base. A save of the draft on
@@ -5063,12 +5106,12 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   (`against=`), since against the active revision a save that is active now
   differs from nothing; the conflict banner's Show what changed is the newer
   revision against the draft's base for the same reason. Until this node
-  applies it, the Company screen's read lenses carry a note that they draw the
+  applies it, the org chart and Teams carry a note that they draw the
   previous revision.
 - **The status is the last answer about the current draft**, whoever asked:
   a save's refusal is placed on the nodes like a check's, and the check
   machine decides the status only while a check is out or before any answer.
-- **A read-only lens records nothing.** The guarded and read-only postures, a
+- **A read-only builder records nothing.** The guarded and read-only postures, a
   conflict and a base the engine has not keyed yet all refuse operations at
   the one door every view goes through, and say why in the live region. The
   actions themselves are DISABLED rather than hidden, so an operator still
@@ -5077,7 +5120,7 @@ while the screen binds the real canvas, outline, editor and dialogs, and
 
 ### The org builder draws the engine's organization
 
-The Builder lens of the Company screen shows the draft two ways, and both
+Agents › Edit org shows the draft two ways, and both
 read one module (`routes/org/builder/chartModel.ts`), so they can never
 disagree about where a seat is drawn, who leads a unit or who a seat reports
 to.
@@ -5087,7 +5130,7 @@ to.
   that is what an operation edits. Every derived fact comes from the last
   check's `derived` block, read through the document that check was sent: a
   root seat the engine placed in a unit by its `unit:` reference is drawn in
-  that unit and marked "Placed by unit reference", a reference that names no
+  that unit and marked "Declared at the root with a unit reference", a reference that names no
   unit stays at the root marked with the engine's warning, a unit with no lead
   of its own shows the lead it inherits, and a seat shows its primary manager.
   A derived fact is shown only while the draft still holds the values the
@@ -5109,9 +5152,10 @@ to.
   never name a seat two ways. The reporting
   chart, drawn from the last check while the draft has moved past it, says so
   in a note over the canvas.
-- **The canvas is a tree of cards.** The structure chart has the company card
-  at the root, root seats as cards and units as cards with their seats
-  stacked inside as rows. The reporting chart is the engine's forest: seats
+- **The canvas is a tree of nodes.** The structure chart has the company at
+  the root, and the root seats and the units hang off it; every seat is a node
+  of its own, hanging off its unit like the unit's child units, joined by the
+  design system's elbow branches. The reporting chart is the engine's forest: seats
   with no manager at the top, marked "No manager", and seats that manage each
   other in a loop under one "Reporting cycle" group, each loop drawn from its
   first seat in the engine's order. The reporting chart is read-only, because
@@ -5120,8 +5164,8 @@ to.
   `manages` is. The Builder's `openEditor` names the part of the form to start
   on (`EditorSectionName`), so an action about one field lands on it: a lead
   chip's "Choose another seat" opens the unit's editor at its lead.
-- **A card holds no control a keyboard has to reach.** Each card header and
-  each seat row is a `treeitem` with its level, position and expansion, and
+- **A node holds no control a keyboard has to reach.** Each node is a
+  `treeitem` with its level, position and expansion, and
   one roving tab stop moves among them: the arrows, Home, End and type-ahead
   walk the tree, Enter edits, Delete or Backspace deletes, and the ContextMenu
   key or Shift+F10 opens the node's menu. The buttons a pointer uses (expand,
@@ -5134,25 +5178,28 @@ to.
   opening a collapsed unit on the way. The Builder decides which node is
   focused after an add, a delete, a move, an undo or a redo; the mounted view
   performs it.
-- **Colour stays state.** A card is neutral whatever it holds. A seat leads
-  with its badge, a person's circle or an agent's squircle, on the same solid
-  card — a dashed edge means only "a place nothing fills yet" — a problem count
-  takes the critical tone, a reference that names nothing takes the caution
-  tone, and the Datadog fallback seat carries a neutral badge while Datadog is
-  enabled, the only time the engine routes an alert to it.
-- **A live push never moves a card, and neither does a check.** A saved agent
-  seat shows the same `StateBadge` as every other screen, in a slot that
-  neither shrinks nor wraps while the seat's name truncates beside it, and
-  live state is no input to the layout, so a push changes a word and never a
-  measured height. The problem count, which is the current draft's and so is
-  absent while the check of every edit is out, has a slot of its own on the
-  same first line, which is as tall with it as without it. A mark the engine
-  gave (a lead or a unit reference that names nothing) is held by the chart
-  like a placement, while the node still writes what the check warned about,
-  rather than leaving with each check and coming back with its answer.
-- **The outline is a treegrid of rows.** The same structure as rows with
-  navigable cells: Name, Kind or type, Handle, Lead or reports to, Problems
-  and the row's actions. A row's keys are a card's keys; Right opens a row or
+- **Colour stays state.** A node is neutral whatever it holds: no seat has a
+  hue of its own (one hashed from its key, stated in its editor as a
+  "Colour" fact, was removed — a legend for a decoration the live chart never
+  drew). A seat leads with its badge, a person's circle or an agent's
+  squircle, on the same solid node — a dashed edge means only "a place nothing
+  fills yet" — a reference that names nothing takes the caution tone, and the
+  Datadog fallback seat carries a neutral mark while Datadog is enabled, the
+  only time the engine routes an alert to it.
+- **A chart node says what it is, not how it is doing.** It carries neither
+  the seat's live state nor a problem count: drawn on every node they were a
+  column of "idle" dots and an empty box beside every node with nothing wrong.
+  The table writes the live state beside a seat's name, as the same
+  `StateBadge` every other screen draws, in a slot that neither shrinks nor
+  wraps while the name truncates, so a push changes a word and never a row's
+  height; the table's Problems column and the toolbar's status count the
+  problems. A mark the engine gave (a lead or a unit reference that names
+  nothing) is held by the chart like a placement, while the node still writes
+  what the check warned about, rather than leaving with each check and coming
+  back with its answer.
+- **The table is a treegrid of rows.** The same structure as rows with
+  navigable cells: Name (the kind or type under it), Handle, Lead or reports
+  to, Problems and the row's actions. A row's keys are a card's keys; Right opens a row or
   steps into its cells, Left steps back out, Up and Down keep the column, and
   a cell holding a control (the lead choice, the actions menu, an add button)
   focuses the control, which becomes the grid's one tab stop. A press that
@@ -5168,8 +5215,8 @@ to.
   that scrolls on one axis clips on both, so a row's menus open in a
   `.popup-layer` over the grid, placed from their trigger, and follow a
   sideways scroll (or close once their trigger has left the frame) rather than
-  being cut off under the last rows. An inline add row closes each unit's rows
-  and the company's while the draft can change. Alt+Up and Alt+Down move a row
+  being cut off under the last rows. The company's row and each unit's carry
+  the Add that splits into the three kinds. Alt+Up and Alt+Down move a row
   among its siblings of the same kind, past the row drawn beside it: a root
   seat the engine placed in a unit by its reference is drawn in that unit, so
   the root seats around it step over it rather than make a move nobody can

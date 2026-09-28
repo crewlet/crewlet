@@ -73,6 +73,7 @@ export function BuilderHarness({
   readOnly = false,
   agents = [],
   sandboxes = [],
+  selected: initialSelection = null,
   children,
 }: {
   initial: BuilderState;
@@ -81,10 +82,12 @@ export function BuilderHarness({
   readOnly?: boolean;
   agents?: AgentRow[];
   sandboxes?: SandboxEntry[];
+  /** The node selected when the view mounts, as a link naming one leaves it. */
+  selected?: NodeKey | null;
   children: ReactNode;
 }) {
   const [state, rawDispatch] = useReducer(builderReducer, initial);
-  const [selected, setSelected] = useState<NodeKey | null>(null);
+  const [selected, setSelected] = useState<NodeKey | null>(initialSelection);
   // One source for the harness's life, as the Builder has one.
   const [keys] = useState(() => countingKeys("test"));
   const view = useRef<BuilderViewHandle | null>(null);
@@ -263,6 +266,29 @@ export class LayoutObserver {
     const real = globalThis.ResizeObserver;
     const realFrame = globalThis.requestAnimationFrame;
     const realCancelFrame = globalThis.cancelAnimationFrame;
+    // THE BOXES A SCREEN READS ARE THE ONES THE SUITE LAID OUT. jsdom lays out
+    // nothing, so an element's client and offset sizes are zero; a screen
+    // that places the view by where a card is drawn (`ui/canvasView.ts`) reads
+    // the same sizes the observer reported, from the same sizer, and any
+    // element the sizer has no answer for keeps jsdom's own.
+    const boxes = (["clientWidth", "clientHeight", "offsetWidth", "offsetHeight"] as const).map(
+      (name) => {
+        const owner = name.startsWith("client") ? Element.prototype : HTMLElement.prototype;
+        const original = Object.getOwnPropertyDescriptor(owner, name)!;
+        Object.defineProperty(HTMLElement.prototype, name, {
+          configurable: true,
+          get(this: HTMLElement) {
+            const size = LayoutObserver.sizer(this);
+            if (size) return name.endsWith("Width") ? size.width : size.height;
+            return original.get!.call(this);
+          },
+        });
+        return () => {
+          if (owner === HTMLElement.prototype) Object.defineProperty(owner, name, original);
+          else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+        };
+      },
+    );
     LayoutObserver.instances = [];
     LayoutObserver.sizer = defaultSizer;
     frames.length = 0;
@@ -278,6 +304,7 @@ export class LayoutObserver {
       globalThis.ResizeObserver = real;
       globalThis.requestAnimationFrame = realFrame;
       globalThis.cancelAnimationFrame = realCancelFrame;
+      for (const undo of boxes) undo();
     };
   }
 }

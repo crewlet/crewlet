@@ -1,5 +1,5 @@
 /**
- * The Builder lens of the Org chart screen (`#/agents/edit`): editing the
+ * Agents › Edit org (`#/agents/edit`), the builder: editing the
  * organization, and creating the company where none exists.
  *
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. A
@@ -7,7 +7,7 @@
  * and a rotated one is refused), so `GET /config` is read on mount and again
  * whenever the operator token changes, and its answer decides:
  *
- * | `GET /config` answers                            | The lens shows |
+ * | `GET /config` answers                            | The builder shows |
  * |---|---|
  * | 200                                              | edit mode |
  * | 404 `no_active_revision`, no company in the org  | create mode |
@@ -26,7 +26,7 @@
  * The views and dialogs it hosts are handed in as [BuilderSurfaces] and reach
  * all of it through `BuilderContext`, so none of them starts a request.
  *
- * THE LAYOUT FILLS THE SCREEN in the canvas view: the lens is a flex column
+ * THE LAYOUT FILLS THE SCREEN in the canvas view: the builder is a flex column
  * whose canvas takes the height left under the toolbar, so the scroller has
  * nothing to scroll and a wheel over the page never lands in a canvas that is
  * half off screen. Fullscreen takes the whole builder container (toolbar,
@@ -180,7 +180,7 @@ export interface AddDialogProps {
 /**
  * The views and dialogs the Builder hosts. They read and act through
  * `BuilderContext`; the Builder decides which is mounted. Every one is
- * required: a lens missing its canvas or its editor is not a smaller lens
+ * required: a builder missing its canvas or its editor is not a smaller builder
  * but a broken one, so an unbound surface is a type error rather than a
  * screen that apologises at run time.
  */
@@ -226,7 +226,7 @@ export interface BuilderSurfaces {
   changeKind: ComponentType<NodeDialogProps>;
 }
 
-/** A dialog the lens is asked to open. */
+/** A dialog the builder is asked to open. */
 type DialogRequest =
   | { readonly type: "editor"; readonly key: NodeKey; readonly section?: EditorSectionName }
   | { readonly type: "move" | "remove" | "changeKind"; readonly key: NodeKey }
@@ -234,7 +234,7 @@ type DialogRequest =
   | { readonly type: "discard" };
 
 /**
- * A dialog the lens has open, and which opening of it this is.
+ * A dialog the builder has open, and which opening of it this is.
  *
  * ONE MOUNT PER OPENING. The host keys each dialog by `opening`, so every
  * opening builds its form afresh (another node, or the same node again),
@@ -274,7 +274,7 @@ export interface OrgKnowledge {
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** Decides the lens posture from `GET /config`'s answer and the org snapshot. */
+/** Decides the builder's posture from `GET /config`'s answer and the org snapshot. */
 export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: boolean): Posture {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
@@ -355,7 +355,7 @@ function statusLook(status: CheckStatus, problems: number, tokenStored: boolean)
  * nothing more, so no answer for the new generation ever arrives, and the
  * engine still holds the newer revision the last answer named. Read only for
  * the current generation, that answer vanished and took the Update my draft
- * banner with it, leaving a lens paused with no way forward.
+ * banner with it, leaving a builder paused with no way forward.
  */
 function conflictOf(state: BuilderState): Extract<CheckOutcome, { status: "conflict" }> | null {
   const outcome = state.check.outcome;
@@ -386,7 +386,7 @@ function isPresent(state: BuilderState, key: NodeKey): boolean {
 
 /** The filters that name `key`, or `null` when the node has no name the URL can carry yet. */
 function paramsOf(state: BuilderState, key: NodeKey): SelectionParams | null {
-  // The company is what the lens opens on, so it names itself with no filter.
+  // The company is what the builder opens on, so it names itself with no filter.
   if (key === COMPANY_KEY) return { unit: "", seat: "" };
   const found = locate(state.draft, key);
   if (!found) return null;
@@ -412,6 +412,54 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
     }
   }
   return null;
+}
+
+/** The kind an `add=` asks for, or `null` for a value that names none. */
+function addKindOf(value: string): AddKind | null {
+  return value === "unit" || value === "agent" || value === "human" ? value : null;
+}
+
+/**
+ * What the address a reader ARRIVED at asks the builder to do, beyond showing
+ * the organization: open one node's editor (`seat=` or `unit=`), or open an
+ * Add (`add=`, under the unit `unit=` names or at the company's root).
+ *
+ * WHY A LINK OPENS SOMETHING AT ALL. Every way into this section from another
+ * screen is a request to change one thing: the profile's "Edit" beside a
+ * seat's setup, the seat menu's "Edit in org", the org chart's "Add seat". The
+ * section used to answer all of them with the whole chart at fit-to-view and
+ * one node outlined somewhere in it, so the reader had to find the card they
+ * had just asked for and press it again — and `add=` was not read at all, so
+ * "Add seat" opened a chart with nothing to add.
+ *
+ * ONLY ON ARRIVAL, AND ONCE. `seat=` and `unit=` are also where the builder
+ * MIRRORS its own selection, so every press on a card writes them: opening an
+ * editor whenever they changed would open one on every press, and on a Back
+ * that restored an older selection. So what is honoured is the address the
+ * builder was MOUNTED on, and only until it is answered or the reader moves
+ * the selection first. `add=` is then taken out of the address, so a reload or
+ * a copied link does not ask for a second node; `seat=` stays, because it is
+ * also the selection, and a link to a selected seat is a link to its editor.
+ *
+ * WHICH MAKES EVERY MOUNT ON A SELECTION AN ARRIVAL. A reload, or a Back into
+ * this section from the profile a node's "Open seat" went to, mounts on the
+ * address the builder itself wrote, and nothing in it tells that from a link
+ * somebody sent: both open the editor. `docs/guides/org-builder.md` says so.
+ * Telling them apart needs a request the address spends (an `edit=` the link
+ * sets and this removes, as `add=` is), which is a change to the section's
+ * URL grammar rather than to this effect.
+ *
+ * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, keyed by the
+ * engine's handles (a link names a seat by the handle it runs under), in edit
+ * mode and not paused — a kept draft waiting for Keep or Discard, a save whose
+ * outcome is unknown, a conflict. The request waits through all of those
+ * rather than opening a form that could not be applied, and a reader who
+ * resolves them is then shown what the link asked for.
+ */
+interface Arrival {
+  readonly unit: string;
+  readonly seat: string;
+  readonly add: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +506,7 @@ function useLiveRegion(): { text: string; announce: (message: string) => void } 
 }
 
 // ---------------------------------------------------------------------------
-// The lens
+// The builder
 // ---------------------------------------------------------------------------
 
 /**
@@ -508,7 +556,7 @@ export function Builder({
           nothing happens. useToast finds the nearest provider. */}
       <LayerHost>
         <ToastProvider>
-          <Lens
+          <BuilderScreen
             surfaces={surfaces}
             transport={transport}
             clock={clock}
@@ -522,7 +570,7 @@ export function Builder({
   );
 }
 
-function Lens({
+function BuilderScreen({
   surfaces,
   transport,
   clock,
@@ -554,6 +602,7 @@ function Lens({
   const chart: ChartKind = chartParam === "reporting" ? "reporting" : "structure";
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
+  const [addParam] = useParam("add", "", "filter");
   const viewPanel = useId();
   const chartPanel = useId();
 
@@ -567,7 +616,7 @@ function Lens({
      one while this view is on: a wheel turned over a page that scrolls
      otherwise lands in a canvas half off screen. The table is an ordinary
      column and gives the scroller straight back, and so does the posture
-     screen this lens draws instead of either until the engine has answered.
+     screen this builder draws instead of either until the engine has answered.
 
      ABOVE THAT POSTURE RETURN, because a hook below one runs on some renders
      and not others. */
@@ -639,7 +688,7 @@ function Lens({
     // newer revision is the check's to report as a conflict, and the operator
     // decides what happens to the work; without work there is nothing to lose
     // by standing on it. A forced read is no exception: it reads back what a
-    // save stored, whose own answer already keyed the base and left the lens
+    // save stored, whose own answer already keyed the base and left the builder
     // editable, so an edit made while that read was out stands on the saved
     // revision already, and reading the same revision over it would throw the
     // edit away unasked for a document that differs from the one sent only by
@@ -685,7 +734,7 @@ function Lens({
   //
   // THE FIRST ORG THIS TAB HEARS OF IS NOT AN APPLY. The slice is `null` until
   // the socket's snapshot delivers the company as the engine held it when the
-  // socket subscribed, and on a cold open of this lens the draft is read from
+  // socket subscribed, and on a cold open of this builder the draft is read from
   // `/config` at that same moment, so the two describe one configuration.
   // Re-checking on it sent the same dry run twice on every such open, the
   // second aborting the first. The one apply that could land between them is
@@ -782,7 +831,7 @@ function Lens({
   // Say what the last operation did, and put focus where it leads.
   const viewHandle = useRef<BuilderViewHandle | null>(null);
   const focusNode = useCallback((key: NodeKey) => viewHandle.current?.focusNode(key), []);
-  // ONE IDENTITY FOR THE LENS'S LIFETIME. A view registers in an effect that
+  // ONE IDENTITY FOR THE BUILDER'S LIFETIME. A view registers in an effect that
   // depends on this function, so a new one per state change unregistered and
   // registered the mounted view again after every edit and every answer.
   const registerView = useCallback((handle: BuilderViewHandle) => {
@@ -914,6 +963,39 @@ function Lens({
     [readOnlyReason, announce, openDialog],
   );
 
+  // WHAT THE ADDRESS THIS BUILDER WAS MOUNTED ON ASKED FOR — see [Arrival].
+  // Read once, in the first render, and spent the moment it is answered or the
+  // reader moves the selection before the builder could answer it.
+  const arrival = useRef<Arrival | null>(
+    unitParam !== "" || seatParam !== "" || addParam !== ""
+      ? { unit: unitParam, seat: seatParam, add: addParam }
+      : null,
+  );
+  useEffect(() => {
+    const asked = arrival.current;
+    if (asked === null) return;
+    if (asked.unit !== unitParam || asked.seat !== seatParam) {
+      // The reader chose another node (or none) first: the link is spent.
+      arrival.current = null;
+      return;
+    }
+    if (!loaded || state.mode !== "edit" || readOnlyReason !== null || dialog !== null) return;
+    arrival.current = null;
+    if (asked.add !== "") {
+      nav.filter({ add: null });
+      const kind = addKindOf(asked.add);
+      if (kind === null) return;
+      const parent = asked.unit !== "" ? keyOfParams(state, { unit: asked.unit, seat: "" }) : null;
+      // A unit the draft does not hold is no place to add under, and the
+      // company's root is not what the link meant either.
+      if (asked.unit !== "" && parent === null) return;
+      openDialog({ type: "add", parent, kind });
+      return;
+    }
+    const key = keyOfParams(state, { unit: asked.unit, seat: asked.seat });
+    if (key !== null) openDialog({ type: "editor", key });
+  }, [loaded, state, readOnlyReason, dialog, unitParam, seatParam, nav, openDialog]);
+
   const exitFullscreen = useFullscreenExit();
   const askForToken = useCallback(() => {
     // The token dialog belongs to the shell, outside the fullscreen element.
@@ -934,7 +1016,7 @@ function Lens({
   // only once this node serves that revision or a later one: a node behind a
   // load balancer can still answer with the draft's own base, and rebasing
   // onto that would lose the change the conflict was about. `stand` is the
-  // lens with no work moving onto that revision (see below): an update of
+  // builder with no work moving onto that revision (see below): an update of
   // nothing, confirmed at once, so nothing is offered for review.
   const beginUpdate = useCallback(
     async (conflictRevisionId: string | null, stand = false) => {
@@ -990,7 +1072,7 @@ function Lens({
   }, [conflict]);
 
   // A DRAFT WITH NO WORK STANDS ON THE NEWER REVISION. The conflict flow
-  // exists to protect the operator's changes; with none (a lens somebody is
+  // exists to protect the operator's changes; with none (a builder somebody is
   // only reading when a colleague saves, which the org push reports at
   // once) it would pause editing behind a banner offering to update nothing.
   // A kept draft still waiting for its decision is left alone: it was offered
@@ -1038,8 +1120,8 @@ function Lens({
   // session storage, which a reload or a trip to another screen of this page
   // finds again and a closed tab does not, so while the draft has changes the
   // browser asks before the tab goes. Where storage cannot keep the draft at
-  // all, leaving the lens loses it as well, and that move is asked about
-  // first; moving within the lens (a view, a chart, a selection) keeps it.
+  // all, leaving the builder loses it as well, and that move is asked about
+  // first; moving within the builder (a view, a chart, a selection) keeps it.
   useUnloadGuard(changed);
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
   useLeaveGuard(
@@ -1210,7 +1292,7 @@ function Lens({
   // THE COMPANY RUNS AND ITS AGENTS WAIT. The engine applies a company with no
   // providers.llm and places its seats, then holds every delivery on the
   // seat's inbox until an apply brings a provider (engine/nomodels.go). The
-  // dashboard writes none, so the lens says where one comes from.
+  // dashboard writes none, so the builder says where one comes from.
   const noProvider = state.mode === "edit" && !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
@@ -1494,7 +1576,7 @@ function Lens({
           </Callout>
         )}
         {/* KEPT TO READ, NEVER TO SAVE. Every check and save of this draft is
-            refused while the lens is read-only over it, so the way on stays
+            refused while the builder is read-only over it, so the way on stays
             on screen after the dialog that first offered it is closed. */}
         {conflict && conflict.reason === "already_configured" && !companyExists && (
           <Callout
@@ -1897,7 +1979,7 @@ function DialogHost({
     case "discard":
       /*
        * ONE QUESTION, ONE ANSWER, in the shape every other confirmation in
-       * this lens takes: the node editor asks the same thing and asks it as a
+       * this builder takes: the node editor asks the same thing and asks it as a
        * prompt. Written here as a framed Modal it carried a head band, a
        * pencil-sized mark and a close control that did exactly what the Keep
        * editing two inches below it did, so one question was drawn two ways on

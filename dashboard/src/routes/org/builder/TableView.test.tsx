@@ -250,11 +250,35 @@ describe("the rows", () => {
     const tag = drawnClasses(Tag, { children: "x" })[0]!;
     expect(drawnPart(caption, tag)).toBeNull();
   });
+
+  /*
+   * COLOUR IS NOT IDENTITY, IN THE TABLE AS ON THE CHART. Each row's name, its
+   * mark and the wire arriving at it took one of six hues hashed from an agent
+   * seat's key — a legend a reader had to learn and could never decode, and
+   * the same seat was neutral on the org chart one screen away. The design
+   * system tints a row only when asked (`data-tone` on its name group and on
+   * its wire), so nothing on this table may carry one.
+   */
+  test("no row, name or wire of the table is tinted, an agent seat's included", () => {
+    const { container } = mount();
+    // The table really drew agent seats hanging below the company, so an empty
+    // list below is a statement about them rather than about an empty table.
+    const agents = screen
+      .getAllByRole("row")
+      .filter(
+        (r) => Number(r.getAttribute("aria-level")) > 1 && within(r).queryByText("Agent seat"),
+      );
+    expect(agents.length).toBeGreaterThan(0);
+    const tinted = [...container.querySelectorAll("[data-tone]")].map(
+      (el) => `${el.getAttribute("data-tone")}: ${el.closest("[role='row']")?.textContent ?? ""}`,
+    );
+    expect(tinted).toEqual([]);
+  });
 });
 
 describe("opening and closing the hierarchy", () => {
   /*
-   * THE PAIR IS THE LENS TOOLBAR'S, ON BOTH VIEWS, so this table draws none of
+   * THE PAIR IS THE BUILDER TOOLBAR'S, ON BOTH VIEWS, so this table draws none of
    * its own (`controls={false}`): the design system's pair over the table and
    * the toolbar's pair above it were one action with two implementations, each
    * hidden on the view where the other was drawn, so the control moved 800px

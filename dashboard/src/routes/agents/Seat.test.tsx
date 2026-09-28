@@ -1374,7 +1374,11 @@ test("the turns list says it holds a page, and loads the one before it", async (
     .closest(".crewlet-card") as HTMLElement;
   expect(card.querySelector(".crewlet-card__header")?.textContent).toContain("50+");
   fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
-  await waitFor(() => expect(card.textContent).toContain("did thing 51"));
+  // THE ROW ITSELF, by its whole summary. A substring of the card's text was
+  // already true before the older page arrived — "did thing 5" and the "1"
+  // of its round count run together in `textContent` — so under load the
+  // wait passed at once and the header was read before the page landed.
+  await within(card).findByText("did thing 51");
   expect(askedFor("turns").find((a) => a.params.before)?.params).toMatchObject({
     seat: "swe",
     days: 30,

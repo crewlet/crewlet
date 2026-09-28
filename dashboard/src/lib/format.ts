@@ -266,6 +266,31 @@ export function inTime(ts: string | null | undefined, now: number): string {
   return fmtDate(ts);
 }
 
+/**
+ * "in 1h 20m" — [inTime] with a second unit, for instants that are read
+ * against EACH OTHER in a series.
+ *
+ * `inTime` rounds to one unit, which is the right answer for one instant a
+ * reader holds in their head and the wrong one for a list whose rows are
+ * compared: a schedule firing every twenty minutes read "in 1h", "in 1h" for
+ * the fires at 20:40 and 21:00, on the one list whose whole point is the
+ * spacing between its rows. Two units tell apart any two instants a minute or
+ * more apart inside a day. The terminus is [inTime]'s, for the reason given
+ * there.
+ */
+export function inTimeExact(ts: string | null | undefined, now: number): string {
+  const at = tsKey(ts);
+  if (!at) return EMPTY_VALUE;
+  const secs = Math.round((at - now) / 1000);
+  if (secs < 60 * 60) return inTime(ts, now);
+  const mins = Math.floor(secs / 60);
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return mins % 60 ? `in ${hours}h ${mins % 60}m` : `in ${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return hours % 24 ? `in ${days}d ${hours % 24}h` : `in ${days}d`;
+  return fmtDate(ts);
+}
+
 /** A duration in ms as the shortest honest string. */
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return EMPTY_VALUE;

@@ -1,10 +1,10 @@
 /**
- * The Org screen's Builder lens is assembled from the real views and dialogs.
+ * Edit org's builder is assembled from the real views and dialogs.
  *
  * Every other Builder suite stands a view in with a fake, so nothing there
- * notices a lens whose visualization or table was never bound: it rendered "not
+ * notices a builder whose visualization or table was never bound: it rendered "not
  * part of this build" for both until this binding existed. These tests mount
- * the lens with the surfaces the screen hands it and hold it to drawing the
+ * the builder with the surfaces the screen hands it and hold it to drawing the
  * canvas's tree, the table's rows and the node editor.
  */
 
@@ -85,7 +85,7 @@ async function openTheEditorFromTheTable(): Promise<void> {
   fireEvent.click(within(row).getByRole("button", { name: "Edit CEO" }));
 }
 
-// A dialog the lens opens is a component the model never sees, so the one
+// A dialog the builder opens is a component the model never sees, so the one
 // thing a suite can hold is that the screen hands in the dialog each action
 // names rather than another one.
 test("each structural action opens its own dialog", () => {
@@ -99,9 +99,12 @@ test("the toolbar's Delete opens the delete dialog for the selected seat", async
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table&seat=ceo",
+    hash: "#/agents/edit?view=table",
   });
   await screen.findByText("No problems");
+  // SELECTED BY A PRESS, not by `seat=` in the address, which is a request
+  // to open the seat's editor now (`editWiring.test.tsx`).
+  fireEvent.click(await tableRow("CEO"));
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
   const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: /^Delete/ }));
@@ -133,12 +136,16 @@ const entries = (menu: HTMLElement) =>
  * own, so every action of the node is in the menu it opens.
  */
 test("the toolbar offers the selected seat's whole list: its entries, order and icons", async () => {
-  mountBuilder({
+  const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=visualization&seat=ceo",
+    hash: "#/agents/edit?view=visualization",
   });
   await screen.findByText("No problems");
+  // A press on the card selects it.
+  fireEvent.click(
+    view.container.querySelector<HTMLElement>('[role="treeitem"][data-tree-id="seat:ceo"]')!,
+  );
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
   const toolbar = entries(await screen.findByRole("menu", { name: "Actions for CEO" }));
   const labels = toolbar.map((e) => e.label);
@@ -158,10 +165,12 @@ test("the toolbar offers the selected seat's whole list: its entries, order and 
  * down the row beside it offered.
  */
 test("a node's card menu and its row menu are the same list", async () => {
+  // NO `seat=` IN THE ADDRESS: a link naming a seat opens its editor now
+  // (`editWiring.test.tsx`), and this case is about the menus under it.
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=visualization&seat=ceo",
+    hash: "#/agents/edit?view=visualization",
   });
   await screen.findByText("No problems");
   const card = view.container.querySelector<HTMLElement>(
@@ -186,24 +195,26 @@ test("a node's card menu and its row menu are the same list", async () => {
  * ADDED FROM THE TABLE, which is the view that still asks in a DIALOG: the
  * structure chart draws the same form in the chart instead (`Builder.tsx`
  * decides which, and `CanvasView.test.tsx` holds the chart's half). Bound
- * here, so the lens really does hand a table-view add to `surfaces.add`.
+ * here, so the builder really does hand a table-view add to `surfaces.add`.
  */
 test("the toolbar offers no screen for a seat that exists only in the draft", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    keys: countingKeys("lens"),
+    keys: countingKeys("builder"),
     hash: "#/agents/edit?view=table",
   });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
-  const dialog = await screen.findByRole("dialog", { name: "Add to the company" });
+  const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Analyst" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Add agent seat" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  // Minted from the lens's one key source, which a suite injects.
-  await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"new:lens1"'));
+  // Minted from the builder's one key source, which a suite injects.
+  await waitFor(() =>
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"new:builder1"'),
+  );
   // Pressing a row selects the node it holds.
   fireEvent.click(await tableRow("Analyst"));
   fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
@@ -213,15 +224,16 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
   expect(labels).not.toContain("Open seat");
 });
 
-// The lens hands the part an action names on to the editor it opens: Edit
+// The builder hands the part an action names on to the editor it opens: Edit
 // reports is about whom the seat manages, so that is where the form starts.
 test("Edit reports opens the seat's editor at Manages", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table&seat=ceo",
+    hash: "#/agents/edit?view=table",
   });
   await screen.findByText("No problems");
+  fireEvent.click(await tableRow("CEO"));
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
   const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Edit reports" }));
@@ -240,8 +252,8 @@ async function typeIntoTheEditor(): Promise<HTMLElement> {
 }
 
 // BACK HAS ALREADY HAPPENED by the time the page hears of it, and it used to
-// take the lens and the editor with it, typed changes and all.
-test("Back off the lens over a changed editor asks first, and keeping the changes keeps the page", async () => {
+// take the builder and the editor with it, typed changes and all.
+test("Back off the builder over a changed editor asks first, and keeping the changes keeps the page", async () => {
   // Reached from the org chart, which Back goes back to: the chart beside the
   // builder is as much a departure as any other screen.
   mountBuilder({
@@ -264,10 +276,10 @@ test("Back off the lens over a changed editor asks first, and keeping the change
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
 });
 
-// A MOVE WITHIN THE LENS LOSES NOTHING. The Builder keeps the editor open,
+// A MOVE WITHIN THE BUILDER LOSES NOTHING. The Builder keeps the editor open,
 // form and all, when Back only turns the table back into the visualization, so
 // asking first would be a question about nothing, worded as a departure.
-test("Back within the lens asks nothing, and the editor keeps what was typed", async () => {
+test("Back within the builder asks nothing, and the editor keeps what was typed", async () => {
   mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
   await screen.findByText("No problems");
   const onCanvas = location.hash;
@@ -310,7 +322,7 @@ test("an editor opened before the engine described the company keeps its node", 
   expect(screen.getByRole("dialog", { name: "Edit CEO" })).toBe(editor);
 });
 
-// ONE FORM PER OPENING: the lens mounts a new editor for every one, so a node
+// ONE FORM PER OPENING: the builder mounts a new editor for every one, so a node
 // opened after another starts from its own data, never from the last form.
 test("every opening of the editor builds its own node's form", async () => {
   mountBuilder({
@@ -326,7 +338,7 @@ test("every opening of the editor builds its own node's form", async () => {
   expect((within(next).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("");
 });
 
-// A COLLEAGUE'S SAVE IS NO REASON TO LOSE A FORM. A lens with no work in its
+// A COLLEAGUE'S SAVE IS NO REASON TO LOSE A FORM. A builder with no work in its
 // draft stands on the newer revision, and did it by reading the document
 // again, which keys a seat declaring no handle by its path until the next
 // check: the open editor lost its node for that moment and came back empty.
@@ -339,7 +351,9 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
     hash: "#/agents/edit?view=table&seat=ceo",
   });
   await screen.findByText("No problems");
-  const editor = await typeIntoTheEditor();
+  // Arrived on a link naming the CEO, so the CEO's editor is what opened.
+  const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
+  fireEvent.change(within(editor).getByLabelText(/^Goal/), { target: { value: "Grow" } });
   const next = company();
   next.roles![1]!.goal = "Design things";
   engine.document = next;
@@ -369,8 +383,8 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
  * ONE NODE READS THE SAME WAY ON BOTH VIEWS.
  *
  * The chart and the table are two arrangements of one draft, drawn from one
- * module each for the words (`nodeMarks`), the actions (`nodeActions`) and the
- * hue (`nodeTone`). Written out twice they drifted in exactly the places two
+ * module each for the words (`nodeMarks`) and the actions (`nodeActions`).
+ * Written out twice they drifted in exactly the places two
  * people would not think to compare: a unit's own type read "Department" on
  * the card and "department" on the row, and the mark beside it came from one
  * list on the chart and another on the row it named.
@@ -413,7 +427,7 @@ test("a unit says the same word and wears the same mark on the chart and in the 
  * BOTH SHELLS OPEN ON THE SAME CONTROL, and it is the kind: the question the
  * add is asking, and the one everything else in the form follows from. They
  * did not, and the reason they did not is the kind of thing only a case
- * mounting the real lens can see: the name carried `autoFocus`, the dialog is
+ * mounting the real builder can see: the name carried `autoFocus`, the dialog is
  * not hidden on the tick it mounts so the field took the focus, and the chart
  * ghost IS hidden until the layout places it, so the same request was refused
  * and the chart's own answer landed instead. One set of fields opening on two
@@ -451,7 +465,7 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
-  const dialog = await screen.findByRole("dialog", { name: "Add to the company" });
+  const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   expect(document.activeElement).toBe(within(dialog).getByRole("radio", { name: "Agent seat" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -489,7 +503,7 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
  * has always been written: a chart that simply stopped drawing the form would
  * take it away with no word about why.
  *
- * Mounted with the real surfaces, because the whole of this is the lens and
+ * Mounted with the real surfaces, because the whole of this is the builder and
  * the chart agreeing about where one add is asked.
  */
 test("an add falls back to the dialog when its parent leaves the draft", async () => {
@@ -511,7 +525,7 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   // A unit of the draft alone, so an undo can take it away again.
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
-  const dialog = await screen.findByRole("dialog", { name: "Add to the company" });
+  const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Tooling" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Add unit" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

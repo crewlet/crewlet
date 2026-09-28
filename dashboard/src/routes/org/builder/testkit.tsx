@@ -336,7 +336,7 @@ export function FakeCanvas({
   chart: ChartKind;
   chrome?: { controls?: ReactNode; switcher?: ReactNode };
   about?: string | null;
-  /** An add the lens handed the chart to draw itself, rather than opening a dialog. */
+  /** An add the builder handed the chart to draw itself, rather than opening a dialog. */
   adding?: { parent: string | null; kind?: string; opening: number; onClose: () => void } | null;
 }) {
   return (
@@ -354,7 +354,7 @@ export function FakeCanvas({
 }
 
 /**
- * The lens's own surfaces with the two views stood in: the suites exercise
+ * The builder's own surfaces with the two views stood in: the suites exercise
  * the Builder rather than a view, and the dialogs they open are the real ones.
  */
 export const fakeSurfaces: BuilderSurfaces = {
@@ -363,7 +363,7 @@ export const fakeSurfaces: BuilderSurfaces = {
   table: FakeView,
 };
 
-/** Mounts the Builder lens against the scripted engine. */
+/** Mounts the builder against the scripted engine. */
 export function mountBuilder({
   engine,
   org = null,
@@ -381,11 +381,11 @@ export function mountBuilder({
   hash?: string;
   surfaces?: BuilderSurfaces;
   storage?: DraftStorage | null;
-  /** Where the lens mints keys and write ids; the browser's random source otherwise. */
+  /** Where the builder mints keys and write ids; the browser's random source otherwise. */
   keys?: KeySource;
   /** What the socket's query channel answers, by name. */
   query?: (what: string) => unknown;
-  /** A provider the lens reads from, which the application frame supplies. */
+  /** A provider the builder reads from, which the application frame supplies. */
   wrap?: (tree: ReactNode) => ReactNode;
 }) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });

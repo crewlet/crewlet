@@ -378,9 +378,15 @@ holds the `scheduler` fleet duty.
 
 ## Observability
 
-- **Dashboard.** The **Schedules** screen lists every configured schedule —
-  name, scope, cron, task, when it next fires and how it last went — and the
-  recent dispatch ledger beside it, both sortable. It is backed by
+- **Dashboard.** **Agents › Schedules** (`#/agents/schedules`) lists every
+  configured schedule — name, scope (a role's seat by its name, or a unit),
+  cron with what it means in words, task, whom it wakes, when it next fires
+  and how it last went — and the recent dispatch ledger below it, both
+  sortable. One schedule's own page
+  (`#/agents/schedules/{scope_type}/{scope_id}/{name}`) adds its whole
+  definition, the fires after the next worked out in the schedule's own zone,
+  and every fire this node's ledger still holds for it (the `schedule_runs`
+  query), because the company-wide ledger is only its newest fifty. The list is backed by
   `GET /schedules`, which serves `schedules` (the resolved schedule list with
   next-run times, projected from the current organization on each request)
   and `recent_runs` (the 50 most recent `scheduled_runs` rows). The next-fire times tick as you watch: every relative time in the

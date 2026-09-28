@@ -148,6 +148,15 @@ export interface Fact {
    * every value is a fact line nobody reads.
    */
   note?: string;
+  /**
+   * A value that is a STACKED READING rather than a phrase, drawn whole and
+   * never clamped. A schedule's cron is the worked case: its expression on one
+   * line and what it means on the next, as the grid it was opened from draws
+   * it. Inline and clamped to two lines, the expression took the first line
+   * and "every 20 minutes every day" was cut to "every 20 minutes…" under it.
+   * For a value whose length the caller bounds; free text keeps the clamp.
+   */
+  whole?: boolean;
 }
 
 export function FactLine({ facts }: { facts: Fact[] }) {
@@ -162,7 +171,7 @@ export function FactLine({ facts }: { facts: Fact[] }) {
               in a track as narrow as `8rem`, and cut to one line an agent's
               "not running on this node" read "not running on this no…" at
               1440, which says nothing about where it IS running. */}
-          <span className="fact-value clamp">
+          <span className={cx("fact-value", !fact.whole && "clamp")}>
             {fact.path ? (
               <a className="t-link" href={href(fact.path, fact.query)}>
                 {fact.value}
@@ -191,6 +200,7 @@ export function ObjectHeader({
   kind,
   icon,
   identifier,
+  within,
   title,
   status,
   facts,
@@ -202,6 +212,15 @@ export function ObjectHeader({
   icon?: GlyphName;
   /** The key, handle or id, in the mono face. */
   identifier?: string;
+  /**
+   * WHOSE the object is, where that is part of its identity and is a NAME
+   * rather than a key: a schedule is declared on a seat or on a unit, and two
+   * units may each declare a "standup". In the eyebrow beside the kind, in the
+   * reader's words and the eyebrow's own ink — `identifier` is a key in the
+   * mono face, and a seat drawn there as `role:agent-pm` was the one place on
+   * a schedule still showing an address where a name belongs.
+   */
+  within?: string;
   title: ReactNode;
   /**
    * The object's state — glyphs or pills, never identity.
@@ -228,6 +247,9 @@ export function ObjectHeader({
             line that is already the quietest thing on the screen. The mono
             face is the whole of what this needs, and `.object-id` is it. */}
         {identifier && <span className="mono object-id">{identifier}</span>}
+        {/* THE SAME RESET AS THE KEY'S, WITHOUT THE MONO FACE: a name in
+            capitals is a shout, and the eyebrow's kind above is set in them. */}
+        {within && <span className="object-id">{within}</span>}
       </div>
       {/* AND THE HEAD ROW WRAPS. It holds a heading, the object's state marks
           and the frame's actions, and the first of those is the only one that

@@ -8,9 +8,9 @@
  * and Undo takes back the whole of what Apply did. Closing a form with
  * changes in it, by Cancel, Close, Escape or the veil, asks first, because a
  * form's changes exist nowhere else, and so does every move that leaves the
- * Builder lens (one of its links, Back or Forward, a reload): the form holds
+ * builder (one of its links, Back or Forward, a reload): the form holds
  * a leave guard (`app/router.useLeaveGuard`) for as long as it has changes.
- * A move within the lens (Back from the outline to the canvas) keeps the
+ * A move within the builder (Back from the outline to the canvas) keeps the
  * editor open with its form, so it is let go without a question
  * (`BuilderContext.keepsTheLens`).
  *
@@ -76,7 +76,6 @@ import {
 import {
   ACKNOWLEDGEMENT_TEXT,
   EditorSection,
-  HueFact,
   NodeProblems,
   NotConnected,
   ReadOnlyFact,
@@ -248,7 +247,7 @@ function EditorShell({
 }) {
   // `leave` is the move the router held (a link, Back or Forward) when the
   // question came from one, so the same question serves a close and a move,
-  // and discarding then makes the move. Only a move off the lens is held: the
+  // and discarding then makes the move. Only a move off the builder is held: the
   // Builder keeps this editor, form and all, through a move within it.
   const [confirming, setConfirming] = useState<{ leave: (() => void) | null } | null>(null);
   const requestClose = () => (dirty ? setConfirming({ leave: null }) : onClose());
@@ -1065,13 +1064,6 @@ function SeatEditor({
             disabled={disabled}
           />
           <DocumentFacts data={data} handle={handle} />
-          {/*
-           * Last, where the console's agent editor ends too. An agent seat is
-           * the only node the chart tints, so it is the only one with a hue
-           * to state: a human seat wears the dashed boundary and a unit is
-           * the chart's own neutral surface (`nodeTone.ts`).
-           */}
-          <HueFact nodeKey={key} />
         </>
       )}
     </EditorShell>

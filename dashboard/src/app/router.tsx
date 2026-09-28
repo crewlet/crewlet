@@ -286,7 +286,7 @@ export type LeaveGuard = (to: Route, leave: () => void) => boolean;
 /**
  * The guards that hold moves, in the order they began to hold. The one that
  * began last is asked first: it is the surface the reader opened last (an
- * editor over the lens that holds a draft), so its question is the one on
+ * editor over the builder that holds a draft), so its question is the one on
  * top.
  */
 const guards: { readonly ask: LeaveGuard }[] = [];
@@ -316,7 +316,7 @@ function holdUnload(holder: object): () => void {
  * Whether a guard holds a move to `to`, asking from the last guard down.
  * EVERY GUARD IS ASKED BEFORE THE MOVE IS MADE: the `leave` a guard is handed
  * asks the guards below it, and only the last agreement makes the move, so an
- * editor agreeing to lose its form never also loses the lens's work unasked.
+ * editor agreeing to lose its form never also loses the builder's work unasked.
  * The guards are the ones holding when the move was asked for, because
  * agreeing can close a surface and take its guard off the list.
  */

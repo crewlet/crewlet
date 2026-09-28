@@ -4,9 +4,8 @@
  * NEUTRAL, EXCEPT WHERE A MARK IS A STATE. A seat's kind, its placement by a
  * unit reference and its Datadog fallback role are facts about identity and
  * wiring, so they are drawn in the neutral ink like every other identity on
- * the dashboard (design rule 1). A problem count is a state and takes the
- * critical tone; a reference that names no unit is a caution; a seat's live
- * state is the `StateBadge` every other screen uses.
+ * the dashboard (design rule 1). A reference that names no unit is a caution,
+ * and a seat's live state is the `StateBadge` every other screen uses.
  *
  * ONE DRAWING OF ONE FACT, on both surfaces. A wiring mark is a fixed-size
  * glyph riding the caption, named for a reader who cannot see it and titled
@@ -15,26 +14,29 @@
  * row is a RANK tall, so a tag in it took the row from 36px to 36.6 and made a
  * row as tall as its own wiring, which this module promises it is not.
  *
- * A LIVE PUSH NEVER MOVES A NODE, AND NEITHER DOES A CHECK. The live state
- * badge and the problem count sit in slots that keep their room whether or not
- * they hold anything (`.bnode-state` and `.bnode-count`, and the chart node's
- * own trailing slot), every glyph mark is a fixed size, and the marks of a
- * reference that names nothing come from the chart, which holds them while the
- * node still writes what the check warned about. So a push twice per tool-loop
- * round, and a check after every edit, change a badge's text and never a
- * node's measured size, which is what the canvas lays out by.
+ * A LIVE PUSH NEVER MOVES A ROW, AND NEITHER DOES A CHECK. The live state
+ * badge sits in a slot that keeps its room whether or not it holds anything
+ * (`.bnode-state`, in the table row's trailing slot), every glyph mark is a
+ * fixed size, and the marks of a reference that names nothing come from the
+ * chart, which holds them while the node still writes what the check warned
+ * about. So a push twice per tool-loop round, and a check after every edit,
+ * change a badge's text and never a measured size, which is what the canvas
+ * and the table lay out by.
+ *
+ * WHAT A CHART NODE DOES NOT CARRY. The chart drew the live state and the
+ * problem count in every node's trailing slot once — a column of "idle" dots
+ * down a company where nothing was running, and an empty box beside every
+ * node with no problem — and stopped (see `CanvasView.tsx`). The compact
+ * drawing of the state and the count's badge went with it: the table writes
+ * the state out and counts the problems in a column of its own, and the
+ * toolbar counts the whole draft's.
  */
 
 import type { ReactNode } from "react";
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
-import { activityOf, activityWord, toneOf } from "~/lib/seats.ts";
-// `toneOf` answers in the KIT's tone vocabulary directly — the ring a seat's
-// state takes, neutral for idle — so there is no translation left to get
-// wrong between the library and the dot.
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.ts";
-import type { NodeKey } from "./model/keys.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
   NetworkGlyph,
@@ -47,7 +49,6 @@ import {
   cssLength,
   type GlyphSize,
 } from "@crewlethq/icons/glyphs";
-import { StatusDot, Tag, VisuallyHidden } from "@crewlethq/ui";
 
 /** "Agent seat" or "Human seat". */
 export function seatKindLabel(view: Pick<SeatView, "kind">): string {
@@ -122,79 +123,16 @@ export function managerLabel(manager: string | null | undefined): string {
 }
 
 /**
- * The problem count, in a slot of its own: empty when the last check of the
- * current draft placed nothing on the node.
- *
- * A CHECK NEVER MOVES A CARD. The count is the last check of the CURRENT
- * draft's, so it is absent while a check is out, which is after every edit.
- * Drawn in a line of its own, that line collapsed and came back, changing the
- * card's measured height twice per edit and moving every card beside it. The
- * slot (`.bnode-count`) sits on the card's first line beside the name, which
- * truncates instead, and that line is as tall with the badge as without it.
- *
- * THE COUNT RATHER THAN THE SENTENCE, because a chart node is one rank tall
- * and as wide as its own name, and the slot a push arrives in is one control
- * step wide however many marks it holds: "3 problems" written out was clipped
- * inside it. It is the rule this module already keeps for a wiring mark, for
- * the same reason, and the sentence is still said, as the badge's own name and
- * as the tooltip a pointer gets. The table beside this chart has a line to
- * spare and writes it out.
- */
-export function ProblemCount({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeKey }) {
-  const count = api.problemsFor(nodeKey).length;
-  return (
-    <span className="bnode-count">
-      {count > 0 && (
-        <Tag
-          variant="danger"
-          title={plural(count, "problem")}
-          aria-label={plural(count, "problem")}
-        >
-          {count}
-        </Tag>
-      )}
-    </span>
-  );
-}
-
-/**
  * The live state of a saved agent seat. Looked up by the handle and name the
  * SAVED company gives it, because that is what the running seat is called
  * until this draft is saved and applied.
  */
-export function LiveState({
-  api,
-  view,
-  compact = false,
-}: {
-  api: BuilderApi;
-  view: SeatView;
-  /**
-   * The chart's drawing: the state as its tone and nothing written out.
-   *
-   * A NODE HAS NO ROOM FOR THE WORD. The slot a push arrives in is one control
-   * step wide whatever it holds, which is what stops a badge appearing from
-   * relaying the chart; the word "awaiting sandbox" in it would be clipped
-   * rather than read. The state is still said, as the mark's own name and as
-   * the tooltip a pointer gets, and the table beside the chart writes it out.
-   */
-  compact?: boolean;
-}) {
+export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
   if (!view.running || !view.saved) return null;
   const { handle, name } = view.saved;
   const agent =
     (handle ? api.agents.find((a) => a.handle === handle) : undefined) ??
     api.agents.find((a) => a.role === name);
-  if (compact) {
-    const state = activityOf(agent);
-    const said = activityWord(state);
-    return (
-      <span className="bnode-state" title={said}>
-        <StatusDot tone={toneOf(state)} />
-        <VisuallyHidden>{said}</VisuallyHidden>
-      </span>
-    );
-  }
   return (
     <span className="bnode-state">
       <StateBadge agent={agent} />

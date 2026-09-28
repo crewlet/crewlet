@@ -1649,14 +1649,13 @@ a.prof-row:hover {
   pointer-events: none;
 }
 
-/* A LIVE STATE OR A CHECK NEVER RESIZES A NODE. The live state and the problem
-   count each have a slot on the card's first line that does not shrink, wrap
-   or push the name onto a second line: the name truncates instead, and the
-   line is as tall with a badge as without one. So a push that turns "idle"
-   into "working", and a count that leaves while a check is out and comes back
-   with its answer, change a word and never a measured height. */
-.bnode-state,
-.bnode-count {
+/* A LIVE STATE NEVER RESIZES A ROW. The table's live state has a slot on the
+   name line that does not shrink, wrap or push the name onto a second line:
+   the name truncates instead, and the line is as tall with a badge as without
+   one. So a push that turns "idle" into "working" changes a word and never a
+   measured height. (The chart node carries no state and no problem count, so
+   neither has a slot there: see `nodeMarks.tsx`.) */
+.bnode-state {
   display: inline-flex;
   flex: none;
   white-space: nowrap;
@@ -1687,6 +1686,24 @@ a.prof-row:hover {
    `__icon` and `__name`, four of them byte for byte, and the one that was not
    (`min-width` on the label span) was inert, since the span is not a flex item
    and the ellipsis lives on `__name`. */
+
+/* ON A PHONE A ROW'S IDENTITY IS ITS FIRST SCREEN. The table scrolls sideways
+   there, because the design system's grid keeps every column, and its name
+   track was five and a quarter shares of the grid — 417px on a 356px screen —
+   so a seat's state pill sat past the scroller's edge, cut in half with no
+   ellipsis. Below the phone breakpoint the name track is exactly the width the
+   scroller shows (the builder body's own inline size, less the grid's two 1px
+   borders): the mark, the name and the state are whole on the first screen,
+   a long name ellipsises beside its state as it does on a chart node, and the
+   handle, the lead and the problems are what a sideways scroll reaches.
+   `TableView.tsx` reads `--btable-name-track` with the wide track as its
+   fallback. */
+@media (width < 640px) {
+  .org-builder-body {
+    container-type: inline-size;
+    --btable-name-track: calc(100cqi - 2px);
+  }
+}
 
 /* ---- Org builder: the node editor and its dialogs ------------------------
    `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
@@ -5573,6 +5590,17 @@ a.work-cal-chip {
 }
 .diff-del-ink {
   color: var(--color-feedback-danger-ink);
+}
+
+/* A schedule's expression over what it means — in a grid cell, on a phone's
+   card, and as the Cron fact of the schedule's own header, one drawing in all
+   three (`CronReading`). THE EXPRESSION HUGS ITS OWN TEXT: stretched to the column's width by
+   the flex column it sits in, its code chip ran on past `0 9 * * 1-5` to the
+   end of the sentence under it — a box drawn round blank space that read as a
+   longer expression with the rest cut. */
+.cron-cell {
+  gap: 1px;
+  align-items: flex-start;
 }
 
 /* The fires a cron expression works out to — a plain ordered list without the

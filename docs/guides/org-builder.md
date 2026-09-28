@@ -21,11 +21,11 @@ under [Editing a node](#editing-a-node), field by field.
 
 The configuration is guarded, reads included, so the builder needs what any
 other configuration client needs: an operator token the engine accepts
-(unless the node runs with `api.auth.disabled`). What the lens shows is
+(unless the node runs with `api.auth.disabled`). What the builder shows is
 decided from what the engine answers, never from whether the browser holds a
 token:
 
-| The engine answers `GET /config` with | The lens shows |
+| The engine answers `GET /config` with | The builder shows |
 |---|---|
 | the active revision | the organization, ready to edit |
 | `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
@@ -43,6 +43,34 @@ and the builder treats it as a node it could not reach: the draft is kept,
 and the check retries until a peer or the restarted node answers. Nothing is
 written by a refused save, so there is nothing to settle afterwards.
 
+### Arriving from a link
+
+Every way into Edit org from another screen asks to change one thing, and the
+builder opens on it. The address says what:
+
+| The link carries | The builder opens |
+|---|---|
+| `seat=<handle>` | that seat's editor (a seat's **Edit** beside its setup on its profile, **Edit in org** in its menu) |
+| `unit=<name>` | that unit's editor |
+| `add=agent`, `add=human` or `add=unit` | the Add on that kind at the company's top level (the org chart's **Add seat** is `add=agent`) |
+| `unit=<name>` and `add=…` | the Add under that unit |
+
+It happens once, on arrival, and only when the builder can edit: once the
+draft is loaded and the engine has described it (a link names a seat by the
+handle it runs under), and not while a kept draft waits for **Keep** or
+**Discard**, a save's outcome is unknown or the configuration changed under
+the draft. The request waits through each of those and opens once they are
+settled. `add=` is then taken out of the address, so a reload or a copied link
+does not ask for a second node; `seat=` and `unit=` stay, because they are
+also the selection (see [Selecting a node](#selecting-a-node)). Selecting
+another node inside the builder, or a Back to an earlier selection while you
+stay in it, opens nothing. But because the selection is part of the address,
+ANY arrival that carries one is read the same way as a link: a reload with a
+node selected, or a Back into Edit org from another screen (a seat's profile
+reached from the node's **Open seat**, say), opens that node's editor, since
+the builder cannot tell that address from a link somebody sent you. A link
+naming a node the draft does not hold selects nothing and opens nothing.
+
 Changing the operator token while a draft is open keeps the draft. The
 builder reads the configuration again and checks the draft under the new
 token; if the engine refuses it, editing pauses until a token it accepts is
@@ -50,7 +78,7 @@ set.
 
 ## Creating the company
 
-On an engine with no active configuration the lens opens on a form: the
+On an engine with no active configuration the builder opens on a form: the
 company's name and mission, a shape to start from, and optionally a seat for
 yourself.
 
@@ -87,67 +115,95 @@ commands for it.
 
 ## Reading the organization
 
-The toolbar switches between the **Canvas**, a chart of the organization with
-a **Structure** and a **Reporting** arrangement, and the **Outline**, the same
-structure as rows and columns. Below 640 pixels wide the builder opens on the
-outline. The view, the chart and the selected unit or seat are in the URL, so
-a link opens the builder where it was.
+The toolbar switches between two views of the draft: the **Visualization**, a
+chart of the organization in a **Structure** and a **Reporting** arrangement
+(chosen in the chart's own corner, under its zoom controls), and the
+**Table**, the same structure as rows and columns. Below 640 pixels wide the
+builder opens on the table. The view (`view=visualization|table`), the chart
+(`chart=structure|reporting`) and the selected unit or seat are in the URL,
+so a link opens the builder where it was.
 
 Both views draw the draft as it stands, and take everything the engine
 derives from its last check of it: where a seat declared at the top level
 with a unit reference is placed, the lead a unit inherits, and who each seat
 reports to. A derived value is shown only while the draft still holds what
-the check saw, so just after a change a card can read "Handle after the
+the check saw, so just after a change a node can read "Handle after the
 check", "Lead after the check" or "Manager after the check" for a moment
-rather than show an answer the engine has not given. Colour is state, never
-identity: a person's badge is a circle and an agent's a squircle, and a card
-is otherwise neutral whatever it holds.
+rather than show an answer the engine has not given.
 
-### The canvas
+Colour is state, never identity. Every node is drawn on the same neutral
+surface whatever it holds; what tells a person's seat from an agent's is its
+badge, a circle for a person and a squircle for an agent, and the one colour a
+node takes is the accent ring of the selection. The live org chart follows the
+same rule, and there colour says what a seat is doing: a draft is doing
+nothing, so here there is nothing for colour to say.
 
-The structure chart has the company at the root, the seats declared at the
-top level as cards beneath it, and each unit as a card with its seats stacked
-inside as rows and its child units below it. A card or a row shows its name,
-its kind or type and its handle, and the marks that apply:
+### The structure chart
+
+The company is the root. The seats declared at the top level and the units
+hang off it, and each unit's seats and child units hang off that unit: every
+seat is a node of its own, joined to the unit it sits in by the same
+orthogonal branch the live org chart draws. The branch is heavier here: a node
+is half the height of the live chart's card, and the design system keeps the
+branch at the same weight against the node it joins. A node shows its badge (or a
+unit's or the company's glyph), its name and, under it, what kind of thing it
+is, with the marks that apply as small glyphs on that line. Each mark says its
+sentence as its name and its tooltip:
 
 | Mark | Meaning |
 |---|---|
-| a live state | a saved agent seat's current state, as every other screen shows it |
-| *N problems* | the last check of the draft refused something about this node |
-| Placed by unit reference | a seat declared at the top level that its `unit:` reference places in this unit |
+| Declared at the root with a unit reference | a seat declared at the top level that its `unit:` reference places in this unit |
 | No unit named *X* | a `unit:` reference the engine resolved to no unit; the seat stays at the top level |
 | Lead names no seat | the unit's lead names no seat of the company |
-| Datadog fallback | the seat an alert that names no seat wakes, while Datadog is enabled |
+| Alerts that name no seat wake this seat | the Datadog fallback seat, while Datadog is enabled |
 
-The live state and the problem count never change the size of a card: they
-sit beside the name, which is shortened instead, so the chart does not move
-while seats work or while a check is on its way. A mark about wiring (a
-placement, or a reference that names nothing) stays for as long as the node
-still writes what the check found, so a check on its way does not take it off
-the card either.
+A node carries neither the seat's live state nor a problem count. Drawn on
+every node they were a column of "idle" dots down a company where nothing was
+running and an empty box beside every node with nothing wrong; the table
+writes both out, the toolbar's status counts the draft's problems, and each
+problem is shown in the editor of the node it names. A name too long for its
+node is shortened rather than growing the node, so the chart does not move
+while a check is on its way.
 
-A unit's card carries its **lead chip**: the lead it declares, the one it
+A unit's node carries its **lead chip**: the lead it declares, the one it
 inherits from the unit above (marked inherited), or "No lead". Pressing the
 chip opens the lead choice in place: **No lead** (saying what the unit would
-then inherit), each seat drawn in the unit, and **Choose another seat**, which
-opens the unit's editor at its lead.
+then inherit), each seat in the unit, and **Choose another seat**, which opens
+the unit's editor at its lead.
 
-Every card and row is one stop in a tree. The arrow keys walk the visible
-order: Right opens a closed unit or steps into an open one, Left closes it or
-climbs to the unit above, Home and End jump, and typing a name moves to the
-next node it matches. On a node, Enter opens its editor, Delete or Backspace
-deletes it (never the company), and the context menu key or Shift+F10 opens
-its menu of actions; the buttons on a card open the same menus for a pointer.
-Each unit collapses and expands on its own, and **Expand all** and **Collapse
-all** in the toolbar do it for the whole chart.
+A node's controls appear when it is reached, by the pointer, by focus or by
+being the selected node: the expander on its leading edge, **Edit** and
+**Delete** down its end, and, under a node that can take a child, the **Add**
+on the branch its children hang from, which splits into **Add unit**, **Add
+agent seat** and **Add human seat** where it stands.
+
+Every node is one stop in a tree. The arrow keys walk the visible order: Right
+opens a closed unit or steps into an open one, Left closes it or climbs to the
+unit above, Home and End jump, and typing a name moves to the next node it
+matches. On a node, Enter opens its editor, Delete or Backspace deletes it
+(never the company), Alt+Up and Alt+Down move it among its siblings, as they
+move a row in [the table](#the-table), and the context menu key or
+Shift+F10 opens its menu, which holds everything the node's own controls do
+not. Each unit collapses and expands on its own, and **Expand all** and
+**Collapse all** in the toolbar do it for the whole chart.
 
 The chart pans with a drag, or with the wheel while it has focus; Ctrl or
 Command with the wheel zooms toward the pointer, and plus, minus and zero zoom
 and fit while the chart itself has focus. On a touch screen one finger scrolls
 the page until you tap the chart, which then pans with one finger until you
-press **Done**; two fingers pinch at any time. The chart fits itself when it
-is first drawn, and after that moves only when you move it or when a node you
-act on has to be revealed.
+press **Done**; two fingers pinch at any time.
+
+The chart fits itself when it is first drawn, but never below the size its
+text can be read at: 85%, the floor the live org chart keeps. A company too
+wide to be read whole is drawn at exactly that size, centred across on the
+selected node or, with none selected, on the company itself, and placed down
+the pane where **Fit** would put it (in the middle when it is shorter than the
+pane, from the top when it is not, and never with the selected node off it);
+the rest of it is a pan away; **Fit** (the control or zero) draws the whole
+company at whatever size that takes, because that is a request for all of it.
+After that the chart moves only when you move it, when a node you act on has
+to be revealed, or when an editor or a dialog opens over a node, which eases
+the chart onto it and back.
 
 ### The reporting chart
 
@@ -163,19 +219,25 @@ first check answers the chart says the lines appear after it, and while the
 check of later changes is on its way it says that it shows the lines of the
 last one.
 
-### The outline
+### The table
 
-The outline is the structure as a grid of rows, with the columns **Name**,
-**Kind or type**, **Handle**, **Lead or reports to** (a unit's lead chip, or a
-seat's primary manager), **Problems** and the row's actions. A row takes the
-same keys as a card on the canvas, and Right also steps from a row into its
-cells, Left back out; in a cell, Up and Down keep the column, and a cell that
-holds a control (the lead chip, the actions menu, an add button) puts focus on
-the control itself. At narrow widths the grid scrolls sideways in its own box,
-never the page.
+The table is the structure as a tree of rows, in the order the chart draws
+it, with the columns **Name** (the node's kind or type under its name, and a
+saved agent seat's live state beside it), **Handle**, **Lead or reports to**
+(a unit's lead chip, or a seat's primary manager), **Problems** and the row's
+actions. It has no sort and no column settings: an organization has one order
+its rows mean anything in. A row takes the same keys as a node on the chart,
+and Right also steps from a row into its cells, Left back out; in a cell, Up
+and Down keep the column, and a cell that holds a control (the lead chip, the
+actions menu, an add button) puts focus on the control itself. At narrow
+widths the table scrolls sideways in its own box, never the page.
 
-While the draft can be changed, the rows of each unit and of the company end
-in an add row with **Add agent seat**, **Add human seat** and **Add unit**.
+Each row ends in its controls: on the company's row and a unit's, the **Add**
+that splits into **Add unit**, **Add agent seat** and **Add human seat**;
+**Edit** and **Delete** on every row but the company's, which cannot be
+deleted; and a menu of the rest (**Open seat**, **Edit reports**, **Change
+kind**, **Move to** and the two moves among the siblings). Where the builder
+cannot write, the controls are disabled with the reason, never hidden.
 
 **Alt+Up** and **Alt+Down** move a row among its siblings of the same kind (a
 seat among its unit's seats, a unit among its parent's units), past the row
@@ -192,9 +254,12 @@ toolbar carries that node's own actions: the same menu as its card and its
 row, so every action is reachable from the keyboard. **Open seat** is offered
 only for a seat the saved company has: a seat added in the draft has no
 screen until it is saved. A rename rewrites the name in the URL rather than
-leaving a link pointing at something that no longer exists. Selecting the
+leaving a link pointing at something that no longer exists. A link that
+arrives naming a node opens its editor as well (see
+[Arriving from a link](#arriving-from-a-link)); selecting a node inside the
+builder never does. Selecting the
 company itself carries the charter's **Edit** and the same **Add** menu; it
-names no filter, because the lens is already about that company. Where the
+names no filter, because the builder is already about that company. Where the
 builder cannot write (a guarded or read-only posture, or a draft waiting to be
 updated) the actions stay in the menu and are marked unavailable, so what the
 builder does is still legible.
@@ -229,9 +294,13 @@ or `PATCH /config` ([Configure via the API](configure-via-api.md)).
 ## Adding a unit or a seat
 
 **Add unit**, **Add agent seat** and **Add human seat** on the company or a
-unit (from its menu, the toolbar or the outline's add row) open the Add
-dialog, which adds the new node at the end of that unit, or at the top level
-of the company. Seat names are unique, because a lead or a `manages` entry
+unit (the **Add** on its branch or its row, its menu, or the toolbar) add the
+new node at the end of that unit, or at the top level of the company. On the
+structure chart the form is drawn IN the chart, in the place the new node will
+take: the chart makes room in that rank, draws the branch to it and eases onto
+it, so what you are adding to stays in view while you name it. On the table
+and on the reporting chart, which have no place to draw it, the same form
+opens as a dialog. Seat names are unique, because a lead or a `manages` entry
 names exactly one seat, and so are unit names, because a `manages` entry or a
 unit reference names exactly one unit. The dialog starts with a name nobody
 holds, and when you type a name that is taken it offers the next free one,
@@ -251,7 +320,7 @@ changes (Cancel, Close, Escape or a click outside it) asks before discarding
 them, and so does anything that would leave the builder under it: one of its
 links, the browser's Back or Forward to another screen, or a reload.
 **Keep editing** leaves you where you were, form and all. Moving between the
-builder's own views (Back from the outline to the canvas, say) keeps the
+builder's own views (Back from the table to the visualization, say) keeps the
 editor open with your changes, so it asks nothing.
 
 If the engine refused something about the node at the last check, the problem
@@ -363,10 +432,10 @@ grant access to everything (an empty repository list already does).
 
 Two more things the builder deliberately does not have. A seat has no colour
 of its own: colour on the dashboard shows state, never identity, so seats are
-told apart by their names. And the canvas has no box for typing a zoom
-percentage: zoom in, zoom out and fit are buttons on the canvas and keys while
-it has focus (plus, minus and zero), and Ctrl or Command with the wheel zooms
-toward the pointer.
+told apart by their names and their badges. And the zoom is the chart's own:
+zoom in, zoom out and fit are buttons on the chart and keys while it has focus
+(plus, minus and zero), the percentage between the buttons opens a field to
+type one into, and Ctrl or Command with the wheel zooms toward the pointer.
 
 ## Moving a node
 
@@ -586,7 +655,7 @@ opens and finds a kept draft:
 - **Made against an older revision:** the draft is restored through the same
   update described below, and **Discard the kept draft** removes it instead.
 - **Made for creating a company, where a company now exists** (or the other
-  way around): it is discarded, and the lens says so.
+  way around): it is discarded, and the builder says so.
 
 The kept draft is removed when you save, when you discard, when the operator
 token changes, and when the engine refuses the token, because each of those
@@ -607,8 +676,8 @@ revision saved by somebody else (another operator, `crewlet config import`, a
 setup flow on the Integrations screen) is found at the next check, not at the
 save. The status reads "The configuration changed", editing pauses, and a
 banner offers **Show what changed** (the newer revision against the one the
-draft was started from) and **Update my draft**. A lens with no changes on it
-has nothing to update: it moves onto the newer revision by itself and goes
+draft was started from) and **Update my draft**. A builder with no changes on
+it has nothing to update: it moves onto the newer revision by itself and goes
 on. An editor you have open keeps what you typed in it, and the selected unit
 or seat stays selected, so an edit you had not applied yet applies to the
 newer revision.
@@ -654,7 +723,7 @@ redo says it undid or redid the change), and focus moves to the unit or seat
 it touched: an added node, the node before a deleted one (or its unit), a
 moved node where it went. **Discard changes** throws the whole draft away
 after a confirmation; the saved configuration is not touched. The keys of the
-chart and the outline are described under
+chart and the table are described under
 [Reading the organization](#reading-the-organization).
 
 At narrow widths Undo, Redo, Discard changes, Expand all and Collapse all move

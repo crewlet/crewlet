@@ -43,7 +43,6 @@ import {
   type MouseEvent,
   type RefObject,
 } from "react";
-import { flushSync } from "react-dom";
 import {
   Callout,
   EmptyState,
@@ -82,6 +81,13 @@ import {
 import { buildOrgChart, placeLine, stateCounts, type StateCounts } from "~/lib/orgchart.ts";
 import type { AgentRow } from "~/protocol/types.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import {
+  CANVAS_LABELS,
+  canvasControls,
+  canvasReady,
+  holdLegible,
+  largestRoot,
+} from "~/ui/canvasView.ts";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
@@ -147,17 +153,8 @@ export function OrgChart() {
   const step = usePeekStep();
 
   // THE ROOT THE COMPANY HANGS FROM — the root with the most seats under it —
-  // which a chart held above its fit with nobody selected is revealed at.
-  const anchor = useMemo(() => {
-    const size = (n: { children?: readonly unknown[] }): number =>
-      1 + (n.children ?? []).reduce<number>((sum, c) => sum + size(c as typeof n), 0);
-    let best: { id: string; seats: number } | null = null;
-    for (const n of chart.nodes) {
-      const seats = size(n);
-      if (!best || seats > best.seats) best = { id: n.id, seats };
-    }
-    return best?.id ?? null;
-  }, [chart]);
+  // which a chart held above its fit with nobody selected is anchored on.
+  const anchor = useMemo(() => largestRoot(chart.nodes), [chart]);
 
   // ONE PRESS, ONE NAVIGATION. A pointer press on a card reaches the peek
   // twice — the tree's selection follows the focus the press gave the card,
@@ -287,7 +284,7 @@ export function OrgChart() {
             className="oc-canvas"
             ref={view}
             label="Org chart"
-            labels={{ fit: FIT_LABEL, zoomIn: ZOOM_IN_LABEL }}
+            labels={CANVAS_LABELS}
             connector="elbow"
             nodes={chart.nodes}
             cards={cards}
@@ -465,28 +462,6 @@ function SeatRowCell({
 }
 
 /**
- * The labels this screen gives the canvas's own Fit and Zoom in controls — and
- * so how it finds them to press (see [canvasControls]).
- */
-const FIT_LABEL = "Fit to view";
-const ZOOM_IN_LABEL = "Zoom in";
-
-/**
- * The smallest zoom this screen draws the chart at ON ITS OWN.
- *
- * A card's place and state lines are `--font-size-xs`, 12px, the smallest
- * text on it a reader is meant to read; at 0.85 they are drawn at 10.2px,
- * and below it they stop being text. Fitting the whole company into whatever
- * width the peek left used to go as far as the fit went: 71% beside a peek at
- * 1440 and 54% at 1280, where the state lines were seven pixels and the
- * selected card's outline barely a line. A chart that fits above this is
- * fitted whole; one that would not is drawn AT this, with the seat the reader
- * is on revealed in it. Only a Fit the READER presses goes below it — that is
- * a request for the whole company, legible or not.
- */
-export const LEGIBLE_ZOOM = 0.85;
-
-/**
  * The canvas under a chart whose frame changes: the whole chart stays fitted
  * and centred in whatever width the canvas has — never below [LEGIBLE_ZOOM] —
  * and the seat the peek is about stays on screen.
@@ -507,10 +482,11 @@ export const LEGIBLE_ZOOM = 0.85;
  * # But never shrunk past reading
  *
  * Every view this screen chooses — the canvas's own first fit and every refit
- * after it — is held at [LEGIBLE_ZOOM] where the fit falls below it, and the
- * selected seat (or, with none, the root the company hangs from) is revealed
- * at that size. The chart past the edge is a pan away; a chart drawn whole at
- * half size was a chart nobody could read any of.
+ * after it — is drawn at exactly [LEGIBLE_ZOOM] where the fit falls below it,
+ * centred across on the selected seat (or, with none, the root the company
+ * hangs from) and down the canvas where the kit's own fit would put the chart
+ * (`holdLegible`). The chart past the edge is a pan away; a chart drawn whole
+ * at half size was a chart nobody could read any of.
  *
  * # A reader's own view is theirs
  *
@@ -557,10 +533,8 @@ function useChartView(
     if (!el) return;
     // The one element under this chart that says whether it is ready is the
     // kit's canvas, inside the TreeCanvas this screen draws.
-    const canvasReady = () =>
-      el.querySelector("[data-ready]")?.getAttribute("data-ready") === "true";
-    setReady(canvasReady());
-    const watch = new MutationObserver(() => setReady(canvasReady()));
+    setReady(canvasReady(el));
+    const watch = new MutationObserver(() => setReady(canvasReady(el)));
     watch.observe(el, { attributes: true, attributeFilter: ["data-ready"], subtree: true });
     const size = new ResizeObserver((entries) => {
       // READ BEFORE THE CANVAS ANSWERS THE NEW SIZE: its answer clamps the
@@ -590,7 +564,8 @@ function useChartView(
     () => ({
       onClick: (event: MouseEvent<HTMLElement>) => {
         if (pressing.current) return;
-        if ((event.target as Element).closest(`button[aria-label="${FIT_LABEL}"]`)) remember();
+        if ((event.target as Element).closest(`button[aria-label="${CANVAS_LABELS.fit}"]`))
+          remember();
       },
       onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {
         if (event.key === "0" && !(event.target as Element).closest("input, textarea")) {
@@ -623,9 +598,9 @@ function useChartView(
 
   /**
    * Choose the view: the fit (pressed, when `refit`; the canvas's own, on its
-   * first layout), held at [LEGIBLE_ZOOM], with the selected seat revealed —
-   * or the root, where the chart was held above its fit and nobody is
-   * selected. Remembered as chosen once the canvas has drawn it.
+   * first layout), held at [LEGIBLE_ZOOM] centred across on the selected seat
+   * — or on the root, where nobody is selected — and the selected seat
+   * revealed. Remembered as chosen once the canvas has drawn it.
    */
   const place = useCallback(
     (refit: boolean) => {
@@ -633,8 +608,12 @@ function useChartView(
       if (!el) return;
       const controls = canvasControls(el, pressing);
       if (refit) controls.fit();
-      const held = holdLegible(controls);
-      const target = latest.current ?? (held ? root.current : null);
+      const chosen = latest.current;
+      const hold = holdLegible(controls, chosen ?? root.current);
+      // A HELD VIEW THAT COULD NOT PLACE ITS ANCHOR was zoomed about the
+      // centre, and the root is revealed in it; a selected seat is revealed
+      // whatever the hold did — the least pan, which is none once placed.
+      const target = chosen ?? (hold === "centred" ? root.current : null);
       if (target) reveal(target);
       remember();
     },
@@ -675,80 +654,6 @@ function useChartView(
   }, [host, ready, width, place, reveal]);
 
   return handlers;
-}
-
-/**
- * Raise the view to [LEGIBLE_ZOOM] where it is below it, a zoom step at a
- * time — so it comes to rest at the first step at or above the floor, never
- * more than one step over it. True when it had to.
- */
-function holdLegible(controls: CanvasControls): boolean {
-  let k = controls.zoom();
-  let held = false;
-  while (k !== null && k < LEGIBLE_ZOOM) {
-    controls.zoomIn();
-    const next = controls.zoom();
-    // The canvas's ceiling: a step that moves nothing ends the climb.
-    if (next === null || next <= k) break;
-    k = next;
-    held = true;
-  }
-  return held;
-}
-
-/** What [canvasControls] offers. */
-interface CanvasControls {
-  /** The view as the canvas draws it: the transform of the layer it pans. */
-  view(): string | null;
-  /** The zoom that view is drawn at, or null before there is one. */
-  zoom(): number | null;
-  /** Press Fit. */
-  fit(): void;
-  /** Press Zoom in: one step, about the canvas's centre. */
-  zoomIn(): void;
-}
-
-/**
- * The canvas's own controls, PRESSED, and its view as it draws it — what this
- * screen uses in place of the handle methods the kit's tree canvas does not
- * hand out.
- *
- * THE KIT'S TREE CANVAS OFFERS NO FIT AND NO ZOOM. Its canvas has both on its
- * handle; the tree canvas wraps that canvas and passes on only `focusNode`,
- * `focusRegion` and `restoreView`, and it passes out no ready or view-change
- * event either. So the view is read the way a reader meets it — the viewport
- * is the group announced as a canvas, and the layer it moves is its one child
- * — and the fit and the zoom are the controls the reader has, found by the
- * labels this screen gives them, so there is still exactly one answer to
- * "fitted" and one zoom step: the kit's. A press is flushed, so the view it
- * moved to can be read before the next press decides anything.
- *
- * ALL OF IT IS HERE AND NOWHERE ELSE, so a kit that hands out `fit()`, a zoom
- * and a view-change event is a change to this function and nothing else.
- */
-function canvasControls(host: HTMLElement, pressing: { current: boolean }): CanvasControls {
-  const layer = () =>
-    host.querySelector('[role="group"][aria-roledescription="canvas"]')
-      ?.firstElementChild as HTMLElement | null;
-  const press = (label: string) => {
-    const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-    if (!button) return;
-    pressing.current = true;
-    try {
-      flushSync(() => button.click());
-    } finally {
-      pressing.current = false;
-    }
-  };
-  return {
-    view: () => layer()?.style.transform ?? null,
-    zoom: () => {
-      const scale = /scale\(([\d.]+)\)/.exec(layer()?.style.transform ?? "");
-      return scale ? Number(scale[1]) : null;
-    },
-    fit: () => press(FIT_LABEL),
-    zoomIn: () => press(ZOOM_IN_LABEL),
-  };
 }
 
 /**
