@@ -254,7 +254,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	}
 
 	// AND THE REANCHOR IT NEEDS IS THE RESTORED ONE, from where the log ends.
-	view, err := e.ReanchorStatus(t.Context(), tracker.Domain{}.Stream().Name)
+	view, err := e.ReanchorStatus(t.Context(), estateSpec(tracker.Domain{}).Name)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
 	}

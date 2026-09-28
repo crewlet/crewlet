@@ -147,7 +147,7 @@ func (e *Engine) feedFor(running *runningDomain) (changefeed.Translator, changef
 	// committed record rather than the writer's goroutine.
 	records := domainFeed{
 		log:    running.log,
-		stream: running.domain.Stream().Name,
+		stream: running.spec.Name,
 		envel:  running.domain.Envelope,
 	}
 	switch running.domain.Name() {

@@ -235,6 +235,7 @@ func TestABuildBeforeVersionFourRetainsARankOrderAndHaltsAtAPurge(t *testing.T) 
 	t.Cleanup(func() { _ = older.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:  olderTracker{reads: 3},
+		Spec:    statelog.EstateStream(olderTracker{reads: 3}),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,

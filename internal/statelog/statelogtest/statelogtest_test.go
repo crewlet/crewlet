@@ -44,9 +44,9 @@ func TestTheCompactedControlPasses(t *testing.T) {
 
 // rowsOver is the framework's own read seam over one control domain, which is
 // what a real domain's constructor returns too.
-func rowsOver(d statelog.Domain) func(*store.DB) (statelog.Rows, error) {
-	return func(db *store.DB) (statelog.Rows, error) {
-		return statelog.NewRows(db, d, nil)
+func rowsOver(d statelog.Domain) func(*store.DB, statelog.StreamSpec) (statelog.Rows, error) {
+	return func(db *store.DB, spec statelog.StreamSpec) (statelog.Rows, error) {
+		return statelog.NewRows(db, d, spec, nil)
 	}
 }
 
@@ -76,9 +76,25 @@ func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Cont
 	}
 }
 
+// controlLayout is the partitioned layout the control is certified under, and
+// controlLog its log there — so the suite runs the framework on a log whose
+// names the partition grammar gives, which no production domain's layout-0
+// log exercises.
+func controlLayout() statelog.Layout {
+	return statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 1, Domains: []string{"control"}},
+	}}
+}
+
+var controlLog = statelog.LogID{
+	Domain: "control", Partition: statelog.PartitionID{Space: statelog.SpaceTracker},
+}
+
 func control() statelogtest.Candidate {
 	return statelogtest.Candidate{
 		Domain:     controlDomain{},
+		Layout:     controlLayout(),
+		Log:        controlLog,
 		Applier:    controlApplier{},
 		Kinds:      []string{"widget"},
 		Rows:       rowsOver(controlDomain{}),
@@ -174,16 +190,31 @@ type controlBase struct{}
 
 func (controlBase) Name() string { return "control" }
 
-func (controlBase) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:            "CREWLET_CONTROL_LOG",
-		Subjects:        []string{"crewlet.control.log.>"},
-		SubjectPrefix:   "crewlet.control.log",
+func (controlBase) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
 		ArbitratedKinds: []string{"widget"},
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
 		Replay:          statelog.ReplayStrict,
 	}
+}
+
+// PartitionOf places a widget in the one partition that carries the control's
+// log, and the framework's records — the barrier and the node gate — nowhere.
+func (controlBase) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	if env.Kind != "widget" {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition("control"), true
+}
+
+// ScopePartition places a `widget/<id>` path where PartitionOf places its
+// widget, and the gate's own term — which names the log — nowhere.
+func (controlBase) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
+	if !strings.HasPrefix(path, "widget/") {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition("control"), true
 }
 
 func (controlBase) RecordVersion() int { return 1 }
@@ -268,8 +299,8 @@ func (controlDomain) Evictions(ctx context.Context, db *store.DB) ([]statelog.Ev
 // than a fault.
 type compactedControl struct{ controlBase }
 
-func (c compactedControl) Stream() statelog.StreamSpec {
-	s := c.controlBase.Stream()
+func (c compactedControl) StreamShape() statelog.StreamShape {
+	s := c.controlBase.StreamShape()
 	s.Replay = statelog.ReplayCompacted
 	s.MaxPerSubject = 1
 	s.MaxAge = time.Hour
@@ -530,8 +561,8 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 
 type brokenStream struct{ controlDomain }
 
-func (b brokenStream) Stream() statelog.StreamSpec {
-	s := b.controlDomain.Stream()
+func (b brokenStream) StreamShape() statelog.StreamShape {
+	s := b.controlDomain.StreamShape()
 	s.MaxPerSubject = 1 // a strict log that keeps one message per subject
 	return s
 }
@@ -666,3 +697,87 @@ type compactedNodeGate struct{ compactedControl }
 
 func (compactedNodeGate) InstallsGate(statelog.Envelope) bool { return true }
 func (compactedNodeGate) NodeGate(statelog.Envelope) bool     { return true }
+
+// A DOMAIN THAT MISPLACES ITS RECORDS IS CAUGHT.
+//
+// Each arm is a partition function that ships silently until a layout divides
+// the domain: a record answered in another partition is misfiled on its own
+// log; one answered as a framework record is one that could never be told
+// apart on the wrong log; a barrier or a node gate named for a partition reads
+// as misfiled on every other log it is appended to; and a scope path placed
+// elsewhere is a deferral the record's own partition never probes.
+func TestTheSuiteCatchesADomainThatMisplacesItsRecords(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		domain statelog.Domain
+		names  string
+	}{
+		"a widget placed in another partition": {
+			domain: misplaced{controlDomain{}}, names: "places its own widget record in tracker.001",
+		},
+		"a widget answered as a framework record": {
+			domain: unplaced{controlDomain{}}, names: "is a framework record",
+		},
+		"a barrier named for a partition": {
+			domain: placedFramework{controlDomain{}}, names: "places a barrier record",
+		},
+		"a node gate named for a partition": {
+			domain: placedFramework{controlDomain{}}, names: "places a " + controlGateKind + " record",
+		},
+		"a scope path placed in another partition": {
+			domain: scopeElsewhere{controlDomain{}}, names: "places the path",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := control()
+			c.Domain = tc.domain
+			errs := statelogtest.Placement(c)
+			var found bool
+			for _, err := range errs {
+				if strings.Contains(err.Error(), tc.names) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("the suite did not name %q for %s: %v", tc.names, name, errs)
+			}
+		})
+	}
+	// THE CONTROL, placed as it says, draws nothing: a case that objected to
+	// every domain would pass every arm above.
+	if errs := statelogtest.Placement(control()); len(errs) != 0 {
+		t.Errorf("the control is reported misplaced: %v", errs)
+	}
+}
+
+// elsewhere is a partition of the control's space that its layout does not
+// carry — "another partition" from where the control's one log is.
+var elsewhere = statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+
+type misplaced struct{ controlDomain }
+
+func (misplaced) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	if env.Kind != "widget" {
+		return statelog.PartitionID{}, false
+	}
+	return elsewhere, true
+}
+
+type unplaced struct{ controlDomain }
+
+func (unplaced) PartitionOf(statelog.Layout, statelog.Envelope) (statelog.PartitionID, bool) {
+	return statelog.PartitionID{}, false
+}
+
+type placedFramework struct{ controlDomain }
+
+func (placedFramework) PartitionOf(l statelog.Layout, _ statelog.Envelope) (statelog.PartitionID, bool) {
+	return l.OnlyPartition("control"), true
+}
+
+type scopeElsewhere struct{ controlDomain }
+
+func (scopeElsewhere) ScopePartition(statelog.Layout, string) (statelog.PartitionID, bool) {
+	return elsewhere, true
+}

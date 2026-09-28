@@ -30,8 +30,9 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
-			Domain:  search.Domain{},
-			Applier: search.NewApplier(),
+			Domain:     search.Domain{},
+			Generation: search.GenerationRecord{},
+			Applier:    search.NewApplier(),
 			// Migrate is nil: these tables ship in the replicated
 			// estate's own migration, so a fresh store already has
 			// them. A domain that created its tables from test code
@@ -54,7 +55,7 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 // nothing certifies nothing.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: pub, Store: db, Log: search.Domain{}.Stream().Name,
+		Publisher: pub, Store: db, Log: statelog.EstateStream(search.Domain{}).Name,
 		// THE SUITE'S ONE NODE, applied through its own end: the corpus is
 		// one document, below the index's minimum, so the step decides
 		// nothing whatever it reads.

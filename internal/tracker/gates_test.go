@@ -192,13 +192,13 @@ func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	// stopped applier never reaches.
 	onLog := func(node string, want bool) {
 		t.Helper()
-		evicted, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{}, r.log, node)
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{}, statelog.EstateStream(tracker.Domain{}), r.log, node)
 		if err != nil || !found || evicted != want {
 			t.Fatalf("%s's standing read off the log = evicted %v, found %v (%v), "+
 				"want evicted %v", node, evicted, found, err, want)
 		}
 	}
-	if _, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{}, r.log, "node-b"); err != nil || found {
+	if _, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{}, statelog.EstateStream(tracker.Domain{}), r.log, "node-b"); err != nil || found {
 		t.Fatalf("a node never gated has a standing on the log: found %v, %v", found, err)
 	}
 

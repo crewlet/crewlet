@@ -58,7 +58,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
 	}
-	spec := tracker.Domain{}.Stream()
+	spec := estateSpec(tracker.Domain{})
 	log, err := q.DomainLog(t.Context(), spec.Name)
 	if err != nil {
 		t.Fatalf("open the log: %v", err)

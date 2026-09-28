@@ -166,7 +166,7 @@ func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 // the domain, so read from the register rather than from a running log.
 func streamKeepsGateReserve(stream string) bool {
 	for _, domain := range registeredDomains() {
-		if domain.Stream().Name == stream {
+		if estateSpec(domain).Name == stream {
 			return statelog.KeepsGateReserve(domain)
 		}
 	}

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -80,12 +79,9 @@ const (
 	VectorLogDuplicates = 2 * time.Minute
 )
 
-// Stream is the vector domain's compacted changelog.
-func (Domain) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:          topics.TrackerVectorsStream,
-		Subjects:      []string{topics.TrackerVectorsWildcard},
-		SubjectPrefix: topics.TrackerVectorsPrefix,
+// StreamShape is what every one of the vector domain's compacted changelogs is.
+func (Domain) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
 		MaxBytes:      VectorLogMaxBytes,
 		MaxPerSubject: 1,
 		MaxAge:        VectorLogMaxAge,
@@ -97,6 +93,34 @@ func (Domain) Stream() statelog.StreamSpec {
 		// would be a row nothing writes and nothing reads.
 		ArbitratedKinds: nil,
 	}
+}
+
+// PartitionOf is the partition a vector record belongs to: the one partition
+// that carries the vector domain's log ([statelog.Layout.OnlyPartition]).
+//
+// EVERY RECORD THIS LOG CARRIES IS THE DOMAIN'S OWN — an embed, a forget, and
+// the index's centroids, reassign and measure records — because it keeps no
+// eviction and no generation record and has no read index to append a
+// barrier. A barrier is still answered as the framework's, belonging to
+// whichever log it is on, so the answer does not depend on which domains
+// happen to read linearizably. This build keys no source to a partition, so a
+// layout that divides the vectors places nothing: every record answers the
+// zero partition, which no log carries, rather than being guessed onto a log.
+func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	if env.Kind == statelog.BarrierKind {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
+}
+
+// ScopePartition is the partition a scope path lies in — where
+// [Domain.PartitionOf] places its record — or none for the domain's own root,
+// which names every vector on whichever log the record is written to.
+func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
+	if path == ScopeRoot {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
 }
 
 // RecordVersion is the record shape this build reads.
@@ -230,8 +254,10 @@ func (Domain) FeedGroup() string { return "" }
 // removed by a forget record, so there is no permanent deletion marker to
 // consult and no guarding row a first write has to see. It publishes
 // additively and arbitrates nothing.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{},
+//
+// spec is the log the publisher writes, whose checkpoint the seam reads.
+func NewRows(db *store.DB, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec,
 		func(context.Context, *sql.Tx, statelog.Subject) (bool, bool, error) {
 			return false, false, nil
 		})

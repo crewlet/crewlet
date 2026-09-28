@@ -494,7 +494,7 @@ func gateLogFor(running *runningDomain, publisher *statelog.Publisher, db *store
 	nodeID string, rec *metrics.Recorder) (gateLog, error) {
 
 	name := running.domain.Name()
-	gl := gateLog{domain: name, stream: running.domain.Stream().Name}
+	gl := gateLog{domain: name, stream: running.spec.Name}
 	switch name {
 	case tracker.Domain{}.Name():
 		w, err := tracker.NewWriter(tracker.WriterDeps{

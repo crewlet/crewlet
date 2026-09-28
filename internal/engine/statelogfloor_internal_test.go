@@ -295,7 +295,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 
 	s := e.native.Load().log
 	name := tracker.Domain{}.Name()
-	spec := tracker.Domain{}.Stream()
+	spec := estateSpec(tracker.Domain{})
 	running := s.Domain(name)
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -452,7 +452,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	artefactAt := func(seq uint64) statelog.Manifest {
 		m := statelog.Manifest{Domains: map[string]statelog.DomainPosition{}}
 		for _, domain := range registeredDomains() {
-			m.Domains[domain.Name()] = statelog.DomainPosition{Stream: domain.Stream().Name}
+			m.Domains[domain.Name()] = statelog.DomainPosition{Stream: estateSpec(domain).Name}
 		}
 		m.Domains[name] = statelog.DomainPosition{Stream: spec.Name, Seq: seq}
 		return m

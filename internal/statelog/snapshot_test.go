@@ -112,7 +112,7 @@ func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: probeDomain{},
+			Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health { return h.health },
 		}},
 		DB:            h.db,
@@ -683,7 +683,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 			Replay:          statelog.ReplayStrict,
 		}},
 	}}
-	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}}}
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
 
 	req := statelog.OfferRequest{
 		Need:            map[string]uint64{"probe": 1},

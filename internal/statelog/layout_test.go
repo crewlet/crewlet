@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -597,5 +598,256 @@ func TestALayoutIsRecordedUnderItsDocumentedKeys(t *testing.T) {
 	if err := missing.Validate(); !errors.Is(err, statelog.ErrInvalidLayout) {
 		t.Fatalf("a record with no layout in it decoded to one that validates (%v); "+
 			"it would read as layout 0's whole estate", err)
+	}
+}
+
+// namedDomain is the probe domain under another name and shape, so a case can
+// instantiate a layout's logs of a domain the layout carries.
+type namedDomain struct {
+	probeDomain
+	name  string
+	shape statelog.StreamShape
+}
+
+func (d namedDomain) Name() string                      { return d.name }
+func (d namedDomain) StreamShape() statelog.StreamShape { return d.shape }
+
+// trackerShaped is a domain named as the tracker is, with the budget the cases
+// divide.
+func trackerShaped(budget int64) namedDomain {
+	shape := probeDomain{}.StreamShape()
+	shape.MaxBytes = budget
+	return namedDomain{name: "tracker", shape: shape}
+}
+
+// A LOG'S STREAM IS ITS DOMAIN'S SHAPE UNDER THE NAMES THE LAYOUT GIVES IT.
+//
+// Everything but the names and the ceiling is the domain's and is the same on
+// every one of its logs — the replay, the arbitration, the bounds and the
+// window are what the framework reads and writes the log by. The names are the
+// layout's grammar, so a log of one partition is never addressed as another's.
+func TestAStreamSpecIsTheDomainsShapeUnderTheLayoutsNames(t *testing.T) {
+	t.Parallel()
+	d := trackerShaped(1 << 30)
+	for _, tc := range []struct {
+		layout statelog.Layout
+		log    statelog.LogID
+	}{
+		{layoutZero(), statelog.LogID{Domain: "tracker", Partition: statelog.EstatePartition}},
+		{layoutOne(), statelog.LogID{Domain: "tracker", Partition: mustParse(t, "tracker.007")}},
+		{layoutOne(), statelog.LogID{Domain: "tracker", Partition: mustParse(t, "company.000")}},
+	} {
+		spec := tc.layout.StreamSpec(d, tc.log)
+		name, prefix := tc.layout.Stream(tc.log)
+		wildcard := topics.PartitionLogWildcard(tc.layout.Number,
+			string(tc.log.Partition.Space), int(tc.log.Partition.Index), tc.log.Domain)
+		if spec.Name != name || spec.SubjectPrefix != prefix ||
+			!slices.Equal(spec.Subjects, []string{wildcard}) {
+			t.Errorf("%s of layout %d is (%q, %q, %v), and the grammar names it (%q, %q, %q)",
+				tc.log, tc.layout.Number, spec.Name, spec.SubjectPrefix, spec.Subjects,
+				name, prefix, wildcard)
+		}
+		if err := spec.Instantiates(d); err != nil {
+			t.Errorf("%s of layout %d is not an instance of its own domain: %v",
+				tc.log, tc.layout.Number, err)
+		}
+		if want := tc.layout.LogShare("tracker", d.shape.MaxBytes); spec.MaxBytes != want {
+			t.Errorf("%s of layout %d reserves %d bytes, and its share is %d",
+				tc.log, tc.layout.Number, spec.MaxBytes, want)
+		}
+	}
+	// A COPY OF THE ARBITRATED KINDS: a spec that shared the domain's slice
+	// would let one log's caller rewrite what every log arbitrates.
+	spec := layoutZero().StreamSpec(d, statelog.LogID{Domain: "tracker", Partition: statelog.EstatePartition})
+	spec.ArbitratedKinds[0] = "rewritten"
+	if d.shape.ArbitratedKinds[0] == "rewritten" {
+		t.Error("a log's spec shares its domain's arbitrated kinds, so one log's " +
+			"caller rewrote them for every log")
+	}
+}
+
+// A LOG THE LAYOUT DOES NOT CARRY, OR ANOTHER DOMAIN'S, HAS NO STREAM.
+//
+// The zero spec is what every constructor's validation refuses, so a caller
+// that asked for a log the layout lacks is stopped where it builds rather than
+// handed a stream under a guessed name.
+func TestAStreamSpecOfALogTheLayoutDoesNotCarryIsRefused(t *testing.T) {
+	t.Parallel()
+	d := trackerShaped(1 << 30)
+	for name, tc := range map[string]struct {
+		layout statelog.Layout
+		log    statelog.LogID
+	}{
+		"a partition past the space's count": {layoutOne(),
+			statelog.LogID{Domain: "tracker", Partition: mustParse(t, "tracker.064")}},
+		"a space the domain has no log in": {layoutOne(),
+			statelog.LogID{Domain: "tracker", Partition: mustParse(t, "pages.003")}},
+		"another domain's log": {layoutOne(),
+			statelog.LogID{Domain: "vectors", Partition: mustParse(t, "tracker.003")}},
+		"layout 0's key under a partitioned layout": {layoutOne(),
+			statelog.LogID{Domain: "tracker", Partition: statelog.EstatePartition}},
+	} {
+		spec := tc.layout.StreamSpec(d, tc.log)
+		if err := spec.Validate(); err == nil {
+			t.Errorf("%s: %s of layout %d was given the stream %q", name, tc.log,
+				tc.layout.Number, spec.Name)
+		}
+	}
+}
+
+// A DOMAIN'S BUDGET IS DIVIDED EVENLY ACROSS ITS LOGS, AND ITS LOGS TOGETHER
+// RESERVE NO MORE THAN IT.
+//
+// A ceiling is a reservation the broker takes in full at create, so the sum
+// over a domain's logs is what the domain costs every broker member holding
+// them. Divided by a SPACE's partitions instead, the tracker's one company log
+// would take the tracker's whole budget beside its 64 tracker-space logs, and
+// the vectors' pages-space logs the vectors' whole budget again.
+func TestALogsShareDividesItsDomainsBudgetAcrossItsLogs(t *testing.T) {
+	t.Parallel()
+	const budget = int64(64<<30) + 7 // not a multiple of any count, so the rounding shows
+	for _, tc := range []struct {
+		layout statelog.Layout
+		domain string
+		logs   int64
+	}{
+		{layoutZero(), "tracker", 1},
+		{layoutOne(), "tracker", 64 + 1},
+		{layoutOne(), "vectors", 64 + 16},
+		{layoutOne(), "pages", 16},
+		{layoutFull(), "vectors", 2 * statelog.MaxPartitions},
+	} {
+		share := tc.layout.LogShare(tc.domain, budget)
+		if got := int64(len(tc.layout.LogsOf(tc.domain))); got != tc.logs {
+			t.Fatalf("layout %d gives %s %d logs, want %d", tc.layout.Number, tc.domain, got, tc.logs)
+		}
+		total := share * tc.logs
+		if total < budget || total-budget >= tc.logs {
+			t.Errorf("layout %d: %s's %d logs at %d bytes each reserve %d against a "+
+				"budget of %d — the share must cover the budget and exceed it by "+
+				"less than a byte a log", tc.layout.Number, tc.domain, tc.logs,
+				share, total, budget)
+		}
+	}
+	if share := layoutOne().LogShare("absent", budget); share != 0 {
+		t.Errorf("a domain the layout does not carry is given a share of %d", share)
+	}
+}
+
+// EVERY LOG OF A LAYOUT, ONCE, IN PARTITION ORDER AND THEN DOMAIN ORDER, and a
+// domain's logs are exactly its entries in that walk.
+func TestAllLogsWalksEveryPartitionsLogsInOrder(t *testing.T) {
+	t.Parallel()
+	l := layoutOne()
+	all := l.AllLogs()
+	if want := 2*64 + 2*16 + 1; len(all) != want {
+		t.Fatalf("layout 1 walks %d logs, want %d", len(all), want)
+	}
+	seen := map[string]bool{}
+	for i, log := range all {
+		if seen[log.String()] {
+			t.Errorf("%s is walked twice", log)
+		}
+		seen[log.String()] = true
+		if i > 0 && log.Partition == all[i-1].Partition {
+			continue
+		}
+		if i > 0 && log.Partition.String() < all[i-1].Partition.String() {
+			t.Errorf("%s is walked after %s", log, all[i-1])
+		}
+	}
+	for _, domain := range []string{"tracker", "vectors", "pages"} {
+		var want []statelog.LogID
+		for _, log := range all {
+			if log.Domain == domain {
+				want = append(want, log)
+			}
+		}
+		if got := l.LogsOf(domain); !slices.Equal(got, want) {
+			t.Errorf("LogsOf(%s) = %d logs, and the walk holds %d of them", domain, len(got), len(want))
+		}
+	}
+}
+
+// ONLY A LAYOUT THAT GIVES A DOMAIN ONE LOG PLACES IT WITHOUT A KEY.
+//
+// It is the whole partition function of an unkeyed domain, so the answer under
+// a layout that divides the domain must be a partition no layout carries —
+// never one of the domain's logs picked by a guess.
+func TestOnlyPartitionAnswersOnlyWhereThereIsOneLog(t *testing.T) {
+	t.Parallel()
+	if got := layoutZero().OnlyPartition("tracker"); got != statelog.EstatePartition {
+		t.Errorf("layout 0 places the tracker in %q, want %s", got, statelog.EstatePartition)
+	}
+	one := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{"tracker"}},
+		{Space: statelog.SpacePages, Partitions: 4, Domains: []string{"pages"}},
+	}}
+	if got := one.OnlyPartition("tracker"); got != mustParse(t, "company.000") {
+		t.Errorf("a layout with one tracker log places it in %q", got)
+	}
+	for _, domain := range []string{"pages", "absent"} {
+		if got := one.OnlyPartition(domain); got.Valid() {
+			t.Errorf("a layout with no single %s log places it in %s", domain, got)
+		}
+	}
+}
+
+// A DOMAIN'S LAYOUT-0 LOG IS NAMED AS IT HAS ALWAYS BEEN, AT ITS WHOLE BUDGET.
+//
+// EstateStream is what a domain's own code and its suites address layout 0's
+// log by, so it has to be the stream the engine's layout 0 provisions — a
+// domain alone in the estate space is named exactly as it is beside the others,
+// and its share is its budget either way.
+func TestEstateStreamIsTheDomainsLayoutZeroLog(t *testing.T) {
+	t.Parallel()
+	d := trackerShaped(3 << 30)
+	alone := statelog.EstateStream(d)
+	beside := layoutZero().StreamSpec(d, statelog.LogID{Domain: "tracker", Partition: statelog.EstatePartition})
+	if alone.Name != topics.TrackerLogStream || alone.SubjectPrefix != topics.TrackerLogPrefix {
+		t.Errorf("the tracker's layout-0 log is %q under %q, want %q under %q",
+			alone.Name, alone.SubjectPrefix, topics.TrackerLogStream, topics.TrackerLogPrefix)
+	}
+	if alone.Name != beside.Name || alone.MaxBytes != beside.MaxBytes || alone.MaxBytes != 3<<30 {
+		t.Errorf("alone the tracker's layout-0 log is %q at %d bytes; beside the others "+
+			"it is %q at %d — want one stream at the whole %d",
+			alone.Name, alone.MaxBytes, beside.Name, beside.MaxBytes, int64(3<<30))
+	}
+}
+
+// A SPEC IS A LOG OF A DOMAIN ONLY IF EVERY SETTING BUT THE CEILING IS THE
+// DOMAIN'S.
+//
+// The replay loop, the arbitration, the per-subject and age bounds and the
+// duplicate window are each chosen from the DOMAIN's declaration by whatever
+// reads or writes the log, so a spec that differs in any is a log those
+// choices are wrong for — and no loop can see that from the inside.
+func TestASpecOfAnotherShapeIsNotALogOfTheDomain(t *testing.T) {
+	t.Parallel()
+	d := trackerShaped(1 << 30)
+	base := func() statelog.StreamSpec {
+		return layoutZero().StreamSpec(d, statelog.LogID{Domain: "tracker", Partition: statelog.EstatePartition})
+	}
+	if err := base().Instantiates(d); err != nil {
+		t.Fatalf("the domain's own log is refused: %v", err)
+	}
+	smaller := base()
+	smaller.MaxBytes = 1 << 20
+	if err := smaller.Instantiates(d); err != nil {
+		t.Errorf("a log at another ceiling is refused, and the ceiling is the one "+
+			"setting a log may have of its own: %v", err)
+	}
+	for name, mutate := range map[string]func(*statelog.StreamSpec){
+		"another duplicate window": func(s *statelog.StreamSpec) { s.Duplicates = time.Second },
+		"other arbitrated kinds":   func(s *statelog.StreamSpec) { s.ArbitratedKinds = nil },
+		"another replay protocol": func(s *statelog.StreamSpec) {
+			s.Replay, s.MaxPerSubject, s.MaxAge = statelog.ReplayCompacted, 1, time.Hour
+		},
+	} {
+		spec := base()
+		mutate(&spec)
+		if err := spec.Instantiates(d); err == nil {
+			t.Errorf("a spec with %s is accepted as a log of the domain", name)
+		}
 	}
 }

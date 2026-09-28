@@ -39,7 +39,7 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 	}
 	for _, name := range s.order {
 		running := s.domains[name]
-		want := running.domain.Stream().Name
+		want := running.spec.Name
 		in, _, err := e.reanchorInputs(t.Context(), running)
 		if err != nil {
 			t.Fatalf("read %s's inputs: %v", name, err)
@@ -196,7 +196,7 @@ func TestOnlyAPeerHoldingHistoryTheLogDoesNotCountsAsAhead(t *testing.T) {
 func TestAReanchorOfAStreamThatCannotBeReadRefuses(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	stream := search.Domain{}.Stream().Name
+	stream := estateSpec(search.Domain{}).Name
 	if err := js.DeleteStream(t.Context(), stream); err != nil {
 		t.Fatalf("delete the stream: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	trackerStream := tracker.Domain{}.Stream().Name
+	trackerStream := estateSpec(tracker.Domain{}).Name
 
 	// FIRST BOOT: history on the tracker's log.
 	e, back := bootNode(t, &b, cfg)
@@ -413,7 +413,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	trackerStream := tracker.Domain{}.Stream().Name
+	trackerStream := estateSpec(tracker.Domain{}).Name
 	watched := &tracker.Notify{
 		Kind:     tracker.ChangeStatus,
 		Snapshot: tracker.Snapshot{Key: "ENG-1", Assignee: "ceo", Watchers: []string{"cfo"}},
@@ -599,7 +599,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
-	stream := running.domain.Stream().Name
+	stream := running.spec.Name
 	for i, node := range []string{"node-p", "node-q"} {
 		if res, err := e.native.Load().writer.EvictNode(t.Context(), fmt.Sprintf("op-%d", i), node); err != nil ||
 			res.Outcome != statelog.OutcomeApplied {
@@ -609,7 +609,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 	lost := running.runner.StreamCreatedAt()
 	own := running.runner.Committed()
 
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(tracker.Domain{}))
 	s.publishPositions(t.Context())
 	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrStreamRecreated) {
 		t.Fatalf("after the rebuild the tracker's identity is %v, want the rebuild", err)
@@ -735,7 +735,7 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
 	}
 
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(tracker.Domain{}))
 	s.publishPositions(t.Context())
 	_, err := e.native.Load().writer.EvictNode(t.Context(), "op-refused", "node-y")
 	requireRebuiltLogRefusal(t, err)
@@ -743,7 +743,7 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 	if named == nil {
 		t.Fatalf("the refusal names no live instant: %v", err)
 	}
-	view, err := e.ReanchorStatus(t.Context(), tracker.Domain{}.Stream().Name)
+	view, err := e.ReanchorStatus(t.Context(), estateSpec(tracker.Domain{}).Name)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 	}
 
 	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: tracker.Domain{}.Stream().Name, Confirm: named[1], By: "ops-1",
+		Stream: estateSpec(tracker.Domain{}).Name, Confirm: named[1], By: "ops-1",
 	})
 	if err != nil {
 		t.Fatalf("Reanchor confirming the instant the refusal named: %v", err)
@@ -805,9 +805,9 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	}
 	trackerBefore := readCursorRow(t, e, tracker.Domain{}.Name())
 
-	rebuildLog(t, js, pages.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(pages.Domain{}))
 	s.publishPositions(t.Context())
-	stream := pages.Domain{}.Stream().Name
+	stream := estateSpec(pages.Domain{}).Name
 	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
@@ -908,7 +908,7 @@ func TestARefusedReanchorLeavesTheDomainServing(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	_, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: tracker.Domain{}.Stream().Name, Confirm: "2020-01-01T00:00:00Z",
+		Stream: estateSpec(tracker.Domain{}).Name, Confirm: "2020-01-01T00:00:00Z",
 		By: "ops-1",
 	})
 	if !errors.Is(err, statelog.ErrReanchorRefused) {
@@ -957,7 +957,7 @@ func appendEvictionAs(t *testing.T, running *runningDomain, opID, node string,
 	if err != nil {
 		t.Fatalf("encode the record: %v", err)
 	}
-	spec := running.domain.Stream()
+	spec := running.spec
 	wire := statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}
 	seq, _, err := running.log.Append(t.Context(), spec.SubjectPrefix+"."+wire.String(),
 		opID, nil, record)
@@ -975,7 +975,7 @@ type cursorRow struct {
 
 func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 	t.Helper()
-	stream := e.native.Load().log.Domain(domain).domain.Stream().Name
+	stream := e.native.Load().log.Domain(domain).spec.Name
 	at, created, _, err := statelog.CursorFor(t.Context(), e.backends.Store.Replicated(), stream)
 	if err != nil {
 		t.Fatalf("read %s's checkpoint: %v", domain, err)
@@ -1043,7 +1043,7 @@ func TestTwoNodesCannotOpenOneGeneration(t *testing.T) {
 	e, js := aRunningNode(t)
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
-	spec := running.domain.Stream()
+	spec := running.spec
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)

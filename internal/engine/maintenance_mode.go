@@ -271,7 +271,7 @@ func maintenanceStreams() []string {
 	domains := registeredDomains()
 	out := make([]string, 0, len(domains))
 	for _, domain := range domains {
-		out = append(out, domain.Stream().Name)
+		out = append(out, estateSpec(domain).Name)
 	}
 	return out
 }

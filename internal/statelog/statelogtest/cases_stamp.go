@@ -73,18 +73,18 @@ func Stamped(t *testing.T, new Factory) error {
 			"decide through", name)
 	}
 	db := openEstate(t, c)
-	stream := c.Domain.Stream().Name
+	stream := c.spec().Name
 	at := statelog.Position{Stream: stream, Generation: SuiteGeneration}
 	if err := seedCheckpoint(t.Context(), db, at); err != nil {
 		t.Fatalf("place %s's checkpoint at generation %d: %v", name, SuiteGeneration, err)
 	}
-	rows, err := c.Rows(db)
+	rows, err := c.Rows(db, c.spec())
 	if err != nil {
 		t.Fatalf("build %s's read seam: %v", name, err)
 	}
 	log := &recordingLog{last: map[string]uint64{}}
 	deps := statelog.Deps{
-		Domain: c.Domain, Log: log, Rows: rows,
+		Domain: c.Domain, Spec: c.spec(), Log: log, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
 		Waiter: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
 		NodeID:     SuiteWriter,
@@ -93,7 +93,7 @@ func Stamped(t *testing.T, new Factory) error {
 	// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps one: what
 	// is under test is what the decision writes, not the log's room.
 	if statelog.KeepsGateReserve(c.Domain) {
-		reserve, reserveErr := statelog.NewReserve(c.Domain.Stream().Name,
+		reserve, reserveErr := statelog.NewReserve(c.spec().Name,
 			func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
 		if reserveErr != nil {
 			t.Fatalf("build a reserve over %s: %v", name, reserveErr)

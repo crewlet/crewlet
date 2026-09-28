@@ -35,7 +35,7 @@ func TestAVersionOnePeerAppliesTheVectorsAndDefersTheIndex(t *testing.T) {
 	t.Parallel()
 	const dim, model = 16, "version-embed"
 	rng := rand.New(rand.NewPCG(8, 8))
-	generation := statelog.Position{Stream: search.Domain{}.Stream().Name,
+	generation := statelog.Position{Stream: statelog.EstateStream(search.Domain{}).Name,
 		Generation: 1, Seq: 2}.Packed()
 	records := []search.VectorRecord{
 		embedRecord(search.SourcePage, "p1", model, randomEmbedding(rng, dim)),
@@ -96,7 +96,7 @@ func TestAnIndexsRecordsWaitBehindItsDeferredCentroids(t *testing.T) {
 	t.Parallel()
 	const dim, model = 16, "nested-embed"
 	rng := rand.New(rand.NewPCG(9, 9))
-	generation := statelog.Position{Stream: search.Domain{}.Stream().Name,
+	generation := statelog.Position{Stream: statelog.EstateStream(search.Domain{}).Name,
 		Generation: 1, Seq: 1}.Packed()
 	later := indexRecordOver(model, dim)
 	later.V = search.RecordVersion + 1 // a later build's reshaped centroids
@@ -212,7 +212,7 @@ func runLog(t *testing.T, db *store.DB, domain statelog.Domain, payloads [][]byt
 		t.Fatal(err)
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: domain, Applier: search.NewApplier(), Fetch: log, Log: log,
+		Domain: domain, Spec: statelog.EstateStream(domain), Applier: search.NewApplier(), Fetch: log, Log: log,
 		Node: db, DB: db.Replicated(),
 		Checkpoint: statelog.Position{Generation: 1}, Metrics: recorder,
 	})

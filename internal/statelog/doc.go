@@ -314,11 +314,12 @@
 // a rebuild is a lost update, it is caught within the call, as (ii) is. A node
 // that knows its log is not the one its rows are keyed to refuses every write,
 // `wrong_stream`, and every read with the same word — until an operator
-// re-anchors THAT log ([Reanchor]), which moves its domain alone into a new
+// re-anchors THAT log ([Reanchor]), which moves that log alone into a new
 // generation on the live stream and re-keys the runner to it, so every number
-// above is in one space again. A generation is per domain for exactly this
+// above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
-// domain's would key that domain to a stream it never read.
+// log's — another domain's, or the same domain's in another partition — would
+// key it to a stream it never read.
 //
 // The instant is not the only way the premise fails. A broker restored from a
 // copy older than this node's rows keeps its stream, instant and all, and the

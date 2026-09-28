@@ -83,9 +83,9 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		}
 		d := statelog.DomainInputs{
 			Domain:     name,
-			Stream:     running.domain.Stream().Name,
+			Stream:     running.spec.Name,
 			Generation: running.runner.Committed().Generation,
-			Replay:     running.domain.Stream().Replay,
+			Replay:     running.spec.Replay,
 			Reserved:   statelog.KeepsGateReserve(running.domain),
 		}
 		if stats, err := running.log.Stats(ctx); err == nil {
@@ -240,7 +240,7 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 		if running == nil {
 			continue
 		}
-		op, open, err := r.fleet.Maintenance(ctx, running.domain.Stream().Name)
+		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
 		if err != nil || !open {
 			continue
 		}
@@ -429,7 +429,7 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 		if running == nil {
 			continue
 		}
-		op, open, err := r.fleet.Maintenance(ctx, running.domain.Stream().Name)
+		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
 		if err != nil || !open || op.EnteredAt.IsZero() {
 			continue
 		}

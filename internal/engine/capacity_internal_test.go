@@ -503,7 +503,7 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 		return err
 	}
 	for _, domain := range []statelog.Domain{tracker.Domain{}, pages.Domain{}} {
-		stream := domain.Stream().Name
+		stream := estateSpec(domain).Name
 		err := open(stream, target)
 		if err == nil {
 			t.Fatalf("a %d-byte target on %s, holding %d bytes, was accepted — "+
@@ -530,7 +530,7 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 				"least that works", stream)
 		}
 	}
-	if err := open(search.Domain{}.Stream().Name, target); err != nil {
+	if err := open(estateSpec(search.Domain{}).Name, target); err != nil {
 		t.Errorf("the vector changelog keeps no reserve, and a target above what "+
 			"it holds was refused: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestATargetUnderTheFloorIsRefused(t *testing.T) {
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 1 << 20, MaxBytes: 4 << 30}
 	for _, domain := range registeredDomains() {
-		stream := domain.Stream().Name
+		stream := estateSpec(domain).Name
 		e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 		_, err := e.openCapacity(ctx, CapacityRequest{
 			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling) - 1, By: "ops-3",
@@ -861,10 +861,10 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 	e.backends.Queue = host
 	e.native.Store(&native{log: &stateLog{
 		order:   []string{domain.Name()},
-		domains: map[string]*runningDomain{domain.Name(): {domain: domain}},
+		domains: map[string]*runningDomain{domain.Name(): {domain: domain, spec: estateSpec(domain)}},
 		volume:  t.TempDir(),
 	}})
-	return e, fleet, domain.Stream().Name
+	return e, fleet, estateSpec(domain).Name
 }
 
 // A TARGET PAST int64 IS THE UNBOUNDED SETTING WEARING A LARGE NUMBER.

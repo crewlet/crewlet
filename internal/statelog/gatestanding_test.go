@@ -142,7 +142,7 @@ func TestAHeldOperationIsJudgedInsideTheSnapshot(t *testing.T) {
 			judge:  func(*sql.Tx, statelog.OpEntry) error { return nil }},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rows, err := statelog.NewRows(h.db, tc.domain, nil)
+			rows, err := statelog.NewRows(h.db, tc.domain, specOf(tc.domain), nil)
 			if err != nil {
 				t.Fatalf("NewRows: %v", err)
 			}

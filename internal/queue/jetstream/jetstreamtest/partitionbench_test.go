@@ -333,11 +333,11 @@ func domainSpec(domain string, s estateShape) (statelog.StreamSpec, int64, int) 
 	switch domain {
 	case "tracker":
 		// The company's log is sized like a tracker partition's.
-		return tracker.Domain{}.Stream(), trackerTotalBytes, s.tracker
+		return statelog.EstateStream(tracker.Domain{}), trackerTotalBytes, s.tracker
 	case "vectors":
-		return search.Domain{}.Stream(), vectorsTotalBytes, s.tracker + s.tracker/4
+		return statelog.EstateStream(search.Domain{}), vectorsTotalBytes, s.tracker + s.tracker/4
 	default:
-		return pages.Domain{}.Stream(), pagesTotalBytes, s.tracker / 4
+		return statelog.EstateStream(pages.Domain{}), pagesTotalBytes, s.tracker / 4
 	}
 }
 

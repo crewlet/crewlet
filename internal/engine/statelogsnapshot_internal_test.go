@@ -486,7 +486,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 			e, js := aRunningNode(t)
 			return e, func() {
 				running := e.native.Load().log.Domain(tracker.Domain{}.Name())
-				spec := running.domain.Stream()
+				spec := running.spec
 				if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 					res.Outcome != statelog.OutcomeApplied {
 					t.Fatalf("a write before the rebuild: %+v, %v", res, err)

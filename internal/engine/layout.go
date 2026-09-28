@@ -122,9 +122,18 @@ func LayoutZero() statelog.Layout {
 	for _, d := range domains {
 		names = append(names, d.Name())
 	}
-	return statelog.Layout{Number: 0, Spaces: []statelog.SpaceLayout{
-		{Space: statelog.SpaceEstate, Partitions: 1, Domains: names},
-	}}
+	return statelog.EstateLayout(names...)
+}
+
+// estateLog is a registered domain's one log under [LayoutZero], and
+// estateSpec its stream — named as it has always been, at the domain's whole
+// declared budget.
+func estateLog(domain statelog.Domain) statelog.LogID {
+	return statelog.LogID{Domain: domain.Name(), Partition: statelog.EstatePartition}
+}
+
+func estateSpec(domain statelog.Domain) statelog.StreamSpec {
+	return LayoutZero().StreamSpec(domain, estateLog(domain))
 }
 
 // DefaultLayoutOne is the first partitioned layout at the default counts:

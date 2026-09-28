@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -251,10 +252,20 @@ type Manifest struct {
 	Artifact string `json:"artifact"`
 }
 
-// Registered is one domain as the framework holds it, for the surfaces that
-// walk every domain rather than serving one.
+// Registered is one LOG as the framework holds it — a domain on one of its
+// logs — for the surfaces that walk every log rather than serving one.
+//
+// All three of Domain, Log and Spec, and they must agree ([Registered.Check]):
+// a manifest names a position by the log's key and reads it out of the copy by
+// the spec's stream, so a registration whose two named different logs would
+// stamp one log's checkpoint under another's key.
 type Registered struct {
 	Domain Domain
+
+	// Log is which log this is, and its key ([LogID.String]) is what a
+	// manifest and an offer name it by. Spec is that log's stream.
+	Log  LogID
+	Spec StreamSpec
 
 	// Health is this node's readiness for that domain, which is what the
 	// snapshot gate reads: how far behind, whether it has ever drained,
@@ -267,6 +278,29 @@ type Registered struct {
 	// handle describes another stream the moment one is recreated — and a
 	// value nobody reads is one that goes stale without anybody noticing,
 	// which is exactly what a reanchor under a running node did to it.
+}
+
+// Check refuses a registration whose domain, log and stream are not one log.
+func (r Registered) Check() error {
+	switch {
+	case r.Domain == nil:
+		return fmt.Errorf("statelog: a registered log has no domain")
+	case r.Log.Domain != r.Domain.Name():
+		return fmt.Errorf("statelog: the %s domain is registered as the log %q, "+
+			"which is not one of its logs", r.Domain.Name(), r.Log)
+	}
+	return r.Spec.Instantiates(r.Domain)
+}
+
+// checkRegistered refuses a set of registrations any one of which fails
+// [Registered.Check].
+func checkRegistered[K comparable](regs map[K]Registered) error {
+	for _, r := range regs {
+		if err := r.Check(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SnapshotDeps is everything the snapshot loop needs that it does not own.
@@ -327,6 +361,9 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 		return nil, fmt.Errorf("statelog: the snapshot loop cannot count the fleet")
 	case d.Interval <= 0:
 		return nil, fmt.Errorf("statelog: the snapshot loop has no interval")
+	}
+	if err := checkRegistered(maps.Collect(slices.All(d.Domains))); err != nil {
+		return nil, err
 	}
 	logger := loggerOr(d.Logger)
 	now := d.Now
@@ -524,7 +561,7 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 	positions := make(map[string]DomainPosition, len(s.deps.Domains))
 	for _, reg := range s.deps.Domains {
 		h := reg.Health()
-		spec := reg.Domain.Stream()
+		spec := reg.Spec
 		// EVERY CHECKPOINT FIELD OUT OF THE FILE, the identity included.
 		//
 		// The generation and the sequence were read from the copy and the
@@ -553,7 +590,7 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 		if h.Lag != nil {
 			pos.LastSeqAtTake = h.Position.Seq + *h.Lag
 		}
-		positions[reg.Domain.Name()] = pos
+		positions[reg.Log.String()] = pos
 	}
 	return positions, nil
 }
@@ -573,7 +610,7 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 
 	for _, reg := range s.deps.Domains {
 		h := reg.Health()
-		name := reg.Domain.Name()
+		name := reg.Log.String()
 		if h.Deferred > 0 {
 			return &ErrSkipped{Reason: SkipDeferred, Detail: fmt.Sprintf(
 				"this node holds %d record(s) of %s it cannot decode, from "+
@@ -709,7 +746,7 @@ func (s *Snapshotter) newest() (Manifest, bool, error) {
 // generation a joiner asking this node would accept it at.
 func (s *Snapshotter) current(m Manifest) bool {
 	for _, reg := range s.deps.Domains {
-		at, named := m.Domains[reg.Domain.Name()]
+		at, named := m.Domains[reg.Log.String()]
 		if !named || at.Generation != reg.Health().Position.Generation {
 			return false
 		}

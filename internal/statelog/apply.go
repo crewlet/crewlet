@@ -130,6 +130,13 @@ type RunnerDeps struct {
 	Applier Applier
 	Fetch   Fetcher
 
+	// Spec is the log this runner applies: the domain's shape on one of
+	// its logs ([Layout.StreamSpec]). One runner per LOG, because every
+	// per-stream thing it keeps — the checkpoint row, the generation, the
+	// anchors, the stream identity — is the log's, and a domain with a log
+	// in each of two partitions has two of each.
+	Spec StreamSpec
+
 	// Log is the same stream read by position, which is how the applier
 	// establishes that the log still holds, at its checkpoint's sequence,
 	// the record it consumed there before it applies anything past it
@@ -495,8 +502,8 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 	case d.DB == nil:
 		return nil, fmt.Errorf("statelog: applier has no database")
 	}
-	spec := d.Domain.Stream()
-	if err := spec.Validate(); err != nil {
+	spec := d.Spec
+	if err := spec.Instantiates(d.Domain); err != nil {
 		return nil, err
 	}
 	checkpoint := d.Checkpoint
@@ -508,7 +515,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		return nil, fmt.Errorf("%w: %s's applier was handed a checkpoint on %s",
 			ErrWrongStream, d.Domain.Name(), checkpoint.Stream)
 	}
-	t, err := newTables(d.Domain)
+	t, err := newTables(d.Domain, spec)
 	if err != nil {
 		return nil, err
 	}

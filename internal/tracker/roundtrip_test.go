@@ -92,7 +92,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := tracker.Domain{}.Stream()
+	spec := statelog.EstateStream(tracker.Domain{})
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is not a
 	// property under test: the shipped default is sized for five years of a
 	// real company's growth, and an embedded broker in a temporary
@@ -129,7 +129,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	nodeID string) *roundTrip {
 
 	t.Helper()
-	rows, err := tracker.NewRows(db)
+	rows, err := tracker.NewRows(db, statelog.EstateStream(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -165,7 +165,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	r.metrics = recorder
 	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
 	// engine's does, so every write here is admitted as a production one is.
-	reserve, err := statelog.NewReserve(tracker.Domain{}.Stream().Name,
+	reserve, err := statelog.NewReserve(statelog.EstateStream(tracker.Domain{}).Name,
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -175,7 +175,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	}
 	r.reserve = reserve
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Log: log, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
 		Admission:     reserve,
@@ -205,7 +205,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	// about is one record's journey from writer to row, and the barrier
 	// belongs to the cases that have a quorum to commit against.
 	logReader, err := statelogtest.LocalReader(tracker.Domain{}, db.Replicated(),
-		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1})
+		statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
@@ -321,7 +321,7 @@ func (r *roundTrip) apply(from, last uint64) {
 				Writer: env.Writer,
 			},
 			Position: statelog.Position{
-				Stream: tracker.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
+				Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: env.Gen, Seq: seq,
 			},
 			Payload:  payload,
 			StoredAt: storedAt,
@@ -352,7 +352,7 @@ func (r *roundTrip) apply(from, last uint64) {
 				INSERT INTO tracker_ops (op_id, subject, position, applied_at)
 				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
 				env.OpID,
-				tracker.Domain{}.Stream().SubjectPrefix+"."+env.Subject.String(),
+				statelog.EstateStream(tracker.Domain{}).SubjectPrefix+"."+env.Subject.String(),
 				record.Position.Packed(), store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
@@ -362,7 +362,7 @@ func (r *roundTrip) apply(from, last uint64) {
 				ON CONFLICT (stream, subject) DO UPDATE SET
 					anchor = MAX(anchor, excluded.anchor)`,
 				record.Position.Stream,
-				tracker.Domain{}.Stream().SubjectPrefix+"."+env.Subject.String(),
+				statelog.EstateStream(tracker.Domain{}).SubjectPrefix+"."+env.Subject.String(),
 				record.Position.Packed()); err != nil {
 				return err
 			}
@@ -602,7 +602,7 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	rows, err := tracker.NewRows(r.db)
+	rows, err := tracker.NewRows(r.db, statelog.EstateStream(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("NewRows: %v", err)
 	}
@@ -621,7 +621,7 @@ func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 		return snap.Checkpoint
 	}
 	at := func(seq uint64) statelog.Position {
-		return statelog.Position{Stream: tracker.Domain{}.Stream().Name, Seq: seq}
+		return statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Seq: seq}
 	}
 
 	if got, want := checkpoint(), at(r.consumed); got != want {

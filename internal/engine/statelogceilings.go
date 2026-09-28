@@ -188,7 +188,7 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 			return nil, err
 		}
 		asked[domain.Name()] = ceiling
-		holds, found, err := host.DomainStreamCeiling(ctx, domain.Stream().Name)
+		holds, found, err := host.DomainStreamCeiling(ctx, estateSpec(domain).Name)
 		switch {
 		case err != nil:
 			// CARRIED AS ABSENT. The provision that follows asks the
@@ -510,7 +510,7 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 		"ceiling: %s needed %d bytes and %s. %s. %s; the state logs that already "+
 		"exist keep the ceilings they were created with, and no Tier A setting "+
 		"changes them: %w",
-		domain.Name(), domain.Stream().Name, ceiling.Bytes, had, from, remedy, cause)
+		domain.Name(), estateSpec(domain).Name, ceiling.Bytes, had, from, remedy, cause)
 }
 
 // roomLeft is what the broker had to reserve when it refused, in the terms an

@@ -451,6 +451,13 @@ const DefaultResolveBudget = 5 * time.Second
 // Deps is everything a publisher needs that it does not own.
 type Deps struct {
 	Domain Domain
+
+	// Spec is the log this publisher writes: the domain's shape on one of
+	// its logs ([Layout.StreamSpec]). One publisher per LOG — its prefix is
+	// every subject's, and its arbitration is against that stream's own
+	// sequences, which mean nothing on a sibling partition's log.
+	Spec StreamSpec
+
 	Log    Appender
 	Rows   Rows
 	Fence  Fence
@@ -519,8 +526,8 @@ func NewPublisher(d Deps) (*Publisher, error) {
 			"carries no gate record and a reserve would only refuse its ordinary "+
 			"writes early", d.Domain.Name())
 	}
-	spec := d.Domain.Stream()
-	if err := spec.Validate(); err != nil {
+	spec := d.Spec
+	if err := spec.Instantiates(d.Domain); err != nil {
 		return nil, err
 	}
 	logger := loggerOr(d.Logger)
@@ -1749,7 +1756,7 @@ func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) er
 // helper; both are the same one line, and the ANCHOR's key comes from the
 // table helper on both sides — which is the pairing that has to agree.
 func (p *Publisher) subjectOf(s Subject) string {
-	return p.prefix + "." + s.String()
+	return wireSubject(p.prefix, s)
 }
 
 // observe records the write path's own instruments.

@@ -442,7 +442,7 @@ func rebuildLogged(h *applyHarness) *lockedBuffer {
 	}
 	logs := &lockedBuffer{}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
 		Node: h.db, DB: h.db.Replicated(),
 		Checkpoint: cp.At, CheckpointStoredAt: cp.StoredAt,
 		Metrics: h.metrics, Logger: slog.New(slog.NewJSONHandler(logs, nil)),
@@ -725,7 +725,7 @@ func TestARunnerStandsAtItsCheckpointBeforeItsLoopRuns(t *testing.T) {
 
 	// AND A CHECKPOINT ON ANOTHER STREAM IS REFUSED rather than stood at.
 	_, err = statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
 		Node: h.db, DB: h.db.Replicated(),
 		Checkpoint: statelog.Position{Stream: "CREWLET_SOMEONE_ELSES_LOG", Generation: 1},
 	})

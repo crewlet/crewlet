@@ -13,9 +13,10 @@ import (
 // The publisher's three seams: what it reads, what refuses a write it must not
 // make, and what tells a dropped record from a lost race.
 
-// NewRows builds the publisher's read seam.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{}, pageGuards)
+// NewRows builds the publisher's read seam over the log spec names — the one
+// the publisher writes, whose checkpoint and anchors the seam reads.
+func NewRows(db *store.DB, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec, pageGuards)
 }
 
 // pageGuards answers the two object-level facts a first write needs.

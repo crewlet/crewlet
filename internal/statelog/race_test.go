@@ -543,7 +543,7 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 // seam rather than inferred by whichever loop got there first.
 func TestAStreamSpecAndItsReplayProtocolMustAgree(t *testing.T) {
 	t.Parallel()
-	base := func() statelog.StreamSpec { return probeDomain{}.Stream() }
+	base := func() statelog.StreamSpec { return specOf(probeDomain{}) }
 	for name, tc := range map[string]struct {
 		spec statelog.StreamSpec
 		want string

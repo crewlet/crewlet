@@ -48,7 +48,7 @@ func TestLayoutZeroIsTodaysEstateUnderTodaysNames(t *testing.T) {
 			t.Errorf("layout 0's %s log is keyed %q; the positions register, the manifest "+
 				"and the floors key it %q today", d.Name(), got, d.Name())
 		}
-		spec := d.Stream()
+		spec := estateSpec(d)
 		stream, prefix := l.Stream(log)
 		if stream != spec.Name || prefix != spec.SubjectPrefix {
 			t.Errorf("layout 0 names the %s log (%q, %q); the domain declares (%q, %q)",

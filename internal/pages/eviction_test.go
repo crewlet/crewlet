@@ -40,7 +40,7 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 	// stopped applier never reaches.
 	onLog := func(want bool) {
 		t.Helper()
-		evicted, found, err := statelog.EvictedOnLog(t.Context(), pages.Domain{}, r.log, "node-b")
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), pages.Domain{}, statelog.EstateStream(pages.Domain{}), r.log, "node-b")
 		if err != nil || !found || evicted != want {
 			t.Fatalf("node-b's standing read off the log = evicted %v, found %v (%v), "+
 				"want evicted %v", evicted, found, err, want)

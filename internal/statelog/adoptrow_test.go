@@ -144,7 +144,7 @@ func writeLegacyAdoption(t *testing.T, db *store.DB, started time.Time, complete
 // lostBefore is the probe ledger's watermark in db's replicated estate.
 func lostBefore(t *testing.T, db *store.DB) (time.Time, bool) {
 	t.Helper()
-	rows, err := statelog.NewRows(db, probeDomain{}, nil)
+	rows, err := statelog.NewRows(db, probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}

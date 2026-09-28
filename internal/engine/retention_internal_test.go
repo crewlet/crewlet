@@ -476,7 +476,7 @@ func barrierOn(t *testing.T, running *runningDomain) uint64 {
 		t.Fatalf("encode a barrier: %v", err)
 	}
 	seq, _, err := running.log.Append(t.Context(),
-		running.domain.Stream().SubjectPrefix+"."+statelog.BarrierKind, "", nil, body)
+		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body)
 	if err != nil {
 		t.Fatalf("append a barrier: %v", err)
 	}
@@ -617,7 +617,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 			}
 
 			committed := running.runner.Committed()
-			stream := running.domain.Stream().Name
+			stream := running.spec.Name
 			now := time.Now().UTC()
 			floors, err := back.Fleet.Floors(t.Context())
 			if err != nil {
@@ -1088,9 +1088,9 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 
 	// THE PAGES LOG IS REBUILT AND RE-ANCHORED, which moves the pages domain
 	// to the next generation and leaves its published row behind it.
-	rebuildLog(t, js, s.Domain(pagesName).domain.Stream())
+	rebuildLog(t, js, s.Domain(pagesName).spec)
 	s.publishPositions(t.Context())
-	stream := s.Domain(pagesName).domain.Stream().Name
+	stream := s.Domain(pagesName).spec.Name
 	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
@@ -1219,7 +1219,7 @@ func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
 	pagesName := pages.Domain{}.Name()
 
-	rebuildLog(t, js, s.Domain(pagesName).domain.Stream())
+	rebuildLog(t, js, s.Domain(pagesName).spec)
 	s.publishPositions(t.Context())
 
 	report := r.Report(t.Context())

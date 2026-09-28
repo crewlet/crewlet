@@ -202,7 +202,7 @@ func TestARetryOfAWriteThatLandedIsAnsweredWithIt(t *testing.T) {
 // arrives.
 func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	t.Helper()
-	rows, err := tracker.NewRows(r.db)
+	rows, err := tracker.NewRows(r.db, statelog.EstateStream(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -215,7 +215,7 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	fence.Committed = r.waiter.Committed
 	lost := &lossyLog{Appender: r.log}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Log: lost, Rows: rows, Fence: fence,
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Log: lost, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(r.db), Waiter: r.waiter, Identity: r.waiter,
 		NodeID: r.nodeID, Admission: r.reserve,
 		Generation:    func() uint32 { return 0 },

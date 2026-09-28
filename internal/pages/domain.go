@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -62,15 +61,12 @@ const PagesLogMaxBytes = 4 << 30
 // on the server.
 const PagesLogDuplicates = 2 * time.Minute
 
-// Stream is the knowledge base's log.
-func (Domain) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:          topics.PagesLogStream,
-		Subjects:      []string{topics.PagesLogWildcard},
-		SubjectPrefix: topics.PagesLogPrefix,
-		MaxBytes:      PagesLogMaxBytes,
-		Duplicates:    PagesLogDuplicates,
-		Replay:        statelog.ReplayStrict,
+// StreamShape is what every one of the knowledge base's logs is.
+func (Domain) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
+		MaxBytes:   PagesLogMaxBytes,
+		Duplicates: PagesLogDuplicates,
+		Replay:     statelog.ReplayStrict,
 		// FIVE OF THE SIX KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an
@@ -91,6 +87,33 @@ func arbitratedKinds() []string {
 		}
 	}
 	return out
+}
+
+// PartitionOf is the partition a record belongs to: the one partition that
+// carries the knowledge base's log ([statelog.Layout.OnlyPartition]) — or,
+// for the framework's own records, none.
+//
+// This build keys no container to a partition, so a layout that divides the
+// knowledge base places nothing: every record answers the zero partition,
+// which no log carries, rather than being guessed onto a log. A barrier, an eviction or readmission and a generation record are each
+// log's own, and name no partition — see the tracker's [Domain.PartitionOf]
+// for why.
+func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	switch ObjectKind(env.Kind) {
+	case KindBarrier, KindEviction, KindGeneration:
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
+}
+
+// ScopePartition is the partition a scope path lies in — where
+// [Domain.PartitionOf] places its object — or none for the domain term, which
+// names everything on whichever log the record is written to.
+func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
+	if path == pathDomain {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
 }
 
 // RecordVersion is the record shape this build reads.

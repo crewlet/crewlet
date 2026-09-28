@@ -25,7 +25,7 @@ func TestEveryPageReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	behind, err := statelogtest.LocalReaderBehind(pages.Domain{}, r.db.Replicated(),
-		statelog.Position{Stream: pages.Domain{}.Stream().Name, Generation: 1, Seq: 1},
+		statelog.Position{Stream: statelog.EstateStream(pages.Domain{}).Name, Generation: 1, Seq: 1},
 		100_000)
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)

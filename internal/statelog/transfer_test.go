@@ -189,7 +189,7 @@ func TestAnAbandonedTransferIsNeverReportedAsASnapshot(t *testing.T) {
 // manifest alone.
 func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 	t.Parallel()
-	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}}}
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
 	base := func() statelog.Offer {
 		return statelog.Offer{Manifest: statelog.Manifest{
 			V: statelog.ManifestVersion,

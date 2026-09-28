@@ -19,9 +19,10 @@ import (
 // would be a second chance to get it wrong, in the package least likely to be
 // the one somebody re-reads.
 //
-// What is genuinely this domain's is the pair of GUARDS below.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{}, taskGuards)
+// What is genuinely this domain's is the pair of GUARDS below. spec is the log
+// the publisher writes, whose checkpoint and anchors the seam reads.
+func NewRows(db *store.DB, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec, taskGuards)
 }
 
 // taskGuards answers the two object-level facts a first write needs.

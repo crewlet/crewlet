@@ -332,7 +332,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		t.Fatalf("recorder: %v", err)
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:     domain,
+		Domain: domain, Spec: specOf(domain),
 		Applier:    applier,
 		Fetch:      fetch,
 		Log:        fetch,
@@ -372,7 +372,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	// AT THE CHECKPOINT THE ROWS HOLD, as the engine builds a restarting
 	// node's runner — generation 1 on a node that never committed.
 	checkpoint, found, err := statelog.CheckpointOf(h.t.Context(), h.db.Replicated(),
-		domain.Stream().Name)
+		specOf(domain).Name)
 	if err != nil {
 		h.t.Fatalf("read the checkpoint: %v", err)
 	}
@@ -380,7 +380,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		checkpoint.At.Generation = 1
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:             domain,
+		Domain: domain, Spec: specOf(domain),
 		Applier:            h.applier,
 		Fetch:              h.fetch,
 		Log:                h.fetch,
@@ -947,8 +947,8 @@ func TestACompactedDomainStepsOverHolesAndSupersedesItsDeferrals(t *testing.T) {
 // compactedDomain is the other replay protocol.
 type compactedDomain struct{ probeDomain }
 
-func (compactedDomain) Stream() statelog.StreamSpec {
-	s := probeDomain{}.Stream()
+func (compactedDomain) StreamShape() statelog.StreamShape {
+	s := probeDomain{}.StreamShape()
 	s.Replay = statelog.ReplayCompacted
 	s.MaxPerSubject = 1
 	s.MaxAge = time.Hour
@@ -2117,7 +2117,7 @@ func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
 			"run applied 2 and closed with a redelivery of 1", got)
 	}
 	at, _, found, err := statelog.CursorFor(h.t.Context(), h.db.Replicated(),
-		probeDomain{}.Stream().Name)
+		specOf(probeDomain{}).Name)
 	if err != nil {
 		t.Fatalf("read the checkpoint: %v", err)
 	}
@@ -2200,7 +2200,7 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	h := newApplyHarness(t, probeDomain{})
 	flaky := &flakyEstate{inner: h.db.Replicated(), refusals: 3}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:     probeDomain{},
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,
@@ -2340,7 +2340,7 @@ func waitForDrain(t *testing.T, h *applyHarness, want bool, what string) {
 func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	rows, err := statelog.NewRows(h.db, probeDomain{}, nil)
+	rows, err := statelog.NewRows(h.db, probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}

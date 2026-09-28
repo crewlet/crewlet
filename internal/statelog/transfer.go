@@ -117,7 +117,7 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered) error {
 				"this node cannot read, and once those sequences are trimmed it "+
 				"never can", name, pos.RecordVersion, want)
 		}
-		if spec := reg.Domain.Stream(); pos.Replay != spec.Replay {
+		if spec := reg.Spec; pos.Replay != spec.Replay {
 			return fmt.Errorf("%s was written under the %q replay protocol and "+
 				"this build declares %q — adopting a compacted position into a "+
 				"strict loop is a permanent stall", name, pos.Replay, spec.Replay)

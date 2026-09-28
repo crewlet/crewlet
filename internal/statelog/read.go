@@ -362,6 +362,7 @@ type Incomplete struct {
 // Reader answers reads at a level, over one domain.
 type Reader struct {
 	domain  Domain
+	stream  string
 	tables  tables
 	db      readStore
 	index   *ReadIndex
@@ -379,6 +380,12 @@ type readStore interface {
 // ReaderDeps is everything a reader needs that it does not own.
 type ReaderDeps struct {
 	Domain Domain
+
+	// Spec is the log this reader answers for: the domain's shape on one of
+	// its logs ([Layout.StreamSpec]). A read's positions, its barrier and
+	// the deferrals its coverage probe reads are all that one log's.
+	Spec StreamSpec
+
 	DB     readStore
 	Index  *ReadIndex
 	Waiter Waiter
@@ -407,7 +414,7 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 	case d.Health == nil:
 		return nil, fmt.Errorf("statelog: reader has no health source")
 	}
-	t, err := newTables(d.Domain)
+	t, err := newTables(d.Domain, d.Spec)
 	if err != nil {
 		return nil, err
 	}
@@ -417,6 +424,7 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 	}
 	return &Reader{
 		domain:  d.Domain,
+		stream:  d.Spec.Name,
 		tables:  t,
 		db:      d.DB,
 		index:   d.Index,
@@ -523,10 +531,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 
 	// 4. The wait, holding nothing.
 	if !target.IsZero() {
-		if target.Stream != "" && target.Stream != r.domain.Stream().Name {
+		if target.Stream != "" && target.Stream != r.stream {
 			return r.refuse(h, q, RefuseWrongStream,
 				fmt.Sprintf("this read names a position on %s and this domain "+
-					"reads %s", target.Stream, r.domain.Stream().Name), started)
+					"reads %s", target.Stream, r.stream), started)
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, ReadBudget)
 		err := r.waiter.WaitCommitted(waitCtx, target)
@@ -677,14 +685,14 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 	// is the caller's bug rather than a state that clears — see
 	// [RefuseWrongStream].
 	if !q.MinPosition.IsZero() && q.MinPosition.Stream != "" &&
-		q.MinPosition.Stream != r.domain.Stream().Name {
+		q.MinPosition.Stream != r.stream {
 
 		return Position{}, &Refused{
 			Code: RefuseWrongStream, Level: q.Level,
 			Detail: fmt.Sprintf("this read floors at a position on %s and this "+
 				"domain reads %s — a position names the log it is a position "+
 				"in, and this one is not from this log",
-				q.MinPosition.Stream, r.domain.Stream().Name),
+				q.MinPosition.Stream, r.stream),
 		}
 	}
 	switch q.Level {

@@ -25,7 +25,7 @@ func TestAnEmbedDutyGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) {
 	valid := EmbedDeps{
 		Publisher: &statelog.Publisher{},
 		Store:     &store.DB{},
-		Log:       Domain{}.Stream().Name,
+		Log:       statelog.EstateStream(Domain{}).Name,
 		Standing: func(context.Context) (LogStanding, error) {
 			return LogStanding{}, nil
 		},

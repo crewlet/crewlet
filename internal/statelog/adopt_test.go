@@ -157,7 +157,7 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: from.domain,
+			Domain: from.domain, Log: logOf(from.domain), Spec: specOf(from.domain),
 			Health: func() statelog.Health {
 				return statelog.Health{
 					Position: statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200},
@@ -221,7 +221,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 	t.Helper()
 	h.answered.Store(0)
 	a, err := statelog.NewAdopter(statelog.AdoptDeps{
-		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
+		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}},
 		LivePath: h.joinPath,
 		NodeID:   "joiner",
 		Conn:     h.nc,
@@ -796,7 +796,7 @@ func (h *joinHarness) joinerOps(t *testing.T) int64 {
 // publisher asks it through.
 func (h *joinHarness) joinerLostBefore(t *testing.T) (time.Time, bool) {
 	t.Helper()
-	rows, err := statelog.NewRows(h.joiner, probeDomain{}, nil)
+	rows, err := statelog.NewRows(h.joiner, probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}

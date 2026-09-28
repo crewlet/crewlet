@@ -42,7 +42,7 @@ import (
 // lets a live peer's generation be abandoned, so the caller decides nothing on
 // an answer it could not get.
 func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
-	log statelog.StandingLog, nodes []string) (map[string]bool, error) {
+	spec statelog.StreamSpec, log statelog.StandingLog, nodes []string) (map[string]bool, error) {
 
 	out := make(map[string]bool, len(nodes))
 	if len(nodes) == 0 || !domain.ClaimsIdentity() {
@@ -60,7 +60,7 @@ func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 		}
 	}
 	for _, node := range nodes {
-		onLog, found, err := statelog.EvictedOnLog(ctx, domain, log, node)
+		onLog, found, err := statelog.EvictedOnLog(ctx, domain, spec, log, node)
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +134,7 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 				return nil, fmt.Errorf("engine: %s's log is not open, so whether the "+
 					"nodes ahead of this one on it are evicted cannot be read", name)
 			}
-			if evicted, err = s.evictedOn(ctx, domain, log, candidates); err != nil {
+			if evicted, err = s.evictedOn(ctx, domain, estateSpec(domain), log, candidates); err != nil {
 				return nil, err
 			}
 		}

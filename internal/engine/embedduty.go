@@ -262,7 +262,7 @@ func (d *embedDuty) tick(ctx context.Context) {
 		// duty keeps beside its vectors (ADR-0022): the one replicated
 		// file and the one vector log this layout has.
 		Store:    d.engine.backends.Store,
-		Log:      search.Domain{}.Stream().Name,
+		Log:      d.log.spec.Name,
 		Standing: d.standing,
 		Embedder: provider,
 		Model:    model,

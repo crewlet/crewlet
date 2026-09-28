@@ -104,12 +104,12 @@ func Evictions(t *testing.T, new Factory) error {
 			t.Fatalf("%s's gate record is not declared as installing a gate, "+
 				"so a build that cannot decode it would defer it", name)
 		}
-		at := statelog.Position{Stream: c.Domain.Stream().Name, Generation: 1, Seq: seq}
+		at := statelog.Position{Stream: c.spec().Name, Generation: 1, Seq: seq}
 		stored := base.Add(time.Duration(seq) * time.Minute)
 		rec := statelog.Record{Envelope: env, Position: at, Payload: body, StoredAt: stored}
 		opts := statelog.ApplyOptions{
 			Now: stored, StoredAt: stored,
-			ArbitratedKinds: c.Domain.Stream().ArbitratedKinds,
+			ArbitratedKinds: c.spec().ArbitratedKinds,
 			MaxVariables:    db.Caps().MaxVariables,
 		}
 		if err := w.Tx(t.Context(), func(tx *sql.Tx) error {

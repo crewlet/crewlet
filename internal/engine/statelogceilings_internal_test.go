@@ -392,7 +392,7 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			host := sizingHost{budget: tc.budget, unread: tc.unread, held: map[string]int64{
-				tracker.Domain{}.Stream().Name: trackerHolds,
+				estateSpec(tracker.Domain{}).Name: trackerHolds,
 			}}
 			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
 			if err != nil {
@@ -443,7 +443,7 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 			}
 			host.held = map[string]int64{}
 			for _, domain := range registeredDomains() {
-				host.held[domain.Stream().Name] = first[domain.Name()].Bytes
+				host.held[estateSpec(domain).Name] = first[domain.Name()].Bytes
 			}
 			again, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
 			if err != nil {
@@ -489,7 +489,7 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 	create := func(name string, bytes int64) {
 		for _, domain := range registeredDomains() {
 			if domain.Name() == name {
-				host.held[domain.Stream().Name] = bytes
+				host.held[estateSpec(domain).Name] = bytes
 				host.budget.Committed += bytes
 				return
 			}
@@ -511,7 +511,7 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 
 	again := boot()
 	for _, domain := range registeredDomains() {
-		holds := host.held[domain.Stream().Name]
+		holds := host.held[estateSpec(domain).Name]
 		if reported := again[domain.Name()].Bytes; reported != holds {
 			t.Errorf("%s's stream holds %d and every boot now reports it against "+
 				"%d — a capacity difference nobody made", domain.Name(), holds, reported)
@@ -586,7 +586,7 @@ func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	}
 	var reserved int64
 	for _, domain := range registeredDomains() {
-		held, found, err := q.DomainStreamCeiling(t.Context(), domain.Stream().Name)
+		held, found, err := q.DomainStreamCeiling(t.Context(), estateSpec(domain).Name)
 		if err != nil || !found {
 			t.Fatalf("%s's stream = (found %v, %v)", domain.Name(), found, err)
 		}

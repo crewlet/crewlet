@@ -81,7 +81,7 @@ func newReader(t *testing.T, db interface {
 }, h func() statelog.Health, waiter statelog.Waiter, index *statelog.ReadIndex) *statelog.Reader {
 	t.Helper()
 	r, err := statelog.NewReader(statelog.ReaderDeps{
-		Domain: probeDomain{},
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		DB:     db,
 		Index:  index,
 		Waiter: waiter,
@@ -150,7 +150,7 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			t.Parallel()
 			var appends atomic.Int64
 			h := newHarness(t)
-			index, err := statelog.NewReadIndex(probeDomain{},
+			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
 				&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
@@ -195,7 +195,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 	t.Parallel()
 	var appends atomic.Int64
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{},
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
 		&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -251,7 +251,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 func TestAStallBelowTheFloorServesNoRead(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -313,7 +313,7 @@ func (c *countingAppends) LastSeq(ctx context.Context, subject string) (uint64, 
 func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, refusingAppender{}, noCeiling(t), probeEncode,
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), refusingAppender{}, noCeiling(t), probeEncode,
 		h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -365,7 +365,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var appends atomic.Int64
-	index, err := statelog.NewReadIndex(probeDomain{},
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
 		&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -405,7 +405,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 func TestALinearizableReadWaitsForThePositionItsBarrierEstablished(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestADeferredScopeRefusesAPointReadAndUncertifiesASetRead(t *testing.T) {
 	}
 	var appends atomic.Int64
 	broker := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{},
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
 		&countingAppends{inner: broker.log, n: &appends}, noCeiling(t), probeEncode, broker.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -734,7 +734,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var appends atomic.Int64
-	index, err := statelog.NewReadIndex(probeDomain{},
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
 		&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -804,7 +804,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}

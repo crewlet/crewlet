@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -45,7 +46,15 @@ type tables struct {
 // other is a publisher that never finds an anchor at all — every arbitrated
 // write falls through to the last-message probe, loops its whole round budget
 // and reports a conflict on an object nobody else touched.
-func (t tables) subjectOf(s Subject) string { return t.prefix + "." + s.String() }
+func (t tables) subjectOf(s Subject) string { return wireSubject(t.prefix, s) }
+
+// wireSubject is a subject as the broker carries it on the log whose subject
+// prefix is prefix: the grammar's ([topics.LogSubject]), and never spelled
+// here, because the publisher, the applier's anchor and the eviction probe each
+// compose one and a second spelling is a key two of them disagree about.
+func wireSubject(prefix string, s Subject) string {
+	return topics.LogSubject(prefix, s.Kind, s.ID)
+}
 
 // identifier is what a domain may call a table. Deliberately narrower than SQL
 // allows: these names are interpolated into statements, so the set is what is
@@ -65,11 +74,27 @@ func validIdentifier(name string) bool {
 	return true
 }
 
-func newTables(d Domain) (tables, error) {
-	spec := d.Stream()
+// newTables is the framework's statements over domain d's tables on ONE of its
+// logs — the one spec names, whose stream keys the checkpoint and whose prefix
+// keys every anchor.
+func newTables(d Domain, spec StreamSpec) (tables, error) {
+	t, err := domainTables(d)
+	if err != nil {
+		return tables{}, err
+	}
+	if err := spec.Instantiates(d); err != nil {
+		return tables{}, err
+	}
+	t.stream, t.prefix = spec.Name, spec.SubjectPrefix
+	return t, nil
+}
+
+// domainTables is domain d's own table names, checked, with no log bound — for
+// what is kept per DOMAIN in a file rather than per log: the operation ledger
+// and the watermark of how far back it lost rows, which are keyed by the
+// ledger's table.
+func domainTables(d Domain) (tables, error) {
 	t := tables{
-		stream:   spec.Name,
-		prefix:   spec.SubjectPrefix,
 		ops:      d.OpsTable(),
 		deferred: d.DeferredTable(),
 		scope:    d.ScopeIndex(),

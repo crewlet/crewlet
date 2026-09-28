@@ -160,7 +160,7 @@ func commentOn(r *roundTrip, taskID, op, id string) (tracker.WriteResult, error)
 // over what arrived, resuming at the artefact's position.
 func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundTrip {
 	t.Helper()
-	stream := tracker.Domain{}.Stream().Name
+	stream := statelog.EstateStream(tracker.Domain{}).Name
 	at, _, _, err := statelog.CursorFor(t.Context(), donor.db.Replicated(), stream)
 	if err != nil {
 		t.Fatalf("read the donor's checkpoint: %v", err)
@@ -169,7 +169,8 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	dir := t.TempDir()
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: declared,
+			Domain: declared, Spec: statelog.EstateStream(declared),
+			Log: statelog.LogID{Domain: declared.Name(), Partition: statelog.EstatePartition},
 			Health: func() statelog.Health {
 				return statelog.Health{Position: at, Drained: true, Lag: &lag}
 			},
@@ -208,7 +209,10 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	}
 	t.Cleanup(func() { _ = joiner.Close() })
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
-		Domains:  map[string]statelog.Registered{"tracker": {Domain: tracker.Domain{}}},
+		Domains: map[string]statelog.Registered{"tracker": {
+			Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}),
+			Log: statelog.LogID{Domain: tracker.Domain{}.Name(), Partition: statelog.EstatePartition},
+		}},
 		LivePath: joiner.ReplicatedPath(),
 		NodeID:   "node-b",
 		Conn:     donor.broker.Conn(),
@@ -287,7 +291,7 @@ func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 	// THE SWEEP, with a cutoff past the row — the arithmetic of a month
 	// passing, done by the job that runs it.
 	sweep, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: tracker.Domain{}, Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.db,
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.db,
 		DB: r.db.Replicated(),
 	})
 	if err != nil {

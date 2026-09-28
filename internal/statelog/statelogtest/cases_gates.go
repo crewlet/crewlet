@@ -262,7 +262,7 @@ func GateAgreement(t *testing.T, new GateFactory) error {
 			"skip, for the reason requireKinds gives")
 	}
 	db := openEstate(t, c.Candidate)
-	stream := c.Domain.Stream().Name
+	stream := c.spec().Name
 	at := func(seq uint64) statelog.Position {
 		return statelog.Position{Stream: stream, Generation: 1, Seq: seq}
 	}
@@ -317,7 +317,7 @@ func applyGateHistory(t *testing.T, c GateCandidate, db *store.DB,
 	opts := statelog.ApplyOptions{
 		Now:             time.Unix(1_700_000_000, 0).UTC(),
 		StoredAt:        time.Unix(1_700_000_000, 0).UTC(),
-		ArbitratedKinds: c.Domain.Stream().ArbitratedKinds,
+		ArbitratedKinds: c.spec().ArbitratedKinds,
 		MaxVariables:    db.Caps().MaxVariables,
 	}
 	var problems []string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -24,9 +25,18 @@ type Domain interface {
 	// idea about each other.
 	Name() string
 
-	// Stream is the stream this domain's records live on, and the replay
-	// protocol its own shape implies.
-	Stream() StreamSpec
+	// StreamShape is what every one of this domain's logs is: the replay
+	// protocol, the arbitrated kinds, the per-subject and age bounds, the
+	// duplicate window, and the domain's WHOLE byte budget.
+	//
+	// A SHAPE AND NOT A STREAM. A layout gives a domain one log per
+	// partition of every space that carries it, so which stream a record
+	// is on — its name, its subjects, its prefix and its share of the
+	// budget — is the layout's to say ([Layout.StreamSpec]) and never the
+	// domain's. What the domain says is everything that is the same on all
+	// of them, which is what makes a partition's log an instance of the
+	// domain rather than a second declaration of it.
+	StreamShape() StreamShape
 
 	// RecordVersion is the highest record version THIS BUILD can decode.
 	// A record above it is retained rather than skipped — see the
@@ -164,6 +174,35 @@ type Domain interface {
 	// trim's `feed_ack_floor` term reads, so the log's trim stalls behind
 	// the replay.
 	FeedGroup() string
+
+	// PartitionOf is the partition of layout l a record BELONGS to, read
+	// from its envelope alone, or false for a FRAMEWORK kind — a barrier,
+	// an eviction or readmission, a generation record — which belongs to
+	// whichever log it is on.
+	//
+	// FROM THE ENVELOPE, for [Domain.InstallsGate]'s reason: the half every
+	// build reads, so a node that cannot decode a record can still say
+	// whether it is on the right log. A record whose answer is another
+	// partition is on the wrong log, and one no probe of its own
+	// partition's deferrals can see — which is why the answer must be the
+	// domain's, from what the record says, and never the log's.
+	//
+	// A PARTITION NO LOG OF l CARRIES — the zero value among them — is the
+	// honest answer from a domain that cannot place the record under l.
+	// It is "another partition" for every log there is, so a reader of it
+	// can only ever keep the record off a log, never guess it onto one.
+	PartitionOf(l Layout, env Envelope) (PartitionID, bool)
+
+	// ScopePartition is the partition of layout l a scope path lies in, or
+	// false for a path that names the LOG itself — a domain or family term
+	// — which lies in whichever log it is written to.
+	//
+	// It is asked of the paths a write declares, because a scope is what a
+	// deferral is filed under and probed by, and the probe runs in one
+	// partition's file: a path naming another partition's object is a
+	// deferral that partition could never see. The same reading of a
+	// partition no log carries holds here.
+	ScopePartition(l Layout, path string) (PartitionID, bool)
 }
 
 // ReplayProtocol is how a domain's stream behaves under replay, and the
@@ -208,22 +247,16 @@ func (r ReplayProtocol) Valid() bool {
 	return false
 }
 
-// StreamSpec is a domain's stream: what the broker is asked for, plus the
-// replay protocol the broker has no field for.
+// StreamShape is what every log of one domain is, whichever partition it is
+// in: what the broker is asked for beyond a name, plus the replay protocol the
+// broker has no field for.
 //
 // THE PROTOCOL IS NOT A STREAM SETTING and this type is where the two meet.
 // The client models replay as a CONSUMER policy, so a stream cannot carry it
 // and the framework has to hold the pair together — which is also the honest
 // place for it, since the protocol is a claim about what the stream's own
 // settings imply rather than one of them.
-type StreamSpec struct {
-	// Name is the stream. Conventionally CREWLET_<DOMAIN>_LOG.
-	Name string
-
-	// Subjects is the subject space this domain publishes into, as the
-	// broker is told it — normally one wildcard.
-	Subjects []string
-
+type StreamShape struct {
 	// ArbitratedKinds are the subject kinds whose writes carry a
 	// per-subject expectation, and therefore the only kinds an anchor is
 	// written for.
@@ -243,19 +276,14 @@ type StreamSpec struct {
 	// its idempotency is its own row guard.
 	ArbitratedKinds []string
 
-	// SubjectPrefix is what a subject's own path is appended to, and it
-	// is DECLARED rather than derived from Subjects.
-	//
-	// Deriving it would mean stripping a wildcard token off a configured
-	// string, which is a parser between the framework and every record it
-	// publishes: a domain that declared two subject spaces, or one
-	// without a trailing wildcard, would silently publish to a subject
-	// no consumer covers and no test would say so.
-	SubjectPrefix string
-
 	// MaxBytes is the ceiling. Crossing it REFUSES an append rather than
 	// dropping the oldest record, so zero — unlimited — is a stream that
 	// fills the volume instead.
+	//
+	// ON A SHAPE IT IS THE DOMAIN'S WHOLE BUDGET, and on a [StreamSpec] it
+	// is one log's share of it ([Layout.LogShare]): a layout that gave
+	// every partition's log the whole budget would reserve it once per
+	// partition on every broker member that holds them.
 	MaxBytes int64
 
 	// MaxPerSubject retains only the newest message per subject, turning
@@ -278,12 +306,78 @@ type StreamSpec struct {
 	Replay ReplayProtocol
 }
 
-// Validate refuses a spec whose settings and protocol disagree.
+// Validate refuses a shape whose settings and protocol disagree, naming the
+// domain it was declared for.
 //
 // The pairing is the whole reason the protocol is a field: a compacted stream
 // read by a strict loop stalls on its first ordinary write, and a log read by
 // a compacted loop accepts a hole that is data loss. Neither loop can detect
 // its own mismatch, so the declaration is checked here, once, at the seam.
+func (s StreamShape) Validate(name string) error {
+	if !s.Replay.Valid() {
+		return fmt.Errorf("statelog: stream %q declares replay %q (want %s or %s)",
+			name, s.Replay, ReplayStrict, ReplayCompacted)
+	}
+	switch s.Replay {
+	case ReplayStrict:
+		if s.MaxPerSubject != 0 {
+			return fmt.Errorf("statelog: stream %q is %s but keeps %d "+
+				"message(s) per subject — a per-subject limit removes an "+
+				"interior sequence, which is the one thing a strict loop "+
+				"treats as a fault", name, ReplayStrict, s.MaxPerSubject)
+		}
+		if s.MaxAge != 0 {
+			return fmt.Errorf("statelog: stream %q is %s and sets max_age %s "+
+				"— an age bound on a log deletes records a node has not "+
+				"applied, and there is no node whose word it takes",
+				name, ReplayStrict, s.MaxAge)
+		}
+	case ReplayCompacted:
+		if s.MaxPerSubject != 1 {
+			return fmt.Errorf("statelog: stream %q is %s but keeps %d "+
+				"message(s) per subject — a compacted domain's stream is a "+
+				"keyed table and keeps exactly one", name, ReplayCompacted,
+				s.MaxPerSubject)
+		}
+	}
+	if s.MaxBytes <= 0 {
+		return fmt.Errorf("statelog: stream %q has no byte ceiling — a log "+
+			"with none fills the volume its own applier commits to", name)
+	}
+	if s.Duplicates <= 0 {
+		return fmt.Errorf("statelog: stream %q sets no duplicate window", name)
+	}
+	return nil
+}
+
+// StreamSpec is ONE LOG's stream: its domain's [StreamShape], instantiated
+// under a layout with the names the grammar gives that log and its share of
+// the domain's budget ([Layout.StreamSpec]).
+type StreamSpec struct {
+	// Name is the stream.
+	Name string
+
+	// Subjects is the subject space this log publishes into, as the
+	// broker is told it — one wildcard.
+	Subjects []string
+
+	// SubjectPrefix is what a subject's own path is appended to, and it
+	// is DECLARED rather than derived from Subjects.
+	//
+	// Deriving it would mean stripping a wildcard token off a configured
+	// string, which is a parser between the framework and every record it
+	// publishes: a spec that named two subject spaces, or one without a
+	// trailing wildcard, would silently publish to a subject no consumer
+	// covers and no test would say so.
+	SubjectPrefix string
+
+	// StreamShape is everything the log shares with every other log of
+	// its domain, MaxBytes being this log's share.
+	StreamShape
+}
+
+// Validate refuses a spec that names no stream or whose shape disagrees with
+// itself.
 func (s StreamSpec) Validate() error {
 	if s.Name == "" {
 		return fmt.Errorf("statelog: stream spec has no name")
@@ -297,38 +391,30 @@ func (s StreamSpec) Validate() error {
 			"from the wildcard would publish to a subject nothing consumes",
 			s.Name)
 	}
-	if !s.Replay.Valid() {
-		return fmt.Errorf("statelog: stream %q declares replay %q (want %s or %s)",
-			s.Name, s.Replay, ReplayStrict, ReplayCompacted)
+	return s.StreamShape.Validate(s.Name)
+}
+
+// Instantiates refuses a spec that is not a log of domain d: every setting but
+// the byte ceiling must be the domain's own, because the loop that reads the
+// log, the arbitration the publisher forms and the duplicate window a retry
+// leans on are all chosen from the DOMAIN's declaration — and a log of another
+// shape is one those choices are wrong for, silently.
+func (s StreamSpec) Instantiates(d Domain) error {
+	if err := s.Validate(); err != nil {
+		return err
 	}
-	switch s.Replay {
-	case ReplayStrict:
-		if s.MaxPerSubject != 0 {
-			return fmt.Errorf("statelog: stream %q is %s but keeps %d "+
-				"message(s) per subject — a per-subject limit removes an "+
-				"interior sequence, which is the one thing a strict loop "+
-				"treats as a fault", s.Name, ReplayStrict, s.MaxPerSubject)
-		}
-		if s.MaxAge != 0 {
-			return fmt.Errorf("statelog: stream %q is %s and sets max_age %s "+
-				"— an age bound on a log deletes records a node has not "+
-				"applied, and there is no node whose word it takes",
-				s.Name, ReplayStrict, s.MaxAge)
-		}
-	case ReplayCompacted:
-		if s.MaxPerSubject != 1 {
-			return fmt.Errorf("statelog: stream %q is %s but keeps %d "+
-				"message(s) per subject — a compacted domain's stream is a "+
-				"keyed table and keeps exactly one", s.Name, ReplayCompacted,
-				s.MaxPerSubject)
-		}
-	}
-	if s.MaxBytes <= 0 {
-		return fmt.Errorf("statelog: stream %q has no byte ceiling — a log "+
-			"with none fills the volume its own applier commits to", s.Name)
-	}
-	if s.Duplicates <= 0 {
-		return fmt.Errorf("statelog: stream %q sets no duplicate window", s.Name)
+	shape := d.StreamShape()
+	switch {
+	case s.Replay != shape.Replay,
+		s.MaxPerSubject != shape.MaxPerSubject,
+		s.MaxAge != shape.MaxAge,
+		s.Duplicates != shape.Duplicates,
+		!slices.Equal(s.ArbitratedKinds, shape.ArbitratedKinds):
+		return fmt.Errorf("statelog: stream %q is not a log of the %s domain: "+
+			"its replay, per-subject bound, age bound, duplicate window or "+
+			"arbitrated kinds differ from the domain's own shape, and every "+
+			"one of them decides how the framework reads and writes that log",
+			s.Name, d.Name())
 	}
 	return nil
 }

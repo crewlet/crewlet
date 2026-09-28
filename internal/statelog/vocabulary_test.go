@@ -62,7 +62,6 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"tracker.partitions: 4",
 		"the SearchPlan is computed from",
 		"partitions_answered",
-		"func partitionOf(project string) int",
 		"tracker_task_home",
 		"a task's home partition is its filed project",
 		"this record is a cross-partition write",
@@ -91,6 +90,7 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"An item promotion marks its parent LAST",
 		"LimitMarkerTTL: time.Minute",
 		"tracker_rank_duplicates_cleared",
+		"PartitionOf(l Layout, env Envelope) (PartitionID, bool)",
 	} {
 		if hits := matchWithdrawn(negative); len(hits) > 0 {
 			t.Errorf("control: %q is live and the matcher flagged it on %v",
@@ -114,7 +114,7 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 	// AND THE SUPPRESSION PATH ITSELF, on inputs whose verdict is known.
 	// The walk below only ever reaches it with real occurrences, so a
 	// suppression that has swallowed everything would report a clean tree.
-	if !offends("internal/somewhere/live.go", `partitionOf\b`) {
+	if !offends("internal/somewhere/live.go", `home_partition`) {
 		t.Error("control: an unallowed occurrence is not reported as one, so " +
 			"every hit in the tree is being suppressed and this guard reports " +
 			"a clean repository whatever it finds")
@@ -201,23 +201,45 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 // A pattern rather than a literal wherever a bare word would catch a live one:
 // the compound forms of `partition` are gone and the word itself is not, so
 // each is anchored to the compound that left.
+//
+// # The partitioned estate brought one of these back, and not the rest
+//
+// A withdrawn design once divided the tracker's log; its vocabulary was retired
+// here when that design was. The partitioned estate is a different design, and
+// it reintroduced exactly one of those names under a meaning it can defend:
+// `partitionOf` was withdrawn because "nothing maps an object to a partition",
+// and [statelog.Domain.PartitionOf] now does — so it left this list, and a
+// live method is its negative control above. Every other entry below was
+// re-read against the new design and stays, with the reason it is STILL wrong
+// written beside it: the new design names an object's partition by its key and
+// its id's birth partition, never by a stored home, and it keeps one log per
+// domain per partition, so a record never straddles two.
 var withdrawn = map[string]string{
-	// The tracker's log was never partitioned: there is one mutation
-	// stream, arbitrated per subject, so there is no partition count to
-	// configure and nothing to route between.
-	`tracker\.partitions`:      "the tracker's log is one stream, arbitrated per subject",
-	`partition_linearizable`:   "a read level per partition, of a log that has one",
-	`partitions_answered`:      "a fan-out over partitions; buckets_answered is the surviving name",
-	`partitions_missing`:       "as above; buckets_missing survives",
-	`partitionOf\b`:            "nothing maps an object to a partition",
-	`home_partition`:           "an object has no home; every node holds the whole corpus",
+	// A partition count is RECORDED in the layout — in the estate map and
+	// every partition file's cursor rows — and changing it is a new layout
+	// drained and split, never an edit. A configuration field for it would
+	// let a restart repartition a company by accident.
+	`tracker\.partitions`: "a partition count is a layout's, recorded and never configured",
+	// The four read levels are per LOG, unchanged by partitioning; a read
+	// across partitions reports the cut it was answered at rather than
+	// adding a fifth level.
+	`partition_linearizable`: "the read levels are per log; a gather reports its cut",
+	`partitions_answered`:    "the search fan-out's coverage is buckets_answered",
+	`partitions_missing`:     "as above; buckets_missing survives",
+	// An object's partition is DERIVED — from its key, and a task's from
+	// the birth partition its id carries — and never stored as a home a
+	// move would have to keep consistent with the rows.
+	`home_partition`:           "an object's partition is derived from its key, never stored",
 	`tracker_task_home`:        "as above",
 	`tracker_task_placement`:   "as above",
 	`scoped_through_partition`: "scoped_through survives; its partition sibling does not",
 	`\bhome partition\b`:       "prose for the same withdrawn idea",
 	`\bhome stream\b`:          "prose for the same withdrawn idea",
 	`\bmixed-home\b`:           "prose for the same withdrawn idea",
-	`\bcross-partition\b`:      "there is one log, so no write crosses anything",
+	// A record's scope lies inside its own partition — a path in another's
+	// is a deferral that partition's probe never sees — so no WRITE crosses
+	// a partition: an effect elsewhere travels as a write decided there.
+	`\bcross-partition\b`: "no write crosses a partition; its scope lies inside its own",
 
 	// The search planner: withdrawn entirely, because every query
 	// consults every bucket and there is nothing to plan.

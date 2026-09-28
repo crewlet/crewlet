@@ -28,7 +28,7 @@ func TestAStopIsWrittenOnceSayingWhatResumesIt(t *testing.T) {
 	h := newApplyHarness(t, gatingDomain{})
 	logs := &lockedBuffer{}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:     gatingDomain{},
+		Domain: gatingDomain{}, Spec: specOf(gatingDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,

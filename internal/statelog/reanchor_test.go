@@ -627,7 +627,7 @@ func newReanchorFixture(t *testing.T) *reanchorFixture {
 
 func (f *reanchorFixture) deps(domain statelog.Domain) statelog.ReanchorDeps {
 	return statelog.ReanchorDeps{
-		Domain: domain, Stream: f.log, Record: probeGeneration{keeps: true},
+		Domain: domain, Spec: specOf(domain), Stream: f.log, Record: probeGeneration{keeps: true},
 		Consumer: f.consumer, Runner: f.runner, DB: f.db.Replicated(),
 		By: "ops-1", NodeID: "node-a",
 	}
@@ -690,17 +690,12 @@ func cursorOf(t *testing.T, db *store.DB, stream string) (statelog.Position, tim
 // moves.
 type secondProbeDomain struct{ probeDomain }
 
-const secondProbeStream = "CREWLET_SECOND_PROBE_LOG"
+const (
+	secondProbeStream = "CREWLET_SECOND_PROBE_LOG"
+	secondProbePrefix = "crewlet.secondprobe.log"
+)
 
 func (secondProbeDomain) Name() string { return "second_probe" }
-
-func (secondProbeDomain) Stream() statelog.StreamSpec {
-	spec := probeDomain{}.Stream()
-	spec.Name = secondProbeStream
-	spec.Subjects = []string{"crewlet.secondprobe.log.>"}
-	spec.SubjectPrefix = "crewlet.secondprobe.log"
-	return spec
-}
 
 // ---- the cases ------------------------------------------------------- //
 
@@ -769,7 +764,7 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	// instant loads the untouched checkpoint and does not stop.
 	secondFetch := newProbeFetch()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: secondProbeDomain{}, Applier: newProbeApplier(),
+		Domain: secondProbeDomain{}, Spec: specOf(secondProbeDomain{}), Applier: newProbeApplier(),
 		Fetch: secondFetch, Log: secondFetch, Node: f.db, DB: f.db.Replicated(),
 		Checkpoint:      statelog.Position{Generation: 1},
 		StreamCreatedAt: secondCreated,
@@ -1377,7 +1372,7 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 	in.StreamCreatedAt, in.KeyedTo, in.Generation, in.Position, in.Highest =
 		rebuilt, born, old.Generation, old.Seq, old.Seq
 	plan, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
-		Domain: probeDomain{}, Stream: newReanchorLog(&order, rebuilt),
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Stream: newReanchorLog(&order, rebuilt),
 		Record: probeGeneration{keeps: true}, Consumer: &reanchorConsumer{},
 		Runner: h.runner, DB: h.db.Replicated(), NodeID: "node-a",
 	}, in, statelog.ReanchorGuard{Confirm: statelog.ConfirmationOf(rebuilt)})
@@ -1592,7 +1587,7 @@ func TestAPassedGenerationNamesTheRemedyThatExists(t *testing.T) {
 		t.Helper()
 		h := newApplyHarness(t, probeDomain{})
 		runner, err := statelog.NewRunner(statelog.RunnerDeps{
-			Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
 			Node: h.db, DB: h.db.Replicated(), Metrics: h.metrics,
 			Checkpoint: statelog.Position{Generation: 1},
 			NodeID:     self,
@@ -1956,7 +1951,7 @@ func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 		return rec
 	}
 	subject := func(rec statelog.GenerationRecord) string {
-		return probeDomain{}.Stream().SubjectPrefix + "." + rec.Subject.String()
+		return specOf(probeDomain{}).SubjectPrefix + "." + rec.Subject.String()
 	}
 	// THE MOST PERMISSIVE THE GUARD CAN BE: the register unreadable and the
 	// operator forcing it, so nothing but the read-back stands in the way.
@@ -2163,7 +2158,7 @@ func TestANodesStandingIsReadOffTheLog(t *testing.T) {
 	}
 	ask := func() (bool, bool) {
 		t.Helper()
-		evicted, found, err := statelog.EvictedOnLog(t.Context(), evictingProbe{}, log, "node-x")
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), evictingProbe{}, specOf(evictingProbe{}), log, "node-x")
 		if err != nil {
 			t.Fatalf("EvictedOnLog: %v", err)
 		}
@@ -2182,7 +2177,7 @@ func TestANodesStandingIsReadOffTheLog(t *testing.T) {
 			"LAST record is its standing", evicted, found)
 	}
 	// A DOMAIN WITH NO GATE has nothing to read.
-	if _, found, err := statelog.EvictedOnLog(t.Context(), probeDomain{}, log, "node-x"); err != nil || found {
+	if _, found, err := statelog.EvictedOnLog(t.Context(), probeDomain{}, specOf(probeDomain{}), log, "node-x"); err != nil || found {
 		t.Fatalf("a domain with no eviction gate answered found=%v, %v", found, err)
 	}
 }
@@ -2225,7 +2220,7 @@ func TestWhoOpenedEachGenerationIsReadOffTheLog(t *testing.T) {
 	open(5, "node-e")
 	read := func(above, through uint32) map[uint32]string {
 		t.Helper()
-		got, err := statelog.GenerationOpeners(t.Context(), probeDomain{},
+		got, err := statelog.GenerationOpeners(t.Context(), probeDomain{}, specOf(probeDomain{}),
 			probeGeneration{keeps: true}, log, above, through)
 		if err != nil {
 			t.Fatalf("GenerationOpeners: %v", err)
@@ -2243,7 +2238,7 @@ func TestWhoOpenedEachGenerationIsReadOffTheLog(t *testing.T) {
 	if got := read(5, 5); len(got) != 0 {
 		t.Fatalf("above 5 = %v, want nothing", got)
 	}
-	if got, err := statelog.GenerationOpeners(t.Context(), probeDomain{},
+	if got, err := statelog.GenerationOpeners(t.Context(), probeDomain{}, specOf(probeDomain{}),
 		probeGeneration{keeps: false}, log, 1, 5); err != nil || len(got) != 0 {
 		t.Fatalf("a domain keeping no generation record = %v, %v, want nothing", got, err)
 	}

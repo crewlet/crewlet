@@ -26,7 +26,7 @@ func newReadHarness(t *testing.T) *readHarness {
 	// it is how `read_level` came to be a word in the answer rather than a
 	// property of it.
 	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
-		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: h.seq})
+		statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1, Seq: h.seq})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}

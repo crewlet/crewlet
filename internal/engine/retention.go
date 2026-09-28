@@ -383,9 +383,9 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 	tombs, _ := r.tombstones(ctx, running, generation)
 	in.Counted = statelog.CountedSet(shared.at,
 		reportedPositions(shared.positions, name), shared.live, tombs)
-	in.Holds = holdsFor(shared.holds, running.domain.Stream().Name)
+	in.Holds = holdsFor(shared.holds, running.spec.Name)
 	in.BackupFloor, in.BackupAt, in.BackupFloorGen, in.HasBackupFloor =
-		r.backupTerm(shared.backups, running.domain.Stream().Name)
+		r.backupTerm(shared.backups, running.spec.Name)
 	in.FeedAckFloor, in.HasFeed, in.FeedReadable = r.feedTerm(ctx, running)
 	in.AgeFloor, err = r.ageFloor(ctx, running.log, stats, r.cfg.MinAge(), shared.at)
 	if err != nil {

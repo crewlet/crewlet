@@ -143,6 +143,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	}
 	plan, err := statelog.Reanchor(ctx, statelog.ReanchorDeps{
 		Domain:   running.domain,
+		Spec:     running.spec,
 		Stream:   reanchorStream{log: running.log},
 		Record:   record,
 		Consumer: running.consumer,
@@ -267,7 +268,7 @@ func (r reanchorStream) CreatedAt(ctx context.Context) (time.Time, error) {
 func (e *Engine) reanchorInputs(ctx context.Context,
 	running *runningDomain) (statelog.ReanchorInputs, []string, error) {
 
-	stream := running.domain.Stream().Name
+	stream := running.spec.Name
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: %s could not be read, "+
@@ -346,7 +347,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
-	openers, err := statelog.GenerationOpeners(ctx, running.domain, enc, running.log,
+	openers, err := statelog.GenerationOpeners(ctx, running.domain, running.spec, enc, running.log,
 		in.Generation, through)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: which generations of %s "+
@@ -359,7 +360,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			candidates = append(candidates, writer)
 		}
 	}
-	evicted, err := n.log.evictedOn(ctx, running.domain, running.log, candidates)
+	evicted, err := n.log.evictedOn(ctx, running.domain, running.spec, running.log, candidates)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether the peers ahead "+
 			"of this node on %s are evicted could not be read, and an evicted "+
@@ -456,9 +457,9 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *na
 	if which, _, _ := in.Case(); which != statelog.ReanchorRestored {
 		return nil
 	}
-	stream := running.domain.Stream().Name
+	stream := running.spec.Name
 	next := max(in.Generation, in.Abandoned) + 1
-	opened, own, err := statelog.OwnGeneration(ctx, running.domain, enc, running.log,
+	opened, own, err := statelog.OwnGeneration(ctx, running.domain, running.spec, enc, running.log,
 		next, n.nodeID)
 	if err != nil {
 		return fmt.Errorf("%w: whether an earlier reanchor of %s on this node already "+
@@ -469,7 +470,7 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *na
 	if own {
 		in.Opened, bound = opened, opened-1
 	}
-	in.Unheld, err = statelog.UnheldTail(ctx, running.domain,
+	in.Unheld, err = statelog.UnheldTail(ctx, running.domain, running.spec,
 		replicatedEstate{node: n.log.db}, running.log, in.Generation, in.FirstSeq, bound)
 	if err != nil {
 		return fmt.Errorf("%w: whether %s holds records written after the restore "+

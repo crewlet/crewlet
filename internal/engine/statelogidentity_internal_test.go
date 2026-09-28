@@ -42,7 +42,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := tracker.Domain{}.Stream().Name
+	stream := estateSpec(tracker.Domain{}).Name
 
 	// FIRST BOOT: the running domain carries what the broker reports.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -195,7 +195,7 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 
 	// THE REBUILD, under a node that never stops: the same name, a new
 	// creation instant, and sequences counting from 1 again.
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(tracker.Domain{}))
 
 	// THE HEARTBEAT IS WHAT SEES IT, on the round trip it already makes.
 	s.publishPositions(t.Context())
@@ -273,7 +273,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 		t.Fatalf("read node-x's record back (held %v): %v", held, err)
 	}
 
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(tracker.Domain{}))
 
 	// THE RETRY AT ZERO, BEFORE ANY HEARTBEAT HAS SEEN THE REBUILD. The
 	// zero fence's own read of the log carries the stream's creation
@@ -361,7 +361,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := tracker.Domain{}.Stream().Name
+	stream := estateSpec(tracker.Domain{}).Name
 
 	// FIRST BOOT: an object with history on the log, and the log's end.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -502,7 +502,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 			s, q, appendTo := aProvisionedTrackerLog(t)
 			// Records nobody will apply — the loop never starts here —
 			// so their bytes do not matter, only where the log ends.
-			subject := tracker.Domain{}.Stream().SubjectPrefix + ".probe.x"
+			subject := estateSpec(tracker.Domain{}).SubjectPrefix + ".probe.x"
 			for i := range 2 {
 				if _, _, err := appendTo.Append(t.Context(), subject,
 					fmt.Sprintf("op-%d", i), nil, []byte("{}")); err != nil {
@@ -518,7 +518,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 					INSERT INTO statelog_cursor
 						(stream, generation, seq, stream_created_at, updated_at)
 					VALUES (?, 0, ?, ?, ?)`,
-					tracker.Domain{}.Stream().Name, stats.LastSeq+tc.past,
+					estateSpec(tracker.Domain{}).Name, stats.LastSeq+tc.past,
 					store.EncodeTime(stats.CreatedAt.UTC()),
 					store.EncodeTime(time.Now().UTC()))
 				return err

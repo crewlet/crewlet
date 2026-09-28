@@ -471,7 +471,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
-	if _, _, err := r.log.Append(t.Context(), tracker.Domain{}.Stream().SubjectPrefix+
+	if _, _, err := r.log.Append(t.Context(), statelog.EstateStream(tracker.Domain{}).SubjectPrefix+
 		"."+tracker.BarrierSubject().String(), "", nil, barrier); err != nil {
 		t.Fatalf("append a barrier: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = older.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:  versionOneTracker{},
+		Domain: versionOneTracker{}, Spec: statelog.EstateStream(versionOneTracker{}),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,

@@ -74,7 +74,7 @@ func refusedFull(err error) bool {
 func requireOrdinaryRefused(t *testing.T, running *runningDomain) {
 	t.Helper()
 	name := running.domain.Name()
-	index, err := statelog.NewReadIndex(running.domain, running.log, running.reserve,
+	index, err := statelog.NewReadIndex(running.domain, running.spec, running.log, running.reserve,
 		barrierEncoder(running.domain),
 		func() uint32 { return running.runner.Committed().Generation }, nil)
 	if err != nil {

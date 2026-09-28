@@ -88,6 +88,10 @@ var ErrInvalidPartitionID = errors.New("not a partition id")
 // ErrInvalidLayout reports a layout that [Layout.Validate] refuses.
 var ErrInvalidLayout = errors.New("invalid layout")
 
+// EstatePartition is layout 0's one partition, `estate.000`: today's whole
+// estate, whose logs are keyed by their domain alone ([LogID.String]).
+var EstatePartition = PartitionID{Space: SpaceEstate}
+
 // PartitionID names one partition: a space and an index within it.
 //
 // THE ZERO VALUE IS NOT A PARTITION. Its space is empty, which no layout
@@ -336,6 +340,130 @@ func (l Layout) Stream(log LogID) (name, prefix string) {
 	space, index := string(log.Partition.Space), int(log.Partition.Index)
 	return topics.PartitionLogStream(l.Number, space, index, log.Domain),
 		topics.PartitionLogPrefix(l.Number, space, index, log.Domain)
+}
+
+// AllLogs is every log of the layout: each partition's, in [Layout.Partitions]
+// order, and each partition's in its space's domain order — the order every
+// surface that walks a node's logs renders them in, so no screen's rows move
+// between two refreshes.
+func (l Layout) AllLogs() []LogID {
+	var out []LogID
+	for _, p := range l.Partitions() {
+		out = append(out, l.Logs(p)...)
+	}
+	return out
+}
+
+// LogsOf is every log the named domain has in this layout, in
+// [Layout.AllLogs]' order, or nil for a domain no space carries.
+func (l Layout) LogsOf(domain string) []LogID {
+	var out []LogID
+	for _, log := range l.AllLogs() {
+		if log.Domain == domain {
+			out = append(out, log)
+		}
+	}
+	return out
+}
+
+// LogShare is one log's byte ceiling out of its domain's whole budget: the
+// budget divided EVENLY across every log the domain has in this layout, rounded
+// up — or 0 for a domain the layout does not carry.
+//
+// # Even, because a ceiling is a reservation
+//
+// The broker reserves a stream's ceiling in full when it creates it and refuses
+// a create it cannot back. A share that was a multiple of the even one "for
+// skew" would reserve that multiple of the domain's budget on every broker
+// member holding the logs; a partition that runs hot is resized alone, through
+// the capacity operation every stream already has.
+//
+// # Across the domain's logs, not a space's partitions
+//
+// A domain can have logs in more than one space — the tracker's in every
+// tracker partition and in the company partition, the vectors' in the tracker
+// and the pages spaces. Dividing by the partitions of each space would give the
+// company partition's one log the tracker's WHOLE budget, and the pages space's
+// vector logs the vectors' whole budget again, so the logs together would
+// reserve twice what the domain was sized for. Dividing by the domain's logs is
+// what keeps their sum within the budget plus the rounding, which is under one
+// byte a log. Under layout 0 every domain has one log, and its share is its
+// budget.
+func (l Layout) LogShare(domain string, budget int64) int64 {
+	logs := int64(len(l.LogsOf(domain)))
+	if logs == 0 || budget <= 0 {
+		return 0
+	}
+	return (budget + logs - 1) / logs
+}
+
+// StreamSpec is domain d's shape instantiated on one of its logs: the names the
+// grammar gives that log ([Layout.Stream]) and its [Layout.LogShare] of the
+// domain's budget — or the zero StreamSpec, which [StreamSpec.Validate]
+// refuses, for a log this layout does not carry or one of another domain.
+func (l Layout) StreamSpec(d Domain, log LogID) StreamSpec {
+	if d == nil || d.Name() != log.Domain {
+		return StreamSpec{}
+	}
+	name, prefix := l.Stream(log)
+	if name == "" {
+		return StreamSpec{}
+	}
+	shape := d.StreamShape()
+	shape.MaxBytes = l.LogShare(log.Domain, shape.MaxBytes)
+	// A COPY, because the spec outlives the call and a domain that
+	// returned one slice to every caller would share its backing array
+	// with every log's spec.
+	shape.ArbitratedKinds = slices.Clone(shape.ArbitratedKinds)
+	space, index := string(log.Partition.Space), int(log.Partition.Index)
+	return StreamSpec{
+		Name:          name,
+		Subjects:      []string{topics.PartitionLogWildcard(l.Number, space, index, log.Domain)},
+		SubjectPrefix: prefix,
+		StreamShape:   shape,
+	}
+}
+
+// EstateLayout is layout 0 carrying exactly the named domains: one space,
+// [SpaceEstate], with one partition whose logs are those domains', in the
+// order given. The engine's own layout 0 is this over every domain it
+// registers; a domain's suite is this over the one domain it certifies.
+func EstateLayout(domains ...string) Layout {
+	return Layout{Number: 0, Spaces: []SpaceLayout{
+		{Space: SpaceEstate, Partitions: 1, Domains: slices.Clone(domains)},
+	}}
+}
+
+// EstateStream is domain d's log in layout 0 — the one stream the domain has
+// always had, under its whole budget — for the code that addresses layout 0's
+// log directly rather than through a running layout: a domain's own reads of
+// the rows its one log keyed, and the suites that stand one up.
+//
+// It names d's log exactly as the engine's layout 0 does: the name is the
+// grammar's for that domain in `estate.000`, and every domain has one log
+// there, so its share is its whole budget however many domains the layout
+// carries beside it.
+func EstateStream(d Domain) StreamSpec {
+	return EstateLayout(d.Name()).StreamSpec(d, LogID{Domain: d.Name(), Partition: EstatePartition})
+}
+
+// OnlyPartition is the one partition that carries the named domain's log, when
+// exactly one does, and otherwise the zero PartitionID — a partition no layout
+// carries.
+//
+// It is the whole partition function of a domain whose records are not keyed
+// to partitions: under a layout that gives the domain a single log there is
+// one place a record of it can belong, and under one that divides the domain
+// there is no answer such a domain can give. The zero value is that answer —
+// "another partition" for every log there is — so a domain answering it from
+// [Domain.PartitionOf] or [Domain.ScopePartition] keeps a record off every
+// log rather than being placed on one by a guess.
+func (l Layout) OnlyPartition(domain string) PartitionID {
+	logs := l.LogsOf(domain)
+	if len(logs) != 1 {
+		return PartitionID{}
+	}
+	return logs[0].Partition
 }
 
 // spaceOf is p's space in this layout, and whether the layout has p at all.

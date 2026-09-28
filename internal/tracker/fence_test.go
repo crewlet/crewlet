@@ -15,7 +15,7 @@ import (
 )
 
 // fenceStream is the log every cursor below is a position on.
-var fenceStream = tracker.Domain{}.Stream().Name
+var fenceStream = statelog.EstateStream(tracker.Domain{}).Name
 
 // standingAt is this node's applier, committed at p and staying there — the
 // ordinary state, in which the node stands where its write's snapshot did.

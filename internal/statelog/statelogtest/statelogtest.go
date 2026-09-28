@@ -10,12 +10,14 @@
 // documentation: the table that must carry a class, the stream whose settings
 // must agree with its replay protocol, the apply that must produce the same
 // rows twice, the envelope that must not fail on a version this build cannot
-// read, the record that must name the node that wrote it and the generation it
-// was decided in, the evictions a domain that claims identity must be able to
-// list — because the trim counts nodes per log, and a log whose evictions
-// nothing reads counts an evicted node for ever — and the node gate that is
-// the domain's own eviction and nothing else, because a write flagged one is
-// excused the fences and the reserve every other write is held to.
+// read, the record that must belong to the partition of the log it is on —
+// and the framework's own records to none, since each of the domain's logs
+// carries them alike — the record that must name the node that wrote it and
+// the generation it was decided in, the evictions a domain that claims identity
+// must be able to list — because the trim counts nodes per log, and a log whose
+// evictions nothing reads counts an evicted node for ever — and the node gate
+// that is the domain's own eviction and nothing else, because a write flagged
+// one is excused the fences and the reserve every other write is held to.
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -75,6 +77,15 @@ type Candidate struct {
 	// Domain is the declaration under test.
 	Domain statelog.Domain
 
+	// Layout and Log are the layout the domain is certified under and the
+	// one of its logs every case runs it on. Both zero take the domain's
+	// layout-0 log ([statelog.EstateLayout]), which is where a domain of
+	// this build runs; a candidate named for no layout-0 log names a
+	// partitioned one, which is how the suite certifies the framework on a
+	// log whose names the partition grammar gives.
+	Layout statelog.Layout
+	Log    statelog.LogID
+
 	// Applier is its state machine.
 	Applier statelog.Applier
 
@@ -92,9 +103,9 @@ type Candidate struct {
 	// used wherever one is needed.
 	Kinds []string
 
-	// Rows builds the domain's own read seam over an estate — the one its
-	// production publisher decides through.
-	Rows func(db *store.DB) (statelog.Rows, error)
+	// Rows builds the domain's own read seam over an estate, on the log spec
+	// names — the one its production publisher decides through.
+	Rows func(db *store.DB, spec statelog.StreamSpec) (statelog.Rows, error)
 
 	// Write performs at least one write through the domain's OWN
 	// production write path — the writer every caller reaches, not a
@@ -103,11 +114,38 @@ type Candidate struct {
 	// framework's stamp.
 	Write func(ctx context.Context, pub *statelog.Publisher, db *store.DB) error
 
+	// Generation is the domain's generation record — the one a reanchor opens
+	// a generation with — or nil for a domain that keeps none. What the
+	// suite reads of it is the record's kind: a generation record is the
+	// framework's, on whichever log it is appended to ([Placement]).
+	Generation statelog.GenerationEncoder
+
 	// EncodeGate builds the record that evicts nodeID from this domain's log
 	// — or, with readmit, takes it back — as the domain's own writer
 	// publishes it. Required of a domain that claims identity, whose log the
 	// trim counts nodes on; see [Evictions].
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
+}
+
+// layout is the layout the candidate is certified under.
+func (c Candidate) layout() statelog.Layout {
+	if c.Layout.Spaces == nil {
+		return statelog.EstateLayout(c.Domain.Name())
+	}
+	return c.Layout
+}
+
+// log is the log every case runs the candidate on.
+func (c Candidate) log() statelog.LogID {
+	if c.Log == (statelog.LogID{}) {
+		return statelog.LogID{Domain: c.Domain.Name(), Partition: statelog.EstatePartition}
+	}
+	return c.Log
+}
+
+// spec is that log's stream, as the layout names it.
+func (c Candidate) spec() statelog.StreamSpec {
+	return c.layout().StreamSpec(c.Domain, c.log())
 }
 
 // Factory builds a fresh candidate for one case.
@@ -117,6 +155,7 @@ type Factory func(t *testing.T) Candidate
 func Run(t *testing.T, new Factory) {
 	t.Helper()
 	t.Run("declaration", func(t *testing.T) { runDeclaration(t, new) })
+	t.Run("placement", func(t *testing.T) { runPlacement(t, new) })
 	t.Run("tables", func(t *testing.T) { runTables(t, new) })
 	t.Run("envelope", func(t *testing.T) { runEnvelope(t, new) })
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })
@@ -180,7 +219,7 @@ func runTables(t *testing.T, new Factory) {
 	t.Helper()
 	c := new(t)
 	db := openEstate(t, c)
-	if err := statelog.CheckTables(t.Context(), db, c.Domain); err != nil {
+	if err := statelog.CheckTables(t.Context(), db, c.Domain, c.spec()); err != nil {
 		t.Fatal(err)
 	}
 }

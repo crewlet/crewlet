@@ -225,7 +225,7 @@ func TestAnOlderBuildRetainsAContainerRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
-	if _, _, err := r.log.Append(t.Context(), pages.Domain{}.Stream().SubjectPrefix+
+	if _, _, err := r.log.Append(t.Context(), statelog.EstateStream(pages.Domain{}).SubjectPrefix+
 		"."+pages.BarrierSubject().String(), "", nil, barrier); err != nil {
 		t.Fatalf("append a barrier: %v", err)
 	}
@@ -257,7 +257,7 @@ func (r *roundTrip) olderNodeApplies() func(query string) int {
 	}
 	t.Cleanup(func() { _ = older.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:  versionOneBuild{},
+		Domain: versionOneBuild{}, Spec: statelog.EstateStream(versionOneBuild{}),
 		Applier: pages.NewApplier("node-older", nil, nil),
 		Fetch:   &logFetch{log: r.log, next: 1},
 		Log:     r.log,
@@ -519,7 +519,7 @@ func (r *roundTrip) publishRaw(rec pages.MutationRecord) {
 	if err != nil {
 		r.t.Fatalf("encode: %v", err)
 	}
-	subject := pages.Domain{}.Stream().SubjectPrefix + "." + rec.Subject.String()
+	subject := statelog.EstateStream(pages.Domain{}).SubjectPrefix + "." + rec.Subject.String()
 	if _, _, err := r.log.Append(r.t.Context(), subject, rec.OpID, nil, body); err != nil {
 		r.t.Fatalf("append: %v", err)
 	}

@@ -23,7 +23,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 	t.Parallel()
 	d := stageDivergedBroker(t)
 	e, _ := bootNode(t, &d.a, d.cfg)
-	stream := tracker.Domain{}.Stream().Name
+	stream := estateSpec(tracker.Domain{}).Name
 	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
 
 	view, err := e.ReanchorStatus(t.Context(), stream)
@@ -108,7 +108,7 @@ func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	}
 	zero := uint64(0)
 	seq, _, err := running.log.Append(t.Context(),
-		tracker.Domain{}.Stream().SubjectPrefix+"."+record.Subject.String(),
+		estateSpec(tracker.Domain{}).SubjectPrefix+"."+record.Subject.String(),
 		record.OpID, &zero, record.Payload)
 	if err != nil {
 		t.Fatalf("append the first attempt's generation record: %v", err)
@@ -143,7 +143,7 @@ func TestARerunOfARestoredReanchorThatFailedAfterItsAppendFinishes(t *testing.T)
 			t.Parallel()
 			d := c.stage(t)
 			e, _ := bootNode(t, &d.a, d.cfg)
-			stream := tracker.Domain{}.Stream().Name
+			stream := estateSpec(tracker.Domain{}).Name
 			running := e.native.Load().log.Domain(tracker.Domain{}.Name())
 			opened := appendOwnGeneration(t, e)
 

@@ -44,12 +44,14 @@ type SnapshotRows struct {
 	guards Guards
 }
 
-// NewRows builds the publisher's read seam for a domain.
-func NewRows(db *store.DB, d Domain, guards Guards) (*SnapshotRows, error) {
+// NewRows builds the publisher's read seam for a domain, on the one of its
+// logs spec names — whose stream keys the checkpoint a decision is paired with
+// and whose prefix keys every anchor an expectation is formed from.
+func NewRows(db *store.DB, d Domain, spec StreamSpec, guards Guards) (*SnapshotRows, error) {
 	if db == nil {
 		return nil, fmt.Errorf("statelog: a read seam needs a store")
 	}
-	t, err := newTables(d)
+	t, err := newTables(d, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +216,8 @@ func (r *SnapshotRows) LostBefore(ctx context.Context) (time.Time, bool, error) 
 //
 // So the suite runs one of each statement against a fresh estate and rolls it
 // back. What it proves is exactly what a comment cannot: the shapes agree.
-func CheckTables(ctx context.Context, db *store.DB, d Domain) error {
-	t, err := newTables(d)
+func CheckTables(ctx context.Context, db *store.DB, d Domain, spec StreamSpec) error {
+	t, err := newTables(d, spec)
 	if err != nil {
 		return err
 	}

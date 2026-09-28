@@ -272,10 +272,10 @@ type smallGatingDomain struct{ gatingDomain }
 // smallLogBytes is its ceiling: sixteen reserves of 64 KiB.
 const smallLogBytes = 1 << 20
 
-func (smallGatingDomain) Stream() statelog.StreamSpec {
-	spec := probeDomain{}.Stream()
-	spec.MaxBytes = smallLogBytes
-	return spec
+func (smallGatingDomain) StreamShape() statelog.StreamShape {
+	shape := probeDomain{}.StreamShape()
+	shape.MaxBytes = smallLogBytes
+	return shape
 }
 
 // smallPurgingDomain is that log with a second gate beside the eviction: a

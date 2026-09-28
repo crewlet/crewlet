@@ -180,7 +180,7 @@ func pagesEviction(t *testing.T, node string) []byte {
 func appendRecord(t *testing.T, running *runningDomain, subject string, payload []byte) uint64 {
 	t.Helper()
 	seq, _, err := running.log.Append(t.Context(),
-		running.domain.Stream().SubjectPrefix+"."+subject, "", nil, payload)
+		running.spec.SubjectPrefix+"."+subject, "", nil, payload)
 	if err != nil {
 		t.Fatalf("append to %s: %v", running.domain.Name(), err)
 	}

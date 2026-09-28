@@ -58,7 +58,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
 			VALUES (?, 0, ?, ?, ?)
 			ON CONFLICT (stream) DO NOTHING`,
-			vectors.domain.Stream().Name, int64(vstats.LastSeq),
+			vectors.spec.Name, int64(vstats.LastSeq),
 			store.EncodeTime(vstats.CreatedAt), store.EncodeTime(time.Now().UTC()))
 		return err
 	}); err != nil {
@@ -159,7 +159,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(tracker.Domain{}))
 	stats, err := running.log.Stats(t.Context())
 	if err != nil {
 		t.Fatalf("read the rebuilt log: %v", err)
@@ -172,7 +172,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	peerRecord := appendEviction(t, running, "op-peer", "node-z")
 	next := running.runner.Committed().Generation + 1
 	standUpDonor(t, q, rows, statelog.Position{
-		Stream: running.domain.Stream().Name, Generation: next, Seq: peerRecord - 1,
+		Stream: running.spec.Name, Generation: next, Seq: peerRecord - 1,
 	}, live)
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 		NodeID: "donor", At: time.Now().UTC(),
@@ -186,7 +186,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 
 	// THE GUARD NAMES THE PEER, and adopting its snapshot is what it means.
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: running.domain.Stream().Name, Confirm: statelog.ConfirmationOf(live),
+		Stream: running.spec.Name, Confirm: statelog.ConfirmationOf(live),
 		By: "ops-1",
 	}); !errors.Is(err, statelog.ErrReanchorRefused) {
 		t.Fatalf("a reanchor with a re-anchored peer = %v, want a refusal", err)
@@ -258,14 +258,14 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 		Generation: next, Case: statelog.ReanchorRestored, By: "ops-1", Writer: "donor",
 		At: time.Now().UTC(),
 		Inputs: statelog.ReanchorInputs{
-			Stream: running.domain.Stream().Name, StreamCreatedAt: live, KeyedTo: live,
+			Stream: running.spec.Name, StreamCreatedAt: live, KeyedTo: live,
 		},
 	})
 	if err != nil || !keeps {
 		t.Fatalf("encode the peer's generation record: %v", err)
 	}
 	zero := uint64(0)
-	spec := running.domain.Stream()
+	spec := running.spec
 	genSeq, _, err := running.log.Append(t.Context(),
 		spec.SubjectPrefix+"."+record.Subject.String(), record.OpID, &zero, record.Payload)
 	if err != nil {
@@ -359,7 +359,7 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	var registered []statelog.Registered
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
-			Domain: domain,
+			Domain: domain, Log: estateLog(domain), Spec: estateSpec(domain),
 			Health: func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
 		})
 	}

@@ -48,7 +48,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := pages.Domain{}.Stream()
+	spec := statelog.EstateStream(pages.Domain{})
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is not a
 	// property under test: the shipped default is sized for years of a real
 	// company's growth, and an embedded broker in a temporary directory
@@ -89,7 +89,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	nodeID string) *roundTrip {
 
 	t.Helper()
-	rows, err := pages.NewRows(db)
+	rows, err := pages.NewRows(db, statelog.EstateStream(pages.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -111,7 +111,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	fence.Committed = waiter.Committed
 	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
 	// engine's does, so every write here is admitted as a production one is.
-	reserve, err := statelog.NewReserve(pages.Domain{}.Stream().Name,
+	reserve, err := statelog.NewReserve(statelog.EstateStream(pages.Domain{}).Name,
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -120,7 +120,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 		t.Fatalf("build the gate reserve: %v", err)
 	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,
+		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Log: log, Rows: rows, Fence: fence,
 		Gates: pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
@@ -168,7 +168,7 @@ func (r *roundTrip) drain() {
 	if err != nil {
 		r.t.Fatalf("read the log's end: %v", err)
 	}
-	spec := pages.Domain{}.Stream()
+	spec := statelog.EstateStream(pages.Domain{})
 	for seq := r.consumed + 1; seq <= last; seq++ {
 		_, payload, storedAt, ok, err := r.log.At(r.t.Context(), seq)
 		if err != nil {

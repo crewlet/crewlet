@@ -145,6 +145,16 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 		return nil, fmt.Errorf("statelog: a join cannot record itself, so a crash " +
 			"mid-adoption would be indistinguishable from a node that is caught up")
 	}
+	if err := checkRegistered(d.Domains); err != nil {
+		return nil, err
+	}
+	for key, r := range d.Domains {
+		if key != r.Log.String() {
+			return nil, fmt.Errorf("statelog: a join registers the log %s under "+
+				"the key %q — a manifest names every log by its own key, so this "+
+				"one would be read as missing from every artefact", r.Log, key)
+		}
+	}
 	logger := loggerOr(d.Logger)
 	now := d.Now
 	if now == nil {

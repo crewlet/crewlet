@@ -77,7 +77,7 @@ func (s *stateLog) truncation(ctx context.Context, running *runningDomain,
 	// A STABLE ORDER, so the peer a refusal names does not flip between
 	// beats while several hold more.
 	slices.Sort(candidates)
-	evicted, err := s.evictedOn(ctx, running.domain, running.log, candidates)
+	evicted, err := s.evictedOn(ctx, running.domain, running.spec, running.log, candidates)
 	if err != nil {
 		return nil, err
 	}

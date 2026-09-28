@@ -98,7 +98,7 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		point := coord.BackupPoint{Owner: self, At: at, Verified: true,
 			Streams: map[string]coord.Position{}}
 		for _, running := range identity {
-			stream := running.domain.Stream().Name
+			stream := running.spec.Name
 			point.Streams[stream] = coord.Position{Stream: stream,
 				Generation: running.runner.Committed().Generation,
 				Seq:        targets[running.domain.Name()]}

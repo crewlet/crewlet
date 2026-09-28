@@ -30,7 +30,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	t.Parallel()
 
 	runner, err := NewRunner(RunnerDeps{
-		Domain: loggerProbe{}, Applier: struct{ Applier }{},
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Applier: struct{ Applier }{},
 		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
 		Node: struct{ NodeEstate }{}, DB: struct{ Estate }{},
 	})
@@ -38,7 +38,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		t.Fatalf("NewRunner: %v", err)
 	}
 	publisher, err := NewPublisher(Deps{
-		Domain: loggerProbe{}, Log: struct{ Appender }{}, Rows: struct{ Rows }{},
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{}, Rows: struct{ Rows }{},
 		Fence: struct{ Fence }{}, Gates: struct{ Gates }{},
 		Waiter: struct{ Waiter }{}, Identity: struct{ Identity }{},
 		NodeID: "node-a", Generation: func() uint32 { return 1 },
@@ -47,7 +47,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		t.Fatalf("NewPublisher: %v", err)
 	}
 	snapshotter, err := NewSnapshotter(SnapshotDeps{
-		Domains: []Registered{{Domain: loggerProbe{}}}, DB: &store.DB{},
+		Domains: []Registered{{Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}}, DB: &store.DB{},
 		Dir: t.TempDir(), NodeID: "node-a",
 		Counted:  func(context.Context) (int, error) { return 2, nil },
 		Interval: time.Hour,
@@ -65,7 +65,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		t.Fatalf("NewDonor: %v", err)
 	}
 	adopter, err := NewAdopter(AdoptDeps{
-		Domains:  map[string]Registered{loggerProbe{}.Name(): {Domain: loggerProbe{}}},
+		Domains:  map[string]Registered{loggerProbe{}.Name(): {Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}},
 		LivePath: "replicated.db", NodeID: "node-a", Conn: &nats.Conn{},
 		Need: func(context.Context) (OfferRequest, error) { return OfferRequest{}, nil },
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
@@ -111,16 +111,36 @@ const loggerProbeStream = "CREWLET_LOGGER_PROBE_LOG"
 
 func (loggerProbe) Name() string { return "logger_probe" }
 
-func (loggerProbe) Stream() StreamSpec {
-	return StreamSpec{
-		Name:            loggerProbeStream,
-		Subjects:        []string{"crewlet.loggerprobe.log.>"},
-		SubjectPrefix:   "crewlet.loggerprobe.log",
+func (loggerProbe) StreamShape() StreamShape {
+	return StreamShape{
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
 		Replay:          ReplayStrict,
 		ArbitratedKinds: []string{"object"},
 	}
+}
+
+// loggerProbeLog is the probe's one log, in layout 0's estate.
+var loggerProbeLog = LogID{Domain: loggerProbe{}.Name(), Partition: EstatePartition}
+
+// loggerProbeSpec is the probe's one log's stream. Named by hand rather than by a
+// layout, because the probe's name is not one the partition grammar can
+// spell, and what these cases construct is indifferent to the name.
+func loggerProbeSpec() StreamSpec {
+	return StreamSpec{
+		Name:          loggerProbeStream,
+		Subjects:      []string{"crewlet.loggerprobe.log.>"},
+		SubjectPrefix: "crewlet.loggerprobe.log",
+		StreamShape:   loggerProbe{}.StreamShape(),
+	}
+}
+
+func (loggerProbe) PartitionOf(Layout, Envelope) (PartitionID, bool) {
+	return PartitionID{}, false
+}
+
+func (loggerProbe) ScopePartition(Layout, string) (PartitionID, bool) {
+	return PartitionID{}, false
 }
 
 func (loggerProbe) RecordVersion() int                { return 1 }

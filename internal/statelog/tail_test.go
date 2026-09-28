@@ -16,7 +16,7 @@ import (
 // unheld walks the harness's log back from last, as a restored reanchor does.
 func unheld(t *testing.T, h *applyHarness, last uint64) *statelog.TailRecord {
 	t.Helper()
-	got, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.db.Replicated(), h.fetch,
+	got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.db.Replicated(), h.fetch,
 		h.runner.Committed().Generation, 1, last)
 	if err != nil {
 		t.Fatalf("UnheldTail: %v", err)
@@ -138,7 +138,7 @@ func TestARecordWhoseEnvelopeDoesNotDecodeIsAnError(t *testing.T) {
 	h.fetch.mu.Lock()
 	h.fetch.log[4] = statelog.Message{Seq: 4, StoredAt: otherHistory, Payload: []byte("{")}
 	h.fetch.mu.Unlock()
-	_, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.db.Replicated(), h.fetch,
+	_, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.db.Replicated(), h.fetch,
 		h.runner.Committed().Generation, 1, 4)
 	if err == nil || !strings.Contains(err.Error(), "does not decode") {
 		t.Fatalf("UnheldTail over an undecodable record = %v, want an error", err)
@@ -255,7 +255,7 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	log.offerStored(at.Seq, held, env(at.Seq, "edit", "held", "op-held", 1))
 	walk := func(t *testing.T, h *joinHarness) *statelog.TailRecord {
 		t.Helper()
-		got, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.joiner.Replicated(),
+		got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.joiner.Replicated(),
 			log, at.Generation, 1, at.Seq)
 		if err != nil {
 			t.Fatalf("UnheldTail over the adopted estate: %v", err)

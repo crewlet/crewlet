@@ -33,7 +33,7 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	// exceeded — the two units are two readings of one distance and a
 	// reader that carried only one of them must still go red.
 	log, err := statelogtest.LocalReaderBehind(tracker.Domain{}, h.db.Replicated(),
-		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: h.seq},
+		statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1, Seq: h.seq},
 		100_000)
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
@@ -209,7 +209,7 @@ func TestAReaderWithNoBoundAnswersHoweverFarBehindItIs(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
 	log, err := statelogtest.LocalReaderBehind(tracker.Domain{}, h.db.Replicated(),
-		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: h.seq},
+		statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1, Seq: h.seq},
 		100_000)
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)

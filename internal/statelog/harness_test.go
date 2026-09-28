@@ -31,15 +31,48 @@ type probeDomain struct{}
 
 func (probeDomain) Name() string { return "probe" }
 
-func (probeDomain) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:            probeStream,
-		Subjects:        []string{probePrefix + ".>"},
-		SubjectPrefix:   probePrefix,
+func (probeDomain) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
 		Replay:          statelog.ReplayStrict,
 		ArbitratedKinds: []string{"object"},
+	}
+}
+
+// PartitionOf and ScopePartition place every record and path of a fake in the
+// one partition that carries its log. No case here runs a layout, so what
+// they are asked for is only ever that answer.
+func (d probeDomain) PartitionOf(l statelog.Layout, _ statelog.Envelope) (statelog.PartitionID, bool) {
+	return l.OnlyPartition(d.Name()), true
+}
+
+func (d probeDomain) ScopePartition(l statelog.Layout, _ string) (statelog.PartitionID, bool) {
+	return l.OnlyPartition(d.Name()), true
+}
+
+// logOf is a fake domain's one log, in layout 0's estate — keyed, as every
+// such log is, by the domain's name alone.
+func logOf(d statelog.Domain) statelog.LogID {
+	return statelog.LogID{Domain: d.Name(), Partition: statelog.EstatePartition}
+}
+
+// specOf is a fake domain's one log's stream: its shape under the name the cases here
+// were written against. Named by hand rather than by a layout, because what
+// these cases vary is what a domain DECLARES — its replay, its window, its
+// ceiling — and a partitioned name would change every position they assert on
+// and none of what they are about. The partitioned grammar is certified by
+// statelogtest's control and by the layout's own tests.
+func specOf(d statelog.Domain) statelog.StreamSpec {
+	name, prefix := probeStream, probePrefix
+	if d.Name() == (secondProbeDomain{}).Name() {
+		name, prefix = secondProbeStream, secondProbePrefix
+	}
+	return statelog.StreamSpec{
+		Name:          name,
+		Subjects:      []string{prefix + ".>"},
+		SubjectPrefix: prefix,
+		StreamShape:   d.StreamShape(),
 	}
 }
 
@@ -634,7 +667,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := domain.Stream()
+	spec := specOf(domain)
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name:       spec.Name,
 		Subjects:   spec.Subjects,
@@ -662,7 +695,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	}
 
 	deps := statelog.Deps{
-		Domain:        domain,
+		Domain: domain, Spec: specOf(domain),
 		Log:           h.appends,
 		Rows:          h.rows,
 		Fence:         h.fence,
