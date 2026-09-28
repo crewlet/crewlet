@@ -1,10 +1,8 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -25,7 +23,7 @@ import (
 // again to what the tick wrote, so neither overwrites the other — and there is
 // no second path into the map for the two to disagree about.
 //
-// The retries are BOUNDED at [objectsGestureAttempts]: a map that moved under
+// The retries are BOUNDED at [mapGestureAttempts]: a map that moved under
 // every attempt is a map being written faster than a person can act on it,
 // and the honest answer is what it says now and that the gesture did not land,
 // rather than a loop that holds an API request until the maintainer pauses.
@@ -62,14 +60,6 @@ var ErrObjectsUnavailable = errors.New("engine: the placement map could not be r
 var ErrObjectsNewerMap = errors.New("engine: the placement map was written by a newer build; " +
 	"make this gesture from a node running it")
 
-// objectsGestureAttempts is how many compare-and-sets a gesture tries before
-// answering that it did not land.
-//
-// THREE: a race is the maintainer's tick, fifteen seconds apart, or another
-// operator — one retry covers the first and a second covers both at once. More
-// than that is a map moving faster than the gesture can be reasoned about.
-const objectsGestureAttempts = 3
-
 // objectMapStore is what the gestures need from the coordination store.
 type objectMapStore interface {
 	ObjectMap(ctx context.Context) (coord.ObjectMapRecord, bool, error)
@@ -90,19 +80,8 @@ type ObjectsControl struct {
 	now      func() time.Time
 }
 
-// ObjectsGesture is what a gesture did: whether the map now says what was
-// asked, and the map as it stands after the attempt.
-type ObjectsGesture struct {
-	// Landed is whether the stored map says what the gesture asked —
-	// written by it, or already so. False only when every attempt lost its
-	// compare-and-set to another writer.
-	Landed bool
-
-	// State is the map after the gesture, or as it stood when the last
-	// attempt lost; Version the store's version of it.
-	State   objstore.MapState
-	Version uint64
-}
+// ObjectsGesture is what a gesture on the placement map did ([MapGesture]).
+type ObjectsGesture = MapGesture[objstore.MapState]
 
 // Out takes a member out of the placement map: nothing new is placed on it,
 // and its share is copied to the other members while it keeps serving what it
@@ -146,75 +125,42 @@ func (c *ObjectsControl) State(ctx context.Context) (objstore.MapState, uint64, 
 
 // read is the stored map, decoded for a rewrite.
 func (c *ObjectsControl) read(ctx context.Context) (objstore.MapState, uint64, bool, error) {
-	rec, found, err := c.store.ObjectMap(ctx)
-	if err != nil {
-		return objstore.MapState{}, 0, false, fmt.Errorf("%w: %w", ErrObjectsUnavailable, err)
-	}
-	if !found {
-		return objstore.MapState{}, 0, false, nil
-	}
-	state, err := objstore.DecodeMapStateForUpdate(rec.Value)
-	if err != nil {
-		return objstore.MapState{}, 0, false, fmt.Errorf("%w: %w", ErrObjectsNewerMap, err)
-	}
-	return state, rec.Version, true, nil
+	return c.record().state(ctx)
 }
 
 // apply reads the map, applies the gesture and writes it back at the version
-// read, retrying a lost race — see the file's doc.
+// read, retrying a lost race — the loop both maps share (mapcontrol.go).
 func (c *ObjectsControl) apply(ctx context.Context, gesture string,
 	change func(objstore.MapState) (objstore.MapState, error), attrs ...any) (ObjectsGesture, error) {
 
-	var last ObjectsGesture
-	for range objectsGestureAttempts {
-		state, version, found, err := c.read(ctx)
-		if err != nil {
-			return ObjectsGesture{}, err
-		}
-		if !found {
-			return ObjectsGesture{}, upkeep.ErrNoMap
-		}
-		next, err := change(state)
-		if err != nil {
-			return ObjectsGesture{State: state, Version: version}, err
-		}
-		before, err := state.Encode()
-		if err != nil {
-			return ObjectsGesture{}, err
-		}
-		raw, err := next.Encode()
-		if err != nil {
-			return ObjectsGesture{}, err
-		}
-		// ALREADY SO: the map says what was asked, and a write of the
-		// same bytes would move the record's version for nothing — which
-		// a racing maintainer would then lose its tick to.
-		if bytes.Equal(before, raw) {
-			return ObjectsGesture{Landed: true, State: state, Version: version}, nil
-		}
-		wrote, won, err := c.store.UpdateObjectMap(ctx, raw, version)
-		if err != nil {
-			return ObjectsGesture{}, fmt.Errorf("%w: %w", ErrObjectsUnavailable, err)
-		}
-		if won {
-			if c.observer != nil {
-				c.observer.Observe(next, wrote.Version)
-			}
-			fields := append([]any{"gesture", gesture, "epoch", next.Map.Epoch},
-				gestureBalance(state, next)...)
-			log.InfoContext(ctx, "object_map_gesture", append(fields, attrs...)...)
-			return ObjectsGesture{Landed: true, State: next, Version: wrote.Version}, nil
-		}
-		last = ObjectsGesture{State: state, Version: version}
+	return c.record().apply(ctx, gesture, change, attrs...)
+}
+
+// record is the placement map as the shared gesture loop reads and writes it.
+func (c *ObjectsControl) record() casMap[objstore.MapState] {
+	m := casMap[objstore.MapState]{
+		event: "object_map",
+		read: func(ctx context.Context) ([]byte, uint64, bool, error) {
+			rec, found, err := c.store.ObjectMap(ctx)
+			return rec.Value, rec.Version, found, err
+		},
+		update: func(ctx context.Context, raw []byte, version uint64) (uint64, bool, error) {
+			rec, won, err := c.store.UpdateObjectMap(ctx, raw, version)
+			return rec.Version, won, err
+		},
+		decode:      objstore.DecodeMapStateForUpdate,
+		encode:      objstore.MapState.Encode,
+		noMap:       upkeep.ErrNoMap,
+		unavailable: ErrObjectsUnavailable,
+		newer:       ErrObjectsNewerMap,
+		fields: func(before, after objstore.MapState) []any {
+			return append([]any{"epoch", after.Map.Epoch}, gestureBalance(before, after)...)
+		},
 	}
-	// EVERY ATTEMPT LOST: answer the map as it stands now, which is what
-	// the operator decides the next gesture against.
-	if state, version, found, err := c.read(ctx); err == nil && found {
-		last = ObjectsGesture{State: state, Version: version}
+	if c.observer != nil {
+		m.observe = c.observer.Observe
 	}
-	log.WarnContext(ctx, "object_map_gesture_not_landed", append([]any{
-		"gesture", gesture, "attempts", objectsGestureAttempts}, attrs...)...)
-	return last, nil
+	return m
 }
 
 // gestureBalance is the balance a gesture ran, as log fields — none when it
