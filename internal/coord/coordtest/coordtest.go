@@ -186,8 +186,9 @@
 // won answered "not held". [RunShared] is the half that can tell: its cases
 // spread their handles across a store's members. It is enforced rather than
 // relaxed because a claim you cannot read back cannot provide mutual
-// exclusion, and the seat host reads ListLive and FleetProtocolFloor
-// immediately after claiming.
+// exclusion, and the seat host acts on reads that follow its own writes: a
+// renewal a heartbeat after a claim, the next sweep's listing, and the floor a
+// refused claim asks for.
 //
 // Two lag shapes are not the same risk. A general READ lag fails loudly —
 // measured, by making the twin serve reads from a snapshot one write behind,

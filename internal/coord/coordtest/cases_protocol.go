@@ -288,10 +288,9 @@ var protocolCases = []testCase{
 	// --- the observability half ----------------------------------------
 
 	{"fleet_protocol_floor_reports_the_oldest_live_holder", func(h *harness) {
-		// TryAcquire can only answer yes or no, so a node stalled by the
-		// gate looks identical to one whose peers simply hold every
-		// seat. This is the call that tells them apart — once per claim
-		// sweep, not once per resource.
+		// A claim refused RefusedProtocol says the gate stopped it;
+		// this is the call that names the protocol behind that
+		// refusal, asked after one and never once per sweep.
 		if floor, any := h.floor(); any {
 			h.t.Fatalf("FleetProtocolFloor = (%d, true) on an empty store, want (_, false)", floor)
 		}

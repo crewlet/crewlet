@@ -1447,9 +1447,11 @@ func (s *Store) PreferredResources(ctx context.Context, class coord.Class, nodeI
 }
 
 // FleetProtocolFloor returns the lowest protocol among live leases, and
-// whether there were any. It is the observability half of the gate: TryAcquire
-// can only answer yes or no, so a node stalled behind an older peer would
-// otherwise look identical to one whose peers simply hold every seat.
+// whether there were any. It is the observability half of the gate: a claim
+// refused [coord.RefusedProtocol] says a lease at a lower protocol stopped it,
+// and this names that protocol. It is asked after such a refusal and never
+// otherwise — a sweep whose seats were merely held learns that from the
+// refusal ([coord.RefusedHeld]) and judges no gate.
 //
 // It counts what the GATE counts (held records in both lease buckets,
 // including one still in the claiming state) rather than what Get returns.

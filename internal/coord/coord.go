@@ -441,7 +441,10 @@ type AcquireOptions struct {
 //
 // It reads like an implementation detail and it is the whole basis of mutual
 // exclusion: a claim you cannot read back cannot exclude anybody, and the
-// seat host reads ListLive and FleetProtocolFloor immediately after claiming.
+// seat host acts on reads that follow its own writes — the heartbeat renews a
+// seat a heartbeat after winning it, the next sweep lists what it holds, and a
+// claim the gate refused asks FleetProtocolFloor, which must count the lease
+// that refused it.
 // The twin makes it true for free, being a mutex over a map, and so did the KV
 // backend while a suite ran it on one member — which is how it went unstated
 // while the suite enforced it in about twenty places without naming it. On a

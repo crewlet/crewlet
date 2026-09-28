@@ -369,9 +369,10 @@ func (b *Backend) PreferredResources(ctx context.Context, class coord.Class, nod
 }
 
 // FleetProtocolFloor returns the lowest protocol among live leases, and
-// whether there were any. It is the observability half of the gate: TryAcquire
-// can only answer yes or no, so a node stalled behind an older peer would
-// otherwise look identical to one whose peers simply hold every seat.
+// whether there were any. It is the observability half of the gate: a claim
+// refused [coord.RefusedProtocol] says a lease at a lower protocol stopped it,
+// and this names that protocol. It is asked after such a refusal and never
+// otherwise.
 func (b *Backend) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	if err := unavailable(ctx); err != nil {
 		return 0, false, err
