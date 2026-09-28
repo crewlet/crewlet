@@ -3253,6 +3253,10 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		pos := coord.DomainPosition{
 			Seq: at.Seq, Generation: at.Generation, AppliedThrough: at.Seq,
 			StreamCreatedAt: running.runner.KeyedTo(), CheckpointStoredAt: record,
+			// WHICH RECORDS THIS BUILD READS, so a writer of a kind older
+			// builds cannot even defer waits for every node to read it —
+			// see [coord.DomainPosition.RecordVersion].
+			RecordVersion: running.domain.RecordVersion(),
 		}
 		// APPLIED_THROUGH IS LOWER WHEN SOMETHING IS DEFERRED, and the
 		// two numbers are what tell a lagging node from a stalled one:

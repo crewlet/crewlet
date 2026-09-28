@@ -557,7 +557,7 @@ func reportedPositions(rows []coord.NodePositions, domain string) []statelog.Nod
 		}
 		out = append(out, statelog.NodePosition{
 			NodeID: row.NodeID, Generation: at.Generation, Seq: at.Seq,
-			SnapshotSeq: at.SnapshotSeq,
+			SnapshotSeq: at.SnapshotSeq, RecordVersion: at.RecordVersion,
 			// FROM THE INSTANT RATHER THAN THE SEQUENCE. A snapshot
 			// taken while a domain's log was still empty covers it
 			// at position zero, which is a real artefact a joiner

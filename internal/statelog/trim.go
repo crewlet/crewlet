@@ -212,6 +212,13 @@ type NodePosition struct {
 	SnapshotSeq uint64
 	HasSnapshot bool
 
+	// RecordVersion is the highest record version the node's build reads on
+	// this log, zero when its row does not say — a build older than the
+	// advertisement, or a node counted from its presence before its first
+	// report. The trim reads none of it; a writer publishing a kind older
+	// builds cannot defer reads it across the same counted set ([Readers]).
+	RecordVersion int
+
 	// SnapshotGeneration is the generation that snapshot's sequences
 	// belong to, which is a SEPARATE number from the one above: a node
 	// reports its committed position every ten seconds and takes a

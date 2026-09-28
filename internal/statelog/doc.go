@@ -155,6 +155,17 @@
 // decode it. A deferred gate does not postpone one record's effect on one
 // node; it silently licenses every record above it.
 //
+// # Retention rests on the ENVELOPE, so a writer can ask who reads what
+//
+// A build retains what it can file: the envelope must decode. A kind whose
+// envelope an older build REFUSES — one that validated a field a newer build
+// widened — is a stop on that build, not a deferral, and no version number on
+// the record changes that. So every node's position heartbeat names, per log,
+// the highest record version its build reads ([NodePosition].RecordVersion),
+// and [Readers] reads it across the trim's own counted set: a writer about to
+// publish such a kind waits until every node that applies the log reads it —
+// a node that says nothing being one that predates the question.
+//
 // # THE FLOOR THEOREM
 //
 // The trim floor is load-bearing for the WRITE path, not only for recovery,

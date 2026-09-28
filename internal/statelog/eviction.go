@@ -138,6 +138,24 @@ func CountedSet(now time.Time, reported []NodePosition, live []Presence, tombs [
 	return out
 }
 
+// Readers is the record version every node of a counted set reads on its log,
+// zero for one that has not said: the set a writer asks before it publishes a
+// record an older build cannot even defer.
+//
+// THE TRIM'S COUNTED SET, and deliberately the same one. It is every node that
+// applies the log — a node between boot and its first report counts, at zero,
+// because it is about to replay — and a node on an old build that is offline
+// but not evicted applies the log the moment it returns: a record it cannot
+// read would stop it then, so it holds such a writer back exactly as it holds
+// back the trim, and an operator's eviction releases both.
+func Readers(counted []NodePosition) map[string]int {
+	out := make(map[string]int, len(counted))
+	for _, n := range counted {
+		out[n.NodeID] = n.RecordVersion
+	}
+	return out
+}
+
 // EvictionRefusal reports why an eviction was not permitted.
 type EvictionRefusal struct {
 	NodeID string
