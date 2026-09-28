@@ -212,7 +212,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Each edge is `{"object":{...},"parent":...,"lead":...}`, and a seat's edge states its `seat_kind` and its whole `manages` list too — the content writes that follow carry neither. Takes `config:write` |
 | `GET` | `/chart/imports` `/chart/imports/{revision}` | Which revision this company's structure is running, and when it landed |
 | `GET` | `/chart/check` | The **continuous report**: every way the chart and the applied settings disagree (see [below](#the-continuous-report)). **Takes `audit:read`** — it names every seat nobody in the identity directory holds; the counts ride `/health` for everybody |
-| `GET` | `/company/export` | The chart as an authored **document**, whole and unstripped, for a round trip through a file — its credentials masked, as every read of the runtime half is. Takes `config:read` |
+| `GET` | `/company/export` | The chart as an authored **document**, whole and unstripped — every unit, every seat with its runtime half, and every seat's `manages:` list under `manages` — for a round trip through a file, its credentials masked as every read of the runtime half is. Takes `config:read` |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |

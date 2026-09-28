@@ -497,13 +497,16 @@ for any reader.
 The chart as an authored document, whole and **unstripped**, which is why it
 needs the grant that reads the company configuration: this is a round trip —
 the file you edit and import back — so a stripped export would be one that
-silently deletes half of every seat the moment somebody uses it. Its
-credentials are **masked** as every read of the runtime half is: a sealed one
-exports as the `${CHART_…}` reference it is stored under, which round-trips
-unchanged into this deployment (another one holds no value under that name
-until you store it there), and anything else as `__redacted__`, which an import
-back into this deployment restores from the row and an import into one holding
-no such row refuses, naming the field. `-out PATH` writes it at `0600`, because it carries the names of every
+silently deletes half of every seat the moment somebody uses it. It carries
+every unit, every seat with its runtime half, and every seat's `manages:` list
+under `manages`, keyed by handle — the list is structure, so it sits beside the
+seats rather than on them. Its credentials are **masked** as every read of the
+runtime half is: a sealed one exports as the `${CHART_…}` reference it is
+stored under, which round-trips unchanged into this deployment (another one
+holds no value under that name until you store it there), and anything else as
+`__redacted__`, which an import back into this deployment restores from the row
+and an import into one holding no such row refuses, naming the field.
+`-out PATH` writes it at `0600`, because it carries the names of every
 credential the company holds.
 
 ## `crewlet iam`

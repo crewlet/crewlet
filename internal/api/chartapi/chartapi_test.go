@@ -1295,6 +1295,28 @@ func TestAReadServesEveryFieldAContentWriteTakes(t *testing.T) {
 	}
 }
 
+// THE EXPORT IS A ROUND TRIP, SO IT CARRIES WHOM EVERY SEAT MANAGES.
+//
+// A seat's view has no `manages` — the list is structure, and the whole-chart
+// read serves it beside the seats — and the export served the seats alone, so
+// a company exported and imported back lost every reporting line it had. The
+// control is the seat itself, which the export always carried.
+func TestTheExportCarriesEverySeatsManages(t *testing.T) {
+	t.Parallel()
+	company := nimbus()
+	company.Manages = map[string][]string{"sre": {"engineering"}}
+	r := serve(t, &reader{chart: company}, leadOf(iam.GrantConfigRead), leads())
+
+	body := getJSON(t, r.mux, "/company/export", http.StatusOK)
+	manages, _ := body["manages"].(map[string]any)
+	if got, _ := manages["sre"].([]any); len(got) != 1 || got[0] != "engineering" {
+		t.Errorf("manages = %v, want sre's list carried: %s", body["manages"], mustMarshal(t, body))
+	}
+	if !strings.Contains(string(mustMarshal(t, body)), `"sre"`) {
+		t.Error("the export carries no seat either, so the case certifies nothing")
+	}
+}
+
 // A RENAME IS A ONE-OPERATION STRUCTURAL BATCH, naming the object by the
 // address the route is addressed by and the address the body asks for.
 //

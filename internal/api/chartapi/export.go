@@ -67,6 +67,11 @@ func (s *Service) getExport(w http.ResponseWriter, r *http.Request) {
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"units": units, "seats": seats,
+		// EVERY SEAT'S `manages:` LIST, which a seat's view does not carry:
+		// it is structure, kept beside the seats rather than on them, and an
+		// export that left it out was a round trip that silently took every
+		// reporting line out of the company the moment it was imported back.
+		"manages": got.Manages,
 		// THE POSITION THIS DOCUMENT IS TRUE AS OF, which is what makes
 		// an edit-and-send-back safe to reason about: an import states
 		// the revision it came from, and an operator holding two exports
