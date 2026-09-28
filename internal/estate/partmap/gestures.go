@@ -119,11 +119,15 @@ func HoldFor(state MapState, d time.Duration, by, reason string, now time.Time) 
 }
 
 // Release ends a hold, if there is one ([membership.Release]). A map with no
-// hold is answered as it was given.
-func Release(state MapState) MapState {
-	next := state
+// hold is answered as it was given; a fleet with no map at all is refused like
+// every other gesture, rather than answered with a record nobody wrote.
+func Release(state MapState) (MapState, error) {
+	if state.Map.Generation == uuid.Nil {
+		return state, ErrNoMap
+	}
+	next := state.Clone()
 	next.State = membership.Release(state.State)
-	return next
+	return next, nil
 }
 
 // Move moves one partition off one node: the partition's target skips the

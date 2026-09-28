@@ -18,11 +18,12 @@ func TestAGestureWithNoMapIsRefused(t *testing.T) {
 	t.Parallel()
 	p := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
 	for name, gesture := range map[string]func() error{
-		"out":    func() error { _, err := Out(MapState{}, "data-00", "op", "", base); return err },
-		"in":     func() error { _, err := In(MapState{}, "data-00"); return err },
-		"hold":   func() error { _, err := HoldFor(MapState{}, time.Hour, "op", "", base); return err },
-		"move":   func() error { _, err := Move(MapState{}, p, "data-00", "op", "", base); return err },
-		"cancel": func() error { _, err := CancelMove(MapState{}, p, "data-00"); return err },
+		"out":     func() error { _, err := Out(MapState{}, "data-00", "op", "", base); return err },
+		"in":      func() error { _, err := In(MapState{}, "data-00"); return err },
+		"hold":    func() error { _, err := HoldFor(MapState{}, time.Hour, "op", "", base); return err },
+		"release": func() error { _, err := Release(MapState{}); return err },
+		"move":    func() error { _, err := Move(MapState{}, p, "data-00", "op", "", base); return err },
+		"cancel":  func() error { _, err := CancelMove(MapState{}, p, "data-00"); return err },
 	} {
 		if err := gesture(); !errors.Is(err, ErrNoMap) {
 			t.Errorf("%s with no map: %v, want ErrNoMap", name, err)
@@ -95,7 +96,9 @@ func TestAHoldKeepsAnAbsentMembersPartitions(t *testing.T) {
 	if !s.state.Map.Draw().Holds("data-02") {
 		t.Fatal("a held map removed a member")
 	}
-	s.state = Release(s.state)
+	if s.state, err = Release(s.state); err != nil {
+		t.Fatal(err)
+	}
 	if s.state.Hold != nil {
 		t.Fatal("a release left the hold")
 	}
