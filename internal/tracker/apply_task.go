@@ -1014,7 +1014,7 @@ func bucketOf(task Task) string {
 // grandparent, or the root when the purged task was one — and its subtree's
 // ancestry is rebuilt. Depth can only fall, so no cap is crossed by the move.
 //
-// # What it writes of OTHER tasks, it writes into their DOCUMENTS
+// # From version 4, what it writes of OTHER tasks, it writes into their DOCUMENTS
 //
 // A task's derived rows — its parent pointer, its relations, its dependency
 // edges and its mirror of who waits on it — are a pure function of its own
@@ -1027,6 +1027,11 @@ func bucketOf(task Task) string {
 // however many of the purge's effects reach it ([Applier.rewriteNaming]), and
 // stamped `scoped_through` rather than `version`: a record may move only its
 // own subject's version ([Task]).
+//
+// A PURGE BELOW VERSION 4 fixes the rows alone, as every build before it did
+// ([Applier.reparentRows]): applying an older record by the newer rule on a
+// node that replays it would give that node documents no other node holds
+// ([rewriteVersion]).
 //
 // Those tasks are named in the purge's SCOPE, which the writer enumerates
 // ([purgeReach]); the list of what a purge writes of another task is the
@@ -1079,10 +1084,12 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		written += n
 	}
 	// WHICH OTHER TASKS NAME IT, read while the rows that say so are still
-	// here; each is rewritten below, once.
-	others, err := othersNaming(ctx, tx, id, children)
-	if err != nil {
-		return 0, err
+	// here: from version 4 each is rewritten below, once.
+	var others map[string]otherEdit
+	if c.record.V >= rewriteVersion {
+		if others, err = othersNaming(ctx, tx, id, children); err != nil {
+			return 0, err
+		}
 	}
 	for _, statement := range []struct {
 		sql  string
@@ -1131,7 +1138,12 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	moved, err := a.rewriteNaming(ctx, tx, id, task.Parent, children, others, c)
+	var moved int
+	if c.record.V >= rewriteVersion {
+		moved, err = a.rewriteNaming(ctx, tx, id, task.Parent, children, others, c)
+	} else {
+		moved, err = a.reparentRows(ctx, tx, children, task.Parent)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -1200,7 +1212,41 @@ func forgetRecords(ctx context.Context, tx *sql.Tx, id, keep string) (int, error
 	return written, nil
 }
 
-// otherEdit is everything a purge changes in ONE other task's document.
+// reparentRows is a purge's re-parenting BELOW VERSION 4: each child's
+// pointer moves onto parent on the row alone, and its subtree's ancestry is
+// rebuilt.
+//
+// The rule every build before [rewriteVersion] applied, kept for the records
+// they wrote. Its flaw is the one version 4 exists for — the child's document
+// still names the purged task, and the child's next record puts the pointer
+// back — and it is not repaired here, because the nodes that applied such a
+// record hold exactly this.
+//
+// AFTER THE DELETES, deliberately: [Applier.maintainClosure] walks the parent
+// chain, and run before them it would walk through the row this purge is
+// removing and write an ancestry naming it.
+func (a *Applier) reparentRows(ctx context.Context, tx *sql.Tx, children []string,
+	parent *string) (int, error) {
+
+	written := 0
+	for _, child := range children {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tracker_tasks SET parent_id = ? WHERE id = ?`,
+			parent, child); err != nil {
+			return 0, fmt.Errorf("tracker: re-parent %s: %w", child, err)
+		}
+		written++
+		n, err := a.maintainClosure(ctx, tx, Task{ID: child, Parent: parent})
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// otherEdit is everything a version-4 purge changes in ONE other task's
+// document.
 //
 // GATHERED PER TASK, because a task can be reached by more than one of the
 // purge's effects — the subtask an epic waits on is both its child and its
@@ -1223,9 +1269,9 @@ type otherEdit struct {
 	reparent bool
 }
 
-// othersNaming reads which OTHER tasks a purge of id rewrites, and what it
-// changes in each: the tasks relating to it, the blockers listing it among
-// their dependents, and its direct children.
+// othersNaming reads which OTHER tasks a version-4 purge of id rewrites, and
+// what it changes in each: the tasks relating to it, the blockers listing it
+// among their dependents, and its direct children.
 //
 // READ BEFORE THE DELETES: the relation rows and the mirror rows are what say
 // which tasks name it, and they are about to go.
@@ -1263,9 +1309,9 @@ func othersNaming(ctx context.Context, tx *sql.Tx, id string,
 	return edits, nil
 }
 
-// rewriteNaming is a purge's effect on every other task: each one's document
-// rewritten ONCE with everything the purge changes in it ([otherEdit]), and
-// then each re-parented child's ancestry rebuilt.
+// rewriteNaming is a version-4 purge's effect on every other task: each one's
+// document rewritten ONCE with everything the purge changes in it
+// ([otherEdit]), and then each re-parented child's ancestry rebuilt.
 //
 // IN ID ORDER, so every node issues the same statements in the same order.
 //
@@ -1281,31 +1327,32 @@ func (a *Applier) rewriteNaming(ctx context.Context, tx *sql.Tx, id string,
 	written := 0
 	for _, other := range slices.Sorted(maps.Keys(edits)) {
 		edit := edits[other]
-		n, err := rewriteOther(ctx, tx, other, c, func(task *Task) bool {
-			changed := false
-			if edit.unrelate {
-				kept := slices.DeleteFunc(slices.Clone(task.Relations),
-					func(r Relation) bool { return r.Other == id })
-				changed = changed || len(kept) != len(task.Relations)
-				task.Relations = kept
-			}
-			if edit.unmirror {
-				kept := slices.DeleteFunc(slices.Clone(task.Dependents),
-					func(d string) bool { return d == id })
-				changed = changed || len(kept) != len(task.Dependents)
-				task.Dependents = kept
-			}
-			if edit.reparent {
-				if parent == nil {
-					task.Parent = nil
-				} else {
-					moved := *parent
-					task.Parent = &moved
+		n, err := rewriteOther(ctx, tx, other, c, movedColumns{parent: edit.reparent},
+			func(task *Task) bool {
+				changed := false
+				if edit.unrelate {
+					kept := slices.DeleteFunc(slices.Clone(task.Relations),
+						func(r Relation) bool { return r.Other == id })
+					changed = changed || len(kept) != len(task.Relations)
+					task.Relations = kept
 				}
-				changed = true
-			}
-			return changed
-		})
+				if edit.unmirror {
+					kept := slices.DeleteFunc(slices.Clone(task.Dependents),
+						func(d string) bool { return d == id })
+					changed = changed || len(kept) != len(task.Dependents)
+					task.Dependents = kept
+				}
+				if edit.reparent {
+					if parent == nil {
+						task.Parent = nil
+					} else {
+						moved := *parent
+						task.Parent = &moved
+					}
+					changed = true
+				}
+				return changed
+			})
 		if err != nil {
 			return 0, fmt.Errorf("tracker: take %s out of task %s: %w", id, other, err)
 		}
@@ -1321,6 +1368,21 @@ func (a *Applier) rewriteNaming(ctx context.Context, tx *sql.Tx, id string,
 	return written, nil
 }
 
+// movedColumns are the row columns a rewrite of ANOTHER task moves beside its
+// document.
+//
+// ONLY THOSE, and never every column the document could derive: a task can
+// hold a column its document does not agree with — a rank a version-1 rank
+// order wrote to the column alone, a pointer a version-1 purge moved on the row
+// alone ([rewriteVersion]) — and a rewrite that re-derived every column would
+// put a purged parent back under a task a later purge merely unlinked, or undo
+// a drag because a purge touched the card. What a rewrite does not move, it
+// leaves as the row holds it.
+type movedColumns struct {
+	parent bool
+	rank   bool
+}
+
 // rewriteOther applies change to ANOTHER task's document, from a record on
 // some other subject, and reports the rows written.
 //
@@ -1332,14 +1394,10 @@ func (a *Applier) rewriteNaming(ctx context.Context, tx *sql.Tx, id string,
 // task at most once: a second rewrite from the same record reads as that
 // redelivery and writes nothing ([otherEdit]).
 //
-// The two columns such a record moves — the parent pointer (a purge's
-// re-parenting) and the rank (a rank move) — are rewritten from the document
-// with it, because the document is what every later record derives them from;
-// a change that moves neither writes the values it read, and a rank the
-// document never carried takes [upsertTask]'s fallback, which is what the
-// task's own next record would write.
+// The columns named in moved are written from the document with it, because
+// the document is what every later record derives them from.
 func rewriteOther(ctx context.Context, tx *sql.Tx, id string, c applyContext,
-	change func(*Task) bool) (int, error) {
+	moved movedColumns, change func(*Task) bool) (int, error) {
 
 	task, held, err := readTask(ctx, tx, id)
 	if err != nil || !held {
@@ -1353,14 +1411,18 @@ func rewriteOther(ctx context.Context, tx *sql.Tx, id string, c applyContext,
 	if err != nil {
 		return 0, fmt.Errorf("tracker: encode task %s at %s: %w", id, c.position, err)
 	}
-	rank := task.Rank
-	if rank == "" {
-		rank = RankOrigin
+	set, args := `document = ?, scoped_through = ?`, []any{document, c.packed}
+	if moved.parent {
+		set += `, parent_id = ?`
+		args = append(args, nullableStringPtr(task.Parent))
 	}
-	res, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET document = ?, parent_id = ?, rank = ?, scoped_through = ?
+	if moved.rank {
+		set += `, rank = ?`
+		args = append(args, string(task.Rank))
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE tracker_tasks SET `+set+`
 		WHERE id = ? AND ? > MAX(version, scoped_through)`,
-		document, nullableStringPtr(task.Parent), string(rank), c.packed, id, c.packed)
+		append(args, id, c.packed)...)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: rewrite task %s at %s: %w", id, c.position, err)
 	}

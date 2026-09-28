@@ -25,11 +25,13 @@ import (
 //   - 2: a task patch may carry the cross-project move's marker
 //     ([TaskPatch.Moving]).
 //   - 3: the file kind ([KindFile]).
+//   - 4: a rank order and a purge write each OTHER task they change into
+//     that task's document as well as its rows ([rewriteVersion]).
 //
 // A record is WRITTEN at the lowest version a reader can apply without
 // losing anything it says, never simply at this constant — see
 // [recordVersionOf] for why that matters to a node still on the older build.
-const RecordVersion = 3
+const RecordVersion = 4
 
 // baseRecordVersion is the version a record whose shape no later version
 // changed is written at: 1, which every build there has ever been reads.
@@ -51,6 +53,27 @@ const moveMarkVersion = 2
 // [recordVersionOf].
 const fileVersion = 3
 
+// rewriteVersion is the version from which a record that changes ANOTHER task
+// — a rank order moving it, a purge taking itself out of it — writes that
+// task's DOCUMENT beside its rows ([rewriteOther]). See [recordVersionOf].
+//
+// # Why the rule is chosen by the record and not by the build
+//
+// The two records' APPLY changed and their shape did not: a version-1 rank
+// order and a version-1 purge carry exactly the bytes a version-4 one does.
+// Left at version 1, the same record would be applied one way by a build from
+// before the change and another by a build from after it — in a rolling
+// upgrade, and on every node that replays the log's older records after
+// adopting a snapshot — and the rows the identity claim says are identical on
+// every node ([Domain.ClaimsIdentity]) would differ for ever. So the rule is a
+// function of the record: a record below this version is applied by the rule
+// every build before it applied, for as long as one is in the log, and a
+// record at it by the new one. A node too old to read it RETAINS a rank order
+// (see the deferral contract in [statelog]) and HALTS at a purge, which is a
+// gate ([GateRecordVersion]) — the two answers a build has for a record it
+// cannot apply, and neither of them is applying it the old way.
+const rewriteVersion = 4
+
 // recordVersionOf is the version a record carrying payload is written at: the
 // lowest whose reader applies it without losing anything.
 //
@@ -67,8 +90,7 @@ const fileVersion = 3
 // rolling upgrade loses coverage exactly where a shape changed — here, the
 // root of a subtree somebody moved, until its walk is done — and nowhere else.
 // A domain that raised every record to its newest version would stall an
-// older node's whole tracker for the length of the upgrade. And a gate is
-// pinned at [GateRecordVersion] for ever, which this function never raises.
+// older node's whole tracker for the length of the upgrade.
 //
 // A FILE IS WRITTEN AT 3, for the opposite reason with the same outcome. A
 // build reading only 2 knows every field of the record and not its KIND, so
@@ -76,6 +98,13 @@ const fileVersion = 3
 // at that position for as long as the record is in the log. At 3 it retains
 // the record instead, and a retained file record holds back only that file's
 // own address until the node upgrades.
+//
+// A RANK ORDER AND A PURGE ARE WRITTEN AT 4, because their APPLY changed at 4
+// ([rewriteVersion]) while their shape did not: a build from before it would
+// decode either without complaint and apply it the old way. The rank order is
+// then retained, holding back its project on that node until it upgrades; the
+// purge is a gate, so that node halts rather than defer it ([GateRecordVersion]
+// says why a gate is raised only when its apply changes).
 func recordVersionOf(payload any) int {
 	switch p := payload.(type) {
 	case TaskPatch:
@@ -84,6 +113,8 @@ func recordVersionOf(payload any) int {
 		}
 	case File:
 		return fileVersion
+	case RankOrder, purgeMutation:
+		return rewriteVersion
 	}
 	return baseRecordVersion
 }

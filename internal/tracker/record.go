@@ -566,11 +566,12 @@ type Placement struct {
 
 // Eviction is a node's eviction or its readmission.
 //
-// ITS VERSION IS PINNED AT ONE FROM THE FIRST RELEASE AND FOR EVER, because
-// this record INSTALLS A GATE: a build that cannot decode a gate must not
-// apply anything above it. The shape evolves additively — an old reader drops
-// an unknown key — and a semantic change takes a new record kind rather than a
-// version bump.
+// ITS SHAPE VERSION IS PINNED AT ONE FROM THE FIRST RELEASE AND FOR EVER,
+// because this record INSTALLS A GATE: a build that cannot decode a gate must
+// not apply anything above it. The shape evolves additively — an old reader
+// drops an unknown key — and a change to what its apply does is written at a
+// raised RECORD version, never under a new kind ([GateRecordVersion] says
+// why).
 type Eviction struct {
 	V          int       `json:"v"`
 	Version    uint64    `json:"version"`

@@ -261,8 +261,8 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 	return reason, gated, nil
 }
 
-// GateRecordVersion is the version every gate-installing record carries, FOR
-// EVER.
+// GateRecordVersion is the SHAPE version every gate-installing record's
+// payload carries, FOR EVER.
 //
 // # Why this one number never moves
 //
@@ -271,12 +271,34 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 // that deferred an eviction would leave its own gate table empty and go on
 // applying every record the evicted node appends, and there is no inverse that
 // repairs it. So an un-decodable gate record STOPS that build's applier
-// instead — which only works if a gate record is decodable by every build
-// there will ever be, and that is what pinning the version at one buys.
+// instead — and a stop takes a node out of the fleet until it is upgraded, so
+// no mere change of SHAPE may cost one. That is what pinning this at one buys:
+// a gate record's shape can only ever grow by addition, never by reshaping,
+// for the life of the deployment, and an older build reads every one of them.
 //
-// The consequence is deliberate: a gate record's SHAPE can only ever grow by
-// addition, never by reshaping, for the life of the deployment.
+// # What does move, and why a stop is then the right answer
+//
+// A change to what a gate's APPLY does is not a change of shape, and no older
+// build can honour it: applied the old way it leaves rows every newer node
+// does not hold, and deferred it is the licence described above. So such a
+// record is written at a RECORD version above every build that predates the
+// change — the purge at [rewriteVersion] — and the framework halts that build
+// at it, while every record written before it keeps the rule it was applied
+// by. The halt needs the older build to know the record for a gate, and it
+// does, because [Domain.InstallsGate] is answered from the envelope: an
+// eviction by its kind and a purge by its op. That is also why a changed gate
+// is NOT given a new kind or a new op: one an older build does not know is not
+// a gate to it, so at a raised version it would be deferred — the licence
+// above — and at this one it would reach its dispatch as a failure retried in
+// place for ever rather than a stop.
 const GateRecordVersion = 1
+
+// purgeMutation is a purge's payload, and its type is what [recordVersionOf]
+// raises the record to [rewriteVersion] by.
+type purgeMutation struct {
+	V      int    `json:"v"`
+	Reason string `json:"reason,omitempty"`
+}
 
 // PurgeResult is what an operator is told after a purge, in THREE SIBLING
 // GROUPS.
@@ -447,10 +469,9 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			if err := scope.coversReach(reach); err != nil {
 				return statelog.Decision{}, err
 			}
-			decision, err := w.decide(stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
-				V      int    `json:"v"`
-				Reason string `json:"reason,omitempty"`
-			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason, w.Actor, w.Leads), at)
+			decision, err := w.decide(stamp, subject, OpPurge, ChangePurged, scope, opID,
+				purgeMutation{V: GateRecordVersion, Reason: reason},
+				purgeWake(current, reason, w.Actor, w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

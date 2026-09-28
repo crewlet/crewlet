@@ -1592,6 +1592,14 @@ Its **children move rather than being destroyed**: each direct child
 re-parents onto the purged task's own parent, or becomes a root when the purged
 task was one. Destroying the subtree would destroy work nobody confirmed.
 
+**Every other task that named it stops naming it**, for good: a task that
+waited on it is no longer blocked by it, a task it waited on no longer lists it
+among the work it unblocks, a link to it is gone, and a child's parent is the
+one it moved onto. Each of those tasks keeps that through its own next edit.
+A purge is a gate on the log, so a node on a build that cannot apply it stops
+its tracker rather than guess — do not purge in the middle of a rolling upgrade
+([What a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks)).
+
 **The project's lead is told**, and nobody else. There is no assignee left to
 tell and no watcher list worth carrying — a notification naming them would be
 a copy of exactly the content the purge exists to remove, kept on the log for
