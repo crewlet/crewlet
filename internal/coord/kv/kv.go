@@ -16,8 +16,8 @@
 //
 //   - crewlet_leases, created with KeyValueConfig.TTL = the seat lease TTL
 //     this node asks for, and ADOPTED at whatever a peer created it with.
-//     It holds `seat:`, `node:` and `objects:` leases — every class renewed
-//     on the seat heartbeat. That age is the STREAM's MaxAge,
+//     It holds `seat:`, `node:`, `objects:` and `estate:` leases — every
+//     class renewed on the seat heartbeat. That age is the STREAM's MaxAge,
 //     which is the renewable one: every write refreshes the entry's age, so
 //     Update at the current revision IS the renew, an unrenewed key expires
 //     SERVER-SIDE, and a peer's Create then succeeds. The store's own expiry
@@ -210,7 +210,7 @@
 //
 // A lease's read-back, a renew's and a release's read, Get, the epoch and
 // hint reads, and every record the fleet store reads by key (fleet.go, the
-// mailboxes, the object map, the positions, the follows, the secrets) go
+// mailboxes, the two placement maps, the positions, the follows, the secrets) go
 // through ONE read: `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only
 // the stream leader answers ([leaderReader], [getLatest]). NONE is the bucket
 // handle's own Get, and none may be.
@@ -1362,7 +1362,8 @@ func (s *Store) ListOwned(ctx context.Context, owner string) ([]coord.Lease, err
 // ListLive returns the live leases of one class. ListLive(coord.ClassNode) is
 // the membership read: counting live presence leases is how a node learns the
 // fleet size it divides the seats by. ListLive(coord.ClassObjects) is the
-// object store's, read by the placement map's maintainer every tick.
+// object store's, read by the placement map's maintainer every tick, and
+// ListLive(coord.ClassEstate) the estate map's, read by its maintainer.
 //
 // THE BROKER NARROWS THIS ONE. A class is the leading segment of a resource
 // and therefore a subject token of its key, so each scan asks for that class

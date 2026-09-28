@@ -43,15 +43,20 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord
-	objectMap    *coord.ObjectMapRecord
-	positions    map[string]coord.NodePositions
-	holds        map[string]coord.TrimHold
-	floors       map[string]coord.TrimFloor
-	backups      map[string]coord.BackupPoint
-	maintenance  map[string]coord.MaintenanceOperation
-	admissions   map[string]coord.Admission
-	maintAcks    map[string]coord.MaintenanceAck
-	maintRev     uint64
+	objectMap    versioned
+	estateMap    versioned
+
+	// estateWatches is every open watch of the estate map, each handed
+	// every write of it under mu.
+	estateWatches map[*mapWatch]struct{}
+	positions     map[string]coord.NodePositions
+	holds         map[string]coord.TrimHold
+	floors        map[string]coord.TrimFloor
+	backups       map[string]coord.BackupPoint
+	maintenance   map[string]coord.MaintenanceOperation
+	admissions    map[string]coord.Admission
+	maintAcks     map[string]coord.MaintenanceAck
+	maintRev      uint64
 
 	// version is the one counter every versioned write draws from, sandbox
 	// runs and mailbox records alike. Store-wide rather than per record, as

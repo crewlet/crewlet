@@ -161,6 +161,10 @@ var readCases = []testCase{
 		h.claim(coord.ObjectsResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
+		// And the estate map's, a third class naming that node.
+		h.claim(coord.EstateResource("node-a"), coord.AcquireOptions{
+			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
+		})
 
 		// Each class sees its own and NOTHING else. On the native backend
 		// the broker is what narrows this — a class is the leading subject
@@ -171,6 +175,8 @@ var readCases = []testCase{
 		h.requireResources("live nodes", h.listLive(coord.ClassNode), "node:node-a")
 		h.requireResources("live object-store members", h.listLive(coord.ClassObjects),
 			"objects:node-a")
+		h.requireResources("live estate-map members", h.listLive(coord.ClassEstate),
+			"estate:node-a")
 	}},
 
 	{"a_class_that_cannot_address_a_key_is_refused", func(h *harness) {

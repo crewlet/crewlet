@@ -357,7 +357,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why SIXTEEN buckets and not one
+// # Why SEVENTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -411,6 +411,13 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	objects    none at all: the placement map is standing state, and one
 //	           that expired would read as a fleet with nowhere to put
 //	           anything — every node would place every object on nobody
+//	estate     none at all, for the object map's reason: the estate map is
+//	           standing state, and one that expired would read as an estate
+//	           nobody holds — every router would find no node serving any
+//	           partition. A bucket of its own rather than a second key
+//	           beside the object map because it is WATCHED by every node,
+//	           and a watch over a bucket holding one record delivers that
+//	           record and nothing else
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -446,7 +453,7 @@ const (
 	integrationsSuffix = "_integrations"
 	mailboxesSuffix    = "_mailboxes"
 	objectsSuffix      = "_objects"
-	objectMapKey       = "map"
+	estateSuffix       = "_estate_map"
 	activationKey      = "activation"
 	// payloadKey holds the CURRENT revision's sealed body, in the same
 	// bucket as the pointer and for the same reason: neither may expire,
@@ -566,6 +573,7 @@ type FleetStore struct {
 	integrations jetstream.KeyValue
 	mailboxes    jetstream.KeyValue
 	objects      jetstream.KeyValue
+	estate       jetstream.KeyValue
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
@@ -610,7 +618,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, sixteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, seventeen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -690,6 +698,8 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
 		{&store.objects, objectsSuffix,
 			"Crewlet object placement map; NO TTL — an expired map is a fleet with nowhere to put anything", 0},
+		{&store.estate, estateSuffix,
+			"Crewlet estate map; NO TTL — an expired map is an estate nobody holds", 0},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {

@@ -49,6 +49,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"integrations", integrationCases},
 		{"mailboxes", mailboxCases},
 		{"object maps", objectMapCases},
+		{"estate maps", estateMapCases},
 		{"maintenance", maintenanceCases},
 		{"listings", listingCases},
 		{"markers", markerCases},

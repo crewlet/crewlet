@@ -1132,6 +1132,7 @@ type Fleet interface {
 	Integrations
 	Mailboxes
 	ObjectMaps
+	EstateMaps
 	PositionRegister
 	HoldRegister
 	FloorRegister
@@ -1182,6 +1183,85 @@ type ObjectMaps interface {
 	// UpdateObjectMap writes value at version, reporting false when that
 	// version no longer holds.
 	UpdateObjectMap(ctx context.Context, value []byte, version uint64) (ObjectMapRecord, bool, error)
+}
+
+// EstateMapRecord is the fleet's estate map as the store holds it: which data
+// nodes hold each partition of the replicated estate.
+//
+// OPAQUE BYTES here for the object map's reason: the map's shape and every
+// rule about it belong to internal/estate/partmap, and a coordination package
+// that decoded it would be a second place to decide what a valid map is.
+type EstateMapRecord struct {
+	Value []byte
+
+	// Version is the store's version as read. OPAQUE, like
+	// [Record.Version]: pass back exactly what a read, a write or a watch
+	// handed you.
+	Version uint64
+}
+
+// EstateMaps holds the ONE map every node routes to the replicated estate's
+// partitions by, and every data node joins and leaves them by.
+//
+// # Why coordination, and why a bucket of its own
+//
+// Which data nodes hold a partition is a question the whole company has to
+// answer the same way NOW — a router that sent a write to a node that no
+// longer holds its partition would be told so, but a node that joined or left
+// on a map nobody else read would hold, or drop, a copy the fleet does not
+// know about — which is the definition of a coordination record (ADR-0003).
+// It is one record for the object map's reason: a holder table is a function
+// of the WHOLE map, and a map split across keys could be read half-changed.
+// And it is a bucket of its own rather than a second key beside the object
+// map because it is WATCHED: every node follows it, and a watch over a bucket
+// holding only this record delivers this record and nothing else.
+//
+// # Compare-and-set, no retention, and a watch
+//
+// Every change is conditioned on the version its writer read, for the object
+// map's reason — one duty maintains it and a duty moves between nodes
+// mid-write — and the bucket has no age: a map that expired would read as an
+// estate nobody holds. What the object map does not need and this one does
+// is the WATCH. A node reads the object map when it places a chunk, which it
+// can re-read on an interval; a node JOINS a partition when the map names it,
+// and every router in the fleet routes by who serves each partition, so each
+// has to learn of a change when it lands rather than an interval later.
+type EstateMaps interface {
+	// EstateMap reads the map, reporting false when none was ever written.
+	EstateMap(ctx context.Context) (EstateMapRecord, bool, error)
+
+	// CreateEstateMap writes the first map, reporting false when one
+	// already exists — the second writer re-reads and updates instead.
+	CreateEstateMap(ctx context.Context, value []byte) (EstateMapRecord, bool, error)
+
+	// UpdateEstateMap writes value at version, reporting false when that
+	// version no longer holds.
+	UpdateEstateMap(ctx context.Context, value []byte, version uint64) (EstateMapRecord, bool, error)
+
+	// WatchEstateMap delivers the map as it changes, until ctx ends: the
+	// current version first — on a fleet with no map, nothing until the
+	// first one is written — and then later versions IN THE ORDER THEY
+	// WERE WRITTEN, never an older one after a newer, and always, in the
+	// end, the newest.
+	//
+	// IT MAY SKIP A VERSION superseded before it was handed over. The
+	// store keeps one version of its one key, so a version replaced while
+	// a reader was busy is no longer stored anywhere to deliver: measured
+	// on the broker, a reader that fell forty writes behind was not handed
+	// every one of them. That is the contract rather
+	// than a gap in it, because it is what every reader needs anyway: a
+	// node that restarts is handed only the current map, so a reader that
+	// acted on the step BETWEEN two versions would be wrong on every
+	// restart. A reader acts on the newest map it holds, and the twin
+	// skips as the broker does, so a reader that relied on seeing each
+	// version fails its tests rather than a fleet.
+	//
+	// A CLOSED CHANNEL IS A WATCH THAT MUST BE RE-OPENED: the backend lost
+	// it (its connection closed) or the record was removed, which nothing
+	// in the engine does. The channel is also closed once ctx ends. A
+	// reader that re-opens it is handed the current version first, which
+	// is all a reader of a whole value needs.
+	WatchEstateMap(ctx context.Context) (<-chan EstateMapRecord, error)
 }
 
 // Follows is which chat threads each seat is following.

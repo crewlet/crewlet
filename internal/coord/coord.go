@@ -8,7 +8,7 @@
 // kind of thing the lease is for. That is not decoration: the key a resource
 // becomes carries its class as a subject token of its own, so a whole class
 // is a wildcard the broker can match and a listing asks for one kind rather
-// than reading every lease in the fleet. Four classes name four kinds:
+// than reading every lease in the fleet. Five classes name five kinds:
 //
 //   - seat:{handle} — one agent seat this node runs.
 //   - worker:{duty} — a fleet singleton: the maintenance sweep, the
@@ -35,6 +35,15 @@
 //     object store itself, renewed on its own loop, released only once its
 //     chunk server has stopped, and carries the store's own account of its
 //     health (see internal/objstore's ObjectsMeta).
+//   - estate:{id} — a data node's membership in the ESTATE MAP, which
+//     places the partitions of the replicated estate, and what the node
+//     holds of it: per partition, whether it is adopting, catching up,
+//     serving or leaving, and the map epoch it last acted on. A class of its
+//     own, rather than presence or the objects lease, for the objects
+//     lease's two reasons and a third: it is released LAST in a drain,
+//     after the node has stopped serving every partition it held, so the
+//     map's maintainer never reads a node still serving as one that left.
+//     What the lease carries is internal/estate/partmap's.
 //
 // What belongs here rather than in a node's own database is ADR-0003, the
 // tri-state below is ADR-0005, and why [ProtocolVersion] REFUSES an older
@@ -502,7 +511,8 @@ type Backend interface {
 
 	// ListLive returns the live leases of one resource class. Both
 	// membership reads are built on this: the fleet's — ListLive(ClassNode)
-	// — and the object store's, ListLive(ClassObjects).
+	// — the object store's, ListLive(ClassObjects), and the estate map's,
+	// ListLive(ClassEstate).
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
 
 	// PreferredResources returns resources of this class whose stickiness
@@ -580,7 +590,7 @@ const ResourceSeparator = ":"
 // key, and a listing that returns nothing is indistinguishable from a class
 // with no members at every caller. [Class.Valid] is what refuses one.
 //
-// Classes are deliberately NOT enumerated here. This package owns the four
+// Classes are deliberately NOT enumerated here. This package owns the five
 // the fleet itself leases; the tracker's claims are leases in the same bucket
 // under classes of their own, and an enumeration here would either be wrong
 // or drag every caller's vocabulary into this package.
@@ -592,6 +602,7 @@ const (
 	ClassWorker  Class = "worker"
 	ClassNode    Class = "node"
 	ClassObjects Class = "objects"
+	ClassEstate  Class = "estate"
 )
 
 // Valid reports whether this class can address a key.
@@ -701,6 +712,14 @@ func NodeResource(nodeID string) string { return ClassNode.Resource(nodeID) }
 // store's, and is read and written by internal/objstore.
 func ObjectsResource(nodeID string) string { return ClassObjects.Resource(nodeID) }
 
+// EstateResource names a data node's estate-map membership lease.
+//
+// Claimed by the node's ESTATE RUNTIME rather than by the seat host, once that
+// runtime is up, and given back only after the node has stopped serving every
+// partition it held — see the package doc. What the lease carries is
+// internal/estate/partmap's.
+func EstateResource(nodeID string) string { return ClassEstate.Resource(nodeID) }
+
 // IsSeatResource reports whether a resource names a seat.
 func IsSeatResource(resource string) bool { return ClassSeat.Holds(resource) }
 
@@ -720,3 +739,9 @@ func NodeID(resource string) (string, bool) { return ClassNode.Name(resource) }
 // name, reporting false for a resource of any other class — a presence lease
 // included, which names the same node and says nothing about its store.
 func ObjectsNode(resource string) (string, bool) { return ClassObjects.Name(resource) }
+
+// EstateNode recovers the node id from an estate-map membership resource name,
+// reporting false for a resource of any other class — the node's presence and
+// its objects lease included, which name the same node and say nothing about
+// what it holds of the estate.
+func EstateNode(resource string) (string, bool) { return ClassEstate.Name(resource) }
