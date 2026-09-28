@@ -189,8 +189,17 @@ type converging struct {
 	reporting []string
 
 	// able is every node whose lease the tick counts present and healthy
-	// ([Presence.membership]): the nodes a join may be named on and whose
-	// word may vouch for a partition.
+	// ([Presence.membership]): the nodes a join may be named on, whose word
+	// may vouch for a partition, and whose word may make them a holder or
+	// a server — a copy adopted, a join promoted, a leave taken back.
+	//
+	// A NODE OUTSIDE IT IS AN ABSENT ONE, whatever its lease says: its store
+	// has said it failed, or will not say, or it runs another layout, and
+	// membership counts it exactly as a node that has gone. Its word that
+	// it is GIVING A COPY UP is still taken — a drain, a join given up, a
+	// release — because that is the one direction in which the word of a
+	// store nobody may trust costs nothing: it moves a copy out of what
+	// routers route to, never into it.
 	able map[string]bool
 }
 
@@ -312,9 +321,11 @@ func (c *converging) settle(g int) {
 			// that already dropped its file — and is gone as surely.
 			c.changed = true
 			continue
-		case h.State == Joining && said == PartServing && c.acted(h.Node, h.Since):
+		case h.State == Joining && said == PartServing && c.acted(h.Node, h.Since) &&
+			c.able[h.Node]:
 			// Serving, at its own word, having acted on the map that
-			// named it.
+			// named it — the word of a node the tick counts able
+			// ([converging.able]).
 			c.set(&h, Serving)
 		}
 		kept = append(kept, h)
@@ -333,8 +344,13 @@ func (c *converging) settle(g int) {
 	// drains. A copy still being built is adopted joining where the target
 	// wants it, and leaving where it does not: it serves nothing, and its
 	// release fences anything it might still publish.
+	//
+	// ONLY ON THE WORD OF A NODE THE TICK COUNTS ABLE. A store that has
+	// said it failed is no account of what it holds, and a copy adopted on
+	// its word would be routed to, or be a joiner the trim counts from
+	// nothing; it is adopted the first tick the node is able again.
 	for _, node := range c.reporting {
-		if !c.draw.Holds(node) || holderOf(p, node) != nil {
+		if !c.draw.Holds(node) || !c.able[node] || holderOf(p, node) != nil {
 			continue
 		}
 		said, ok := c.says(node, g)
@@ -360,9 +376,10 @@ func (c *converging) settle(g int) {
 		h := &p.Holders[i]
 		said, _ := c.says(h.Node, g)
 		switch {
-		case h.State == Leaving && inTarget(h.Node) && said == PartServing:
+		case h.State == Leaving && inTarget(h.Node) && said == PartServing && c.able[h.Node]:
 			// 6. Wanted again, and it has not started to leave: the
-			// cheapest copy there is, the one already serving.
+			// cheapest copy there is, the one already serving — on
+			// the word of a node the tick counts able.
 			c.set(h, Serving)
 		case h.State == Joining && !inTarget(h.Node) && said != PartServing:
 			// 7. A joiner the target moved away from before it served

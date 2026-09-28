@@ -38,8 +38,13 @@
 // node that does not say its store is healthy is counted exactly as a failed
 // one: absent for that tick, and removed if it goes on not saying for the
 // grace. A node counted absent is placed on nothing new — no join is named on
-// it — and its word vouches for no copy's retirement, whatever its lease says
-// of a partition, since an absent node has no lease to vouch with. The object
+// it — its word vouches for no copy's retirement, and nothing it says makes it
+// a holder or a server: no copy it reports is adopted, no join of its is
+// promoted and no leave of its is taken back, whatever its lease says of a
+// partition, since an absent node has no lease to say it with. What it holds
+// already stays as it is until it is able again or membership removes it, and
+// its word that it is GIVING a copy up is still taken — the one direction in
+// which the word of a store nobody may trust costs nothing. The object
 // store reads its own lease the other way round, an unsaid health as one that
 // has not failed, and that is right THERE: it had members before it had a
 // health report, and the reading kept them placed on. The estate lease was
@@ -110,7 +115,8 @@
 //     leave a partition it never adopted has nothing to release.
 //   - A joining holder whose lease says serving, at an epoch at least its
 //     Since, is promoted: the node has itself established its copy, and has
-//     read the map that named it.
+//     read the map that named it. This and the two rules after it take the
+//     word of a node the tick counts present and healthy, and no other.
 //   - A node whose lease reports the partition and which the map does not list
 //     is ADOPTED — after the cutover, a restore, or a node that came back
 //     with its files. An established copy is added serving, wanted or not:

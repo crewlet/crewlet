@@ -754,6 +754,92 @@ func TestANodeThatDoesNotSayItIsHealthyIsNotPlacedOn(t *testing.T) {
 	}
 }
 
+// NOTHING A NODE THE TICK COUNTS UNHEALTHY SAYS MAKES IT A HOLDER, OR A
+// SERVER. Membership counts such a node exactly as an absent one — a store
+// that says it has failed, or will not say, or runs another layout, answers
+// for none of what it holds — so its lease is no account of a partition in
+// either direction: no copy it reports is adopted, no join of its is
+// promoted, and no leave of its is taken back on its word that it serves,
+// since each of those would have routers send a partition's reads and writes
+// to a store that has said it cannot be trusted with one. What it already
+// holds stays as it is until it is able again, or membership removes it.
+// Each transition is shown happening on a healthy lease first, so a case
+// that stays put is the health's doing.
+func TestNothingAnUnhealthyNodeSaysMakesItAServer(t *testing.T) {
+	t.Parallel()
+	transitions := map[string]struct {
+		// stage puts data-01 where the transition starts and has its
+		// lease say what makes it happen, returning the partition.
+		stage func(s *sim) int
+		// want is data-01's holder state after the tick on a healthy
+		// lease; on an unhealthy one it keeps was, and "" is no holder.
+		want, was HolderState
+	}{
+		"adopted serving": {want: Serving, stage: func(s *sim) int {
+			g, _ := s.targetedAt("data-01")
+			s.state.Map.Partitions[g].Holders = nil
+			s.nodes["data-01"].meta.Partitions[s.state.Map.Partitions[g].ID] = PartServing
+			return g
+		}},
+		"adopted joining": {want: Joining, stage: func(s *sim) int {
+			g, _ := s.targetedAt("data-01")
+			s.state.Map.Partitions[g].Holders = nil
+			s.nodes["data-01"].meta.Partitions[s.state.Map.Partitions[g].ID] = PartCatchingUp
+			return g
+		}},
+		"adopted leaving": {want: Leaving, stage: func(s *sim) int {
+			g, _ := s.targetedAt("data-00")
+			s.nodes["data-01"].meta.Partitions[s.state.Map.Partitions[g].ID] = PartCatchingUp
+			return g
+		}},
+		"promoted": {want: Serving, was: Joining, stage: func(s *sim) int {
+			g, _ := s.targetedAt("data-01")
+			m := &s.state.Map
+			m.Partitions[g].Holders = []Holder{{Node: "data-01", State: Joining, Since: m.Epoch}}
+			s.nodes["data-01"].meta.Partitions[m.Partitions[g].ID] = PartServing
+			return g
+		}},
+		"serving again": {want: Serving, was: Leaving, stage: func(s *sim) int {
+			g, _ := s.targetedAt("data-01")
+			m := &s.state.Map
+			m.Partitions[g].Holders = []Holder{{Node: "data-01", State: Leaving, Since: m.Epoch}}
+			s.nodes["data-01"].meta.Partitions[m.Partitions[g].ID] = PartServing
+			return g
+		}},
+	}
+	unhealthy := map[string]func(*Meta){
+		"healthy":        nil,
+		"failed":         func(m *Meta) { m.Healthy, m.Detail = no(), "disk gone" },
+		"health unsaid":  func(m *Meta) { m.Healthy = nil },
+		"another layout": func(m *Meta) { m.Layout = layoutNo(2) },
+	}
+	for name, c := range transitions {
+		for how, change := range unhealthy {
+			t.Run(name+"/"+how, func(t *testing.T) {
+				t.Parallel()
+				s := settled(t, smallLayout, 1, "data-00", "data-01")
+				g := c.stage(s)
+				n := s.nodes["data-01"]
+				n.meta.MapGeneration, n.meta.MapEpoch = s.state.Map.Generation, s.state.Map.Epoch
+				want := c.want
+				if change != nil {
+					change(&n.meta)
+					want = c.was
+				}
+				s.tick()
+				var got HolderState
+				if h := holderOf(&s.state.Map.Partitions[g], "data-01"); h != nil {
+					got = h.State
+				}
+				if got != want {
+					t.Fatalf("%s's holder on a %s lease is %q, want %q (table %+v)",
+						s.state.Map.Partitions[g].ID, how, got, want, s.state.Map.Partitions[g].Holders)
+				}
+			})
+		}
+	}
+}
+
 // ONLY THE NEWEST COMPANY SETS THE COPIES: the duty moves between nodes, and a
 // node a revision behind must not set the replica count back (ADR-0020).
 func TestOnlyTheNewestCompanySetsTheEstatesCopies(t *testing.T) {
