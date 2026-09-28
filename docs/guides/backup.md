@@ -46,7 +46,7 @@ A deployment's durable state lives in four estates:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — today the work tracker and the knowledge embeddings — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — the work tracker, the knowledge base's pages, the knowledge embeddings, the [org chart](../concepts/chart-domain.md) and the [identity directory](../concepts/identity-and-access.md) — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
@@ -187,8 +187,10 @@ peers hold too.
 A node is **two** database files, and they answer differently.
 
 The **replicated estate** is a copy of state every node holds: the tracker's
-projects, tasks, comments and history, derived from an ordered log by an
-applier that runs identically everywhere. Any healthy node's copy of it is the
+projects, tasks, comments and history, the knowledge base's pages and
+revisions, the vectors search reads, the org chart's units and seats, and the
+identity directory's people, credentials and sessions — each derived from its
+own ordered log by an applier that runs identically everywhere. Any healthy node's copy of it is the
 company's, in the same sense the stream estate is.
 
 The **node estate** is that node's alone, and what only lives there is what

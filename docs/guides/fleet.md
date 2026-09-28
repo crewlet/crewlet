@@ -419,8 +419,9 @@ posture change.
 
 ## How a node that fell behind catches up
 
-The work tracker and the knowledge embeddings are derived on every node from
-an ordered log the fleet shares. A node replays that log from wherever its own
+The work tracker, the knowledge base's pages and embeddings, the org chart and
+the identity directory are each derived on every node from an ordered log the
+fleet shares. A node replays each log from wherever its own
 rows say it stopped — which works only while the log still **holds** those
 records. It does not hold them for ever: once every node has applied past a
 record, a backup covers it and it is at least a week old, it is trimmed.
