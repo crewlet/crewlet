@@ -109,6 +109,9 @@ type embeddedServer struct {
 	// off here, so everything a stream or a bucket needs is across its link
 	// rather than in this process. See [Config.LeafURLs].
 	leaf bool
+	// system is the identity that reaches this member's system account,
+	// declared on a clustered member only — see membership.go.
+	system systemUser
 }
 
 // holdsStreams reports whether this process's broker is where its streams
@@ -236,7 +239,11 @@ func (s *Server) Shutdown() {
 // day they matter. A wrong MaxPayload surfaces as one oversized publish
 // failing in production, and a wrong SyncAlways surfaces only as acked data
 // missing after a host loses power — which no test can stage.
-func embeddedOptions(cfg Config) (*server.Options, string, error) {
+//
+// system is the identity a CLUSTERED member declares its system account with
+// (see membership.go), minted by the caller because the key that signs for it
+// cannot be read back out of the options; a solo member and a leaf ignore it.
+func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, error) {
 	// THE NAME, and only the name: the cluster block below is installed on
 	// it alone, so a port or a peer list without one configures nothing and
 	// this member starts solo. Tier A refuses that shape (it requires
@@ -457,12 +464,28 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 			Advertise: cfg.ClusterAdvertise,
 		}
 		opts.Routes = server.RoutesFromStr(joinURLs(cfg.ClusterURLs))
+		// AND ITS SYSTEM ACCOUNT, reachable from this process alone — the
+		// only account the metadata group's membership is changed through.
+		// See membership.go.
+		if system.declared() {
+			system.declare(opts)
+		}
 	}
 	return opts, scratch, nil
 }
 
 func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
-	opts, scratch, err := embeddedOptions(cfg)
+	// THE SYSTEM ACCOUNT'S KEY, for a clustered member: the one rule
+	// [embeddedOptions] reads for `clustered`, which refuses a leaf that
+	// names a cluster before anything declares it.
+	var system systemUser
+	if cfg.ClusterName != "" {
+		var err error
+		if system, err = newSystemUser(); err != nil {
+			return nil, err
+		}
+	}
+	opts, scratch, err := embeddedOptions(cfg, system)
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +591,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	}
 	return &embeddedServer{
 		ns: ns, inProcess: opts.DontListen, scratch: scratch, clustered: clustered,
-		leaf: len(opts.LeafNode.Remotes) > 0,
+		leaf: len(opts.LeafNode.Remotes) > 0, system: system,
 	}, nil
 }
 

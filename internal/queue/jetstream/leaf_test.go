@@ -88,14 +88,14 @@ func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 	for name, mutate := range cases {
 		cfg := leaf
 		mutate(&cfg)
-		if _, _, err := embeddedOptions(cfg); err == nil {
+		if _, _, err := embeddedOptions(cfg, systemUser{}); err == nil {
 			t.Errorf("a leaf with %s was accepted", name)
 		}
 	}
 	// THE CONTROL: the leaf itself builds, with JetStream off and no
 	// listener, or the refusals above pass on a function that refuses
 	// every leaf.
-	opts, scratch, err := embeddedOptions(leaf)
+	opts, scratch, err := embeddedOptions(leaf, systemUser{})
 	if err != nil {
 		t.Fatalf("a plain leaf was refused: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestEveryMemberServesTheFleetsDomain(t *testing.T) {
 		// keep nothing, so this member keeps everything they do.
 		"with a leaf listener": {ServerName: "a", LeafPort: 7422, StoreDir: t.TempDir()},
 	} {
-		opts, scratch, err := embeddedOptions(cfg)
+		opts, scratch, err := embeddedOptions(cfg, systemUser{})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
