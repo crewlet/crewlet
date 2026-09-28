@@ -61,6 +61,7 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 	return statelog.NewReader(statelog.ReaderDeps{
 		Domain: domain,
 		Spec:   statelog.EstateStream(domain),
+		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Waiter: localWaiter{at: at},
 		Health: func() statelog.Health {
@@ -115,6 +116,7 @@ func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*st
 	return statelog.NewReader(statelog.ReaderDeps{
 		Domain: domain,
 		Spec:   statelog.EstateStream(domain),
+		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Waiter: waiter,
 		Health: func() statelog.Health {

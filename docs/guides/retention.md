@@ -822,7 +822,14 @@ below all read it — while it claims **no seat** and hands **no writer** to any
 surface: the operator's MCP endpoint offers only its search tool, the purge
 route is not served, the chart's projects and containers are applied at the
 next normal boot, and a stateless node's writes are answered "not here". Its
-reads are still served.
+reads are still served — every level but `linearizable`, which proves the
+log's end by appending a barrier to it and is refused
+[`maintenance`](consistency.md#the-thirteen-refusals). The operator gestures
+that append a record are refused the same way: an eviction and a readmission
+answer `409 not_publishing`, and a reanchor `409 reanchor_refused` naming the
+mode. None of them is what a window needs — a participant that will not
+acknowledge is excluded from the operation, not evicted from the logs — and
+each would move the usage the window is measuring.
 
 ### Who has to acknowledge
 
@@ -1402,7 +1409,7 @@ which:
 - **[Replication](replication.md)** — the two regimes, the write outcomes and
   what the design does not promise.
 - **[Read consistency](consistency.md)** — what a full log costs, and the
-  twelve refusals.
+  thirteen refusals.
 - **[Backups & restore](backup.md)** — the artefact and the runbook.
 - **[CLI reference](../reference/cli.md#crewlet-retention)** — every verb's
   flags and refusals.

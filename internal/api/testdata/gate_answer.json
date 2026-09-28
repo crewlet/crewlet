@@ -209,6 +209,19 @@
         "op_id": "01a0c450-6c00-7ba8-8d4a-0db8da6b0076.evict-node-4"
       }
     },
+    "not_publishing": {
+      "status": 409,
+      "body": {
+        "actions": [
+          "wait"
+        ],
+        "detail": "engine: this node publishes nothing in its mode: an eviction appends a record to the state log, and this node runs in seal mode",
+        "error": "not_publishing",
+        "hint": "this node is in a capacity window and writes nothing to the logs until the fleet is restarted into normal mode; run the gesture again then",
+        "node": "node-4",
+        "op_id": "01a0c450-6c00-7fb3-8794-6f520465d51f.evict-node-4"
+      }
+    },
     "readmission_refused": {
       "status": 409,
       "body": {

@@ -115,6 +115,15 @@ const (
 	// RefuseTooStale — this node's lag is past what the caller said it
 	// would accept.
 	RefuseTooStale ReadRefusal = "too_stale"
+
+	// RefuseMaintenance — this node runs in a mode that publishes nothing
+	// ([MaintenanceMode.Publishes]), and a linearizable read establishes the
+	// log's end by APPENDING a barrier to it. The other levels append
+	// nothing and keep answering; this one is answered again once the
+	// fleet is back in normal mode. Not retryable: the mode is the
+	// process's for its life, and every node of a fleet in a capacity
+	// window is in one, so neither waiting nor another node clears it.
+	RefuseMaintenance ReadRefusal = "maintenance"
 )
 
 // ReadRefusals are every code. The COUNT IS DERIVED from this slice rather
@@ -124,6 +133,7 @@ var ReadRefusals = []ReadRefusal{
 	RefuseBehind, RefuseDeferred, RefuseDeferredScopeUnknown, RefuseStalled,
 	RefuseBelowFloor, RefuseFloorUnknown, RefuseEvicted, RefuseBrokerUnreachable,
 	RefuseNoQuorum, RefuseLogFull, RefuseWrongStream, RefuseTooStale,
+	RefuseMaintenance,
 }
 
 // Valid reports whether a refusal code off the wire is one this build knows.
@@ -362,6 +372,7 @@ type Incomplete struct {
 // Reader answers reads at a level, over one domain.
 type Reader struct {
 	domain  Domain
+	mode    MaintenanceMode
 	stream  string
 	tables  tables
 	db      readStore
@@ -385,6 +396,21 @@ type ReaderDeps struct {
 	// its logs ([Layout.StreamSpec]). A read's positions, its barrier and
 	// the deferrals its coverage probe reads are all that one log's.
 	Spec StreamSpec
+
+	// Mode is what this node started for, and it decides whether a read
+	// may append.
+	//
+	// A BARRIER IS A PUBLISH. It is a record on the log, admitted, stored
+	// and replicated like any other, and a node in a mode that publishes
+	// nothing exists so that the fleet's logs hold still while a capacity
+	// window measures them — a seal-mode acknowledgement is evidence
+	// precisely because nothing on that node writes. So in such a mode a
+	// linearizable read is refused [RefuseMaintenance] rather than
+	// answered, the reader is given no [ReadIndex] to append through
+	// ([NewReader] refuses one), and every level that appends nothing is
+	// served as ever. REQUIRED: the zero mode is refused rather than read
+	// as either, since each reading is wrong in one of the two postures.
+	Mode MaintenanceMode
 
 	DB     readStore
 	Index  *ReadIndex
@@ -413,6 +439,13 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 		return nil, fmt.Errorf("statelog: reader has no waiter")
 	case d.Health == nil:
 		return nil, fmt.Errorf("statelog: reader has no health source")
+	case !d.Mode.Valid():
+		return nil, fmt.Errorf("statelog: reader has no mode (%q; want one of %v): "+
+			"whether a read may append a barrier turns on it", d.Mode, MaintenanceModes)
+	case !d.Mode.Publishes() && d.Index != nil:
+		return nil, fmt.Errorf("statelog: a reader in %s mode was given a read index, "+
+			"and a read index appends barriers to a log this mode publishes nothing to",
+			d.Mode)
 	}
 	t, err := newTables(d.Domain, d.Spec)
 	if err != nil {
@@ -424,6 +457,7 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 	}
 	return &Reader{
 		domain:  d.Domain,
+		mode:    d.Mode,
 		stream:  d.Spec.Name,
 		tables:  t,
 		db:      d.DB,
@@ -697,6 +731,17 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 	}
 	switch q.Level {
 	case ReadLinearizable:
+		if !r.mode.Publishes() {
+			return Position{}, &Refused{
+				Code: RefuseMaintenance, Level: q.Level,
+				Detail: fmt.Sprintf("this node runs in %s mode, which publishes "+
+					"nothing, and a linearizable read establishes the log's end "+
+					"by appending a barrier to it — `session`, `consistent_prefix` "+
+					"and `stale` reads append nothing and are still served here, "+
+					"and `linearizable` is answered again once the fleet is back "+
+					"in normal mode", r.mode),
+			}
+		}
 		if r.index == nil {
 			return Position{}, &Refused{
 				Code: RefuseBrokerUnreachable, Level: q.Level,

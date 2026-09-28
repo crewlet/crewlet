@@ -82,6 +82,7 @@ func newReader(t *testing.T, db interface {
 	t.Helper()
 	r, err := statelog.NewReader(statelog.ReaderDeps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Index:  index,
 		Waiter: waiter,
@@ -1032,5 +1033,90 @@ func TestAPointReadNamedByReferenceIsProbedWhereItResolves(t *testing.T) {
 	both.Scope = statelog.ScopeSet{Paths: []string{"project/OPS"}}
 	if _, err := r.Read(t.Context(), both, func(*sql.Tx) error { return nil }); err == nil {
 		t.Error("a read that declared a scope AND resolved one was served")
+	}
+}
+
+// A NODE THAT PUBLISHES NOTHING APPENDS NO BARRIER.
+//
+// A barrier is a record on the log — admitted, stored and replicated like any
+// other — and a node in a maintenance or seal mode exists so the fleet's logs
+// hold still while a capacity window measures them: a seal-mode
+// acknowledgement is evidence precisely because nothing on that node writes.
+// So a linearizable read there is refused `maintenance`, which neither a wait
+// nor another node clears (every node of the fleet is in the window), while
+// every level that appends nothing is answered as ever. And the reader cannot
+// be built with a read index to append through, nor without saying which mode
+// its node runs in.
+func TestANodeThatPublishesNothingAppendsNoBarrier(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var appends atomic.Int64
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
+		&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
+	}
+	noop := func(*sql.Tx) error { return nil }
+	deps := func(mode statelog.MaintenanceMode, index *statelog.ReadIndex) statelog.ReaderDeps {
+		return statelog.ReaderDeps{
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Mode: mode,
+			DB: newStubStore(t), Index: index, Health: healthy,
+			Waiter: &stubWaiter{at: healthy().Position},
+		}
+	}
+	for _, mode := range []statelog.MaintenanceMode{statelog.ModeMaintenance, statelog.ModeSeal} {
+		if _, err := statelog.NewReader(deps(mode, index)); err == nil {
+			t.Errorf("a reader in %s mode was built over a read index, which "+
+				"appends", mode)
+		}
+		r, err := statelog.NewReader(deps(mode, nil))
+		if err != nil {
+			t.Fatalf("NewReader in %s mode: %v", mode, err)
+		}
+		_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable), noop)
+		var refusal *statelog.Refused
+		if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseMaintenance {
+			t.Fatalf("a linearizable read in %s mode answered %v, want %q",
+				mode, err, statelog.RefuseMaintenance)
+		}
+		if !refusal.Code.Valid() {
+			t.Errorf("%q is not a code this build names, so a peer reading it "+
+				"off the wire could not tell it from a newer build's", refusal.Code)
+		}
+		if refusal.Code.Retryable() || refusal.RetryAfter != 0 {
+			t.Errorf("the refusal invites a retry (%v, %s) that only the fleet's "+
+				"restart into normal mode can answer", refusal.Code.Retryable(),
+				refusal.RetryAfter)
+		}
+		if !strings.Contains(refusal.Detail, string(mode)) {
+			t.Errorf("the refusal does not name the mode: %q", refusal.Detail)
+		}
+		session := pointQuery(statelog.ReadSession)
+		session.Session = healthy().Position
+		for _, q := range []statelog.Query{
+			pointQuery(statelog.ReadStale), pointQuery(statelog.ReadConsistentPrefix), session,
+		} {
+			if _, err := r.Read(t.Context(), q, noop); err != nil {
+				t.Errorf("a %s read in %s mode, which appends nothing, answered %v",
+					q.Level, mode, err)
+			}
+		}
+	}
+	if got := appends.Load(); got != 0 {
+		t.Fatalf("a node that publishes nothing appended %d barrier(s)", got)
+	}
+
+	// THE CONTROL: the same index, in the mode that publishes, appends.
+	r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position}, index)
+	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadLinearizable), noop); err != nil {
+		t.Fatalf("a linearizable read in normal mode: %v", err)
+	}
+	if got := appends.Load(); got != 1 {
+		t.Fatalf("a linearizable read in normal mode appended %d barrier(s), want 1", got)
+	}
+
+	// AND A READER WITH NO MODE IS REFUSED rather than read as either.
+	if _, err := statelog.NewReader(deps("", nil)); err == nil {
+		t.Error("a reader was built without a mode")
 	}
 }

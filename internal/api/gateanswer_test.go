@@ -70,6 +70,8 @@ func gateRefusalScenarios() map[string]error {
 	live := statelog.PermitEviction("node-4", []statelog.Presence{{NodeID: "node-4"}}, false)
 	return map[string]error{
 		"eviction_refused": fmt.Errorf("engine: evict node node-4: %w", live),
+		"not_publishing": fmt.Errorf("%w: an eviction appends a record to the "+
+			"state log, and this node runs in seal mode", engine.ErrNotPublishing),
 		"eviction_unjudged": &engine.GateUnjudged{Node: "node-4",
 			Err: errors.New("list the live nodes: coordination is unreachable")},
 		"readmission_refused": fmt.Errorf("engine: readmit node node-4: %w",
@@ -230,6 +232,7 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 		"eviction_refused":    {statelog.GateWait, statelog.GateForce},
 		"eviction_unjudged":   {statelog.GateRetrySameOp, statelog.GateForce},
 		"readmission_refused": {statelog.GateWait},
+		"not_publishing":      {statelog.GateWait},
 	}
 	for name, err := range gateRefusalScenarios() {
 		refusal, ok := api.RenderGateRefusal("node-4", refusalOpID(name), err)

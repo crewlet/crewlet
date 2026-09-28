@@ -111,6 +111,9 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		return statelog.ReanchorPlan{}, err
 	}
 	s := e.native.Load().log
+	if err = s.appends("a reanchor"); err != nil {
+		return statelog.ReanchorPlan{}, err
+	}
 	record, err := generationEncoder(running.domain)
 	if err != nil {
 		return statelog.ReanchorPlan{}, err

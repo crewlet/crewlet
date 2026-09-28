@@ -567,6 +567,10 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 
 // fakeGate is a gate over two logs that record which were written, judging an
 // eviction against a lease listing that answers nothing held — or listErr.
+// normalMode is a state log in the mode that publishes, whose gate a fixture
+// borrows.
+var normalMode = &stateLog{mode: statelog.ModeNormal}
+
 func fakeGate(wrote *[]string, listErr error) *NodeGate {
 	write := func(domain string) func(context.Context, string, string, string,
 		bool) (statelog.Result, error) {
@@ -578,6 +582,7 @@ func fakeGate(wrote *[]string, listErr error) *NodeGate {
 	return &NodeGate{
 		live:         func(context.Context) ([]statelog.Presence, error) { return nil, listErr },
 		readmissible: func(context.Context, string) error { return nil },
+		publishing:   normalMode.appends,
 		logs: []gateLog{
 			{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: write("tracker")},
 			{domain: "pages", stream: "CREWLET_PAGES_LOG", write: write("pages")},
@@ -627,7 +632,8 @@ func (r *recorder) setProbe(fn func()) {
 func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, map[string]*recorder) {
 	t.Helper()
 	s := e.native.Load().log
-	g := &NodeGate{live: e.native.Load().gate.live, readmissible: e.native.Load().gate.readmissible}
+	g := &NodeGate{live: e.native.Load().gate.live, readmissible: e.native.Load().gate.readmissible,
+		publishing: e.native.Load().gate.publishing}
 	recs := map[string]*recorder{}
 	for _, running := range identityLogs(t, s) {
 		name := running.domain.Name()
@@ -714,7 +720,8 @@ func TestAnUnvouchedGateLogIsSentToAnotherNode(t *testing.T) {
 			{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: answer(false)},
 			{domain: "pages", stream: "CREWLET_PAGES_LOG", write: answer(true)},
 		},
-		live: func(context.Context) ([]statelog.Presence, error) { return nil, nil },
+		live:       func(context.Context) ([]statelog.Presence, error) { return nil, nil },
+		publishing: normalMode.appends,
 	}
 	got, err := g.Evict(t.Context(), GateRequest{Node: "node-4", By: "ops",
 		OpID: statelog.NewOpID(time.Now(), "evict-node-4")})

@@ -169,6 +169,15 @@ type stateLog struct {
 	// registered domain's one log.
 	layout statelog.Layout
 
+	// mode is what this node started for. In a mode that publishes nothing
+	// the logs still run — they apply, heartbeat and serve reads — and
+	// append nothing: no reader is given a read index, so a linearizable
+	// read is refused `maintenance` rather than spending a barrier on a log
+	// a capacity window is measuring ([statelog.ReaderDeps.Mode]), and the
+	// operator gestures that append a record ([NodeGate], [Engine.Reanchor])
+	// are refused through [stateLog.appends].
+	mode statelog.MaintenanceMode
+
 	// logs is every log this node runs NOW, as one immutable [logSet]: a
 	// log is started and stopped while the node runs ([stateLog.startLogs],
 	// [stateLog.stopLogs]), so every reader takes the whole set at once
@@ -596,7 +605,7 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &stateLog{
-		layout: layout, host: host, epoch: epoch,
+		layout: layout, mode: e.Mode(), host: host, epoch: epoch,
 		nodeID: nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
@@ -1428,6 +1437,7 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 	deps := statelog.ReaderDeps{
 		Domain: domain,
 		Spec:   spec,
+		Mode:   s.mode,
 		DB:     replicatedEstate{node: s.db},
 		Waiter: runner,
 		// READ FRESH ON EVERY READ, because every one of its terms can
@@ -1455,7 +1465,10 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 		Drain:   runner.Drain,
 		Metrics: s.metrics,
 	}
-	if encode != nil {
+	// NO READ INDEX IN A MODE THAT PUBLISHES NOTHING: it is an appender,
+	// and the reader refuses a linearizable read there rather than
+	// appending (see the mode field).
+	if encode != nil && s.mode.Publishes() {
 		var admission statelog.Admission
 		if running.reserve != nil {
 			admission = running.reserve

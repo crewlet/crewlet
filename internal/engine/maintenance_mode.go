@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -53,6 +54,31 @@ import (
 // It withholds the two things that write the company's records: SEATS, which
 // the seat host never claims here ([Engine.seatsAdmitted]), and this node's own
 // WRITERS, which no surface is handed ([Engine.writeSide]).
+
+// ErrNotPublishing is an operator gesture that appends a record to a state log
+// — an eviction, a readmission, a reanchor — asked of a node in a mode that
+// publishes nothing. It wraps a sentence naming the mode and the gesture.
+//
+// REFUSED RATHER THAN CARRIED OUT, for the reason a linearizable read is
+// ([statelog.RefuseMaintenance]): each is a record on a log, and the mode
+// exists so the fleet's logs hold still while a capacity window measures them.
+// A gate record is no smaller a publish than a seat's write because an
+// operator asked for it. None of the three is what a window needs, either: a
+// participant that will not acknowledge is excluded from the operation
+// (`crewlet retention maintenance exclude`), not evicted from the logs.
+var ErrNotPublishing = errors.New("engine: this node publishes nothing in its mode")
+
+// appends refuses gesture, naming the mode and the way back, unless this
+// node's mode publishes.
+func (s *stateLog) appends(gesture string) error {
+	if s.mode.Publishes() {
+		return nil
+	}
+	return fmt.Errorf("%w: %s appends a record to the state log, and this node "+
+		"runs in %s mode, which appends nothing while a capacity window "+
+		"measures the logs; run it once the fleet is back in normal mode "+
+		"(`crewlet run` without -mode)", ErrNotPublishing, gesture, s.mode)
+}
 
 // ErrExcluded is a boot refused because a capacity operation is unresolved.
 //

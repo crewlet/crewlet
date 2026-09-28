@@ -568,7 +568,7 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 		t.Fatalf("sizeCeilings: %v", err)
 	}
 	s := &stateLog{
-		layout: LayoutZero(), nodeID: "node-a", db: db,
+		layout: LayoutZero(), mode: statelog.ModeNormal, nodeID: "node-a", db: db,
 		ceilings: ceilings, run: t.Context(),
 	}
 	appendTo, err := s.provision(t.Context(), q, tracker.Domain{}, estateLog(tracker.Domain{}))

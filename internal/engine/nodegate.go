@@ -367,6 +367,11 @@ type NodeGate struct {
 	// a readmission.
 	live         func(ctx context.Context) ([]statelog.Presence, error)
 	readmissible func(ctx context.Context, nodeID string) error
+
+	// publishing refuses a gesture on a node whose mode appends nothing
+	// ([ErrNotPublishing]) — asked FIRST, before anything is judged, since
+	// no judgement could make the write allowed.
+	publishing func(gesture string) error
 }
 
 // gateLog is one identity-claiming log as the gate writes it.
@@ -469,6 +474,7 @@ func newNodeGate(s *stateLog, leases liveLeases, db *store.DB, nodeID string,
 			return livePresences(ctx, leases)
 		},
 		readmissible: s.Readmissible,
+		publishing:   s.appends,
 	}
 	for _, running := range s.running() {
 		if !running.domain.ClaimsIdentity() {
@@ -567,6 +573,9 @@ func (g *NodeGate) Evict(ctx context.Context, req GateRequest) (GateResult, erro
 	if err := req.valid(); err != nil {
 		return GateResult{}, err
 	}
+	if err := g.publishing("an eviction"); err != nil {
+		return GateResult{}, err
+	}
 	live, err := g.live(ctx)
 	switch {
 	case err != nil && !req.Force:
@@ -601,6 +610,9 @@ func (g *NodeGate) Evict(ctx context.Context, req GateRequest) (GateResult, erro
 // and nothing is appended anywhere — see [stateLog.Readmissible].
 func (g *NodeGate) Readmit(ctx context.Context, req GateRequest) (GateResult, error) {
 	if err := req.valid(); err != nil {
+		return GateResult{}, err
+	}
+	if err := g.publishing("a readmission"); err != nil {
 		return GateResult{}, err
 	}
 	if err := g.readmissible(ctx, req.Node); err != nil {

@@ -155,6 +155,19 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 	switch {
 	case err == nil:
 		return GateRefusal{}, false
+	case errors.Is(err, engine.ErrNotPublishing):
+		// A NODE IN A CAPACITY WINDOW appends nothing, and a gate record
+		// is an append: 409 with the sentence naming the mode, because the
+		// remedy is the fleet's return to normal mode rather than anything
+		// about the node named. Nothing was judged and nothing was written.
+		return GateRefusal{Status: http.StatusConflict, Body: map[string]any{
+			"error": "not_publishing", "detail": err.Error(),
+			"hint": "this node is in a capacity window and writes nothing to " +
+				"the logs until the fleet is restarted into normal mode; run the " +
+				"gesture again then",
+			"actions": []statelog.GateAction{statelog.GateWait},
+			"node":    node, "op_id": opID,
+		}}, true
 	case errors.Is(err, engine.ErrInvalidGate):
 		// A NODE ID NO NODE COULD RUN UNDER is a typo rather than a fault,
 		// and it is the caller's to fix: nothing was judged and nothing
@@ -217,5 +230,8 @@ func logGateRefusal(operator, node string, err error) {
 	case errors.As(err, &eviction):
 		log.Info("retention_eviction_refused", "operator", operator,
 			"node", node, "detail", eviction.Detail)
+	case errors.Is(err, engine.ErrNotPublishing):
+		log.Info("retention_gate_not_publishing", "operator", operator,
+			"node", node, "detail", err.Error())
 	}
 }
