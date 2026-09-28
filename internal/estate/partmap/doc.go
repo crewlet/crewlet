@@ -172,10 +172,11 @@
 // [Maintainer] is what runs [Next]: once a tick, while its node holds the
 // map's duty (`worker:estate-map`), reading the live estate leases, the stored
 // map and the company, and writing the answer back by compare-and-set — the
-// object map's maintainer over this record. Before it writes a FIRST map it
-// has the layout's logs created ([Provisioner]), because a node named to join
-// a partition opens its logs, and a map naming holders of logs nobody created
-// would name joins that cannot start.
+// object map's maintainer over this record. Before it writes a FIRST map, and
+// on the first tick of each tenure of the duty that finds one, it has the
+// map's logs created ([Provisioner]), because a node named to join a partition
+// opens its logs, and a map naming holders of logs nobody created — or logs a
+// restored broker or an operator lost — would name joins that cannot start.
 //
 // Under layout 0 — the single-file layout, and the only one this build runs —
 // it writes NOTHING: there is no map, [Next] creates none for layout 0, and a

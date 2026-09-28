@@ -419,6 +419,11 @@ type mapDuty struct {
 	claim func(context.Context) (bool, error)
 
 	tick func(context.Context) (mapTick, error)
+
+	// released is told of every turn that does not hold the duty, nil where
+	// the map keeps nothing per tenure: whatever it did while it held the
+	// duty may have been undone by the holder since.
+	released func()
 }
 
 // turn is one turn of the duty, answering how long to wait before the next.
@@ -449,6 +454,9 @@ func (d mapDuty) turn(ctx context.Context) time.Duration {
 			log.WarnContext(ctx, d.event+"_duty_unclaimed", "error", err)
 		}
 		if err != nil || !mine {
+			if d.released != nil {
+				d.released()
+			}
 			return mapInterval
 		}
 	}

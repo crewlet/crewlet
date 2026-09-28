@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/membership"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The estate map, wired: its duty (`worker:estate-map`) and the operator's
@@ -25,11 +26,13 @@ import (
 // singleton's. It paces at the tick's interval: a tick that found no map where
 // none is wanted has nothing to poll for.
 //
-// Should a map exist — written by a node running a partitioned layout — the
-// duty maintains it whatever layout this node runs: which layout the fleet
-// runs is RECORDED in the map, never assumed from one node's build, and this
-// node's own lease, at layout 0, counts it as a member that cannot hold that
-// map's partitions.
+// Should a map exist — written by a node running a partitioned layout — which
+// layout the fleet runs is RECORDED in it, never assumed from one node's build.
+// But the first tick of a tenure that finds a map creates that map's logs
+// before it moves a holder, and this build cannot create a partition log of
+// any layout ([refuseEstateLogs]), so its duty leaves such a map exactly as it
+// is, saying why on every tick, until a node that runs the map's layout holds
+// the duty.
 
 // estateMapDuty is the fleet singleton that maintains the estate map.
 const estateMapDuty = "estate-map"
@@ -45,7 +48,7 @@ func (e *Engine) startEstateMap(ctx context.Context) error {
 		return err
 	}
 	duty := mapDuty{event: "estate_map", claim: e.workerDuty(estateMapDuty, mapDutyTTL),
-		tick: estateMapTick(m)}
+		tick: estateMapTick(m), released: m.Forget}
 	e.estateMaintainer = startLoop(ctx, sleep, duty.turn)
 	return nil
 }
@@ -60,15 +63,30 @@ func (e *Engine) newEstateMaintainer() (*partmap.Maintainer, error) {
 		},
 		Company: e.estateCompany,
 		// THE LAYOUT THIS BUILD RUNS, which a first map would be created
-		// at — and layout 0 creates none, so no provisioner is needed:
-		// there are no partition logs to create before a map that is
-		// never written.
-		Layout: LayoutZero(),
+		// at — and layout 0 creates none.
+		Layout:    LayoutZero(),
+		Provision: refuseEstateLogs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: the estate map's maintainer: %w", err)
 	}
 	return m, nil
+}
+
+// refuseEstateLogs is this build's answer to "create a map's partition logs":
+// it cannot, and says so.
+//
+// THIS BUILD RUNS LAYOUT 0, whose one partition's logs are the domains' own
+// streams, created by every data node's state log as it boots; it has no stream
+// shape for a partition of any other layout. It never creates a map, so the
+// question is asked only of a map a node running a partitioned layout wrote —
+// and the maintainer's answer to logs it cannot vouch for is to change nothing
+// and say why, each tick, rather than name joiners of logs that may not exist.
+// The map waits for a duty holder that runs its layout.
+func refuseEstateLogs(_ context.Context, l statelog.Layout) error {
+	return fmt.Errorf("engine: this node runs layout 0 and cannot create the partition "+
+		"logs of layout %d; the estate map at that layout is maintained by a node that "+
+		"runs it", l.Number)
 }
 
 // estateMapTick is the estate map's maintainer as its duty paces it: a map is

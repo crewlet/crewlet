@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +102,49 @@ func TestTheEstateMapTakesTheCompanyStampedWithItsActivation(t *testing.T) {
 	got, _ = e.estateCompany()
 	if got.Replicas != 5 || got.FailureDomain != "zone" || got.Epoch <= want.Epoch {
 		t.Errorf("a later revision naming 5 copies across zones reads as %+v", got)
+	}
+}
+
+// A MAP AT A LAYOUT THIS BUILD CANNOT CREATE LOGS FOR IS LEFT AS IT IS. A node
+// running layout 0 never creates a map, but one a node running a partitioned
+// layout wrote is a map its duty maintains — and its first tick of a tenure
+// creates that map's logs before it moves a holder, which this build cannot
+// do. So the tick changes nothing and says which layout it cannot serve,
+// rather than naming joiners of logs that may be gone.
+func TestTheEstateMapDutyLeavesAMapWhoseLogsItCannotCreate(t *testing.T) {
+	t.Parallel()
+	e := newSandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))
+	layout := DefaultLayoutOne()
+	healthy := true
+	var live []partmap.Presence
+	for _, node := range []string{"a", "b", "c"} {
+		live = append(live, partmap.Presence{Node: node, Meta: partmap.Meta{Weight: 1,
+			Layout: &layout.Number, Healthy: &healthy,
+			Partitions: map[string]partmap.PartitionState{}}})
+	}
+	state, changed := partmap.Next(partmap.MapState{}, partmap.Input{Layout: layout, Live: live,
+		Company: membership.Company{Epoch: 1, Replicas: 3, Block: "estate"},
+		Now:     time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)})
+	if !changed {
+		t.Fatal("the premise: a first map at layout 1")
+	}
+	raw, err := state.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := e.backends.Fleet.CreateEstateMap(t.Context(), raw); err != nil || !ok {
+		t.Fatalf("seed the map: %v %v", ok, err)
+	}
+
+	m, err := e.newEstateMaintainer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Tick(t.Context()); err == nil ||
+		!strings.Contains(err.Error(), fmt.Sprintf("layout %d", layout.Number)) {
+		t.Fatalf("a tick over a map whose logs this build cannot create answered %v", err)
+	}
+	if rec, _, err := e.backends.Fleet.EstateMap(t.Context()); err != nil || string(rec.Value) != string(raw) {
+		t.Fatalf("the map changed under a maintainer that cannot create its logs (%v)", err)
 	}
 }

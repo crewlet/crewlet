@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -36,16 +39,27 @@ type MapStore interface {
 	UpdateEstateMap(ctx context.Context, value []byte, version uint64) (coord.EstateMapRecord, bool, error)
 }
 
-// Provisioner creates every log stream a layout has, idempotently.
+// Provisioner creates every log stream a layout has, idempotently — or refuses,
+// naming why, where this build cannot create them.
 //
 // # Streams exist before anyone joins
 //
 // A joiner opens its partition's logs and an applier consumes them, so a
-// partition's logs have to exist before the first map names a holder for it.
-// Creating them is the MAINTAINER's work, once per layout, rather than each
-// node's at boot: at the default layout a node would otherwise walk hundreds
-// of stream creates on every boot, and a fleet would repeat them on every
-// node.
+// partition's logs have to exist before a map names a holder for them.
+// Creating them is the MAINTAINER's work rather than each node's at boot: at
+// the default layout a node would otherwise walk hundreds of stream creates on
+// every boot, and a fleet would repeat them on every node.
+//
+// ONCE PER LINEAGE AND LAYOUT PER TENURE OF THE DUTY, and on reading a map as
+// well as on creating one. A map's logs can be missing while the map is not —
+// a broker store restored from before the layout was created, a stream an
+// operator deleted — and every joiner the map names would then fail to open
+// them with nothing recreating them. Creating them on every tick instead is
+// hundreds of stream lookups every fifteen seconds for an answer that almost
+// never changes; once per tenure, a new holder of the duty — which is what a
+// restart, a failover or a lost lease makes — re-creates whatever is missing
+// before it moves a holder, and [Maintainer.Forget] is how a node that gave
+// the duty up and takes it back again counts as new.
 type Provisioner func(ctx context.Context, l statelog.Layout) error
 
 // MaintainerOptions are a maintainer's dependencies.
@@ -66,9 +80,11 @@ type MaintainerOptions struct {
 	// created — every data node holds that layout's one partition whole.
 	Layout statelog.Layout
 
-	// Provision creates a layout's logs before its first map is written.
-	// REQUIRED at a partitioned layout, where a first map may be written,
-	// and unused at layout 0, where none is.
+	// Provision creates a map's logs before the maintainer writes the first
+	// map at a layout or moves a holder of one it read ([Provisioner]).
+	// REQUIRED at every layout: a node running layout 0 creates no map, but
+	// one another node created is a map it maintains, and the logs that map
+	// names are the ones its joiners open.
 	Provision Provisioner
 
 	// Now stamps what the record shows an operator and is what a hold
@@ -83,10 +99,21 @@ type MaintainerOptions struct {
 // race rather than overwriting its successor.
 type Maintainer struct {
 	opts MaintainerOptions
+
+	mu sync.Mutex
+	// provisioned is the map whose logs this maintainer created during the
+	// current tenure of the duty, the zero value before it has.
+	provisioned provisionedMap
 }
 
-// NewMaintainer builds a maintainer, refusing one that could write a first map
-// at a layout whose logs nothing would create.
+// provisionedMap names a map's logs: its lineage and its layout.
+type provisionedMap struct {
+	generation uuid.UUID
+	layout     int
+}
+
+// NewMaintainer builds a maintainer, refusing one that could name holders of a
+// layout whose logs nothing would create.
 func NewMaintainer(opts MaintainerOptions) (*Maintainer, error) {
 	switch {
 	case opts.Store == nil || opts.Live == nil || opts.Company == nil:
@@ -95,10 +122,10 @@ func NewMaintainer(opts MaintainerOptions) (*Maintainer, error) {
 	case opts.Layout.Validate() != nil:
 		return nil, fmt.Errorf("estate/partmap: a maintainer needs the layout this node "+
 			"runs: %w", opts.Layout.Validate())
-	case opts.Layout.Number != 0 && opts.Provision == nil:
-		return nil, fmt.Errorf("estate/partmap: a maintainer at layout %d may write the "+
-			"first map, and needs a provisioner to create the layout's logs before any "+
-			"node is named to hold them", opts.Layout.Number)
+	case opts.Provision == nil:
+		return nil, errors.New("estate/partmap: a maintainer needs a provisioner: every " +
+			"map it creates or reads names partitions whose logs must exist before a " +
+			"node is named to join them")
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -153,6 +180,12 @@ func (m *Maintainer) Tick(ctx context.Context) (TickResult, error) {
 		if state, err = DecodeMapStateForUpdate(rec.Value); err != nil {
 			return res, fmt.Errorf("%w: %w", errNewerMap, err)
 		}
+		// THE LOGS OF A MAP THAT EXISTS, before anything the tick decides
+		// can name a joiner of them — once per tenure ([Provisioner]).
+		if perr := m.provision(ctx, state.Map); perr != nil {
+			return res, fmt.Errorf("estate/partmap: create the logs of layout %d, which the "+
+				"estate map names: %w", state.Map.Layout.Number, perr)
+		}
 	}
 	next, changed := Next(state, Input{
 		Layout: m.opts.Layout, Live: live, Company: company, Now: m.opts.Now().UTC(),
@@ -189,8 +222,45 @@ func (m *Maintainer) Tick(ctx context.Context) (TickResult, error) {
 		// never hastens one.
 		return res, nil
 	}
+	if !found {
+		m.remember(next.Map)
+	}
 	logChanges(ctx, state, next)
 	return res, nil
+}
+
+// provision creates the logs of the map read, unless this tenure already has.
+func (m *Maintainer) provision(ctx context.Context, read Map) error {
+	want := provisionedMap{generation: read.Generation, layout: read.Layout.Number}
+	m.mu.Lock()
+	done := m.provisioned == want
+	m.mu.Unlock()
+	if done {
+		return nil
+	}
+	if err := m.opts.Provision(ctx, read.Layout); err != nil {
+		return err
+	}
+	m.remember(read)
+	return nil
+}
+
+// remember records that a map's logs exist: provisioned by this tenure, or
+// before the first map this tenure wrote.
+func (m *Maintainer) remember(written Map) {
+	m.mu.Lock()
+	m.provisioned = provisionedMap{generation: written.Generation, layout: written.Layout.Number}
+	m.mu.Unlock()
+}
+
+// Forget ends this maintainer's tenure of the duty: the next tick that finds a
+// map creates its logs again, whatever it created before. The duty calls it on
+// every turn that does not hold the duty, so a node that gave the duty up and
+// took it back re-creates what may have been lost while another node held it.
+func (m *Maintainer) Forget() {
+	m.mu.Lock()
+	m.provisioned = provisionedMap{}
+	m.mu.Unlock()
 }
 
 // company is the company to apply this tick: none when this node has none, or

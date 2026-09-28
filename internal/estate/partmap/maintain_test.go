@@ -3,6 +3,7 @@ package partmap
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -141,27 +142,102 @@ func TestAFirstMapFollowsItsLayoutsLogs(t *testing.T) {
 	}
 }
 
-// A MAINTAINER THAT MAY WRITE A FIRST MAP MUST BE ABLE TO CREATE ITS LOGS. At a
-// partitioned layout one without a provisioner is refused when it is built,
-// rather than writing a map whose holders find no logs to join.
-func TestAPartitionedMaintainerNeedsAProvisioner(t *testing.T) {
+// EVERY MAINTAINER MUST BE ABLE TO CREATE ITS MAP'S LOGS, OR SAY WHY IT CANNOT.
+// At a partitioned layout it may write a first map; at layout 0 it writes
+// none, but a map another node wrote is one it maintains. Either without a
+// provisioner is refused when it is built, rather than naming joiners of logs
+// nothing would create.
+func TestAMaintainerNeedsAProvisioner(t *testing.T) {
 	t.Parallel()
-	_, err := NewMaintainer(MaintainerOptions{
-		Store:   coordmemory.NewFleet(),
-		Live:    func(context.Context) ([]Presence, error) { return nil, nil },
-		Company: func() (membership.Company, bool) { return membership.Company{}, false },
-		Layout:  smallLayout,
-	})
-	if err == nil || !strings.Contains(err.Error(), "provisioner") {
-		t.Fatalf("a partitioned maintainer with no provisioner was built: %v", err)
+	for _, layout := range []statelog.Layout{smallLayout, layoutZero} {
+		_, err := NewMaintainer(MaintainerOptions{
+			Store:   coordmemory.NewFleet(),
+			Live:    func(context.Context) ([]Presence, error) { return nil, nil },
+			Company: func() (membership.Company, bool) { return membership.Company{}, false },
+			Layout:  layout,
+		})
+		if err == nil || !strings.Contains(err.Error(), "provisioner") {
+			t.Errorf("a maintainer at layout %d with no provisioner was built: %v",
+				layout.Number, err)
+		}
 	}
-	if _, err := NewMaintainer(MaintainerOptions{
-		Store:   coordmemory.NewFleet(),
-		Live:    func(context.Context) ([]Presence, error) { return nil, nil },
-		Company: func() (membership.Company, bool) { return membership.Company{}, false },
-		Layout:  layoutZero,
-	}); err != nil {
-		t.Fatalf("a layout-0 maintainer, which writes no first map, was refused: %v", err)
+}
+
+// A MAP'S LOGS ARE CREATED BY THE MAINTAINER THAT READS IT, not only by the one
+// that created it: a broker store restored from before its layout, or a stream
+// an operator deleted, leaves a map naming joiners of logs that are gone. So
+// the first tick of a tenure that finds a map creates its logs before it moves
+// a holder — and a tick that cannot changes nothing — while later ticks of
+// the same tenure do not repeat hundreds of creates. A tenure ended and begun
+// again, or a map written again under a new lineage, creates them again.
+func TestAMaintainerCreatesTheLogsOfAMapItReads(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, smallLayout, 3, "a", "b", "c")
+	s.tick()
+	store := coordmemory.NewFleet()
+	raw, err := s.state.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.CreateEstateMap(t.Context(), raw); err != nil || !ok {
+		t.Fatalf("seed: %v %v", ok, err)
+	}
+	gone := []Presence{s.live()[0]}
+	var provisioned []int
+	failing := true
+	m := maintainerOver(t, store, layoutZero,
+		func() ([]Presence, error) { return gone, nil }, company(3, "", 1),
+		func(_ context.Context, l statelog.Layout) error {
+			provisioned = append(provisioned, l.Number)
+			if failing {
+				return errors.New("the broker refused a stream")
+			}
+			return nil
+		})
+
+	// A PROVISIONING THAT FAILS CHANGES NOTHING: the tick would have
+	// opened two absences.
+	if _, err := m.Tick(t.Context()); err == nil || !strings.Contains(err.Error(), "logs") {
+		t.Fatalf("a tick whose map's logs could not be created answered %v", err)
+	}
+	if rec, _, _ := store.EstateMap(t.Context()); string(rec.Value) != string(raw) {
+		t.Fatal("a tick that could not create its map's logs changed the map")
+	}
+
+	failing = false
+	for range 3 {
+		if _, err := m.Tick(t.Context()); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+	}
+	if want := []int{smallLayout.Number, smallLayout.Number}; !slices.Equal(provisioned, want) {
+		t.Fatalf("provisioned %v over one failed and three good ticks, want %v: the map's "+
+			"own layout, once for the tenure", provisioned, want)
+	}
+
+	m.Forget()
+	if _, err := m.Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(provisioned) != 3 {
+		t.Fatalf("a tenure begun again provisioned %v, want its map's logs created again",
+			provisioned)
+	}
+
+	// THE KEY WRITTEN AGAIN under a new lineage: another map, whose logs
+	// this tenure never created.
+	again := newSim(t, smallLayout, 3, "a", "b", "c")
+	again.tick()
+	recreated := coordmemory.NewFleet()
+	if _, ok, err := recreated.CreateEstateMap(t.Context(), encoded(t, again.state)); err != nil || !ok {
+		t.Fatalf("seed: %v %v", ok, err)
+	}
+	m.opts.Store = recreated
+	if _, err := m.Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(provisioned) != 4 {
+		t.Fatalf("a map of a new lineage provisioned %v, want its logs created", provisioned)
 	}
 }
 

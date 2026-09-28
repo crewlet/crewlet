@@ -305,14 +305,19 @@ func TestTheMapDutyPacesOnWhatItsTickFound(t *testing.T) {
 		"did not hold the duty":            {claim: dutyAnswers(false, nil), want: mapInterval},
 		"could not ask whether it held it": {claim: dutyAnswers(false, failed), want: mapInterval},
 	} {
-		ticked := false
+		ticked, released := false, false
 		duty := mapDuty{event: "test_map", claim: tc.claim, tick: func(context.Context) (mapTick, error) {
 			ticked = true
 			return tc.result, tc.err
-		}}
+		}, released: func() { released = true }}
 		if got := duty.turn(t.Context()); got != tc.want || ticked != tc.ticks {
 			t.Errorf("%s: waited %v having ticked %v, want %v having ticked %v",
 				name, got, ticked, tc.want, tc.ticks)
+		}
+		// A TURN THAT DOES NOT TICK ENDS THE TENURE: it did not hold the
+		// duty, or could not say it did.
+		if released == ticked {
+			t.Errorf("%s: released the tenure %v having ticked %v", name, released, ticked)
 		}
 	}
 }
