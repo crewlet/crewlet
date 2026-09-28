@@ -1,19 +1,19 @@
 // Package jwks is the ONE cached reader of a published JSON Web Key Set, and
 // the one place that decides what this engine trusts one to say.
 //
-// # Why it is a package and not a type in each caller
+// # Why it is a package and not a type in its caller
 //
-// Two edges verify somebody else's signed token against keys that party
-// publishes: the Forge relay a webhook arrives over, and the identity provider
-// a person signs in through. Written twice, the two copies would have to agree
-// about six decisions, none of them locally obvious — how long a key set is
-// trusted without re-reading, how often an unknown key id may trigger an
-// outbound fetch, how big a document may be, whether one unusable entry
-// discards the rest, whether a stale key still verifies when the source is
-// down, and whether the fetch happens under the lock. That is the shape
-// [textcut], [whsec] and [jsprovision] each arrived at after the copies had
-// already drifted, and this one had drifted before it was extracted: the
-// webhook's copy held its mutex ACROSS the fetch.
+// The Forge relay a webhook arrives over verifies Atlassian's signed token
+// against the keys Atlassian publishes, and what it needs from a key set is
+// six decisions none of which is about Forge and none of which is locally
+// obvious — how long a key set is trusted without re-reading, how often an
+// unknown key id may trigger an outbound fetch, how big a document may be,
+// whether one unusable entry discards the rest, whether a stale key still
+// verifies when the source is down, and whether the fetch happens under the
+// lock. Kept apart from the relay, each is stated and tested once, against a
+// key set rather than through a webhook; and the relay's own copy had already
+// got the last one wrong before it was extracted: it held its mutex ACROSS the
+// fetch.
 //
 // # THE FETCH DOES NOT HAPPEN UNDER THE LOCK
 //
@@ -56,8 +56,6 @@ package jwks
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -276,9 +274,9 @@ func (s *Set) stale(keyID string) (any, bool) {
 // then waits on ITS OWN context: a caller with a shorter deadline gives up
 // rather than being held to somebody else's. The request itself runs on a
 // context no caller can cancel, bounded by [FetchTimeout] instead. It used to
-// run on the first caller's, so the first caller hanging up — a browser tab
-// closed mid sign-in, a webhook sender giving up — failed every verification
-// waiting on the same flight, each refused for somebody else's disconnect.
+// run on the first caller's, so the first caller hanging up — a webhook sender
+// giving up — failed every verification waiting on the same flight, each
+// refused for somebody else's disconnect.
 func (s *Set) fetch(ctx context.Context) (map[string]any, error) {
 	s.mu.Lock()
 	inflight := s.flight
@@ -325,17 +323,13 @@ func (s *Set) fly(ctx context.Context, inflight *flight) {
 	close(inflight.done)
 }
 
-// document is the subset of a JWK set this reads: RSA keys, and elliptic-curve
-// keys on P-256 and P-384.
+// document is the subset of a JWK set this reads: RSA keys.
 //
-// WHAT EACH CALLER NEEDS, and nothing either does not. The identity provider
-// signs ID tokens RS256 almost everywhere and ES256 or ES384 at the providers
-// that offer them (internal/iam/oidc's Algorithms), so its key set has to
-// yield both types; the Forge relay pins RS256, and an EC key handed to its
-// RSA verifier fails on the key's TYPE before any arithmetic, so reading one
-// costs that caller nothing. Other curves and other key types (`oct`, `OKP`)
-// are skipped — an `oct` key above all, since a symmetric key read out of a
-// published set is a signing secret anybody can download.
+// WHAT THE CALLER NEEDS, and nothing it does not. The Forge relay pins RS256,
+// so a key of any other type could verify nothing it accepts, and a key
+// nothing should verify with is a key nothing should hold. Every other type
+// (`EC`, `OKP`, `oct`) is skipped — an `oct` key above all, since a symmetric
+// key read out of a published set is a signing secret anybody can download.
 type document struct {
 	Keys []struct {
 		Kid string `json:"kid"`
@@ -343,9 +337,6 @@ type document struct {
 		Use string `json:"use"`
 		N   string `json:"n"`
 		E   string `json:"e"`
-		Crv string `json:"crv"`
-		X   string `json:"x"`
-		Y   string `json:"y"`
 	} `json:"keys"`
 }
 
@@ -378,16 +369,10 @@ func (s *Set) read(ctx context.Context) (map[string]any, error) {
 		if k.Kid == "" || k.Use == "enc" {
 			continue
 		}
-		var pub any
-		var err error
-		switch k.Kty {
-		case "RSA":
-			pub, err = rsaKey(k.N, k.E)
-		case "EC":
-			pub, err = ecKey(k.Crv, k.X, k.Y)
-		default:
+		if k.Kty != "RSA" {
 			continue
 		}
+		pub, err := rsaKey(k.N, k.E)
 		if err != nil {
 			// ONE UNUSABLE ENTRY MUST NOT DISCARD THE REST: a key
 			// set carries the outgoing key alongside the incoming
@@ -436,51 +421,4 @@ func rsaKey(modulus, exponent string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("exponent out of range: %s", exp)
 	}
 	return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(exp.Int64())}, nil
-}
-
-// curves are the elliptic curves a key set's EC entries may name, by their JWK
-// `crv`, with the length of one coordinate on each.
-//
-// P-256 AND P-384, which are ES256's and ES384's: the curves the providers
-// that sign with ECDSA use. P-521 is left out because nothing this engine
-// verifies accepts ES512, and a key only an unaccepted algorithm could use is
-// a key nothing should hold.
-var curves = map[string]struct {
-	curve elliptic.Curve
-	bytes int
-}{
-	"P-256": {elliptic.P256(), 32},
-	"P-384": {elliptic.P384(), 48},
-}
-
-// ecKey rebuilds a public key from a JWK's curve and base64url coordinates.
-//
-// EACH COORDINATE MUST BE THE CURVE'S FULL LENGTH, which RFC 7518 §6.2.1.2
-// requires and which is what makes the two halves unambiguous, and the POINT
-// MUST BE ON THE CURVE: [ecdsa.ParseUncompressedPublicKey] refuses one that is
-// not, because a verifier handed an off-curve point is the invalid-curve
-// attack's way in.
-func ecKey(crv, x, y string) (*ecdsa.PublicKey, error) {
-	want, known := curves[crv]
-	if !known {
-		return nil, fmt.Errorf("curve %q is not one this engine verifies with", crv)
-	}
-	xb, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(x, "="))
-	if err != nil {
-		return nil, fmt.Errorf("x: %w", err)
-	}
-	yb, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(y, "="))
-	if err != nil {
-		return nil, fmt.Errorf("y: %w", err)
-	}
-	if len(xb) != want.bytes || len(yb) != want.bytes {
-		return nil, fmt.Errorf("a %s coordinate is %d bytes, and x and y are %d "+
-			"and %d", crv, want.bytes, len(xb), len(yb))
-	}
-	point := append(append([]byte{4}, xb...), yb...)
-	pub, err := ecdsa.ParseUncompressedPublicKey(want.curve, point)
-	if err != nil {
-		return nil, fmt.Errorf("point: %w", err)
-	}
-	return pub, nil
 }

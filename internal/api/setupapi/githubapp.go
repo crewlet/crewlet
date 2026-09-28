@@ -64,10 +64,10 @@ import (
 // name that is nobody, so "who gave this agent its GitHub identity" had no
 // answer in the chart's history or on the key's row.
 //
-// SEALED AND NOT SIGNED, for the reason [iam/oidc]'s flight is: the state goes
-// to GitHub and comes back in a URL — through GitHub's logs, a browser history
-// and every ingress access log — and who began a creation is this company's
-// business rather than any of theirs. It is sealed under the fleet keyring
+// SEALED AND NOT SIGNED: the state goes to GitHub and comes back in a URL —
+// through GitHub's logs, a browser history and every ingress access log — and
+// who began a creation is this company's business rather than any of theirs,
+// which a signature would leave readable to every one of them. It is sealed under the fleet keyring
 // every node holds, so the node GitHub returns the browser to opens what
 // another node minted, and rotating the keyring leaves a state minted under
 // the previous key valid while that key is still in the ring.

@@ -118,11 +118,11 @@ func TestAStateIsRefusedUnlessThisFleetSealedItForThisFlow(t *testing.T) {
 		// ANOTHER KEYRING — another deployment, or a key nobody holds.
 		"another keyring": sealAs(ring(t, map[string][]byte{"k1": freshKey(t)}, "k1"),
 			stateAAD, valid),
-		// ANOTHER PURPOSE under this very keyring: a login flight or a
-		// stored secret is sealed by the same keys, and the context is
+		// ANOTHER PURPOSE under this very keyring: a stored secret is
+		// sealed by the same keys, under its own name, and the context is
 		// what stops one opening as the other.
 		"another purpose": sealAs(ring(t, map[string][]byte{"k1": key}, "k1"),
-			"iam_oidc/flight", valid),
+			"GITLAB_TOKEN", valid),
 		"lapsed": sealAs(ring(t, map[string][]byte{"k1": key}, "k1"), stateAAD,
 			appState{Seat: "sre-lead", ExpiresAt: now, By: began.Name,
 				ByKind: string(began.Kind)}),

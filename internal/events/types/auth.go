@@ -48,8 +48,7 @@ import (
 // `iam_token_rejected` is absent for the admission rule's own reason: a
 // rejected bearer is authored by whoever holds the wrong value, so it is a
 // failed attempt of method `bearer` inside [IAMLoginFailures] and never a row
-// of its own. And neither link event carries the provider's SUBJECT — see
-// [IAMIdentityLinked].
+// of its own.
 
 func init() {
 	events.Register[IAMSessionStarted]()
@@ -64,8 +63,6 @@ func init() {
 	events.Register[IAMRecoveryCodeUsed]()
 	events.Register[IAMSecondFactorThrottled]()
 	events.Register[IAMMFAReset]()
-	events.Register[IAMIdentityLinked]()
-	events.Register[IAMIdentityUnlinked]()
 	events.Register[IAMSessionGenerationBumped]()
 	events.Register[RecordUnverifiable]()
 	events.Register[RecordTampered]()
@@ -78,10 +75,6 @@ const (
 	// SignInPassword is a password, and a second factor when the person
 	// holds one.
 	SignInPassword SignInMethod = "password"
-
-	// SignInOIDC is an identity provider's assertion about a subject this
-	// estate had already linked.
-	SignInOIDC SignInMethod = "oidc"
 
 	// SignInInvite is the session an invitation's redemption opens, for
 	// the person it just enrolled.
@@ -99,7 +92,7 @@ const (
 // Valid reports whether m is a method this build names.
 func (m SignInMethod) Valid() bool {
 	switch m {
-	case SignInPassword, SignInOIDC, SignInInvite, SignInBootstrap, SignInToken:
+	case SignInPassword, SignInInvite, SignInBootstrap, SignInToken:
 		return true
 	}
 	return false
@@ -152,10 +145,6 @@ const (
 	// session or every session a person holds.
 	EndRevoked SessionEndReason = "revoked"
 
-	// EndIDPRevoked is the deactivation probe hearing `invalid_grant` from
-	// the identity provider — an off-boarding done centrally.
-	EndIDPRevoked SessionEndReason = "idp_revoked"
-
 	// EndPersonRemoved is the person being removed, which ends every
 	// session they hold along with everything else about them.
 	EndPersonRemoved SessionEndReason = "person_removed"
@@ -173,7 +162,7 @@ const (
 func (r SessionEndReason) Valid() bool {
 	switch r {
 	case EndLogout, EndLogoutAll, EndIdle, EndAbsolute, EndRevoked,
-		EndIDPRevoked, EndPersonRemoved, EndCredentialChanged:
+		EndPersonRemoved, EndCredentialChanged:
 		return true
 	}
 	return false
@@ -192,11 +181,6 @@ const (
 
 	// FailSecondFactor is a correct password with a wrong code.
 	FailSecondFactor FailureMethod = "second_factor"
-
-	// FailOIDC is a provider round trip that did not end in somebody this
-	// estate holds: a missing or stale flight, a state mismatch, a refused
-	// ID token, a subject nobody linked.
-	FailOIDC FailureMethod = "oidc"
 
 	// FailBootstrap is a wrong one-time founder code.
 	FailBootstrap FailureMethod = "bootstrap"
@@ -224,7 +208,7 @@ const (
 // Valid reports whether m is a method this build names.
 func (m FailureMethod) Valid() bool {
 	switch m {
-	case FailPassword, FailSecondFactor, FailOIDC, FailBootstrap, FailInvite,
+	case FailPassword, FailSecondFactor, FailBootstrap, FailInvite,
 		FailBearer:
 		return true
 	}
@@ -234,8 +218,7 @@ func (m FailureMethod) Valid() bool {
 // FailureMethods is every method, for a metrics dimension and a test that
 // walks the set.
 var FailureMethods = []FailureMethod{
-	FailPassword, FailSecondFactor, FailOIDC, FailBootstrap, FailInvite,
-	FailBearer,
+	FailPassword, FailSecondFactor, FailBootstrap, FailInvite, FailBearer,
 }
 
 // CredentialKind is what sort of credential a mint or a revocation was about.
@@ -257,9 +240,6 @@ const (
 
 	// CredentialPassword is a password.
 	CredentialPassword CredentialKind = "password"
-
-	// CredentialOIDC is a provider subject.
-	CredentialOIDC CredentialKind = "oidc"
 )
 
 // IAMSessionStarted is a session opened: somebody proved who they are and now
@@ -280,10 +260,6 @@ type IAMSessionStarted struct {
 
 	Remote       string       `json:"remote"`
 	SecondFactor SecondFactor `json:"second_factor"`
-
-	// ACR is the authentication context an identity provider asserted,
-	// empty on every other method.
-	ACR string `json:"acr"`
 
 	// ExpiresAt is the absolute deadline the session was minted with.
 	ExpiresAt time.Time `json:"expires_at"`
@@ -322,8 +298,8 @@ type IAMSessionEnded struct {
 	Reason  SessionEndReason `json:"reason"`
 
 	// By is who ended it: the holder for a logout, an administrator for a
-	// revocation or a removal, and EMPTY for a deadline, a provider verdict
-	// or a changed credential, which nobody this engine can name authored.
+	// revocation or a removal, and EMPTY for a deadline or a changed
+	// credential, which nobody this engine can name authored.
 	By string `json:"by"`
 
 	// OperatorID is the CREDENTIAL By acted through: a machine token's
@@ -446,7 +422,7 @@ func (e IAMLoginFailures) Summary() string {
 // is what the surfaces that change what a company IS ask for.
 //
 // It opens a FRESH session carrying the new proof, keeping the absolute
-// deadline and the provider-carried grants of the one it replaces; Replaces is
+// deadline of the one it replaces; Replaces is
 // that one, ENDED before the new one opened, so a reader can join the two. No
 // separate session-ended row is written for it: this row is the record of
 // why it ended.
@@ -737,96 +713,6 @@ func (e IAMMFAReset) Actor() string { return e.By }
 // Summary names whose.
 func (e IAMMFAReset) Summary() string {
 	return "Second factor of " + orSomebody(e.Person, "") + " reset"
-}
-
-// LinkVia is how an identity provider subject came to be pinned to a person.
-//
-// THE TWO ANSWERS ARE THE WHOLE LIST, and that is the rule the link enforces
-// rather than a vocabulary that happens to be short: a subject is pinned by an
-// invitation somebody issued and the invitee redeemed through the provider, or
-// by an administrator — never by the provider asserting an address that
-// matched somebody's, because at most providers a person sets their own.
-type LinkVia string
-
-const (
-	// LinkViaInvite is an invitation redeemed through the identity
-	// provider, which pins the subject the provider came back with to the
-	// person the redemption created.
-	LinkViaInvite LinkVia = "invite"
-
-	// LinkViaAdmin is an administrator pinning a subject to somebody who
-	// already exists — `PATCH /iam/people/{id}` with `oidc_subject`, or
-	// `crewlet iam link`.
-	LinkViaAdmin LinkVia = "admin"
-)
-
-// Valid reports whether v is one of the two.
-func (v LinkVia) Valid() bool { return v == LinkViaInvite || v == LinkViaAdmin }
-
-// IAMIdentityLinked is an identity provider subject pinned to a person, which
-// is what makes their provider sign-in resolve to them from now on.
-//
-// NO SUBJECT, and the absence is the design's own rule for where a subject may
-// live: it identifies a person at a third party, so the estate holds it only
-// as a keyed blind, and an event row is the one place that copy would outlive
-// everything else — it reaches the node store, the activity feed and every
-// OTLP sink, none of which a removal's crypto-shred reaches. The issuer is
-// here because it is the company's own provider and names nobody; which of
-// its subjects is the person's own is a question for the provider.
-type IAMIdentityLinked struct {
-	Person string  `json:"person"`
-	Issuer string  `json:"issuer"`
-	Via    LinkVia `json:"via"`
-	By     string  `json:"by"`
-
-	// OperatorID is the credential By acted through — see
-	// [IAMSessionEnded.OperatorID]. Empty on a link an invitation's
-	// redemption pinned, which the node's own writer makes on nobody's
-	// credential.
-	OperatorID string `json:"operator_id,omitempty"`
-}
-
-// EventType is the "iam_identity_linked" wire type.
-func (IAMIdentityLinked) EventType() string { return "iam_identity_linked" }
-
-// Actor is who pinned it — the administrator, or the node's own writer for an
-// invitation redeemed through the provider.
-func (e IAMIdentityLinked) Actor() string { return e.By }
-
-// Summary names whose sign-in and how it was pinned.
-func (e IAMIdentityLinked) Summary() string {
-	how := "by an administrator"
-	if e.Via == LinkViaInvite {
-		how = "redeeming an invitation"
-	}
-	return fmt.Sprintf("Identity provider sign-in linked for %s (%s)",
-		orSomebody(e.Person, ""), how)
-}
-
-// IAMIdentityUnlinked is an identity provider subject taken off a person, after
-// which their provider sign-in resolves to nobody. The subject is absent for
-// [IAMIdentityLinked]'s reason.
-type IAMIdentityUnlinked struct {
-	Person string `json:"person"`
-	Issuer string `json:"issuer"`
-	By     string `json:"by"`
-
-	// OperatorID is the credential By acted through — see
-	// [IAMSessionEnded.OperatorID].
-	OperatorID string `json:"operator_id,omitempty"`
-
-	Reason string `json:"reason"`
-}
-
-// EventType is the "iam_identity_unlinked" wire type.
-func (IAMIdentityUnlinked) EventType() string { return "iam_identity_unlinked" }
-
-// Actor is the administrator who removed it.
-func (e IAMIdentityUnlinked) Actor() string { return e.By }
-
-// Summary names whose.
-func (e IAMIdentityUnlinked) Summary() string {
-	return "Identity provider sign-in unlinked for " + orSomebody(e.Person, "")
 }
 
 // IAMSessionGenerationBumped is the fleet-wide session generation moving, which

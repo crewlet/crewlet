@@ -223,22 +223,6 @@ func TestSummaries(t *testing.T) {
 			"wrong code from 203.0.113.9: somebody holding the password is " +
 			"guessing at the code",
 	}, {
-		// NO SUBJECT ANYWHERE ON THE LINE: it identifies a person at a
-		// third party, and an event row outlives every crypto-shred.
-		name: "a link through an invitation says so",
-		payload: IAMIdentityLinked{Person: "p-1", Issuer: "https://idp.example.com",
-			Via: LinkViaInvite, By: "node-a"},
-		want: "Identity provider sign-in linked for p-1 (redeeming an invitation)",
-	}, {
-		name: "an administrator's link says so",
-		payload: IAMIdentityLinked{Person: "p-1", Issuer: "https://idp.example.com",
-			Via: LinkViaAdmin, By: "ana.admin"},
-		want: "Identity provider sign-in linked for p-1 (by an administrator)",
-	}, {
-		name:    "an unlink names whose",
-		payload: IAMIdentityUnlinked{Person: "p-1", By: "ana.admin"},
-		want:    "Identity provider sign-in unlinked for p-1",
-	}, {
 		name:    "a grant change lists both directions",
 		payload: IAMGrantsChanged{Person: "p-1", Added: []string{"audit:read"}, Removed: []string{"config:write", "fleet:operate"}},
 		want:    "Grants of p-1 changed: +audit:read; -config:write, -fleet:operate",

@@ -260,8 +260,6 @@ var categories = map[string]placement{
 	// somebody guessing, never by what a stranger can send.
 	"iam_second_factor_throttled":   {"auth", RateAuthenticated},
 	"iam_mfa_reset":                 {"auth", RateAuthenticated},
-	"iam_identity_linked":           {"auth", RateAuthenticated},
-	"iam_identity_unlinked":         {"auth", RateAuthenticated},
 	"iam_session_generation_bumped": {"auth", RateAuthenticated},
 	"statelog_record_unverifiable":  {"auth", RateEngine},
 	"statelog_record_tampered":      {"auth", RateEngine},

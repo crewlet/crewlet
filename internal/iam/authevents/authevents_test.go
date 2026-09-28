@@ -216,7 +216,7 @@ func TestOneRowPerClientPerMinute(t *testing.T) {
 		Subject: "a-wrong-token"})
 	trail.Failed(ctx, Failure{Client: "203.0.113.9", Method: types.FailPassword,
 		Throttled: true})
-	trail.Failed(ctx, Failure{Client: "198.51.100.4", Method: types.FailOIDC})
+	trail.Failed(ctx, Failure{Client: "198.51.100.4", Method: types.FailInvite})
 	if got := len(pub.published()); got != 0 {
 		t.Fatalf("%d rows published on the request path: a failed attempt must "+
 			"never publish, or the caller who failed paces the estate", got)
