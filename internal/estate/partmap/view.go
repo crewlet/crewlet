@@ -42,10 +42,23 @@ import (
 // is layout 0 — every data node holding the one partition whole — only for a
 // node that itself runs layout 0; a node running a partitioned layout with no
 // map yet is a fleet whose partitions nobody has been named to hold, and that
-// is an error, not a layout. Under layout 0 a partition's servers are the live
-// estate leases that say they serve it (the lease half); under a map they are
-// the map's serving holders (the map half) — routing reads the holder table
-// and nothing else.
+// is an error, not a layout. Under a map a partition's servers are the map's
+// serving holders — routing reads the holder table and nothing else.
+//
+// # Layout 0 routes by presence, never by the estate leases
+//
+// Under layout 0 the one partition's servers are EVERY LIVE DATA NODE, as this
+// node's watched presence view names them ([Roster]) — the answer the estate's
+// router gives there, so the two can never disagree about who serves a fleet
+// with no map. The estate leases are deliberately not that answer, and either
+// reason alone breaks routing. A build from before the estate lease claims
+// none while it holds and serves the whole estate, so on a rolling upgrade
+// that replaced the stateless nodes first, every seat tool on them would find
+// nobody serving and fail with every data node up. And a lease's `serving` is
+// its copy's own state, which a copy that falls behind leaves — a node holding
+// the whole estate still answers for it, and says so itself when a read needs
+// rows it has not applied. What the leases are for is what a MAP decides by: a
+// joiner's word that it serves, and a leaver's that it has let go.
 //
 // # Freshness
 //
@@ -75,6 +88,22 @@ type MapSource interface {
 	WatchEstateMap(ctx context.Context) (<-chan coord.EstateMapRecord, error)
 }
 
+// Roster is the fleet's live data nodes as this node's watched presence view
+// names them: layout 0's servers ([View.Serving]).
+//
+// FROM MEMORY, because a router asks it per request — the engine's presence
+// view (a coord.LeaseView of the presence class) lists once per heartbeat.
+type Roster interface {
+	// LiveDataNodes is every live data node — or an error wrapping
+	// [coord.ErrUnavailable] when that is not known, never an empty list
+	// standing in for it, which would read as "nobody serves the estate".
+	LiveDataNodes() ([]string, error)
+
+	// Invalidate asks for a listing now, because a node it named did not
+	// answer. It must not block.
+	Invalidate()
+}
+
 // ViewOptions configure a [View].
 type ViewOptions struct {
 	// Maps is the estate map's store; Leases lists the estate leases.
@@ -84,6 +113,11 @@ type ViewOptions struct {
 	// Running is the layout this node runs: what a store with no map is
 	// read as, if it is layout 0.
 	Running statelog.Layout
+
+	// Roster is who serves layout 0's one partition while there is no map:
+	// every live data node. REQUIRED where Running is layout 0, and unused
+	// otherwise — a partitioned layout with no map has no servers at all.
+	Roster Roster
 
 	// Heartbeat is the estate leases' renew cadence, and TTL how long one
 	// survives unrenewed — the lease view's cadence and its trust.
@@ -99,6 +133,7 @@ type ViewOptions struct {
 type View struct {
 	maps    MapSource
 	leases  *coord.LeaseView
+	roster  Roster
 	running statelog.Layout
 	now     func() time.Time
 
@@ -131,6 +166,9 @@ func NewView(opts ViewOptions) (*View, error) {
 	case opts.Running.Validate() != nil:
 		return nil, fmt.Errorf("estate/partmap: a view needs the layout this node runs: %w",
 			opts.Running.Validate())
+	case opts.Running.Number == 0 && opts.Roster == nil:
+		return nil, errors.New("estate/partmap: a view on a node running layout 0 needs the " +
+			"fleet's live data nodes, which serve that layout's one partition")
 	}
 	leases, err := coord.NewLeaseView(opts.Leases, coord.ClassEstate, coord.ViewOptions{
 		Every: opts.Heartbeat, Trust: opts.TTL, Now: opts.Now,
@@ -142,8 +180,8 @@ func NewView(opts ViewOptions) (*View, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &View{maps: opts.Maps, leases: leases, running: opts.Running, now: now,
-		watches: map[*viewWatch]struct{}{}}, nil
+	return &View{maps: opts.Maps, leases: leases, roster: opts.Roster, running: opts.Running,
+		now: now, watches: map[*viewWatch]struct{}{}}, nil
 }
 
 // Run follows the map and lists the leases until ctx ends, and returns ctx's
@@ -366,8 +404,9 @@ func (v *View) Serves(node string, p statelog.PartitionID) (bool, error) {
 	return slices.Contains(nodes, node), nil
 }
 
-// wholeServers is p's servers where there is no map: under layout 0, every live
-// estate lease that runs layout 0, says its store is healthy and serves p.
+// wholeServers is p's servers where there is no map: under layout 0, every
+// live data node — see the file's doc for why presence and not the estate
+// leases.
 func (v *View) wholeServers(p statelog.PartitionID) ([]string, error) {
 	if v.running.Number != 0 {
 		return nil, fmt.Errorf("%w: this node runs layout %d and the fleet has no estate "+
@@ -376,24 +415,11 @@ func (v *View) wholeServers(p statelog.PartitionID) ([]string, error) {
 	if parts := v.running.Partitions(); len(parts) != 1 || parts[0] != p {
 		return nil, fmt.Errorf("%w: %q in layout 0", ErrUnknownPartition, p.String())
 	}
-	leases, _, err := v.leases.Leases()
+	nodes, err := v.roster.LiveDataNodes()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("estate/partmap: who serves %s under layout 0: %w", p.String(), err)
 	}
-	var out []string
-	for _, lease := range leases {
-		presence, ok := PresenceOf(lease)
-		if !ok {
-			continue
-		}
-		m := presence.Meta
-		if m.Layout == nil || *m.Layout != 0 || m.Healthy == nil || !*m.Healthy {
-			continue
-		}
-		if m.Partitions[p.String()] == PartServing {
-			out = append(out, presence.Node)
-		}
-	}
+	out := slices.Clone(nodes)
 	slices.Sort(out)
 	return out, nil
 }
@@ -434,9 +460,15 @@ func (v *View) Fresh() bool {
 	return err == nil && now.Sub(listed) <= statelog.FloorCacheStale
 }
 
-// Invalidate asks the lease half for a listing now, because a caller asked a
-// node the view named and got no answer ([coord.LeaseView.Invalidate]).
-func (v *View) Invalidate() { v.leases.Invalidate() }
+// Invalidate asks for a listing now, because a caller asked a node the view
+// named and got no answer: of the estate leases ([coord.LeaseView.Invalidate]),
+// and of presence where that is what named it.
+func (v *View) Invalidate() {
+	v.leases.Invalidate()
+	if v.roster != nil {
+		v.roster.Invalidate()
+	}
+}
 
 // Watch delivers every map this view takes in from now until ctx ends — the one
 // it holds first, then each newer one in order. It may skip a version replaced

@@ -190,7 +190,9 @@
 // beside a watched listing of the estate leases (coord.LeaseView). It answers
 // which layout the fleet runs and who serves a partition, three-valued, and
 // under layout 0 it answers that the one partition is served by every live
-// estate lease that serves it. Routing may use it at any age; anything that
-// decides asks [View.Fresh], which is false once either half was last
-// confirmed more than statelog.FloorCacheStale ago.
+// data node, from PRESENCE ([Roster]) — never from the estate leases, which a
+// build from before them does not claim while it serves the whole estate.
+// Routing may use it at any age; anything that decides asks [View.Fresh],
+// which is false once either half was last confirmed more than
+// statelog.FloorCacheStale ago.
 package partmap

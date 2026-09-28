@@ -3,6 +3,7 @@ package partmap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -49,11 +50,41 @@ func (c *clock) advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
+// roster is a settable presence roster: the live data nodes, or why they are
+// not known.
+type roster struct {
+	mu          sync.Mutex
+	nodes       []string
+	err         error
+	invalidated int
+}
+
+func (r *roster) LiveDataNodes() ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.nodes), r.err
+}
+
+func (r *roster) Invalidate() {
+	r.mu.Lock()
+	r.invalidated++
+	r.mu.Unlock()
+}
+
 // viewOver is a view over this store and these leases, running layout, on
-// this clock, with a quick lease heartbeat so the tests need not wait for one.
+// this clock, with a quick lease heartbeat so the tests need not wait for one,
+// and a presence roster naming a, b and c.
 func viewOver(t *testing.T, maps MapSource, leases coord.Lister, running statelog.Layout, c *clock) *View {
 	t.Helper()
-	opts := ViewOptions{Maps: maps, Leases: leases, Running: running,
+	return viewWith(t, maps, leases, running, c, &roster{nodes: []string{"a", "b", "c"}})
+}
+
+// viewWith is viewOver with this presence roster.
+func viewWith(t *testing.T, maps MapSource, leases coord.Lister, running statelog.Layout, c *clock,
+	r Roster) *View {
+
+	t.Helper()
+	opts := ViewOptions{Maps: maps, Leases: leases, Running: running, Roster: r,
 		Heartbeat: 20 * time.Millisecond, TTL: time.Minute}
 	if c != nil {
 		opts.Now = c.Now
@@ -115,22 +146,26 @@ func estateLease(layout int, healthy bool, state PartitionState) Meta {
 
 var estateZero = statelog.PartitionID{Space: statelog.SpaceEstate}
 
-// UNDER LAYOUT 0 EVERY DATA NODE SERVES THE WHOLE ESTATE, and the view says so:
-// a store with no map is layout 0 to a node that runs it, and the one
-// partition's servers are the live estate leases that run layout 0, say their
-// store is healthy and serve it — at map epoch 0, since there is no map. A copy
-// still catching up, a store that says it failed and a node on another layout
-// serve nothing; a partition layout 0 does not have is refused by name; and a
-// fresh read of the map says there is none.
-func TestUnderLayoutZeroEveryDataNodeServesTheWholeEstate(t *testing.T) {
+// UNDER LAYOUT 0 EVERY LIVE DATA NODE SERVES THE WHOLE ESTATE, and the view
+// says so from PRESENCE: a store with no map is layout 0 to a node that runs
+// it, and the one partition's servers are the live data nodes the presence
+// roster names, at map epoch 0 — whatever the estate leases say. A data node
+// of a build that claims no estate lease is served (a rolling upgrade that
+// replaced the stateless nodes first must still reach it), and so is one whose
+// copy is catching up; an estate lease nobody's presence backs serves nothing.
+// A roster that cannot say makes the view say it cannot; a node that did not
+// answer invalidates the roster as well as the leases; a partition layout 0
+// does not have is refused by name; and a fresh read of the map says there is
+// none.
+func TestUnderLayoutZeroEveryLiveDataNodeServesTheWholeEstate(t *testing.T) {
 	t.Parallel()
 	leases := coordmemory.New()
 	claimEstate(t, leases, "a", estateLease(0, true, PartServing))
 	claimEstate(t, leases, "b", estateLease(0, true, PartCatchingUp))
-	claimEstate(t, leases, "c", estateLease(0, false, PartServing))
-	claimEstate(t, leases, "d", estateLease(1, true, PartServing))
-	claimEstate(t, leases, "e", estateLease(0, true, PartServing))
-	v := viewOver(t, coordmemory.NewFleet(), leases, layoutZero, nil)
+	claimEstate(t, leases, "x", estateLease(0, true, PartServing))
+	// c runs a build from before the estate lease: presence, and no lease.
+	r := &roster{nodes: []string{"c", "a", "b"}}
+	v := viewWith(t, coordmemory.NewFleet(), leases, layoutZero, nil, r)
 	run(t, v)
 	eventually(t, "the view to read the store and the leases", v.Fresh)
 
@@ -139,20 +174,33 @@ func TestUnderLayoutZeroEveryDataNodeServesTheWholeEstate(t *testing.T) {
 		t.Fatalf("Layout = (%+v, %v), want layout 0", layout, err)
 	}
 	nodes, epoch, err := v.Serving(estateZero)
-	if err != nil || epoch != 0 || !slices.Equal(nodes, []string{"a", "e"}) {
-		t.Fatalf("Serving(estate.000) = (%v, %d, %v), want [a e] at epoch 0", nodes, epoch, err)
+	if err != nil || epoch != 0 || !slices.Equal(nodes, []string{"a", "b", "c"}) {
+		t.Fatalf("Serving(estate.000) = (%v, %d, %v), want every live data node [a b c] at "+
+			"epoch 0", nodes, epoch, err)
 	}
-	if yes, err := v.Serves("a", estateZero); err != nil || !yes {
-		t.Errorf("Serves(a) = (%v, %v)", yes, err)
+	if yes, err := v.Serves("c", estateZero); err != nil || !yes {
+		t.Errorf("a data node that claims no estate lease is not served: (%v, %v)", yes, err)
 	}
-	if yes, err := v.Serves("b", estateZero); err != nil || yes {
-		t.Errorf("a copy still catching up serves: (%v, %v)", yes, err)
+	if yes, err := v.Serves("x", estateZero); err != nil || yes {
+		t.Errorf("an estate lease with no presence behind it serves: (%v, %v)", yes, err)
 	}
 	if _, _, err := v.Serving(statelog.PartitionID{Space: statelog.SpaceTracker}); !errors.Is(err, ErrUnknownPartition) {
 		t.Errorf("a partition layout 0 does not have = %v, want ErrUnknownPartition", err)
 	}
 	if _, _, err := v.Read(t.Context()); !errors.Is(err, ErrNoMap) {
 		t.Errorf("Read = %v, want ErrNoMap", err)
+	}
+
+	v.Invalidate()
+	r.mu.Lock()
+	invalidated := r.invalidated
+	r.err = fmt.Errorf("%w: the presence view is older than a lease survives", coord.ErrUnavailable)
+	r.mu.Unlock()
+	if invalidated != 1 {
+		t.Errorf("an unanswered node invalidated the roster %d time(s), want 1", invalidated)
+	}
+	if nodes, _, err := v.Serving(estateZero); !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("a roster that cannot say reads as (%v, %v), want unknown", nodes, err)
 	}
 }
 
@@ -176,7 +224,14 @@ func TestAViewThatCannotSaySaysSo(t *testing.T) {
 		t.Error("a view that has read nothing is fresh")
 	}
 
-	partitioned := viewOver(t, coordmemory.NewFleet(), coordmemory.New(), smallLayout, nil)
+	// A NODE RUNNING LAYOUT 0 WITH NOBODY TO NAME ITS SERVERS is refused
+	// at construction, rather than answering "nobody" on every request.
+	if _, err := NewView(ViewOptions{Maps: coordmemory.NewFleet(), Leases: coordmemory.New(),
+		Running: layoutZero, Heartbeat: time.Second, TTL: time.Minute}); err == nil {
+		t.Error("a view running layout 0 was built with no roster of live data nodes")
+	}
+
+	partitioned := viewWith(t, coordmemory.NewFleet(), coordmemory.New(), smallLayout, nil, nil)
 	run(t, partitioned)
 	eventually(t, "the view to read the store", partitioned.Fresh)
 	if _, err := partitioned.Layout(); !errors.Is(err, ErrNoMap) {
