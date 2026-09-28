@@ -412,10 +412,9 @@ func TestClockSkewBetweenNodesNeverEndsASession(t *testing.T) {
 
 // A PRE-LOGIN COOKIE IS NEVER HONOURED.
 //
-// The engine sets values in a browser before anybody has authenticated — the
-// sealed state a sign-in round trip carries, and whatever else a deployment
-// puts on the same host. None of them is a session, and every one of them
-// arrives in the same cookie jar. What makes them safe is not where they are
+// A browser holds values for this host before anybody has authenticated —
+// whatever else a deployment serves from the same host sets its own. None of
+// them is a session, and every one of them arrives in the same cookie jar. What makes them safe is not where they are
 // stored but that a bearer is only honoured when it PARSES as one and verifies
 // under a key this node holds.
 func TestAPreLoginCookieIsNeverHonoured(t *testing.T) {

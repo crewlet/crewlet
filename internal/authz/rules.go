@@ -194,7 +194,7 @@ const (
 	ActionDirectoryWrite Action = "iam.write"
 	// ActionDirectoryAuthority changes what somebody ALREADY ENROLLED may
 	// do or how they prove who they are: an edit of their row (grants,
-	// stage, seat, login, reach, provider link) and a second-factor reset.
+	// stage, seat, login, reach) and a second-factor reset.
 	// Its own verb beside [ActionDirectoryWrite] because it asks for the
 	// SENSITIVE window where every other directory write asks the ordinary
 	// one.
@@ -202,8 +202,8 @@ const (
 	ActionCredentialWrite    Action = "iam.credential.write"
 	// ActionCredentialProof changes how ONE PERSON PROVES WHO THEY ARE:
 	// enrolling or replacing a second factor, regenerating the recovery
-	// codes, and revoking a password, a second factor, the recovery codes
-	// or a provider link. It is asked from both surfaces that make those
+	// codes, and revoking a password, a second factor or the recovery
+	// codes. It is asked from both surfaces that make those
 	// changes — `/auth` for a person's own, `/iam` for anybody's — so one
 	// row decides them whichever route a request took.
 	ActionCredentialProof Action = "iam.credential.proof"

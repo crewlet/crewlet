@@ -283,7 +283,7 @@ func AADForVar(name string) string { return "secret_values/" + name }
 //
 // THE CREDENTIAL AND NOT THE PERSON, which is the one decision here and it is
 // not the obvious one: a person holds several credentials at once — a
-// password, an identity-provider binding, a machine token or two — and
+// password, a second factor, a machine token or two — and
 // binding to the person alone would let a second factor's sealed secret be
 // pasted over a first one's on the same row and still open. The field is the
 // second term for the same reason one level down: two values under one

@@ -1466,12 +1466,11 @@ func TestASuccessOnAPairThisNodeForgotStillClearsTheFleet(t *testing.T) {
 // strips the header the source is derived from — locks every person in the
 // company out at once, which is an outage the throttle caused. What still
 // bounds that caller is the password cost and the verify cap. And a
-// credential that names nobody — an invitation link, a founder's code, a
-// provider's round trip — has no pair to key, and keyed on its source alone it
-// was a way to hold every provider sign-in at an address shut, since a
-// callback nobody started fails for free. Either ticket is nil, and does
+// credential that names nobody — an invitation link or a founder's code — has
+// no pair to key, and keyed on its source alone it was a way to hold every
+// invitation redeemed at an address shut. Either ticket is nil, and does
 // nothing. Mutation: count a subject-less attempt against its source and the
-// callbacks below meet 429.
+// attempts below meet 429.
 func TestAnUncountableAttemptIsAdmitted(t *testing.T) {
 	t.Parallel()
 	th, _, sleeps := newThrottle(t, newAttempts())

@@ -135,12 +135,11 @@ import (
 // ceiling is announced, because it means somebody holding a person's password
 // is guessing at their second factor.
 //
-// AN ATTEMPT THAT NAMES NOBODY IS NOT COUNTED — an invitation link, a
-// founder's one-time code, a provider's round trip. There is no subject to key
-// a pair on, and each of those credentials is minted with 256 bits of
-// crypto/rand, so there is nothing a curve would slow; keyed on the source it
-// was a way for a stranger to hold a company's provider sign-ins shut, since a
-// callback nobody started fails for free.
+// AN ATTEMPT THAT NAMES NOBODY IS NOT COUNTED — an invitation link or a
+// founder's one-time code. There is no subject to key a pair on, and each of
+// those credentials is minted with 256 bits of crypto/rand, so there is
+// nothing a curve would slow; keyed on the source it was a way for a stranger
+// to hold every invitation and founding from an address shut.
 //
 // # The fleet shares the pair, at every step
 //

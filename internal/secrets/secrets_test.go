@@ -140,8 +140,8 @@ func TestKeyringValidation(t *testing.T) {
 // A SEALED CREDENTIAL VALUE IS UNREADABLE UNDER ANY OTHER CREDENTIAL ID.
 //
 // THE FAILURE THIS BINDING EXISTS FOR is not a stolen key — it is a ciphertext
-// MOVED. A person holds several credentials at once: a password, an
-// identity-provider binding, a machine token or two. With nothing binding a
+// MOVED. A person holds several credentials at once: a password, a second
+// factor, a machine token or two. With nothing binding a
 // sealed value to the credential it belongs to, anybody who can write a row
 // can paste one credential's sealed secret over another's and it opens
 // perfectly, under the same key, on every node.

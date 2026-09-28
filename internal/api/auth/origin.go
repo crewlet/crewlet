@@ -26,7 +26,7 @@ import (
 // # Why it landed before the first cookie did
 //
 // What a browser attaches automatically is a COOKIE — the session cookie a
-// sign-in sets, and the flight cookie a provider round trip carries. A bearer
+// sign-in sets. A bearer
 // is attached by script, which a cross-site page cannot do without already
 // holding the token, so while bearers were the only credential this check
 // refused nothing, and that was exactly when to add it: landing the cookie
