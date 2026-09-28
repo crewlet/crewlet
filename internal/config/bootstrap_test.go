@@ -221,7 +221,8 @@ func TestAPeerListCountsOnlyTheOtherMembers(t *testing.T) {
 	t.Parallel()
 	const kv = "coordination:\n  type: embedded-kv\n"
 	cluster := func(extra, peers string) string {
-		return "stream:\n" + extra + "  cluster:\n    name: acme\n    port: 6222\n" +
+		return "stream:\n  store_dir: /var/lib/crewlet/stream\n" + extra +
+			"  cluster:\n    name: acme\n    port: 6222\n" +
 			"    host: 10.0.0.11\n    advertise: node-a.internal\n    peers: [" + peers + "]\n"
 	}
 	for _, tc := range []struct {
@@ -306,7 +307,8 @@ func TestAPeerListCountsOnlyTheOtherMembers(t *testing.T) {
 		kv + cluster("  replicas: 3\n", "nats://10.0.0.11:6222, nats://node-b.internal:6222, nats://node-c.internal:6222"),
 		kv + cluster("", "nats://localhost:6222, nats://node-b.internal:6222"),
 		// A listener bound to every interface is no address to match.
-		kv + "stream:\n  cluster:\n    name: acme\n    port: 6222\n    host: 0.0.0.0\n" +
+		kv + "stream:\n  store_dir: /var/lib/crewlet/stream\n  cluster:\n    name: acme\n" +
+			"    port: 6222\n    host: 0.0.0.0\n" +
 			"    peers: [nats://0.0.0.0:6222, nats://node-b.internal:6222]\n",
 	} {
 		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
@@ -349,7 +351,8 @@ func TestSupportedTopologiesLoad(t *testing.T) {
 		"coordination:\n  type: local\n",
 		// Three members, which is the fleet shape: a clustered embedded
 		// stream carrying its own coordination, and an external one.
-		"coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+		"coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  store_dir: /var/lib/crewlet/stream\n" +
+			"  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
 		"stream:\n  type: nats\n  url: nats://localhost:4222\ncoordination:\n  type: embedded-kv\n",
 		// An external cluster asking for replicas. Its membership is not
 		// in this file and cannot be — the url names an address, not a

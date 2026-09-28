@@ -464,7 +464,8 @@ units:
 		{
 			name: "a three-node fleet",
 			tier: TierBootstrap,
-			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  store_dir: /var/lib/crewlet/stream\n" +
+				"  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
 		},
 		// A LITERAL signing secret, not a ${VAR}. The full company above
 		// carries the reference form, which validate() deliberately does not
@@ -483,7 +484,7 @@ units:
 		},
 		{
 			name: "a five-member fleet at the broker's ceiling", tier: TierBootstrap,
-			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 5\n  cluster:\n" +
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 5\n  store_dir: /var/lib/crewlet/stream\n  cluster:\n" +
 				"    name: acme\n    peers: [nats://b:6222, nats://c:6222, nats://d:6222, nats://e:6222]\n",
 		},
 
@@ -531,7 +532,7 @@ units:
 		// type it could not see to be local.
 		{
 			name: "a fleet whose coordination is the environment's", tier: TierBootstrap,
-			yaml: "coordination:\n  type: \"${COORDINATION}\"\nstream:\n  cluster:\n    name: acme\n" +
+			yaml: "coordination:\n  type: \"${COORDINATION}\"\nstream:\n  store_dir: /var/lib/crewlet/stream\n  cluster:\n    name: acme\n" +
 				"    peers: [nats://b:6222, nats://c:6222]\n",
 			env: map[string]string{"COORDINATION": "embedded-kv"},
 		},

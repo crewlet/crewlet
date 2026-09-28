@@ -94,7 +94,7 @@ node:
 
 | Role | What it does | What a fleet loses without it |
 |---|---|---|
-| `data` | Holds the company's durable state: a copy of the replicated estate, a member's share of the broker, the event log, and a share of the [object store](object-store.md)'s files. `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
+| `data` | Keeps the company's durable state on this node's disk: a copy of the replicated estate, the event log, and a share of the [object store](object-store.md)'s files. It says nothing about the broker (see below). `ingress` and `workers` require it until the partitioned estate is live | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, the object store's placement map, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled, and a data node that joins or leaves is never placed on or taken off |
@@ -109,10 +109,39 @@ peers divide the seats by; counting it would strand the difference.
 
 **`data` is the one role that is a promise about the disk rather than about
 work.** A node without it keeps nothing that has to outlive it, and Tier A
-holds it to that: `store.scratch: true` is required (its store is deleted at
-every boot), an embedded stream joins the fleet as a leaf through
-`stream.leaf.urls`, and `ingress` or `workers` beside it is refused. See
+holds it to that whatever its broker: `store.scratch: true` is required (its
+store is deleted at every boot), and `store.replicated_path`,
+`store.snapshot_dir` and `store.objects` are refused. See
 [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data).
+
+**The broker is not a role.** How a node's broker takes part in the fleet's
+is its *broker kind*, derived from the `stream` block and from nothing else:
+
+| Broker kind | The `stream` block that makes it | What the broker is |
+|---|---|---|
+| `member` | embedded, with no `stream.leaf.urls` (a solo node included) | runs JetStream in this process, holds stream replicas, votes in the metadata group |
+| `leaf` | embedded, with `stream.leaf.urls` | JetStream off: reaches the members' across a leaf link, holds nothing, votes in nothing |
+| `client` | `type: nats` | a plain client of an external cluster somebody else runs |
+
+Every node advertises its kind on its presence lease (`crewlet fleet broker
+list` and the dashboard's Fleet screen show it), and a node running a build
+older than the field shows as `unknown`. The rules that are about the broker
+are asked of the kind, whatever the roles: a member of a fleet — one naming a
+cluster, peers or a leaf listener — must set `stream.store_dir`, because it
+holds the fleet's streams for every node that reaches it; a leaf carries no
+cluster block, no store directory and no leaf listener.
+
+Three pairings of roles and broker are **refused until the partitioned estate
+is live**, and each refusal says so: a data node on a leaf, a broker member
+without `data`, and `ingress` or `workers` without `data`. Under the
+single-file layout this build runs, every data node holds the whole estate as
+a member of the broker, and a node without `data` reaches the estate through
+one — so today a node without `data` on an embedded stream joins the fleet as
+a leaf through `stream.leaf.urls`. `crewlet validate` also warns about two
+valid shapes: a member whose peer list names more than four other members
+(no stream keeps more than five copies, so a sixth member is a voter holding
+nothing — a fleet grows by adding leaves), and a fleet node that left
+`node.roles` undeclared and so runs every role.
 
 #### `node.labels`
 

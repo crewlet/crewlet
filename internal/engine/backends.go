@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -660,8 +661,7 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 // provisions is a replicated create on the members it reaches, and the solo
 // budget would fail it against peers that are themselves still forming.
 func clusteredStream(b *config.Bootstrap) bool {
-	return b.Stream.Type == config.StreamNATS || b.Stream.Cluster.Name != "" ||
-		b.Stream.Leaf.Joins()
+	return b.BrokerKind() != placement.BrokerMember || b.Stream.Cluster.Name != ""
 }
 
 // holdsData reports whether this node holds the company's durable state.

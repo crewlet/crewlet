@@ -422,7 +422,7 @@
           "description": "Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this."
         },
         "roles": {
-          "description": "What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state: it needs store.scratch, and an embedded stream joins the fleet through stream.leaf.urls.",
+          "description": "What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; until the partitioned estate is live it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers.",
           "items": {
             "type": [
               "string",
@@ -737,7 +737,7 @@
           "description": "Copies of every stream and coordination bucket, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members. Not the object store's copies; those are objects.replicas in the company."
         },
         "store_dir": {
-          "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart).",
+          "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart). Required on a member of a fleet (a named cluster, peers or a leaf listener); refused on a leaf.",
           "type": [
             "string",
             "number",
@@ -956,10 +956,10 @@
               "type": "string"
             }
           ],
-          "description": "A member's leaf listener, where nodes without the data role join. Accepts any connection that reaches it, like the route port."
+          "description": "A member's leaf listener, where the fleet's leaves join. Accepts any connection that reaches it, like the route port. A member with one is in a fleet, so it needs stream.store_dir."
         },
         "urls": {
-          "description": "Leaf listeners of the members a node without the data role joins through, e.g. nats-leaf://data-a.internal:7422. Any one that answers will do.",
+          "description": "Leaf listeners of the members this node joins as a LEAF - no JetStream, no replica, no vote - e.g. nats-leaf://member-a.internal:7422. Any one that answers will do. Until the partitioned estate is live only a node without the data role may be a leaf, and an embedded node without it must be one.",
           "items": {
             "type": [
               "string",

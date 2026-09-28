@@ -404,14 +404,32 @@ func (b *Bootstrap) Validate() error {
 // turned a data node's roles into `seats` would otherwise boot a node that
 // believes itself stateless on a store it has not agreed to lose.
 //
-// A NODE WITHOUT `data` KEEPS NO DURABLE STATE, and every rule below is one
-// way of holding some. Its store is scratch, deleted at every boot; an
-// embedded stream joins the fleet as a leaf, holding no replica and voting in
-// no quorum; and it runs no role that reads this node's own copy of the
-// replicated estate, because it has none. A node WITH `data` is the opposite
-// on each: a member, never a leaf, and never scratch. Each is refused naming
-// the field to change, because each is otherwise a node that boots and then
-// either loses the company's history or reads an estate that is not there.
+// # Two questions, asked apart
+//
+// `data` is a promise about the DISK: a node with it keeps the company's
+// durable state, and one without it keeps nothing that has to outlive it — its
+// store is scratch, deleted at every boot, and it holds no estate and no
+// share of the object store. The rules below that turn on `data` are the ones
+// about that disk, and each is refused naming the field to change, because
+// each is otherwise a node that boots and then loses the company's history at
+// its next restart.
+//
+// The BROKER is the other question, and it is not the roles': a node's
+// [Bootstrap.BrokerKind] is what its stream block makes it. The rules about
+// the broker itself — what a leaf may not carry, what a member of a fleet has
+// to persist — are asked of that, whatever the roles (see
+// [Bootstrap.validateTopology] and [StreamLeaf]).
+//
+// # And the pairings refused until the partitioned estate is live
+//
+// Separating the two questions admits three pairings that were refused while
+// `data` meant both: a data node on a leaf, a broker member that holds no
+// data, and ingress or workers on a node without it. They are what the
+// partitioned estate is built from, and this build does not run it: every data
+// node here holds the WHOLE estate and is a member of the broker, and a node
+// without data reaches the estate through one. So each is still refused, by
+// [refusedUntilPartitioned], naming why and naming that the refusal lasts only
+// as long as the single-file layout does.
 func (b *Bootstrap) ValidateRoles() error {
 	var p problems
 	roles, err := b.Node.RoleSet()
@@ -421,7 +439,6 @@ func (b *Bootstrap) ValidateRoles() error {
 		// on the set, so none of them can be judged without one.
 		return nil
 	}
-	embedded := b.Stream.Type != StreamNATS
 	if roles.Has(placement.RoleData) {
 		if b.Store.Scratch {
 			p.add(field("store.scratch"), ErrConflict,
@@ -430,57 +447,78 @@ func (b *Bootstrap) ValidateRoles() error {
 					"of its own turns with it. Remove it, or drop %q from "+
 					"node.roles", placement.RoleData)
 		}
-		if b.Stream.Leaf.Joins() {
-			p.add(field("stream.leaf.urls"), ErrConflict,
-				"a node that holds data is a MEMBER of the fleet's broker, and "+
-					"stream.leaf.urls joins it as a leaf holding nothing. Remove "+
-					"them, or drop %q from node.roles", placement.RoleData)
+	} else {
+		if !b.Store.Scratch {
+			p.add(field("store.scratch"), ErrMissing,
+				"a node without %q keeps no durable state, so its store is "+
+					"deleted at every boot — set store.scratch: true to say so, "+
+					"since it is the one setting here that deletes something",
+				placement.RoleData)
 		}
-		return p.err()
+		if b.Store.ReplicatedPath != "" || b.Store.SnapshotDir != "" {
+			p.add(field("store"), ErrConflict,
+				"replicated_path and snapshot_dir are where a node keeps its copy "+
+					"of the replicated estate, and a node without %q holds none",
+				placement.RoleData)
+		}
+		if b.Store.Objects != (StoreObjects{}) {
+			p.add(field("store.objects"), ErrConflict,
+				"is a node's share of the object store, and a node without %q "+
+					"holds none — it reads and writes objects through the nodes "+
+					"that do", placement.RoleData)
+		}
+	}
+	b.refusedUntilPartitioned(&p, roles)
+	return p.err()
+}
+
+// refusedUntilPartitioned refuses the three pairings of roles and broker the
+// partitioned estate is built from, and this build does not run.
+//
+// ONE PLACE FOR ALL THREE, because they are one decision rather than three: each
+// is correct once the estate is placed by partition and every node routes to
+// the partition's holders, and each is wrong under the single-file layout for
+// the same reason — a data node here holds the whole estate as a member of the
+// broker, and a node without data asks one for everything. When the partitioned
+// estate is live this function goes, whole.
+//
+// Each refusal is reported where the operator most likely erred, and names both
+// ways out.
+func (b *Bootstrap) refusedUntilPartitioned(p *problems, roles placement.RoleSet) {
+	data := roles.Has(placement.RoleData)
+	switch kind := b.BrokerKind(); {
+	case data && kind == placement.BrokerLeaf:
+		p.add(field("stream.leaf.urls"), ErrConflict,
+			"joins this data node to the fleet's broker as a leaf, which is refused "+
+				"until the partitioned estate is live: under the single-file layout "+
+				"every data node holds the whole estate as a MEMBER of the broker. "+
+				"Remove the leaf urls, or drop %q from node.roles", placement.RoleData)
+	case !data && kind == placement.BrokerMember:
+		p.add(field("stream.leaf.urls"), ErrMissing,
+			"a node without %q runs its embedded broker as a MEMBER here, and a "+
+				"broker member that holds no data is refused until the partitioned "+
+				"estate is live: under the single-file layout a node without %q "+
+				"joins the fleet as a LEAF of the members' — no JetStream, no "+
+				"replica, no vote. Name the members' leaf listeners here, or add "+
+				"%q to node.roles", placement.RoleData, placement.RoleData,
+			placement.RoleData)
+	}
+	if data {
+		return
 	}
 	for _, role := range []placement.NodeRole{placement.RoleWorkers, placement.RoleIngress} {
 		if !roles.Has(role) {
 			continue
 		}
 		p.add(field("node.roles"), ErrConflict,
-			"%q needs %q: %s", role, placement.RoleData, needsData[role])
+			"%q needs %q until the partitioned estate is live: %s. Add %q, or "+
+				"drop %q", role, placement.RoleData, needsData[role],
+			placement.RoleData, role)
 	}
-	if !b.Store.Scratch {
-		p.add(field("store.scratch"), ErrMissing,
-			"a node without %q keeps no durable state, so its store is "+
-				"deleted at every boot — set store.scratch: true to say so, "+
-				"since it is the one setting here that deletes something",
-			placement.RoleData)
-	}
-	if b.Store.ReplicatedPath != "" || b.Store.SnapshotDir != "" {
-		p.add(field("store"), ErrConflict,
-			"replicated_path and snapshot_dir are where a node keeps its copy "+
-				"of the replicated estate, and a node without %q holds none",
-			placement.RoleData)
-	}
-	if b.Store.Objects != (StoreObjects{}) {
-		p.add(field("store.objects"), ErrConflict,
-			"is a node's share of the object store, and a node without %q "+
-				"holds none — it reads and writes objects through the nodes "+
-				"that do", placement.RoleData)
-	}
-	if embedded {
-		if !b.Stream.Leaf.Joins() {
-			p.add(field("stream.leaf.urls"), ErrMissing,
-				"a node without %q runs its embedded broker as a LEAF of the "+
-					"fleet's — no JetStream, no replica, no vote — and has to be "+
-					"told which members' leaf listeners to join", placement.RoleData)
-		}
-		if b.Stream.Leaf.Port != 0 {
-			p.add(field("stream.leaf.port"), ErrConflict,
-				"a leaf listener is a MEMBER's, where stateless nodes join; a "+
-					"node without %q is one of those nodes", placement.RoleData)
-		}
-	}
-	return p.err()
 }
 
-// needsData is why each role a stateless node cannot run needs `data`.
+// needsData is why each role a node without data cannot run under the
+// single-file layout needs `data` — see [Bootstrap.refusedUntilPartitioned].
 var needsData = map[placement.NodeRole]string{
 	placement.RoleWorkers: "the company-wide duties — the log trim, the " +
 		"embedding pass, the maintenance sweep, the scheduler — read and " +
@@ -527,10 +565,35 @@ func (b *Bootstrap) validateTopology() error {
 	// that join it claim seats and hold presence leases, and a lease kept
 	// in this process is one they can never see — each would read the
 	// fleet as having no data node and claim every seat for itself.
-	leaf := b.Stream.Type != StreamNATS && b.Stream.Leaf.Joins()
-	servesLeaves := b.Stream.Type != StreamNATS && b.Stream.Leaf.Port != 0
+	leaf := b.BrokerKind() == placement.BrokerLeaf
+	servesLeaves := b.BrokerKind() == placement.BrokerMember && b.Stream.Leaf.Port != 0
 	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded ||
 		leaf || servesLeaves
+
+	// A MEMBER OF A FLEET PERSISTS, whatever its roles. Its broker holds the
+	// fleet's streams — the seats' mailboxes, every record a state log
+	// writes, every coordination bucket — for every node that reaches it, a
+	// leaf that keeps nothing of its own included, and one kept in memory
+	// comes back from its next restart holding none of them: a peer with
+	// its copies has to replace every one, and a member that was the last
+	// copy of anything has lost it. A solo member is not in a fleet and is
+	// the operator's own business (see [Bootstrap.Warnings]); a member with
+	// a named cluster, peers or a leaf listener is.
+	//
+	// THE BROKER'S RULE, NOT THE ROLES': a member without `data` keeps a
+	// scratch node store and a durable stream store, and it is the stream
+	// store that makes it a member.
+	inFleet := len(b.Stream.Cluster.Peers) > 0 || b.Stream.Cluster.Name != "" || servesLeaves
+	if b.BrokerKind() == placement.BrokerMember && inFleet &&
+		strings.TrimSpace(b.Stream.StoreDir) == "" {
+		p.add(field("stream.store_dir"), ErrMissing,
+			"this node's broker is a MEMBER of a fleet's (it names a cluster, "+
+				"peers or a leaf listener), so it holds the fleet's streams — the "+
+				"seats' mailboxes, every record a state log writes and every "+
+				"coordination bucket — for every node that reaches it, and a "+
+				"stream kept in memory loses its copy of all of them at this "+
+				"member's next restart. Name a directory")
+	}
 
 	if b.Coordination.Type == CoordinationLocal && clustered {
 		p.add(field("coordination.type"), ErrConflict,
@@ -775,8 +838,9 @@ func (d discountedPeer) describe() string {
 // FIVE, JetStream's own ceiling — the broker refuses a stream or a KV bucket
 // with more — so a larger number is a boot that fails at its first create
 // rather than a fleet that keeps more copies. Five copies survive two members
-// lost at once with a quorum left; beyond that a fleet adds members, not
-// replicas.
+// lost at once with a quorum left; beyond that a fleet adds LEAVES, not
+// members, since a sixth member holds no copy and only adds a voter to the
+// metadata group (see the warning [Bootstrap.Warnings] gives).
 const MaxStreamReplicas = 5
 
 // ---- node ------------------------------------------------------------ //
@@ -821,14 +885,16 @@ type Node struct {
 	// `data` is the one role that is a promise about the DISK rather than
 	// about work: a node without it keeps nothing that has to outlive it,
 	// which is what a small, disposable agent node wants — see
-	// [Bootstrap.ValidateRoles] for everything it then requires.
+	// [Bootstrap.ValidateRoles] for everything it then requires. It says
+	// nothing about the broker, which the stream block decides
+	// ([Bootstrap.BrokerKind]).
 	//
 	// Subtracting a role subtracts it from THIS node, never from the
 	// company: a fleet with no workers node runs no scheduler and no
 	// retention sweep, and one with no ingress node never hears a webhook.
 	// Neither is visible in any single node's config, so the engine checks
 	// it against live node presence at runtime.
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state: it needs store.scratch, and an embedded stream joins the fleet through stream.leaf.urls."`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; until the partitioned estate is live it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
@@ -1230,7 +1296,12 @@ type Stream struct {
 	// see the other. No node is an exception for its roles: every node runs
 	// the engine, and an in-memory server creates every stream it
 	// provisions in memory.
-	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart)."`
+	//
+	// REQUIRED ON A MEMBER OF A FLEET, whatever its roles and whatever the
+	// company: its broker holds the fleet's streams for every node that
+	// reaches it, a leaf that keeps nothing included — see
+	// [Bootstrap.validateTopology]. A leaf has no stream store at all.
+	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart). Required on a member of a fleet (a named cluster, peers or a leaf listener); refused on a leaf."`
 
 	// StoreMaxBytes is how much of that directory's volume this node's
 	// EMBEDDED broker may hold — the ONE number every stream ceiling on it
@@ -1269,8 +1340,9 @@ type Stream struct {
 	// account limits are its own operator's to set.
 	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=4294967296;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
-	// Cluster makes the embedded server join peers, which is the fleet
-	// topology: every node embeds a member of one cluster.
+	// Cluster makes the embedded server a MEMBER of a cluster with its
+	// peers: the fleet's broker is those members, and every other node
+	// reaches it as a leaf or as a client.
 	Cluster StreamCluster `yaml:"cluster,omitempty" json:"cluster,omitzero"`
 
 	// Leaf is how a node that holds no data reaches the fleet's broker,
@@ -1579,28 +1651,28 @@ type StreamCluster struct {
 	Advertise string `yaml:"advertise,omitempty" json:"advertise,omitempty" desc:"host:port peers should dial for this member, when it differs from what it binds."`
 }
 
-// StreamLeaf is the embedded broker's side of a LEAF link: a node without
-// the `data` role joins through it, and a member opens it for them.
+// StreamLeaf is the embedded broker's side of a LEAF link: a leaf joins
+// through it, and a member opens it for the leaves.
 //
-// ONE BLOCK, TWO SIDES, decided by the node's roles: `urls` is how a
-// stateless node dials in and is refused on a member, and `port` is a
-// member's listener and is refused on a stateless node — each side of the
-// link is exactly one of them. A stateless node's broker runs no JetStream,
-// holds no replica and is in no quorum; everything its clients ask of the
-// fleet crosses this link.
+// ONE BLOCK, TWO SIDES, and the block decides which: `urls` makes this node's
+// broker a LEAF ([Bootstrap.BrokerKind]) and `port` opens a MEMBER's listener,
+// and a node is exactly one of them. A leaf's broker runs no JetStream, holds
+// no replica and is in no quorum; everything its clients ask of the fleet
+// crosses this link. Which nodes may BE a leaf is the roles' question — until
+// the partitioned estate is live, only a node without `data` (see
+// [Bootstrap.ValidateRoles]).
 type StreamLeaf struct {
 	// URLs are the leaf listeners of the members this node may join, any
-	// of which will do. A node WITHOUT the `data` role on an embedded
-	// stream requires them.
-	URLs []string `yaml:"urls,omitempty" json:"urls,omitempty" desc:"Leaf listeners of the members a node without the data role joins through, e.g. nats-leaf://data-a.internal:7422. Any one that answers will do."`
+	// of which will do. Setting them makes this node's broker a leaf.
+	URLs []string `yaml:"urls,omitempty" json:"urls,omitempty" desc:"Leaf listeners of the members this node joins as a LEAF - no JetStream, no replica, no vote - e.g. nats-leaf://member-a.internal:7422. Any one that answers will do. Until the partitioned estate is live only a node without the data role may be a leaf, and an embedded node without it must be one."`
 
-	// Port is the leaf listener a MEMBER opens for the fleet's stateless
-	// nodes. Zero opens none.
+	// Port is the leaf listener a MEMBER opens for the fleet's leaves. Zero
+	// opens none.
 	//
 	// It accepts any connection that reaches it, exactly as the route
 	// port does and for the same reason: the fleet is one trust domain on
 	// a network its operator controls. Put both there and nowhere else.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"A member's leaf listener, where nodes without the data role join. Accepts any connection that reaches it, like the route port."`
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"A member's leaf listener, where the fleet's leaves join. Accepts any connection that reaches it, like the route port. A member with one is in a fleet, so it needs stream.store_dir."`
 
 	// Host is the interface the leaf listener binds, empty for every one
 	// of them — the same exposure [StreamCluster.Host] names.
@@ -1613,8 +1685,9 @@ type StreamLeaf struct {
 
 // validate refuses a leaf block that is neither side of a link, or both.
 //
-// The roles decide WHICH side a node is on (see [Bootstrap.ValidateRoles]);
-// this is what either side needs on its own terms.
+// This is what either side needs on its own terms, whatever the roles; which
+// roles may take which side is [Bootstrap.ValidateRoles]', and what a member
+// with a listener has to persist is [Bootstrap.validateTopology]'s.
 func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
 	var p problems
 	if l.IsZero() {
@@ -1663,13 +1736,6 @@ func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
 		p.add(at(path, "port"), ErrMissing,
 			"is required once host or advertise is set: they describe a leaf "+
 				"LISTENER, and without a port this member opens none")
-	}
-	if l.Port != 0 && strings.TrimSpace(s.StoreDir) == "" {
-		p.add(field("stream.store_dir"), ErrMissing,
-			"a member with a leaf listener is where the nodes that join it keep "+
-				"everything — their seats' mailboxes and every record they write "+
-				"— and a stream kept in memory loses all of it at this member's "+
-				"next restart. Name a directory")
 	}
 	if l.Advertise != "" {
 		if err := validateAdvertise(l.Advertise); err != nil {

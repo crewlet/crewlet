@@ -24,6 +24,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 				b.Stream.Replicas = 3
 				b.Stream.Sync = "30s"
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
 				b.Stream.Cluster = config.StreamCluster{
 					Name: "crewlet", Port: 6222,
 					Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
@@ -38,6 +39,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			func(b *config.Bootstrap) {
 				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 				b.Stream.Replicas = 3
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
 				b.Stream.Cluster = config.StreamCluster{
 					Name: "crewlet", Port: 6222, Host: "10.0.0.11",
 					Peers: []string{"nats://10.0.0.11:6222", "nats://node-b.internal:6222",
@@ -50,6 +52,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			func(b *config.Bootstrap) {
 				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 				b.Stream.Replicas = 3
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
 				b.Stream.Cluster = config.StreamCluster{
 					Name: "crewlet", Port: 6222,
 					Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222",
@@ -160,6 +163,10 @@ func TestAPeerListOfOtherMembersWarnsAboutNothing(t *testing.T) {
 	b.Retention.BackupOwner = "platform-oncall"
 	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 	b.Stream.Replicas = 3
+	// DECLARED, as a fleet node's roles are: a member of a fleet that left
+	// them to the every-role default is warned about that, which is not
+	// what this case is about.
+	b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
 	b.Stream.Cluster = config.StreamCluster{
 		Name: "crewlet", Port: 6222, Host: "10.0.0.11", Advertise: "node-a.internal",
 		Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
