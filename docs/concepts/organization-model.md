@@ -604,7 +604,7 @@ In this example:
 - **Backend** has no lead, so it inherits `vp-eng`. VP Engineering auto-manages `dev-a` and `dev-b`.
 - **Frontend** has an explicit lead (`frontend-lead`), so the parent's lead is ignored.
 
-Inherited leads work the same as explicit leads for auto-management, task routing, `org.Organization.IsUnitLead`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one. Use `org.Organization.EffectiveLead` to resolve the lead seat in code.
+Inherited leads work the same as explicit leads for auto-management, task routing, `org.Unit.IsLedBy`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one. Use `org.Organization.EffectiveLead` to resolve the lead seat in code.
 
 ### Roles at Any Level
 

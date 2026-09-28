@@ -192,28 +192,6 @@ func TestRootSeatHasNoUnit(t *testing.T) {
 	if got := o.UnitChainFor(ceo); got != nil {
 		t.Errorf("UnitChainFor(CEO) = %v, want none", got)
 	}
-	if o.IsUnitLead(ceo) || o.LeadDepth(ceo) != -1 {
-		t.Error("a root seat reads as a unit lead")
-	}
-}
-
-func TestLeadDepthRanksAuthority(t *testing.T) {
-	t.Parallel()
-	o := hierarchyOrg()
-	// VP Engineering leads the department AND the team inside it; the
-	// wider authority is the one that matters.
-	if got := o.LeadDepth(o.Role("vp-engineering")); got != 0 {
-		t.Errorf("LeadDepth(VP Engineering) = %d, want 0", got)
-	}
-	if got := o.LeadDepth(o.Role("product-manager")); got != 1 {
-		t.Errorf("LeadDepth(Product Manager) = %d, want 1", got)
-	}
-	if got := o.LeadDepth(o.Role("junior-engineer")); got != -1 {
-		t.Errorf("LeadDepth(Junior Engineer) = %d, want -1", got)
-	}
-	if !o.IsUnitLead(o.Role("vp-engineering")) || o.IsUnitLead(o.Role("junior-engineer")) {
-		t.Error("IsUnitLead disagrees with LeadDepth")
-	}
 }
 
 func TestEffectiveLeadResolvesEveryPlacement(t *testing.T) {
@@ -281,8 +259,8 @@ func TestInheritedLeadIsAFullLead(t *testing.T) {
 	}}})
 	vp := o.Role("vp-eng")
 	backend := o.Unit("Backend")
-	if !o.IsUnitLead(vp) {
-		t.Error("an inherited lead does not read as a unit lead")
+	if got := o.EffectiveLead(backend); got != vp {
+		t.Errorf("the child unit's effective lead is %v, want the inherited one", got)
 	}
 	if !backend.IsLedBy(vp) {
 		t.Error("the child unit does not report its inherited lead")
