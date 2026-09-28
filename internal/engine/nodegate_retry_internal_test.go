@@ -54,15 +54,15 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 			// log's write made to answer `unknown` once — the one fault a
 			// real broker hands a caller that nothing on this side can
 			// resolve.
-			flaky, recs := recordingGate(t, e, back)
+			flaky, logs, recs := recordingGate(t, e, back)
 			faulted := false
 			trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
-			for i := range flaky.logs {
-				if flaky.logs[i].domain != pagesName {
+			for i := range logs {
+				if logs[i].domain != pagesName {
 					continue
 				}
-				write := flaky.logs[i].write
-				flaky.logs[i].write = func(ctx context.Context, by, opID, node string,
+				write := logs[i].write
+				logs[i].write = func(ctx context.Context, by, opID, node string,
 					readmit bool) (statelog.Result, error) {
 
 					if faulted {
@@ -274,7 +274,7 @@ func TestARetryThroughALaggingApplierWritesNoSecondRecord(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
 	s := e.native.Load().log
-	gate, recs := recordingGate(t, e, back)
+	gate, _, recs := recordingGate(t, e, back)
 	trackerName := tracker.Domain{}.Name()
 	req := GateRequest{Node: "node-away", OpID: "op-lagging", By: "operator"}
 
@@ -341,7 +341,7 @@ func TestARetryThroughALaggingApplierWritesNoSecondRecord(t *testing.T) {
 func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	gate, recs := recordingGate(t, e, back)
+	gate, _, recs := recordingGate(t, e, back)
 	trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `DROP TABLE pages_ops`)
@@ -376,7 +376,7 @@ func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 func TestAGateOnANodeIDNoNodeCouldHaveIsRefused(t *testing.T) {
 	t.Parallel()
 	var wrote []string
-	g := fakeGate(&wrote, nil)
+	g, _ := fakeGate(&wrote, nil)
 	for _, node := range []string{"node*", "node 4", "-node", "node>", ""} {
 		_, err := g.Evict(t.Context(), GateRequest{Node: node, OpID: "op", By: "operator"})
 		if !errors.Is(err, ErrInvalidGate) {
@@ -398,7 +398,7 @@ func TestAGateOnANodeIDNoNodeCouldHaveIsRefused(t *testing.T) {
 func TestForceEvictsPastALeaseListingNobodyCouldRead(t *testing.T) {
 	t.Parallel()
 	var wrote []string
-	g := fakeGate(&wrote, errors.New("coordination is unreachable"))
+	g, _ := fakeGate(&wrote, errors.New("coordination is unreachable"))
 	req := GateRequest{Node: "node-away", OpID: "op-unjudged", By: "operator"}
 
 	_, err := g.Evict(t.Context(), req)
@@ -431,14 +431,14 @@ func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var wrote []string
-	g := fakeGate(&wrote, nil)
-	g.logs[0].write = func(context.Context, string, string, string, bool) (statelog.Result, error) {
+	g, logs := fakeGate(&wrote, nil)
+	logs[0].write = func(context.Context, string, string, string, bool) (statelog.Result, error) {
 		wrote = append(wrote, "tracker")
 		cancel()
 		return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 	}
-	second := g.logs[1].write
-	g.logs[1].write = func(ctx context.Context, by, opID, node string,
+	second := logs[1].write
+	logs[1].write = func(ctx context.Context, by, opID, node string,
 		readmit bool) (statelog.Result, error) {
 		if err := ctx.Err(); err != nil {
 			return statelog.Result{}, err
@@ -565,13 +565,15 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 	}
 }
 
-// fakeGate is a gate over two logs that record which were written, judging an
-// eviction against a lease listing that answers nothing held — or listErr.
 // normalMode is a state log in the mode that publishes, whose gate a fixture
 // borrows.
 var normalMode = &stateLog{mode: statelog.ModeNormal}
 
-func fakeGate(wrote *[]string, listErr error) *NodeGate {
+// fakeGate is a gate over two logs that record which were written, judging an
+// eviction against a lease listing that answers nothing held — or listErr.
+// The logs come back beside it, and the gate answers whatever they hold at each
+// gesture, so a case may replace one's write.
+func fakeGate(wrote *[]string, listErr error) (*NodeGate, []gateLog) {
 	write := func(domain string) func(context.Context, string, string, string,
 		bool) (statelog.Result, error) {
 		return func(context.Context, string, string, string, bool) (statelog.Result, error) {
@@ -579,15 +581,16 @@ func fakeGate(wrote *[]string, listErr error) *NodeGate {
 			return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 		}
 	}
+	logs := []gateLog{
+		{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: write("tracker")},
+		{domain: "pages", stream: "CREWLET_PAGES_LOG", write: write("pages")},
+	}
 	return &NodeGate{
 		live:         func(context.Context) ([]statelog.Presence, error) { return nil, listErr },
 		readmissible: func(context.Context, string) error { return nil },
 		publishing:   normalMode.appends,
-		logs: []gateLog{
-			{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: write("tracker")},
-			{domain: "pages", stream: "CREWLET_PAGES_LOG", write: write("pages")},
-		},
-	}
+		logs:         gateLogs(logs...),
+	}, logs
 }
 
 // recorder is one domain's real log behind a counter: every append that
@@ -628,13 +631,16 @@ func (r *recorder) setProbe(fn func()) {
 
 // recordingGate is the engine's own gate over every identity log, each written
 // through its own domain's production write authority publishing via a
-// [recorder] in front of the real log.
-func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, map[string]*recorder) {
+// [recorder] in front of the real log. The logs come back beside it, as
+// [fakeGate]'s do.
+func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, []gateLog,
+	map[string]*recorder) {
 	t.Helper()
 	s := e.native.Load().log
 	g := &NodeGate{live: e.native.Load().gate.live, readmissible: e.native.Load().gate.readmissible,
 		publishing: e.native.Load().gate.publishing}
 	recs := map[string]*recorder{}
+	var logs []gateLog
 	for _, running := range identityLogs(t, s) {
 		name := running.domain.Name()
 		rec := &recorder{log: running.log}
@@ -647,10 +653,11 @@ func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, map[stri
 		if err != nil {
 			t.Fatalf("the gate's writer for %s: %v", name, err)
 		}
-		g.logs = append(g.logs, gl)
+		logs = append(logs, gl)
 		recs[name] = rec
 	}
-	return g, recs
+	g.logs = gateLogs(logs...)
+	return g, logs, recs
 }
 
 // appends is how many appends each recorder has passed to the broker.
@@ -716,10 +723,10 @@ func TestAnUnvouchedGateLogIsSentToAnotherNode(t *testing.T) {
 		}
 	}
 	g := &NodeGate{
-		logs: []gateLog{
-			{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: answer(false)},
-			{domain: "pages", stream: "CREWLET_PAGES_LOG", write: answer(true)},
-		},
+		logs: gateLogs(
+			gateLog{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: answer(false)},
+			gateLog{domain: "pages", stream: "CREWLET_PAGES_LOG", write: answer(true)},
+		),
 		live:       func(context.Context) ([]statelog.Presence, error) { return nil, nil },
 		publishing: normalMode.appends,
 	}

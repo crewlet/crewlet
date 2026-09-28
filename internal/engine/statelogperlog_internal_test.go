@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -386,7 +388,9 @@ func TestALogIsStoppedAndStartedWhileTheNodeRuns(t *testing.T) {
 	running := s.Log(leaving.String())
 	linearizableRead(t, running)
 
-	s.stopLogs([]statelog.LogID{leaving})
+	if err := s.stopLogs([]statelog.LogID{leaving}); err != nil {
+		t.Fatalf("stop %s: %v", leaving, err)
+	}
 	if s.Log(leaving.String()) != nil {
 		t.Fatal("the stopped log is still in the set every reader walks")
 	}
@@ -456,6 +460,182 @@ func TestALogIsStoppedAndStartedWhileTheNodeRuns(t *testing.T) {
 	if err := s.startLogs(t.Context(), []statelog.LogID{absent}); err == nil ||
 		!strings.Contains(err.Error(), "not a log of layout 1") {
 		t.Errorf("starting %s, which layout 1 does not carry, answered %v", absent, err)
+	}
+}
+
+// A LOG NAMED TWICE IS STARTED ONCE.
+//
+// What is already running is judged against the set as it stood before the
+// call started anything, so a log named twice in one call was provisioned and
+// started twice: two runners and two consumer handles on one durable consumer,
+// the set keeping the second and nothing ever closing the first.
+func TestALogNamedTwiceIsStartedOnce(t *testing.T) {
+	t.Parallel()
+	_, s, _ := aPartitionedStateLog(t)
+	twice := statelog.LogID{Domain: tracker.Domain{}.Name(),
+		Partition: statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}}
+	stream := s.Log(twice.String()).spec.Name
+	if err := s.stopLogs([]statelog.LogID{twice}); err != nil {
+		t.Fatalf("stop %s: %v", twice, err)
+	}
+	// THE HOST IS READ ONLY UNDER THE MEMBERSHIP LOCK, by a start, so it is
+	// swapped under it.
+	counted := &consumerCounter{domainHost: s.host, opened: map[string]int{}}
+	s.membership.Lock()
+	s.host = counted
+	s.membership.Unlock()
+
+	if err := s.startLogs(t.Context(), []statelog.LogID{twice, twice}); err != nil {
+		t.Fatalf("start %s named twice: %v", twice, err)
+	}
+	if got := counted.count(stream); got != 1 {
+		t.Errorf("starting %s named twice opened %d consumers on %s, want one",
+			twice, got, stream)
+	}
+	if s.Log(twice.String()) == nil {
+		t.Error("the log named twice is not running")
+	}
+}
+
+// consumerCounter is a broker that counts the state-log consumers opened on
+// each stream.
+type consumerCounter struct {
+	domainHost
+
+	mu     sync.Mutex
+	opened map[string]int
+}
+
+func (c *consumerCounter) DomainConsumer(ctx context.Context, stream, nodeID string,
+	after uint64) (*jetstream.DomainConsumer, error) {
+	c.mu.Lock()
+	c.opened[stream]++
+	c.mu.Unlock()
+	return c.domainHost.DomainConsumer(ctx, stream, nodeID, after)
+}
+
+func (c *consumerCounter) count(stream string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.opened[stream]
+}
+
+// THE FRAMEWORK'S OWN SURFACES FOLLOW A LOG THAT STOPS AND STARTS.
+//
+// The snapshot registration and the node gate are built once, with the
+// runtime, and every log they name can stop and start under them. A
+// registration that captured its log vouched for a stopped log's frozen rows
+// and, after a restart, for the halted runner's checkpoint against a growing
+// log end — declining every snapshot as catching up, for ever. A gate that
+// captured its logs wrote through a stopped log's publisher, waiting its whole
+// budget on a runner that no longer applies, and never reached the log started
+// again after it. So both are asked while the log is away and after it is
+// back: away, the registration vouches for nothing and the gate writes to the
+// logs still running; back, both answer through the new runtime.
+func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
+	t.Parallel()
+	e, s, js := aPartitionedStateLog(t)
+	leaving := statelog.LogID{Domain: tracker.Domain{}.Name(),
+		Partition: statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}}
+	// A CHECKPOINT PAST ZERO, so a registration still reading the halted
+	// runner is told apart from one that vouches for nothing.
+	linearizableRead(t, s.Log(leaving.String()))
+	registration, found := s.registered()[leaving.String()]
+	if !found {
+		t.Fatalf("%s is not registered", leaving)
+	}
+	gate, err := newNodeGate(s, e.backends.Coord, e.backends.Store, s.nodeID, nil)
+	if err != nil {
+		t.Fatalf("the node gate: %v", err)
+	}
+
+	if err := s.stopLogs([]statelog.LogID{leaving}); err != nil {
+		t.Fatalf("stop %s: %v", leaving, err)
+	}
+	if h := registration.Health(); h.Position != (statelog.Position{}) || h.Lag != nil || h.Drained {
+		t.Errorf("the registration vouches for %s while it is stopped: at %s, lag %v, drained %v",
+			leaving, h.Position, h.Lag, h.Drained)
+	}
+	away, err := gate.Evict(t.Context(), GateRequest{Node: "node-gone", By: "ops",
+		OpID: statelog.NewOpID(time.Now(), "evict-node-gone")})
+	if err != nil {
+		t.Fatalf("evict while %s is stopped: %v", leaving, err)
+	}
+	var wrote []string
+	for _, d := range away.Domains {
+		wrote = append(wrote, d.Domain)
+	}
+	if want := []string{"pages@pages.000", "tracker@tracker.000"}; !slices.Equal(wrote, want) {
+		t.Errorf("with %s stopped the gate wrote %v, want the logs still running %v",
+			leaving, wrote, want)
+	}
+
+	if err := s.startLogs(t.Context(), []statelog.LogID{leaving}); err != nil {
+		t.Fatalf("start %s again: %v", leaving, err)
+	}
+	back := s.Log(leaving.String())
+	end := lastSeq(t, js, back.spec.Name)
+	waitUntil(t, 20*time.Second, "the restarted log to apply its log",
+		func() bool { return back.runner.Committed().Seq == end })
+	if got := registration.Health().Position; got != back.runner.Committed() {
+		t.Errorf("after the restart the registration vouches for %s at %s, and its "+
+			"runner is at %s", leaving, got, back.runner.Committed())
+	}
+	again, err := gate.Evict(t.Context(), GateRequest{Node: "node-gone-too", By: "ops",
+		OpID: statelog.NewOpID(time.Now(), "evict-node-gone-too")})
+	if err != nil {
+		t.Fatalf("evict after %s restarted: %v", leaving, err)
+	}
+	var reached bool
+	for _, d := range again.Domains {
+		if d.Domain != leaving.String() {
+			continue
+		}
+		reached = true
+		if d.Err != nil || d.Outcome != statelog.OutcomeApplied {
+			t.Errorf("the gate's write to the restarted %s answered %s (%v), want "+
+				"it applied through the new runtime", leaving, d.Outcome, d.Err)
+		}
+	}
+	if !reached {
+		t.Errorf("the gate never wrote to %s once it was running again: %+v",
+			leaving, again.Domains)
+	}
+}
+
+// A LOG OF LAYOUT 0'S ONE PARTITION IS NEVER STOPPED.
+//
+// Every domain surface of the node — the tracker's writer and reader, the
+// knowledge base's, the embedding duty, the feeds — holds its domain's
+// `estate.000` log from the moment the native runtime is built, so stopping
+// one leaves them writing through a publisher that waits on a runner nobody
+// runs. The refusal comes before anything stops.
+func TestALogOfLayoutZerosOnePartitionIsNeverStopped(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	s := e.native.Load().log
+	estate := statelog.LogID{Domain: tracker.Domain{}.Name(), Partition: statelog.EstatePartition}
+	running := s.Log(estate.String())
+	if running == nil {
+		t.Fatalf("the premise: the node runs no %s", estate)
+	}
+	err := s.stopLogs([]statelog.LogID{estate})
+	if err == nil || !strings.Contains(err.Error(), "layout 0's one partition") {
+		t.Errorf("stopping %s answered %v, want it refused", estate, err)
+	}
+	if s.Log(estate.String()) != running {
+		t.Errorf("a refused stop took %s out of the running set", estate)
+	}
+	s.applyMu.Lock()
+	run := s.applying[estate.String()]
+	s.applyMu.Unlock()
+	if run == nil {
+		t.Fatalf("%s has no applier", estate)
+	}
+	select {
+	case <-run.done:
+		t.Errorf("a refused stop halted %s's applier", estate)
+	default:
 	}
 }
 

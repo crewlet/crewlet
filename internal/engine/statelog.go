@@ -777,7 +777,14 @@ func (s *stateLog) startLog(ctx, consumerCtx context.Context, id statelog.LogID,
 //
 // Under the partitions' recovery locks, so no adoption replaces the file a
 // runner is being built over, and no reanchor moves a checkpoint it reads.
+//
+// A LOG NAMED TWICE IS STARTED ONCE. What is already running is judged against
+// the set as it stood before this call started anything, so a second mention
+// of a log this call is starting would have provisioned and started it again:
+// two runners and two consumer handles on one durable consumer, the set
+// keeping the second and the first's handle never closed.
 func (s *stateLog) startLogs(ctx context.Context, ids []statelog.LogID) error {
+	ids = distinctLogs(ids)
 	partitions := make([]statelog.PartitionID, 0, len(ids))
 	for _, id := range ids {
 		if name, _ := s.layout.Stream(id); name == "" {
@@ -826,9 +833,33 @@ func (s *stateLog) startLogs(ctx context.Context, ids []statelog.LogID) error {
 // loop or reader picks it up again, then its applier is ended and waited for,
 // then its consumer is given back to the broker. A log not running is
 // ignored.
-func (s *stateLog) stopLogs(ids []statelog.LogID) {
+//
+// # A log of layout 0's one partition is never stopped
+//
+// Refused, naming it, before anything stops. Every DOMAIN surface of this node
+// — the tracker's writer and reader, the knowledge base's store and reader, the
+// embedding duty, the change feeds — is wired to its domain's log in
+// `estate.000` ([stateLog.Domain]) when the native runtime is built, and holds
+// that log's publisher, reader and runner from then on. Stopped, they would
+// write through a publisher waiting on a runner that no longer applies and read
+// rows nothing advances — and started again, through the halted instance
+// rather than the new one. What surfaces the FRAMEWORK builds over every log it
+// runs — the snapshot registrations, the node gate — look the running set up
+// at every use and follow a restart; the domain surfaces key nothing to a
+// partition yet, so under layout 0 the partition a node holds is its whole
+// estate for the life of the process, which is what this rule says. A
+// partitioned layout's logs have no such surface bound to them and are stopped
+// and started freely.
+func (s *stateLog) stopLogs(ids []statelog.LogID) error {
+	ids = distinctLogs(ids)
 	partitions := make([]statelog.PartitionID, 0, len(ids))
 	for _, id := range ids {
+		if id.Partition == statelog.EstatePartition {
+			return fmt.Errorf("engine: %s is a log of layout 0's one partition, "+
+				"which every domain surface of this node writes and reads "+
+				"through for the life of the process; it is not stopped while "+
+				"the node runs", id)
+		}
 		partitions = append(partitions, id.Partition)
 	}
 	defer s.recovering.lock(partitions...)()
@@ -839,7 +870,7 @@ func (s *stateLog) stopLogs(ids []statelog.LogID) {
 	drop := map[string]bool{}
 	var stopping []*runningLog
 	for _, id := range ids {
-		if running := held.byKey[id.String()]; running != nil && !drop[running.key] {
+		if running := held.byKey[id.String()]; running != nil {
 			drop[running.key] = true
 			stopping = append(stopping, running)
 		}
@@ -851,6 +882,21 @@ func (s *stateLog) stopLogs(ids []statelog.LogID) {
 			running.consumer.Close()
 		}
 	}
+	return nil
+}
+
+// distinctLogs is ids with every log after its first mention dropped, in the
+// order they were named.
+func distinctLogs(ids []statelog.LogID) []statelog.LogID {
+	seen := make(map[string]bool, len(ids))
+	out := make([]statelog.LogID, 0, len(ids))
+	for _, id := range ids {
+		if key := id.String(); !seen[key] {
+			seen[key] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Stop ends every loop this node started and waits for them.
@@ -2863,8 +2909,9 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), 
 }
 
 // registered is every log of the running layout, as the framework's own
-// surfaces want it: by key, with the health this node reports for each it
-// runs.
+// surfaces want it: by key, with the health this node reports for each —
+// read off the log running under that key at the moment it is asked, and the
+// zero health, which vouches for nothing, while none is.
 //
 // The health is what a SNAPSHOT gates on — a node donates only what it can
 // vouch for — and the artefact's acceptance is what a join gates on. Both walk
@@ -2885,24 +2932,37 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 		}
 		if running := s.Log(name); running != nil {
 			entry.Spec = running.spec
-			// THIS NODE'S OWN CONTEXT, for [stateLog.readerFor]'s
-			// reason: the snapshot loop and the adopter call this
-			// closure on their own cadence, long after whoever built
-			// the map returned, so there is no caller's context to
-			// inherit — and [stateLog.run] is the one that ends when
-			// the domain being vouched for does.
-			entry.Health = func() statelog.Health {
-				health, err := s.health(s.run, running)
-				if err != nil {
-					// AN UNREADABLE HEALTH IS NOT A HEALTHY ONE:
-					// the zero value has Drained false, an
-					// unread floor and no first sequence, which
-					// every gate reads as "cannot vouch for
-					// this".
-					return statelog.Health{}
-				}
-				return health
+		}
+		// THE LOG AS IT RUNS AT EACH CALL, looked up by its key rather than
+		// captured here: the snapshot loop and the adopter keep this
+		// registration for the life of the process, and the logs a node
+		// runs change while it runs ([stateLog.stopLogs],
+		// [stateLog.startLogs]). A captured log vouched, after a stop, for
+		// rows nothing applies any more — and after a restart for the
+		// halted runner's frozen checkpoint against a growing log end,
+		// declining every snapshot as catching up for ever.
+		//
+		// THIS NODE'S OWN CONTEXT, for [stateLog.readerFor]'s reason: the
+		// snapshot loop and the adopter call this closure on their own
+		// cadence, long after whoever built the map returned, so there is
+		// no caller's context to inherit — and [stateLog.run] is the one
+		// that ends when the domain being vouched for does.
+		entry.Health = func() statelog.Health {
+			running := s.Log(name)
+			if running == nil {
+				// A LOG THIS NODE DOES NOT RUN IS ONE IT CANNOT VOUCH
+				// FOR, which the zero value says.
+				return statelog.Health{}
 			}
+			health, err := s.health(s.run, running)
+			if err != nil {
+				// AN UNREADABLE HEALTH IS NOT A HEALTHY ONE: the zero
+				// value has Drained false, an unread floor and no
+				// first sequence, which every gate reads as "cannot
+				// vouch for this".
+				return statelog.Health{}
+			}
+			return health
 		}
 		out[name] = entry
 	}

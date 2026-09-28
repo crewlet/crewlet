@@ -360,7 +360,15 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 
 // NodeGate is the gesture, over every identity-claiming log this node runs.
 type NodeGate struct {
-	logs []gateLog
+	// logs is every identity-claiming log this node runs AT THE GESTURE,
+	// each with its writer: looked up at every call rather than captured
+	// when the gate was built, because the logs a node runs change while
+	// it runs ([stateLog.startLogs], [stateLog.stopLogs]). A captured set
+	// wrote through the publisher of a log that had stopped — waiting, for
+	// the whole [GateBudget], on a runner that no longer applies — and never
+	// reached a log started after the gate was built, which the trim then
+	// went on counting the evicted node on.
+	logs func() ([]gateLog, error)
 
 	// live lists the nodes holding a presence lease, which an eviction is
 	// judged against, and readmissible is the state log's own judgement of
@@ -466,6 +474,10 @@ func domainOpID(gesture string, readmit bool, domain, node string) string {
 // (a company on an external tracker still runs every log in the register) and
 // the page store's may not either, and an eviction is a decision about a
 // machine that has to reach every log whichever backends the company chose.
+//
+// CHECKED ONCE HERE, so the boot is what refuses a register no gesture could
+// reach; every gesture then builds its writers over the logs running at that
+// moment ([NodeGate.logs]).
 func newNodeGate(s *stateLog, leases liveLeases, db *store.DB, nodeID string,
 	rec *metrics.Recorder) (*NodeGate, error) {
 
@@ -475,7 +487,22 @@ func newNodeGate(s *stateLog, leases liveLeases, db *store.DB, nodeID string,
 		},
 		readmissible: s.Readmissible,
 		publishing:   s.appends,
+		logs: func() ([]gateLog, error) {
+			return gateLogsOf(s, db, nodeID, rec)
+		},
 	}
+	if _, err := g.logs(); err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+// gateLogsOf is a writer for every identity-claiming log s runs now, in its
+// order, each publishing through that log's own write authority.
+func gateLogsOf(s *stateLog, db *store.DB, nodeID string,
+	rec *metrics.Recorder) ([]gateLog, error) {
+
+	var logs []gateLog
 	for _, running := range s.running() {
 		if !running.domain.ClaimsIdentity() {
 			continue
@@ -484,13 +511,18 @@ func newNodeGate(s *stateLog, leases liveLeases, db *store.DB, nodeID string,
 		if err != nil {
 			return nil, err
 		}
-		g.logs = append(g.logs, gl)
+		logs = append(logs, gl)
 	}
-	if len(g.logs) == 0 {
-		return nil, errors.New("engine: no registered domain claims identity, so " +
-			"there is no log an eviction could be written to")
+	if len(logs) == 0 {
+		return nil, errors.New("engine: this node runs no log that claims " +
+			"identity, so there is no log an eviction could be written to")
 	}
-	return g, nil
+	return logs, nil
+}
+
+// gateLogs is a fixed set of gate logs, as a [NodeGate.logs].
+func gateLogs(logs ...gateLog) func() ([]gateLog, error) {
+	return func() ([]gateLog, error) { return logs, nil }
 }
 
 // gateLogFor is one identity-claiming log's writer for the gate, publishing
@@ -599,7 +631,7 @@ func (g *NodeGate) Evict(ctx context.Context, req GateRequest) (GateResult, erro
 					"operator forced its eviction past it")
 		}
 	}
-	return g.write(ctx, req, false), nil
+	return g.write(ctx, req, false)
 }
 
 // Readmit is the inverse commit on every identity-claiming log.
@@ -618,7 +650,7 @@ func (g *NodeGate) Readmit(ctx context.Context, req GateRequest) (GateResult, er
 	if err := g.readmissible(ctx, req.Node); err != nil {
 		return GateResult{}, fmt.Errorf("engine: readmit node %s: %w", req.Node, err)
 	}
-	return g.write(ctx, req, true), nil
+	return g.write(ctx, req, true)
 }
 
 // write publishes the gate record to every identity-claiming log, in order.
@@ -629,11 +661,17 @@ func (g *NodeGate) Readmit(ctx context.Context, req GateRequest) (GateResult, er
 // a closed connection, a client's own timeout — is not a request to leave a
 // node evicted on one log and counted on the other. The values travel, so each
 // write keeps the trace and the operator it was asked under.
-func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) GateResult {
+//
+// The only error is that there is no log to write: nothing was written.
+func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) (GateResult, error) {
+	logs, err := g.logs()
+	if err != nil {
+		return GateResult{}, err
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), GateBudget)
 	defer cancel()
 	out := GateResult{Node: req.Node, OpID: req.OpID}
-	for _, l := range g.logs {
+	for _, l := range logs {
 		d := DomainGate{Domain: l.domain, Stream: l.stream,
 			OpID: domainOpID(req.OpID, readmit, l.domain, req.Node)}
 		res, err := l.write(ctx, req.By, d.OpID, req.Node, readmit)
@@ -645,5 +683,5 @@ func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) Gat
 		}
 		out.Domains = append(out.Domains, d)
 	}
-	return out
+	return out, nil
 }
