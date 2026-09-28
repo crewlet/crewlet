@@ -852,11 +852,12 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 // The seal's proof is that every BROKER process restarted, because a request
 // the broker has already queued is retired by the process holding it going
 // away, and every PUBLISHER must be admitted. So a live node takes part if it
-// holds the estate — it publishes records ([capacityHolders]) — or if its
-// broker is a member, which holds queued requests whatever its roles
-// ([capacityMembers]). Counted over data nodes alone, a member that holds no
-// data was never waited for, and the seal could pass while its broker still
-// held a request that would resize the log after it.
+// holds the estate — it publishes records, and says so on its estate lease
+// ([capacityHolders]) — or if its broker is a member, which holds queued
+// requests whatever its roles ([capacityMembers]). Counted over data nodes
+// alone, a member that holds no data was never waited for, and the seal could
+// pass while its broker still held a request that would resize the log after
+// it.
 //
 // A node whose presence does not say what its broker is counts as a member:
 // excluding it could pass a seal it should hold, where including one that is
@@ -876,12 +877,16 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 		seen[row.NodeID] = true
 	}
 	if e.backends.Coord != nil {
+		estate, err := e.backends.Coord.ListLive(ctx, coord.ClassEstate)
+		if err != nil {
+			return nil, fmt.Errorf("engine: list the live estate leases: %w", err)
+		}
+		for _, id := range capacityHolders(estate) {
+			seen[id] = true
+		}
 		held, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 		if err != nil {
 			return nil, fmt.Errorf("engine: list the live nodes: %w", err)
-		}
-		for _, id := range capacityHolders(held) {
-			seen[id] = true
 		}
 		for _, id := range capacityMembers(held) {
 			seen[id] = true
@@ -897,13 +902,35 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 }
 
 // capacityHolders is every live node holding a copy of the replicated estate —
-// the publishers of its records.
+// the publishers of its records — as its estate lease says (estatelease.go).
 //
-// UNDER THE SINGLE-FILE LAYOUT every data node holds the whole estate, so a
-// node's presence is what says it does; there is no lease of the estate's own
-// to read until the partitioned estate places it by partition.
-func capacityHolders(held []coord.Lease) []string {
-	return dataNodesOf(held)
+// THE ESTATE LEASE AND NOT PRESENCE, for the estate map's own reason: a node
+// holds its estate lease for exactly as long as its estate runtime runs, from
+// the moment the runtime is up until after it has stopped applying, which is
+// the span in which it can publish — where a presence lease says what a node
+// was configured as, and a drain gives it up at its first step while the
+// runtime still runs. Under the single-file layout that is every data node
+// running the estate, each holding the one partition whole; once the estate is
+// partitioned it is every node holding any partition of it, which is who
+// publishes to any of its logs.
+//
+// A DATA NODE RUNNING NO ESTATE is left out, and publishes nothing a seal has
+// to retire: a company on vendor backends for both its tracker and its
+// knowledge base runs no state log at all, and a node with no company yet runs
+// none until an apply brings one — whose writers a maintenance mode withholds
+// and a normal mode admits first. Its broker is counted on its own terms
+// ([capacityMembers]), and a node the fleet holds a position for is counted by
+// that. A lease this build cannot read as an estate lease still names a node,
+// and the node is counted: a publisher that went uncounted is the one thing
+// this set exists to prevent.
+func capacityHolders(estate []coord.Lease) []string {
+	out := make([]string, 0, len(estate))
+	for _, lease := range estate {
+		if node, ok := coord.EstateNode(lease.Resource); ok && node != "" {
+			out = append(out, node)
+		}
+	}
+	return out
 }
 
 // capacityMembers is every live node whose broker is a member of the fleet's,

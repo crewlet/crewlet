@@ -412,6 +412,29 @@ func TestAnUnreadablePositionRegisterRefusesRatherThanShrinkingTheSet(t *testing
 	}
 }
 
+// blindEstateLeases is a lease store that cannot list the estate leases.
+type blindEstateLeases struct{ coord.Backend }
+
+func (b blindEstateLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	if class == coord.ClassEstate {
+		return nil, errors.New("coordination timed out")
+	}
+	return b.Backend.ListLive(ctx, class)
+}
+
+// AN UNREADABLE ESTATE LISTING REFUSES RATHER THAN SHRINKING THE SET, for the
+// register's reason: every estate lease it could not read names a node that may
+// be publishing the estate's records.
+func TestAnUnreadableEstateListingRefusesRatherThanShrinkingTheSet(t *testing.T) {
+	ctx := context.Background()
+	e, _ := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	e.backends.Coord = blindEstateLeases{Backend: coordmem.New()}
+	if _, err := e.capacityParticipants(ctx); err == nil {
+		t.Fatal("the participant set was formed without the estate leases it " +
+			"could not list — every node missing from it may be publishing")
+	}
+}
+
 // TestAnAdmissionBlocksTakingTheExclusion is the coordinator's half of the
 // handshake: a node that slipped between the check and its own start left a
 // durable record, and that record is what a silence could never be.
@@ -974,29 +997,50 @@ func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
 	}
 }
 
-// WHO TAKES PART IN A CAPACITY SEAL IS DECIDED BY THE DATA AND BY THE BROKER,
-// asked apart. The seal's proof is that every broker process restarted and
-// every publisher was admitted, so a live node takes part when it holds the
-// estate (it publishes) or when its broker is a member (it queues requests) —
-// and when its presence does not say what its broker is, because leaving out a
-// node that may be a member could pass a seal it should hold. A leaf or a
-// client of an external cluster that holds no data does neither.
-func TestWhoTakesPartInACapacitySealIsTheDataAndTheBrokerMembers(t *testing.T) {
+// WHO TAKES PART IN A CAPACITY SEAL IS DECIDED BY THE ESTATE AND BY THE
+// BROKER, asked apart. The seal's proof is that every broker process restarted
+// and every publisher was admitted, so a live node takes part when it holds the
+// estate — its ESTATE LEASE, held for exactly as long as its estate runtime
+// runs, says it publishes — or when its broker is a member (it queues requests)
+// — and when its presence does not say what its broker is, because leaving out
+// a node that may be a member could pass a seal it should hold. A leaf or a
+// client of an external cluster that runs no estate does neither, whatever its
+// roles say it may hold; and an estate lease this build cannot read still names
+// a node that publishes.
+func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T) {
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-coordinator", statelog.ModeMaintenance)
 	backend := coordmem.New()
 	e.backends.Coord = backend
 	for id, meta := range map[string]map[string]any{
-		"data-member":      {"roles": []string{"data", "seats"}, "broker": "member"},
-		"data-client":      {"roles": []string{"data"}, "broker": "client"},
-		"dataless-member":  {"roles": []string{"seats"}, "broker": "member"},
-		"an-older-build":   {"roles": []string{"seats"}},
-		"a-newer-kind":     {"roles": []string{"seats"}, "broker": "observer"},
-		"stateless-leaf":   {"roles": []string{"seats"}, "broker": "leaf"},
-		"stateless-client": {"roles": []string{"seats"}, "broker": "client"},
+		"data-member":         {"roles": []string{"data", "seats"}, "broker": "member"},
+		"data-client":         {"roles": []string{"data"}, "broker": "client"},
+		"data-client-idle":    {"roles": []string{"data"}, "broker": "client"},
+		"dataless-member":     {"roles": []string{"seats"}, "broker": "member"},
+		"an-older-build":      {"roles": []string{"seats"}},
+		"a-newer-kind":        {"roles": []string{"seats"}, "broker": "observer"},
+		"stateless-leaf":      {"roles": []string{"seats"}, "broker": "leaf"},
+		"stateless-client":    {"roles": []string{"seats"}, "broker": "client"},
+		"estate-on-a-leaf":    {"roles": []string{"data"}, "broker": "leaf"},
+		"unreadable-estate-1": {"roles": []string{"data"}, "broker": "client"},
 	} {
 		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
 			Owner: id + ":boot-1", TTL: time.Minute, Meta: meta,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// THE ESTATE'S PUBLISHERS, each on the lease its runtime claims — and
+	// one whose lease says nothing this build can read. `data-client-idle`
+	// has the role and runs no estate: vendor backends, or no company yet.
+	for id, meta := range map[string]map[string]any{
+		"data-member":         {"weight": 1, "layout": 0, "healthy": true, "partitions": map[string]any{"estate.000": "serving"}},
+		"data-client":         {"weight": 1, "layout": 0, "healthy": true, "partitions": map[string]any{"estate.000": "catching_up"}},
+		"estate-on-a-leaf":    {"weight": 1, "layout": 0, "healthy": true, "partitions": map[string]any{"estate.000": "serving"}},
+		"unreadable-estate-1": {"from": "a newer build"},
+	} {
+		if _, _, err := backend.TryAcquire(ctx, coord.EstateResource(id), coord.AcquireOptions{
+			Owner: id + ":boot-1", TTL: time.Minute, Meta: meta, Ungated: true,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -1006,7 +1050,7 @@ func TestWhoTakesPartInACapacitySealIsTheDataAndTheBrokerMembers(t *testing.T) {
 		t.Fatalf("capacityParticipants: %v", err)
 	}
 	want := []string{"a-newer-kind", "an-older-build", "data-client", "data-member",
-		"dataless-member", "node-coordinator"}
+		"dataless-member", "estate-on-a-leaf", "node-coordinator", "unreadable-estate-1"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("participants = %v, want %v", got, want)
 	}

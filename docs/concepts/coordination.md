@@ -197,9 +197,11 @@ one file that every data node holds whole (layout 0): it says layout 0, no map
 epoch, and the one partition `estate.000` — `serving` once its copy is
 established, the same readiness a seat's admission waits on, `catching_up`
 before that, and `faulted` when the copy is wrong rather than behind. Nothing
-reads those states until a layout divides the estate. A data node that runs no
-estate — a company on vendor backends for both its tracker and its knowledge
-base, or a node with no company yet — holds none.
+reads those states until a layout divides the estate; what reads the lease now
+is that it is there — a [capacity window](../guides/retention.md#who-has-to-acknowledge)
+counts every live `estate:` lease as a publisher of the estate's records. A
+data node that runs no estate — a company on vendor backends for both its
+tracker and its knowledge base, or a node with no company yet — holds none.
 
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with

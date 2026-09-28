@@ -850,7 +850,12 @@ broker already queued is retired by the process holding it going away — and
 that every **publisher** was admitted. So the operation's participants are:
 
 - every node the fleet holds a position for;
-- every live **data** node, whose process publishes records;
+- every live node holding an **estate lease** — every data node whose estate
+  runtime is running, from the moment it is up until after it has stopped
+  applying — whose process publishes records. A data node running no estate
+  (a company on vendor backends for both its tracker and its knowledge base,
+  or a node with no company yet) publishes none and is not asked on that
+  account;
 - every live **broker member**, whatever its roles, because its broker holds
   queued requests whether or not the node keeps data;
 - every live node whose presence does not say what its broker is — a node
@@ -859,7 +864,7 @@ that every **publisher** was admitted. So the operation's participants are:
   not costs only an acknowledgement you can `exclude`;
 - and the coordinator itself.
 
-A **leaf** or a client of an external cluster that holds no data is not asked:
+A **leaf** or a client of an external cluster that runs no estate is not asked:
 its broker queues nothing, and its seats publish through a data node, which is.
 Each node's broker kind is on `crewlet fleet broker list`.
 

@@ -127,13 +127,13 @@ func (r *remoteNative) admitted(ctx context.Context) bool {
 // is older than a lease survives; see [coord.LeaseView] and [newDataView].
 //
 // ONE FILTER FOR EVERY QUESTION ABOUT DATA NODES — [dataNodesOf], which the
-// trim, the eviction gate and the capacity handshake's holders apply to a
-// listing of their own — because a second reading of "which nodes hold data"
-// is how one of them comes to count a stateless node and wait for ever on a
-// position it will never publish. (The handshake also counts broker MEMBERS,
-// which is a different question with its own filter — see
-// [Engine.capacityParticipants].) Those three list the store directly and
-// deliberately:
+// trim and the eviction gate apply to a listing of their own — because a
+// second reading of "which nodes hold data" is how one of them comes to count
+// a stateless node and wait for ever on a position it will never publish. (The
+// capacity handshake asks two different questions with filters of their own:
+// who publishes the estate's records, which the ESTATE lease answers, and
+// whose broker is a member — see [Engine.capacityParticipants].) Those list
+// the store directly and deliberately:
 // each runs on a duty's tick rather than per request, and each decides
 // something a roster up to a heartbeat old must not — what may be trimmed,
 // who may be evicted, whether a fleet-wide operation may proceed.
