@@ -23,6 +23,7 @@
  */
 
 import { apiToken } from "./authToken.ts";
+import { needSession } from "./session.ts";
 
 /**
  * What the engine said when it refused.
@@ -37,10 +38,26 @@ export class RestError extends Error {
   readonly code: string;
   readonly detail: string;
   readonly hint: string;
+  /**
+   * The engine's own sentence for the code — the envelope's `message`, which
+   * every refusal it writes carries — or "" for an answer the engine did not
+   * write. What a person is shown when a screen has nothing more specific to
+   * say: the sign-in surface's one uniform refusal is exactly this sentence,
+   * and a screen that wrote its own would be a second copy of the engine's
+   * wording, the one that goes stale.
+   */
+  readonly sentence: string;
+  /**
+   * The `Retry-After` the answer carried, in whole seconds, or null for none.
+   * A `429` always carries one and says how long the curve makes the next
+   * attempt wait; a `503` carries one where waiting can clear the cause and
+   * none where it cannot, which is a difference a screen has to render.
+   */
+  readonly retryAfter: number | null;
   /** Everything else the body carried, for a caller that needs a field. */
   readonly body: Record<string, unknown>;
 
-  constructor(status: number, body: Record<string, unknown>) {
+  constructor(status: number, body: Record<string, unknown>, retryAfter: number | null = null) {
     const code = typeof body.error === "string" ? body.error : "";
     const detail = typeof body.detail === "string" ? body.detail : "";
     super(detail || code || `HTTP ${status}`);
@@ -49,6 +66,8 @@ export class RestError extends Error {
     this.code = code;
     this.detail = detail;
     this.hint = typeof body.hint === "string" ? body.hint : "";
+    this.sentence = typeof body.message === "string" ? body.message : "";
+    this.retryAfter = retryAfter;
     this.body = body;
   }
 
@@ -90,6 +109,43 @@ export function refusedGrants(body: unknown): string[] {
   if (typeof body !== "object" || body === null) return [];
   const grants = (body as Record<string, unknown>).grants;
   return Array.isArray(grants) ? grants.filter((g): g is string => typeof g === "string") : [];
+}
+
+/**
+ * The codes a `401` carries when it is an answer about WHAT WAS TYPED rather
+ * than about the browser's credential: a sign-in whose details were not
+ * accepted, and one whose password proved itself and now wants the second
+ * factor. Every other `401` means this browser holds nothing the engine
+ * accepts, and the session needs a sign-in.
+ */
+const TYPED_REFUSALS = new Set(["sign_in_refused", "second_factor_required"]);
+
+/**
+ * What a refusal says about the browser's SESSION, noted where every screen's
+ * request passes — so no screen has to recognise a lost session itself, and
+ * none can forget to.
+ *
+ * A `401` that is not an answer about typed details is a browser signed in as
+ * nobody the engine accepts: never signed in, its session ended, expired or
+ * revoked. A `403 second_factor_enrolment_required` is a session that may do
+ * nothing but enrol the second factor the deployment requires. Every other
+ * refusal is about the REQUEST, and the session is fine.
+ */
+function noteSession(refusal: RestError): void {
+  if (refusal.status === 401 && !TYPED_REFUSALS.has(refusal.code)) needSession("sign_in");
+  if (refusal.status === 403 && refusal.code === "second_factor_enrolment_required") {
+    needSession("second_factor");
+  }
+}
+
+/**
+ * The seconds a `Retry-After` header names, or null for none. The engine
+ * writes whole seconds and never an HTTP date; anything else is not its
+ * answer and is read as none.
+ */
+function retryAfterOf(response: Response): number | null {
+  const raw = response.headers.get("Retry-After")?.trim() ?? "";
+  return /^\d+$/.test(raw) ? Number(raw) : null;
 }
 
 /**
@@ -326,8 +382,10 @@ async function request(
   // the caller wrote, and it means the representation the caller holds is
   // still current.
   if (!response.ok && response.status !== 304) {
-    const refusal = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-    throw new RestError(response.status, refusal);
+    const body = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    const refusal = new RestError(response.status, body, retryAfterOf(response));
+    noteSession(refusal);
+    throw refusal;
   }
   return { status: response.status, body: parsed, etag: response.headers.get("ETag") };
 }

@@ -370,6 +370,9 @@ because every single-modifier combination worth having is already the browser's.
 | `#/admin/config` · `#/admin/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|entities\|audit\|diff` |
 | `#/admin/credentials` | **Credentials** — names and provenance, never values *(operator)* | |
 | `#/admin/audit` | **Audit** — every write a person or a token made, across all four subsystems that record one: the tracker, the knowledge base, the configuration history and the credential store *(operator)*. NO DETAIL ROUTE — every row already has a page of its own somewhere else | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
+| `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on the Inbox |
+| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it and the seat it binds, then a login, a name and a password. The link the engine mints lands here | |
+| `#/enrol` | **Second factor** *(outside the frame)* — the authenticator a deployment that requires one asks for before anything else opens, then the first recovery codes | `next=`, as the sign-in's |
 
 **There is no redirect table.** There was one, and it was always a liability: a
 redirect whose old path is now a live route sends every reader of that route

@@ -14,7 +14,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
-import { RAIL } from "./nav.ts";
+import { FRAMELESS, RAIL } from "./nav.ts";
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));
 
@@ -136,7 +136,9 @@ test("no JSX guard is a bare number", () => {
 /** Whether a `path:` on this line points into the company document, not at a screen. */
 const documentPointer = (line: string) => /\bvalue:|\bcredential:/.test(line);
 test("every link names a segment a workspace owns", () => {
-  const owned = new Set(RAIL.flatMap((r) => r.owns));
+  // OR A SCREEN OUTSIDE THE FRAME, which no workspace owns and the router
+  // draws all the same — the sign-in screens a refusal sends a reader to.
+  const owned = new Set<string>([...RAIL.flatMap((r) => r.owns), ...FRAMELESS]);
   const literal = /(?:href\(|nav\.to\(|\bpath:\s*)\[\s*"([a-z0-9_-]+)"/g;
   const dead: string[] = [];
   for (const { path, text } of sources([".tsx", ".ts"])) {

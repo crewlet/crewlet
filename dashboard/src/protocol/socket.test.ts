@@ -11,6 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { currentSessionNeed, sessionRestored } from "./session.ts";
 import { LiveSocket } from "./socket.ts";
 import { Store } from "./store.ts";
 
@@ -71,6 +72,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  sessionRestored();
 });
 
 /** The nth dial, which the case has already caused. */
@@ -120,6 +122,9 @@ describe("the engine's close codes", () => {
     dial(0).closeWith(1006);
     await vi.advanceTimersByTimeAsync(0);
     expect(store.state.accessRefused).toBe("the live socket needs state:read");
+    // THE CONTROL for the enrolment case: a refusal on authority is the
+    // administrator's to repair, and sends nobody to sign in.
+    expect(currentSessionNeed()).toBeNull();
 
     const dialled = ScriptedWebSocket.dials.length;
     await vi.advanceTimersByTimeAsync(120_000);
@@ -129,6 +134,40 @@ describe("the engine's close codes", () => {
     expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
     dial(dialled).open();
     expect(store.state.accessRefused).toBeNull();
+  });
+
+  // A HANDSHAKE THAT NAMES NOBODY is a browser that needs to sign in, which
+  // is said where the application can hear it; the socket itself draws
+  // nothing.
+  test("a 401 handshake asks for a sign-in", async () => {
+    probeStatus = 401;
+    probeBody = { error: "invalid_token" };
+    const { store } = started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.state.authRejected).toBe(true);
+    expect(currentSessionNeed()).toBe("sign_in");
+    expect(store.state.accessRefused).toBeNull();
+  });
+
+  // A SESSION THAT MAY ONLY ENROL is refused the socket until it has, and
+  // its repair is the person's own: the enrolment, not an administrator.
+  test("a session that may only enrol stops the socket and asks for the enrolment", async () => {
+    probeStatus = 403;
+    probeBody = { error: "second_factor_enrolment_required" };
+    const { socket, store } = started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(currentSessionNeed()).toBe("second_factor");
+    expect(store.state.accessRefused).toBeNull();
+
+    const dialled = ScriptedWebSocket.dials.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled);
+
+    // The enrolment ends by re-dialling with the whole session it opened.
+    socket.reconnect();
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
   });
 
   test("a refusal that lands while a dial is in flight is not undone by that dial's close", async () => {

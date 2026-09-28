@@ -19,6 +19,7 @@
 
 import { api } from "./api.ts";
 import { apiToken } from "./authToken.ts";
+import { needSession } from "./session.ts";
 import type { Store } from "./store.ts";
 import type {
   Frame,
@@ -255,6 +256,12 @@ export class LiveSocket {
    */
   reconnect(): void {
     this.refused = false;
+    // A RE-DIAL IS A NEW ATTEMPT, usually with a credential the browser did
+    // not hold at the last one — a sign-in's cookie, a step-up's replacement
+    // — so the last refusal no longer describes it. Left standing, the page a
+    // sign-in lands on would open under a banner saying this browser was
+    // refused, until the handshake it had just started answered.
+    this.store.setAuthRejected(false);
     if (this.sock) this.sock.close();
     else this.connect();
   }
@@ -504,8 +511,17 @@ export class LiveSocket {
       // a token.
       if (res.status === 401) this.authRejected();
       else if (res.status === 403) {
-        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
-        this.accessRefused(body?.detail ?? "");
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+          detail?: string;
+        } | null;
+        // A SESSION THAT MAY ONLY ENROL A SECOND FACTOR is refused this
+        // surface until it has, and its repair is the person's own — the
+        // enrolment screen — rather than an administrator's. So it stops
+        // the loop as a refusal does, and asks for the enrolment rather
+        // than saying access was withdrawn.
+        if (body?.error === "second_factor_enrolment_required") this.enrolmentRequired();
+        else this.accessRefused(body?.detail ?? "");
       }
     } catch {
       // Offline, or a proxy that refuses the request outright. The reconnect
@@ -538,15 +554,32 @@ export class LiveSocket {
    * `reconnect()` is the way back, once an administrator has restored it.
    */
   private accessRefused(reason: string): void {
+    this.stopDialling();
+    this.store.setAccessRefused(reason);
+  }
+
+  /**
+   * The engine accepts this browser's session for nothing but enrolling the
+   * second factor the deployment requires. Every dial would be refused the
+   * same way until it has, so the loop stops; the enrolment ends by calling
+   * `reconnect()` with the whole session it opened.
+   */
+  private enrolmentRequired(): void {
+    this.stopDialling();
+    needSession("second_factor");
+  }
+
+  /** Stops the reconnect loop and the REST fallback, until `reconnect()`. */
+  private stopDialling(): void {
     this.refused = true;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = 0;
     this.stopFallback();
-    this.store.setAccessRefused(reason);
   }
 
   private authRejected(): void {
     this.store.setAuthRejected(true);
+    needSession("sign_in");
     if (this.askedForToken || !this.authRejectedHandler) return;
     this.askedForToken = true;
     this.authRejectedHandler();
