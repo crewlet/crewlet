@@ -27,7 +27,7 @@ import (
 //     [validateAdvertise] exists to prevent.
 //   - `node.labels: {" zone": eu}` passes the non-empty key check and then
 //     matches no `zone` selector any seat could write, because
-//     [Node.Profile] copies the key through verbatim.
+//     [Bootstrap.Profile] copies the key through verbatim.
 //   - `store.path` with a trailing newline is validated as one path and
 //     opened as another.
 //
