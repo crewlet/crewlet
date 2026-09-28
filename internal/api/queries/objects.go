@@ -10,10 +10,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
-	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 	"github.com/crewlet/crewlet/internal/placement"
 )
 
@@ -256,9 +256,9 @@ type ObjectProbation struct {
 
 	// RemovedAt is when the map removed it, for display; Reason and Detail
 	// the absence that did.
-	RemovedAt time.Time              `json:"removed_at"`
-	Reason    objstore.AbsenceReason `json:"reason"`
-	Detail    string                 `json:"detail,omitempty"`
+	RemovedAt time.Time                `json:"removed_at"`
+	Reason    membership.AbsenceReason `json:"reason"`
+	Detail    string                   `json:"detail,omitempty"`
 }
 
 // ObjectAbsence is a member's run of absence, counted in the maintainer's
@@ -282,8 +282,8 @@ type ObjectAbsence struct {
 	Since time.Time `json:"since"`
 
 	// Reason is `absent` or `unhealthy`, and Detail what the member said.
-	Reason objstore.AbsenceReason `json:"reason"`
-	Detail string                 `json:"detail,omitempty"`
+	Reason membership.AbsenceReason `json:"reason"`
+	Detail string                   `json:"detail,omitempty"`
 }
 
 // ObjectMember is one member as the fleet view renders it: the map's view of
@@ -357,9 +357,9 @@ type ObjectRemoval struct {
 
 	// At is when it was removed, for display; Reason and Detail the
 	// absence that removed it.
-	At     time.Time              `json:"at"`
-	Reason objstore.AbsenceReason `json:"reason"`
-	Detail string                 `json:"detail,omitempty"`
+	At     time.Time                `json:"at"`
+	Reason membership.AbsenceReason `json:"reason"`
+	Detail string                   `json:"detail,omitempty"`
 
 	// Gone is how many consecutive ticks have not seen it present and
 	// healthy, and ForgetAfterTicks how many forget it — after which it
@@ -388,7 +388,7 @@ func RenderMapMember(state objstore.MapState, node string) (ObjectMapMember, boo
 		// the flag is what it is placed by.
 		r := state.Removed[node]
 		out.Probation = &ObjectProbation{
-			Present: r.Present, PlacedAfterTicks: upkeep.StableTicks,
+			Present: r.Present, PlacedAfterTicks: membership.StableTicks,
 			RemovedAt: r.At, Reason: r.Reason, Detail: r.Detail,
 		}
 	}
@@ -403,8 +403,8 @@ func RenderMapMember(state objstore.MapState, node string) (ObjectMapMember, boo
 	}
 	if run, gone := state.Absence[node]; gone {
 		out.Absence = &ObjectAbsence{
-			Ticks: run.Ticks, OutAfterTicks: upkeep.OutTicks,
-			Present: run.Present, ClearAfterTicks: upkeep.StableTicks,
+			Ticks: run.Ticks, OutAfterTicks: membership.OutTicks,
+			Present: run.Present, ClearAfterTicks: membership.StableTicks,
 			Since: run.Since, Reason: run.Reason, Detail: run.Detail,
 		}
 	}
@@ -477,8 +477,8 @@ func RenderObjects(state objstore.MapState, layout *objplacement.Layout,
 		}
 		placed.Removed = append(placed.Removed, ObjectRemoval{
 			Node: node, At: r.At, Reason: r.Reason, Detail: r.Detail,
-			Gone: r.Gone, ForgetAfterTicks: upkeep.OutTicks,
-			PlacedAfterTicks: upkeep.StableTicks,
+			Gone: r.Gone, ForgetAfterTicks: membership.OutTicks,
+			PlacedAfterTicks: membership.StableTicks,
 		})
 	}
 	slices.SortFunc(placed.Removed, func(a, b ObjectRemoval) int {

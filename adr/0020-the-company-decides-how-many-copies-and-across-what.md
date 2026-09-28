@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/upkeep`
-- **Enforced-by:** `internal/objstore/upkeep.TestOnlyTheNewestCompanySetsTheCopies`, `internal/engine.TestTheMapTakesTheCompanyStampedWithItsActivation`, `internal/objstore/placement.TestCopiesAreSpreadAcrossFailureDomains` and `internal/objstore/placement.TestPlacementIsPinnedAcrossBuilds`, and end to end `internal/e2e.TestTheMapsCopiesAreTheCompanys`
+- **Enforced-by:** `internal/objstore/upkeep.TestOnlyTheNewestCompanySetsTheCopies` and `internal/membership.TestOnlyTheNewestCompanySetsTheCopies`, `internal/engine.TestTheMapTakesTheCompanyStampedWithItsActivation`, `internal/objstore/placement.TestCopiesAreSpreadAcrossFailureDomains` and `internal/objstore/placement.TestPlacementIsPinnedAcrossBuilds`, and end to end `internal/e2e.TestTheMapsCopiesAreTheCompanys`
 - **Measured:** 256 fixed placement groups left the fullest of thirty data nodes holding about one and a half times its fair share, and of two hundred more than two and a half times. Unbalanced straw2 at three copies over ten members gives a weight-4 node about 2.8 times a weight-1 node's copies rather than four; the balanced shares hold a member within 2% of its weight wherever 2% is at least a copy and a half of its target — every fleet within that converged in at most 32 rounds, a median of five — which the group count's sizing gives every member of an equal-weight fleet and every member down to about three quarters of the mean weight, unless a failure domain is capped (twelve equal members in zones of one, one and ten at three copies target 51.2 copies each). Below it a copy count within 2% may not exist: nine members of weight 64 and one of weight 1 at three copies over 512 groups leave the light one about 13% off, and the balance stops at sixty rounds reporting it did not converge. Doubling the group count re-places 49.5% of the slots over ten members. A layout — every group's holders — takes 12 ms at 50 members over 2048 groups and 185 ms at 200 over 8192.
 - **Cost-when-tried:** the map took its copy count from whichever node held its duty — that node's own `stream.replicas` — so a node left at that field's default of one set every group to one copy the moment the duty landed on it, and every other copy then read as placed elsewhere, which is exactly what the collectors delete.
 - **Tag-status:** unreleased
@@ -33,12 +33,14 @@ it has fewer: fewer domains than copies is reported, never refused, because a
 map that refused to place would lose writes to guard against a failure it can
 no longer avoid.
 
-This binds four packages that each hold a quarter of it — the Tier B field and
+This binds five packages that each hold a part of it — the Tier B field and
 its validation in `internal/config`, the per-tick read of the company and the
-objects lease in `internal/engine`, the maintainer that applies them in
-`internal/objstore/upkeep`, and the draw that spreads by domain in
-`internal/placement` (the draw the object map shares with the estate map) —
-which is why it is a record rather than a package doc.
+objects lease in `internal/engine`, the rule that applies a company only as
+recent as the one the map was set by in `internal/membership` (the lifecycle
+the object map shares with the estate map), the maintainer that composes it
+in `internal/objstore/upkeep`, and the draw that spreads by domain in
+`internal/placement` — which is why it is a record rather than a package
+doc.
 
 ## Why the obvious alternatives are wrong
 

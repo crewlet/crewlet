@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -136,7 +137,7 @@ func TestTheLayoutFollowsTheMapAndOnlyTheMap(t *testing.T) {
 	}
 
 	counted := first.Clone()
-	counted.Absence = map[string]objstore.Absence{"data-c": {Ticks: 1, Reason: objstore.ReasonAbsent}}
+	counted.Absence = map[string]membership.Absence{"data-c": {Ticks: 1, Reason: membership.ReasonAbsent}}
 	c.Observe(counted, 2)
 	if l2, _ := c.Layout(); l2 != l1 {
 		t.Fatal("a record whose map did not change had its layout computed again")

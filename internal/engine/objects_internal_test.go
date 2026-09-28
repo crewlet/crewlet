@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
@@ -143,9 +144,11 @@ func TestTheMapTakesTheCompanyStampedWithItsActivation(t *testing.T) {
 	if !ok {
 		t.Fatal("an activated company was not applied")
 	}
-	want := upkeep.Company{
+	want := membership.Company{
 		Epoch:    uint64(configplane.ActivationStamp(activated)),
 		Replicas: config.DefaultObjectReplicas,
+		// Named, so a refusal of it names the field to change.
+		Block: "objects",
 	}
 	if got != want {
 		t.Errorf("company = %+v, want %+v", got, want)
@@ -213,7 +216,7 @@ func TestTheMapDutyCountsAnAbsenceOnlyATickApart(t *testing.T) {
 	var live []upkeep.Presence
 	m, err := upkeep.NewMaintainer(upkeep.MaintainerOptions{Store: store,
 		Live:    func(context.Context) ([]upkeep.Presence, error) { return live, nil },
-		Company: func() (upkeep.Company, bool) { return upkeep.Company{Epoch: 1, Replicas: 2}, true },
+		Company: func() (membership.Company, bool) { return membership.Company{Epoch: 1, Replicas: 2}, true },
 		// NO OBSERVER, and no cache anywhere: the duty is handed its
 		// tick and nothing else to pace by.
 	})
@@ -245,15 +248,15 @@ func TestTheMapDutyCountsAnAbsenceOnlyATickApart(t *testing.T) {
 	live = live[:1]
 	var counted []time.Duration
 	removed := time.Duration(-1)
-	for range 3 * upkeep.OutTicks {
+	for range 3 * membership.OutTicks {
 		before := storedAbsence(t, store, "data-b")
 		wait := duty.turn(t.Context())
 		after := storedAbsence(t, store, "data-b")
 		switch {
 		case after > before:
-			if n := len(counted); n > 0 && clock-counted[n-1] < upkeep.TickInterval {
+			if n := len(counted); n > 0 && clock-counted[n-1] < membership.TickInterval {
 				t.Fatalf("absence counted %v after the last count, want at least %v",
-					clock-counted[n-1], upkeep.TickInterval)
+					clock-counted[n-1], membership.TickInterval)
 			}
 			counted = append(counted, clock)
 		case after < before:
@@ -267,9 +270,9 @@ func TestTheMapDutyCountsAnAbsenceOnlyATickApart(t *testing.T) {
 	if removed < 0 {
 		t.Fatalf("data-b was never removed; counted %d ticks", len(counted))
 	}
-	if gone := removed - lastSeen; gone != upkeep.OutGrace {
+	if gone := removed - lastSeen; gone != membership.OutGrace {
 		t.Fatalf("data-b was removed %v after the last tick that saw it, want the grace, %v",
-			gone, upkeep.OutGrace)
+			gone, membership.OutGrace)
 	}
 }
 

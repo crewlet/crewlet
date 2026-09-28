@@ -12,9 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
-	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 	"github.com/crewlet/crewlet/internal/placement"
 )
 
@@ -56,14 +56,14 @@ func placedFleet(t *testing.T) objstore.MapState {
 				member("data-c", 1, "eu-3"), out, probation,
 			},
 		},
-		Absence: map[string]objstore.Absence{"data-b": {Ticks: 12, Present: 3,
-			Since: since, Reason: objstore.ReasonAbsent}},
-		TakenOut: map[string]objstore.Gesture{"data-d": {By: "alice",
+		Absence: map[string]membership.Absence{"data-b": {Ticks: 12, Present: 3,
+			Since: since, Reason: membership.ReasonAbsent}},
+		TakenOut: map[string]membership.Gesture{"data-d": {By: "alice",
 			Reason: "decommission", At: since}},
-		Removed: map[string]objstore.Removal{
-			"data-e": {Gone: 6, At: since, Reason: objstore.ReasonUnhealthy,
+		Removed: map[string]membership.Removal{
+			"data-e": {Gone: 6, At: since, Reason: membership.ReasonUnhealthy,
 				Detail: "probe: read-only filesystem"},
-			"data-f": {Present: 12, At: since.Add(-time.Hour), Reason: objstore.ReasonAbsent},
+			"data-f": {Present: 12, At: since.Add(-time.Hour), Reason: membership.ReasonAbsent},
 		},
 	}
 }
@@ -181,8 +181,8 @@ func TestTheFleetShowsWhereTheCompanysFilesArePlaced(t *testing.T) {
 	// it beside the count — a member back for three ticks keeps its twelve.
 	absence, _ := row(1)["absence"].(map[string]any)
 	for key, want := range map[string]any{
-		"ticks": float64(12), "out_after_ticks": float64(upkeep.OutTicks),
-		"present": float64(3), "clear_after_ticks": float64(upkeep.StableTicks),
+		"ticks": float64(12), "out_after_ticks": float64(membership.OutTicks),
+		"present": float64(3), "clear_after_ticks": float64(membership.StableTicks),
 		"reason": "absent",
 	} {
 		if absence[key] != want {
@@ -243,7 +243,7 @@ func TestTheFleetShowsWhereTheCompanysFilesArePlaced(t *testing.T) {
 	// close it is to being placed on again and the absence that removed it.
 	probation, _ := row(4)["probation"].(map[string]any)
 	for key, want := range map[string]any{
-		"present": float64(12), "placed_after_ticks": float64(upkeep.StableTicks),
+		"present": float64(12), "placed_after_ticks": float64(membership.StableTicks),
 		"reason": "absent",
 	} {
 		if probation[key] != want {
@@ -268,8 +268,8 @@ func TestTheFleetShowsWhereTheCompanysFilesArePlaced(t *testing.T) {
 		t.Fatalf("removed = %v", got["removed"])
 	}
 	if e, _ := removed[0].(map[string]any); e["node"] != "data-e" || e["gone"] != float64(6) ||
-		e["forget_after_ticks"] != float64(upkeep.OutTicks) ||
-		e["placed_after_ticks"] != float64(upkeep.StableTicks) || e["reason"] != "unhealthy" {
+		e["forget_after_ticks"] != float64(membership.OutTicks) ||
+		e["placed_after_ticks"] != float64(membership.StableTicks) || e["reason"] != "unhealthy" {
 		t.Errorf("the removed node reads %v", e)
 	}
 }
@@ -280,7 +280,7 @@ func TestTheFleetShowsWhereTheCompanysFilesArePlaced(t *testing.T) {
 func TestTheFleetShowsAHoldOnlyWhileItHolds(t *testing.T) {
 	t.Parallel()
 	state := placedFleet(t)
-	state.Hold = &objstore.Hold{Until: pinned.Add(time.Hour), By: "alice",
+	state.Hold = &membership.Hold{Until: pinned.Add(time.Hour), By: "alice",
 		Reason: "kernel upgrade", At: pinned.Add(-time.Minute)}
 	got := fleetObjects(t, objectsLeases(t), objectMaps{raw: encodeState(t, state), found: true})
 	hold, _ := got["hold"].(map[string]any)

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	"github.com/crewlet/crewlet/internal/objstore/placement"
@@ -40,7 +41,7 @@ import (
 // The map itself is maintained by ONE node at a time, a fleet duty like the
 // trim: it reads the objects leases, takes the replica count and the failure
 // domain from the COMPANY ([Engine.objectsCompany]), and takes a member out
-// once it has been gone or failed for [upkeep.OutTicks] of its ticks. An
+// once it has been gone or failed for [membership.OutTicks] of its ticks. An
 // operator's gestures on it go through [ObjectsControl].
 
 // objectStore is this node's part in the object store.
@@ -332,8 +333,8 @@ const objectMapDuty = "object-map"
 
 // objectMapInterval is how often the map's holder brings it up to date: the
 // maintainer's own tick, which every absence is counted in — so the duty runs
-// it at exactly the cadence its grace was derived from ([upkeep.OutTicks]).
-const objectMapInterval = upkeep.TickInterval
+// it at exactly the cadence its grace was derived from ([membership.OutTicks]).
+const objectMapInterval = membership.TickInterval
 
 // objectMapDutyTTL is three ticks, the ratio every singleton here uses: one
 // missed tick must not hand the map to a peer mid-change.
@@ -393,8 +394,8 @@ type mapDuty struct {
 // turn is one turn of the duty, answering how long to wait before the next.
 //
 // [objectMapInterval] after a tick that found a map, WHATEVER ELSE HAPPENED:
-// that tick counted every open absence, and the grace is [upkeep.OutTicks]
-// of them only if they are that far apart. The poll only after a tick that
+// that tick counted every open absence, and the grace is
+// [membership.OutTicks] of them only if they are that far apart. The poll only after a tick that
 // read the store cleanly and found none. And the interval after everything
 // else:
 //
@@ -442,22 +443,23 @@ func (d mapDuty) turn(ctx context.Context) time.Duration {
 // activation has named — a Tier B file a node booted with, before its
 // reconciler published it — has no instant, and the map takes nothing from
 // it, exactly as [Engine.applyChart] writes nothing.
-func (e *Engine) objectsCompany() (upkeep.Company, bool) {
+func (e *Engine) objectsCompany() (membership.Company, bool) {
 	c := e.Company()
 	if c == nil || c.Config == nil {
-		return upkeep.Company{}, false
+		return membership.Company{}, false
 	}
 	// ONE TEST FOR BOTH: the zero instant — no activation — stamps before
 	// the Unix epoch, as would any instant an unsigned epoch cannot carry
 	// without wrapping into one that outranks every later activation.
 	stamp := configplane.ActivationStamp(c.ActivatedAt)
 	if stamp <= 0 {
-		return upkeep.Company{}, false
+		return membership.Company{}, false
 	}
-	return upkeep.Company{
+	return membership.Company{
 		Epoch:         uint64(stamp),
 		Replicas:      c.Config.Objects.ReplicaCount(),
 		FailureDomain: c.Config.Objects.FailureDomain,
+		Block:         "objects",
 	}, true
 }
 

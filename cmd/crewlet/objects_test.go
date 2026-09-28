@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
@@ -42,7 +43,7 @@ func settledObjects() objstore.MapState {
 				member("data-a", "eu-1"), member("data-b", "eu-2"), out,
 			},
 		},
-		TakenOut: map[string]objstore.Gesture{"data-c": {By: "ops",
+		TakenOut: map[string]membership.Gesture{"data-c": {By: "ops",
 			Reason: "decommission", At: objectsAt}},
 	}
 }
@@ -203,8 +204,8 @@ func TestObjectsStatusSaysWhenANodeMayBeStopped(t *testing.T) {
 func TestObjectsStatusNamesWhatTheFleetIsWaitingFor(t *testing.T) {
 	node := newFakeObjectsNode(t)
 	strays := 9
-	node.state.Absence = map[string]objstore.Absence{"data-a": {Ticks: 5, Since: objectsAt,
-		Reason: objstore.ReasonAbsent}}
+	node.state.Absence = map[string]membership.Absence{"data-a": {Ticks: 5, Since: objectsAt,
+		Reason: membership.ReasonAbsent}}
 	delete(node.leases, "data-a")
 	b := node.leases["data-b"]
 	b.Repair = &objstore.ObjectsRepair{Epoch: 6, Completed: true, Pending: 0}
@@ -239,7 +240,7 @@ func TestObjectsStatusNamesWhatTheFleetIsWaitingFor(t *testing.T) {
 	node.state.Absence = nil
 	b.Repair = &objstore.ObjectsRepair{Epoch: 7, Completed: true, Pending: 12}
 	node.leases["data-b"] = b
-	node.state.Hold = &objstore.Hold{Until: objectsAt.Add(time.Hour), By: "ops",
+	node.state.Hold = &membership.Hold{Until: objectsAt.Add(time.Hour), By: "ops",
 		Reason: "kernel upgrade", At: objectsAt}
 	out, _, err = cli(t, "objects", "status", bootstrapForURL(t, node.server.URL))
 	if err != nil {
@@ -287,9 +288,9 @@ func TestObjectsStatusSaysProbationRemovalsAndWhatTheScrubCouldNotRead(t *testin
 	back := placement.Member{Node: "data-d", Weight: 1, Share: placement.DefaultShare(1),
 		Domain: "eu-2", Probation: true}
 	node.state.Map.Members = append(node.state.Map.Members, back)
-	node.state.Removed = map[string]objstore.Removal{
-		"data-d": {Present: 12, At: objectsAt, Reason: objstore.ReasonAbsent},
-		"data-e": {Gone: 6, At: objectsAt, Reason: objstore.ReasonUnhealthy,
+	node.state.Removed = map[string]membership.Removal{
+		"data-d": {Present: 12, At: objectsAt, Reason: membership.ReasonAbsent},
+		"data-e": {Gone: 6, At: objectsAt, Reason: membership.ReasonUnhealthy,
 			Detail: "probe: read-only filesystem"},
 	}
 	// JUST BACK: no repair pass reported yet, which a member the map places
@@ -465,8 +466,8 @@ func TestObjectsOutTakesTheMemberOutAndSaysWhatComesNext(t *testing.T) {
 // rather than claiming a member the map does not yet have.
 func TestObjectsInOfARemovedNodeSaysWhenItIsPlacedOn(t *testing.T) {
 	node := newFakeObjectsNode(t)
-	node.state.Removed = map[string]objstore.Removal{"data-e": {At: objectsAt,
-		Reason: objstore.ReasonAbsent}}
+	node.state.Removed = map[string]membership.Removal{"data-e": {At: objectsAt,
+		Reason: membership.ReasonAbsent}}
 	out, _, err := cli(t, "objects", "in", "data-e", "-confirm", "data-e",
 		bootstrapForURL(t, node.server.URL))
 	if err != nil {
@@ -523,8 +524,8 @@ func TestObjectsGestureRefusalsAndLostRacesAreErrors(t *testing.T) {
 
 	// A NODE THE MAP REMOVED IS NOT A NAME TO RETYPE: the answer says it is
 	// put back rather than taken out.
-	node.state.Removed = map[string]objstore.Removal{"data-e": {Gone: 2, At: objectsAt,
-		Reason: objstore.ReasonAbsent}}
+	node.state.Removed = map[string]membership.Removal{"data-e": {Gone: 2, At: objectsAt,
+		Reason: membership.ReasonAbsent}}
 	_, _, err = cli(t, "objects", "out", "data-e", "-confirm", "data-e",
 		bootstrapForURL(t, node.server.URL))
 	if err == nil || !strings.Contains(err.Error(), "removed_member") ||

@@ -32,13 +32,13 @@ import (
 //
 // # What a caller can tell apart
 //
-// A refusal is one of upkeep's sentinels, so a surface maps each to its own
-// answer: [upkeep.ErrNoMap] (no data node has joined yet),
-// [upkeep.ErrRemovedMember] (taking out a node the map removed for absence,
-// which places nothing already — tested BEFORE the next, which it wraps),
-// [upkeep.ErrUnknownMember], [upkeep.ErrNothingPlaceable] (taking this member
-// out would leave nowhere to write) and [upkeep.ErrHoldRange]. A store that did
-// not answer is [ErrObjectsUnavailable], and a map this build cannot rewrite is
+// A refusal is one of the gestures' sentinels, so a surface maps each to its
+// own answer: [upkeep.ErrNoMap] (no data node has joined yet), and
+// [internal/membership]'s ErrRemovedMember (taking out a node the map removed
+// for absence, which places nothing already — tested BEFORE the next, which it
+// wraps), ErrUnknownMember, ErrNothingPlaceable (taking this member out would
+// leave nowhere to write) and ErrHoldRange. A store that did not answer is
+// [ErrObjectsUnavailable], and a map this build cannot rewrite is
 // [ErrObjectsNewerMap]. A gesture that lost every race is not an error: it
 // answers Landed false with the map as it now stands.
 //
@@ -121,8 +121,8 @@ func (c *ObjectsControl) In(ctx context.Context, node, by string) (ObjectsGestur
 	}, "node", node, "by", by)
 }
 
-// Hold holds the map for d, at most [upkeep.MaxHold]: no member is removed for
-// absence until it expires or is released.
+// Hold holds the map for d, at most internal/membership's MaxHold: no member
+// is removed for absence until it expires or is released.
 func (c *ObjectsControl) Hold(ctx context.Context, d time.Duration, by, reason string) (ObjectsGesture, error) {
 	return c.apply(ctx, "hold", func(s objstore.MapState) (objstore.MapState, error) {
 		return upkeep.HoldFor(s, d, by, reason, c.now())

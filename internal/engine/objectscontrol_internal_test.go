@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 )
@@ -23,7 +24,7 @@ func storedMap(t *testing.T, nodes ...string) *coordmemory.Fleet {
 		live = append(live, upkeep.Presence{Node: n, Weight: 1})
 	}
 	state, changed := upkeep.Next(objstore.MapState{}, live,
-		upkeep.Company{Epoch: 1, Replicas: 3}, gestureNow)
+		membership.Company{Epoch: 1, Replicas: 3}, gestureNow)
 	if !changed {
 		t.Fatal("the fixture wrote no first map")
 	}
@@ -93,19 +94,19 @@ func TestAGestureRefusesByName(t *testing.T) {
 		t.Errorf("a gesture with no map = %v, want ErrNoMap", err)
 	}
 	c := controlOver(storedMap(t, "a"), nil)
-	if _, err := c.Out(ctx, "zz", "ops", ""); !errors.Is(err, upkeep.ErrUnknownMember) ||
-		errors.Is(err, upkeep.ErrRemovedMember) {
+	if _, err := c.Out(ctx, "zz", "ops", ""); !errors.Is(err, membership.ErrUnknownMember) ||
+		errors.Is(err, membership.ErrRemovedMember) {
 		t.Errorf("taking out a stranger = %v, want ErrUnknownMember alone", err)
 	}
 	removed := controlOver(removedFrom(t, "c", "a", "b", "c"), nil)
-	if _, err := removed.Out(ctx, "c", "ops", ""); !errors.Is(err, upkeep.ErrRemovedMember) {
+	if _, err := removed.Out(ctx, "c", "ops", ""); !errors.Is(err, membership.ErrRemovedMember) {
 		t.Errorf("taking out a node the map removed = %v, want ErrRemovedMember", err)
 	}
-	if _, err := c.Out(ctx, "a", "ops", ""); !errors.Is(err, upkeep.ErrNothingPlaceable) {
+	if _, err := c.Out(ctx, "a", "ops", ""); !errors.Is(err, membership.ErrNothingPlaceable) {
 		t.Errorf("taking out the last member = %v, want ErrNothingPlaceable", err)
 	}
-	for _, d := range []time.Duration{0, upkeep.MaxHold + time.Minute} {
-		if _, err := c.Hold(ctx, d, "ops", ""); !errors.Is(err, upkeep.ErrHoldRange) {
+	for _, d := range []time.Duration{0, membership.MaxHold + time.Minute} {
+		if _, err := c.Hold(ctx, d, "ops", ""); !errors.Is(err, membership.ErrHoldRange) {
 			t.Errorf("a %v hold = %v, want ErrHoldRange", d, err)
 		}
 	}
@@ -230,7 +231,7 @@ func TestAnOutSentAgainWritesNothing(t *testing.T) {
 	if again.Version != first.Version {
 		t.Errorf("the record moved from version %d to %d", first.Version, again.Version)
 	}
-	want := objstore.Gesture{By: "ops@example.com", Reason: "replacing its disk", At: gestureNow}
+	want := membership.Gesture{By: "ops@example.com", Reason: "replacing its disk", At: gestureNow}
 	if g := again.State.TakenOut["b"]; g != want {
 		t.Errorf("the out is recorded as %+v, want the first operator's %+v", g, want)
 	}
@@ -287,11 +288,11 @@ func removedFrom(t *testing.T, gone string, nodes ...string) *coordmemory.Fleet 
 			live = append(live, upkeep.Presence{Node: n, Weight: 1})
 		}
 	}
-	for range upkeep.OutTicks + 1 {
-		state, _ = upkeep.Next(state, live, upkeep.Company{Epoch: 1, Replicas: 3}, gestureNow)
+	for range membership.OutTicks + 1 {
+		state, _ = upkeep.Next(state, live, membership.Company{Epoch: 1, Replicas: 3}, gestureNow)
 	}
 	if _, removed := state.Removed[gone]; !removed {
-		t.Fatalf("%d ticks without %s did not remove it", upkeep.OutTicks+1, gone)
+		t.Fatalf("%d ticks without %s did not remove it", membership.OutTicks+1, gone)
 	}
 	raw, err := state.Encode()
 	if err != nil {

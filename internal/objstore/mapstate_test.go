@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/membership"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/placement"
 )
@@ -29,12 +30,14 @@ func full() MapState {
 				{Node: "data-c", Weight: 1, Share: 1 << 16, Domain: "eu-3", Probation: true},
 			},
 		},
-		Absence: map[string]Absence{"data-a": {Ticks: 3, Present: 1, Since: stamp,
-			Reason: ReasonUnhealthy, Detail: "fsync failed"}},
-		Removed: map[string]Removal{"data-c": {Present: 2, At: stamp, Reason: ReasonAbsent}},
-		Config:  ConfigSource{Epoch: 1_790_000_000_000},
-		Hold:    &Hold{Until: stamp.Add(time.Hour), By: "ops", Reason: "upgrade", At: stamp},
-		TakenOut: map[string]Gesture{"data-b": {By: "ops", Reason: "decommission",
+		Absence: map[string]membership.Absence{"data-a": {Ticks: 3, Present: 1, Since: stamp,
+			Reason: membership.ReasonUnhealthy, Detail: "fsync failed"}},
+		Removed: map[string]membership.Removal{"data-c": {Present: 2, At: stamp,
+			Reason: membership.ReasonAbsent}},
+		Config: membership.ConfigSource{Epoch: 1_790_000_000_000},
+		Hold: &membership.Hold{Until: stamp.Add(time.Hour), By: "ops", Reason: "upgrade",
+			At: stamp},
+		TakenOut: map[string]membership.Gesture{"data-b": {By: "ops", Reason: "decommission",
 			At: stamp}},
 		Balance: Balance{Epoch: 7, BalanceReport: placement.BalanceReport{Rounds: 4,
 			Deviation: 0.0125, Converged: true}},
@@ -104,9 +107,9 @@ func TestACloneSharesNothing(t *testing.T) {
 	orig := full()
 	c := orig.Clone()
 	c.Map.Members[0].Weight = 9
-	c.Absence["data-a"] = Absence{}
-	c.Removed["data-z"] = Removal{}
-	c.TakenOut["data-a"] = Gesture{}
+	c.Absence["data-a"] = membership.Absence{}
+	c.Removed["data-z"] = membership.Removal{}
+	c.TakenOut["data-a"] = membership.Gesture{}
 	c.Hold.Reason = "changed"
 	if !reflect.DeepEqual(orig, full()) {
 		t.Fatalf("writing the clone changed the original: %+v", orig)
@@ -131,7 +134,7 @@ func TestProbationIsExactlyWhatTheRecordRemembers(t *testing.T) {
 			s.Map.Members[2].Probation = false
 		},
 		"a member remembered as removed": func(s *MapState) {
-			s.Removed["data-a"] = Removal{Gone: 1, At: stamp, Reason: ReasonAbsent}
+			s.Removed["data-a"] = membership.Removal{Gone: 1, At: stamp, Reason: membership.ReasonAbsent}
 		},
 	} {
 		s := full()
@@ -148,35 +151,6 @@ func TestProbationIsExactlyWhatTheRecordRemembers(t *testing.T) {
 		}
 		if _, err := DecodeMapState(raw); err != nil {
 			t.Errorf("%s: a reader refused it: %v", name, err)
-		}
-	}
-}
-
-// A HOLD IS ACTIVE UNTIL IT ENDS, and none at all when there is none.
-func TestAHoldIsActiveUntilItEnds(t *testing.T) {
-	t.Parallel()
-	var none *Hold
-	h := &Hold{Until: stamp}
-	switch {
-	case none.Active(stamp.Add(-time.Hour)):
-		t.Error("no hold is active")
-	case !h.Active(stamp.Add(-time.Nanosecond)):
-		t.Error("a hold is not active before it ends")
-	case h.Active(stamp):
-		t.Error("a hold is still active when it ends")
-	}
-}
-
-func TestAbsenceReasons(t *testing.T) {
-	t.Parallel()
-	for _, r := range []AbsenceReason{ReasonAbsent, ReasonUnhealthy} {
-		if !r.Valid() {
-			t.Errorf("%q is not valid", r)
-		}
-	}
-	for _, r := range []AbsenceReason{"", "gone", "unhealthy: disk"} {
-		if r.Valid() {
-			t.Errorf("%q is valid", r)
 		}
 	}
 }

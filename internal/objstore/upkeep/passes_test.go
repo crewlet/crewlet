@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
@@ -647,7 +648,7 @@ func strayNode(t *testing.T, m objplacement.Map, peer Peers) (*Node, *disk.Store
 }
 
 // withMember is m with node added as a member that is out, so it holds no
-// group and its every referenced copy is beyond its objplacement.
+// group and its every referenced copy is beyond its placement.
 func withMember(m objplacement.Map, node string) objplacement.Map {
 	m.Members = append(slices.Clone(m.Members), placement.Member{Node: node, Weight: 1,
 		Share: placement.DefaultShare(1), Out: true})
@@ -799,7 +800,7 @@ func TestARemovedHolderIsReadFromTheTickItIsBack(t *testing.T) {
 	}
 	f.refs.refer(h)
 
-	removed := ticks(t, state, without(live, "data-a", "data-b"), c, OutTicks)
+	removed := ticks(t, state, without(live, "data-a", "data-b"), c, membership.OutTicks)
 	if removed.Map.Holds("data-a") || removed.Map.Holds("data-b") {
 		t.Fatalf("setup: the two are still members of %v", nodes(removed.Map))
 	}

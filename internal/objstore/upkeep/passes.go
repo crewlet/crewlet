@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	"github.com/crewlet/crewlet/internal/objstore/placement"
@@ -27,14 +28,15 @@ const PendingGrace = 24 * time.Hour
 
 // RepairInterval is how often a data node checks it holds what it should.
 //
-// TEN MINUTES, the map's own [OutGrace]: a member taken out of the map leaves
-// its groups one copy short until their new holders repair them, so a repair
-// that ran less often than members can be taken out would let that window
-// grow past the one the grace already accepted. A map change also starts a
+// TEN MINUTES, the map's own grace ([membership.OutGrace]): a member taken out
+// of the map leaves its groups one copy short until their new holders repair
+// them, so a repair that ran less often than members can be taken out would
+// let that window grow past the one the grace already accepted. A map change
+// also starts a
 // pass at once, and a pass that left work a retry may do is retried sooner,
 // so this is the ceiling on noticing a chunk lost from this disk rather than
 // on following the map.
-const RepairInterval = OutGrace
+const RepairInterval = membership.OutGrace
 
 // CollectInterval is how often a data node deletes what nothing needs it to
 // hold.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/placement"
@@ -31,8 +32,8 @@ func sick(node, detail string) Presence {
 }
 
 // company is an activation.
-func company(epoch uint64, replicas int, domain string) Company {
-	return Company{Epoch: epoch, Replicas: replicas, FailureDomain: domain}
+func company(epoch uint64, replicas int, domain string) membership.Company {
+	return membership.Company{Epoch: epoch, Replicas: replicas, FailureDomain: domain}
 }
 
 // roster is n equal, live, healthy data nodes: data-00, data-01, …
@@ -62,7 +63,7 @@ func repaired(live []Presence, epoch uint64, pending int) []Presence {
 }
 
 // first is the first map a maintainer writes for this fleet and company.
-func first(t *testing.T, live []Presence, c Company) objstore.MapState {
+func first(t *testing.T, live []Presence, c membership.Company) objstore.MapState {
 	t.Helper()
 	state, changed := Next(objstore.MapState{}, live, c, t0)
 	if !changed {
@@ -75,7 +76,7 @@ func first(t *testing.T, live []Presence, c Company) objstore.MapState {
 }
 
 // ticks runs n ticks against the same fleet.
-func ticks(t *testing.T, state objstore.MapState, live []Presence, c Company, n int) objstore.MapState {
+func ticks(t *testing.T, state objstore.MapState, live []Presence, c membership.Company, n int) objstore.MapState {
 	t.Helper()
 	for range n {
 		state = tick(t, state, live, c)
@@ -85,7 +86,7 @@ func ticks(t *testing.T, state objstore.MapState, live []Presence, c Company, n 
 
 // tick runs one tick, checking what every tick must hold: a record that can
 // be stored.
-func tick(t *testing.T, state objstore.MapState, live []Presence, c Company) objstore.MapState {
+func tick(t *testing.T, state objstore.MapState, live []Presence, c membership.Company) objstore.MapState {
 	t.Helper()
 	next, _ := Next(state, live, c, t0)
 	if _, err := next.Encode(); err != nil {
@@ -111,9 +112,9 @@ func TestAFirstMapComesFromTheCompany(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		live    []Presence
-		company Company
+		company membership.Company
 	}{
-		"no company":              {roster(2), Company{}},
+		"no company":              {roster(2), membership.Company{}},
 		"a company that is wrong": {roster(2), company(7, 0, "")},
 		"no data node":            {nil, company(7, 3, "")},
 		"a node offering nothing": {[]Presence{up("agent-1", 0)}, company(7, 3, "")},
@@ -160,7 +161,7 @@ func TestOnlyTheNewestCompanySetsTheCopies(t *testing.T) {
 	base := first(t, live, company(10, 3, ""))
 	for _, c := range []struct {
 		name         string
-		company      Company
+		company      membership.Company
 		wantReplicas int
 		wantDomain   string
 		wantConfig   uint64
@@ -168,7 +169,7 @@ func TestOnlyTheNewestCompanySetsTheCopies(t *testing.T) {
 		wantChanged  bool
 	}{
 		{"an older activation is ignored", company(9, 1, "zone"), 3, "", 10, 1, false},
-		{"no company is ignored", Company{}, 3, "", 10, 1, false},
+		{"no company is ignored", membership.Company{}, 3, "", 10, 1, false},
 		{"the same activation changes nothing", company(10, 3, ""), 3, "", 10, 1, false},
 		{"a newer activation sets the copies", company(11, 2, ""), 2, "", 11, 2, true},
 		{"a newer activation sets the domain", company(11, 3, "zone"), 3, "zone", 11, 2, true},
@@ -204,102 +205,9 @@ func TestOnlyTheNewestCompanySetsTheCopies(t *testing.T) {
 func TestAJoinerIsAddedWithoutACompany(t *testing.T) {
 	t.Parallel()
 	base := first(t, roster(2), company(10, 3, ""))
-	next, changed := Next(base, roster(3), Company{}, t0)
+	next, changed := Next(base, roster(3), membership.Company{}, t0)
 	if !changed || len(next.Map.Members) != 3 || next.Map.Replicas != 3 || next.Map.Epoch != 2 {
 		t.Fatalf("a joiner with no company gave %+v (changed %v)", next.Map, changed)
-	}
-}
-
-// MEMBERSHIP, one rule each: who joins, at what share and weight, in which
-// domain, and who does not.
-func TestWhoIsAMember(t *testing.T) {
-	t.Parallel()
-	c := company(1, 2, "zone")
-	base := first(t, []Presence{
-		labelled("data-a", 1, map[string]string{"zone": "eu-1"}),
-		labelled("data-b", 1, map[string]string{"zone": "eu-2"}),
-	}, c)
-	base.Map.Members[0].Share = 3 << 16 // the fleet runs at 2.0 per unit of weight
-	base.Map.Members[1].Share = 1 << 16
-	for _, tc := range []struct {
-		name  string
-		live  []Presence
-		check func(t *testing.T, members map[string]placement.Member)
-	}{
-		{
-			name: "a joiner starts at the fleet's rate for its weight",
-			live: []Presence{up("data-a", 1), up("data-b", 1),
-				labelled("data-c", 3, map[string]string{"zone": "eu-3"})},
-			check: func(t *testing.T, members map[string]placement.Member) {
-				if c := members["data-c"]; c.Share != 6<<16 || c.Weight != 3 || c.Domain != "eu-3" {
-					t.Fatalf("the joiner is %+v, want weight 3 at share %d in eu-3", c, 6<<16)
-				}
-			},
-		},
-		{
-			name: "a changed weight keeps its share per unit of weight",
-			live: []Presence{up("data-a", 3), up("data-b", 1)},
-			check: func(t *testing.T, members map[string]placement.Member) {
-				if a := members["data-a"]; a.Weight != 3 || a.Share != 9<<16 {
-					t.Fatalf("data-a is %+v, want weight 3 at share %d", a, 9<<16)
-				}
-			},
-		},
-		{
-			name: "a weight past the ceiling is held to it",
-			live: []Presence{up("data-a", placement.MaxWeight*2), up("data-b", 1)},
-			check: func(t *testing.T, members map[string]placement.Member) {
-				if a := members["data-a"]; a.Weight != placement.MaxWeight {
-					t.Fatalf("data-a weighs %d, want %d", a.Weight, placement.MaxWeight)
-				}
-			},
-		},
-		{
-			name: "a node offering nothing and one whose store failed do not join",
-			live: []Presence{up("data-a", 1), up("data-b", 1), up("agent-1", 0), sick("data-c", "io")},
-			check: func(t *testing.T, members map[string]placement.Member) {
-				if len(members) != 2 {
-					t.Fatalf("members %v, want data-a and data-b", members)
-				}
-			},
-		},
-		{
-			name: "a node's domain is its value of the label, and none without it",
-			live: []Presence{labelled("data-a", 1, map[string]string{"zone": "eu-9"}), up("data-b", 1)},
-			check: func(t *testing.T, members map[string]placement.Member) {
-				if members["data-a"].Domain != "eu-9" || members["data-b"].Domain != "" {
-					t.Fatalf("domains %q and %q, want eu-9 and none",
-						members["data-a"].Domain, members["data-b"].Domain)
-				}
-			},
-		},
-		{
-			name: "an absent member keeps its domain while the label is unchanged",
-			live: []Presence{up("data-a", 1)},
-			check: func(t *testing.T, members map[string]placement.Member) {
-				if members["data-b"].Domain != "eu-2" {
-					t.Fatalf("the absent member's domain became %q", members["data-b"].Domain)
-				}
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tk := newTicking(base, tc.live, t0)
-			tk.config(c)
-			tk.returning()
-			tk.membership()
-			tc.check(t, tk.members)
-		})
-	}
-
-	// A CHANGED LABEL LEAVES AN ABSENT MEMBER IN NO DOMAIN: its value of
-	// the old label names nothing, and its value of the new one is unknown
-	// until it is seen.
-	tk := newTicking(base, []Presence{labelled("data-a", 1, map[string]string{"rack": "r1"})}, t0)
-	tk.config(company(2, 2, "rack"))
-	tk.membership()
-	if tk.members["data-a"].Domain != "r1" || tk.members["data-b"].Domain != "" {
-		t.Fatalf("after the label changed: %+v", tk.members)
 	}
 }
 
@@ -314,201 +222,35 @@ func TestASteadyFleetWritesNothing(t *testing.T) {
 	}
 }
 
-// AN ABSENCE IS COUNTED IN TICKS, and moves no epoch: the member is still
-// placed on, and a displaced write lands on the next member of its ranking.
-func TestAnAbsenceIsCountedInTicks(t *testing.T) {
-	t.Parallel()
-	c := company(1, 2, "")
-	live := roster(3)
-	state := first(t, live, c)
-	gone := without(live, "data-02")
-
-	next, changed := Next(state, gone, c, t0)
-	run := next.Absence["data-02"]
-	if !changed || run.Ticks != 1 || run.Present != 0 || !run.Since.Equal(t0) ||
-		run.Reason != objstore.ReasonAbsent || next.Map.Epoch != state.Map.Epoch ||
-		!next.Map.Holds("data-02") {
-		t.Fatalf("one tick absent: %+v, epoch %d → %d", run, state.Map.Epoch, next.Map.Epoch)
-	}
-
-	// Since is the run's first tick and stays there.
-	later, _ := Next(next, gone, c, t0.Add(time.Hour))
-	if run := later.Absence["data-02"]; run.Ticks != 2 || !run.Since.Equal(t0) {
-		t.Fatalf("two ticks absent: %+v", run)
-	}
-
-	// A member back counts present ticks and keeps its absent ones.
-	back, _ := Next(later, live, c, t0)
-	if run := back.Absence["data-02"]; run.Ticks != 2 || run.Present != 1 {
-		t.Fatalf("back one tick: %+v", run)
-	}
-	// Gone again: the present count starts over, the absent one does not.
-	again, _ := Next(back, gone, c, t0)
-	if run := again.Absence["data-02"]; run.Ticks != 3 || run.Present != 0 {
-		t.Fatalf("gone again: %+v", run)
-	}
-}
-
-// AN UNHEALTHY MEMBER IS AN ABSENT ONE: up and holding its lease, but its
-// store answers for none of its chunks — so it accumulates ticks exactly as a
-// member that is down does, and is removed at the same grace.
-func TestAnUnhealthyMemberIsCountedAbsent(t *testing.T) {
-	t.Parallel()
-	c := company(1, 2, "")
-	live := roster(3)
-	state := first(t, live, c)
-	failing := append(without(live, "data-02"), sick("data-02", "fsync: input/output error"))
-	state = ticks(t, state, failing, c, OutTicks-1)
-	run := state.Absence["data-02"]
-	if run.Ticks != OutTicks-1 || run.Reason != objstore.ReasonUnhealthy ||
-		run.Detail != "fsync: input/output error" || !state.Map.Holds("data-02") {
-		t.Fatalf("after %d unhealthy ticks: %+v", OutTicks-1, run)
-	}
-	state = tick(t, state, failing, c)
-	if state.Map.Holds("data-02") {
-		t.Fatalf("an unhealthy member was kept past %d ticks", OutTicks)
-	}
-	if r := state.Removed["data-02"]; r.Reason != objstore.ReasonUnhealthy {
-		t.Fatalf("the removal says %+v", r)
-	}
-}
-
-// A MEMBER IS REMOVED ON THE TICK ITS RUN REACHES THE GRACE, and on no other —
-// counted in ticks, so the removal happens after exactly OutTicks of them
-// whatever the clock says: forty ticks with the clock frozen remove a member,
-// and thirty-nine a day apart do not.
-func TestRemovalCountsTicksNotTime(t *testing.T) {
+// AN ABSENCE MOVES NO EPOCH AND A REMOVAL MOVES IT BY ONE. Who is absent and
+// for how long is the membership's to count (internal/membership holds every
+// rule of it, in ticks); what the object map adds is its epoch, which counts
+// PLACEMENT changes — so every tick that counts the absence writes the record
+// at the same epoch, the member still placed on, and the tick that removes it
+// is a placement change, balanced in an epoch of its own.
+func TestAnAbsenceMovesNoEpochAndARemovalMovesOne(t *testing.T) {
 	t.Parallel()
 	c := company(1, 2, "")
 	live := roster(3)
 	gone := without(live, "data-02")
 	start := first(t, live, c)
-
 	state := start
-	for i := 1; i <= OutTicks; i++ {
-		next, changed := Next(state, gone, c, t0) // the clock never moves
+	for i := 1; i <= membership.OutTicks; i++ {
+		next, changed := Next(state, gone, c, t0)
 		if !changed {
 			t.Fatalf("tick %d wrote nothing", i)
 		}
-		if held := next.Map.Holds("data-02"); held != (i < OutTicks) {
-			t.Fatalf("after %d ticks the member held = %v", i, held)
+		if i < membership.OutTicks && (next.Map.Epoch != start.Map.Epoch || !next.Map.Holds("data-02")) {
+			t.Fatalf("tick %d of the absence: epoch %d → %d, the member held %v", i,
+				start.Map.Epoch, next.Map.Epoch, next.Map.Holds("data-02"))
 		}
 		state = next
 	}
-	if state.Map.Epoch != start.Map.Epoch+1 || state.Absence != nil {
-		t.Fatalf("the removal moved the epoch %d → %d and left absences %v",
-			start.Map.Epoch, state.Map.Epoch, state.Absence)
+	if state.Map.Holds("data-02") || state.Map.Epoch != start.Map.Epoch+1 || state.Absence != nil ||
+		state.Balance.Epoch != state.Map.Epoch {
+		t.Fatalf("the removal: held %v, epoch %d → %d, absences %v, balance %+v",
+			state.Map.Holds("data-02"), start.Map.Epoch, state.Map.Epoch, state.Absence, state.Balance)
 	}
-
-	state = start
-	for i := range OutTicks - 1 {
-		state, _ = Next(state, gone, c, t0.Add(time.Duration(i)*24*time.Hour))
-	}
-	if !state.Map.Holds("data-02") {
-		t.Fatal("a member was removed on elapsed time rather than on ticks")
-	}
-}
-
-// THE SCENARIOS THE RULES ARE FOR, each a sequence of ticks.
-func TestAbsenceScenarios(t *testing.T) {
-	t.Parallel()
-	c := company(1, 2, "")
-	live := roster(3)
-	gone := without(live, "data-02")
-
-	// A FLAPPING MEMBER — up two ticks in every ten — is removed once its
-	// absent ticks add up, where clearing the run on any sighting kept it
-	// for ever.
-	t.Run("a flapping member is removed", func(t *testing.T) {
-		t.Parallel()
-		state := first(t, live, c)
-		removedAt := 0
-		for i := 1; i <= 10*OutTicks && removedAt == 0; i++ {
-			fleet := gone
-			if i%10 >= 8 {
-				fleet = live
-			}
-			state = tick(t, state, fleet, c)
-			if !state.Map.Holds("data-02") {
-				removedAt = i
-			}
-		}
-		// Seven absent ticks, then eight in every ten: the fortieth is
-		// tick 50.
-		if removedAt != 50 {
-			t.Fatalf("the flapping member was removed at tick %d, want 50", removedAt)
-		}
-	})
-
-	t.Run("absent 39, present 39, absent 1 is removed", func(t *testing.T) {
-		t.Parallel()
-		state := first(t, live, c)
-		state = ticks(t, state, gone, c, OutTicks-1)
-		state = ticks(t, state, live, c, StableTicks-1)
-		if run := state.Absence["data-02"]; run.Ticks != OutTicks-1 || run.Present != StableTicks-1 {
-			t.Fatalf("the run is %+v", run)
-		}
-		state = tick(t, state, gone, c)
-		if state.Map.Holds("data-02") {
-			t.Fatal("a member present for less than the stable span lost its accumulated ticks")
-		}
-	})
-
-	t.Run("absent, then present for the stable span, is cleared", func(t *testing.T) {
-		t.Parallel()
-		state := first(t, live, c)
-		state = ticks(t, state, gone, c, OutTicks-1)
-		state = ticks(t, state, live, c, StableTicks)
-		if _, open := state.Absence["data-02"]; open {
-			t.Fatalf("the run survived %d present ticks: %+v", StableTicks, state.Absence)
-		}
-		state = ticks(t, state, gone, c, OutTicks-1)
-		if !state.Map.Holds("data-02") {
-			t.Fatal("a cleared run was still counted")
-		}
-	})
-
-	// A HOLD KEEPS AN ABSENT MEMBER PAST THE GRACE, still counting, and
-	// its expiry lets the next tick remove it.
-	t.Run("a hold keeps an absent member until it expires", func(t *testing.T) {
-		t.Parallel()
-		state, err := HoldFor(first(t, live, c), time.Hour, "ops", "rolling kernel upgrade", t0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for range OutTicks + 5 {
-			state, _ = Next(state, gone, c, t0.Add(30*time.Minute))
-		}
-		if !state.Map.Holds("data-02") || state.Absence["data-02"].Ticks != OutTicks+5 {
-			t.Fatalf("under the hold: member held %v, run %+v", state.Map.Holds("data-02"),
-				state.Absence["data-02"])
-		}
-		state, _ = Next(state, gone, c, t0.Add(time.Hour))
-		if state.Map.Holds("data-02") || state.Hold != nil {
-			t.Fatalf("after the hold expired: member held %v, hold %+v",
-				state.Map.Holds("data-02"), state.Hold)
-		}
-	})
-
-	// A MEMBER BACK WITH ITS RUN PAST THE GRACE — gone through a hold — is
-	// not removed while it is present, and is removed the tick it leaves.
-	t.Run("a present member is never removed", func(t *testing.T) {
-		t.Parallel()
-		state, err := HoldFor(first(t, live, c), time.Hour, "ops", "", t0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		state = ticks(t, state, gone, c, OutTicks+1)
-		state = Release(state)
-		state = tick(t, state, live, c)
-		if !state.Map.Holds("data-02") {
-			t.Fatal("a member present on this tick was removed")
-		}
-		state = tick(t, state, gone, c)
-		if state.Map.Holds("data-02") {
-			t.Fatal("a member past the grace that left again was kept")
-		}
-	})
 }
 
 // A REMOVED NODE IS NOT PLACED ON AGAIN UNTIL IT IS STABLE: placed on at its
@@ -524,7 +266,7 @@ func TestARemovedNodeIsPlacedOnOnlyOnceStable(t *testing.T) {
 	c := company(1, 2, "")
 	live := roster(3)
 	gone := without(live, "data-02")
-	removed := ticks(t, first(t, live, c), gone, c, OutTicks)
+	removed := ticks(t, first(t, live, c), gone, c, membership.OutTicks)
 	if removed.Map.Holds("data-02") {
 		t.Fatal("setup: not removed")
 	}
@@ -563,7 +305,7 @@ func TestARemovedNodeIsPlacedOnOnlyOnceStable(t *testing.T) {
 	t.Run("flapping, it is never placed on", func(t *testing.T) {
 		t.Parallel()
 		state := removed
-		for i := 1; i <= 10*StableTicks; i++ {
+		for i := 1; i <= 10*membership.StableTicks; i++ {
 			fleet := gone
 			if i%10 >= 8 {
 				fleet = live
@@ -581,18 +323,18 @@ func TestARemovedNodeIsPlacedOnOnlyOnceStable(t *testing.T) {
 
 	t.Run("leaving on probation removes it again at once", func(t *testing.T) {
 		t.Parallel()
-		state := ticks(t, removed, live, c, StableTicks-1)
+		state := ticks(t, removed, live, c, membership.StableTicks-1)
 		state = tick(t, state, append(without(live, "data-02"), sick("data-02", "fsync: EIO")), c)
 		if state.Map.Holds("data-02") {
 			t.Fatal("a member on probation that failed was kept")
 		}
 		if r := state.Removed["data-02"]; r.Present != 0 || r.Gone != 1 ||
-			r.Reason != objstore.ReasonUnhealthy || r.Detail != "fsync: EIO" {
+			r.Reason != membership.ReasonUnhealthy || r.Detail != "fsync: EIO" {
 			t.Fatalf("sent back to removed as %+v", r)
 		}
 		// Its probation starts over: a whole span again.
-		state = ticks(t, state, live, c, StableTicks-1)
-		if placeable(state) || state.Removed["data-02"].Present != StableTicks-1 {
+		state = ticks(t, state, live, c, membership.StableTicks-1)
+		if placeable(state) || state.Removed["data-02"].Present != membership.StableTicks-1 {
 			t.Fatalf("back again, trusted early: %+v", state.Removed)
 		}
 	})
@@ -612,27 +354,27 @@ func TestARemovedNodeIsPlacedOnOnlyOnceStable(t *testing.T) {
 
 	t.Run("stable, it is placed on", func(t *testing.T) {
 		t.Parallel()
-		state := ticks(t, removed, live, c, StableTicks-1)
-		if placeable(state) || state.Removed["data-02"].Present != StableTicks-1 {
+		state := ticks(t, removed, live, c, membership.StableTicks-1)
+		if placeable(state) || state.Removed["data-02"].Present != membership.StableTicks-1 {
 			t.Fatalf("placed on early: %+v", state.Removed)
 		}
 		before := state.Map.Epoch
 		state = tick(t, state, live, c)
 		if !placeable(state) || state.Removed != nil || state.Map.Epoch != before+1 {
-			t.Fatalf("not placed on after %d stable ticks: %+v at epoch %d", StableTicks,
+			t.Fatalf("not placed on after %d stable ticks: %+v at epoch %d", membership.StableTicks,
 				state.Removed, state.Map.Epoch)
 		}
 	})
 
 	t.Run("gone a whole grace, it is forgotten", func(t *testing.T) {
 		t.Parallel()
-		state := ticks(t, removed, gone, c, OutTicks-1)
+		state := ticks(t, removed, gone, c, membership.OutTicks-1)
 		if _, remembered := state.Removed["data-02"]; !remembered {
 			t.Fatal("forgotten early")
 		}
 		state = tick(t, state, gone, c)
 		if state.Removed != nil {
-			t.Fatalf("still remembered after %d ticks gone: %+v", OutTicks, state.Removed)
+			t.Fatalf("still remembered after %d ticks gone: %+v", membership.OutTicks, state.Removed)
 		}
 		if state = tick(t, state, live, c); !placeable(state) {
 			t.Fatal("a forgotten node did not join at its next sighting")
@@ -665,88 +407,6 @@ func TestARemovedNodeIsPlacedOnOnlyOnceStable(t *testing.T) {
 	})
 }
 
-// THE LAST MEMBER THAT CAN BE PLACED ON IS NEVER REMOVED: there is nowhere to
-// re-place its share, and a map left placing on nothing would refuse every
-// write after the node returned, until it had proved itself stable. An out
-// member places nothing, so it is removed beside it all the same.
-func TestTheLastPlaceableMemberIsNeverRemoved(t *testing.T) {
-	t.Parallel()
-	c := company(1, 3, "")
-	state := first(t, roster(1), c)
-	state = ticks(t, state, nil, c, 2*OutTicks)
-	if !state.Map.Holds("data-00") {
-		t.Fatal("the only member was removed")
-	}
-	if state = tick(t, state, roster(1), c); state.Absence["data-00"].Present != 1 {
-		t.Fatalf("back: %+v", state.Absence)
-	}
-
-	two, err := Out(first(t, roster(2), c), "data-01", "ops", "decommission", t0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	two = ticks(t, two, nil, c, OutTicks)
-	if !two.Map.Holds("data-00") {
-		t.Fatal("the last placeable member was removed beside an out one")
-	}
-	if two.Map.Holds("data-01") || two.TakenOut != nil {
-		t.Fatalf("the out member gone for the grace was kept: %v, %v", nodes(two.Map), two.TakenOut)
-	}
-}
-
-// A WHOLE TIER GOING DARK REMOVES NOBODY, however its leases lapse. Removing a
-// member re-places its share, which is only worth doing onto a member present
-// and healthy NOW: counting the members merely not due yet, the first to reach
-// the grace was removed onto others as dead as it was, each in turn onto the
-// next, until one was left — and when power came back the map placed on that
-// one alone while the rest proved themselves, every write keeping one copy
-// and most groups reading as missing from four healthy nodes that held them.
-func TestAWholeTierLapsingOverSeveralTicksRemovesNobody(t *testing.T) {
-	t.Parallel()
-	c := company(1, 3, "")
-	live := roster(5)
-	state := first(t, live, c)
-	// data-00 and data-01 lapse first, data-02 and data-03 a tick later,
-	// data-04 a tick after that — and the fleet stays dark past every grace.
-	state = tick(t, state, without(live, "data-00", "data-01"), c)
-	state = tick(t, state, without(live, "data-00", "data-01", "data-02", "data-03"), c)
-	state = ticks(t, state, nil, c, 2*OutTicks)
-	if len(state.Map.Members) != 5 || state.Removed != nil {
-		t.Fatalf("a dark tier lost members: %v, removed %v", nodes(state.Map), state.Removed)
-	}
-	if run := state.Absence["data-00"]; run.Ticks != 2*OutTicks+2 {
-		t.Fatalf("the absence stopped being counted: %+v", run)
-	}
-	back := tick(t, state, live, c)
-	if got := len(back.Map.Placeable()); got != 5 || back.Map.Size() != 3 {
-		t.Fatalf("the first tick back places on %d members at %d copies, want 5 at 3",
-			got, back.Map.Size())
-	}
-
-	// A MEMBER ON PROBATION IS NO PLACE FOR A SHARE: it takes no copies,
-	// so the two placeable members going dark beside it remove nobody.
-	three := roster(3)
-	removedOne := ticks(t, first(t, three, c), without(three, "data-02"), c, OutTicks)
-	// Everything dark for a few ticks, then data-02 back — on probation —
-	// while the other two stay dark past their grace.
-	dark := ticks(t, ticks(t, removedOne, nil, c, 5), three[2:], c, OutTicks-3)
-	if m, _ := dark.Map.Member("data-02"); !m.Probation {
-		t.Fatalf("setup: data-02 is %+v, want on probation", m)
-	}
-	if run := dark.Absence["data-00"]; run.Ticks <= OutTicks {
-		t.Fatalf("setup: data-00's run is %+v, want past the grace", run)
-	}
-	if !dark.Map.Holds("data-00") || !dark.Map.Holds("data-01") {
-		t.Fatalf("the placeable members were removed onto one on probation: %v", nodes(dark.Map))
-	}
-
-	// AND ONE PRESENT MEMBER IS ENOUGH: the others are removed onto it.
-	lit := ticks(t, first(t, live, c), live[4:], c, OutTicks)
-	if got := nodes(lit.Map); !slices.Equal(got, []string{"data-04"}) {
-		t.Fatalf("with one member present the map holds %v, want only it", got)
-	}
-}
-
 // OUT IS THE OPERATOR'S GESTURE AND NOTHING ELSE: every tick derives the flag
 // the map places by from the recorded gesture, and forgets a gesture about a
 // node the map no longer holds.
@@ -755,7 +415,7 @@ func TestAMemberIsOutExactlyWhileTakenOut(t *testing.T) {
 	c := company(1, 2, "")
 	live := roster(3)
 	state := first(t, live, c)
-	state.TakenOut = map[string]objstore.Gesture{"data-01": {By: "ops"}, "data-09": {By: "ops"}}
+	state.TakenOut = map[string]membership.Gesture{"data-01": {By: "ops"}, "data-09": {By: "ops"}}
 	state.Map.Members[2].Out = true // a flag no gesture stands behind
 	next, _ := Next(state, live, c, t0)
 	for _, m := range next.Map.Members {
@@ -778,7 +438,7 @@ func TestNextLeavesItsInputAlone(t *testing.T) {
 	t.Parallel()
 	c := company(1, 2, "")
 	state := ticks(t, first(t, roster(3), c), roster(2), c, 3)
-	state.TakenOut = map[string]objstore.Gesture{"data-00": {By: "ops"}}
+	state.TakenOut = map[string]membership.Gesture{"data-00": {By: "ops"}}
 	before, err := state.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -794,7 +454,7 @@ func TestNextLeavesItsInputAlone(t *testing.T) {
 // splittable is a fleet whose group count is short of its target: seven
 // members at three copies want 256 groups and the map is written at that,
 // then an eighth joins — which wants 512.
-func splittable(t *testing.T) (objstore.MapState, []Presence, Company) {
+func splittable(t *testing.T) (objstore.MapState, []Presence, membership.Company) {
 	t.Helper()
 	c := company(1, 3, "")
 	state := first(t, roster(7), c)
@@ -858,8 +518,8 @@ func TestASplitWaitsForACleanFleet(t *testing.T) {
 		probation := state.Clone()
 		probation.Map.Members = append(probation.Map.Members, placement.Member{Node: "data-99",
 			Weight: 1, Share: placement.DefaultShare(1), Probation: true})
-		probation.Removed = map[string]objstore.Removal{"data-99": {Present: 1, At: t0,
-			Reason: objstore.ReasonAbsent}}
+		probation.Removed = map[string]membership.Removal{"data-99": {Present: 1, At: t0,
+			Reason: membership.ReasonAbsent}}
 		next, _ := Next(probation, repaired(append(slices.Clone(live), up("data-99", 1)), epoch, 0),
 			c, t0)
 		if next.Map.PGBits != state.Map.PGBits || next.Removed["data-99"].Present != 2 {
@@ -985,10 +645,10 @@ func TestAChangeIsBalancedInItsOwnEpoch(t *testing.T) {
 	state := first(t, roster(10), c)
 	live := append(roster(10), up("data-heavy", 4))
 
-	joined := newTicking(state, live, t0)
-	joined.membership()
-	joined.assemble()
-	unbalanced := joined.next.Map.Layout().Deviation()
+	joined := state.Map
+	_, drawn := membership.Tick(state.State, state.Map.Draw(), memberships(live), membership.Company{}, t0)
+	joined.Members = drawn.Members
+	unbalanced := joined.Layout().Deviation()
 
 	next, _ := Next(state, live, c, t0)
 	if next.Map.Epoch != state.Map.Epoch+1 || next.Balance.Epoch != next.Map.Epoch ||
@@ -1018,7 +678,7 @@ func TestTheGestures(t *testing.T) {
 		}
 		m, _ := out.Map.Member("data-01")
 		if !m.Out || out.Map.Epoch != state.Map.Epoch+1 || out.Balance.Epoch != out.Map.Epoch ||
-			out.TakenOut["data-01"] != (objstore.Gesture{By: "ops@example.com",
+			out.TakenOut["data-01"] != (membership.Gesture{By: "ops@example.com",
 				Reason: "replacing the disk", At: t0}) {
 			t.Fatalf("taken out: %+v, epoch %d, %+v", m, out.Map.Epoch, out.TakenOut)
 		}
@@ -1076,18 +736,18 @@ func TestTheGestures(t *testing.T) {
 
 	t.Run("refusals", func(t *testing.T) {
 		t.Parallel()
-		if _, err := Out(state, "data-09", "ops", "", t0); !errors.Is(err, ErrUnknownMember) ||
-			errors.Is(err, ErrRemovedMember) {
+		if _, err := Out(state, "data-09", "ops", "", t0); !errors.Is(err, membership.ErrUnknownMember) ||
+			errors.Is(err, membership.ErrRemovedMember) {
 			t.Errorf("out of an unknown node = %v", err)
 		}
 		// A node removed and not seen back places nothing already: out is
 		// refused by a sentinel of its own, still an unknown member.
-		removed := ticks(t, state, roster(2), c, OutTicks)
-		if _, err := Out(removed, "data-02", "ops", "", t0); !errors.Is(err, ErrRemovedMember) ||
-			!errors.Is(err, ErrUnknownMember) {
-			t.Errorf("out of a removed node = %v, want ErrRemovedMember", err)
+		removed := ticks(t, state, roster(2), c, membership.OutTicks)
+		if _, err := Out(removed, "data-02", "ops", "", t0); !errors.Is(err, membership.ErrRemovedMember) ||
+			!errors.Is(err, membership.ErrUnknownMember) {
+			t.Errorf("out of a removed node = %v, want membership.ErrRemovedMember", err)
 		}
-		if _, err := In(state, "data-09"); !errors.Is(err, ErrUnknownMember) {
+		if _, err := In(state, "data-09"); !errors.Is(err, membership.ErrUnknownMember) {
 			t.Errorf("in of an unknown node = %v", err)
 		}
 		_, outErr := Out(objstore.MapState{}, "data-00", "ops", "", t0)
@@ -1105,34 +765,34 @@ func TestTheGestures(t *testing.T) {
 		// data-01 goes quiet: data-02 is the last member present to
 		// place on.
 		quiet := tick(t, two, without(roster(3), "data-01"), c)
-		if _, err := Out(quiet, "data-02", "ops", "", t0); !errors.Is(err, ErrNothingPlaceable) {
+		if _, err := Out(quiet, "data-02", "ops", "", t0); !errors.Is(err, membership.ErrNothingPlaceable) {
 			t.Errorf("taking out the last present placeable member = %v", err)
 		}
 		if _, err := Out(quiet, "data-01", "ops", "", t0); err != nil {
 			t.Errorf("taking out a quiet member beside a present one = %v", err)
 		}
 		one := first(t, roster(1), c)
-		if _, err := Out(one, "data-00", "ops", "", t0); !errors.Is(err, ErrNothingPlaceable) {
+		if _, err := Out(one, "data-00", "ops", "", t0); !errors.Is(err, membership.ErrNothingPlaceable) {
 			t.Errorf("taking out the only member = %v", err)
 		}
 	})
 
 	t.Run("hold and release", func(t *testing.T) {
 		t.Parallel()
-		for _, d := range []time.Duration{0, -time.Minute, MaxHold + time.Second} {
-			if _, err := HoldFor(state, d, "ops", "", t0); !errors.Is(err, ErrHoldRange) {
-				t.Errorf("a hold of %s = %v, want ErrHoldRange", d, err)
+		for _, d := range []time.Duration{0, -time.Minute, membership.MaxHold + time.Second} {
+			if _, err := HoldFor(state, d, "ops", "", t0); !errors.Is(err, membership.ErrHoldRange) {
+				t.Errorf("a hold of %s = %v, want membership.ErrHoldRange", d, err)
 			}
 		}
-		held, err := HoldFor(state, MaxHold, "ops", "datacentre move", t0)
+		held, err := HoldFor(state, membership.MaxHold, "ops", "datacentre move", t0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := objstore.Hold{Until: t0.Add(MaxHold), By: "ops", Reason: "datacentre move", At: t0}
+		want := membership.Hold{Until: t0.Add(membership.MaxHold), By: "ops", Reason: "datacentre move", At: t0}
 		if held.Hold == nil || *held.Hold != want || held.Map.Epoch != state.Map.Epoch || state.Hold != nil {
 			t.Fatalf("held: %+v at epoch %d", held.Hold, held.Map.Epoch)
 		}
-		if !held.Hold.Active(t0.Add(MaxHold-time.Second)) || held.Hold.Active(t0.Add(MaxHold)) {
+		if !held.Hold.Active(t0.Add(membership.MaxHold-time.Second)) || held.Hold.Active(t0.Add(membership.MaxHold)) {
 			t.Fatal("the hold is not active exactly until it ends")
 		}
 		released := Release(held)
@@ -1156,7 +816,7 @@ func TestTheGestures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := objstore.Hold{Until: later.Add(time.Hour), By: "ops-2", Reason: "still upgrading",
+		want := membership.Hold{Until: later.Add(time.Hour), By: "ops-2", Reason: "still upgrading",
 			At: later}
 		if again.Hold == nil || *again.Hold != want || held.Hold.Until != t0.Add(time.Hour) {
 			t.Fatalf("held again: %+v, want %+v", again.Hold, want)
@@ -1169,7 +829,7 @@ func TestTheGestures(t *testing.T) {
 	t.Run("out on probation", func(t *testing.T) {
 		t.Parallel()
 		live := roster(3)
-		probation := tick(t, ticks(t, state, roster(2), c, OutTicks), live, c)
+		probation := tick(t, ticks(t, state, roster(2), c, membership.OutTicks), live, c)
 		out, err := Out(probation, "data-02", "ops", "retire it", t0)
 		if err != nil {
 			t.Fatal(err)
@@ -1177,46 +837,11 @@ func TestTheGestures(t *testing.T) {
 		if m, _ := out.Map.Member("data-02"); !m.Out || !m.Probation {
 			t.Fatalf("taken out on probation: %+v", m)
 		}
-		trusted := ticks(t, out, live, c, StableTicks)
+		trusted := ticks(t, out, live, c, membership.StableTicks)
 		if m, _ := trusted.Map.Member("data-02"); !m.Out || m.Probation || m.Placeable() {
 			t.Fatalf("after its probation: %+v, want out and not placeable", m)
 		}
 	})
-}
-
-// A MEMBER BACK FROM A MISSED TICK IS PRESENT to the gesture that takes
-// another out. Its absence run stays open for a whole grace while it proves
-// itself stable, but the latest tick saw it — placed on, holding its lease,
-// serving — so it is somewhere for copies to land. Only a member the latest
-// tick counted absent is absent now: reading every open run as gone refused
-// taking a member out for up to ten minutes after one missed heartbeat.
-func TestAMemberBackFromAMissedTickIsPresentToOut(t *testing.T) {
-	t.Parallel()
-	c := company(1, 2, "")
-	live := roster(2)
-	missed := tick(t, first(t, live, c), without(live, "data-01"), c)
-	if _, err := Out(missed, "data-00", "ops", "", t0); !errors.Is(err, ErrNothingPlaceable) {
-		t.Fatalf("taking out the only member the latest tick saw = %v, want ErrNothingPlaceable", err)
-	}
-
-	back := tick(t, missed, live, c)
-	if run, open := back.Absence["data-01"]; !open || run.Ticks != 1 || run.Present != 1 {
-		t.Fatalf("setup: data-01's run is %+v (open %v), want one tick gone and seen back once",
-			run, open)
-	}
-	out, err := Out(back, "data-00", "ops", "replacing the disk", t0)
-	if err != nil {
-		t.Fatalf("taking out a member beside one back from a missed tick = %v", err)
-	}
-	if m, _ := out.Map.Member("data-00"); !m.Out {
-		t.Fatalf("data-00 was not taken out: %+v", m)
-	}
-
-	// AND GONE AGAIN is absent again, on the tick that counts it.
-	gone := tick(t, back, without(live, "data-01"), c)
-	if _, err := Out(gone, "data-00", "ops", "", t0); !errors.Is(err, ErrNothingPlaceable) {
-		t.Fatalf("taking out the only member present once the other left again = %v", err)
-	}
 }
 
 // SETTLED IS EVERY MEMBER THE MAP PLACES ON present, healthy and finished
@@ -1281,7 +906,7 @@ func TestATickSaysWhetherItFoundAMap(t *testing.T) {
 	live := roster(2)
 	m, err := NewMaintainer(MaintainerOptions{Store: store,
 		Live:    func(context.Context) ([]Presence, error) { return live, nil },
-		Company: func() (Company, bool) { return company(1, 2, ""), true },
+		Company: func() (membership.Company, bool) { return company(1, 2, ""), true },
 		Now:     func() time.Time { return t0 }})
 	if err != nil {
 		t.Fatal(err)
@@ -1306,7 +931,7 @@ func TestATickSaysWhetherItFoundAMap(t *testing.T) {
 		"the roster did not answer": {Store: store,
 			Live: func(context.Context) ([]Presence, error) { return nil, errors.New("no leases") }},
 	} {
-		opts.Company = func() (Company, bool) { return company(1, 2, ""), true }
+		opts.Company = func() (membership.Company, bool) { return company(1, 2, ""), true }
 		failing, err := NewMaintainer(opts)
 		if err != nil {
 			t.Fatal(err)
@@ -1333,7 +958,7 @@ func TestAnAbsenceStartedByOneHolderIsFinishedByTheNext(t *testing.T) {
 	holder := func() *Maintainer {
 		m, err := NewMaintainer(MaintainerOptions{Store: store,
 			Live:    func(context.Context) ([]Presence, error) { return live, nil },
-			Company: func() (Company, bool) { return company(1, 2, ""), true },
+			Company: func() (membership.Company, bool) { return company(1, 2, ""), true },
 			Now:     func() time.Time { return t0 }})
 		if err != nil {
 			t.Fatal(err)
@@ -1344,14 +969,14 @@ func TestAnAbsenceStartedByOneHolderIsFinishedByTheNext(t *testing.T) {
 		t.Fatal(err)
 	}
 	live = live[:2]
-	for range OutTicks {
+	for range membership.OutTicks {
 		if _, err := holder().Tick(t.Context()); err != nil { // a new holder every tick
 			t.Fatal(err)
 		}
 	}
 	state := stored(t, store)
 	if state.Map.Holds("data-02") || len(state.Map.Members) != 2 {
-		t.Fatalf("after %d ticks the map holds %v, want data-00 and data-01", OutTicks, nodes(state.Map))
+		t.Fatalf("after %d ticks the map holds %v, want data-00 and data-01", membership.OutTicks, nodes(state.Map))
 	}
 }
 
@@ -1376,13 +1001,13 @@ func TestNoFirstMapWithoutAMemberAndACompany(t *testing.T) {
 	for name, opts := range map[string]MaintainerOptions{
 		"no member": {
 			Live:    func(context.Context) ([]Presence, error) { return []Presence{up("agent-1", 0)}, nil },
-			Company: func() (Company, bool) { return company(1, 3, ""), true }},
+			Company: func() (membership.Company, bool) { return company(1, 3, ""), true }},
 		"no company": {
 			Live:    func(context.Context) ([]Presence, error) { return roster(1), nil },
-			Company: func() (Company, bool) { return Company{}, false }},
+			Company: func() (membership.Company, bool) { return membership.Company{}, false }},
 		"a company that cannot be applied": {
 			Live:    func(context.Context) ([]Presence, error) { return roster(1), nil },
-			Company: func() (Company, bool) { return company(1, 0, ""), true }},
+			Company: func() (membership.Company, bool) { return company(1, 0, ""), true }},
 	} {
 		store := memory.NewFleet()
 		opts.Store = store
@@ -1428,7 +1053,7 @@ func TestAMapThisBuildCannotRewriteIsNotOverwritten(t *testing.T) {
 		}
 		m, err := NewMaintainer(MaintainerOptions{Store: store,
 			Live:    func(context.Context) ([]Presence, error) { return roster(2), nil },
-			Company: func() (Company, bool) { return company(2, 1, ""), true }})
+			Company: func() (membership.Company, bool) { return company(2, 1, ""), true }})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1450,7 +1075,7 @@ func TestALostRaceWritesNothing(t *testing.T) {
 	observed := &observer{}
 	m, err := NewMaintainer(MaintainerOptions{Store: store, Observer: observed,
 		Live:    func(context.Context) ([]Presence, error) { return roster(1), nil },
-		Company: func() (Company, bool) { return company(1, 1, ""), true }})
+		Company: func() (membership.Company, bool) { return company(1, 1, ""), true }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1471,15 +1096,3 @@ func (r *racing) CreateObjectMap(context.Context, []byte) (coord.ObjectMapRecord
 type observer struct{ n int }
 
 func (o *observer) Observe(objstore.MapState, uint64) { o.n++ }
-
-// THE TICK ARITHMETIC IS THE GRACE: forty ticks at the reconcile interval are
-// ten minutes, and the span that clears a run is the span that removes one.
-func TestTheTickArithmetic(t *testing.T) {
-	t.Parallel()
-	if got := time.Duration(OutTicks) * TickInterval; got != OutGrace || OutTicks != 40 {
-		t.Fatalf("%d ticks of %s = %s, want %s in 40", OutTicks, TickInterval, got, OutGrace)
-	}
-	if StableTicks != OutTicks {
-		t.Fatalf("stable after %d ticks, removed after %d", StableTicks, OutTicks)
-	}
-}

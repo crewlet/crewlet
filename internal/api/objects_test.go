@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
@@ -64,15 +65,15 @@ func objectsFleet() objstore.MapState {
 				member("data-c", 1, "eu-3"), out, probation,
 			},
 		},
-		Absence: map[string]objstore.Absence{"data-b": {Ticks: 12, Present: 3,
-			Since: objectsSince, Reason: objstore.ReasonAbsent}},
-		TakenOut: map[string]objstore.Gesture{"data-d": {By: "founder",
+		Absence: map[string]membership.Absence{"data-b": {Ticks: 12, Present: 3,
+			Since: objectsSince, Reason: membership.ReasonAbsent}},
+		TakenOut: map[string]membership.Gesture{"data-d": {By: "founder",
 			Reason: "decommission", At: objectsSince}},
-		Removed: map[string]objstore.Removal{
-			"data-e": {Gone: 6, At: objectsSince, Reason: objstore.ReasonUnhealthy,
+		Removed: map[string]membership.Removal{
+			"data-e": {Gone: 6, At: objectsSince, Reason: membership.ReasonUnhealthy,
 				Detail: "probe: read-only filesystem"},
 			"data-f": {Present: 12, At: objectsSince.Add(-time.Hour),
-				Reason: objstore.ReasonAbsent},
+				Reason: membership.ReasonAbsent},
 		},
 		Balance: objstore.Balance{Epoch: 7, BalanceReport: placement.BalanceReport{
 			Rounds: 6, Deviation: 0.015, Converged: true}},
@@ -361,10 +362,10 @@ func TestEachObjectRefusalIsNamedApart(t *testing.T) {
 			// LATEST tick — an open run that has seen the member back
 			// since is not an absence — data-a is the last member a
 			// write could land on.
-			f.state.Absence["data-b"] = objstore.Absence{Ticks: 12, Since: objectsSince,
-				Reason: objstore.ReasonAbsent}
-			f.state.Absence["data-c"] = objstore.Absence{Ticks: 1,
-				Reason: objstore.ReasonUnhealthy}
+			f.state.Absence["data-b"] = membership.Absence{Ticks: 12, Since: objectsSince,
+				Reason: membership.ReasonAbsent}
+			f.state.Absence["data-c"] = membership.Absence{Ticks: 1,
+				Reason: membership.ReasonUnhealthy}
 		}, "/objects/out/data-a?confirm=data-a", http.StatusConflict, "objects_refused"},
 		{"a fleet with no map", func(f *fakeObjects) { f.found = false },
 			"/objects/hold?for=1h", http.StatusServiceUnavailable, "no_object_map"},
@@ -409,9 +410,9 @@ func TestTheLastPresentMemberIsJudgedByTheLatestTick(t *testing.T) {
 		{"data-b gone as of the latest tick is not", 0, http.StatusConflict},
 	} {
 		f := newFakeObjects()
-		f.state.Absence["data-b"] = objstore.Absence{Ticks: 12, Present: tc.present,
-			Since: objectsSince, Reason: objstore.ReasonAbsent}
-		f.state.Absence["data-c"] = objstore.Absence{Ticks: 1, Reason: objstore.ReasonUnhealthy}
+		f.state.Absence["data-b"] = membership.Absence{Ticks: 12, Present: tc.present,
+			Since: objectsSince, Reason: membership.ReasonAbsent}
+		f.state.Absence["data-c"] = membership.Absence{Ticks: 1, Reason: membership.ReasonUnhealthy}
 		status, body := postObjects(t, objectsApp(t, f), "/objects/out/data-a?confirm=data-a")
 		if status != tc.status {
 			t.Errorf("%s: out data-a answered %d %v, want %d", tc.name, status, body, tc.status)
@@ -479,7 +480,7 @@ func renderObjectsScenarios(t *testing.T) []byte {
 	t.Helper()
 	fleet := objectsFleet()
 	held := objectsFleet()
-	held.Hold = &objstore.Hold{Until: objectsSince.Add(2 * time.Hour), By: "founder",
+	held.Hold = &membership.Hold{Until: objectsSince.Add(2 * time.Hour), By: "founder",
 		Reason: "kernel upgrade", At: objectsSince}
 	// A BALANCE THAT RAN OUT OF ROUNDS short of its tolerance: the map it
 	// wrote is the best it measured, and this is the one place that says
@@ -528,12 +529,39 @@ func renderObjectsScenarios(t *testing.T) []byte {
 			"data-a", objectsSince),
 	}
 
+	// THE GESTURES' REFUSALS AS THE OBJECT MAP ANSWERS THEM — through its own
+	// gestures, so each detail is the text an operator is shown, the map's
+	// name in front of internal/membership's statement of what is so.
+	refusedBy := func(what string, gesture func() (objstore.MapState, error)) error {
+		t.Helper()
+		_, err := gesture()
+		if err == nil {
+			t.Fatalf("%s was not refused", what)
+		}
+		return err
+	}
+	lone := fleet
+	for _, node := range []string{"data-b", "data-c"} {
+		next, err := upkeep.Out(lone, node, "founder", "", objectsSince)
+		if err != nil {
+			t.Fatalf("setup: taking out %s: %v", node, err)
+		}
+		lone = next
+	}
 	refusals := map[string]api.ObjectsRefusal{}
 	for name, err := range map[string]error{
-		"unknown_member":      fmt.Errorf("%w: %q", upkeep.ErrUnknownMember, "data-z"),
-		"removed_member":      fmt.Errorf("%w: %q", upkeep.ErrRemovedMember, "data-e"),
-		"objects_refused":     fmt.Errorf("%w: %s", upkeep.ErrNothingPlaceable, "data-a"),
-		"invalid_hold":        fmt.Errorf("%w: asked for %s", upkeep.ErrHoldRange, 25*time.Hour),
+		"unknown_member": refusedBy("out of a stranger", func() (objstore.MapState, error) {
+			return upkeep.Out(fleet, "data-z", "founder", "", objectsSince)
+		}),
+		"removed_member": refusedBy("out of a removed node", func() (objstore.MapState, error) {
+			return upkeep.Out(fleet, "data-e", "founder", "", objectsSince)
+		}),
+		"objects_refused": refusedBy("out of the last member", func() (objstore.MapState, error) {
+			return upkeep.Out(lone, "data-a", "founder", "", objectsSince)
+		}),
+		"invalid_hold": refusedBy("a hold past a day", func() (objstore.MapState, error) {
+			return upkeep.HoldFor(fleet, 25*time.Hour, "founder", "", objectsSince)
+		}),
 		"no_object_map":       upkeep.ErrNoMap,
 		"objects_unavailable": fmt.Errorf("%w: nats: timeout", engine.ErrObjectsUnavailable),
 		"objects_newer_map":   fmt.Errorf("%w: unknown field", engine.ErrObjectsNewerMap),
@@ -692,7 +720,7 @@ func TestNoObjectsHintNamesACommandLineFlag(t *testing.T) {
 // EVERY HOLD LENGTH THE DASHBOARD OFFERS IS ONE THE ENGINE ACCEPTS, AND THE
 // LONGEST IS ITS CEILING.
 //
-// A length past upkeep.MaxHold is a choice the route answers `invalid_hold`
+// A length past membership.MaxHold is a choice the route answers `invalid_hold`
 // on every press; a list that stopped short of it hides the day-long hold a
 // long maintenance needs. The copy exists because the dashboard is its own
 // build — see internal/clientsource — so this side holds it.
@@ -710,14 +738,14 @@ func TestTheDashboardOffersHoldLengthsTheEngineAccepts(t *testing.T) {
 	longest := time.Duration(0)
 	for _, l := range lengths {
 		d, err := time.ParseDuration(l)
-		if err != nil || d <= 0 || d > upkeep.MaxHold {
+		if err != nil || d <= 0 || d > membership.MaxHold {
 			t.Errorf("the dashboard offers a hold of %q, which the engine refuses: it "+
-				"takes more than nothing and at most %s", l, upkeep.MaxHold)
+				"takes more than nothing and at most %s", l, membership.MaxHold)
 		}
 		longest = max(longest, d)
 	}
-	if longest != upkeep.MaxHold {
+	if longest != membership.MaxHold {
 		t.Errorf("the dashboard's longest hold is %s and the engine's ceiling %s",
-			longest, upkeep.MaxHold)
+			longest, membership.MaxHold)
 	}
 }

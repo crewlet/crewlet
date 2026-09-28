@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 )
 
@@ -644,7 +645,7 @@ func objectsHold(args []string, stdout, stderr io.Writer) error {
 	var reason *string
 	client, err := nodeClientFor(args, "objects hold", stderr, func(fs *flag.FlagSet) {
 		length = fs.Duration("for", 0, "how long to hold the map, at most "+
-			shortDuration(upkeep.MaxHold)+"; required")
+			shortDuration(membership.MaxHold)+"; required")
 		reason = fs.String("reason", "", "why, recorded on the map beside who held it")
 	})
 	if err != nil {
@@ -654,7 +655,7 @@ func objectsHold(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "usage: crewlet objects hold -for DURATION [-reason TEXT]")
 		return fmt.Errorf("name how long to hold the map in -for, like 30m or 2h (at "+
 			"most %s): while it holds, a member that is gone keeps its groups a copy "+
-			"short", shortDuration(upkeep.MaxHold))
+			"short", shortDuration(membership.MaxHold))
 	}
 	query := url.Values{"for": {length.String()}}
 	if r := strings.TrimSpace(*reason); r != "" {
@@ -684,6 +685,6 @@ func objectsRelease(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "The hold is released: a member gone for %d ticks or more is "+
-		"removed at the map maintainer's next tick.\n", upkeep.OutTicks)
+		"removed at the map maintainer's next tick.\n", membership.OutTicks)
 	return nil
 }

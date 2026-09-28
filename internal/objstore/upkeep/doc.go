@@ -12,24 +12,26 @@
 // about the node that happens to hold it. The copies every chunk keeps and the
 // label they are spread across come from the COMPANY configuration
 // (ADR-0020), stamped with the activation they came from so a holder a
-// revision behind cannot set them back; absences are counted in the maintainer's own TICKS rather than
-// timed on its clock ([OutTicks]); and everything a tick has to remember rides
-// in the stored record ([objstore.MapState]) rather than in the holder's
-// memory. [Next] is the whole of the policy, pure, one tick at a time.
+// revision behind cannot set them back; absences are counted in the
+// maintainer's own TICKS rather than timed on its clock
+// ([membership.OutTicks]); and everything a tick has to remember rides in the
+// stored record ([objstore.MapState]) rather than in the holder's memory.
+// [Next] is the whole of the policy, pure, one tick at a time.
 //
-// What the policy answers, rule by rule: a member gone or failed for a grace
-// is removed — but never onto nothing, so a whole tier going dark together
-// leaves the map as it was — and one that FLAPS is removed too, because a run
-// of absence is cleared only by a whole grace of presence. A removed node seen
-// back is a member again at once but ON PROBATION: read from and repaired
-// from, since it may hold the only copy of something, and placed on only
-// after the same span of presence, or it would be placed on and removed again
-// every cycle. An operator may take a member OUT ([Out]) so its data moves
-// while it still serves, and HOLD the map ([HoldFor]) through planned
-// maintenance so nothing is removed while nodes restart. And the groups SPLIT
-// as the fleet grows, one bit per epoch and only on a clean fleet, the split's
-// epoch changing nothing else — so every lower child keeps its parent's
-// holders and a doubling moves half the data rather than all of it.
+// WHO IS IN THE MAP is not this package's own: the estate map answers the same
+// questions about the same data nodes, so the lifecycle is written once, in
+// internal/membership (ADR-0008), and [Next] composes it — a member gone or
+// failed for a grace is removed, but never onto nothing; one that FLAPS is
+// removed too; a removed node seen back is a member again at once but ON
+// PROBATION, read from and repaired from and placed on only after the same
+// span of presence; an operator may take a member OUT ([Out]) so its data
+// moves while it still serves, and HOLD the map ([HoldFor]) through planned
+// maintenance. What is this map's own is what a change of members means for
+// what it places: the change is balanced in an epoch of its own, and the
+// groups SPLIT as the fleet grows, one bit per epoch and only on a clean
+// fleet, the split's epoch changing nothing else — so every lower child keeps
+// its parent's holders and a doubling moves half the data rather than all of
+// it.
 //
 // # The inventory is derived, never kept
 //

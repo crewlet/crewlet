@@ -125,9 +125,9 @@
 // and a node a reader cannot find is a node whose copies read as lost. The
 // two are separate flags because they are separate decisions with separate
 // ends — an operator's, lifted only by an operator, and the maintainer's,
-// lifted by the ticks — and one flag could not say which a member carries,
-// nor end one without the other. [Member.Placeable] is the one question
-// every placement rule asks of both.
+// lifted by the ticks (internal/membership) — and one flag could not say
+// which a member carries, nor end one without the other. [Member.Placeable]
+// is the one question every placement rule asks of both.
 package placement
 
 import (
@@ -227,7 +227,7 @@ type Member struct {
 	// placed on nothing, exactly as an out member is, but a member — at
 	// the tail of every ranking, where a reader and a repair look for the
 	// copies it held when it went. The map's maintainer sets and clears it;
-	// see objstore.Removal for the rule and why a node proving itself is
+	// see membership.Removal for the rule and why a node proving itself is
 	// not simply left out of the map.
 	//
 	// ITS OWN FLAG, NOT OUT: out is an operator's decision that the

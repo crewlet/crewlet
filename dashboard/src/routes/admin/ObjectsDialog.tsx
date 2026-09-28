@@ -271,7 +271,7 @@ export function ObjectsMemberDialog({
 
 /**
  * The lengths a hold is offered at, the longest being the engine's own ceiling
- * (`upkeep.MaxHold`): a hold nobody releases must still end.
+ * (`membership.MaxHold`): a hold nobody releases must still end.
  */
 export const HOLD_LENGTHS = ["30m", "1h", "2h", "4h", "8h", "24h"] as const;
 

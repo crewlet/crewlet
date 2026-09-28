@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 )
 
@@ -141,9 +142,9 @@ func RenderObjectsGesture(g engine.ObjectsGesture, node string, now time.Time) O
 }
 
 // maxHold is the engine's ceiling on a hold as the refusals spell it, "24h"
-// rather than time's "24h0m0s" — read off [upkeep.MaxHold] so the sentence
+// rather than time's "24h0m0s" — read off [membership.MaxHold] so the sentence
 // cannot outlive a change to the ceiling.
-var maxHold = fmt.Sprintf("%gh", upkeep.MaxHold.Hours())
+var maxHold = fmt.Sprintf("%gh", membership.MaxHold.Hours())
 
 // ObjectsRefusal is a gesture refused with nothing written: the status and the
 // body the route answers with.
@@ -182,7 +183,7 @@ func RenderObjectsRefusal(err error) (ObjectsRefusal, bool) {
 		return refuse(http.StatusServiceUnavailable, "no_object_map",
 			"no data node has joined the object store yet, so there is no map to "+
 				"change: one is written within seconds of the first data node starting")
-	case errors.Is(err, upkeep.ErrRemovedMember):
+	case errors.Is(err, membership.ErrRemovedMember):
 		// BEFORE THE UNKNOWN MEMBER IT WRAPS: taking out a node the map
 		// removed and has not seen back names a node the map does know,
 		// and the unknown-member hint — name a node the map lists — would
@@ -192,15 +193,15 @@ func RenderObjectsRefusal(err error) (ObjectsRefusal, bool) {
 		return refuse(http.StatusConflict, "removed_member",
 			"leave it: it rejoins on probation the next time it is seen present "+
 				"and healthy, or putting it back vouches for it now")
-	case errors.Is(err, upkeep.ErrUnknownMember):
+	case errors.Is(err, membership.ErrUnknownMember):
 		return refuse(http.StatusNotFound, "unknown_member",
 			"name a node the fleet view's object placement lists: a member to take "+
 				"out or put back, or a removed node to put back")
-	case errors.Is(err, upkeep.ErrNothingPlaceable):
+	case errors.Is(err, membership.ErrNothingPlaceable):
 		return refuse(http.StatusConflict, "objects_refused",
 			"every write needs a present member to land on: put another member "+
 				"back in, or bring an absent one back, before taking this one out")
-	case errors.Is(err, upkeep.ErrHoldRange):
+	case errors.Is(err, membership.ErrHoldRange):
 		return refuse(http.StatusBadRequest, "invalid_hold",
 			"hold for more than nothing and at most "+maxHold+"; a longer "+
 				"maintenance is a hold renewed on purpose")
