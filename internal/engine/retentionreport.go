@@ -493,11 +493,7 @@ func (r *retention) observed(out *statelog.Reading) {
 		out.SearchDegradedFraction = float64(degraded) / float64(answers)
 	}
 
-	// THE DECLARED RATE, beside the observed one below. It is a constant
-	// rather than a configured value because it is a term in the log's own
-	// sizing: an operator who could set it would be silencing the alarm
-	// rather than resizing the deployment it is about.
-	out.LinearizableReadsExpected = statelog.LinearizableReadsPerDay
+	r.census(reading, out)
 
 	for _, snapshot := range reading {
 		switch snapshot.Name {
@@ -514,12 +510,6 @@ func (r *retention) observed(out *statelog.Reading) {
 			out.RecordsGated += int(snapshot.Total)
 		case metrics.TrackerFeedUnreadable:
 			out.FeedUnreadable += int(snapshot.Total)
-		case metrics.StatelogBarrierAppends:
-			// THE BARRIER APPEND IS THE LINEARIZABLE READ. One is
-			// appended per read that asks for the level, so the
-			// counter and the census input are the same quantity —
-			// which is exactly why the drift is checkable at all.
-			out.LinearizableReads += int(snapshot.Total)
 		case metrics.StatelogReadRefusals:
 			// ANY REFUSAL AT ALL IS ONE, and the alarm's own
 			// condition is a DURATION rather than a count — so what
@@ -529,6 +519,60 @@ func (r *retention) observed(out *statelog.Reading) {
 			if snapshot.Total > 0 && !refusalIsOrdinaryLag(snapshot) {
 				out.RefusalsSince = max(out.RefusalsSince, statelog.RefusalAlarmFloor)
 			}
+		}
+	}
+}
+
+// census fills the reading's census half: of every log this node applies, the
+// one whose read rate is furthest past its share of the census, with that rate
+// and that share.
+//
+// # The rate is the LOG'S, read where it is applied
+//
+// A barrier record is what a linearizable read costs the log, so the census
+// input is the barrier records a log received — and every node applies every
+// record, so the count this node's applier took of them is the whole fleet's,
+// not this node's. What this replaced summed the barriers THIS NODE appended,
+// which on a fleet of several serving nodes is only its share of the reads: a
+// three-node fleet exceeding its census threefold read as a company exactly at
+// it, and the alarm could not fire until the company was six times past what
+// its logs were sized for.
+//
+// # The share is the census's, per seat and per log
+//
+// Declared rather than configured — it is a term in the log's own sizing, so
+// an operator who could set it would be silencing the alarm rather than
+// resizing the deployment it is about — and scaled by the company's own seats
+// and divided across the domain's logs ([statelog.CensusExpectation]).
+func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
+	received := map[string]int{}
+	for _, snapshot := range reading {
+		if snapshot.Name == metrics.StatelogBarriersApplied {
+			received[snapshot.Attrs["stream"]] += int(snapshot.Total)
+		}
+	}
+	seats := 0
+	if r.seats != nil {
+		seats = r.seats()
+	}
+	worst := -1.0
+	for _, running := range r.state.running() {
+		if barrierEncoder(running.domain) == nil {
+			// A LOG NO READ APPENDS TO has no census to drift from: its
+			// domain has no read index, so nothing it receives is a
+			// linearizable read.
+			continue
+		}
+		expected := statelog.CensusExpectation(seats,
+			len(r.state.layout.LogsOf(running.id.Domain)))
+		if expected <= 0 {
+			continue
+		}
+		got := received[running.spec.Name]
+		if ratio := float64(got) / float64(expected); ratio > worst {
+			worst = ratio
+			out.LinearizableReads, out.LinearizableReadsExpected = got, expected
+			out.CensusLog = running.key
 		}
 	}
 }

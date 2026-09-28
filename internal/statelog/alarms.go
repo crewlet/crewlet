@@ -112,20 +112,61 @@ const (
 	// that number, so at 2× they are describing a different company.
 	CensusDriftFactor = 2.0
 
-	// LinearizableReadsPerDay is the read rate this engine's log sizing was
-	// derived from.
+	// LinearizableReadsPerSeatDay is the read rate this engine's log sizing
+	// was derived from, per agent seat.
 	//
-	// TWELVE AND A HALF THOUSAND, the census input every capacity decision
-	// under the log rests on: a `linearizable` read appends a barrier
-	// record, so this number is a term in the log's byte ceiling, in how
-	// often the trim has to run to stay under it, and in how long a
-	// rejoining node's replay takes. It is a DECLARED expectation rather
-	// than a measurement, which is exactly why it needs an alarm — nothing
-	// else notices when a company outgrows the assumptions its deployment
-	// was sized against, and the symptom arrives as a full log rather than
-	// as a slow one.
-	LinearizableReadsPerDay = 12_500
+	// ONE HUNDRED AND TWENTY-FIVE: the reference company's 12 500
+	// linearizable reads a day over its 100 seats. It is the census input
+	// every capacity decision under the log rests on — a `linearizable`
+	// read appends a barrier record, so the rate is a term in a log's byte
+	// ceiling, in how often the trim has to run to stay under it, and in
+	// how long a rejoining node's replay takes — and it is PER SEAT because
+	// a seat's tools are what issue those reads: stated for the whole
+	// company it was a fixed 12 500 that a two-hundred-seat company doing
+	// exactly the reference company's work per seat exceeded twofold, so
+	// the alarm fired on the one company whose sizing was still right. It
+	// is a DECLARED expectation rather than a measurement, which is exactly
+	// why it needs an alarm — nothing else notices when a company outgrows
+	// the assumptions its deployment was sized against, and the symptom
+	// arrives as a full log rather than as a slow one. [CensusExpectation]
+	// turns it into one log's figure.
+	LinearizableReadsPerSeatDay = 125
 )
+
+// CensusExpectation is one log's share of the census: the linearizable reads a
+// day a company of seats agent seats was sized to put on a log of a domain the
+// layout divides into logs logs.
+//
+// # Per seat, and at least one
+//
+// The reads come from a seat's tools, so the company's figure is
+// [LinearizableReadsPerSeatDay] times its seats. A company with NO agent seat
+// is counted as one: its operators still read through the dashboard and the
+// operator MCP, and an expectation of zero would be an alarm that could never
+// fire, on exactly the company whose first seat has not been hired yet.
+//
+// # Divided across the DOMAIN's logs, not across every log
+//
+// The census says how many reads a company makes and not how they split
+// between the tracker and the knowledge base, so each domain's logs are sized
+// for all of them — which is how their ceilings are sized too: each domain has
+// its own budget, divided evenly across that domain's logs
+// ([Layout.LogShare]). A partition's share is its domain's figure over its
+// domain's partitions, rounded UP so a small company on many partitions is not
+// told to expect zero reads on a log that takes one. Divided across every log
+// of the layout instead, a layout-0 tracker log would be expected to take half
+// the census, and the reference company, whose reads are mostly the
+// tracker's, would fire the alarm doing exactly the work it was sized for.
+//
+// Zero where there is nothing to share it across (logs below one), which the
+// alarm reads as "no expectation" rather than as one exceeded.
+func CensusExpectation(seats, logs int) int {
+	if logs < 1 {
+		return 0
+	}
+	company := LinearizableReadsPerSeatDay * max(seats, 1)
+	return (company + logs - 1) / logs
+}
 
 // Kind names one alarm.
 //
@@ -284,9 +325,15 @@ type Reading struct {
 	// PoolWaitP95 is how long a caller queues for a database connection.
 	PoolWaitP95 time.Duration
 
-	// LinearizableReads and LinearizableReadsExpected are the observed and
-	// designed-for daily read rates.
+	// LinearizableReads and LinearizableReadsExpected are one log's
+	// observed and designed-for daily read rates — the barrier records the
+	// log received in the last day, from every node, and its share of the
+	// census ([CensusExpectation]) — and CensusLog names that log: of every
+	// log this node applies, the one furthest past its share, since the
+	// reading describes one node and a log over its share is over it
+	// however quiet the others are.
 	LinearizableReads, LinearizableReadsExpected int
+	CensusLog                                    string
 
 	// ObjectsMissing is how many chunks the estate names, and the map
 	// places on this node, that its last COMPLETED repair pass found
@@ -655,8 +702,9 @@ var table = []rule{
 		// rate. At twice it, they are describing a different company.
 		kind: KindCensusDrift,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d linearizable reads a day against the %d this "+
-					"deployment was sized for", r.LinearizableReads, r.LinearizableReadsExpected),
+			return fmt.Sprintf("%d linearizable reads a day on %s against the %d "+
+					"this deployment was sized for", r.LinearizableReads, r.CensusLog,
+					r.LinearizableReadsExpected),
 				r.LinearizableReadsExpected > 0 &&
 					float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
 		},

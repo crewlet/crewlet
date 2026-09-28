@@ -139,8 +139,9 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a read rate the sizing did not assume": {
 			statelog.KindCensusDrift,
-			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000},
-			"sized for",
+			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000,
+				CensusLog: "tracker@tracker.007"},
+			"on tracker@tracker.007 against the 1000",
 		},
 		"chunks no member holds": {
 			statelog.KindObjectsMissing,
@@ -470,4 +471,39 @@ func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 	}
 	t.Fatalf("no gauge series for %s", kind)
 	return -1
+}
+
+// A LOG'S SHARE OF THE CENSUS IS PER SEAT, PER DOMAIN LOG, AND NEVER ZERO.
+//
+// The reference company — 100 seats, one tracker log — is the 12 500 the
+// sizing was derived from, so that is what its log is expected to take. A
+// company twice the size doing the same work per seat takes twice it, which
+// the fixed figure read as drift. A partitioned domain divides its figure
+// across its own logs, ROUNDING UP, so no partition of a small company is told
+// to expect nothing; and a company with no agent seat is still one seat's
+// worth, since its operators read too and an expectation of zero is an alarm
+// that cannot fire.
+func TestALogsCensusIsPerSeatAndPerDomainLog(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		seats, logs int
+		want        int
+	}{
+		{"the reference company on layout 0", 100, 1, 12_500},
+		{"twice the company", 200, 1, 25_000},
+		{"no agent seat", 0, 1, 125},
+		{"a small company on two partitions", 3, 2, 188},
+		{"the reference company on 256 partitions", 100, 256, 49},
+		{"no log to share it across", 5, 0, 0},
+	} {
+		if got := statelog.CensusExpectation(tc.seats, tc.logs); got != tc.want {
+			t.Errorf("%s: %d seats over %d log(s) expects %d a day, want %d",
+				tc.name, tc.seats, tc.logs, got, tc.want)
+		}
+	}
+	if statelog.LinearizableReadsPerSeatDay*100 != 12_500 {
+		t.Errorf("the per-seat census is %d, and the reference company's 12 500 "+
+			"over its 100 seats is 125", statelog.LinearizableReadsPerSeatDay)
+	}
 }

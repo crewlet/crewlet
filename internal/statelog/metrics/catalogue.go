@@ -217,6 +217,16 @@ func Catalogue() []Instrument {
 				"anything at all.",
 		},
 		{
+			Name: StatelogBarriersApplied, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain", "stream"},
+			Shows: "Barrier records applied from each log — every node's " +
+				"linearizable reads on it, since every node applies every " +
+				"record. It is the rate `census_drift` holds against the " +
+				"census, per log: a node's own appends are only its share of " +
+				"the fleet's reads, and on a fleet of several serving nodes " +
+				"they describe a company that many times quieter than it is.",
+		},
+		{
 			Name: StatelogLingerYields, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How often a waiter cut a batch short. It is the batching " +

@@ -125,6 +125,14 @@ type retention struct {
 	// reads as nothing to report.
 	objects func(now time.Time, out *statelog.Reading)
 
+	// seats is the running company's agent-seat count, which the census a
+	// log's read rate is held against scales with
+	// ([statelog.CensusExpectation]). READ AT EVERY EVALUATION, because a
+	// revision that hires or retires seats moves it and the trim is not
+	// rebuilt for one. Nil counts no seat, which the expectation reads as
+	// the one seat it never goes below.
+	seats func() int
+
 	// mu guards the coverage cache below. The tick and every API request
 	// assemble a report, on different goroutines.
 	mu sync.Mutex
@@ -182,6 +190,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		coverage:    e.vectorCoverage,
 		index:       e.indexReading,
 		objects:     e.objectsReading,
+		seats:       func() int { return seatCount(e.Company()) },
 		pooled:      map[string]poolCounters{},
 		done:        make(chan struct{}),
 	}

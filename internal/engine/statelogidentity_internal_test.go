@@ -618,10 +618,16 @@ func requireRebuiltLogRefusal(t *testing.T, err error) {
 // admit seats, and answers a JetStream handle on that broker.
 func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 	t.Helper()
+	return aRunningNodeOf(t, nativeCleanupCompany)
+}
+
+// aRunningNodeOf is [aRunningNode] running the given company.
+func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
+	t.Helper()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	cfg, err := config.ParseCompany([]byte(company))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}

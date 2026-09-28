@@ -2397,3 +2397,56 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 		t.Fatalf("the sweep record moved back to %s from %s", before, cutoff)
 	}
 }
+
+// A LOG'S BARRIERS ARE COUNTED WHERE THEY ARE APPLIED, ONCE EACH, UNDER THE LOG.
+//
+// The census a log is held against is its linearizable reads, and a barrier
+// record is what each one costs it. Every node applies every record, so the
+// applier's count is the whole fleet's — which is the number `census_drift`
+// needs and a node's own appends are not. Keyed by the stream, because a
+// domain with a log per partition has a rate per partition; and counted from
+// the batch that committed, so a record redelivered below the checkpoint is
+// not a second read.
+func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	barrier := func(seq uint64) statelog.Envelope {
+		return statelog.Envelope{
+			V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
+			Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: 1,
+			Scope:  statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+			Writer: fmt.Sprintf("node-%d", seq),
+		}
+	}
+	for seq := uint64(1); seq <= 5; seq++ {
+		if seq%2 == 0 {
+			h.fetch.offer(seq, barrier(seq))
+			continue
+		}
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq),
+			fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(5); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// A REDELIVERY of a barrier the checkpoint already holds.
+	h.fetch.offer(4, barrier(4))
+	h.fetch.offer(6, env(6, "edit", "o6", "op-6", 1))
+	if err := h.run(6); err != nil {
+		t.Fatalf("run the redelivery: %v", err)
+	}
+
+	var counted uint64
+	for _, snapshot := range h.metrics.ReadWindow() {
+		if snapshot.Name != metrics.StatelogBarriersApplied {
+			continue
+		}
+		if got, want := snapshot.Attrs["stream"], specOf(probeDomain{}).Name; got != want {
+			t.Errorf("barriers were counted under the stream %q, and the log is %q", got, want)
+		}
+		counted += snapshot.Total
+	}
+	if counted != 2 {
+		t.Fatalf("the log carried 2 barriers and the applier counted %d", counted)
+	}
+}

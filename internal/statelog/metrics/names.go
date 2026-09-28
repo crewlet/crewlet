@@ -30,6 +30,7 @@ const (
 	StatelogApplyTxAborts            = "crewlet.statelog.apply.tx.aborts"
 	StatelogApplyTxDuration          = "crewlet.statelog.apply.tx.duration"
 	StatelogBarrierAppends           = "crewlet.statelog.barrier.appends"
+	StatelogBarriersApplied          = "crewlet.statelog.barrier.applied"
 	StatelogBarrierDuration          = "crewlet.statelog.barrier.duration"
 	StatelogDeferredCount            = "crewlet.statelog.deferred.count"
 	StatelogDeferredOldestAgeSeconds = "crewlet.statelog.deferred.oldest_age_seconds"

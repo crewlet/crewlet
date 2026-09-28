@@ -80,8 +80,9 @@ var alarmMeaning = map[Kind]string{
 		"a checkpoint is not happening.",
 	KindPoolStarved: "Callers are queuing for a database connection before " +
 		"their query starts.",
-	KindCensusDrift: "This company is doing more than twice the reads its " +
-		"log was sized for, so every sizing decision under it is stale.",
+	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
+		"its share of the census allows — 125 a day per agent seat, over its " +
+		"domain's logs — so every sizing decision under it is stale.",
 	KindObjectsMissing: "Parts of the company's files that the placement map " +
 		"puts on this node are held by no member of the fleet — every member " +
 		"asked answered that it has no copy — so those files cannot be read " +

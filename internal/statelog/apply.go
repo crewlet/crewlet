@@ -2611,6 +2611,9 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				tally.skipped++
 				continue
 			}
+			if rec.Kind == BarrierKind {
+				tally.barriers++
+			}
 			// THE FRAMEWORK'S OWN WRITE FIRST, from the
 			// always-decodable envelope, because it happens
 			// whatever the record then does.
@@ -2987,6 +2990,11 @@ type results struct {
 	retained int
 	gated    int
 	skipped  int
+
+	// barriers is how many of the records this batch consumed for the
+	// first time were barriers, whatever became of them — each is a record
+	// on the log, which is what the census counts.
+	barriers int
 }
 
 // countAborts records the transactions the store rolled back under this apply.
@@ -3023,6 +3031,15 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 			r.metrics.Add(metrics.StatelogApplyRecords, uint64(n),
 				metrics.Attrs{"domain": domain, "result": result})
 		}
+	}
+	// THE LOG'S READ RATE, as this node applies it: every node's barriers,
+	// counted after the transaction that consumed them committed — so an
+	// attempt the store rolled back and ran again counts once. Keyed by
+	// the STREAM, which names one log in every layout, because a domain
+	// with a log per partition has a rate per partition.
+	if tally.barriers > 0 {
+		r.metrics.Add(metrics.StatelogBarriersApplied, uint64(tally.barriers),
+			metrics.Attrs{"domain": domain, "stream": r.spec.Name})
 	}
 	// THE COMMIT-TO-APPLY GAP, from the BROKER's own timestamp rather
 	// than from when this node fetched the record: every read level is a

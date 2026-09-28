@@ -1361,7 +1361,11 @@ growing without bound and the forecast above does not apply to it.
 The read barriers add about **639 MB a year** to the log's throughput, which is
 inside the ceiling by a factor of five at year five. That figure is a term in
 the log's own size, so it is printed with its derivation rather than assumed:
-it comes from an assumed 12 500 linearizable reads a day.
+it comes from an assumed 125 linearizable reads a day per agent seat, which is
+12 500 for the reference company's 100 seats. The
+[`census_drift`](../reference/alarms.md) alarm holds every log to that
+assumption: a log is expected to take 125 reads a day per seat, divided across
+its domain's logs, and the alarm fires on the one furthest past twice its share.
 
 Two excursions are designed for and do not alarm:
 
