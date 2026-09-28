@@ -64,8 +64,8 @@ func TestLayoutZeroIsTodaysEstateUnderTodaysNames(t *testing.T) {
 
 // THE FIRST PARTITIONED LAYOUT HAS THE SHAPE ITS COSTS WERE COUNTED FOR.
 //
-// The broker figures the benchmark is judged against — 161 partition logs
-// over 81 partitions at T = 64 — are functions of this shape: which spaces
+// The broker figures the count was chosen by — 641 partition logs over 321
+// partitions at T = 256 — are functions of this shape: which spaces
 // exist, which domains each carries, and the counts. A domain moved between
 // spaces, a vectors log dropped from pages, or a second company partition
 // would each change what the benchmark had to measure without anyone

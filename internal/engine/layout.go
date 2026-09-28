@@ -43,12 +43,20 @@ import (
 //	files on a node holding every partition
 //	  (a fleet of at most R data nodes)         1 node + 81       1 node + 321
 //
-// The benchmark's own shapes, about 130 and 513 streams, were an earlier
-// design's: 64 or 256 search partitions plus one pages log, with no pages
-// split and no company log. At T = 64 the 161 here lies inside the measured
-// range. At T = 256 the 641 is a quarter beyond it, so before 256 is chosen
-// the benchmark must add a 641-stream point with these consumer counts rather
-// than have it extrapolated.
+// What was measured (jetstreamtest.BenchmarkPartitionedEstate, 4 vCPU, one
+// process holding every member, holder and leaf) were an earlier design's
+// shapes, 129 and 513 streams: 64 or 256 search partitions plus one pages log,
+// with no pages split and no company log. Both provisioned inside the
+// clustered sequence budget with no failed create (17–25 s at 129, 21–64 s at
+// 513), and every axis cost scaled linearly with the stream count — per
+// partition across three members, 12 raft instances, 66 goroutines, about
+// 1.1 MiB of cold heap and 0.1 ms/s of heartbeat CPU per raft instance. The
+// 513-stream point is therefore the one 256 was judged by, and its idle cost
+// is only affordable with the state-log pull answered on one standing inbox
+// (the per-pull poll measured 1.3–3 cores at 1,539 consumers). At T = 256 the
+// 641 here is a quarter beyond the measured 513, so the activation step
+// measures the 641-stream point with these consumer counts before it merges,
+// rather than extrapolating it.
 //
 // # The rule for choosing
 //
@@ -75,10 +83,18 @@ import (
 // finding goes to the owner rather than into the code.
 const (
 	// DefaultTrackerPartitions is how many partitions the tracker space of
-	// a NEW deployment's first partitioned layout gets. CANDIDATES: 64 | 256.
-	// The owner picks from the NATS benchmark by the rule above; 64 is the
-	// placeholder until then.
-	DefaultTrackerPartitions = 64
+	// a NEW deployment's first partitioned layout gets: 256, the larger
+	// candidate, which the owner chose because the engine is built to scale
+	// far and the count cannot be changed without a drained repartition.
+	// It passed rule 1 at the measured 513-stream point; by rule 3 it keeps
+	// holders balanced up to 96 data nodes where 64 would stop at 24, and by
+	// rule 4 it keeps a tracker partition near 64 GB at 10,000 seats in year
+	// five where 64 would put it at 257 GB. The price is four times the
+	// broker cost of 64 on every axis, which is why a fleet at this count
+	// runs five broker members rather than three (1,250 raft groups per
+	// member against 2,082 at the measured point), and why rule 2 — a single
+	// node holding all 321 partition files — is measured before activation.
+	DefaultTrackerPartitions = 256
 
 	// DefaultPagesPartitions is a QUARTER of the tracker's, borrowed from
 	// config.DerivedPagesLogDivisor: the knowledge base's log grows at about
