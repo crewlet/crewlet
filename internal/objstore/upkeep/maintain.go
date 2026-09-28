@@ -16,7 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/placement"
 	seatplacement "github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -395,7 +396,7 @@ func (t *ticking) membership() {
 		m := placement.Member{Node: node, Weight: weight,
 			// THE PREVIOUS MAP'S RATE, for every newcomer alike, so
 			// two joining at once start where either would alone.
-			Share: t.before.Map.ShareFor(weight),
+			Share: t.before.Map.Draw().ShareFor(weight),
 			// A REMOVED NODE SEEN BACK joins at once, on probation:
 			// read from and repaired from, placed on nothing until
 			// returning trusts it. See [objstore.Removal].
@@ -562,7 +563,7 @@ func (t *ticking) placement(first bool) {
 	switch {
 	case first:
 		t.next.Map.Generation = uuid.New()
-		t.next.Map.PGBits = placement.TargetPGBits(len(t.next.Map.Placeable()), t.next.Map.Size())
+		t.next.Map.PGBits = objplacement.TargetPGBits(len(t.next.Map.Placeable()), t.next.Map.Size())
 		rebalance(&t.next, 0)
 	case !samePlacement(t.before.Map, t.next.Map):
 		rebalance(&t.next, t.before.Map.Epoch)
@@ -583,14 +584,14 @@ func (t *ticking) measure() {
 			Deviation: dev, Converged: dev <= placement.DefaultTolerance}}
 		return
 	}
-	balanced, report := placement.Balance(m, placement.BalanceOptions{})
+	balanced, report := placement.Balance(m.Draw(), placement.BalanceOptions{})
 	if slices.Equal(balanced.Members, m.Members) {
 		// Nothing better to be had: record that, so the next tick does
 		// not measure it again.
 		t.next.Balance = objstore.Balance{Epoch: m.Epoch, BalanceReport: report}
 		return
 	}
-	t.next.Map = balanced
+	t.next.Map.Members = balanced.Members
 	t.next.Map.Epoch = m.Epoch + 1
 	t.next.Balance = objstore.Balance{Epoch: t.next.Map.Epoch, BalanceReport: report}
 }
@@ -609,11 +610,11 @@ func (t *ticking) clean() bool {
 	// the tick that trusts it is a placement change within a grace, and a
 	// split taken now would re-place half the data only for the balance
 	// that follows it to move a share again.
-	if m.PGBits >= placement.MaxPGBits || len(t.next.Absence) > 0 ||
+	if m.PGBits >= objplacement.MaxPGBits || len(t.next.Absence) > 0 ||
 		slices.ContainsFunc(m.Members, func(x placement.Member) bool { return x.Probation }) {
 		return false
 	}
-	if placement.TargetPGBits(len(m.Placeable()), m.Size()) <= m.PGBits {
+	if objplacement.TargetPGBits(len(m.Placeable()), m.Size()) <= m.PGBits {
 		return false
 	}
 	return settled(m, t.live)
@@ -631,11 +632,11 @@ func (t *ticking) clean() bool {
 // has caught up" would drift. It only ever says WHEN to look: what a
 // collection may delete is still decided copy by copy, by the members'
 // verified answers ([Node.Collect]).
-func Settled(m placement.Map, live []Presence) bool {
+func Settled(m objplacement.Map, live []Presence) bool {
 	return settled(m, byNode(live))
 }
 
-func settled(m placement.Map, live map[string]Presence) bool {
+func settled(m objplacement.Map, live map[string]Presence) bool {
 	placeable := m.Placeable()
 	if len(placeable) == 0 {
 		return false
@@ -652,15 +653,15 @@ func settled(m placement.Map, live map[string]Presence) bool {
 // rebalance finishes a change to what a map places: shares balanced from the
 // ones it has, and the epoch moved past from.
 func rebalance(s *objstore.MapState, from uint64) {
-	balanced, report := placement.Balance(s.Map, placement.BalanceOptions{})
-	s.Map = balanced
+	balanced, report := placement.Balance(s.Map.Draw(), placement.BalanceOptions{})
+	s.Map.Members = balanced.Members
 	s.Map.Epoch = from + 1
 	s.Balance = objstore.Balance{Epoch: s.Map.Epoch, BalanceReport: report}
 }
 
 // samePlacement reports whether two maps place every chunk on the same
 // members: everything but the epoch and the generation.
-func samePlacement(a, b placement.Map) bool {
+func samePlacement(a, b objplacement.Map) bool {
 	return a.Replicas == b.Replicas && a.PGBits == b.PGBits &&
 		a.FailureDomain == b.FailureDomain && slices.Equal(a.Members, b.Members)
 }
@@ -823,7 +824,7 @@ func absentNow(state objstore.MapState, node string) bool {
 }
 
 // setMember changes one member of a map in place.
-func setMember(m *placement.Map, node string, change func(*placement.Member)) {
+func setMember(m *objplacement.Map, node string, change func(*placement.Member)) {
 	for i := range m.Members {
 		if m.Members[i].Node == node {
 			change(&m.Members[i])
@@ -834,7 +835,7 @@ func setMember(m *placement.Map, node string, change func(*placement.Member)) {
 // HoldFor holds the map for d FROM NOW: no member is removed however long it
 // is gone, until the hold expires or is released — while its absence keeps
 // being counted, so a member still gone when the hold ends is removed on the
-// next tick. It changes no placement. A member on probation is the exception
+// next tick. It changes no objplacement. A member on probation is the exception
 // ([objstore.Hold]): it has no share for the hold to keep, and leaves the map
 // the tick it is not seen.
 //

@@ -1,26 +1,25 @@
 package placement
 
 import (
-	"cmp"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/placement"
 )
 
 // generation is the lineage every test map carries.
 var generation = uuid.MustParse("5f0c7a52-8e1d-4c3b-9a64-0d2e7f1b3c85")
 
 // mapOf is a valid map of these members, sorted.
-func mapOf(pgBits, replicas int, failureDomain string, members ...Member) Map {
-	slices.SortFunc(members, func(a, b Member) int {
+func mapOf(pgBits, replicas int, failureDomain string, members ...placement.Member) Map {
+	slices.SortFunc(members, func(a, b placement.Member) int {
 		switch {
 		case a.Node < b.Node:
 			return -1
@@ -34,13 +33,13 @@ func mapOf(pgBits, replicas int, failureDomain string, members ...Member) Map {
 }
 
 // member is a node of this weight at its default share, in this domain.
-func member(node string, weight int, domain string) Member {
-	return Member{Node: node, Weight: weight, Share: DefaultShare(weight), Domain: domain}
+func member(node string, weight int, domain string) placement.Member {
+	return placement.Member{Node: node, Weight: weight, Share: placement.DefaultShare(weight), Domain: domain}
 }
 
 // fleet is n equal members, data-000 onwards.
 func fleet(n, pgBits, replicas int) Map {
-	members := make([]Member, n)
+	members := make([]placement.Member, n)
 	for i := range members {
 		members[i] = member(fmt.Sprintf("data-%03d", i), 1, "")
 	}
@@ -52,7 +51,7 @@ func fleet(n, pgBits, replicas int) Map {
 // failure domain with a member missing its label, an out member.
 func goldenMap() Map {
 	drifted := member("data-b", 1, "zone-a")
-	drifted.Share = DefaultShare(1) + 12345
+	drifted.Share = placement.DefaultShare(1) + 12345
 	drained := member("data-f", 2, "zone-b")
 	drained.Out = true
 	return mapOf(10, 3, "zone",
@@ -113,29 +112,18 @@ func TestEveryGroupIsPinnedAcrossBuilds(t *testing.T) {
 	}
 }
 
-// THE DRAW'S PIECES ARE PINNED ONE BY ONE, so a failure above says which
-// piece moved. Each value was reproduced outside this code: the node key is
-// SHA-256("crewlet-objstore-node\x00data-a")'s first eight bytes, the mix is
-// the two MurmurHash3 finalizer rounds computed independently, and the
-// logarithm is floor(log2(u)·2^32) − 53·2^32 for u = (mix >> 11) + 1 (true
-// value −4337083689.74).
-func TestTheDrawIsPinnedPieceByPiece(t *testing.T) {
+// THE SEED IS PINNED ON ITS OWN, so a failure above says whether the object
+// map's groups moved or the draw did (internal/placement pins the draw's
+// pieces, from this very seed): group 12 in ten bits is 0b1100 — value 3,
+// length 8 once its trailing zeros are stripped.
+func TestTheSeedIsPinned(t *testing.T) {
 	t.Parallel()
-	key := nodeKey("data-a")
-	seed := seedKey(12, 10) // 12 is 0b1100 in ten bits: value 3, length 8
-	for name, c := range map[string]struct{ got, want int64 }{
-		"node key":  {int64(key), int64(-0x46c78516b8322914)}, // 0xb9387ae947cdd6ec
-		"seed":      {int64(seed), 8<<32 | 3},
-		"mix":       {int64(mix(seed, key)), 0x7f220807ec32ea22},
-		"logarithm": {logDraw(seed, key), -4337083690},
-		// Weight three divides the Q32 logarithm by three, truncating
-		// toward zero: the shift keeps the fraction a share would
-		// otherwise divide away.
-		"straw2": {straw2(logDraw(seed, key), DefaultShare(3)), -1445694563},
-	} {
-		if c.got != c.want {
-			t.Errorf("%s = %#x, pinned %#x", name, c.got, c.want)
-		}
+	if got, want := seedKey(12, 10), uint64(8<<32|3); got != want {
+		t.Errorf("seed = %#x, pinned %#x", got, want)
+	}
+	if got, want := (SplitGroups{PGBits: 10}).Seed(12), seedKey(12, 10); got != want ||
+		(SplitGroups{PGBits: 10}).Count() != 1024 {
+		t.Errorf("the map's groups seed group 12 with %#x, want %#x", got, want)
 	}
 }
 
@@ -156,88 +144,6 @@ var pinnedUp = map[int][]string{
 // it passed over (data-b shares zone-a with data-a), then the rest, then the
 // out member.
 var pinnedRanked5 = []string{"data-a", "data-e", "data-d", "data-b", "data-c", "data-f"}
-
-// THE LOGARITHM IS PART OF THE CONTRACT, so it is pinned on its own: exact on
-// every power of two, and on other values the true log2 in Q32 rounded DOWN —
-// the references are floor(log2(x) · 2^32) to fifty digits, derived outside
-// this code.
-func TestTheLogarithmIsPinnedAndExactOnPowersOfTwo(t *testing.T) {
-	t.Parallel()
-	for k := range 64 {
-		if got, want := log2fixed(1<<k), int64(k)<<fracBits; got != want {
-			t.Errorf("log2fixed(2^%d) = %d, want exactly %d", k, got, want)
-		}
-	}
-	for x, want := range map[uint64]int64{
-		3:           6807362105,   // 6807362105.98…
-		5:           9972605231,   // 9972605231.20…
-		10:          14267572527,  // 14267572527.20…
-		1000000:     85605435163,  // 85605435163.22…
-		1<<53 - 1:   227633266687, // 227633266687.9999993…
-		1<<53 + 1:   227633266688, // a hair over 53: its fraction is below 2^-32
-		12345678901: 143981421846, // 143981421846.63…
-	} {
-		if got := log2fixed(x); got != want {
-			t.Errorf("log2fixed(%d) = %d, want %d", x, got, want)
-		}
-	}
-	// Every bit of it, over a hundred thousand inputs of every magnitude: a
-	// change too small to move the values above — one unit in the last
-	// place, now and then — still ranks some group differently on a build
-	// that has it.
-	digest := sha256.New()
-	var buf [8]byte
-	x := uint64(1)
-	for range 100000 {
-		x = x*6364136223846793005 + 1442695040888963407
-		binary.BigEndian.PutUint64(buf[:], uint64(log2fixed(x>>(x%64)|1)))
-		digest.Write(buf[:])
-	}
-	if got, want := hex.EncodeToString(digest.Sum(nil)),
-		"13fe66f7f35d906f1a907f9bad2e5c782d0e9a529743a1e12f0f36ced58d5c1e"; got != want {
-		t.Errorf("the logarithm's digest is %s, pinned %s", got, want)
-	}
-
-	// And against the float reference everywhere else: never above it, and
-	// never more than two units of 2^-32 below.
-	x = 1
-	for range 100000 {
-		x = x*6364136223846793005 + 1442695040888963407
-		v := x>>11 + 1
-		got := float64(log2fixed(v)) / (1 << fracBits)
-		ref := math.Log2(float64(v))
-		if got > ref+1e-9 || got < ref-2.0/(1<<fracBits)-1e-9 {
-			t.Fatalf("log2fixed(%d) = %.12f, the float reference %.12f", v, got, ref)
-		}
-	}
-}
-
-// THE LOGARITHM NEVER DECREASES as its argument grows — a draw that did would
-// rank a larger random value below a smaller one and bias every straw.
-func TestTheLogarithmNeverDecreases(t *testing.T) {
-	t.Parallel()
-	values := []uint64{}
-	x := uint64(7)
-	for range 20000 {
-		x = x*6364136223846793005 + 1442695040888963407
-		values = append(values, x>>11+1)
-	}
-	for k := range 63 {
-		// Around every power of two, where the integer part turns over.
-		p := uint64(1) << k
-		values = append(values, p, p+1, 2*p-1)
-		if p > 1 {
-			values = append(values, p-1)
-		}
-	}
-	slices.Sort(values)
-	for i := 1; i < len(values); i++ {
-		if log2fixed(values[i]) < log2fixed(values[i-1]) {
-			t.Fatalf("log2fixed(%d) = %d is below log2fixed(%d) = %d", values[i],
-				log2fixed(values[i]), values[i-1], log2fixed(values[i-1]))
-		}
-	}
-}
 
 // A SPLIT INHERITS BY ITS SEED: the lower child of every group draws exactly
 // its parent's seed, the upper child a seed no group at any smaller count
@@ -394,14 +300,14 @@ func TestCopiesAreSpreadAcrossFailureDomains(t *testing.T) {
 		}
 		return out
 	}
-	var nine, six, mixed []Member
+	var nine, six, mixed []placement.Member
 	for i := range 9 {
 		nine = append(nine, member(fmt.Sprintf("n%d", i), 1+i%2, fmt.Sprintf("z%d", i%3)))
 	}
 	for i := range 6 {
 		six = append(six, member(fmt.Sprintf("n%d", i), 1, fmt.Sprintf("z%d", i%2)))
 	}
-	mixed = []Member{
+	mixed = []placement.Member{
 		member("a1", 1, "za"), member("a2", 1, "za"), member("a3", 1, "za"),
 		member("u1", 1, ""), member("u2", 1, ""),
 	}
@@ -492,7 +398,7 @@ func TestAMemberOnProbationIsPlacedAsAnOutOne(t *testing.T) {
 	for _, c := range []struct {
 		out, probation, placeable bool
 	}{{false, false, true}, {true, false, false}, {false, true, false}, {true, true, false}} {
-		if got := (Member{Out: c.out, Probation: c.probation}).Placeable(); got != c.placeable {
+		if got := (placement.Member{Out: c.out, Probation: c.probation}).Placeable(); got != c.placeable {
 			t.Errorf("out %v, probation %v: placeable %v, want %v", c.out, c.probation, got,
 				c.placeable)
 		}
@@ -534,16 +440,16 @@ func TestAMemberOnProbationIsPlacedAsAnOutOne(t *testing.T) {
 
 	// ITS SHARE IS NOBODY'S RATE: it is the share it was removed with.
 	rate := mapOf(8, 3, "", member("a", 1, ""), member("b", 1, ""))
-	rate.Members[0].Share, rate.Members[1].Share = 3*shareOne, 3*shareOne
+	rate.Members[0].Share, rate.Members[1].Share = placement.DefaultShare(3), placement.DefaultShare(3)
 	stale := member("c", 1, "")
-	stale.Share, stale.Probation = 40*shareOne, true
+	stale.Share, stale.Probation = placement.DefaultShare(40), true
 	rate.Members = append(rate.Members, stale)
-	if got, want := rate.ShareFor(1), uint32(3*shareOne); got != want {
+	if got, want := rate.Draw().ShareFor(1), placement.DefaultShare(3); got != want {
 		t.Errorf("ShareFor(1) beside a member on probation = %d, want %d", got, want)
 	}
 
 	// AND A BALANCE LEAVES IT WHERE IT IS: it has no target to be moved toward.
-	balanced, _ := Balance(m, BalanceOptions{})
+	balanced, _ := placement.Balance(m.Draw(), placement.BalanceOptions{})
 	if balanced.Members[1] != m.Members[1] {
 		t.Fatalf("the balance moved the member on probation: %+v → %+v", m.Members[1],
 			balanced.Members[1])
@@ -584,14 +490,17 @@ func TestMovedComparesBySlot(t *testing.T) {
 	if moved := Moved(m.Layout(), &Layout{}); !slices.Equal(moved, []Range{{0, Slots}}) {
 		t.Fatalf("to nothing, moved %v, want every slot", moved)
 	}
-	// A reorder of one group's holders moves no data.
+	// A reorder of one group's holders moves no data. (Written through the
+	// layout's own slice, which is exactly what its readers never may: a
+	// hand-edited layout is the only way to make one group differ alone.)
 	a, b := m.Layout(), m.Layout()
-	b.up[3] = []string{b.up[3][1], b.up[3][0]}
+	row := b.Up(3)
+	row[0], row[1] = row[1], row[0]
 	if moved := Moved(a, b); len(moved) != 0 {
 		t.Fatalf("a reordered up set moved %v", moved)
 	}
 	// A changed one moves exactly its slots.
-	b.up[3] = []string{"somebody-else", b.up[3][0]}
+	row[0], row[1] = "somebody-else", row[0]
 	lo, hi := m.SlotRange(3)
 	if moved := Moved(a, b); !slices.Equal(moved, []Range{{lo, hi}}) {
 		t.Fatalf("one changed group moved %v, want [%d, %d)", moved, lo, hi)
@@ -629,20 +538,6 @@ func TestAGroupIsAContiguousRunOfSlots(t *testing.T) {
 	}
 }
 
-// A TIE IS BROKEN BY THE NAME, the same way everywhere: two draws colliding
-// is a curiosity, two nodes ordering it differently would be a bug. Members
-// are sorted by node, so the lower index is the lower name.
-func TestATieIsBrokenByName(t *testing.T) {
-	t.Parallel()
-	if !better(cand{score: -5, i: 1}, cand{score: -5, i: 2}) ||
-		better(cand{score: -5, i: 2}, cand{score: -5, i: 1}) {
-		t.Fatal("a tie is not broken toward the lower name")
-	}
-	if !better(cand{score: -4, i: 9}, cand{score: -5, i: 1}) {
-		t.Fatal("a score closer to zero does not win")
-	}
-}
-
 // A SHARE IS A CHANCE OF THE TOP PLACE: at one copy, a member's primary count
 // is its share over the total, to within what 65536 groups can show — a
 // chi-square over four members below its 0.1% critical value.
@@ -650,7 +545,7 @@ func TestTheFirstCopyIsProportionalToShare(t *testing.T) {
 	t.Parallel()
 	m := mapOf(MaxPGBits, 1, "",
 		member("w1", 1, ""), member("w2", 2, ""), member("w3", 3, ""), member("w4", 4, ""))
-	m.Members[2].Share = DefaultShare(3) + 7777 // a share that is not a whole weight
+	m.Members[2].Share = placement.DefaultShare(3) + 7777 // a share that is not a whole weight
 	counts := m.Layout().Copies()
 	var total float64
 	for _, mem := range m.Members {
@@ -705,30 +600,6 @@ func TestTheTargetGroupCountGivesEachMemberAHundredCopies(t *testing.T) {
 	}
 }
 
-// A MEMBER JOINS AT THE FLEET'S RATE: its weight at the placeable members'
-// mean share per unit of weight, or the default in a map with none.
-func TestANewMembersShareIsTheFleetsRate(t *testing.T) {
-	t.Parallel()
-	m := mapOf(8, 3, "", member("a", 1, ""), member("b", 3, ""))
-	m.Members[0].Share = 3 * shareOne // the fleet runs at 1.5 per weight
-	m.Members[1].Share = 3 * shareOne
-	if got, want := m.ShareFor(2), uint32(3*shareOne); got != want {
-		t.Errorf("ShareFor(2) = %d, want %d", got, want)
-	}
-	// An out member's share is nobody's rate: the balancer leaves it where
-	// it was when the member was drained.
-	stale := member("c", 1, "")
-	stale.Share, stale.Out = 40*shareOne, true
-	m.Members = append(m.Members, stale)
-	if got, want := m.ShareFor(2), uint32(3*shareOne); got != want {
-		t.Errorf("ShareFor(2) beside an out member = %d, want %d", got, want)
-	}
-	m.Members[0].Out, m.Members[1].Out = true, true
-	if got := m.ShareFor(2); got != DefaultShare(2) {
-		t.Errorf("ShareFor(2) with nothing placeable = %d, want the default", got)
-	}
-}
-
 func TestAMapThatCannotPlaceIsRefused(t *testing.T) {
 	t.Parallel()
 	valid := func(mutate func(*Map)) Map {
@@ -742,13 +613,13 @@ func TestAMapThatCannotPlaceIsRefused(t *testing.T) {
 	for name, m := range map[string]Map{
 		"no generation":               valid(func(m *Map) { m.Generation = uuid.Nil }),
 		"no replicas":                 valid(func(m *Map) { m.Replicas = 0 }),
-		"replicas past the cap":       valid(func(m *Map) { m.Replicas = MaxReplicas + 1 }),
+		"replicas past the cap":       valid(func(m *Map) { m.Replicas = placement.MaxReplicas + 1 }),
 		"too few group bits":          valid(func(m *Map) { m.PGBits = MinPGBits - 1 }),
 		"too many group bits":         valid(func(m *Map) { m.PGBits = MaxPGBits + 1 }),
 		"a domain label with a space": valid(func(m *Map) { m.FailureDomain = "my zone" }),
 		"an empty node":               valid(func(m *Map) { m.Members[0].Node = " " }),
 		"weight zero":                 valid(func(m *Map) { m.Members[0].Weight = 0 }),
-		"weight past the cap":         valid(func(m *Map) { m.Members[0].Weight = MaxWeight + 1 }),
+		"weight past the cap":         valid(func(m *Map) { m.Members[0].Weight = placement.MaxWeight + 1 }),
 		"share zero":                  valid(func(m *Map) { m.Members[0].Share = 0 }),
 		"out of order":                valid(func(m *Map) { m.Members[0], m.Members[1] = m.Members[1], m.Members[0] }),
 		"a duplicate":                 valid(func(m *Map) { m.Members[1].Node = "a" }),
@@ -756,8 +627,8 @@ func TestAMapThatCannotPlaceIsRefused(t *testing.T) {
 			m.FailureDomain = ""
 		}),
 	} {
-		if err := m.Validate(); !errors.Is(err, ErrInvalid) {
-			t.Errorf("%s: Validate = %v, want ErrInvalid", name, err)
+		if err := m.Validate(); !errors.Is(err, placement.ErrInvalid) {
+			t.Errorf("%s: Validate = %v, want placement.ErrInvalid", name, err)
 		}
 	}
 }
@@ -790,90 +661,4 @@ func limitedMap() Map {
 	return mapOf(9, 3, "zone",
 		member("n0", 1, "z0"), member("n1", 2, "z0"), member("n2", 1, "z0"),
 		member("n3", 1, "z1"), member("n4", 3, "z1"), member("n5", 1, "z1"), drained)
-}
-
-// THE UP SET IS THE SPECIFIED WALK, whatever structure computes it: every
-// placeable member scored and sorted best first, a member taken unless its
-// domain already holds a copy, and — when the fleet has fewer domains than
-// copies — the rest filled from the best members not yet taken; then the
-// others in score order, then the members out or on probation, one tail in
-// score order. Written here the plain way, over a full sort, and held against
-// the layout and the ranking in every group of maps that exercise each step.
-func TestTheUpSetIsTheSpecifiedWalk(t *testing.T) {
-	t.Parallel()
-	reference := func(m Map, pg int) []string {
-		type scored struct {
-			m     Member
-			score int64
-		}
-		seed := seedKey(pg, m.PGBits)
-		var placeable, out []scored
-		for _, mem := range m.Members {
-			s := scored{mem, straw2(logDraw(seed, nodeKey(mem.Node)), mem.Share)}
-			if mem.Out || mem.Probation {
-				out = append(out, s)
-			} else {
-				placeable = append(placeable, s)
-			}
-		}
-		order := func(a, b scored) int {
-			if c := cmp.Compare(b.score, a.score); c != 0 {
-				return c
-			}
-			return strings.Compare(a.m.Node, b.m.Node)
-		}
-		slices.SortFunc(placeable, order)
-		slices.SortFunc(out, order)
-		domain := func(mem Member) string {
-			if m.FailureDomain != "" && mem.Domain != "" {
-				return "domain:" + mem.Domain
-			}
-			return "node:" + mem.Node
-		}
-		taken := map[string]bool{}
-		held := map[string]bool{}
-		var ranked []string
-		for _, s := range placeable {
-			if len(ranked) < m.Size() && !held[domain(s.m)] {
-				held[domain(s.m)] = true
-				taken[s.m.Node] = true
-				ranked = append(ranked, s.m.Node)
-			}
-		}
-		for _, s := range placeable {
-			if len(ranked) < m.Size() && !taken[s.m.Node] {
-				taken[s.m.Node] = true
-				ranked = append(ranked, s.m.Node)
-			}
-		}
-		for _, s := range placeable {
-			if !taken[s.m.Node] {
-				ranked = append(ranked, s.m.Node)
-			}
-		}
-		for _, s := range out {
-			ranked = append(ranked, s.m.Node)
-		}
-		return ranked
-	}
-	plain := fleet(12, 8, 3)
-	plain.Members[3].Out = true
-	plain.Members[5].Weight, plain.Members[5].Share = 7, DefaultShare(7)
-	plain.Members[8].Probation = true
-	for name, m := range map[string]Map{
-		"the pinned map":       goldenMap(),
-		"a domain-limited map": limitedMap(),
-		"no failure domain":    plain,
-	} {
-		l := m.Layout()
-		for pg := range m.Groups() {
-			want := reference(m, pg)
-			if got := m.Ranked(pg); !slices.Equal(got, want) {
-				t.Fatalf("%s, group %d: ranked %v, the walk gives %v", name, pg, got, want)
-			}
-			if got := l.Up(pg); !slices.Equal(got, want[:m.Size()]) {
-				t.Fatalf("%s, group %d: up %v, the walk gives %v", name, pg, got, want[:m.Size()])
-			}
-		}
-	}
 }

@@ -5,64 +5,16 @@ import (
 	"slices"
 )
 
-// TargetCopiesPerMember is how many group copies [TargetPGBits] sizes a map to
-// give each member.
-//
-// ONE HUNDRED, Ceph's mon_target_pg_per_osd, and for the reason Ceph gives: a
-// member's share of the data is a COUNT of groups, and a count of n has noise
-// of about the square root of n — so a hundred copies holds each member to
-// about a tenth of its share (one standard deviation) before balancing, and
-// leaves the balancer a quantity it can tune to two percent (two copies of a
-// hundred), while a thousand would multiply every layout's cost by ten to buy
-// precision nobody's disks need.
-//
-// It is a member of the fleet's MEAN weight that gets the hundred. Copies
-// follow weight, so a member at a quarter of the mean weight gets twenty-five,
-// and a count of twenty-five is four times as coarse: one copy is four percent
-// of it. That granularity, not the balancer, is what bounds how close
-// [Balance] can hold such a member — see there. And copies follow weight only
-// where no failure domain is capped: the members of a crowded domain get less
-// (see [DefaultTolerance]).
-const TargetCopiesPerMember = 100
-
-// TargetPGBits is the group bits a map with this many placeable members and
-// this many copies per group should have: the smallest count, from
-// [MinPGBits] up to [MaxPGBits], that gives a member of the fleet's mean
-// weight [TargetCopiesPerMember] copies. Pass the copies the map PLACES
-// ([Map.Size]); a count above the members lands on [MinPGBits] whichever is
-// passed, since the smallest count already gives each member a copy of every
-// group.
-//
-// It counts MEMBERS, not domains: it sizes for the mean copies per member,
-// which is what a member of the mean weight holds wherever no failure domain
-// is capped at one copy of each group, and more than the members of a capped
-// domain hold (see [DefaultTolerance]).
-//
-// It only answers what the count SHOULD be. Moving a map to it is the
-// maintainer's decision, one bit per epoch and only on a clean fleet, because
-// each bit re-places half the data.
-func TargetPGBits(placeable, replicas int) int {
-	if placeable < 1 || replicas < 1 {
-		return MinPGBits
-	}
-	for k := MinPGBits; k < MaxPGBits; k++ {
-		if (1<<k)*replicas/placeable >= TargetCopiesPerMember {
-			return k
-		}
-	}
-	return MaxPGBits
-}
-
 // ShareFor is the share a member of this weight joins the map at: its weight
 // at the placeable members' mean share per unit of weight, so a newcomer draws
 // at the fleet's own rate and the balance that follows has only its copies to
 // settle, rather than a newcomer that started too light or too heavy for a
 // fleet whose rate had moved (the share of a member taken out or on
-// probation, say, no longer counting). [DefaultShare] in a map with nothing
+// probation, say, no longer counting). [DefaultShare] in a draw with nothing
 // placeable.
-func (m Map) ShareFor(weight int) uint32 {
+func (d Draw) ShareFor(weight int) uint32 {
 	var shares, weights uint64
-	for _, member := range m.Members {
+	for _, member := range d.Members {
 		if member.Placeable() {
 			shares += uint64(member.Share)
 			weights += uint64(member.Weight)
@@ -84,14 +36,15 @@ const (
 	// A tolerance is a number of copies of each target, and [Balance]
 	// promises it only where it is at least a copy and a half: at two
 	// percent, targets of seventy-five copies and more. That is three
-	// quarters of what [TargetPGBits] gives a member of the fleet's mean
+	// quarters of what the object map's group count
+	// (objstore/placement.TargetPGBits) gives a member of the fleet's mean
 	// weight, so every member down to three quarters of the mean weight —
 	// in a fleet no failure domain caps. A domain holds at most one copy of
 	// each group, so the members of one carrying more than its part of the
 	// weight divide only the groups between them and are entitled to less
 	// than their weight: equal members in zones of one, one and ten at
-	// three copies target 51.2 copies each over the 512 groups
-	// [TargetPGBits] picks, outside the promise however equal they are.
+	// three copies target 51.2 copies each over the 512 groups the object
+	// map picks for them, outside the promise however equal they are.
 	DefaultTolerance = 0.02
 
 	// DefaultMaxRounds bounds the layouts one balance computes. SIXTY: over
@@ -171,7 +124,7 @@ const half = 0.5
 
 // logBudget bounds the logarithms [Balance] computes once and re-divides every
 // round rather than re-drawing: 2^22 of them, 32 MiB — 256 members at 16384
-// groups, the count [TargetPGBits] gives that fleet. The node balancing may be
+// groups, the count the object map gives that fleet. The node balancing may be
 // any node — the maintainer's duty moves, and an operator's out or in is
 // balanced by whichever node serves it — including a small one, so a larger
 // fleet draws afresh each round instead: slower, not wrong.
@@ -203,9 +156,9 @@ type BalanceReport struct {
 }
 
 // Balance sets the members' shares so each holds copies in proportion to its
-// weight, and answers the map with those shares and what it achieved.
+// weight, and answers the draw with those shares and what it achieved.
 //
-// WHAT PROPORTIONAL MEANS. A group has [Map.Size] copies, so the map holds
+// WHAT PROPORTIONAL MEANS. A group has [Draw.Size] copies, so the map holds
 // Groups × Size of them, and a member's target is its weight's part of that
 // total within the bounds any layout keeps to: a member holds at most one copy
 // of a group, and a failure domain holds at most one copy of each group — or,
@@ -229,10 +182,12 @@ type BalanceReport struct {
 // tolerance may hold no count at all — within two percent of 24.5 copies lies
 // neither 24 nor 25 — and the corpus's fleets there ended unconverged one time
 // in twenty between half a copy and a copy (32 of 694), and more often than
-// not below half a copy (605 of 1098). The balance keeps trying for MaxRounds and answers the closest round
-// it measured. What makes a target small is a small weight over a small group
-// count, so the cure for such a fleet is more groups ([TargetPGBits]), not
-// more rounds.
+// not below half a copy (605 of 1098). The balance keeps trying for MaxRounds
+// and answers the closest round it measured. What makes a target small is a
+// small weight over a small group count, so the cure for such a fleet is more
+// groups (the object map's objstore/placement.TargetPGBits), not more rounds.
+// The corpus was drawn over the object map's groups; what it measured is this
+// balance, whatever a map's groups are.
 //
 // HOW. From the members' CURRENT shares — so a small change to the fleet moves
 // little — each round lays the map out, counts the copies, and corrects the
@@ -244,24 +199,24 @@ type BalanceReport struct {
 // and a member within the tolerance and within a copy of its target is left
 // alone, since a copy is all a count can be corrected by. The shares are then
 // renormalised so the mean share per unit of weight is 1.0, which keeps them
-// comparable across balances and leaves [Map.ShareFor] a meaningful starting
+// comparable across balances and leaves [Draw.ShareFor] a meaningful starting
 // point for a member joining later. It stops within tolerance, after
 // MaxRounds, or when no share moves, and answers the BEST round measured,
 // never merely the last: near the end a round measures a copy or two of noise
 // per member either way.
 //
-// DETERMINISTIC: the same map and options always answer the same shares, since
+// DETERMINISTIC: the same draw and options always answer the same shares, since
 // nothing here reads a clock, a random source or a Go map's order.
 //
 // FLOATING POINT IS FINE HERE, as in everything computed once and STORED
-// ([Map.ShareFor] too), and in nothing a node places by: the result is
+// ([Draw.ShareFor] too), and in nothing a node places by: the result is
 // written into the map, and every other node places by the stored integers
 // rather than recomputing them — so two CPUs disagreeing about a last bit in
 // here can never place one group two ways.
 //
-// Only shares change; the epoch is the caller's to move. A map with nothing
+// Only shares change; the epoch is the caller's to move. A draw with nothing
 // placeable is answered as it was.
-func Balance(m Map, opts BalanceOptions) (Map, BalanceReport) {
+func Balance(m Draw, opts BalanceOptions) (Draw, BalanceReport) {
 	tolerance := opts.Tolerance
 	if tolerance <= 0 {
 		tolerance = DefaultTolerance
@@ -278,11 +233,11 @@ func Balance(m Map, opts BalanceOptions) (Map, BalanceReport) {
 		return out, BalanceReport{Converged: true}
 	}
 	b := newBalancer(d, tolerance)
-	groups := m.Groups()
+	groups := m.Groups.Count()
 	if groups*len(d.placeable) <= logBudget {
 		d.logs = make([]int64, groups*len(d.placeable))
 		for pg := range groups {
-			seed := seedKey(pg, m.PGBits)
+			seed := m.Groups.Seed(pg)
 			for j, i := range d.placeable {
 				d.logs[pg*len(d.placeable)+j] = logDraw(seed, d.keys[i])
 			}
@@ -533,7 +488,7 @@ func targets(d *drawer) []float64 { return entitle(d).member }
 //     failure domain and every member is a domain of its own — a group holds
 //     at most one copy per domain, so a domain holds at most one copy of each
 //     group.
-//   - With fewer ([Map.DomainLimited]), placement puts one copy in every
+//   - With fewer ([Draw.DomainLimited]), placement puts one copy in every
 //     domain before it puts a second in any, so a domain holds AT LEAST one
 //     copy of each group — and at most one more for each copy the domains
 //     fall short by, and never more than one per member. A lone node in its
@@ -557,7 +512,7 @@ func entitle(d *drawer) entitlement {
 	if d.size == 0 {
 		return e
 	}
-	groups := float64(d.m.Groups())
+	groups := float64(d.m.Groups.Count())
 	weight := make([]float64, d.nDom)
 	members := make([][]int, d.nDom)
 	for _, i := range d.placeable {

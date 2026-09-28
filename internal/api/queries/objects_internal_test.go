@@ -5,7 +5,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/placement"
 )
 
 // A LAYOUT IS COMPUTED ONCE PER MAP, and a map that places differently is
@@ -17,9 +18,9 @@ import (
 // without moving its epoch.
 func TestTheFleetComputesALayoutOncePerMap(t *testing.T) {
 	t.Parallel()
-	m := placement.Map{
+	m := objplacement.Map{
 		Generation: uuid.MustParse("5b0c1f7e-9c1d-4f5e-8a3b-2d7c6e1f0a9b"),
-		Epoch:      4, Replicas: 2, PGBits: placement.MinPGBits,
+		Epoch:      4, Replicas: 2, PGBits: objplacement.MinPGBits,
 		Members: []placement.Member{
 			{Node: "a", Weight: 1, Share: placement.DefaultShare(1)},
 			{Node: "b", Weight: 1, Share: placement.DefaultShare(1)},

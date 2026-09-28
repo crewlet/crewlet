@@ -17,7 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
-	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	mapplacement "github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -1147,9 +1147,9 @@ func (s *Store) validate(path Path) error {
 		p.add(at(path, "busy_timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the store default) or positive, got %v", s.BusyTimeoutSeconds)
 	}
-	if w := s.Objects.Weight; w < 0 || w > objplacement.MaxWeight {
+	if w := s.Objects.Weight; w < 0 || w > mapplacement.MaxWeight {
 		p.add(at(at(path, "objects"), "weight"), ErrOutOfRange,
-			"must be 0 (the default share) or 1..%d, got %d", objplacement.MaxWeight, w)
+			"must be 0 (the default share) or 1..%d, got %d", mapplacement.MaxWeight, w)
 	}
 	return p.err()
 }

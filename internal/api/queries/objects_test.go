@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
+	"github.com/crewlet/crewlet/internal/placement"
 )
 
 // objectMaps is a stored placement map a test sets directly.
@@ -37,9 +38,9 @@ func (m objectMaps) ObjectMap(context.Context) (coord.ObjectMapRecord, bool, err
 func placedFleet(t *testing.T) objstore.MapState {
 	t.Helper()
 	since := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	member := func(node string, weight int, zone string) objplacement.Member {
-		return objplacement.Member{Node: node, Weight: weight,
-			Share: objplacement.DefaultShare(weight), Domain: zone}
+	member := func(node string, weight int, zone string) placement.Member {
+		return placement.Member{Node: node, Weight: weight,
+			Share: placement.DefaultShare(weight), Domain: zone}
 	}
 	out := member("data-d", 1, "eu-3")
 	out.Out = true
@@ -50,7 +51,7 @@ func placedFleet(t *testing.T) objstore.MapState {
 			Generation: uuid.MustParse("5b0c1f7e-9c1d-4f5e-8a3b-2d7c6e1f0a9b"),
 			Epoch:      7, Replicas: 2, PGBits: objplacement.MinPGBits,
 			FailureDomain: "zone",
-			Members: []objplacement.Member{
+			Members: []placement.Member{
 				member("data-a", 2, "eu-1"), member("data-b", 1, "eu-2"),
 				member("data-c", 1, "eu-3"), out, probation,
 			},
@@ -316,14 +317,14 @@ func TestTheFleetShowsHowEvenlyTheMapSpreadsItsCopies(t *testing.T) {
 		want    map[string]any
 	}{
 		"a balance that ran out of rounds": {
-			balance: objstore.Balance{Epoch: 7, BalanceReport: objplacement.BalanceReport{
-				Rounds: objplacement.DefaultMaxRounds, Deviation: 0.051}},
+			balance: objstore.Balance{Epoch: 7, BalanceReport: placement.BalanceReport{
+				Rounds: placement.DefaultMaxRounds, Deviation: 0.051}},
 			want: map[string]any{"epoch": 7.0, "deviation_percent": 5.1,
 				"tolerance_percent": 2.0, "converged": false,
-				"rounds": float64(objplacement.DefaultMaxRounds)},
+				"rounds": float64(placement.DefaultMaxRounds)},
 		},
 		"a split measured and left as it was": {
-			balance: objstore.Balance{Epoch: 6, BalanceReport: objplacement.BalanceReport{
+			balance: objstore.Balance{Epoch: 6, BalanceReport: placement.BalanceReport{
 				Deviation: 0.012, Converged: true}},
 			want: map[string]any{"epoch": 6.0, "deviation_percent": 1.2,
 				"tolerance_percent": 2.0, "converged": true, "rounds": 0.0},

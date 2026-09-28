@@ -10,7 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/placement"
 )
 
 var stamp = time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
@@ -19,7 +20,7 @@ var stamp = time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
 // would show.
 func full() MapState {
 	return MapState{
-		Map: placement.Map{
+		Map: objplacement.Map{
 			Generation: uuid.MustParse("7b0e0a52-3c43-4d9f-9d6f-2f3d1c1b8e11"),
 			Epoch:      7, Replicas: 3, PGBits: 9, FailureDomain: "zone",
 			Members: []placement.Member{

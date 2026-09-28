@@ -15,9 +15,10 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
+	"github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -391,7 +392,7 @@ func newScheduled() *scheduled {
 		members:   []placement.Member{{Node: "data-a", Weight: 1}, {Node: "data-b", Weight: 1}}}
 	s.passSchedule = &passSchedule{self: "data-a", node: s.passes,
 		now: func() time.Time { return s.clock },
-		settled: func(_ context.Context, m placement.Map) (bool, error) {
+		settled: func(_ context.Context, m objplacement.Map) (bool, error) {
 			s.asked++
 			return s.settledAt[m.Epoch], nil
 		}}
@@ -405,7 +406,7 @@ func (s *scheduled) at(t *testing.T, d time.Duration, epoch uint64) []string {
 	s.clock = s.clock.Add(d)
 	s.passes.epoch = epoch
 	before := len(s.passes.ran)
-	s.poll(t.Context(), placement.Map{Epoch: epoch, Members: s.members}, true)
+	s.poll(t.Context(), objplacement.Map{Epoch: epoch, Members: s.members}, true)
 	return s.passes.ran[before:]
 }
 
@@ -645,7 +646,7 @@ func TestTheLeaseCarriesWhatTheScrubFound(t *testing.T) {
 // map's epoch with nothing pending.
 func TestTheFleetIsSettledAsItsLeasesSay(t *testing.T) {
 	t.Parallel()
-	m := placement.Map{Epoch: 4, Members: []placement.Member{
+	m := objplacement.Map{Epoch: 4, Members: []placement.Member{
 		{Node: "a", Weight: 1}, {Node: "b", Weight: 1}, {Node: "gone", Weight: 1, Out: true}}}
 	lease := func(epoch uint64, completed bool, pending int) map[string]any {
 		return objstore.ObjectsMeta{Weight: 1, Repair: &objstore.ObjectsRepair{

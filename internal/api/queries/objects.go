@@ -12,8 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
+	"github.com/crewlet/crewlet/internal/placement"
 )
 
 // The fleet view's object-store block: where the company's files are placed,
@@ -422,13 +423,13 @@ func RenderHold(state objstore.MapState, now time.Time) *ObjectHold {
 // RenderObjects is a placed map as the fleet view renders it, joined with the
 // live objects leases.
 //
-// layout is the stored map's own ([placement.Map.Layout]) — taken rather than
+// layout is the stored map's own ([objplacement.Map.Layout]) — taken rather than
 // computed here, because computing one is groups × members draws and the fleet
 // question caches it per map (see [objectLayouts]). leases are the live
 // objects leases; one for a node the map does not hold is ignored, as the
 // maintainer adds it at its next tick — on probation, if it is one the map
 // removed.
-func RenderObjects(state objstore.MapState, layout *placement.Layout,
+func RenderObjects(state objstore.MapState, layout *objplacement.Layout,
 	leases []coord.Lease, now time.Time) FleetObjects {
 
 	m := state.Map
@@ -491,7 +492,7 @@ func RenderObjects(state objstore.MapState, layout *placement.Layout,
 // A WALK OF THE CACHED LAYOUT, not of the ranking: the up sets are exactly the
 // copies the map places, and a member outside a group's up set holds nothing
 // of it that anybody is counting on.
-func degradedGroups(layout *placement.Layout, down map[string]bool) int {
+func degradedGroups(layout *objplacement.Layout, down map[string]bool) int {
 	if len(down) == 0 {
 		return 0
 	}
@@ -610,8 +611,8 @@ func (s Sources) objectMap(ctx context.Context, leases []coord.Lease) FleetObjec
 // comparing a few dozen members costs nothing beside a layout.
 type objectLayouts struct {
 	mu     sync.Mutex
-	m      placement.Map
-	layout *placement.Layout
+	m      objplacement.Map
+	layout *objplacement.Layout
 }
 
 // of is m's layout, computed at most once per map. A nil cache computes it
@@ -619,7 +620,7 @@ type objectLayouts struct {
 //
 // THE LOCK IS HELD WHILE A LAYOUT IS COMPUTED, so two requests arriving
 // together after a map change compute it once between them rather than twice.
-func (c *objectLayouts) of(m placement.Map) *placement.Layout {
+func (c *objectLayouts) of(m objplacement.Map) *objplacement.Layout {
 	if c == nil {
 		return m.Layout()
 	}
@@ -635,7 +636,7 @@ func (c *objectLayouts) of(m placement.Map) *placement.Layout {
 
 // sameMap reports whether two maps place identically: every field a layout
 // reads.
-func sameMap(a, b placement.Map) bool {
+func sameMap(a, b objplacement.Map) bool {
 	return a.Generation == b.Generation && a.Epoch == b.Epoch &&
 		a.Replicas == b.Replicas && a.PGBits == b.PGBits &&
 		a.FailureDomain == b.FailureDomain && slices.Equal(a.Members, b.Members)

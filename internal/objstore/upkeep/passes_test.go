@@ -16,8 +16,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/objstore/transfer"
+	"github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -71,8 +72,8 @@ func (r *refs) refer(hs ...objstore.Hash) {
 }
 
 // testMap is a valid map of equal members.
-func testMap(bits, replicas int, names ...string) placement.Map {
-	m := placement.Map{Generation: uuid.New(), Epoch: 3, Replicas: replicas, PGBits: bits}
+func testMap(bits, replicas int, names ...string) objplacement.Map {
+	m := objplacement.Map{Generation: uuid.New(), Epoch: 3, Replicas: replicas, PGBits: bits}
 	for _, name := range slices.Sorted(slices.Values(names)) {
 		m.Members = append(m.Members, placement.Member{Node: name, Weight: 1,
 			Share: placement.DefaultShare(1)})
@@ -85,26 +86,26 @@ func testMap(bits, replicas int, names ...string) placement.Map {
 type dataNode struct {
 	name   string
 	disk   *disk.Store
-	layout atomic.Pointer[placement.Layout]
+	layout atomic.Pointer[objplacement.Layout]
 	client *transfer.Client
 	passes *Node
 	now    atomic.Pointer[time.Time]
 }
 
-func (d *dataNode) layouts() (*placement.Layout, bool) {
+func (d *dataNode) layouts() (*objplacement.Layout, bool) {
 	l := d.layout.Load()
 	return l, l != nil
 }
 
-func (d *dataNode) place(m placement.Map) { d.layout.Store(m.Layout()) }
+func (d *dataNode) place(m objplacement.Map) { d.layout.Store(m.Layout()) }
 
 func (d *dataNode) setNow(t time.Time) { d.now.Store(&t) }
 
 type fleet struct {
 	nodes map[string]*dataNode
 	refs  *refs
-	m     placement.Map
-	l     *placement.Layout
+	m     objplacement.Map
+	l     *objplacement.Layout
 }
 
 // openStore is a data node's chunk store, on a volume pinned half full. Its
@@ -132,7 +133,7 @@ func halfFull(string) (capacity, free uint64, err error) { return 100 << 30, 50 
 // fewest group bits.
 func newFleet(t *testing.T, replicas int, names ...string) *fleet {
 	t.Helper()
-	return newFleetAt(t, placement.MinPGBits, replicas, names...)
+	return newFleetAt(t, objplacement.MinPGBits, replicas, names...)
 }
 
 // newFleetAt is newFleet at a given group count.
@@ -297,10 +298,10 @@ func TestRepairTellsMissingFromUnreachable(t *testing.T) {
 	store := openStore(t)
 	lost := objstore.HashOf([]byte("gone from every member"))
 	away := objstore.HashOf([]byte("on a member that did not answer"))
-	m := testMap(placement.MinPGBits, 1, "data-a")
+	m := testMap(objplacement.MinPGBits, 1, "data-a")
 	n, err := NewNode(NodeOptions{Self: "data-a", Local: store,
 		Peers:      fetching{fail: map[objstore.Hash]error{lost: transfer.ErrNotFound, away: transfer.ErrUnreachable}},
-		Layouts:    func() (*placement.Layout, bool) { return m.Layout(), true },
+		Layouts:    func() (*objplacement.Layout, bool) { return m.Layout(), true },
 		References: References{newRefs(lost, away)}})
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +321,7 @@ func TestRepairTellsMissingFromUnreachable(t *testing.T) {
 // never more than a 256th of the slots in one read.
 func TestTheRunsARepairReadsAreExactlyThisNodesGroups(t *testing.T) {
 	t.Parallel()
-	for _, bits := range []int{placement.MinPGBits, 11, placement.MaxPGBits} {
+	for _, bits := range []int{objplacement.MinPGBits, 11, objplacement.MaxPGBits} {
 		m := testMap(bits, 2, "data-a", "data-b", "data-c", "data-d", "data-e")
 		l := m.Layout()
 		runs := placedOn(l, "data-c")
@@ -627,7 +628,7 @@ func (a *answering) Has(_ context.Context, node string, hs []objstore.Hash, veri
 }
 
 // strayNode is data-z holding one referenced chunk the map places elsewhere.
-func strayNode(t *testing.T, m placement.Map, peer Peers) (*Node, *disk.Store, objstore.Hash) {
+func strayNode(t *testing.T, m objplacement.Map, peer Peers) (*Node, *disk.Store, objstore.Hash) {
 	t.Helper()
 	store := openStore(t)
 	data := []byte("a copy beyond the placement")
@@ -637,7 +638,7 @@ func strayNode(t *testing.T, m placement.Map, peer Peers) (*Node, *disk.Store, o
 	}
 	l := m.Layout()
 	n, err := NewNode(NodeOptions{Self: "data-z", Local: store, Peers: peer,
-		Layouts:    func() (*placement.Layout, bool) { return l, true },
+		Layouts:    func() (*objplacement.Layout, bool) { return l, true },
 		References: References{newRefs(h)}})
 	if err != nil {
 		t.Fatal(err)
@@ -646,8 +647,8 @@ func strayNode(t *testing.T, m placement.Map, peer Peers) (*Node, *disk.Store, o
 }
 
 // withMember is m with node added as a member that is out, so it holds no
-// group and its every referenced copy is beyond its placement.
-func withMember(m placement.Map, node string) placement.Map {
+// group and its every referenced copy is beyond its objplacement.
+func withMember(m objplacement.Map, node string) objplacement.Map {
 	m.Members = append(slices.Clone(m.Members), placement.Member{Node: node, Weight: 1,
 		Share: placement.DefaultShare(1), Out: true})
 	slices.SortFunc(m.Members, func(a, b placement.Member) int { return strings.Compare(a.Node, b.Node) })
@@ -661,7 +662,7 @@ func withMember(m placement.Map, node string) placement.Map {
 // each drop theirs. And every question asks for a VERIFIED answer.
 func TestOnlyAFullConfirmationDropsACopy(t *testing.T) {
 	t.Parallel()
-	m := withMember(testMap(placement.MinPGBits, 1, "data-a"), "data-z")
+	m := withMember(testMap(objplacement.MinPGBits, 1, "data-a"), "data-z")
 	for _, c := range []struct {
 		name    string
 		peer    *answering
@@ -695,7 +696,7 @@ func TestOnlyAFullConfirmationDropsACopy(t *testing.T) {
 func TestANodeTheMapDoesNotHoldKeepsWhatIsReferenced(t *testing.T) {
 	t.Parallel()
 	peer := &answering{held: true, placed: true, epoch: 3}
-	n, store, h := strayNode(t, testMap(placement.MinPGBits, 1, "data-a"), peer)
+	n, store, h := strayNode(t, testMap(objplacement.MinPGBits, 1, "data-a"), peer)
 	junk := []byte("uploaded, never recorded")
 	if err := store.Put(objstore.HashOf(junk), junk); err != nil {
 		t.Fatal(err)
@@ -734,7 +735,7 @@ func TestAMemberOnProbationKeepsWhatIsReferenced(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			m := withMember(testMap(placement.MinPGBits, 1, "data-a"), "data-z")
+			m := withMember(testMap(objplacement.MinPGBits, 1, "data-a"), "data-z")
 			for i := range m.Members {
 				if m.Members[i].Node == "data-z" {
 					m.Members[i].Out, m.Members[i].Probation = c.out, c.probation
@@ -756,7 +757,7 @@ func TestAMemberOnProbationKeepsWhatIsReferenced(t *testing.T) {
 			}
 		})
 	}
-	if keep, why := KeepsEveryCopy(testMap(placement.MinPGBits, 1, "data-a"), "data-z"); !keep ||
+	if keep, why := KeepsEveryCopy(testMap(objplacement.MinPGBits, 1, "data-a"), "data-z"); !keep ||
 		!strings.Contains(why, "not a member") {
 		t.Fatalf("a node the map does not hold: keeps %v, %q", keep, why)
 	}
@@ -839,7 +840,7 @@ func TestARemovedHolderIsReadFromTheTickItIsBack(t *testing.T) {
 // copy, and "every member confirmed" is not vacuously true of it.
 func TestAGroupPlacedOnNobodyKeepsItsCopies(t *testing.T) {
 	t.Parallel()
-	m := testMap(placement.MinPGBits, 1, "data-a", "data-z")
+	m := testMap(objplacement.MinPGBits, 1, "data-a", "data-z")
 	for i := range m.Members {
 		m.Members[i].Out = true
 	}
@@ -858,7 +859,7 @@ func TestAGroupPlacedOnNobodyKeepsItsCopies(t *testing.T) {
 func TestASilentMemberIsAskedOncePerPass(t *testing.T) {
 	t.Parallel()
 	store := openStore(t)
-	m := withMember(testMap(placement.MinPGBits, 1, "data-a"), "data-z")
+	m := withMember(testMap(objplacement.MinPGBits, 1, "data-a"), "data-z")
 	r := newRefs()
 	for i := range 40 {
 		data := []byte{byte(i), 'q'}
@@ -870,7 +871,7 @@ func TestASilentMemberIsAskedOncePerPass(t *testing.T) {
 	peer := &answering{err: transfer.ErrNoAnswer}
 	l := m.Layout()
 	n, err := NewNode(NodeOptions{Self: "data-z", Local: store, Peers: peer,
-		Layouts: func() (*placement.Layout, bool) { return l, true }, References: References{r}})
+		Layouts: func() (*objplacement.Layout, bool) { return l, true }, References: References{r}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -891,7 +892,7 @@ func TestPassesWithNoSourceAreRefused(t *testing.T) {
 	t.Parallel()
 	store := openStore(t)
 	_, err := NewNode(NodeOptions{Self: "data-a", Local: store, Peers: &transfer.Client{},
-		Layouts: func() (*placement.Layout, bool) { return nil, false }})
+		Layouts: func() (*objplacement.Layout, bool) { return nil, false }})
 	if err == nil {
 		t.Fatal("passes with no references were built")
 	}

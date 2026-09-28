@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
+	"github.com/crewlet/crewlet/internal/placement"
 )
 
 // objectsAt is the instant every fixture here is stamped at.
@@ -26,9 +27,9 @@ var objectsAt = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 // settledObjects is a map every member of which holds what it places, with
 // data-c taken out and emptied — the state in which a node may be stopped.
 func settledObjects() objstore.MapState {
-	member := func(node string, zone string) objplacement.Member {
-		return objplacement.Member{Node: node, Weight: 1,
-			Share: objplacement.DefaultShare(1), Domain: zone}
+	member := func(node string, zone string) placement.Member {
+		return placement.Member{Node: node, Weight: 1,
+			Share: placement.DefaultShare(1), Domain: zone}
 	}
 	out := member("data-c", "eu-3")
 	out.Out = true
@@ -37,7 +38,7 @@ func settledObjects() objstore.MapState {
 			Generation: uuid.MustParse("5b0c1f7e-9c1d-4f5e-8a3b-2d7c6e1f0a9b"),
 			Epoch:      7, Replicas: 2, PGBits: objplacement.MinPGBits,
 			FailureDomain: "zone",
-			Members: []objplacement.Member{
+			Members: []placement.Member{
 				member("data-a", "eu-1"), member("data-b", "eu-2"), out,
 			},
 		},
@@ -283,7 +284,7 @@ func TestObjectsStatusNamesWhatTheFleetIsWaitingFor(t *testing.T) {
 // steps past shows nowhere else.
 func TestObjectsStatusSaysProbationRemovalsAndWhatTheScrubCouldNotRead(t *testing.T) {
 	node := newFakeObjectsNode(t)
-	back := objplacement.Member{Node: "data-d", Weight: 1, Share: objplacement.DefaultShare(1),
+	back := placement.Member{Node: "data-d", Weight: 1, Share: placement.DefaultShare(1),
 		Domain: "eu-2", Probation: true}
 	node.state.Map.Members = append(node.state.Map.Members, back)
 	node.state.Removed = map[string]objstore.Removal{
@@ -333,7 +334,7 @@ func TestObjectsStatusSaysProbationRemovalsAndWhatTheScrubCouldNotRead(t *testin
 // rather than "balanced", and a measurement of an older placement says which.
 func TestObjectsStatusSaysHowEvenlyTheMapSpreadsItsCopies(t *testing.T) {
 	report := func(epoch uint64, rounds int, deviation float64, converged bool) objstore.Balance {
-		return objstore.Balance{Epoch: epoch, BalanceReport: objplacement.BalanceReport{
+		return objstore.Balance{Epoch: epoch, BalanceReport: placement.BalanceReport{
 			Rounds: rounds, Deviation: deviation, Converged: converged}}
 	}
 	for name, tc := range map[string]struct {
@@ -342,7 +343,7 @@ func TestObjectsStatusSaysHowEvenlyTheMapSpreadsItsCopies(t *testing.T) {
 	}{
 		"converged": {report(7, 6, 0.015, true),
 			"Balanced within 1.5%: every placeable member holds that close"},
-		"out of rounds": {report(7, objplacement.DefaultMaxRounds, 0.061, false),
+		"out of rounds": {report(7, placement.DefaultMaxRounds, 0.061, false),
 			"NOT CONVERGED: after 60 rounds a member is still 6.1% off the copies its " +
 				"weight entitles it to, where a balance aims within 2%"},
 		"a split left as it was": {report(7, 0, 0.031, false),

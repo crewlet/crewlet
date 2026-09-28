@@ -37,8 +37,8 @@ This binds four packages that each hold a quarter of it — the Tier B field and
 its validation in `internal/config`, the per-tick read of the company and the
 objects lease in `internal/engine`, the maintainer that applies them in
 `internal/objstore/upkeep`, and the draw that spreads by domain in
-`internal/objstore/placement` — which is why it is a record rather than a
-package doc.
+`internal/placement` (the draw the object map shares with the estate map) —
+which is why it is a record rather than a package doc.
 
 ## Why the obvious alternatives are wrong
 

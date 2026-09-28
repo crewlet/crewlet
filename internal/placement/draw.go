@@ -7,34 +7,16 @@ import (
 	"math/bits"
 )
 
-// seedKey is the placement seed of group pg in a map of k group bits: the
-// group's bit string with its trailing zeros stripped, as the pair (value,
-// length), packed into one word.
-//
-// WHY THE ZEROS ARE STRIPPED: raising k by one splits group p into 2p and
-// 2p+1, and 2p is p's bit string with one more zero on the end — so its
-// stripped pair is p's, it draws exactly what p drew, and every chunk in it
-// stays where it was. 2p+1 ends in a one, so its pair keeps all k+1 bits; no
-// group at any smaller k had a pair that long, so it draws fresh. A doubling
-// therefore re-places the upper half of every group and nothing else. And two
-// different groups at one k never share a seed, because the same value and
-// length is the same bit string.
-func seedKey(pg, k int) uint64 {
-	tz := k
-	if pg != 0 {
-		tz = bits.TrailingZeros64(uint64(pg))
-	}
-	return uint64(k-tz)<<32 | uint64(pg)>>tz
-}
-
-// nodeKeyDomain separates a member's key from every other SHA-256 this engine
-// takes of a node id.
-const nodeKeyDomain = "crewlet-objstore-node\x00"
-
 // nodeKey is a member's half of every draw it takes part in: a hash of its
-// node id, computed once per member per layout rather than once per draw.
-func nodeKey(node string) uint64 {
-	sum := sha256.Sum256([]byte(nodeKeyDomain + node))
+// node id under its map's salt, computed once per member per layout rather
+// than once per draw.
+//
+// THE SALT SEPARATES THE MAPS: the same node under two salts has two
+// unrelated keys, so two maps over the same nodes rank them independently
+// even for groups whose seeds coincide. It also separates this key from every
+// other SHA-256 this engine takes of a node id.
+func nodeKey(salt Salt, node string) uint64 {
+	sum := sha256.Sum256([]byte(string(salt) + node))
 	return binary.BigEndian.Uint64(sum[:8])
 }
 
@@ -48,12 +30,12 @@ const golden = 0x9E3779B97F4A7C15
 // PURE INTEGER ARITHMETIC rather than a SHA-256 per draw: a layout is groups ×
 // members draws — up to 65536 × hundreds — computed by every node for every
 // map and by the balancer for every candidate, and a cryptographic hash per
-// draw is what had a node's object server spending seconds on one request. Nothing here
-// needs collision resistance: the inputs are a group number and a node id the
-// fleet chose itself, and what the draw needs is only that it is uniform and
-// independent across (group, member) pairs, which two rounds of MurmurHash3's
-// finalizer give. The seed is folded in twice so a structured seed cannot
-// cancel against a structured key in one round.
+// draw is what had a node's object server spending seconds on one request.
+// Nothing here needs collision resistance: the inputs are a group's seed and a
+// node id the fleet chose itself, and what the draw needs is only that it is
+// uniform and independent across (group, member) pairs, which two rounds of
+// MurmurHash3's finalizer give. The seed is folded in twice so a structured
+// seed cannot cancel against a structured key in one round.
 func mix(seed, node uint64) uint64 {
 	x := seed*golden ^ node
 	x = fmix64(x)
@@ -88,7 +70,7 @@ const drawBits = 53
 //
 // INTEGERS, so every CPU agrees to the last bit. Two nodes computing a draw a
 // last bit apart would rank a group's members differently and each ask the
-// other for a chunk neither stores — which is why Ceph's own crush_ln is
+// other for something neither holds — which is why Ceph's own crush_ln is
 // integer arithmetic too, and why math.Log (per-architecture assembly) is
 // not an option. It truncates, so it is at most a few units of 2^-32 below the
 // true value, identically everywhere, and never decreases as x grows.

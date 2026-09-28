@@ -11,7 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/placement"
 )
 
 var t0 = time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
@@ -94,7 +95,7 @@ func tick(t *testing.T, state objstore.MapState, live []Presence, c Company) obj
 }
 
 // nodes is the map's members' names.
-func nodes(m placement.Map) []string {
+func nodes(m objplacement.Map) []string {
 	var out []string
 	for _, member := range m.Members {
 		out = append(out, member.Node)
@@ -136,10 +137,10 @@ func TestAFirstMapComesFromTheCompany(t *testing.T) {
 	case state.Balance.Epoch != m.Epoch:
 		t.Errorf("the first map was not balanced: %+v", state.Balance)
 	}
-	if big := first(t, roster(8), company(1, 3, "")); big.Map.PGBits != placement.MinPGBits+1 ||
-		placement.TargetPGBits(8, 3) != placement.MinPGBits+1 {
+	if big := first(t, roster(8), company(1, 3, "")); big.Map.PGBits != objplacement.MinPGBits+1 ||
+		objplacement.TargetPGBits(8, 3) != objplacement.MinPGBits+1 {
 		t.Errorf("eight members at three copies start at %d group bits, want the target %d",
-			big.Map.PGBits, placement.TargetPGBits(8, 3))
+			big.Map.PGBits, objplacement.TargetPGBits(8, 3))
 	}
 	if again := first(t, roster(1), company(1, 1, "")); again.Map.Generation == m.Generation {
 		t.Error("two first maps share a generation — a recreated key would read as the old one")
@@ -545,7 +546,7 @@ func TestARemovedNodeIsPlacedOnOnlyOnceStable(t *testing.T) {
 		}
 		if back.Map.Size() != removed.Map.Size() || len(back.Map.Placeable()) != 2 {
 			t.Fatalf("on probation it is placed on: size %d, placeable %v", back.Map.Size(),
-				nodes(placement.Map{Members: back.Map.Placeable()}))
+				nodes(objplacement.Map{Members: back.Map.Placeable()}))
 		}
 		l := back.Map.Layout()
 		for pg := range back.Map.Groups() {
@@ -799,9 +800,9 @@ func splittable(t *testing.T) (objstore.MapState, []Presence, Company) {
 	state := first(t, roster(7), c)
 	live := roster(8)
 	state = tick(t, state, live, c)
-	if state.Map.PGBits != placement.MinPGBits ||
-		placement.TargetPGBits(8, 3) != placement.MinPGBits+1 {
-		t.Fatalf("setup: pg_bits %d, target %d", state.Map.PGBits, placement.TargetPGBits(8, 3))
+	if state.Map.PGBits != objplacement.MinPGBits ||
+		objplacement.TargetPGBits(8, 3) != objplacement.MinPGBits+1 {
+		t.Fatalf("setup: pg_bits %d, target %d", state.Map.PGBits, objplacement.TargetPGBits(8, 3))
 	}
 	return state, live, c
 }
@@ -919,7 +920,7 @@ func TestASplitIsOneBitAtATime(t *testing.T) {
 	state := first(t, roster(7), c)
 	live := roster(16)
 	state = tick(t, state, live, c)
-	if target := placement.TargetPGBits(16, 3); target != state.Map.PGBits+2 {
+	if target := objplacement.TargetPGBits(16, 3); target != state.Map.PGBits+2 {
 		t.Fatalf("setup: target %d from %d", target, state.Map.PGBits)
 	}
 	bits := []int{state.Map.PGBits}
@@ -1239,7 +1240,7 @@ func TestSettledIsEveryPlaceableMemberRepairedAtThisEpoch(t *testing.T) {
 		nobody.Members[i].Out = true
 	}
 	for name, tc := range map[string]struct {
-		m    placement.Map
+		m    objplacement.Map
 		live []Presence
 		want bool
 	}{

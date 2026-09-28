@@ -347,8 +347,9 @@ func (h *holders) at(i int) (string, bool) {
 
 // extend appends every member of the ranking not yet listed, members that did
 // not answer lately last — and for a write, no member the map does not place
-// on ([placement.Member.Placeable]): one that is out, or on probation. What is
-// already listed keeps its place: a request has already tried it.
+// on (one that is not Placeable, internal/placement's one question of both):
+// one that is out, or on probation. What is already listed keeps its place: a
+// request has already tried it.
 func (h *holders) extend() {
 	h.whole = true
 	var rest []string

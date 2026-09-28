@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
-	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	mapplacement "github.com/crewlet/crewlet/internal/placement"
 )
 
 // AN UNSET REPLICA COUNT IS THE DEFAULT, never zero copies. A company that
@@ -35,9 +35,9 @@ func TestTheObjectReplicaCountDefaultsToThree(t *testing.T) {
 // refused would be a revision every node applies and no maintainer can write.
 func TestTheObjectReplicaCeilingIsThePlacementMaps(t *testing.T) {
 	t.Parallel()
-	if config.MaxObjectReplicas != objplacement.MaxReplicas {
+	if config.MaxObjectReplicas != mapplacement.MaxReplicas {
 		t.Fatalf("config allows %d copies, the map %d", config.MaxObjectReplicas,
-			objplacement.MaxReplicas)
+			mapplacement.MaxReplicas)
 	}
 }
 

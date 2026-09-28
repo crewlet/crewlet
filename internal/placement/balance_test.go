@@ -1,12 +1,57 @@
-package placement
+package placement_test
 
 import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/google/uuid"
+
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/placement"
 )
+
+// THE BALANCE IS MEASURED OVER THE OBJECT MAP'S GROUPS — groups that split, at
+// the count objstore/placement.TargetPGBits picks — because that is the corpus
+// every figure in [placement.Balance]'s doc was measured over. So these are
+// object maps, balanced through their draws.
+
+// generation is the lineage every test map carries.
+var generation = uuid.MustParse("5f0c7a52-8e1d-4c3b-9a64-0d2e7f1b3c85")
+
+// mapOf is a valid map of these members, sorted.
+func mapOf(pgBits, replicas int, failureDomain string, members ...placement.Member) objplacement.Map {
+	slices.SortFunc(members, func(a, b placement.Member) int { return strings.Compare(a.Node, b.Node) })
+	return objplacement.Map{Generation: generation, Epoch: 1, Replicas: replicas, PGBits: pgBits,
+		FailureDomain: failureDomain, Members: members}
+}
+
+// member is a node of this weight at its default share, in this domain.
+func member(node string, weight int, domain string) placement.Member {
+	return placement.Member{Node: node, Weight: weight, Share: placement.DefaultShare(weight), Domain: domain}
+}
+
+// fleet is n equal members, data-000 onwards.
+func fleet(n, pgBits, replicas int) objplacement.Map {
+	members := make([]placement.Member, n)
+	for i := range members {
+		members[i] = member(fmt.Sprintf("data-%03d", i), 1, "")
+	}
+	return mapOf(pgBits, replicas, "", members...)
+}
+
+// balance balances a map's draw and answers the map with the shares it found.
+func balance(m objplacement.Map, opts placement.BalanceOptions) (objplacement.Map, placement.BalanceReport) {
+	balanced, report := placement.Balance(m.Draw(), opts)
+	m.Members = balanced.Members
+	return m, report
+}
+
+// entitled is a map's entitlement.
+func entitled(m objplacement.Map) placement.Entitlement { return placement.Entitle(m.Draw()) }
 
 // meanOf is the mean of the named members' copies.
 func meanOf(copies map[string]int, nodes ...string) float64 {
@@ -22,14 +67,14 @@ func meanOf(copies map[string]int, nodes ...string) float64 {
 // copies, and the balanced map gives it four, within five percent.
 func TestABalancedWeightIsItsFractionOfEveryCopy(t *testing.T) {
 	t.Parallel()
-	m := fleet(10, TargetPGBits(10, 3), 3)
-	m.Members[0].Weight, m.Members[0].Share = 4, DefaultShare(4)
+	m := fleet(10, objplacement.TargetPGBits(10, 3), 3)
+	m.Members[0].Weight, m.Members[0].Share = 4, placement.DefaultShare(4)
 	heavy := m.Members[0].Node
 	var light []string
 	for _, mem := range m.Members[1:] {
 		light = append(light, mem.Node)
 	}
-	ratio := func(m Map) float64 {
+	ratio := func(m objplacement.Map) float64 {
 		copies := m.Layout().Copies()
 		return float64(copies[heavy]) / meanOf(copies, light...)
 	}
@@ -37,7 +82,7 @@ func TestABalancedWeightIsItsFractionOfEveryCopy(t *testing.T) {
 		t.Errorf("unbalanced, the weight-4 member holds %.2f times a weight-1 "+
 			"member's copies — the defect the balancer exists for has gone", got)
 	}
-	balanced, report := Balance(m, BalanceOptions{})
+	balanced, report := balance(m, placement.BalanceOptions{})
 	if !report.Converged {
 		t.Fatalf("the balance did not converge: %+v", report)
 	}
@@ -48,8 +93,8 @@ func TestABalancedWeightIsItsFractionOfEveryCopy(t *testing.T) {
 	// AND THE FLEET STAYS AT 1.0 PER UNIT OF WEIGHT, so a member joining
 	// later at ShareFor starts at its weight rather than at wherever the
 	// shares had drifted.
-	if got := balanced.ShareFor(1); got < shareOne-1 || got > shareOne+1 {
-		t.Fatalf("a balanced fleet runs at %d per unit of weight, want %d", got, shareOne)
+	if got := balanced.Draw().ShareFor(1); got < placement.ShareOne-1 || got > placement.ShareOne+1 {
+		t.Fatalf("a balanced fleet runs at %d per unit of weight, want %d", got, placement.ShareOne)
 	}
 }
 
@@ -57,8 +102,8 @@ func TestABalancedWeightIsItsFractionOfEveryCopy(t *testing.T) {
 // at the group count this package picks for them.
 func TestFiftyEqualMembersBalanceEvenly(t *testing.T) {
 	t.Parallel()
-	m := fleet(50, TargetPGBits(50, 3), 3)
-	balanced, report := Balance(m, BalanceOptions{})
+	m := fleet(50, objplacement.TargetPGBits(50, 3), 3)
+	balanced, report := balance(m, placement.BalanceOptions{})
 	copies := balanced.Layout().Copies()
 	most := 0
 	for _, n := range copies {
@@ -82,14 +127,14 @@ func TestFiftyEqualMembersBalanceEvenly(t *testing.T) {
 // ninth of all copies their weights alone would say.
 func TestBalancingRespectsFailureDomains(t *testing.T) {
 	t.Parallel()
-	var members []Member
+	var members []placement.Member
 	for zone, size := range map[string]int{"z2": 2, "z3": 3, "z4": 4} {
 		for i := range size {
 			members = append(members, member(fmt.Sprintf("%s-%d", zone, i), 1, zone))
 		}
 	}
 	m := mapOf(10, 3, "zone", members...)
-	balanced, report := Balance(m, BalanceOptions{})
+	balanced, report := balance(m, placement.BalanceOptions{})
 	if !report.Converged {
 		t.Fatalf("a fleet whose zones cap its targets did not converge: %+v", report)
 	}
@@ -120,9 +165,9 @@ func TestBalancingRespectsFailureDomains(t *testing.T) {
 // groups, and the others two thirds each.
 func TestAMemberIsCappedAtOneCopyOfEveryGroup(t *testing.T) {
 	t.Parallel()
-	m := mapOf(MinPGBits, 3, "", member("big", 64, ""), member("s1", 1, ""),
+	m := mapOf(objplacement.MinPGBits, 3, "", member("big", 64, ""), member("s1", 1, ""),
 		member("s2", 1, ""), member("s3", 1, ""))
-	balanced, report := Balance(m, BalanceOptions{})
+	balanced, report := balance(m, placement.BalanceOptions{})
 	copies := balanced.Layout().Copies()
 	if copies["big"] != m.Groups() || !report.Converged {
 		t.Fatalf("the heavy member holds %d of %d groups (%+v)", copies["big"],
@@ -130,7 +175,7 @@ func TestAMemberIsCappedAtOneCopyOfEveryGroup(t *testing.T) {
 	}
 	want := float64(2*m.Groups()) / 3
 	for _, node := range []string{"s1", "s2", "s3"} {
-		if math.Abs(float64(copies[node])-want)/want > DefaultTolerance {
+		if math.Abs(float64(copies[node])-want)/want > placement.DefaultTolerance {
 			t.Errorf("%s holds %d, want %.1f", node, copies[node], want)
 		}
 	}
@@ -142,16 +187,16 @@ func TestAMemberIsCappedAtOneCopyOfEveryGroup(t *testing.T) {
 // the members and everything else are the caller's.
 func TestBalancingABalancedMapChangesNothing(t *testing.T) {
 	t.Parallel()
-	m := fleet(20, TargetPGBits(20, 3), 3)
+	m := fleet(20, objplacement.TargetPGBits(20, 3), 3)
 	for i := range m.Members {
 		m.Members[i].Weight = 1 + i%3
-		m.Members[i].Share = DefaultShare(m.Members[i].Weight)
+		m.Members[i].Share = placement.DefaultShare(m.Members[i].Weight)
 	}
-	once, first := Balance(m, BalanceOptions{})
+	once, first := balance(m, placement.BalanceOptions{})
 	if !first.Converged {
 		t.Fatalf("the first balance did not converge: %+v", first)
 	}
-	twice, second := Balance(once, BalanceOptions{})
+	twice, second := balance(once, placement.BalanceOptions{})
 	if second.Rounds != 1 || second.Deviation != first.Deviation {
 		t.Errorf("rebalancing took %d rounds to %.4f, the first ended at %.4f",
 			second.Rounds, second.Deviation, first.Deviation)
@@ -162,7 +207,7 @@ func TestBalancingABalancedMapChangesNothing(t *testing.T) {
 			t.Errorf("%s moved from %v to %v", once.Members[i].Node, a, b)
 		}
 	}
-	strip := func(m Map) Map {
+	strip := func(m objplacement.Map) objplacement.Map {
 		m.Members = slices.Clone(m.Members)
 		for i := range m.Members {
 			m.Members[i].Share = 0
@@ -184,12 +229,12 @@ func TestABalanceAnswersItsBestRound(t *testing.T) {
 	t.Parallel()
 	m := fleet(12, 9, 3)
 	start := m.Layout().Deviation()
-	one, report := Balance(m, BalanceOptions{MaxRounds: 1})
+	one, report := balance(m, placement.BalanceOptions{MaxRounds: 1})
 	if report.Rounds != 1 || report.Deviation != start || !slices.Equal(one.Members, m.Members) {
 		t.Fatalf("one round measured %.4f (%+v) of a map at %.4f", report.Deviation,
 			report, start)
 	}
-	_, report = Balance(m, BalanceOptions{MaxRounds: 4, Tolerance: 1e-9})
+	_, report = balance(m, placement.BalanceOptions{MaxRounds: 4, Tolerance: 1e-9})
 	if report.Rounds != 4 || report.Converged || report.Deviation >= start {
 		t.Fatalf("four rounds toward an unreachable tolerance: %+v from %.4f", report, start)
 	}
@@ -197,7 +242,7 @@ func TestABalanceAnswersItsBestRound(t *testing.T) {
 	for i := range empty.Members {
 		empty.Members[i].Out = true
 	}
-	if got, report := Balance(empty, BalanceOptions{}); !slices.Equal(got.Members, empty.Members) ||
+	if got, report := balance(empty, placement.BalanceOptions{}); !slices.Equal(got.Members, empty.Members) ||
 		!report.Converged || report.Rounds != 0 {
 		t.Fatalf("an all-out map balanced to %+v (%+v)", got, report)
 	}
@@ -207,7 +252,7 @@ func TestABalanceAnswersItsBestRound(t *testing.T) {
 // picks for fifty and two hundred members at three copies.
 func BenchmarkLayout(b *testing.B) {
 	for _, n := range []int{50, 200} {
-		m := fleet(n, TargetPGBits(n, 3), 3)
+		m := fleet(n, objplacement.TargetPGBits(n, 3), 3)
 		b.Run(fmt.Sprintf("members=%d/groups=%d", n, m.Groups()), func(b *testing.B) {
 			for b.Loop() {
 				m.Layout()
@@ -224,17 +269,17 @@ func BenchmarkLayout(b *testing.B) {
 func BenchmarkBalance(b *testing.B) {
 	for _, n := range []int{50, 200} {
 		for _, mixed := range []bool{false, true} {
-			m := fleet(n, TargetPGBits(n, 3), 3)
+			m := fleet(n, objplacement.TargetPGBits(n, 3), 3)
 			if mixed {
 				for i := range m.Members {
 					m.Members[i].Weight = 1 + i%4
-					m.Members[i].Share = DefaultShare(m.Members[i].Weight)
+					m.Members[i].Share = placement.DefaultShare(m.Members[i].Weight)
 				}
 			}
 			b.Run(fmt.Sprintf("members=%d/groups=%d/mixed=%v", n, m.Groups(), mixed), func(b *testing.B) {
-				var report BalanceReport
+				var report placement.BalanceReport
 				for b.Loop() {
-					_, report = Balance(m, BalanceOptions{})
+					_, report = balance(m, placement.BalanceOptions{})
 				}
 				b.ReportMetric(float64(report.Rounds), "rounds")
 				b.ReportMetric(100*report.Deviation, "deviation%")
@@ -250,21 +295,21 @@ func BenchmarkBalance(b *testing.B) {
 // re-place the whole fleet's tuning.
 func TestBalancingAJoinMovesLittleMoreThanTheJoin(t *testing.T) {
 	t.Parallel()
-	mixed := func(n int) Map {
+	mixed := func(n int) objplacement.Map {
 		m := fleet(n, 10, 3)
 		for i := range m.Members {
 			m.Members[i].Weight = 1 + i%3
-			m.Members[i].Share = DefaultShare(m.Members[i].Weight)
+			m.Members[i].Share = placement.DefaultShare(m.Members[i].Weight)
 		}
 		return m
 	}
-	before, _ := Balance(mixed(10), BalanceOptions{})
+	before, _ := balance(mixed(10), placement.BalanceOptions{})
 	joined := mixed(11)
 	for i := range before.Members {
 		joined.Members[i].Share = before.Members[i].Share
 	}
-	joined.Members[10].Share = before.ShareFor(joined.Members[10].Weight)
-	after, report := Balance(joined, BalanceOptions{})
+	joined.Members[10].Share = before.Draw().ShareFor(joined.Members[10].Weight)
+	after, report := balance(joined, placement.BalanceOptions{})
 	if !report.Converged {
 		t.Fatalf("the joined fleet did not balance: %+v", report)
 	}
@@ -288,10 +333,10 @@ func TestBalancingAJoinMovesLittleMoreThanTheJoin(t *testing.T) {
 
 // window is the tolerance of a map's smallest target, in copies: how many
 // copies either side of it the tolerance admits.
-func window(m Map, tolerance float64) float64 {
-	e := entitle(newDrawer(m))
+func window(m objplacement.Map, tolerance float64) float64 {
+	e := entitled(m)
 	least := math.Inf(1)
-	for _, t := range e.member {
+	for _, t := range e.Member {
 		if t > 0 {
 			least = min(least, t)
 		}
@@ -312,7 +357,7 @@ const promisedRounds = 20
 // balanceCase is one fleet of the corpus below.
 type balanceCase struct {
 	name string
-	m    Map
+	m    objplacement.Map
 }
 
 // balanceCorpus is a spread of fleets for the balance's promise: sizes from
@@ -346,14 +391,14 @@ func balanceCorpus() []balanceCase {
 		size := min(r, n)
 		w := weights[k%len(weights)]
 		domain := domains[(k/2)%len(domains)]
-		pg := TargetPGBits(n, size) + k%2
+		pg := objplacement.TargetPGBits(n, size) + k%2
 		if domain == "few-zones" {
 			// A domain's extra copies are few, so its members'
 			// targets are small: a bit more keeps some of these
 			// fleets inside the promise.
 			pg++
 		}
-		members := make([]Member, n)
+		members := make([]placement.Member, n)
 		for i := range members {
 			zone := ""
 			switch domain {
@@ -377,7 +422,7 @@ func balanceCorpus() []balanceCase {
 				// Thirty percent either way, spread by the golden
 				// ratio so no two neighbours start alike.
 				off := 0.7 + 0.6*math.Mod(float64(i)*0.6180339887, 1)
-				members[i].Share = quantise(float64(members[i].Share) * off)
+				members[i].Share = placement.Quantise(float64(members[i].Share) * off)
 			}
 		}
 		fd := ""
@@ -422,7 +467,7 @@ func TestBalanceReachesTheToleranceWhereverACopyAndAHalfFitsInIt(t *testing.T) {
 	corpus := balanceCorpus()
 	var promised, near, limited, finer, ceilings, floors int
 	for _, c := range corpus {
-		w := window(c.m, DefaultTolerance)
+		w := window(c.m, placement.DefaultTolerance)
 		switch {
 		case w < 1:
 			finer++
@@ -433,12 +478,12 @@ func TestBalanceReachesTheToleranceWhereverACopyAndAHalfFitsInIt(t *testing.T) {
 			if c.m.DomainLimited() {
 				limited++
 			}
-			e := entitle(newDrawer(c.m))
-			for u, n := range e.count {
+			e := entitled(c.m)
+			for u, n := range e.Count {
 				switch {
-				case n > 1 && e.domain[u] == e.hi[u] && e.lo[u] == 0:
+				case n > 1 && e.Domain[u] == e.Hi[u] && e.Lo[u] == 0:
 					ceilings++
-				case n > 1 && e.domain[u] == e.lo[u] && e.lo[u] > 0:
+				case n > 1 && e.Domain[u] == e.Lo[u] && e.Lo[u] > 0:
 					floors++
 				}
 			}
@@ -461,10 +506,10 @@ func TestBalanceReachesTheToleranceWhereverACopyAndAHalfFitsInIt(t *testing.T) {
 			t.Run(c.name, func(t *testing.T) {
 				t.Parallel()
 				start := c.m.Layout().Deviation()
-				balanced, report := Balance(c.m, BalanceOptions{})
-				w := window(c.m, DefaultTolerance)
+				balanced, report := balance(c.m, placement.BalanceOptions{})
+				w := window(c.m, placement.DefaultTolerance)
 				if got := balanced.Layout().Deviation(); got != report.Deviation ||
-					report.Converged != (got <= DefaultTolerance) {
+					report.Converged != (got <= placement.DefaultTolerance) {
 					t.Fatalf("the report says %+v and the map it returned measures %.4f",
 						report, got)
 				}
@@ -472,7 +517,7 @@ func TestBalanceReachesTheToleranceWhereverACopyAndAHalfFitsInIt(t *testing.T) {
 					t.Fatalf("the balance answered %.4f for a map that started at %.4f",
 						report.Deviation, start)
 				}
-				if !report.Converged && report.Rounds < DefaultMaxRounds {
+				if !report.Converged && report.Rounds < placement.DefaultMaxRounds {
 					t.Fatalf("the balance stopped unconverged with rounds to spare: %+v", report)
 				}
 				switch {
@@ -506,18 +551,18 @@ func TestBalanceReachesTheToleranceWhereverACopyAndAHalfFitsInIt(t *testing.T) {
 // — so every one is held to it, across the names that decide their draws.
 func TestTheFleetsTheBalanceMissedNowBalance(t *testing.T) {
 	t.Parallel()
-	check := func(t *testing.T, what string, m Map) {
+	check := func(t *testing.T, what string, m objplacement.Map) {
 		t.Helper()
-		if w := window(m, DefaultTolerance); w < promisedWindow {
+		if w := window(m, placement.DefaultTolerance); w < promisedWindow {
 			t.Fatalf("%s: a tolerance of %.2f copies is outside the promise", what, w)
 		}
-		if _, report := Balance(m, BalanceOptions{}); !report.Converged {
+		if _, report := balance(m, placement.BalanceOptions{}); !report.Converged {
 			t.Errorf("%s: %+v", what, report)
 		}
 	}
 	for _, prefix := range []string{"data-", "node-", "n", "d", "x", "host-"} {
-		for _, pg := range []int{TargetPGBits(11, 3), TargetPGBits(11, 3) + 1} {
-			heavy := make([]Member, 10)
+		for _, pg := range []int{objplacement.TargetPGBits(11, 3), objplacement.TargetPGBits(11, 3) + 1} {
+			heavy := make([]placement.Member, 10)
 			for i := range heavy {
 				heavy[i] = member(fmt.Sprintf("%s%d", prefix, i), 1+3*btoi(i == 0), "")
 			}
@@ -525,17 +570,17 @@ func TestTheFleetsTheBalanceMissedNowBalance(t *testing.T) {
 			check(t, fmt.Sprintf("nine light members and a heavy one (%s, %d groups)",
 				prefix, m.Groups()), m)
 
-			ten := make([]Member, 10)
+			ten := make([]placement.Member, 10)
 			for i := range ten {
 				ten[i] = member(fmt.Sprintf("%s%d", prefix, i), 1, "")
 			}
-			before, report := Balance(mapOf(pg, 3, "", ten...), BalanceOptions{})
+			before, report := balance(mapOf(pg, 3, "", ten...), placement.BalanceOptions{})
 			if !report.Converged {
 				t.Fatalf("ten equal members (%s, %d groups): %+v", prefix, m.Groups(), report)
 			}
 			check(t, fmt.Sprintf("a weight-4 member joining from the fleet's shares (%s, %d groups)",
 				prefix, m.Groups()), mapOf(pg, 3, "", append(slices.Clone(before.Members),
-				Member{Node: prefix + "new", Weight: 4, Share: before.ShareFor(4)})...))
+				placement.Member{Node: prefix + "new", Weight: 4, Share: before.Draw().ShareFor(4)})...))
 			check(t, fmt.Sprintf("a weight-4 member joining from the defaults (%s, %d groups)",
 				prefix, m.Groups()), mapOf(pg, 3, "", append(ten, member(prefix+"new", 4, ""))...))
 		}
@@ -551,7 +596,7 @@ func TestTheFleetsTheBalanceMissedNowBalance(t *testing.T) {
 // moving; it converges now.
 func TestABalanceStopsEarlyOnlyHavingConverged(t *testing.T) {
 	t.Parallel()
-	var members []Member
+	var members []placement.Member
 	for _, m := range []struct {
 		node   string
 		weight int
@@ -567,8 +612,8 @@ func TestABalanceStopsEarlyOnlyHavingConverged(t *testing.T) {
 		members = append(members, member(m.node, m.weight, m.zone))
 	}
 	m := mapOf(10, 1, "zone", members...)
-	if _, report := Balance(m, BalanceOptions{}); !report.Converged &&
-		report.Rounds < DefaultMaxRounds {
+	if _, report := balance(m, placement.BalanceOptions{}); !report.Converged &&
+		report.Rounds < placement.DefaultMaxRounds {
 		t.Fatalf("the balance stopped unconverged with rounds to spare: %+v", report)
 	}
 }
@@ -589,7 +634,7 @@ func TestALongerBalanceNeverAnswersWorse(t *testing.T) {
 		tried++
 		last := math.Inf(1)
 		for rounds := 1; rounds <= 10; rounds++ {
-			_, report := Balance(c.m, BalanceOptions{MaxRounds: rounds, Tolerance: 1e-9})
+			_, report := balance(c.m, placement.BalanceOptions{MaxRounds: rounds, Tolerance: 1e-9})
 			if report.Deviation > last {
 				t.Fatalf("%s: %d rounds answered %.4f, %d answered %.4f", c.name, rounds,
 					report.Deviation, rounds-1, last)
@@ -612,16 +657,16 @@ func TestAMemberAtItsCeilingIsReachedQuickly(t *testing.T) {
 		for _, c := range []struct{ light, weight, pgBits int }{
 			{10, 26, 10}, {10, 26, 11}, {38, 43, 12},
 		} {
-			members := []Member{member(prefix+"heavy", c.weight, "")}
+			members := []placement.Member{member(prefix+"heavy", c.weight, "")}
 			for i := range c.light {
 				members = append(members, member(fmt.Sprintf("%s%02d", prefix, i), 1, ""))
 			}
 			m := mapOf(c.pgBits, 2, "", members...)
-			heavy := slices.IndexFunc(m.Members, func(mem Member) bool { return mem.Node == prefix+"heavy" })
-			if want := entitle(newDrawer(m)).member[heavy]; want != float64(m.Groups()) {
+			heavy := slices.IndexFunc(m.Members, func(mem placement.Member) bool { return mem.Node == prefix+"heavy" })
+			if want := entitled(m).Member[heavy]; want != float64(m.Groups()) {
 				t.Fatalf("the heavy member is entitled to %.1f of %d groups", want, m.Groups())
 			}
-			_, report := Balance(m, BalanceOptions{})
+			_, report := balance(m, placement.BalanceOptions{})
 			if !report.Converged || report.Rounds > 15 {
 				t.Errorf("weight %d among %d of weight 1 over %d groups (%s): %+v",
 					c.weight, c.light, m.Groups(), prefix, report)
@@ -642,17 +687,17 @@ func TestAMemberAtItsCeilingIsReachedQuickly(t *testing.T) {
 // fleet allowed.
 func TestTooFewDomainsEntitleADomainToACopyOfEveryGroup(t *testing.T) {
 	t.Parallel()
-	lone := []Member{member("alone", 1, "zone-a")}
+	lone := []placement.Member{member("alone", 1, "zone-a")}
 	for i := range 5 {
 		lone = append(lone, member(fmt.Sprintf("crowd-%d", i), 1, "zone-b"))
 	}
-	light := []Member{member("light-0", 1, "zone-a"), member("light-1", 1, "zone-a")}
+	light := []placement.Member{member("light-0", 1, "zone-a"), member("light-1", 1, "zone-a")}
 	for i := range 3 {
 		light = append(light, member(fmt.Sprintf("heavy-b%d", i), 10, "zone-b"),
 			member(fmt.Sprintf("heavy-c%d", i), 10, "zone-c"))
 	}
 	for name, c := range map[string]struct {
-		m    Map
+		m    objplacement.Map
 		want func(node string, groups float64) float64
 	}{
 		"a lone node": {mapOf(9, 3, "zone", lone...), func(node string, groups float64) float64 {
@@ -672,21 +717,21 @@ func TestTooFewDomainsEntitleADomainToACopyOfEveryGroup(t *testing.T) {
 			t.Fatalf("%s: the fleet is not domain-limited", name)
 		}
 		groups := float64(c.m.Groups())
-		e := entitle(newDrawer(c.m))
+		e := entitled(c.m)
 		for i, mem := range c.m.Members {
-			if want := c.want(mem.Node, groups); math.Abs(e.member[i]-want) > 1e-9 {
+			if want := c.want(mem.Node, groups); math.Abs(e.Member[i]-want) > 1e-9 {
 				t.Errorf("%s: %s is entitled to %.2f copies, want %.2f", name, mem.Node,
-					e.member[i], want)
+					e.Member[i], want)
 			}
 		}
-		balanced, report := Balance(c.m, BalanceOptions{})
+		balanced, report := balance(c.m, placement.BalanceOptions{})
 		if !report.Converged {
 			t.Errorf("%s: the fleet did not balance to its entitlement: %+v", name, report)
 		}
 		copies := balanced.Layout().Copies()
 		for _, mem := range c.m.Members {
 			want := c.want(mem.Node, groups)
-			if got := float64(copies[mem.Node]); math.Abs(got-want) > DefaultTolerance*want {
+			if got := float64(copies[mem.Node]); math.Abs(got-want) > placement.DefaultTolerance*want {
 				t.Errorf("%s: %s holds %.0f copies, want %.2f", name, mem.Node, got, want)
 			}
 		}
@@ -700,12 +745,11 @@ func TestTooFewDomainsEntitleADomainToACopyOfEveryGroup(t *testing.T) {
 func TestEntitlementsAddUpToEveryCopyWithinTheirBounds(t *testing.T) {
 	t.Parallel()
 	for _, c := range balanceCorpus() {
-		d := newDrawer(c.m)
-		e := entitle(d)
+		e := entitled(c.m)
 		groups := float64(c.m.Groups())
-		total := groups * float64(d.size)
+		total := groups * float64(c.m.Size())
 		var sum float64
-		for i, target := range e.member {
+		for i, target := range e.Member {
 			sum += target
 			if target > groups+1e-9 || target < 0 || (c.m.Members[i].Out && target != 0) {
 				t.Errorf("%s: %s is entitled to %.3f of %v groups",
@@ -715,84 +759,12 @@ func TestEntitlementsAddUpToEveryCopyWithinTheirBounds(t *testing.T) {
 		if math.Abs(sum-total) > 1e-6*total {
 			t.Errorf("%s: the targets sum to %.4f of %.0f copies", c.name, sum, total)
 		}
-		for u, want := range e.domain {
-			if e.count[u] > 0 && (want < e.lo[u]-1e-9 || want > e.hi[u]+1e-9) {
+		for u, want := range e.Domain {
+			if e.Count[u] > 0 && (want < e.Lo[u]-1e-9 || want > e.Hi[u]+1e-9) {
 				t.Errorf("%s: domain %d is entitled to %.2f, outside [%.0f, %.0f]",
-					c.name, u, want, e.lo[u], e.hi[u])
+					c.name, u, want, e.Lo[u], e.Hi[u])
 			}
 		}
-	}
-}
-
-// FILL IS PROPORTIONAL WITHIN BOUNDS ON BOTH SIDES: every entry clamped to
-// its bounds, the total met exactly, and every entry the bounds did not hold
-// at the same rate per unit of weight — including where holding one entry at
-// its ceiling pushes another under its floor, which a repair that holds
-// whoever overflows and shares the excess again gets wrong on its first pass.
-func TestFillIsProportionalWithinItsBounds(t *testing.T) {
-	t.Parallel()
-	for name, c := range map[string]struct {
-		weight, lo, hi, want []float64
-		total                float64
-	}{
-		"unbounded": {weight: []float64{1, 2, 3}, lo: []float64{0, 0, 0},
-			hi: []float64{100, 100, 100}, total: 60, want: []float64{10, 20, 30}},
-		"a ceiling": {weight: []float64{8, 1, 1}, lo: []float64{0, 0, 0},
-			hi: []float64{10, 10, 10}, total: 18, want: []float64{10, 4, 4}},
-		"a floor": {weight: []float64{1, 9}, lo: []float64{5, 0},
-			hi: []float64{20, 20}, total: 20, want: []float64{5, 15}},
-		"both, the ceiling pushing the floor": {weight: []float64{10, 1, 1, 1},
-			lo: []float64{10, 10, 0, 0}, hi: []float64{20, 20, 20, 20}, total: 40,
-			want: []float64{20, 10, 5, 5}},
-		"no weight holds its floor": {weight: []float64{0, 1}, lo: []float64{3, 0},
-			hi: []float64{9, 9}, total: 8, want: []float64{3, 5}},
-		"exactly the floors": {weight: []float64{1, 1}, lo: []float64{4, 6},
-			hi: []float64{9, 9}, total: 10, want: []float64{4, 6}},
-		"exactly the ceilings": {weight: []float64{1, 5}, lo: []float64{0, 0},
-			hi: []float64{2, 3}, total: 5, want: []float64{2, 3}},
-	} {
-		got := fill(c.weight, c.lo, c.hi, c.total)
-		for u := range got {
-			if math.Abs(got[u]-c.want[u]) > 1e-9 {
-				t.Errorf("%s: fill = %v, want %v", name, got, c.want)
-				break
-			}
-		}
-	}
-}
-
-// A STEP GROWS WHILE ITS ERROR KEEPS ITS SIGN AND HALVES WHEN IT OVERSHOOTS,
-// within its bounds, and a settled round leaves the next with nothing to
-// compare against — so a member that settles and later drifts starts again
-// from the step it had rather than being shortened for an overshoot it never
-// made.
-func TestAStepAdaptsToWhatTheLastOneDid(t *testing.T) {
-	t.Parallel()
-	s := stride{length: firstStep}
-	steps := []float64{s.toward(3), s.toward(2), s.toward(1)}
-	if want := []float64{firstStep, firstStep * stepGrowth, firstStep * stepGrowth *
-		stepGrowth}; !slices.Equal(steps, want) {
-		t.Fatalf("an error keeping its sign stepped %v, want %v", steps, want)
-	}
-	if got := s.toward(-1); got != firstStep*stepGrowth*stepGrowth*stepShrink {
-		t.Fatalf("an overshoot stepped %v", got)
-	}
-	before := s.length
-	s.toward(0)
-	if got := s.toward(-2); got != before {
-		t.Fatalf("after a settled round the step is %v, want %v", got, before)
-	}
-	for range 100 {
-		s.toward(1)
-	}
-	if s.length != maxStep {
-		t.Fatalf("a step growing for ever reached %v, want %v", s.length, maxStep)
-	}
-	for k := range 100 {
-		s.toward(float64(1 - 2*(k%2)))
-	}
-	if s.length != minStep {
-		t.Fatalf("a step overshooting for ever reached %v, want %v", s.length, minStep)
 	}
 }
 
@@ -802,8 +774,8 @@ func TestAStepAdaptsToWhatTheLastOneDid(t *testing.T) {
 func TestABalanceIsDeterministic(t *testing.T) {
 	t.Parallel()
 	for _, c := range balanceCorpus()[:12] {
-		a, ra := Balance(c.m, BalanceOptions{})
-		b, rb := Balance(c.m, BalanceOptions{})
+		a, ra := balance(c.m, placement.BalanceOptions{})
+		b, rb := balance(c.m, placement.BalanceOptions{})
 		if !slices.Equal(a.Members, b.Members) || ra != rb {
 			t.Fatalf("%s balanced two ways: %+v and %+v", c.name, ra, rb)
 		}

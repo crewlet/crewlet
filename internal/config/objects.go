@@ -1,7 +1,7 @@
 package config
 
 import (
-	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	mapplacement "github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -56,7 +56,7 @@ const DefaultObjectReplicas = 3
 // map's own ceiling, referenced rather than restated, because a count this
 // accepted and the map refused would be a revision every node applies and no
 // maintainer can write.
-const MaxObjectReplicas = objplacement.MaxReplicas
+const MaxObjectReplicas = mapplacement.MaxReplicas
 
 // ReplicaCount is the copies the company keeps, with the default applied.
 func (o *Objects) ReplicaCount() int {

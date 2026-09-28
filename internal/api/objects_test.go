@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
+	"github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -45,9 +46,9 @@ var objectsSince = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 // remembered, and gone for six ticks since. The balance that set its shares
 // converged in six rounds.
 func objectsFleet() objstore.MapState {
-	member := func(node string, weight int, zone string) objplacement.Member {
-		return objplacement.Member{Node: node, Weight: weight,
-			Share: objplacement.DefaultShare(weight), Domain: zone}
+	member := func(node string, weight int, zone string) placement.Member {
+		return placement.Member{Node: node, Weight: weight,
+			Share: placement.DefaultShare(weight), Domain: zone}
 	}
 	out := member("data-d", 1, "eu-3")
 	out.Out = true
@@ -58,7 +59,7 @@ func objectsFleet() objstore.MapState {
 			Generation: uuid.MustParse("5b0c1f7e-9c1d-4f5e-8a3b-2d7c6e1f0a9b"),
 			Epoch:      7, Replicas: 2, PGBits: objplacement.MinPGBits,
 			FailureDomain: "zone",
-			Members: []objplacement.Member{
+			Members: []placement.Member{
 				member("data-a", 2, "eu-1"), member("data-b", 1, "eu-2"),
 				member("data-c", 1, "eu-3"), out, probation,
 			},
@@ -73,7 +74,7 @@ func objectsFleet() objstore.MapState {
 			"data-f": {Present: 12, At: objectsSince.Add(-time.Hour),
 				Reason: objstore.ReasonAbsent},
 		},
-		Balance: objstore.Balance{Epoch: 7, BalanceReport: objplacement.BalanceReport{
+		Balance: objstore.Balance{Epoch: 7, BalanceReport: placement.BalanceReport{
 			Rounds: 6, Deviation: 0.015, Converged: true}},
 	}
 }
@@ -484,8 +485,8 @@ func renderObjectsScenarios(t *testing.T) []byte {
 	// wrote is the best it measured, and this is the one place that says
 	// the weights are not being kept.
 	unbalanced := objectsFleet()
-	unbalanced.Balance = objstore.Balance{Epoch: 7, BalanceReport: objplacement.BalanceReport{
-		Rounds: objplacement.DefaultMaxRounds, Deviation: 0.061}}
+	unbalanced.Balance = objstore.Balance{Epoch: 7, BalanceReport: placement.BalanceReport{
+		Rounds: placement.DefaultMaxRounds, Deviation: 0.061}}
 	render := func(s objstore.MapState) queries.FleetObjects {
 		return queries.RenderObjects(s, s.Map.Layout(), objectsLeases(), objectsSince)
 	}

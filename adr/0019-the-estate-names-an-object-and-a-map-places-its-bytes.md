@@ -19,13 +19,15 @@ way, so nobody asks where a chunk is. How many copies it keeps and what they
 are spread across are the company's — [ADR-0020](0020-the-company-decides-how-many-copies-and-across-what.md).
 
 Three rules hold it together, and each is stated once, at `internal/objstore`
-and its packages:
+and its packages — the first over the draw it shares with the estate map, in
+`internal/placement`:
 
 - **The map is maintained by one node at a time and changed by
   compare-and-set** (`objstore/upkeep`). A member is removed only after it
   has been gone for a grace, so a restart moves nothing, and a write past a
-  silent member lands on the next member of the same ranking a reader walks,
-  so an absence costs a copy in another place rather than a copy fewer.
+  silent member lands on the next member of the same ranking a reader walks
+  (`placement`), so an absence costs a copy in another place rather than a
+  copy fewer.
 - **The inventory is derived from the estate, never kept beside it.** Which
   chunks exist is the set of chunks the replicated rows name; which of them a
   node should hold is the map applied to that set. Repair and collection both

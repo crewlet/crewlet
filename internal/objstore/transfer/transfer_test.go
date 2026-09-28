@@ -19,7 +19,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 )
@@ -37,14 +38,14 @@ type fleet struct {
 	t       *testing.T
 	broker  *memory.Broker
 	members map[string]*member
-	m       placement.Map
-	layout  atomic.Pointer[placement.Layout]
+	m       objplacement.Map
+	layout  atomic.Pointer[objplacement.Layout]
 }
 
 // testMap is a valid map of equal members at the fewest group bits.
-func testMap(replicas int, names ...string) placement.Map {
-	m := placement.Map{Generation: uuid.New(), Epoch: 1, Replicas: replicas,
-		PGBits: placement.MinPGBits}
+func testMap(replicas int, names ...string) objplacement.Map {
+	m := objplacement.Map{Generation: uuid.New(), Epoch: 1, Replicas: replicas,
+		PGBits: objplacement.MinPGBits}
 	for _, name := range slices.Sorted(slices.Values(names)) {
 		m.Members = append(m.Members, placement.Member{Node: name, Weight: 1,
 			Share: placement.DefaultShare(1)})
@@ -97,7 +98,7 @@ func (f *fleet) serve(mem *member, chunks Chunks) {
 }
 
 // place makes m the map every member and client places by.
-func (f *fleet) place(m placement.Map) {
+func (f *fleet) place(m objplacement.Map) {
 	f.t.Helper()
 	if err := m.Validate(); err != nil {
 		f.t.Fatal(err)
@@ -106,7 +107,7 @@ func (f *fleet) place(m placement.Map) {
 	f.layout.Store(m.Layout())
 }
 
-func (f *fleet) layouts() (*placement.Layout, bool) { return f.layout.Load(), true }
+func (f *fleet) layouts() (*objplacement.Layout, bool) { return f.layout.Load(), true }
 
 // up is the members a chunk's group is placed on.
 func (f *fleet) up(h objstore.Hash) []string {
@@ -249,7 +250,7 @@ func TestNoMapIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, 1, "data-a")
 	c, err := NewClient(ClientOptions{Queue: f.queue(), Self: "agent-1",
-		Layouts: func() (*placement.Layout, bool) { return nil, false }})
+		Layouts: func() (*objplacement.Layout, bool) { return nil, false }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +273,7 @@ func TestAMissingMapIsReadAgainBeforeARefusal(t *testing.T) {
 	f := newFleet(t, 1, "data-a")
 	var held atomic.Bool
 	var reads atomic.Int32
-	layouts := func() (*placement.Layout, bool) {
+	layouts := func() (*objplacement.Layout, bool) {
 		if held.Load() {
 			return f.layouts()
 		}
@@ -300,7 +301,7 @@ func TestAMissingMapIsReadAgainBeforeARefusal(t *testing.T) {
 
 	// A RE-READ THAT FAILS is still the refusal by name, carrying why.
 	broken, err := NewClient(ClientOptions{Queue: f.queue(), Self: "agent-2",
-		Layouts: func() (*placement.Layout, bool) { return nil, false },
+		Layouts: func() (*objplacement.Layout, bool) { return nil, false },
 		Refresh: func(context.Context) error { return errors.New("the store is unreachable") }})
 	if err != nil {
 		t.Fatal(err)
@@ -537,7 +538,7 @@ func TestAReaderStopsWhenClosedAndFailsOnAMissingChunk(t *testing.T) {
 func TestAMemberAnswersEvenWhatItCannotRead(t *testing.T) {
 	t.Parallel()
 	store := openStore(t)
-	layouts := func() (*placement.Layout, bool) { return nil, false }
+	layouts := func() (*objplacement.Layout, bool) { return nil, false }
 	for name, raw := range map[string][]byte{
 		"empty":        nil,
 		"short header": {0, 0, 0, 9, '{'},
@@ -600,7 +601,7 @@ func TestARangedReadAnswersItsRange(t *testing.T) {
 }
 
 // changed is f's map at the next epoch, with node's member edited by edit.
-func (f *fleet) changed(node string, edit func(*placement.Member)) placement.Map {
+func (f *fleet) changed(node string, edit func(*placement.Member)) objplacement.Map {
 	m := f.m
 	m.Members = slices.Clone(m.Members)
 	for i := range m.Members {

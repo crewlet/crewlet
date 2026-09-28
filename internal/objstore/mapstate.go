@@ -10,7 +10,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/objstore/placement"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/placement"
 )
 
 // MapState is the placement map as the coordination store holds it: the map
@@ -44,10 +45,10 @@ import (
 //
 // Changing an absence, a hold, a measurement or who is remembered as removed
 // changes nothing anybody places by, so none of them moves
-// [placement.Map.Epoch]: the epoch counts PLACEMENT changes, which is what a
+// [objplacement.Map.Epoch]: the epoch counts PLACEMENT changes, which is what a
 // node comparing two maps needs to know.
 type MapState struct {
-	Map placement.Map `json:"map"`
+	Map objplacement.Map `json:"map"`
 
 	// Absence is each member's current run of absence, for the members
 	// with one open.
