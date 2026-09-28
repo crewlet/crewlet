@@ -470,8 +470,7 @@ func newNodeGate(s *stateLog, leases liveLeases, db *store.DB, nodeID string,
 		},
 		readmissible: s.Readmissible,
 	}
-	for _, name := range s.order {
-		running := s.domains[name]
+	for _, running := range s.running() {
 		if !running.domain.ClaimsIdentity() {
 			continue
 		}
@@ -490,11 +489,14 @@ func newNodeGate(s *stateLog, leases liveLeases, db *store.DB, nodeID string,
 
 // gateLogFor is one identity-claiming log's writer for the gate, publishing
 // through publisher — the domain's own write authority.
-func gateLogFor(running *runningDomain, publisher *statelog.Publisher, db *store.DB,
+func gateLogFor(running *runningLog, publisher *statelog.Publisher, db *store.DB,
 	nodeID string, rec *metrics.Recorder) (gateLog, error) {
 
+	// THE LOG'S KEY NAMES THE GATE, never the domain alone: a domain with a
+	// log in each of two partitions has two gates to write, and each is
+	// reported — and its operation derived — as its own.
 	name := running.domain.Name()
-	gl := gateLog{domain: name, stream: running.spec.Name}
+	gl := gateLog{domain: running.key, stream: running.spec.Name}
 	switch name {
 	case tracker.Domain{}.Name():
 		w, err := tracker.NewWriter(tracker.WriterDeps{

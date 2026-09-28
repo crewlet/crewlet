@@ -105,12 +105,12 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		}
 		shared.backups = []coord.BackupPoint{point}
 		for _, running := range identity {
-			if err := r.domain(t.Context(), running.domain.Name(), shared); err != nil {
+			if err := r.domain(t.Context(), running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", running.domain.Name(), err)
 			}
 		}
 	}
-	counted := func(running *runningDomain, at time.Time) bool {
+	counted := func(running *runningLog, at time.Time) bool {
 		t.Helper()
 		gen := running.runner.Committed().Generation
 		tombs, read := r.tombstones(t.Context(), running, gen)
@@ -286,11 +286,11 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 
 // identityLogs is every identity-claiming domain this node runs, in the
 // register's own order.
-func identityLogs(t *testing.T, s *stateLog) []*runningDomain {
+func identityLogs(t *testing.T, s *stateLog) []*runningLog {
 	t.Helper()
-	var out []*runningDomain
-	for _, name := range s.order {
-		if running := s.domains[name]; running.domain.ClaimsIdentity() {
+	var out []*runningLog
+	for _, running := range s.running() {
+		if running.domain.ClaimsIdentity() {
 			out = append(out, running)
 		}
 	}

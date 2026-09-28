@@ -394,7 +394,7 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 			host := sizingHost{budget: tc.budget, unread: tc.unread, held: map[string]int64{
 				estateSpec(tracker.Domain{}).Name: trackerHolds,
 			}}
-			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
 			if err != nil {
 				t.Fatalf("sizeCeilings: %v", err)
 			}
@@ -437,7 +437,7 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			host := sizingHost{budget: tc.budget, unread: tc.unread}
-			first, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+			first, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
 			if err != nil {
 				t.Fatalf("sizeCeilings: %v", err)
 			}
@@ -445,7 +445,7 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 			for _, domain := range registeredDomains() {
 				host.held[estateSpec(domain).Name] = first[domain.Name()].Bytes
 			}
-			again, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+			again, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
 			if err != nil {
 				t.Fatalf("sizeCeilings: %v", err)
 			}
@@ -480,7 +480,7 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 	}}
 	boot := func() map[string]domainCeiling {
 		t.Helper()
-		sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+		sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
 		if err != nil {
 			t.Fatalf("sizeCeilings: %v", err)
 		}
@@ -558,11 +558,11 @@ func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 // and provisions each against q, as a boot does.
 func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, free int64) error {
 	t.Helper()
-	ceilings, err := sizeCeilings(t.Context(), q, stream, free, "/var/lib/crewlet/stream")
+	ceilings, err := sizeCeilings(t.Context(), q, stream, free, "/var/lib/crewlet/stream", LayoutZero())
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
-	s := &stateLog{ceilings: ceilings, volume: "/var/lib/crewlet/stream"}
+	s := &stateLog{layout: LayoutZero(), ceilings: ceilings, volume: "/var/lib/crewlet/stream"}
 	_, err = s.provisionAll(t.Context(), q)
 	return err
 }
@@ -597,6 +597,33 @@ func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	}
 }
 
+// A NODE ASKED TO PROVISION NO LAYOUT IS REFUSED, NOT TOLD ITS LOGS EXIST.
+//
+// The logs a node provisions are its layout's, so a node holding the zero
+// layout — a recorded layout that decoded to nothing — would walk no log and
+// answer that every one it was asked for exists. It is refused naming the
+// layout instead, and the broker is left as it was.
+func TestAZeroLayoutProvisionsNothingAndSaysSo(t *testing.T) {
+	t.Parallel()
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open the broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	s := &stateLog{}
+	logs, err := s.provisionAll(t.Context(), q)
+	if !errors.Is(err, statelog.ErrInvalidLayout) {
+		t.Fatalf("provisioning the zero layout answered (%d logs, %v), want its refusal",
+			len(logs), err)
+	}
+	for _, id := range LayoutZero().AllLogs() {
+		name, _ := LayoutZero().Stream(id)
+		if _, found, err := q.DomainStreamCeiling(t.Context(), name); err != nil || found {
+			t.Errorf("the refused provision created %s (found %v, %v)", name, found, err)
+		}
+	}
+}
+
 // A RESTART SIZES THE LOGS AS THE BOOT THAT CREATED THEM DID.
 //
 // The logs' own reservations count against the broker once they exist, so a
@@ -607,15 +634,15 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
 	q := brokerWithHeadroom(t, 12*gib)
-	first, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream")
+	first, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
-	s := &stateLog{ceilings: first}
+	s := &stateLog{layout: LayoutZero(), ceilings: first}
 	if _, err := s.provisionAll(t.Context(), q); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
-	again, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream")
+	again, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}

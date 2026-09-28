@@ -313,7 +313,11 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 		// Neither sweep is a long-lived writer, so neither wants a pin:
 		// both take a pooled write transaction now, which reaches the
 		// same lock through the same queue.
-		PinnedWriters: len(registeredDomains()),
+		//
+		// ONE PER LOG OF LAYOUT 0, the layout whose every log writes this
+		// one file: a log is one runner, and a runner pins one writer for
+		// the life of its loop.
+		PinnedWriters: len(LayoutZero().AllLogs()),
 	}
 	// A NODE WITHOUT `data` HOLDS NO COPY OF THE REPLICATED ESTATE and keeps
 	// nothing that has to outlive it. Its node estate is discarded and

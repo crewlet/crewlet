@@ -94,18 +94,19 @@ type embedDuty struct {
 	claim     func(context.Context) (bool, error)
 	metrics   *metrics.Recorder
 
-	// log is the vector log's running domain, whose runner and stream the
-	// index step's standing is read from, and fleet and leases the
-	// positions register and the presence leases its counted set is.
-	log    *runningDomain
-	fleet  coord.Fleet
-	leases liveLeases
+	// log is the vector log this duty embeds into, whose runner and stream
+	// the index step's standing is read from, and register and leases the
+	// positions register — as this node's layout reads it — and the
+	// presence leases its counted set is.
+	log      *runningLog
+	register func(context.Context) ([]coord.NodePositions, error)
+	leases   liveLeases
 
 	// identity is every domain that claims identity, whose eviction records
 	// are how the fleet says a node is gone — the vector log carries none
 	// of its own ([embedDuty.evicted]) — and db the store they are read
 	// from.
-	identity []*runningDomain
+	identity []*runningLog
 	db       *store.DB
 
 	// renewEvery is how often a running tick renews the duty's lease:
@@ -127,7 +128,7 @@ func (e *Engine) startEmbedding(ctx context.Context, s *stateLog) {
 	if s == nil || e.backends == nil {
 		return
 	}
-	running := s.domains[search.Domain{}.Name()]
+	running := s.Domain(search.Domain{}.Name())
 	if running == nil || running.publisher == nil {
 		return
 	}
@@ -142,7 +143,7 @@ func (e *Engine) startEmbedding(ctx context.Context, s *stateLog) {
 		claim:      e.workerDuty(embedDutyName, embedDutyTTL),
 		metrics:    e.metrics,
 		log:        running,
-		fleet:      e.backends.Fleet,
+		register:   s.positions,
 		leases:     e.backends.Coord,
 		identity:   s.identityDomains(),
 		db:         e.backends.Store,
@@ -363,7 +364,7 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	_, deferring := d.log.runner.Deferred()
 	out.Current = d.log.runner.Committed().Seq >= stats.LastSeq && !deferring
 
-	rows, err := d.fleet.Positions(ctx)
+	rows, err := d.register(ctx)
 	if err != nil {
 		return out, fmt.Errorf("read the positions register: %w", err)
 	}
@@ -377,9 +378,8 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	if err != nil {
 		return out, err
 	}
-	name := d.log.domain.Name()
 	out.Readers = statelog.Readers(statelog.CountedSet(time.Now().UTC(),
-		reportedPositions(rows, name), live, tombs))
+		reportedPositions(rows, d.log.key), live, tombs))
 	return out, nil
 }
 

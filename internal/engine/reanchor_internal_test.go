@@ -34,11 +34,11 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	s := e.native.Load().log
-	if len(s.order) == 0 {
+	if len(s.held().order) == 0 {
 		t.Fatal("the node runs no domain, so nothing below is checked")
 	}
-	for _, name := range s.order {
-		running := s.domains[name]
+	for _, running := range s.running() {
+		name := running.key
 		want := running.spec.Name
 		in, _, err := e.reanchorInputs(t.Context(), running)
 		if err != nil {
@@ -243,7 +243,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	lost := readCursorRow(t, e, tracker.Domain{}.Name()).created
 	// EVERY OTHER DOMAIN'S CHECKPOINT, as its applier left it.
 	untouched := map[string]cursorRow{}
-	for _, name := range e.native.Load().log.order {
+	for _, name := range e.native.Load().log.held().order {
 		if name == (tracker.Domain{}).Name() {
 			continue
 		}
@@ -367,7 +367,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	// THIRD BOOT: every applier comes up on its own stream.
 	e3, _ := bootNode(t, &b, cfg)
 	waitUntil(t, 20*time.Second, "the node to admit seats after a restart", hydrated(t, e3))
-	for _, name := range e3.native.Load().log.order {
+	for _, name := range e3.native.Load().log.held().order {
 		runner := e3.native.Load().log.Domain(name).runner
 		// THE CHECKPOINT ITS OWN ROW HOLDS, which is what loading it means
 		// — and zero for a log nothing was ever written to, which is every
@@ -926,14 +926,14 @@ func TestARefusedReanchorLeavesTheDomainServing(t *testing.T) {
 // appendEviction puts one tracker eviction record straight onto the domain's
 // live log — around this node's own publisher, which refuses while the log is
 // not the one its rows are keyed to — and answers the sequence it landed at.
-func appendEviction(t *testing.T, running *runningDomain, opID, node string) uint64 {
+func appendEviction(t *testing.T, running *runningLog, opID, node string) uint64 {
 	t.Helper()
 	return appendEvictionAs(t, running, opID, node, 0, "")
 }
 
 // appendEvictionAs is [appendEviction] as a named writer standing in a given
 // generation publishes it: the two stamps a peer's record carries.
-func appendEvictionAs(t *testing.T, running *runningDomain, opID, node string,
+func appendEvictionAs(t *testing.T, running *runningLog, opID, node string,
 	gen uint32, writer string) uint64 {
 
 	t.Helper()

@@ -632,7 +632,7 @@ func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, map[stri
 	for _, running := range identityLogs(t, s) {
 		name := running.domain.Name()
 		rec := &recorder{log: running.log}
-		pub, _, err := s.publisherOver(running.domain, running.spec, rec, running.log, running.runner,
+		pub, _, err := s.publisherOver(running.domain, running.id, running.spec, rec, running.log, running.runner,
 			running.reserve)
 		if err != nil {
 			t.Fatalf("a recorded publisher for %s: %v", name, err)
@@ -668,7 +668,7 @@ func byDomain(res GateResult) map[string]DomainGate {
 }
 
 // logEnds is every identity log's last sequence.
-func logEnds(t *testing.T, identity []*runningDomain) map[string]uint64 {
+func logEnds(t *testing.T, identity []*runningLog) map[string]uint64 {
 	t.Helper()
 	out := map[string]uint64{}
 	for _, running := range identity {
@@ -683,7 +683,7 @@ func logEnds(t *testing.T, identity []*runningDomain) map[string]uint64 {
 
 // publishCaughtUp publishes node's position at every identity log's current
 // end, which is what a readmission is judged on.
-func publishCaughtUp(t *testing.T, back *Backends, identity []*runningDomain, node string) {
+func publishCaughtUp(t *testing.T, back *Backends, identity []*runningLog, node string) {
 	t.Helper()
 	row := coord.NodePositions{NodeID: node, At: time.Now().UTC(),
 		Domains: map[string]coord.DomainPosition{}}

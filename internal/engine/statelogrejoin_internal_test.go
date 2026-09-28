@@ -284,7 +284,7 @@ func bootRejoinNode(t *testing.T) (*Engine, *Backends, *jetstream.Queue) {
 // position the node had applied, and the last sequence purged — which is the
 // position a peer that applied those barriers would hold.
 func pushBelowTheFloor(t *testing.T, e *Engine, q *jetstream.Queue) (
-	running *runningDomain, at statelog.Position, last uint64) {
+	running *runningLog, at statelog.Position, last uint64) {
 
 	t.Helper()
 	running, at, log, last := appendPastTheNode(t, e, q)
@@ -300,7 +300,7 @@ func pushBelowTheFloor(t *testing.T, e *Engine, q *jetstream.Queue) (
 // the position the node had applied, the log, and the last sequence appended:
 // the position a peer that applied those barriers would hold.
 func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
-	running *runningDomain, at statelog.Position, log *jetstream.DomainLog, last uint64) {
+	running *runningLog, at statelog.Position, log *jetstream.DomainLog, last uint64) {
 
 	t.Helper()
 	spec := estateSpec(tracker.Domain{})
@@ -360,7 +360,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 // tracker checkpoint advanced to last — what a peer holds that applied the
 // barriers past at, since a barrier writes no rows — and quiesces it, so the
 // file is self-contained for whatever opens or installs it.
-func copyAdvancedTo(t *testing.T, back *Backends, running *runningDomain,
+func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	at statelog.Position, last uint64, path string) {
 
 	t.Helper()
@@ -786,20 +786,22 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 		t.Fatalf("close the replicated estate: %v", err)
 	}
 
-	s.recovering.Lock()
+	// A RECOVERY OF ONE PARTITION holds the restore off, since the file
+	// the restore reopens holds every partition's rows.
+	unlock := s.recovering.lock(statelog.EstatePartition)
 	done := make(chan error, 1)
 	go func() { done <- s.restoreEstate(s.run) }()
 	select {
 	case err := <-done:
-		s.recovering.Unlock()
+		unlock()
 		t.Fatalf("the restore ran to its end (%v) while a recovery held the node", err)
 	case <-time.After(300 * time.Millisecond):
 	}
 	if back.Store.Replicated() != nil {
-		s.recovering.Unlock()
+		unlock()
 		t.Fatal("the restore reopened the estate while a recovery held the node")
 	}
-	s.recovering.Unlock()
+	unlock()
 	if err := <-done; err != nil {
 		t.Fatalf("the restore, once the recovery ended: %v", err)
 	}

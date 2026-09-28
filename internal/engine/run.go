@@ -844,10 +844,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// is not admitting itself to publish, it is offering the evidence the
 	// capacity barrier is established from. See maintenance_mode.go.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := e.admit(ctx, maintenanceStreams()); err != nil {
+	if err := e.admit(ctx, maintenanceStreams(LayoutZero())); err != nil {
 		return nil, err
 	}
-	e.acknowledge(ctx, maintenanceStreams())
+	e.acknowledge(ctx, maintenanceStreams(LayoutZero()))
 
 	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
 	// engine was stopped is on the fleet before anything resolves it —

@@ -106,14 +106,18 @@ func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositions,
 	logs map[string]*jetstream.DomainLog, above map[string]uint32) (map[string]uint32, error) {
 
-	floors, err := s.fleet.Floors(ctx)
+	floors, err := s.floors(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("engine: read the fleet's published trim floors to "+
 			"establish which generation each domain is on: %w", err)
 	}
 	newest := map[string]uint32{}
-	for _, domain := range registeredDomains() {
-		name := domain.Name()
+	for _, id := range s.layout.AllLogs() {
+		name := id.String()
+		domain, err := registeredDomain(id.Domain)
+		if err != nil {
+			return nil, err
+		}
 		var candidates []string
 		for _, row := range rows {
 			if at, runs := row.Domains[name]; runs && at.Generation > above[name] &&
@@ -134,7 +138,8 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 				return nil, fmt.Errorf("engine: %s's log is not open, so whether the "+
 					"nodes ahead of this one on it are evicted cannot be read", name)
 			}
-			if evicted, err = s.evictedOn(ctx, domain, estateSpec(domain), log, candidates); err != nil {
+			if evicted, err = s.evictedOn(ctx, domain, s.layout.StreamSpec(domain, id),
+				log, candidates); err != nil {
 				return nil, err
 			}
 		}
@@ -152,12 +157,13 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 	return newest, nil
 }
 
-// openLogs is every domain's log this node runs, keyed as the register keys
-// them — what [stateLog.fleetGenerations] reads the evicted peers off.
+// openLogs is every log this node runs, keyed as the register keys them —
+// what [stateLog.fleetGenerations] reads the evicted peers off.
 func (s *stateLog) openLogs() map[string]*jetstream.DomainLog {
-	logs := make(map[string]*jetstream.DomainLog, len(s.domains))
-	for name, running := range s.domains {
-		logs[name] = running.log
+	running := s.running()
+	logs := make(map[string]*jetstream.DomainLog, len(running))
+	for _, r := range running {
+		logs[r.key] = r.log
 	}
 	return logs
 }

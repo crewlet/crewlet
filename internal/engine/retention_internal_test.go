@@ -419,7 +419,7 @@ func (f *orderFleet) PutFloor(ctx context.Context, row coord.TrimFloor) error {
 // trimmedTracker is one node on a real embedded broker with its own trim
 // stopped, and three records on the tracker's log — so every purge and every
 // floor a case sees is the case's own, and a purge has something to remove.
-func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
+func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
@@ -459,7 +459,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
 // tracker-shaped barrier on the knowledge base's log is a record that log's
 // envelope decoder need not accept, and a case would be measuring that
 // instead.
-func barrierOn(t *testing.T, running *runningDomain) uint64 {
+func barrierOn(t *testing.T, running *runningLog) uint64 {
 	t.Helper()
 	encode := barrierEncoder(running.domain)
 	if encode == nil {
@@ -586,7 +586,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 	// an operator, and this case is about a different term.
 	r := &retention{fleet: back.Fleet, state: e.native.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
-	for _, name := range e.native.Load().log.order {
+	for _, name := range e.native.Load().log.held().order {
 		running := e.native.Load().log.Domain(name)
 		t.Run(name, func(t *testing.T) {
 			group := running.domain.FeedGroup()
@@ -646,7 +646,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 					}},
 				}},
 			}
-			if err := r.domain(t.Context(), name, shared); err != nil {
+			if err := r.domain(t.Context(), running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", name, err)
 			}
 			floors, err = back.Fleet.Floors(t.Context())

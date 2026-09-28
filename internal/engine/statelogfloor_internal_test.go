@@ -590,7 +590,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			t.Fatalf("publish %s's position: %v", away, err)
 		}
 	}
-	floor := func(r *runningDomain, f uint64) {
+	floor := func(r *runningLog, f uint64) {
 		t.Helper()
 		if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
 			Domain: r.domain.Name(), Generation: r.runner.Committed().Generation,
@@ -603,7 +603,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	end := func() [2]uint64 {
 		t.Helper()
 		var out [2]uint64
-		for i, r := range []*runningDomain{running, wiki} {
+		for i, r := range []*runningLog{running, wiki} {
 			_, last, err := r.log.Bounds(t.Context())
 			if err != nil {
 				t.Fatalf("read %s's end: %v", r.domain.Name(), err)
@@ -679,7 +679,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 }
 
 // logFirstOf is a domain log's own first surviving sequence.
-func logFirstOf(t *testing.T, r *runningDomain) uint64 {
+func logFirstOf(t *testing.T, r *runningLog) uint64 {
 	t.Helper()
 	first, _, err := r.log.Bounds(t.Context())
 	if err != nil {

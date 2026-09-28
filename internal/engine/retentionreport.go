@@ -49,7 +49,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// as empty: an empty node block is a fleet with no nodes, which cannot
 	// happen, and it is exactly the rendering somebody gets during the
 	// outage they are running this command in.
-	if positions, err := r.fleet.Positions(ctx); err == nil {
+	if positions, err := layoutPositions(ctx, r.fleet, r.state.layout.Number); err == nil {
 		in.Register, in.RegisterReadable = positions, true
 	}
 	if r.leases != nil {
@@ -61,7 +61,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// reports its trim as unreadable rather than as a trim that has
 	// concluded nothing, which is a different thing to go and look at.
 	floors := map[string]coord.TrimFloor{}
-	rows, floorsErr := r.fleet.Floors(ctx)
+	rows, floorsErr := layoutFloors(ctx, r.fleet, r.state.layout.Number)
 	for _, row := range rows {
 		floors[row.Domain] = row
 	}
@@ -75,12 +75,10 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// alarm reading below rather than read again there: both are one
 	// node's answer about the same instant, and two reads a broker round
 	// trip apart could disagree about it.
-	healths := make(map[string]domainHealth, len(r.state.order))
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
-		if running == nil {
-			continue
-		}
+	held := r.state.running()
+	healths := make(map[string]domainHealth, len(held))
+	for _, running := range held {
+		name := running.key
 		d := statelog.DomainInputs{
 			Domain:     name,
 			Stream:     running.spec.Name,
@@ -235,8 +233,7 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 		return nil
 	}
 	var oldest *statelog.MaintenanceReport
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
 		if running == nil {
 			continue
 		}
@@ -367,8 +364,8 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	// alarm then told a company four seconds old that its newest verified
 	// backup was twenty-five hours old, one line above the trim term
 	// reporting that no backup had been recorded at all.
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
+		name := running.key
 		if running == nil {
 			continue
 		}
@@ -424,8 +421,7 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 	if r.fleet == nil {
 		return
 	}
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
 		if running == nil {
 			continue
 		}
@@ -445,7 +441,7 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 // AT THE MEASURED DRAIN, so the number an alarm fires on is a duration rather
 // than a count: "this node is 4m12s behind" is actionable and "this node is
 // 500 000 records behind" is a number an operator has to divide.
-func applyLagOf(health statelog.Health, running *runningDomain) time.Duration {
+func applyLagOf(health statelog.Health, running *runningLog) time.Duration {
 	if health.Lag == nil || *health.Lag == 0 {
 		return 0
 	}

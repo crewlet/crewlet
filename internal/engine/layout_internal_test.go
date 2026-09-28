@@ -161,3 +161,10 @@ func TestThePagesSpaceIsAWholeQuarterOfTheTrackers(t *testing.T) {
 			DefaultPagesPartitions, DefaultTrackerPartitions, config.DerivedPagesLogDivisor)
 	}
 }
+
+// runsLogs stores running as every log s runs, placed in s's layout's order —
+// for a case that builds a state log by hand rather than booting one.
+func runsLogs(s *stateLog, running ...*runningLog) *stateLog {
+	s.logs.Store((*logSet)(nil).with(s.layout, running))
+	return s
+}

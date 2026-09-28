@@ -47,13 +47,13 @@ import (
 // A READ THAT FAILS IS AN ERROR, and the caller leaves the verdict where it was:
 // a register nobody could list, or a log that could not be asked, is neither a
 // peer that holds more nor one that does not.
-func (s *stateLog) truncation(ctx context.Context, running *runningDomain,
+func (s *stateLog) truncation(ctx context.Context, running *runningLog,
 	rows []coord.NodePositions, at statelog.Position, last uint64) (*statelog.Truncation, error) {
 
 	if !running.domain.ClaimsIdentity() {
 		return nil, nil
 	}
-	name := running.domain.Name()
+	name := running.key
 	keyed := running.runner.KeyedTo()
 	ahead := map[string]coord.DomainPosition{}
 	var candidates []string

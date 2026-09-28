@@ -78,12 +78,12 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 		return coord.MaintenanceOperation{}, errors.New(
 			"engine: this node runs no state log, so it has no stream to resize")
 	}
-	running := n.log.domains[n.log.domainOf(req.Stream)]
+	running := n.log.logOf(req.Stream)
 	if running == nil {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %q is not a domain log this build runs — the streams a "+
 				"capacity change applies to are %v",
-			req.Stream, maintenanceStreams())
+			req.Stream, maintenanceStreams(n.log.layout))
 	}
 	if req.TargetMaxBytes == 0 {
 		return coord.MaintenanceOperation{}, errors.New(
@@ -161,14 +161,17 @@ func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 	return room
 }
 
-// streamKeepsGateReserve reports whether the domain log named stream keeps a
-// gate reserve under its ceiling ([statelog.KeepsGateReserve]) — a property of
-// the domain, so read from the register rather than from a running log.
-func streamKeepsGateReserve(stream string) bool {
-	for _, domain := range registeredDomains() {
-		if estateSpec(domain).Name == stream {
-			return statelog.KeepsGateReserve(domain)
+// streamKeepsGateReserve reports whether the log of layout whose stream this
+// is keeps a gate reserve under its ceiling ([statelog.KeepsGateReserve]) — a
+// property of the log's domain, so read from the layout rather than from a
+// running log.
+func streamKeepsGateReserve(layout statelog.Layout, stream string) bool {
+	for _, id := range layout.AllLogs() {
+		if name, _ := layout.Stream(id); name != stream {
+			continue
 		}
+		domain, err := registeredDomain(id.Domain)
+		return err == nil && statelog.KeepsGateReserve(domain)
 	}
 	return false
 }
@@ -254,7 +257,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	// A resume is not asked again: its target was accepted when the window
 	// opened, and refusing it now would strand a window whose request may
 	// already be in flight.
-	reserved := streamKeepsGateReserve(req.Stream)
+	reserved := streamKeepsGateReserve(e.layout(), req.Stream)
 	if ordinary := statelog.OrdinaryCeiling(req.TargetMaxBytes, reserved); ordinary <= current.Bytes {
 		held := ""
 		if reserved {
@@ -357,7 +360,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 }
 
 // driveCapacity advances the operation as far as this mode's evidence allows.
-func (e *Engine) driveCapacity(ctx context.Context, running *runningDomain,
+func (e *Engine) driveCapacity(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	for range len(coord.MaintenancePhases) + 1 {
@@ -377,7 +380,7 @@ func (e *Engine) driveCapacity(ctx context.Context, running *runningDomain,
 
 // advanceCapacity takes one step: gather what this mode can establish, ask the
 // table, and persist whatever it answered.
-func (e *Engine) advanceCapacity(ctx context.Context, running *runningDomain,
+func (e *Engine) advanceCapacity(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	switch op.Phase {
@@ -445,7 +448,7 @@ func (e *Engine) baseline(ctx context.Context, op coord.MaintenanceOperation) (
 // THE READ-BACK IS THE EVIDENCE, never the acknowledgement: what the phase
 // establishes is that the ceiling IS the target, which is a value the broker
 // reports rather than a request it accepted.
-func (e *Engine) apply(ctx context.Context, running *runningDomain,
+func (e *Engine) apply(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	if err := running.log.SetMaxBytes(ctx, op.TargetMaxBytes); err != nil {
@@ -580,7 +583,7 @@ func (e *Engine) capacityRefusal(ctx context.Context, want uint64) string {
 // barrier needs nothing from the journal, it runs, it retires what it covered,
 // and only then is the seal tested against a journal with no unresolved
 // entries left.
-func (e *Engine) seal(ctx context.Context, running *runningDomain,
+func (e *Engine) seal(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	if e.mode != statelog.ModeSeal {
@@ -630,7 +633,7 @@ func (e *Engine) seal(ctx context.Context, running *runningDomain,
 // A MISMATCH IS A NUMBERED ATTEMPT rather than a re-apply: every node is in
 // seal mode, which refuses configuration writes, so there is nowhere legal for
 // a re-apply to run.
-func (e *Engine) verify(ctx context.Context, running *runningDomain,
+func (e *Engine) verify(ctx context.Context, running *runningLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	stats, err := running.log.Stats(ctx)

@@ -115,12 +115,12 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
 	}
-	name := running.domain.Name()
+	name := running.key
 
-	// ONE RECOVERY AT A TIME, with a runtime adoption: that replaces the
-	// replicated file whole, and this writes a checkpoint in it.
-	s.recovering.Lock()
-	defer s.recovering.Unlock()
+	// ONE RECOVERY AT A TIME ON THIS LOG'S PARTITION, with a runtime
+	// adoption: that replaces the partition's file whole, and this writes a
+	// checkpoint in it.
+	defer s.recovering.lock(running.id.Partition)()
 
 	wasRunning := s.haltApplier(name)
 	completed := false
@@ -266,7 +266,7 @@ func (r reanchorStream) CreatedAt(ctx context.Context) (time.Time, error) {
 // position row opened a generation no row names. The second value is the
 // peers that have already re-anchored, by name, for the refusal.
 func (e *Engine) reanchorInputs(ctx context.Context,
-	running *runningDomain) (statelog.ReanchorInputs, []string, error) {
+	running *runningLog) (statelog.ReanchorInputs, []string, error) {
 
 	stream := running.spec.Name
 	stats, err := running.log.Stats(ctx)
@@ -315,17 +315,17 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 		// node's own: every node re-anchors its own copy of such a log.
 		return in, nil, nil
 	}
-	domain := running.domain.Name()
+	domain := running.key
 	self := n.nodeID
 
 	// UNREADABLE IS NOT "no peers". A register nobody could list is exactly
 	// the outage during which re-anchoring is most tempting and least
 	// justified, so RegisterReadable stays false and the permission refuses
 	// on it — which is why the read's error goes no further than this.
-	rows, readErr := e.backends.Fleet.Positions(ctx)
+	rows, readErr := n.log.positions(ctx)
 	// A FLOOR IS ONLY EVER A SOURCE OF AN ABANDONED GENERATION here, and one
 	// that cannot be read leaves that number to the log's own records.
-	floors, _ := e.backends.Fleet.Floors(ctx)
+	floors, _ := n.log.floors(ctx)
 	through := in.Generation
 	var candidates []string
 	if readErr == nil {
@@ -449,7 +449,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 // it known which subject an earlier attempt of this node's would have written.
 // An unreadable log refuses, because whether the reanchor loses writes is the
 // question.
-func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *native,
+func (e *Engine) restoredTail(ctx context.Context, running *runningLog, n *native,
 	enc statelog.GenerationEncoder, in *statelog.ReanchorInputs) error {
 
 	// ONLY THE RESTORED CASE has a tail to fill — and a case that cannot be
@@ -505,16 +505,16 @@ var ErrUnknownStream = errors.New("engine: not a domain log this node runs")
 
 // runningStream is the running domain whose log is stream, or
 // [ErrUnknownStream] naming the streams there are.
-func (e *Engine) runningStream(stream string) (*runningDomain, error) {
+func (e *Engine) runningStream(stream string) (*runningLog, error) {
 	n := e.native.Load()
 	if n == nil || n.log == nil {
 		return nil, fmt.Errorf("%w: this node runs no state log, so %q is not "+
 			"one of its logs", ErrUnknownStream, stream)
 	}
-	running := n.log.Domain(n.log.domainOf(stream))
+	running := n.log.logOf(stream)
 	if running == nil {
 		return nil, fmt.Errorf("%w: %q — the streams this build runs are %v",
-			ErrUnknownStream, stream, maintenanceStreams())
+			ErrUnknownStream, stream, maintenanceStreams(n.log.layout))
 	}
 	return running, nil
 }

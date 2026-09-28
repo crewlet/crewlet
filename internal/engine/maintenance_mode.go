@@ -261,17 +261,20 @@ func (e *Engine) Mode() statelog.MaintenanceMode {
 	return e.mode
 }
 
-// maintenanceStreams is every stream a capacity operation could be open on.
+// maintenanceStreams is every stream a capacity operation could be open on:
+// every log of layout's.
 //
-// EVERY REGISTERED DOMAIN'S, because an operation on any one of them excludes
-// this node from publishing at all: the applier writes into one estate and a
-// seat's tools reach every domain through it, so a node that started because
-// only the vector log was clear would be publishing into the tracker's.
-func maintenanceStreams() []string {
-	domains := registeredDomains()
-	out := make([]string, 0, len(domains))
-	for _, domain := range domains {
-		out = append(out, estateSpec(domain).Name)
+// EVERY LOG'S, because an operation on any one of them excludes this node from
+// publishing at all: the appliers write into one estate and a seat's tools
+// reach every log through it, so a node that started because only the vector
+// log was clear would be publishing into the tracker's.
+func maintenanceStreams(layout statelog.Layout) []string {
+	logs := layout.AllLogs()
+	out := make([]string, 0, len(logs))
+	for _, id := range logs {
+		if stream, _ := layout.Stream(id); stream != "" {
+			out = append(out, stream)
+		}
 	}
 	return out
 }

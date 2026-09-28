@@ -39,7 +39,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 		t.Fatalf("a write: %+v, %v", res, err)
 	}
 	logs := map[string]*jetstream.DomainLog{}
-	for _, name := range s.order {
+	for _, name := range s.held().order {
 		logs[name] = s.Domain(name).log
 	}
 	trackerName, vectorsName := tracker.Domain{}.Name(), search.Domain{}.Name()

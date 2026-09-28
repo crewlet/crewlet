@@ -21,7 +21,7 @@ import (
 // what is under test is what a log at its ceiling takes, not how it came to be
 // there; the reserve reads the ceiling from the broker on every admission, as
 // it would after any resize.
-func fullForOrdinaryWrites(t *testing.T, identity []*runningDomain, minBytes uint64,
+func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64,
 	ceiling func(held uint64) uint64) map[string]uint64 {
 
 	t.Helper()
@@ -71,7 +71,7 @@ func refusedFull(err error) bool {
 // requireOrdinaryRefused asserts that an ordinary append — a linearizable
 // read's barrier, admitted through the log's own reserve as the engine's read
 // index admits it — is refused `log_full` and never reaches the log.
-func requireOrdinaryRefused(t *testing.T, running *runningDomain) {
+func requireOrdinaryRefused(t *testing.T, running *runningLog) {
 	t.Helper()
 	name := running.domain.Name()
 	index, err := statelog.NewReadIndex(running.domain, running.spec, running.log, running.reserve,
@@ -211,8 +211,8 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 	for _, d := range r.Report(t.Context()).Domains {
 		rows[d.Domain] = d
 	}
-	for _, name := range s.order {
-		running := s.domains[name]
+	for _, running := range s.running() {
+		name := running.key
 		reserved := statelog.KeepsGateReserve(running.domain)
 		stats, err := running.log.Stats(t.Context())
 		if err != nil {

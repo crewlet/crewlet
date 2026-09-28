@@ -526,7 +526,8 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 				t.Fatalf("stage the checkpoint: %v", err)
 			}
 
-			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo, nil)
+			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{},
+				estateLog(tracker.Domain{}), appendTo, nil)
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -562,15 +563,15 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	ceilings, err := sizeCeilings(t.Context(), q, config.DefaultBootstrap().Stream,
-		64<<30, "/var/lib/crewlet/stream")
+		64<<30, "/var/lib/crewlet/stream", LayoutZero())
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
 	s := &stateLog{
-		domains: map[string]*runningDomain{}, nodeID: "node-a", db: db,
+		layout: LayoutZero(), nodeID: "node-a", db: db,
 		ceilings: ceilings, run: t.Context(),
 	}
-	appendTo, err := s.provision(t.Context(), q, tracker.Domain{})
+	appendTo, err := s.provision(t.Context(), q, tracker.Domain{}, estateLog(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -671,7 +672,7 @@ func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 }
 
 // endOf is a domain log's last sequence.
-func endOf(t *testing.T, running *runningDomain) uint64 {
+func endOf(t *testing.T, running *runningLog) uint64 {
 	t.Helper()
 	end, err := running.log.End(t.Context())
 	if err != nil {

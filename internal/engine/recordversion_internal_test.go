@@ -35,8 +35,8 @@ func TestEveryHeartbeatAdvertisesTheRecordsItsBuildReads(t *testing.T) {
 	if mine == nil {
 		t.Fatalf("this node published no row: %+v", rows)
 	}
-	for _, name := range s.order {
-		want := s.domains[name].domain.RecordVersion()
+	for _, name := range s.held().order {
+		want := s.Log(name).domain.RecordVersion()
 		if got := mine.Domains[name].RecordVersion; got != want {
 			t.Fatalf("the heartbeat advertises reading version %d of %s, and this "+
 				"build reads %d", got, name, want)

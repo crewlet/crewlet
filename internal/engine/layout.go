@@ -125,6 +125,15 @@ func LayoutZero() statelog.Layout {
 	return statelog.EstateLayout(names...)
 }
 
+// layout is the layout this node runs: its state log's, or [LayoutZero] on a
+// node running none.
+func (e *Engine) layout() statelog.Layout {
+	if n := e.native.Load(); n != nil && n.log != nil {
+		return n.log.layout
+	}
+	return LayoutZero()
+}
+
 // estateLog is a registered domain's one log under [LayoutZero], and
 // estateSpec its stream — named as it has always been, at the domain's whole
 // declared budget.

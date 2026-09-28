@@ -746,7 +746,7 @@ func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error 
 	// it rather than taking one. That is what a bucket revision could never
 	// do — it was a number on a family, and the caller had to say which —
 	// and it is why both native backends now settle through one primitive.
-	running := n.log.Domain(n.log.domainOf(at.Stream))
+	running := n.log.logOf(at.Stream)
 	if running == nil {
 		return nil
 	}

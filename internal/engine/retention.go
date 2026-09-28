@@ -165,7 +165,7 @@ type poolCounters struct {
 // loop that ran there would publish a floor derived from streams it does not
 // have.
 func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *stateLog) {
-	if s == nil || len(s.domains) == 0 || e.backends == nil || e.backends.Fleet == nil {
+	if s == nil || len(s.running()) == 0 || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
 	r := &retention{
@@ -279,9 +279,9 @@ func (r *retention) tick(ctx context.Context) {
 		log.WarnContext(ctx, "retention_inputs_unreadable", "err", err)
 		return
 	}
-	for _, name := range r.state.order {
-		if err := r.domain(ctx, name, shared); err != nil {
-			log.WarnContext(ctx, "retention_trim_failed", "domain", name, "err", err)
+	for _, running := range r.state.running() {
+		if err := r.domain(ctx, running, shared); err != nil {
+			log.WarnContext(ctx, "retention_trim_failed", "domain", running.key, "err", err)
 		}
 	}
 }
@@ -300,8 +300,12 @@ func (r *retention) evaluate(ctx context.Context) {
 	r.alarms.Observe(ctx, r.Report(ctx).Alarms)
 }
 
-// fleetInputs is what one tick reads once and every domain shares.
+// fleetInputs is what one tick reads once and every log shares.
 type fleetInputs struct {
+	// layout is the number of the layout the tick's logs are in, which
+	// every floor it publishes carries beside its key.
+	layout int
+
 	at        time.Time
 	positions []coord.NodePositions
 	readable  bool
@@ -318,9 +322,12 @@ type fleetInputs struct {
 // register can disagree about who is counted, so one domain's floor would be
 // published against a fleet the other's was not.
 func (r *retention) read(ctx context.Context) (fleetInputs, error) {
-	in := fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}}
+	in := fleetInputs{
+		layout: r.state.layout.Number,
+		at:     time.Now().UTC(), previous: map[string]coord.TrimFloor{},
+	}
 
-	positions, err := r.fleet.Positions(ctx)
+	positions, err := layoutPositions(ctx, r.fleet, r.state.layout.Number)
 	if err != nil {
 		return in, fmt.Errorf("read the positions register: %w", err)
 	}
@@ -332,7 +339,7 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	if in.backups, err = r.fleet.BackupPoints(ctx); err != nil {
 		return in, fmt.Errorf("read the backup points: %w", err)
 	}
-	floors, err := r.fleet.Floors(ctx)
+	floors, err := layoutFloors(ctx, r.fleet, r.state.layout.Number)
 	if err != nil {
 		return in, fmt.Errorf("read the published floors: %w", err)
 	}
@@ -351,12 +358,9 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	return in, nil
 }
 
-// domain evaluates and applies one domain's trim.
-func (r *retention) domain(ctx context.Context, name string, shared fleetInputs) error {
-	running := r.state.domains[name]
-	if running == nil {
-		return nil
-	}
+// domain evaluates and applies one log's trim.
+func (r *retention) domain(ctx context.Context, running *runningLog, shared fleetInputs) error {
+	name := running.key
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
 		// THE STREAM ITSELF IS UNREADABLE, so there is no ceiling to
@@ -498,7 +502,10 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 		return err
 	}
 	row := coord.TrimFloor{
-		Domain:     name,
+		Domain: name,
+		// THE LAYOUT BESIDE THE KEY, for the positions row's reason: a
+		// log's key does not carry it. Layout 0 omits it on the wire.
+		Layout:     shared.layout,
 		Generation: generation,
 		TrimTo:     decision.To,
 		Floor:      floor,
@@ -645,7 +652,7 @@ func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 // exist — so the lookup below answered "never created", the term permitted
 // nothing, and that log was blocked on `feed_ack_floor` for the life of the
 // deployment while its own feed acknowledged every record.
-func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
+func (r *retention) feedTerm(ctx context.Context, running *runningLog) (
 	seq uint64, has, readable bool) {
 
 	group := running.domain.FeedGroup()
@@ -718,7 +725,7 @@ var (
 // evicted on that log, and a reader that took that for a readmission released
 // an eviction it had just made. A domain that claims no identity carries no
 // evictions and was read in full, trivially.
-func (r *retention) tombstones(ctx context.Context, running *runningDomain,
+func (r *retention) tombstones(ctx context.Context, running *runningLog,
 	generation uint32) (tombs []statelog.Tombstone, read bool) {
 
 	if !running.domain.ClaimsIdentity() {
