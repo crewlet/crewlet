@@ -1,19 +1,20 @@
 /**
  * The Builder lens decides its posture from what the engine answers, checks
  * every draft with a dry run of exactly the write a save would send, and
- * keeps the operator's work through a change of token.
+ * keeps the operator's work through a change of reader.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { clearToken, storeToken, type OrgProjection } from "~/protocol/index.ts";
+import { type OrgProjection } from "~/protocol/index.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
 import { href } from "~/app/router.tsx";
 import { seatPath } from "~/lib/seats.ts";
 import { FillRequest } from "~/app/fill.tsx";
 import {
+  asReader,
   company,
   Engine,
   fakeSurfaces,
@@ -21,6 +22,7 @@ import {
   json,
   mountBuilder,
   refusal,
+  rereadViewer,
 } from "./testkit.tsx";
 
 beforeEach(() => {
@@ -93,36 +95,31 @@ describe("the posture table", () => {
     ).toBeDefined();
   });
 
-  test("a refusal with no stored token asks for one", async () => {
+  test("a refusal with nobody signed in asks for a sign-in", async () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 401);
-    mountBuilder({ engine });
+    mountBuilder({ engine, query: asReader(() => "") });
     expect(
-      await screen.findByText(
-        "Editing the organization needs a credential the engine accepts. Sign in, or set a token.",
-      ),
+      await screen.findByText(/^Editing the organization needs a credential the engine accepts\./),
     ).toBeDefined();
-    expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   });
 
-  // SETTING A TOKEN IS ALL IT TAKES. The posture is read again on the change,
-  // so an operator who was asked for a token edits without reloading the page.
-  test("setting a token the engine accepts opens edit mode without a reload", async () => {
+  // A SIGN-IN IN ANOTHER TAB IS ALL IT TAKES. The browser's cookie is shared
+  // by its tabs, the viewer is read again, and the posture with it, so a
+  // reader who signed in elsewhere edits here without reloading the page.
+  test("a sign-in in another tab opens edit mode without a reload", async () => {
+    let who = "";
     const engine = new Engine(company());
-    engine.script = (r) =>
-      r.headers.Authorization === "Bearer good" ? null : json({ error: "unauthorized" }, 401);
-    mountBuilder({ engine });
+    engine.script = () => (who === "" ? json({ error: "unauthorized" }, 401) : null);
+    const { store } = mountBuilder({ engine, query: asReader(() => who) });
     expect(
-      await screen.findByText(
-        "Editing the organization needs a credential the engine accepts. Sign in, or set a token.",
-      ),
+      await screen.findByText(/^Editing the organization needs a credential the engine accepts\./),
     ).toBeDefined();
-    act(() => {
-      storeToken("good");
-    });
+    who = "jane.doe";
+    rereadViewer(store);
     expect(await screen.findByText("No problems")).toBeDefined();
     expect(screen.getByText("editable")).toBeDefined();
-    expect(engine.checks().at(-1)!.headers.Authorization).toBe("Bearer good");
   });
 
   // A REFUSAL ON AUTHORITY NAMES THE GRANT IT NAMED. A reader whose credential
@@ -143,12 +140,11 @@ describe("the posture table", () => {
     expect(screen.queryByText(/operator token/)).toBeNull();
   });
 
-  test("a refusal of a stored token says the token was refused", async () => {
-    localStorage.setItem("crewlet_api_token", "stale");
+  test("a refusal of a signed-in reader says the session was refused", async () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 401);
-    mountBuilder({ engine });
-    expect(await screen.findByText("The engine refused this browser's token.")).toBeDefined();
+    mountBuilder({ engine, query: asReader(() => "jane.doe") });
+    expect(await screen.findByText("The engine refused this browser's session.")).toBeDefined();
   });
 
   test("a plain 404 is a process that does not serve the configuration", async () => {
@@ -181,12 +177,11 @@ describe("the posture table", () => {
   // `no_control_plane` that was its only producer: no process serves the API
   // without the coordination store that refusal described.
   test("a halted lens marks the toolbar's add entries unavailable", async () => {
-    storeToken("reader");
     const engine = new Engine(company());
     engine.script = (r) =>
       r.query.get("dry_run") === "true" ? json({ error: "forbidden" }, 403) : null;
-    mountBuilder({ engine });
-    expect(await screen.findByText("The engine refused the token")).toBeDefined();
+    mountBuilder({ engine, query: asReader(() => "reader.only") });
+    expect(await screen.findByText("The engine refused the session")).toBeDefined();
 
     // An edit is refused before it reaches the log, and says why.
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
@@ -643,70 +638,80 @@ describe("a revision saved by somebody else", () => {
   });
 });
 
-describe("a token change mid-edit", () => {
-  test("keeps the draft, reads the configuration again and checks under the new token", async () => {
-    storeToken("first");
+describe("a new reader mid-edit", () => {
+  test("keeps the draft, reads the configuration again and checks as the new reader", async () => {
+    let who = "jane.doe";
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, query: asReader(() => who) });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     const reads = engine.sent("GET").length;
 
-    act(() => {
-      storeToken("second");
-    });
+    who = "sam.lee";
+    rereadViewer(store);
     await waitFor(() => expect(engine.sent("GET").length).toBe(reads + 1));
     await waitFor(() => expect(engine.checks()).toHaveLength(3));
-    const recheck = engine.checks()[2]!;
-    expect(recheck.headers.Authorization).toBe("Bearer second");
     // The edit is still in the draft that was checked.
-    expect(JSON.stringify(recheck.body)).toContain("Lead and more");
+    expect(JSON.stringify(engine.checks()[2]!.body)).toContain("Lead and more");
   });
 
-  test("a dry run refused for the new token pauses editing while the configuration still reads", async () => {
-    storeToken("first");
+  // THE CONTROL: a viewer read again as the SAME person is not a new reader,
+  // and a lens that re-read on every reconnect would re-check a draft for
+  // every blip of the socket.
+  test("the same reader read again changes nothing", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
+    await screen.findByText("No problems");
+    await waitFor(() => expect(engine.checks()).toHaveLength(1));
+    const reads = engine.sent("GET").length;
+    rereadViewer(store);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(engine.sent("GET")).toHaveLength(reads);
+    expect(engine.checks()).toHaveLength(1);
+  });
+
+  test("a dry run refused for the new reader pauses editing while the configuration still reads", async () => {
+    let who = "jane.doe";
+    const engine = new Engine(company());
+    const { store } = mountBuilder({ engine, query: asReader(() => who) });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
-    // Reads are served, writes and dry runs are refused: the token lacks the
-    // right to write, which only the check can find out.
+    // Reads are served, writes and dry runs are refused: the new reader lacks
+    // the right to write, which only the check can find out.
     engine.script = (r) =>
-      r.query.get("dry_run") === "true" && r.headers.Authorization === "Bearer reader"
+      r.query.get("dry_run") === "true" && who === "reader.only"
         ? json({ error: "forbidden" }, 403)
         : null;
-    act(() => {
-      storeToken("reader");
-    });
-    expect(await screen.findByText("The engine refused the token")).toBeDefined();
+    who = "reader.only";
+    rereadViewer(store);
+    expect(await screen.findByText("The engine refused the session")).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
   });
 
-  test("a token the engine refuses pauses editing without discarding the draft", async () => {
-    storeToken("first");
+  test("a reader signed out elsewhere pauses editing without discarding the draft", async () => {
+    let who = "jane.doe";
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, query: asReader(() => who) });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
-    engine.script = (r) => (r.headers.Authorization === "Bearer first" ? null : json({}, 401));
-    act(() => {
-      clearToken();
-    });
+    engine.script = () => (who === "" ? json({}, 401) : null);
+    who = "";
+    rereadViewer(store);
     expect(
       await screen.findByText(
-        "Editing the organization needs a credential the engine accepts. Sign in, or set a token. Your draft is kept on this page.",
+        /^Editing the organization needs a credential the engine accepts\..* Your draft is kept on this page\.$/,
       ),
     ).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
-    // The status names what is missing: no token was refused, none is set.
+    // The status names what is missing: no session was refused, none is held.
     expect(await screen.findByText("Needs a credential")).toBeDefined();
-    expect(screen.queryByText("The engine refused the token")).toBeNull();
+    expect(screen.queryByText("The engine refused the session")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
       expect(liveRegion().textContent).toBe(

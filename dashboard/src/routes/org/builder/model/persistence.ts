@@ -6,7 +6,7 @@
  * of that log is out, and nothing else: never the base document, the draft
  * or the problems. The document holds contact
  * identities, emails, policies and `${VAR}` names; kept in storage it would
- * outlive the operator's token and be offered to whoever uses the tab next.
+ * outlive the operator's session and be offered to whoever uses the tab next.
  * The log refers to the company only by keys and the values its own edits
  * wrote, and on restore the base is fetched again, so what is replayed is
  * always replayed onto what the engine holds now.
@@ -27,7 +27,7 @@
  * which the builder shows as a caution: the work continues, it just will not
  * survive a reload.
  *
- * WHAT CLEARS IT: a save, a discard, a change of stored token, and a check
+ * WHAT CLEARS IT: a save, a discard, a change of reader, and a check
  * the engine refused with 401 or 403. The last two are the tab changing hands,
  * and a colleague's draft is not something to offer the next operator.
  * [persistencePlan] turns the builder's state into the one write or removal
@@ -477,7 +477,7 @@ export interface PersistableState {
   readonly mode: BuilderMode;
   readonly baseRevision: string | null;
   readonly log: Log;
-  /** False from a token change or a refused check until the next operation. */
+  /** False from a change of reader or a refused check until the next operation. */
   readonly keep: boolean;
   /** The write id of a save of this log whose outcome is not known yet, or `null`. */
   readonly write: string | null;

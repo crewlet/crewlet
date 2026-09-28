@@ -31,7 +31,7 @@
  * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again:
  * the answer to the next check is the same refusal. So a change to the draft
  * in one of them sends nothing, and checking resumes only on a reset (a load,
- * an updated draft, a token change).
+ * an updated draft, a change of reader).
  *
  * `unreachable` BACKS OFF. Asking again at every keystroke would hammer an
  * engine that is restarting, or a network that is down, with requests that
@@ -215,7 +215,7 @@ export interface InFlight {
   readonly generation: number;
   /**
    * Numbered per request, not per generation: a reset checks the SAME
-   * generation again (a token change moves no generation), and the answer
+   * generation again (a change of reader moves no generation), and the answer
    * to the request it replaced must not be taken for the answer to the new
    * one.
    */
@@ -240,7 +240,7 @@ export interface CheckState {
 export type CheckEvent =
   /**
    * Check this generation now, whatever is in flight, forgetting any halt: a
-   * load, an updated draft, a save, or a token change (which moves no
+   * load, an updated draft, a save, or a change of reader (which moves no
    * generation but may change every answer).
    */
   | { readonly type: "reset"; readonly generation: number; readonly now: number }
@@ -477,7 +477,7 @@ export interface CheckRunnerOptions {
 /**
  * Performs the machine's effects: one timer, one request, one abort
  * controller. The owner calls [changed] when the draft's generation moves,
- * [reset] on a load, an adopted update, a save or a token change (see
+ * [reset] on a load, an adopted update, a save or a change of reader (see
  * `reducer.checkTrigger`), and [dispose] when the builder goes away.
  */
 export class CheckRunner {

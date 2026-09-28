@@ -22,8 +22,9 @@
  *   somebody may have walked away from, not for a lens switch.
  *
  * WHAT CLEARS IT: whatever makes the plan say so (a save, a discard, an empty
- * log), and a state that may no longer be kept (`keep` false after a token
- * change or a refused token), which also withdraws an offer still on screen.
+ * log), and a state that may no longer be kept (`keep` false after a change
+ * of reader or a refused credential), which also withdraws an offer still on
+ * screen.
  *
  * A KEPT DRAFT A SAVE WAS SENT FOR IS SETTLED BEFORE IT IS DECIDED. A save
  * marks the kept log with its write id before it goes (`markWrite`), and
