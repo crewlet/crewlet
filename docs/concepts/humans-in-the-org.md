@@ -209,10 +209,10 @@ What the binding buys:
   `fleet:operate`. See [the authority
   table](identity-and-access.md#the-authority-table-one-function-decides).
 
-- **Your writes are the seat's.** A write you make — on the dashboard's write
-  surface or through your assistant — is recorded under the seat's handle with
-  the author kind `human`, which is what keeps you out of the wake your own
-  change sends. There is still no way for a caller to name a seat to act as.
+- **Your writes are the seat's.** A write you make — through the `/work` and
+  `/pages` HTTP routes or through your assistant — is recorded under the
+  seat's handle with the author kind `human`, which is what keeps you out of
+  the wake your own change sends. There is still no way for a caller to name a seat to act as.
   See [who a write is attributed
   to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
 
@@ -225,9 +225,10 @@ and the name every personal read answers for — so what its assistant arranges
 is what its screens show. What it lacks is the work the chart addresses to a
 seat, and the screens say so, naming `crewlet iam bind`.
 
-Read and snooze marks are the assistant's to write, not the screen's: the
-dashboard is read-only, and every write in this engine is attributed to
-somebody. What it shows is what the engine recorded.
+Read and snooze marks are written through `PUT /work/people/{handle}/inbox` or
+your assistant's `mark_inbox`, never by the screen: the dashboard writes no
+work item, page or inbox record of its own, so what it shows is what the engine
+recorded, and every write behind it is attributed to somebody.
 
 **The binding lives in the directory**, not on the token and not in the
 company document. Tier A is the root of trust and may never read Tier B — it

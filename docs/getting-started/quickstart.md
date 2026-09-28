@@ -528,9 +528,12 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same thirteen tools a seat holds, and its writes are attributed to
-the token's own name rather than to a seat — so an audit can tell your edit
-from an agent's. See
+It gets the nineteen tracker and knowledge-base tools a seat holds — the same
+tools, not copies — plus ten no seat is given (saved views, writing the
+catalogue, a person's inbox, pins and priorities, and trashing and restoring an
+item), each decided by the same authority table a seat's calls are. Its writes
+are attributed to the token's own name rather than to a seat, so an audit can
+tell your edit from an agent's. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 Once you sign in as a person, give the assistant **your own** token rather than
