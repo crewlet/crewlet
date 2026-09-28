@@ -150,6 +150,55 @@ func TestADeferralShedsSeatsOnlyPastTheGrace(t *testing.T) {
 	}
 }
 
+// A SERVING COPY HOLDS A WHOLE STATE AND IS CLOSE TO THE LOG, WHATEVER THE
+// INSTANT SAYS: an established copy that has drained serves at a lag of one —
+// the record in flight a busy log has on most heartbeats — and at the snapshot
+// slack itself, and is behind one record past it or before it has ever
+// drained. Everything Established refuses on the log's own terms, it refuses
+// with the same reason.
+func TestAServingCopyIsDrainedAndWithinTheSlack(t *testing.T) {
+	t.Parallel()
+	ptr := func(v uint64) *uint64 { return &v }
+	copyAt := func(lag uint64, drained bool) statelog.Health {
+		end := uint64(10_000)
+		return statelog.Health{
+			Position:  statelog.Position{Stream: "S", Generation: 1, Seq: end - lag},
+			TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(lag), LastSeq: ptr(end),
+			Drained: drained,
+		}
+	}
+	for name, tc := range map[string]struct {
+		health statelog.Health
+		ok     bool
+		want   statelog.ReadRefusal
+	}{
+		"caught up":            {health: copyAt(0, true), ok: true},
+		"one record in flight": {health: copyAt(1, true), ok: true},
+		"at the slack":         {health: copyAt(statelog.SnapshotLagSlack, true), ok: true},
+		"past the slack":       {health: copyAt(statelog.SnapshotLagSlack+1, true), want: statelog.RefuseBehind},
+		"never drained":        {health: copyAt(0, false), want: statelog.RefuseBehind},
+		"the end unread":       {health: func() statelog.Health { h := copyAt(0, true); h.Lag, h.LastSeq = nil, nil; return h }(), want: statelog.RefuseBrokerUnreachable},
+		"a floor nobody read":  {health: func() statelog.Health { h := copyAt(0, true); h.TrimFloor = nil; return h }(), want: statelog.RefuseFloorUnknown},
+		"a stream rebuilt":     {health: func() statelog.Health { h := copyAt(0, true); h.StreamRecreated = true; return h }(), want: statelog.RefuseWrongStream},
+		"below the log's start": {health: func() statelog.Health {
+			h := copyAt(0, true)
+			h.FirstSeq, h.TrimFloor = ptr(10_000), ptr(10_000)
+			h.Position.Seq = 10
+			return h
+		}(), want: statelog.RefuseBelowFloor},
+	} {
+		ok, refusal := tc.health.Serving()
+		if ok != tc.ok || refusal != tc.want {
+			t.Errorf("%s: Serving = (%v, %q), want (%v, %q)", name, ok, refusal, tc.ok, tc.want)
+		}
+	}
+	// THE PREMISE of the case the lease was flapping on: admission refuses
+	// the copy with one record in flight, and serving does not.
+	if ok, _ := copyAt(1, true).Established(true); ok {
+		t.Error("the premise: seat admission admits a copy with a record in flight")
+	}
+}
+
 // ESTABLISHED IS A TWO-SIDED INEQUALITY, and each side fails for its own
 // reason.
 //

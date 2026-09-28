@@ -41,9 +41,13 @@ import (
 // exactly that — layout 0, no map acted on (there is none), and one
 // partition, in the state this node's copy is in:
 //
-//   - `serving` when the copy is established: the same strict readiness a
-//     seat's admission waits on ([stateLog.Established]);
-//   - `catching_up` while it is not yet;
+//   - `serving` when the copy is established, has drained since its
+//     appliers started and is within the snapshot slack of every log's end
+//     ([stateLog.Serving]) — the contract's definition, and deliberately NOT
+//     a seat's admission, which refuses at a lag of one: a busy company has
+//     a record in flight on most beats, and a lease sampling that instant
+//     would leave `serving` on every one of them;
+//   - `catching_up` while it is not yet — never drained, or past the slack;
 //   - `faulted` when it is WRONG rather than behind — an applier halted, an
 //     eviction, rows below the log, a checkpoint naming another stream, a
 //     stalled prefix or a record held past its grace ([stateLog.Healthy]).
@@ -70,7 +74,7 @@ import (
 // estateRuntime is the state log as the lease reads it.
 type estateRuntime interface {
 	Healthy(ctx context.Context) (bool, string)
-	Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal)
+	Serving(ctx context.Context) (bool, statelog.ReadRefusal)
 }
 
 // estateLeaseAccount builds this node's estate lease, beat after beat,
@@ -184,7 +188,7 @@ func readPartitionState(ctx context.Context, rt estateRuntime) (partmap.Partitio
 	if ok, _ := rt.Healthy(ctx); !ok {
 		return partmap.PartFaulted, true
 	}
-	switch ok, refusal := rt.Established(ctx, true); {
+	switch ok, refusal := rt.Serving(ctx); {
 	case ok:
 		return partmap.PartServing, true
 	case refusal == statelog.RefuseBrokerUnreachable:

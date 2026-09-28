@@ -194,9 +194,12 @@ as a claim the node never made.
 
 Every data node running the estate holds one today, while the estate is still
 one file that every data node holds whole (layout 0): it says layout 0, no map
-epoch, and the one partition `estate.000` — `serving` once its copy is
-established, the same readiness a seat's admission waits on, `catching_up`
-before that, and `faulted` when the copy is wrong rather than behind. Nothing
+epoch, and the one partition `estate.000` — `serving` once its copy has
+drained and stays within the snapshot slack of its logs (1,000 records),
+`catching_up` before that or past it, and `faulted` when the copy is wrong
+rather than behind. `serving` is deliberately not a seat's admission, which
+waits for a lag of zero: a busy company has a record in flight on most beats,
+and a lease sampling that instant would leave `serving` on every one of them. Nothing
 reads those states until a layout divides the estate; what reads the lease now
 is that it is there — a [capacity window](../guides/retention.md#who-has-to-acknowledge)
 counts every live `estate:` lease as a publisher of the estate's records. A

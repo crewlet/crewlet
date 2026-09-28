@@ -27,7 +27,7 @@ func (f *fakeEstate) Healthy(context.Context) (bool, string) {
 	return f.healthy, ""
 }
 
-func (f *fakeEstate) Established(context.Context, bool) (bool, statelog.ReadRefusal) {
+func (f *fakeEstate) Serving(context.Context) (bool, statelog.ReadRefusal) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.established, f.refusal
@@ -67,6 +67,39 @@ func TestTheEstateLeaseSaysWhatTheCopyIsDoing(t *testing.T) {
 		if got := a.state(t.Context()); got != step.want {
 			t.Fatalf("%s: the lease says %q, want %q", step.name, got, step.want)
 		}
+	}
+}
+
+// A COPY WITH A RECORD IN FLIGHT STILL SERVES. A busy company has a record on
+// its log that the applier has not reached yet on most beats, and a lease that
+// sampled that instant — seat admission's strict test — said `catching_up` on
+// an established, drained copy each time, dropping it from its partition's
+// servers for as long as the company kept writing. Serving is the contract's
+// definition instead: drained, and within the snapshot slack of the log.
+func TestACopyWithARecordInFlightStillServes(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	n := e.native.Load()
+	waitUntil(t, 20*time.Second, "the copy to serve", func() bool {
+		ok, _ := n.log.Serving(t.Context())
+		return ok
+	})
+	// A RECORD THE APPLIER NEVER REACHES: the appliers stop, and a write
+	// lands on the log and waits in vain for its own application.
+	n.log.haltAppliers()
+	write, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	_, _ = n.writer.EvictNode(write, "op-in-flight", "node-x")
+	cancel()
+	if ok, refusal := n.log.Established(t.Context(), true); ok || refusal != statelog.RefuseBehind {
+		t.Fatalf("the premise: seat admission reads (%v, %q), want the copy behind "+
+			"by the record in flight", ok, refusal)
+	}
+	if ok, refusal := n.log.Serving(t.Context()); !ok {
+		t.Fatalf("an established, drained copy one record behind does not serve: %q", refusal)
+	}
+	a := &estateLeaseAccount{runtime: n.log}
+	if got := a.state(t.Context()); got != partmap.PartServing {
+		t.Errorf("the lease says %q of a copy one record behind, want serving", got)
 	}
 }
 

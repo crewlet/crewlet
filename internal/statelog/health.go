@@ -243,12 +243,13 @@ type Health struct {
 	// clears. The applier sees each one — the fetch the broker answered
 	// with nothing is the drain — and [Runner.Drained] is that record.
 	//
-	// ONE READER, AND IT IS THE DONOR GATE: may this node hand a peer a
-	// copy of its rows. That question is about whether the rows were ever
+	// TWO READERS, ASKING ONE QUESTION: the donor gate — may this node hand
+	// a peer a copy of its rows — and [Health.Serving] — may this copy
+	// answer for its partition. Each is about whether the rows were ever
 	// whole, and the separate question of how far they have since fallen
-	// behind is [Health.Lag] against [SnapshotLagSlack]. Neither readiness
-	// gate reads this — admission wants the instant and the shed wants a
-	// fault, and neither is a history.
+	// behind is [Health.Lag] against [SnapshotLagSlack], which both apply.
+	// Neither readiness gate reads this — admission wants the instant and
+	// the shed wants a fault, and neither is a history.
 	Drained bool
 
 	// Stalled reports an applied prefix that has not moved for the stall
@@ -567,6 +568,35 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	// records left to apply holds a PREFIX of what the log says, whether
 	// or not it has ever held the whole of it.
 	if strict && *h.Lag > 0 {
+		return false, RefuseBehind
+	}
+	return true, ""
+}
+
+// Serving reports whether this copy of a log may answer for its partition: the
+// state a node's estate lease names `serving`, which a joiner is promoted on
+// and a leaver's retirement waits for. It is ESTABLISHED on the log's own
+// terms — at or above the floor, on the stream its rows are keyed to — and
+// DRAINED since its applier started, and it is within [SnapshotLagSlack] of the
+// log's end. Otherwise it answers the refusal that holds, [RefuseBehind] for a
+// copy that has never drained or has fallen past the slack.
+//
+// A HISTORY AND A DISTANCE, NEVER THE INSTANT. [Health.Established] strict is
+// seat admission's question — may a seat attach and act on these rows right
+// now — and it refuses at a lag of one, which a busy log has on most
+// heartbeats: a lease sampling that instant said `catching_up` on an
+// established, drained copy of a company filing work, and a map routing by it
+// dropped the copy from its partition's servers on every beat that caught a
+// record in flight. Whether a copy holds a whole state is what the applier
+// observed ([Health.Drained]); how far it has since fallen behind is the lag
+// against the slack a donor is held to, since a copy close enough to hand a
+// joiner is close enough to answer for the partition.
+func (h Health) Serving() (bool, ReadRefusal) {
+	if ok, refusal := h.Established(false); !ok {
+		return false, refusal
+	}
+	// The lag is non-nil here: an unread end is refused above.
+	if !h.Drained || *h.Lag > SnapshotLagSlack {
 		return false, RefuseBehind
 	}
 	return true, ""

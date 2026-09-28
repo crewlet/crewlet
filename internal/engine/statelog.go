@@ -1953,6 +1953,27 @@ func (s *stateLog) identityDomains() []*runningLog {
 // domain is what keeps that a property of the domain rather than a list
 // somewhere of the ones to skip.
 func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal) {
+	return s.everyReadiness(ctx, func(h statelog.Health) (bool, statelog.ReadRefusal) {
+		return h.Established(strict)
+	})
+}
+
+// Serving reports whether this node's copy may answer for the estate: every
+// domain whose health gates seat admission is [statelog.Health.Serving] —
+// drained and within the snapshot slack of its log, rather than at a lag of
+// zero this instant, which is admission's question and not this one. What a
+// node's estate lease says of its copy (estatelease.go).
+func (s *stateLog) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
+	return s.everyReadiness(ctx, statelog.Health.Serving)
+}
+
+// everyReadiness is judge over every domain whose health gates seat admission,
+// in the register's order, answering the first refusal — and
+// [statelog.RefuseBrokerUnreachable] for a domain whose health could not be
+// read. A node with no state log is judged ready: it has nothing to wait for.
+func (s *stateLog) everyReadiness(ctx context.Context,
+	judge func(statelog.Health) (bool, statelog.ReadRefusal)) (bool, statelog.ReadRefusal) {
+
 	if s == nil {
 		return true, ""
 	}
@@ -1964,7 +1985,7 @@ func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog
 		if err != nil {
 			return false, statelog.RefuseBrokerUnreachable
 		}
-		if ok, refusal := health.Established(strict); !ok {
+		if ok, refusal := judge(health); !ok {
 			return false, refusal
 		}
 	}
