@@ -180,8 +180,9 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 	// The majority's writes, straight after the cut. A group the cut member
 	// led has to elect again among the two that remain, so the writes are
 	// retried through that — each on a FRESH resource, because a claim that
-	// failed part way leaves its record claiming under this owner until its
-	// TTL, and the next claim of the same resource waits on it.
+	// failed part way while the lease bucket itself had no leader could not
+	// give its claiming record back either, and that record holds the
+	// resource under this owner until its TTL.
 	var (
 		lease    *coord.Lease
 		resource string

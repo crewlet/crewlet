@@ -1,7 +1,9 @@
 package coordtest
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -91,6 +93,60 @@ var tristateCases = []testCase{
 		}
 		if ok {
 			h.t.Fatal("renew of a lapsed lease reported success")
+		}
+	}},
+
+	{"a_claim_its_caller_abandons_part_way_leaves_its_owner_an_answer", func(h *harness) {
+		// Unknown is a claim's honest answer when its caller gives up
+		// mid-flight, and it says nothing about ownership — so what the
+		// owner does next is claim again, and that claim must get a
+		// DEFINITE answer. A backend that writes a claim in steps must not
+		// leave a half-made one behind: one that did left its record
+		// claiming for the lease's whole TTL, which every peer read as
+		// held and the owner's own retries read as a sibling about to
+		// commit, so the owner answered unknown for five minutes here and a
+		// seat or a duty stayed dark for as long.
+		//
+		// The caller gives up at instants spread across a claim's own
+		// duration, measured first, so some land between whatever steps a
+		// backend takes. Each abandoned claim is on a fresh resource, and
+		// the owner's next claim of it must be GRANTED — nothing else
+		// claims it — at the epoch the abandoned claim returned, if it did
+		// return one.
+		opts := coord.AcquireOptions{Owner: "node-a", TTL: LongTTL, Ungated: true}
+		const warm = 8
+		var took time.Duration
+		for i := range warm {
+			began := time.Now()
+			h.claim(fmt.Sprintf("seat:warm-%d", i), opts)
+			took = max(took, time.Since(began))
+		}
+		const attempts = 64
+		for i := range attempts {
+			resource := fmt.Sprintf("seat:abandoned-%d", i)
+			ctx, cancel := context.WithCancel(h.ctx)
+			// Over TWICE the slowest warm claim, so a claim slower than
+			// those is still given up on part way rather than after it.
+			stop := time.AfterFunc(2*took*time.Duration(i)/attempts, cancel)
+			abandoned, abandonErr := h.b.TryAcquire(ctx, resource, opts)
+			stop.Stop()
+			cancel()
+
+			lease, err := claimUntilDefinite(h, resource, opts)
+			switch {
+			case err != nil:
+				h.t.Fatalf("attempt %d: after a claim of %s was given up on (%v, %v), its "+
+					"owner's next claim got no answer: %v", i, resource, abandoned,
+					abandonErr, err)
+			case lease == nil:
+				h.t.Fatalf("attempt %d: after a claim of %s was given up on (%v, %v), its "+
+					"owner was refused a resource nobody else claims", i, resource,
+					abandoned, abandonErr)
+			case abandoned != nil && lease.Epoch != abandoned.Epoch:
+				h.t.Fatalf("attempt %d: the abandoned claim returned epoch %d and the "+
+					"owner's next claim moved it to %d — an unbroken hold keeps its epoch",
+					i, abandoned.Epoch, lease.Epoch)
+			}
 		}
 	}},
 

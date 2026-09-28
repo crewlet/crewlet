@@ -58,6 +58,19 @@ type leaseValue struct {
 	// yet committed its fencing token. See TryAcquire.
 	Epoch int64 `json:"epoch"`
 
+	// Claim names the ONE CALL that wrote a record in the claiming state,
+	// and is empty on every other record.
+	//
+	// The owner cannot say it: one owner runs several claims of one
+	// resource at once — the heartbeat, the sweep and a recovery path — so
+	// a claiming record under this owner may be a sibling's, one round trip
+	// from committing. A call that fails part way gives back only the record
+	// carrying its own claim ([Store.abandon]), which is what lets it give
+	// back a record whose write it could not confirm without ever tearing
+	// down a sibling's. Nothing but that call writes a record carrying it,
+	// so once the record no longer does, it is no longer that call's.
+	Claim string `json:"claim,omitempty"`
+
 	// TTLNanos is the deadline the claimant asked for. On the seat lease
 	// bucket it equals the bucket's own TTL in every production path, in which
 	// case the record's disappearance IS its expiry and nothing consults a

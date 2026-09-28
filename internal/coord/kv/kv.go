@@ -136,6 +136,22 @@
 // under it. Exactly one claimant gets past step 1, so exactly one advances the
 // counter. A renew is still one write.
 //
+// A claim that fails AFTER step 1 GIVES THE RECORD BACK ([Store.abandon]). It
+// used to leave it claiming until its TTL, on the reasoning that a claimant
+// that failed is a claimant that died — and it is not: it is alive, it knows
+// it failed, and the record it left holds the resource against everybody, its
+// own owner included. A peer reads a claiming record as held, and the owner's
+// own retries read it as a sibling one round trip from committing, so each
+// spun through every compare-and-swap round and answered UNKNOWN for the whole
+// TTL: an epochs bucket without a leader for a second kept a seat or a duty
+// dark for a lease's length. The give-back is exact because no token was
+// handed out — a counter the failed step did advance is a gap, and gaps are
+// harmless — and because it is taken only of the record carrying this call's
+// own claim (leaseValue.Claim), so it can never tear down a sibling's claim or
+// a tenure that did commit. What still lapses on its TTL is the record of a
+// claimant that could not give it back: one that died, or whose store refused
+// the give-back too.
+//
 // # The protocol gate degrades, deliberately
 //
 // Postgres evaluated "no live lease at a lower protocol" as a subquery INSIDE
@@ -245,6 +261,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -806,10 +823,12 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// and has not committed its token yet. There is no epoch to
 			// keep, and taking it over would fence this owner against
 			// itself for no reason. Go round again; the sibling call is
-			// one round trip from committing. If it never does — it
-			// failed and abandoned the record — the attempts run out and
-			// this answers UNKNOWN, which is honest: the record lapses on
-			// its TTL like any other, and the next call takes it.
+			// one round trip from committing, or — if it failed — from
+			// giving the record back ([Store.abandon]). If it does
+			// neither, it died or its store refused the give-back as
+			// well, the attempts run out and this answers UNKNOWN, which
+			// is honest: the record lapses on its TTL like a dead
+			// owner's lease, and the next call takes it.
 			continue
 		}
 		if l == s.duties {
@@ -900,8 +919,16 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// rather than 1; and worse, ownership would briefly exist at a
 		// token the persistent counter had not committed, which is the
 		// exact state fencing exists to prevent.
+		//
+		// A failure after step 1 GIVES THE RECORD BACK — see the package
+		// doc's "A claim is three writes". Every failure below that is not
+		// a lost compare-and-swap may have left this call's claiming
+		// record in the bucket, including a write whose answer was lost
+		// after it landed, so each one hands [Store.abandon] the claim it
+		// wrote rather than a revision it may never have been told.
 		claiming := value
 		claiming.Epoch = claimingEpoch
+		claiming.Claim = uuid.NewString()
 		claimData, err := encodeValue(claiming)
 		if err != nil {
 			return nil, err
@@ -912,14 +939,18 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				if errors.Is(err, jetstream.ErrKeyExists) {
 					continue
 				}
-				return nil, unavailable("create lease "+resource, err)
+				err = unavailable("create lease "+resource, err)
+				s.abandon(ctx, l, resource, claiming, mine, err)
+				return nil, err
 			}
 		} else {
 			if rev, err = l.kv.Update(ctx, key, claimData, mine.revision); err != nil {
 				if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 					continue
 				}
-				return nil, unavailable("claim lease "+resource, err)
+				err = unavailable("claim lease "+resource, err)
+				s.abandon(ctx, l, resource, claiming, mine, err)
+				return nil, err
 			}
 		}
 
@@ -928,15 +959,18 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// through re-pins it on the persistent record if the two ever drift.
 		epoch, hint, err := s.bumpEpoch(ctx, resource, value.Preferred)
 		if err != nil {
-			// The record is left in the claiming state and expires with
-			// its TTL, exactly as a lease whose owner died does. No token
-			// was minted, so nothing is stranded.
+			// No token was handed out, and one the counter did take is
+			// a gap, which is harmless. What must not stay is the
+			// record: left claiming, it held the resource against every
+			// claimant — this owner's retries included — for its TTL.
+			s.abandon(ctx, l, resource, claiming, mine, err)
 			return nil, err
 		}
 		value.Epoch = epoch
 		value.Preferred = hint
 		data, err := encodeValue(value)
 		if err != nil {
+			s.abandon(ctx, l, resource, claiming, mine, err)
 			return nil, err
 		}
 		if _, err := l.kv.Update(ctx, key, data, rev); err != nil {
@@ -946,7 +980,14 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 				continue
 			}
-			return nil, unavailable("commit lease "+resource, err)
+			// UNKNOWN whether the commit landed. If it did, the record
+			// is a committed tenure under this owner, which abandon
+			// leaves alone — it carries no claim — and this owner's
+			// next claim renews it. If it did not, the record is still
+			// this call's claiming one, and it goes back.
+			err = unavailable("commit lease "+resource, err)
+			s.abandon(ctx, l, resource, claiming, mine, err)
+			return nil, err
 		}
 		return s.settle(ctx, l, resource, value, opts, protocol, true)
 	}
@@ -1023,6 +1064,124 @@ func (s *Store) yield(ctx context.Context, resource string, want leaseValue, pro
 	log.InfoContext(ctx, event, "resource", resource, "owner", want.Owner, "epoch", want.Epoch,
 		"protocol", protocol)
 	return nil
+}
+
+// abandon gives back the claiming record a TryAcquire wrote and could not
+// commit, so the resource is claimable at once rather than dark for its TTL.
+// cause is why the claim failed, for the line that says so.
+//
+// A TEARDOWN, so it runs on the caller's context WITHOUT its cancellation: the
+// failure being undone is often that cancellation itself — a claim abandoned
+// by a caller that gave up mid-epoch — and a give-back that inherited it would
+// do nothing at all. Bounded instead by the client's own API timeout, since
+// removing the cancellation removes the deadline with it.
+//
+// EXACT, in both directions that matter:
+//
+//   - It takes back ONLY the record carrying this call's claim. A sibling
+//     claim by the same owner writes its own, and a commit clears it, so a
+//     record that no longer carries it — a commit whose answer was lost
+//     after it landed, or a claim that lapsed and was taken — is not this
+//     call's to touch, and is left exactly as it is.
+//   - It FENCES OUT this call's own claiming write where that has not landed
+//     yet, which is the case a cancelled caller makes: the client gives up
+//     on a request the server has not processed, and the request lands after
+//     the give-back looked — a record carrying this call's claim that nothing
+//     would ever take back. So where the key is still what the claiming write
+//     was made against — no live record for a create, the same revision for a
+//     takeover — the give-back writes its tombstone against that same
+//     expectation, and the late write is refused by the expectation it
+//     carries. Before the fence a loaded suite caught it: a claim cancelled
+//     part way left a record carrying its claim that landed after the
+//     give-back had looked, and its owner was answered unknown until the
+//     record's TTL.
+//
+// Every write is at the revision it read, so a record that moved in between
+// is read again rather than overwritten: nothing but this call writes its
+// claim, so a move either landed that claim — to be taken back — or took the
+// key from this call.
+//
+// The give-back is the tombstone [Store.Release] writes, so a reader treats
+// the resource as unheld and the next claim is an ordinary takeover. A
+// give-back the store refuses leaves the record to lapse on its TTL, which is
+// where it used to be left every time, and says so.
+func (s *Store) abandon(ctx context.Context, l *lane, resource string, claiming leaseValue,
+	over *entry, cause error) {
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.js.Options().DefaultTimeout)
+	defer cancel()
+	gaveBack, err := s.giveBack(ctx, l, resource, claiming, over)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "coord_kv_claim_abandon_failed", "resource", resource,
+			"owner", claiming.Owner, "cause", cause.Error(), "error", err.Error(),
+			"detail", "the claim failed part way and its record could not be given back either, "+
+				"so the resource reads as held until the record's TTL lapses")
+	case gaveBack:
+		log.InfoContext(ctx, "coord_kv_claim_abandoned", "resource", resource,
+			"owner", claiming.Owner, "cause", cause.Error())
+	}
+}
+
+// giveBack tombstones resource's record if it is the claiming record this call
+// wrote, or fences the key against that write if it has not landed, reporting
+// whether it wrote. over is the record the claiming write was made over, nil
+// for a create.
+func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming leaseValue,
+	over *entry) (bool, error) {
+
+	key := encodeResource(resource)
+	for range casAttempts {
+		e, err := s.readOne(ctx, l, resource)
+		if err != nil {
+			return false, err
+		}
+		var (
+			tomb   leaseValue
+			landed bool
+		)
+		switch {
+		case e != nil && e.value.Epoch == claimingEpoch && e.value.Claim == claiming.Claim:
+			tomb, landed = e.value, true
+		case over == nil && e == nil:
+			tomb = claiming
+		case over != nil && e != nil && e.revision == over.revision:
+			tomb = e.value
+		default:
+			// The key moved on without this call's write: a commit
+			// that landed, a claim that lapsed and was taken, or a
+			// takeover's record gone — which refuses that write by
+			// its own expectation.
+			return false, nil
+		}
+		tomb.Owner, tomb.Claim = "", ""
+		tomb.Layout = layoutDutyLane
+		tomb.TTLNanos = int64(l.maxTTL)
+		data, err := encodeValue(tomb)
+		if err != nil {
+			return false, err
+		}
+		if e == nil {
+			_, err = s.create(ctx, l.kv, key, data)
+		} else {
+			_, err = l.kv.Update(ctx, key, data, e.revision)
+		}
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyExists),
+			errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			// Moved between the read and the write — possibly by this
+			// call's own claiming write landing. Read it again.
+			continue
+		default:
+			if landed {
+				return false, unavailable("give back the claim on "+resource, err)
+			}
+			return false, unavailable("fence the claim on "+resource, err)
+		}
+	}
+	return false, contended("giveBack", resource)
 }
 
 // Renew extends a lease the caller still holds at this epoch.
