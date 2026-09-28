@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -137,6 +138,44 @@ func TestASecondBulkOnTheSameNodeIsRefused(t *testing.T) {
 		t.Fatalf("admit a bulk once the first finished: %v", err)
 	}
 	again()
+}
+
+// A CLAIM THE MIXED-VERSION GATE REFUSED IS NOT ANOTHER WALK OR ANOTHER BULK.
+//
+// The gate refuses every claim this build makes while a node of an older one
+// is live, and both tracker claims read every refusal as a peer's hold: a bulk
+// was told a colleague's edit was in flight and to retry "in about a second" —
+// the hint read the remaining time off a holder there was none of — and a walk
+// was told it was already running. For a whole rolling upgrade. So an older
+// build's lease is staged, and a bulk is admitted (it bounds a rate, and fails
+// open exactly as it does on an unknown) while a walk fails closed naming the
+// upgrade rather than a walk.
+func TestAClaimTheGateRefusedIsNotAnotherWalk(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if lease, _, err := r.claims.TryAcquire(t.Context(), coord.NodeResource("old"), coord.AcquireOptions{
+		Owner: "old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion - 1, Ungated: true,
+	}); err != nil || lease == nil {
+		t.Fatalf("stage an older build: (%v, %v)", lease, err)
+	}
+
+	release, err := r.writer.Admit(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("a bulk beside an older build got %v, want it admitted — the gate's "+
+			"refusal names no colleague editing", err)
+	}
+	release()
+
+	_, err = r.writer.Hold(t.Context(), tracker.MoveClaim("t-1"))
+	switch {
+	case !errors.Is(err, statelog.ErrUnavailable):
+		t.Fatalf("a walk beside an older build got %v, want a refusal wrapping "+
+			"statelog.ErrUnavailable", err)
+	case strings.Contains(err.Error(), "another walk"):
+		t.Fatalf("a walk the gate refused was told another walk holds it: %v", err)
+	case !strings.Contains(err.Error(), "older build"):
+		t.Fatalf("a walk the gate refused does not say an older build is live: %v", err)
+	}
 }
 
 func claimOf(t *testing.T, r *roundTrip, resource string) *coord.Lease {

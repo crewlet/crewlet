@@ -1143,7 +1143,7 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 			"nodes rewriting one subtree", resource)
 	}
 	owner := w.claimOwner()
-	lease, _, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+	lease, refused, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: owner, TTL: ClaimTTL,
 	})
 	switch {
@@ -1153,10 +1153,20 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 		// produce a subtree keyed into two projects, which no duty can
 		// tell from an abandoned walk.
 		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
-	case lease == nil:
+	case lease == nil && refused == coord.RefusedHeld:
 		return nil, fmt.Errorf("tracker: %s is held by another walk, on this "+
 			"node or a peer, so this walk is already running: %w", resource,
 			statelog.ErrUnavailable)
+	case lease == nil:
+		// NOT "another walk": the mixed-version gate refuses every claim
+		// this build makes while a node of an older one is live, and a
+		// walk is refused with them — it fails closed for the reason
+		// above. Told it was already running, a caller waited for a walk
+		// nobody had started, for the whole rolling upgrade.
+		return nil, fmt.Errorf("tracker: %s was refused (%s): a node of an "+
+			"older build is live in this fleet and this build takes no claim "+
+			"beside it, so the walk waits for the rolling upgrade to finish: %w",
+			resource, refused, statelog.ErrUnavailable)
 	}
 	h := &held{
 		claims: w.claims, resource: resource, owner: owner,
@@ -2099,7 +2109,9 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 // THREE ANSWERS AND THREE BEHAVIOURS, which is why [Claims] is not a bool: a
 // held lease runs, a peer's lease refuses with the holder's remaining time as
 // the caller's hint, and a coordination store that cannot be reached ADMITS —
-// see the sequence's own doc for why those last two must differ.
+// see the sequence's own doc for why those last two must differ. A claim the
+// mixed-version gate refused admits too: it is a refusal that names no peer,
+// and the admission bounds a rate rather than guarding a correctness.
 func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	if w.claims == nil {
 		return func() {}, nil
@@ -2126,7 +2138,7 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	// rather than being refused, and whichever finished first released the
 	// other's.
 	owner := w.claimOwner()
-	lease, _, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+	lease, refused, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: owner, TTL: ttl,
 	})
 	switch {
@@ -2135,6 +2147,14 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// bulks in flight and merely slow, and refusing here on an
 		// unknown is a seat told a colleague is editing when nobody is.
 		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
+		return func() {}, nil
+	case lease == nil && refused != coord.RefusedHeld:
+		// FAIL OPEN, for the unknown's reason: the mixed-version gate
+		// refused the claim, which says an older build is live and
+		// nothing about a colleague editing. Refused as a bulk in
+		// flight, every seat's bulk edit was told to retry "in about a
+		// second" — the hint read the remaining time off a holder there
+		// was none of — for as long as the rolling upgrade took.
 		return func() {}, nil
 	case lease == nil:
 		remaining := time.Duration(0)

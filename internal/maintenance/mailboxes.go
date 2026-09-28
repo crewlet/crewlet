@@ -631,7 +631,7 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	// subscriptions this is about to delete. So the retirement CLAIMS the
 	// lease, which is the one thing that node's claim loses to. A claim that
 	// cannot be answered is unknown, and unknown retires nothing.
-	lease, _, err := m.leases.TryAcquire(work, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, refused, err := m.leases.TryAcquire(work, coord.SeatResource(handle), coord.AcquireOptions{
 		Owner: m.owner,
 		TTL:   m.leaseTTL,
 		// No Preferred: the hint records the last node that RAN the seat,
@@ -641,11 +641,21 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 		return false, fmt.Errorf("claim the lease of seat %q before retiring its mailbox: %w", handle, err)
 	}
 	if lease == nil {
+		// WHICH of the two the refusal says, rather than both: an
+		// operator reading "a node still holds it" goes looking for a
+		// node serving a stale revision, and one reading "an older
+		// build" finishes a rolling upgrade — and only one of them is
+		// true.
+		detail := "the seat is absent from the active revision but a node still holds its " +
+			"lease — one still serving a revision that has the seat; the mailbox is kept and " +
+			"the claim retried on the next tick"
+		if refused != coord.RefusedHeld {
+			detail = "the seat is absent from the active revision but its lease could not be " +
+				"claimed because a node of an older build holds a lease in this fleet; the " +
+				"mailbox is kept until the rolling upgrade finishes"
+		}
 		log.WarnContext(ctx, "seat_mailbox_retirement_held", "handle", handle,
-			"absent_since", rec.AbsentSince,
-			"detail", "the seat is absent from the active revision but its lease could not be "+
-				"claimed: a node still holds it, or a node of an older build holds a lease in "+
-				"this fleet; the mailbox is kept and the claim retried on the next tick")
+			"absent_since", rec.AbsentSince, "refused", string(refused), "detail", detail)
 		return false, nil
 	}
 	defer m.releaseSeat(ctx, *lease)
