@@ -19,12 +19,11 @@ import (
 var clock = time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 
 // sam and the nodes are the authors the cases write as: an operator at a
-// shell, and the engine on each of three nodes.
+// shell, and the engine on each of two nodes.
 var (
 	sam   = secrets.Author{Name: "sam", Kind: "operator"}
 	nodeA = secrets.Author{Name: "node-a", Kind: "system"}
 	nodeB = secrets.Author{Name: "node-b", Kind: "system"}
-	nodeC = secrets.Author{Name: "node-c", Kind: "system"}
 )
 
 // ring builds a keyring with the named keys, the first active.
@@ -152,99 +151,19 @@ func TestAListingCarriesNoValueAndNeedsNoKey(t *testing.T) {
 	}
 }
 
-// THE ENGINE'S KEYS UNDER A PREFIX NEED NO KEYRING EITHER, because what reads
-// them is the duty that finishes a removal and collects a key nobody owns:
-// destroying one is an Unset, which opens nothing, so finding the key must not
-// be the half that needs a keyring. Only the prefix's rows
-// come back, in name order, each with WHEN it was written — which is what a key
-// nobody owns is aged by — and never with its envelope, and only through the
-// engine's own view.
-func TestTheEnginesKeysUnderAPrefixNeedNoKeyring(t *testing.T) {
-	t.Parallel()
-	s, fleet := fleetStore(t, ring(t, "k1"))
-	estate := s.Estate()
-	minted := map[string]time.Time{
-		"iam/person/b/dek":    clock.Add(time.Minute),
-		"iam/person/a/dek":    clock,
-		"iam/blind-index-key": clock,
-	}
-	for name, at := range minted {
-		if err := estate.Set(t.Context(), name, "value-"+name, nodeA, "iam",
-			at); err != nil {
-			t.Fatalf("Set(%s): %v", name, err)
-		}
-	}
-	mustSet(t, s, "GITLAB_TOKEN", "glpat")
-
-	keyless := fleetsecrets.New(fleet, nil).Estate()
-	keys, err := keyless.Keys(t.Context(), "iam/person/")
-	if err != nil {
-		t.Fatalf("a store with no keyring could not find what a removal left: %v", err)
-	}
-	var names []string
-	for _, key := range keys {
-		names = append(names, key.Name)
-		if key.Value != "" {
-			t.Errorf("%s carried its envelope into a listing", key.Name)
-		}
-		if !key.UpdatedAt.Equal(minted[key.Name]) {
-			t.Errorf("%s reads as written at %v, want %v — a key nobody owns "+
-				"is aged by this, and a wrong one destroys a key a running "+
-				"enrolment is about to claim with", key.Name, key.UpdatedAt,
-				minted[key.Name])
-		}
-	}
-	if strings.Join(names, ",") != "iam/person/a/dek,iam/person/b/dek" {
-		t.Fatalf("names = %v, want exactly the prefix's, name-ordered", names)
-	}
-	if removed, err := keyless.Unset(t.Context(), "iam/person/a/dek"); err != nil ||
-		!removed {
-		t.Fatalf("a store with no keyring could not destroy a key it found: "+
-			"(%v, %v)", removed, err)
-	}
-	// A PREFIX OUTSIDE THE ENGINE'S NAMESPACE IS REFUSED: the engine's view
-	// never lists the operator's credentials either.
-	if _, err := keyless.Keys(t.Context(), "GITLAB"); !errors.Is(err,
-		secrets.ErrInvalidName) {
-		t.Errorf("the engine's view listed an operator prefix (%v)", err)
-	}
-}
-
 // THE OPERATOR'S VIEW DOES NOT REACH THE ENGINE'S KEYS, by any route.
 //
-// A person's key used to be an ordinary operator secret: listed, revealable —
-// so a copy taken before a removal defeated the shred the removal is —
-// deletable, so a DELETE shredded somebody with no removal on record, and
-// decrypted into every node's ${VAR} snapshot on every apply. Each of those routes is closed here, and the one gesture that crosses
-// — a rekey, because the keyring is one keyring — moves them and counts them.
-//
-// FOR EVERY KIND OF KEY the owner keeps: a person's data key and the
-// directory's blind-index key are both the engine's, and a namespace that
-// closed one and not the other would leave the address index one DELETE away
-// from orphaning every address in the directory.
+// The blind-index key used to be an ordinary operator secret: listed,
+// revealable, deletable — so one DELETE orphaned every address in the
+// directory — and decrypted into every node's ${VAR} snapshot on every apply.
+// Each of those routes is closed here, and the one gesture that crosses — a
+// rekey, because the keyring is one keyring — moves it and counts it.
 func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
 	t.Parallel()
-	for _, key := range []string{
-		"iam/person/018f3a9c-0000-7000-8000-000000000001/dek",
-		"iam/blind-index-key",
-	} {
-		t.Run(key, func(t *testing.T) {
-			t.Parallel()
-			operatorViewMissesEngineKey(t, key)
-		})
-	}
-}
-
-// operatorViewMissesEngineKey is [TestTheOperatorsViewDoesNotReachTheEnginesKeys]
-// over one engine key.
-func operatorViewMissesEngineKey(t *testing.T, key string) {
-	t.Helper()
+	const key = "iam/blind-index-key"
 	old := ring(t, "k1", "k2")
 	s, fleet := fleetStore(t, old)
-	if err := s.Estate().Set(t.Context(), key, "the-person-key", nodeA,
-		"iam", clock); err != nil {
-		t.Fatalf("the engine's view could not write its own key: %v", err)
-	}
+	mustCreate(t, s.Estate(), key, "the-engine-key")
 	mustSet(t, s, "GITLAB_TOKEN", "glpat")
 
 	if _, err := s.Get(t.Context(), key); !errors.Is(err, secrets.ErrReservedName) {
@@ -261,7 +180,7 @@ func operatorViewMissesEngineKey(t *testing.T, key string) {
 	if _, err := s.Unset(t.Context(), key); !errors.Is(err, secrets.ErrReservedName) {
 		t.Errorf("deleting an engine key answered %v, want ErrReservedName", err)
 	}
-	if got, err := s.Estate().Get(t.Context(), key); err != nil || got != "the-person-key" {
+	if got, err := s.Estate().Get(t.Context(), key); err != nil || got != "the-engine-key" {
 		t.Fatalf("after every refused gesture the key reads %q (%v)", got, err)
 	}
 
@@ -301,8 +220,17 @@ func operatorViewMissesEngineKey(t *testing.T, key string) {
 			"(%v)", engine.StaleUnder("k2"), err)
 	}
 	if got, err := rotated.Estate().Get(t.Context(), key); err != nil ||
-		got != "the-person-key" {
+		got != "the-engine-key" {
 		t.Errorf("after the rekey the engine key reads %q (%v)", got, err)
+	}
+}
+
+// mustCreate mints one of the engine's own rows, as the engine does.
+func mustCreate(t *testing.T, estate *fleetsecrets.Estate, name, value string) {
+	t.Helper()
+	if created, err := estate.Create(t.Context(), name, value, nodeA, "iam",
+		clock); err != nil || !created {
+		t.Fatalf("the engine's view could not mint %s: (%v, %v)", name, created, err)
 	}
 }
 
@@ -313,9 +241,9 @@ func TestTheEnginesViewWritesOnlyItsOwnNames(t *testing.T) {
 	t.Parallel()
 	s, _ := fleetStore(t, ring(t, "k1"))
 	for _, name := range []string{
-		"GITLAB_TOKEN", "iam/person//dek", "iam/Person/x/dek", "iam", "other/x",
+		"GITLAB_TOKEN", "iam/nested//key", "iam/Nested/x/key", "iam", "other/x",
 	} {
-		if err := s.Estate().Set(t.Context(), name, "v", nodeA, "iam",
+		if _, err := s.Estate().Create(t.Context(), name, "v", nodeA, "iam",
 			clock); !errors.Is(err, secrets.ErrInvalidName) {
 			t.Errorf("the engine's view wrote %q (%v)", name, err)
 		}
@@ -400,14 +328,12 @@ func (f *interleavedFleet) SecretValues(ctx context.Context) ([]coord.SecretReco
 // A REKEY NEVER UNDOES A WRITE THAT LANDED WHILE IT RAN.
 //
 // It reads every row and re-seals each afterwards. Written back with a plain
-// put, what it READ replaced whatever landed in between, and two of those are
+// put, what it READ replaced whatever landed in between, and both of those are
 // irreversible in the wrong direction:
 //
 //   - an operator's rotation was reverted to the credential they had just
 //     replaced — the vendor had already been told to refuse it;
-//   - a person's key a removal destroyed came back, and with it every copy of
-//     their name in every backup, which is the one thing a removal promises
-//     cannot happen.
+//   - a credential an operator deleted came back, live, on every node.
 //
 // The control is the row nobody touched, which still moves.
 func TestARekeyNeverUndoesAWriteThatLandedWhileItRan(t *testing.T) {
@@ -415,13 +341,9 @@ func TestARekeyNeverUndoesAWriteThatLandedWhileItRan(t *testing.T) {
 	old := ring(t, "k1", "k2")
 	f := &interleavedFleet{Fleet: coordmem.NewFleet()}
 	s := fleetsecrets.New(f, old)
-	const personKey = "iam/person/p1/dek"
 	mustSet(t, s, "ROTATED", "the-old-credential")
+	mustSet(t, s, "DELETED", "the-leaked-credential")
 	mustSet(t, s, "UNTOUCHED", "still-here")
-	if err := s.Estate().Set(t.Context(), personKey, "the-person-key", nodeA,
-		"iam", clock); err != nil {
-		t.Fatalf("Estate().Set: %v", err)
-	}
 
 	rotated := fleetsecrets.New(f, ring(t, "k2", "k1"))
 	f.between = func() {
@@ -432,8 +354,8 @@ func TestARekeyNeverUndoesAWriteThatLandedWhileItRan(t *testing.T) {
 			"cli", clock); err != nil {
 			t.Errorf("rotate mid-pass: %v", err)
 		}
-		if _, err := s.Estate().Unset(t.Context(), personKey); err != nil {
-			t.Errorf("remove mid-pass: %v", err)
+		if _, err := s.Unset(t.Context(), "DELETED"); err != nil {
+			t.Errorf("delete mid-pass: %v", err)
 		}
 	}
 	moved, err := rotated.Rekey(t.Context(), "k2")
@@ -445,14 +367,14 @@ func TestARekeyNeverUndoesAWriteThatLandedWhileItRan(t *testing.T) {
 		t.Fatalf("after the rekey the rotated credential reads %q (%v) — the "+
 			"pass put back the value it read before the rotation", got, err)
 	}
-	if _, err := rotated.Estate().Get(t.Context(), personKey); !errors.Is(err,
+	if _, err := rotated.Get(t.Context(), "DELETED"); !errors.Is(err,
 		secrets.ErrNotFound) {
-		t.Fatalf("after the rekey the destroyed person key answers %v — the "+
-			"pass resurrected a key a removal destroyed", err)
+		t.Fatalf("after the rekey the deleted credential answers %v — the "+
+			"pass resurrected a credential an operator deleted", err)
 	}
 	if strings.Join(moved.Moved, ",") != "ROTATED,UNTOUCHED" || moved.EngineKeys != 0 {
-		t.Errorf("the rekey reported %+v, want both operator rows moved (the "+
-			"rotated one judged again on what it holds now) and no engine key", moved)
+		t.Errorf("the rekey reported %+v, want both surviving rows moved (the "+
+			"rotated one judged again on what it holds now) and nothing else", moved)
 	}
 	if row, _, err := f.Secret(t.Context(), "ROTATED"); err != nil || row.KeyID != "k2" {
 		t.Errorf("the rotated row is under %q (%v), want it re-sealed onto k2",
@@ -512,54 +434,18 @@ func TestARekeyRefusesToLeaveARowBehind(t *testing.T) {
 	}
 }
 
-// betweenReadAndWrite runs one gesture after a read of one row has answered and
-// before the write that read was for.
-type betweenReadAndWrite struct {
-	coord.Fleet
-	name    string
-	between func()
-}
-
-func (f *betweenReadAndWrite) Secret(ctx context.Context, name string) (
-	coord.SecretRecord, bool, error) {
-
-	row, found, err := f.Fleet.Secret(ctx, name)
-	if name == f.name && f.between != nil {
-		between := f.between
-		f.between = nil
-		between()
-	}
-	return row, found, err
-}
-
-// THE ENGINE'S KEY LIFECYCLE NEVER ACTS ON A KEY IT HAS NOT SEEN.
+// AN ENGINE KEY IS MINTED ONLY WHERE NONE IS STORED.
 //
-// A person's key is minted with a create, re-dated with a touch when a gesture
-// re-uses it, and destroyed as nobody's only at the version a census judged:
-//
-//   - a second create finds the first's key and leaves it, so two minters of
-//     one id seal under one key;
-//   - a touch moves the write time and the version and keeps the value, which
-//     is what the key duty ages a key by and destroys one at;
-//   - a destroy at a version the key has moved past spares it;
-//   - and a touch that meets a key destroyed between its read and its write
-//     does NOT write it back: that would bring a removed person's key — and
-//     every copy of their name — back from a shred.
-func TestTheEnginesKeyLifecycleNeverActsOnAKeyItHasNotSeen(t *testing.T) {
+// The blind-index key is minted by whichever node first needs it, and a fresh
+// fleet boots every node at once: with a plain put, two minters each derived
+// blinds under the key they wrote and the store kept one of them, so the loser's
+// blinds matched nothing. The second create finds the first's key and leaves
+// it, and says so.
+func TestAnEngineKeyIsMintedOnlyWhereNoneIsStored(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	fleet := &betweenReadAndWrite{Fleet: coordmem.NewFleet()}
-	estate := fleetsecrets.New(fleet, ring(t, "k1")).Estate()
-	const name = "iam/person/p1/dek"
-	keys := func() secrets.Record {
-		t.Helper()
-		rows, err := estate.Keys(ctx, "iam/person/")
-		if err != nil || len(rows) != 1 {
-			t.Fatalf("Keys = (%+v, %v), want the one key", rows, err)
-		}
-		return rows[0]
-	}
-
+	estate := fleetsecrets.New(coordmem.NewFleet(), ring(t, "k1")).Estate()
+	const name = "iam/blind-index-key"
 	if created, err := estate.Create(ctx, name, "first-key", nodeA, "iam",
 		clock); err != nil || !created {
 		t.Fatalf("the first create = (%v, %v)", created, err)
@@ -570,45 +456,6 @@ func TestTheEnginesKeyLifecycleNeverActsOnAKeyItHasNotSeen(t *testing.T) {
 	}
 	if got, _ := estate.Get(ctx, name); got != "first-key" {
 		t.Fatalf("a refused create replaced the key: %q", got)
-	}
-	judged := keys()
-
-	later := clock.Add(3 * time.Hour)
-	if touched, err := estate.Touch(ctx, name, nodeB, "iam", later); err != nil ||
-		!touched {
-		t.Fatalf("Touch = (%v, %v)", touched, err)
-	}
-	after := keys()
-	if !after.UpdatedAt.Equal(later) || after.Version == judged.Version {
-		t.Fatalf("after the touch the key reads %+v, want it written at %s at a "+
-			"new version", after, later)
-	}
-	if got, _ := estate.Get(ctx, name); got != "first-key" {
-		t.Fatalf("the touch changed the key: %q", got)
-	}
-
-	if removed, err := estate.UnsetAt(ctx, name, judged.Version); err != nil || removed {
-		t.Fatalf("a destroy at the version before the touch = (%v, %v), want "+
-			"the key spared", removed, err)
-	}
-	if _, err := estate.Get(ctx, name); err != nil {
-		t.Fatalf("the spared key is gone: %v", err)
-	}
-
-	// THE TOUCH THAT MEETS A DESTROY.
-	fleet.name = name
-	fleet.between = func() {
-		if _, err := estate.Unset(ctx, name); err != nil {
-			t.Errorf("the removal's shred: %v", err)
-		}
-	}
-	touched, err := estate.Touch(ctx, name, nodeC, "iam", later.Add(time.Hour))
-	if err != nil || touched {
-		t.Fatalf("a touch that met a destroy = (%v, %v), want it to find no key",
-			touched, err)
-	}
-	if _, err := estate.Get(ctx, name); !errors.Is(err, secrets.ErrNotFound) {
-		t.Fatalf("a touch wrote back a key destroyed under it (%v)", err)
 	}
 }
 
@@ -640,7 +487,7 @@ func TestAnOperatorRowIsDeletedOnlyAtTheVersionJudged(t *testing.T) {
 		t.Fatalf("a delete at the current version = (%v, %v), want it removed",
 			removed, err)
 	}
-	if _, err := s.UnsetAt(ctx, "iam/person/x/dek", 1); !errors.Is(err,
+	if _, err := s.UnsetAt(ctx, "iam/blind-index-key", 1); !errors.Is(err,
 		secrets.ErrReservedName) {
 		t.Errorf("the operator's view deleted an engine name: %v", err)
 	}

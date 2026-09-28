@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -159,29 +161,35 @@ func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
 // names a different active key than the node's is an operator rekeying onto a
 // key the fleet will not be sealing with — silent success there would report
 // a completed rotation over rows sealed under something else.
-func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (fleetsecrets.Rekeyed, error) {
+func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation, error) {
 	var body struct {
-		Moved      []string `json:"moved"`
-		EngineKeys int      `json:"engine_keys_moved"`
+		Moved      []string                     `json:"moved"`
+		EngineKeys int                          `json:"engine_keys_moved"`
+		Identity   *secretsapi.IdentityResealed `json:"identity"`
 	}
 	err := c.call(ctx, http.MethodPost,
 		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), nil, &body)
 	if err != nil {
-		return fleetsecrets.Rekeyed{}, err
+		return rotation{}, err
 	}
-	return fleetsecrets.Rekeyed{Moved: body.Moved, EngineKeys: body.EngineKeys}, nil
+	return rotation{
+		Rekeyed:  fleetsecrets.Rekeyed{Moved: body.Moved, EngineKeys: body.EngineKeys},
+		Identity: body.Identity,
+	}, nil
 }
 
-// EngineKeys reads the count the node's listing carries beside the operator's
-// names: the engine's own keys, per keyring key, none of them named.
-func (c *secretsClient) EngineKeys(ctx context.Context) (secrets.EngineKeys, error) {
+// EngineKeys reads the counts the node's listing carries beside the operator's
+// names: the engine's own keys and the identity estate's values, per keyring
+// key, none of them named.
+func (c *secretsClient) EngineKeys(ctx context.Context) (engineHeld, error) {
 	var body struct {
-		EngineKeys secrets.EngineKeys `json:"engine_keys"`
+		EngineKeys secrets.EngineKeys     `json:"engine_keys"`
+		Identity   *iamdomain.SealedCount `json:"identity_values"`
 	}
 	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
-		return secrets.EngineKeys{}, err
+		return engineHeld{}, err
 	}
-	return body.EngineKeys, nil
+	return engineHeld{Keys: body.EngineKeys, Identity: body.Identity}, nil
 }
 
 // call performs one request and decodes the answer, or explains the refusal.

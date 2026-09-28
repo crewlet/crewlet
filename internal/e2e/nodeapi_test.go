@@ -134,9 +134,15 @@ func wireAPI(
 	if err != nil {
 		return fail("config surface", err)
 	}
-	secretSurface, err := secretsapi.New(secretsapi.Options{
+	// AND THE IDENTITY ESTATE'S HALF of a rotation, as cmd/crewlet passes it:
+	// nil where the node runs no identity estate, never a typed nil.
+	secretOpts := secretsapi.Options{
 		Fleet: backends.Fleet, Cipher: cipher, ActiveKeyID: boot.Secrets.ActiveKeyID,
-	})
+	}
+	if keyring := e.IdentityKeyring(); keyring != nil {
+		secretOpts.Identity = keyring
+	}
+	secretSurface, err := secretsapi.New(secretOpts)
 	if err != nil {
 		return fail("secret surface", err)
 	}

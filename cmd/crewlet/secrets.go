@@ -11,9 +11,12 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/iamapi"
+	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -64,7 +67,7 @@ Usage:
   crewlet secrets get NAME -reveal         Print one secret to stdout (break-glass; logged)
   crewlet secrets unset NAME               Remove one secret
   crewlet secrets keygen [-key-id ID]      A fresh keyring key, with the config snippet to install it
-  crewlet secrets rekey [-dry-run]         Re-seal every row under the keyring's active key
+  crewlet secrets rekey [-dry-run]         Re-seal every row, and every person's values, under the active key
 
 Flags:
   -config PATH   Tier A config carrying the keyring (default %q)
@@ -133,11 +136,9 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 	// node's own table never holds one, so there is no route on which
 	// asking could do anything but fail later and less clearly.
 	if secrets.Reserved(name) {
-		return fmt.Errorf("%w: %s\n\nA person's key, a session's refresh "+
-			"token and the address index's key belong to the identity estate: "+
-			"remove a person with `crewlet iam remove` and end their sessions "+
-			"with `crewlet iam revoke`. `crewlet secrets rekey` moves these keys "+
-			"with everything else and counts them", secrets.ErrReservedName, name)
+		return fmt.Errorf("%w: %s\n\nThe address index's key belongs to the "+
+			"identity estate. `crewlet secrets rekey` moves it with everything "+
+			"else and counts it", secrets.ErrReservedName, name)
 	}
 
 	ctx := context.Background()
@@ -200,12 +201,32 @@ type secretBackend interface {
 		now time.Time) (secrets.Author, error)
 	Get(ctx context.Context, name string) (string, error)
 	Unset(ctx context.Context, name string) (bool, error)
-	Rekey(ctx context.Context, activeKeyID string) (fleetsecrets.Rekeyed, error)
+	Rekey(ctx context.Context, activeKeyID string) (rotation, error)
 
-	// EngineKeys counts the engine's own key material the store holds,
-	// per keyring key, naming none of it — which is what a rotation has
-	// to see moved before the old key can go.
-	EngineKeys(ctx context.Context) (secrets.EngineKeys, error)
+	// EngineKeys counts what the keyring seals that no command names —
+	// the engine's own keys in the store and the identity estate's
+	// personal values — per keyring key, which is what a rotation has to
+	// see moved before the old key can go.
+	EngineKeys(ctx context.Context) (engineHeld, error)
+}
+
+// rotation is what one rekey moved: the store's rows, and the identity
+// estate's personal values, counted.
+//
+// IDENTITY IS NIL WHERE NOTHING MOVED IT, which is a different answer from
+// "nothing to move": this node's own table holds no identity estate, and a
+// node that started with no active company runs none.
+type rotation struct {
+	fleetsecrets.Rekeyed
+	Identity *secretsapi.IdentityResealed
+}
+
+// engineHeld is what the keyring seals that no command names: the engine's own
+// keys in the store, and — where the backend holds one — the identity estate's
+// values, both counted per keyring key.
+type engineHeld struct {
+	Keys     secrets.EngineKeys
+	Identity *iamdomain.SealedCount
 }
 
 // localSecrets is this node's own table as a backend.
@@ -224,13 +245,13 @@ func (l localSecrets) Set(ctx context.Context, name, value string, by secrets.Au
 	return by, l.SecretValues.Set(ctx, name, value, by, source, now)
 }
 
-func (l localSecrets) Rekey(ctx context.Context, activeKeyID string) (fleetsecrets.Rekeyed, error) {
+func (l localSecrets) Rekey(ctx context.Context, activeKeyID string) (rotation, error) {
 	moved, err := l.SecretValues.Rekey(ctx, activeKeyID)
-	return fleetsecrets.Rekeyed{Moved: moved}, err
+	return rotation{Rekeyed: fleetsecrets.Rekeyed{Moved: moved}}, err
 }
 
-func (localSecrets) EngineKeys(context.Context) (secrets.EngineKeys, error) {
-	return secrets.EngineKeys{}, nil
+func (localSecrets) EngineKeys(context.Context) (engineHeld, error) {
+	return engineHeld{}, nil
 }
 
 // secretTarget is the backend plus what to tell the operator about it.
@@ -413,19 +434,35 @@ func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error 
 			return err
 		}
 	}
-	engine, err := sv.EngineKeys(ctx)
+	held, err := sv.EngineKeys(ctx)
 	if err != nil {
 		return err
 	}
-	if engine.Total > 0 {
+	if held.Keys.Total > 0 {
 		// COUNTED, NEVER NAMED, and said at all because a rotation has to
 		// move them: a listing that stayed silent about them would read
 		// as a store holding nothing else.
 		fmt.Fprintf(stdout, "\nand %d of the engine's own keys (the identity "+
 			"estate's), which no command reads or writes and a rekey moves\n",
-			engine.Total)
+			held.Keys.Total)
+	}
+	if held.Identity != nil {
+		if values := total(held.Identity.People); values > 0 {
+			fmt.Fprintf(stdout, "and %d personal values in the identity estate "+
+				"(names, addresses, second factors), sealed under the same "+
+				"keyring, which a rekey re-seals\n", values)
+		}
 	}
 	return nil
+}
+
+// total sums a per-key count.
+func total(byKey map[string]int) int {
+	n := 0
+	for _, count := range byKey {
+		n += count
+	}
+	return n
 }
 
 func setSecret(ctx context.Context, sv *secretTarget, name, value string,
@@ -551,46 +588,110 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
 			stale++
 			fmt.Fprintf(stdout, "  %s (sealed under %s)\n", r.Name, r.KeyID)
 		}
-		// AND THE ENGINE'S OWN, counted: a dry run that said "nothing to
-		// do" while every person's key was still under the old key would
-		// be the reading an operator retires that key on.
-		engine, err := sv.EngineKeys(ctx)
+		// AND WHAT NO COMMAND NAMES, counted: a dry run that said "nothing
+		// to do" while the address index's key or every person's name was
+		// still under the old key would be the reading an operator retires
+		// that key on.
+		held, err := sv.EngineKeys(ctx)
 		if err != nil {
 			return err
 		}
-		engineStale := engine.StaleUnder(active)
+		engineStale := held.Keys.StaleUnder(active)
 		if engineStale > 0 {
 			fmt.Fprintf(stdout, "  %d of the engine's own keys (sealed under "+
 				"another key)\n", engineStale)
 		}
-		if stale == 0 && engineStale == 0 {
+		identityStale := 0
+		if held.Identity != nil {
+			identityStale = held.Identity.Outside(active)
+			if identityStale > 0 {
+				fmt.Fprintf(stdout, "  %d personal values in the identity estate "+
+					"(sealed under another key)\n", identityStale)
+			}
+		}
+		waitOutInvitations(stdout, held, active)
+		if stale == 0 && engineStale == 0 && identityStale == 0 {
 			fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
+			noIdentityHere(stdout, sv, held.Identity == nil)
 			return nil
 		}
-		fmt.Fprintf(stdout, "%d secrets and %d engine keys would be re-sealed "+
-			"under %s\n", stale, engineStale, active)
+		fmt.Fprintf(stdout, "%d secrets, %d engine keys and %d personal values "+
+			"would be re-sealed under %s\n", stale, engineStale, identityStale, active)
+		noIdentityHere(stdout, sv, held.Identity == nil)
 		return nil
 	}
 	rekeyed, err := sv.Rekey(ctx, active)
 	if err != nil {
 		return err
 	}
-	if len(rekeyed.Moved) == 0 && rekeyed.EngineKeys == 0 {
+	identityMoved := 0
+	if rekeyed.Identity != nil {
+		identityMoved = rekeyed.Identity.Values
+	}
+	if len(rekeyed.Moved) == 0 && rekeyed.EngineKeys == 0 && identityMoved == 0 {
 		fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
-		return nil
+	} else {
+		// THE NAMES, not a count: a pass that moved 12 of 13 rows raises
+		// a question a number cannot answer, and this is the last chance
+		// to see which rows are now safe to retire the old key over. The
+		// engine's own keys and the identity estate's values are the
+		// exception, counted for the listing's reason.
+		fmt.Fprintf(stdout, "re-sealed %d secrets under %s:\n", len(rekeyed.Moved), active)
+		for _, name := range rekeyed.Moved {
+			fmt.Fprintf(stdout, "  %s\n", name)
+		}
+		if rekeyed.EngineKeys > 0 {
+			fmt.Fprintf(stdout, "and %d of the engine's own keys\n", rekeyed.EngineKeys)
+		}
+		if identityMoved > 0 {
+			fmt.Fprintf(stdout, "and %d personal values of %d people in the "+
+				"identity estate\n", identityMoved, rekeyed.Identity.People)
+		}
 	}
-	// THE NAMES, not a count: a pass that moved 12 of 13 rows raises a
-	// question a number cannot answer, and this is the last chance to see
-	// which rows are now safe to retire the old key over. The engine's own
-	// keys are the one exception, counted for the listing's reason.
-	fmt.Fprintf(stdout, "re-sealed %d secrets under %s:\n", len(rekeyed.Moved), active)
-	for _, name := range rekeyed.Moved {
-		fmt.Fprintf(stdout, "  %s\n", name)
+	noIdentityHere(stdout, sv, rekeyed.Identity == nil)
+	// AND WHAT A REKEY CANNOT MOVE, read after it: the answer the operator
+	// drops the old key on has to include it.
+	held, err := sv.EngineKeys(ctx)
+	if err != nil {
+		return err
 	}
-	if rekeyed.EngineKeys > 0 {
-		fmt.Fprintf(stdout, "and %d of the engine's own keys\n", rekeyed.EngineKeys)
-	}
+	waitOutInvitations(stdout, held, active)
 	return nil
+}
+
+// waitOutInvitations says how many live invitations are still sealed under
+// another key — which no rekey moves, because only a re-issue could carry the
+// address again and its own claim refuses one while the invitation is open.
+// The old key must stay on the ring until each is redeemed or lapses.
+func waitOutInvitations(stdout io.Writer, held engineHeld, active string) {
+	if held.Identity == nil {
+		return
+	}
+	if n := held.Identity.InvitationsOutside(active); n > 0 {
+		fmt.Fprintf(stdout, "%d outstanding invitations are sealed under another "+
+			"key and are not re-sealed: keep that key on the ring until each is "+
+			"redeemed or expires (at most %s after it was issued)\n",
+			n, iamapi.InviteWindow)
+	}
+}
+
+// noIdentityHere says that a rotation through this backend did not reach the
+// identity estate, where it could not: a stopped node's own table holds none,
+// and a running node with no active company runs none. SAID, because the
+// silence reads as an estate with nothing to move.
+func noIdentityHere(stdout io.Writer, sv *secretTarget, absent bool) {
+	if !absent {
+		return
+	}
+	if sv.fleet {
+		fmt.Fprintln(stdout, "this node runs no identity estate (it has no "+
+			"active company), so no person's values were counted or re-sealed "+
+			"through it")
+		return
+	}
+	fmt.Fprintln(stdout, "a stopped node's own table holds no identity estate: "+
+		"run the rekey again through the running node to re-seal every "+
+		"person's values")
 }
 
 // generateKey prints one fresh keyring key.

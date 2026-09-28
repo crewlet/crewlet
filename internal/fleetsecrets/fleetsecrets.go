@@ -29,9 +29,9 @@
 //
 // # Two views over one bucket: the operator's, and the engine's own
 //
-// The bucket also holds the ENGINE's key material — a person's data key and
-// the identity estate's blind-index key, both under `iam/` — under path-shaped
-// names no `${VAR}` can reach ([secrets.Reserved]). [Store] is the OPERATOR's
+// The bucket also holds the ENGINE's key material — the identity estate's
+// blind-index key, under `iam/` — under a path-shaped name no `${VAR}` can
+// reach ([secrets.Reserved]). [Store] is the OPERATOR's
 // view: it neither lists, snapshots, reads, writes nor deletes a reserved row,
 // and says so by name ([secrets.ErrReservedName]). [Estate] is the engine's:
 // it addresses reserved rows and nothing else. The one gesture that crosses is
@@ -42,12 +42,11 @@
 // # A plain put is right for a credential and wrong for a key
 //
 // An operator's rotation is last-write-wins by design. The engine's own keys
-// are not, and neither is a rekey: every write that acts on a row it READ is
-// conditioned on the version it read, because a plain put of what it read
-// undoes whatever landed in between. So the rekey re-seals at the version it
-// read, and [Estate] mints with [Estate.Create] (never over a key that exists),
-// re-dates with [Estate.Touch] (never a key destroyed since it was read) and
-// collects with [Estate.UnsetAt] (never a key written since it was judged).
+// are not, and neither is a rekey or a sweep: a key is minted with
+// [Estate.Create], never over one that exists; the rekey re-seals every row at
+// the version it read; and a sweep that decided an operator row is nobody's
+// deletes it with [Store.UnsetAt], only at the version it judged — because a
+// plain write of what either read undoes whatever landed in between.
 package fleetsecrets
 
 import (
@@ -195,7 +194,7 @@ func (s *Store) get(ctx context.Context, name string) (string, error) {
 // than putting the fleet's store on the path of every config read.
 //
 // THE ENGINE'S ROWS ARE NOT OPENED, and that is the other half of the reserved
-// namespace: no reference can name one, so decrypting every person's key into
+// namespace: no reference can name one, so decrypting the blind-index key into
 // each node's resolver on every apply was all exposure and no use.
 //
 // It FAILS CLOSED on the first row it cannot open, exactly as the local store
@@ -328,7 +327,7 @@ func (s *Store) Unset(ctx context.Context, name string) (bool, error) {
 // written since it decided — a chart write re-sealing that very field between
 // the census and the delete would otherwise have its value destroyed under a
 // row that names it. False is such a row, or one already gone, and neither is
-// a failure. NO KEYRING NEEDED, for [Estate.Unset]'s reason.
+// a failure. NO KEYRING NEEDED: deleting a row opens nothing.
 func (s *Store) UnsetAt(ctx context.Context, name string, version uint64) (bool, error) {
 	if s == nil {
 		return false, secrets.ErrNoKeyring
@@ -365,8 +364,14 @@ type Rekeyed struct {
 
 // Rekey re-seals every row this node can open under the active key — the
 // operator's AND the engine's, because the keyring is one keyring: an engine
-// row left under a retired key is every person's name and the blind-index key
-// unreadable the moment that key is dropped.
+// row left under a retired key is the blind-index key unreadable the moment
+// that key is dropped, and every sign-in by address with it.
+//
+// IT IS NOT THE WHOLE ROTATION. The same keyring seals the identity estate's
+// personal values — names, addresses, second factors — in rows derived from a
+// log, which only a record can change; the node re-seals those beside this
+// pass (internal/iamdomain's `Writer.Reseal`), and `crewlet secrets rekey`
+// reports both.
 //
 // A row already under the active key is left alone, so a second run reports
 // nothing and costs one read — which is what makes this safe to put in a
@@ -409,15 +414,15 @@ func (s *Store) Rekey(ctx context.Context, activeKeyID string) (Rekeyed, error) 
 	return out, nil
 }
 
-// movedRowAttempts bounds how many times a conditional write re-reads a row a
-// concurrent write moved between its read and its write — a rekey re-sealing
-// one, a touch re-dating one.
+// movedRowAttempts bounds how many times a rekey re-reads a row a concurrent
+// write moved between its read and its write.
 //
 // THREE, because the writers a row can meet are few and each lands once: an
-// operator rotating it, a removal destroying it, a rekey moving it, a mint or a
-// retry touching it. Two re-reads cover any of them landing between each read
-// and write; a row still moving after that is being rewritten in a loop, which
-// is worth an error naming it rather than a write that spins on it.
+// operator rotating or deleting it, a chart write re-sealing it or the chart's
+// sweep collecting it, another rekey moving it. Two re-reads cover any of them
+// landing between each read and write; a row still moving after that is being
+// rewritten in a loop, which is worth an error naming it rather than a write
+// that spins on it.
 const movedRowAttempts = 3
 
 // rekeyRow re-seals one row under the active key, reporting whether it moved
@@ -426,11 +431,9 @@ const movedRowAttempts = 3
 // AT THE VERSION IT READ, and judged again when that lost. The pass reads every
 // row first and writes each afterwards, and a plain put of the value it READ
 // undoes whatever landed in between: an operator's rotation is reverted to the
-// credential it replaced, and a person's key a removal destroyed comes back —
-// and with it every copy of the name it sealed, which is the one thing a
-// removal promises cannot happen. So a row that moved is read again and judged
-// on what it holds now (a writer on the active key already has nothing to
-// move), and a row that went is left gone.
+// credential it replaced, and a credential an operator deleted comes back. So a
+// row that moved is read again and judged on what it holds now (a writer on the
+// active key already has nothing to move), and a row that went is left gone.
 func (s *Store) rekeyRow(ctx context.Context, row coord.SecretRecord,
 	activeKeyID string) (bool, error) {
 
@@ -527,28 +530,15 @@ func (e *Estate) Get(ctx context.Context, name string) (string, error) {
 	return e.store.get(ctx, name)
 }
 
-// Set seals and writes one of the engine's own rows.
-func (e *Estate) Set(ctx context.Context, name, value string, by secrets.Author,
-	source string, now time.Time) error {
-
-	if e == nil || e.store.cipher == nil {
-		return secrets.ErrNoKeyring
-	}
-	if err := secrets.CheckEstateName(name); err != nil {
-		return err
-	}
-	return e.store.put(ctx, name, value, by, source, now)
-}
-
 // Create seals and writes one of the engine's own rows only where no row is
 // stored under its name, reporting whether it wrote. False is somebody else's
 // row — a concurrent writer of the same name — and never a failure.
 //
-// THE ONE WAY A KEY IS MINTED. A plain put of a fresh key over one that exists
-// seals nothing wrong at once and makes every value already sealed under the
-// old key unreadable; a read-then-put that found none races the next minter to
-// the same outcome. Only the store can decide "none is there" and "write mine"
-// as one step.
+// THE ONE WAY A KEY IS WRITTEN. A plain put of a fresh key over one that
+// exists breaks nothing at once and makes every value already derived under
+// the old key unmatchable; a read-then-put that found none races the next
+// minter to the same outcome. Only the store can decide "none is there" and
+// "write mine" as one step.
 func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Author,
 	source string, now time.Time) (bool, error) {
 
@@ -567,131 +557,4 @@ func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Auth
 		return false, fmt.Errorf("fleetsecrets: create %s: %w", displayName(name), err)
 	}
 	return created, nil
-}
-
-// Touch re-writes one of the engine's own rows exactly as it is stored, at a
-// new write time, reporting whether it was there to touch.
-//
-// IT IS HOW A GESTURE THAT RE-USES A KEY SAYS SO. A key nobody owns is aged by
-// its write time and destroyed once it is old ([iamdomain.ShredKeys]), and a
-// retried enrolment names the same id, so it re-uses the key its first attempt
-// minted — an hour ago, or a week. Without a write, that key's age was its
-// first attempt's, and the duty could destroy it under the retry that was
-// about to seal a person's name under it.
-//
-// AT THE VERSION IT READ, so a touch never brings back a row somebody deleted
-// in between — a removal's shred, the key duty's collection — and never
-// replaces a row somebody rewrote: a row that went answers false, which the
-// caller reads as "mint a fresh one", and a row that moved is read again. And
-// it moves the version, which is what spares the key from a destroy judged
-// before it ([Estate.UnsetAt]).
-//
-// NO KEYRING NEEDED: the envelope is written back as it was read, so nothing
-// is opened or sealed.
-func (e *Estate) Touch(ctx context.Context, name string, by secrets.Author,
-	source string, now time.Time) (bool, error) {
-
-	if e == nil {
-		return false, secrets.ErrNoKeyring
-	}
-	if err := secrets.CheckEstateName(name); err != nil {
-		return false, err
-	}
-	for attempt := 1; ; attempt++ {
-		row, found, err := e.store.fleet.Secret(ctx, name)
-		if err != nil {
-			return false, fmt.Errorf("fleetsecrets: read %s to touch it: %w",
-				displayName(name), err)
-		}
-		if !found {
-			return false, nil
-		}
-		// THE ENVELOPE AS IT WAS, the provenance as this gesture: who
-		// re-used the key is exactly what the new write time is about.
-		touched := provenance(name, by, source, now)
-		touched.Value, touched.KeyID = row.Value, row.KeyID
-		wrote, err := e.store.fleet.UpdateSecret(ctx, touched, row.Version)
-		if err != nil {
-			return false, fmt.Errorf("fleetsecrets: touch %s: %w", displayName(name), err)
-		}
-		if wrote {
-			return true, nil
-		}
-		if attempt == movedRowAttempts {
-			return false, fmt.Errorf("fleetsecrets: %s was rewritten %d times "+
-				"while it was being touched; the gesture that uses it should retry",
-				displayName(name), movedRowAttempts)
-		}
-	}
-}
-
-// UnsetAt destroys one of the engine's own rows only while it is still at the
-// version the caller judged it at, reporting whether it destroyed it.
-//
-// FALSE IS A ROW WRITTEN SINCE — a gesture that re-used the key and touched it,
-// a rekey that moved it — or one already gone, and neither is a failure: what
-// the caller judged is no longer what is stored, so the judgement is void.
-// NO KEYRING NEEDED, for [Estate.Unset]'s reason.
-func (e *Estate) UnsetAt(ctx context.Context, name string, version uint64) (bool, error) {
-	if e == nil {
-		return false, secrets.ErrNoKeyring
-	}
-	if err := secrets.CheckEstateName(name); err != nil {
-		return false, err
-	}
-	removed, err := e.store.fleet.DeleteSecretAt(ctx, name, version)
-	if err != nil {
-		return false, fmt.Errorf("fleetsecrets: destroy %s at version %d: %w",
-			displayName(name), version, err)
-	}
-	return removed, nil
-}
-
-// Unset destroys one of the engine's own rows, reporting whether it was there.
-//
-// NO KEYRING NEEDED: destroying a removed person's key is what finishes their
-// off-boarding, and a node that cannot decrypt anything must still be able to.
-func (e *Estate) Unset(ctx context.Context, name string) (bool, error) {
-	if e == nil {
-		return false, secrets.ErrNoKeyring
-	}
-	if err := secrets.CheckEstateName(name); err != nil {
-		return false, err
-	}
-	return e.store.unset(ctx, name)
-}
-
-// Keys reports every engine row under prefix — its name, its sealing key,
-// when and by whom it was last written, and the store's version of it —
-// sorted by name, without opening anything.
-//
-// NO KEYRING NEEDED, for [Estate.Unset]'s reason: what reads this is the duty
-// that finishes a removal and collects a key nobody owns, and the finding half
-// must not be the one thing a node whose keyring lacks a row's key cannot do. The WRITE TIME
-// is what that duty ages a key by — a key nobody owns yet may be one an
-// enrolment minted a second ago — and the VERSION is what it destroys one at
-// ([Estate.UnsetAt]), so a key written after the listing is spared; both ride
-// beside every envelope, so they cost nothing to hand over. NEVER THE
-// ENVELOPE: a caller that needs a value asks for it by name.
-func (e *Estate) Keys(ctx context.Context, prefix string) ([]secrets.Record, error) {
-	if e == nil {
-		return nil, secrets.ErrNoKeyring
-	}
-	if !secrets.Reserved(prefix) {
-		return nil, fmt.Errorf("%w: %q is not a prefix in the engine's own "+
-			"namespace", secrets.ErrInvalidName, prefix)
-	}
-	rows, err := e.store.fleet.SecretValues(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fleetsecrets: list the engine's keys under %q: %w",
-			prefix, err)
-	}
-	var out []secrets.Record
-	for _, row := range rows {
-		if strings.HasPrefix(row.Name, prefix) {
-			out = append(out, record(row))
-		}
-	}
-	slices.SortFunc(out, func(a, b secrets.Record) int { return cmp.Compare(a.Name, b.Name) })
-	return out, nil
 }

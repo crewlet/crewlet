@@ -2145,8 +2145,8 @@ func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (
 // A ZERO VERSION NAMES NO ROW and writes nothing, for [FleetStore.DeleteSecretAt]'s
 // reason — and here it would be worse than a no-op: the client reads an
 // expected revision of zero as "this key has never been written", which is a
-// create wearing an update's name, and the one row it could resurrect is one a
-// removal destroyed.
+// create wearing an update's name, and the one row it could resurrect is one
+// somebody deleted.
 func (f *FleetStore) UpdateSecret(ctx context.Context, rec coord.SecretRecord, version uint64) (bool, error) {
 	raw, err := encodeSecret(rec)
 	if err != nil {

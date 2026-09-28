@@ -16,25 +16,21 @@ import (
 // a child process — and that includes every literal the org chart seals for a
 // seat or a unit, which is stored under a `CHART_<KIND>_<ID>_<FIELD>` name and
 // referenced from the row, because it is a value the operator typed. And the
-// ENGINE's key material, all of it the identity directory's: a person's data
-// key, whose deletion is what removing them does, and the blind-index key the
-// directory matches an address under. Those live in the same store because it
-// is the one place a delete reaches every node at once and nothing on the
-// request path reads it back.
+// ENGINE's key material: the blind-index key the identity directory matches an
+// address under. It lives in the same store because every node must derive
+// under the same key, and this is the one store every node reads.
 //
 // # Why the two must not meet
 //
 // They used to share the environment-variable grammar, which made the engine's
-// keys ordinary operator secrets. `/secrets` listed every person's key; a
-// reveal was a copy taken before a removal, which defeated the shred the
-// removal is; a PUT or a DELETE shredded somebody with no removal on record,
-// or replaced a blind-index key and orphaned every address in the directory;
-// and every apply decrypted all of it into each node's `${VAR}` resolver,
-// where a reference in an `mcp_env` handed a person's key to a child process.
+// keys ordinary operator secrets: `/secrets` listed them, a PUT or a DELETE
+// replaced the blind-index key and orphaned every address in the directory,
+// and every apply decrypted it into each node's `${VAR}` resolver, where a
+// reference in an `mcp_env` handed it to a child process.
 //
 // # A different SHAPE, so no reference grammar can reach it
 //
-// An engine-owned name is a PATH — `iam/person/<id>/dek` — and the reference
+// An engine-owned name is a PATH — `iam/blind-index-key` — and the reference
 // grammar has no `/` in it, so no `${VAR}` in any document can name one, by the
 // shape of the value rather than by a check a resolver has to remember to run.
 // The operator surfaces refuse the prefix outright ([ErrReservedName]), and the
@@ -46,9 +42,8 @@ import (
 //
 // Its own sentinel because it is neither the caller's typo ([ErrInvalidName])
 // nor an absent row ([ErrNotFound]): the name is well formed and may well
-// exist, and the answer is that no operator gesture reaches it — removing a
-// person is `crewlet iam remove`, and a lost blind-index key is restored with
-// the coordination store it lived in.
+// exist, and the answer is that no operator gesture reaches it — a lost
+// blind-index key is restored with the coordination store it lived in.
 var ErrReservedName = errors.New(
 	"secrets: that name is the engine's own key material, which no operator " +
 		"surface reads, writes or resolves")
@@ -89,10 +84,10 @@ func Reserved(name string) bool {
 // under: a reserved owner, then one or more non-empty segments of lower-case
 // letters, digits, `-`, `_` and `.`.
 //
-// THE SEGMENTS ARE NARROW because every one of them is an id this engine minted
-// (a uuid, a lineage) or a fixed word, and a name nothing parses back must still
-// never alias another — an empty segment would make `iam/person//dek` the one
-// key every unidentified caller shared.
+// THE SEGMENTS ARE NARROW because every one of them is a fixed word or an id
+// this engine minted, and a name nothing parses back must still never alias
+// another — an empty segment is an id somebody forgot to fill in, and the name
+// built around it would be one key every such caller shared.
 func CheckEstateName(name string) error {
 	if !Reserved(name) {
 		return fmt.Errorf("%w: %q is not under one of the engine's own owners %v",
@@ -127,9 +122,9 @@ func CheckEstateName(name string) error {
 //
 // IT EXISTS FOR THE ROTATION. A rekey re-seals these rows with everything else,
 // and the operator retiring the old key needs to know that none is still
-// sealed under it — dropping that key would make every person's name and the
-// blind-index key unreadable at once. A count per key answers that without
-// putting a person's id on an operator's screen.
+// sealed under it — dropping that key would make the blind-index key
+// unreadable, and every sign-in by address with it. A count per key answers
+// that without naming the engine's rows on an operator's screen.
 type EngineKeys struct {
 	Total int            `json:"total"`
 	ByKey map[string]int `json:"by_key,omitempty"`

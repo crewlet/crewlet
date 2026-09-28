@@ -20,11 +20,11 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		reserved bool
 		estate   bool
 	}{
-		{"iam/person/018f3a9c-0000-7000-8000-000000000001/dek", true, true},
 		{"iam/blind-index-key", true, true},
+		{"iam/nested/018f3a9c-0000-7000-8000-000000000001/key", true, true},
 		// RESERVED AND STILL NOT WRITABLE: an owner with a malformed tail.
-		{"iam/person//dek", true, false},
-		{"iam/Person/x/dek", true, false},
+		{"iam/nested//key", true, false},
+		{"iam/Nested/x/key", true, false},
 		{"iam/", true, false},
 		// NEITHER: an operator's name, and a slash under nobody's owner.
 		{"GITLAB_TOKEN", false, false},

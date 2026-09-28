@@ -29,14 +29,21 @@
 //
 // # The engine's own key material is not reachable from here at all
 //
-// The same bucket holds a person's data key and the identity estate's
-// blind-index key, under names in the engine's own namespace
-// ([secrets.Reserved]). Every route that takes a name refuses one of
-// those with `403 reserved_name` before anything else — whatever the caller
-// holds — and the listing counts them per keyring key without naming any. They
-// were once ordinary names here, and that made a reveal a way to copy a
-// person's key before their removal shredded it, and a DELETE a removal nobody
-// recorded.
+// The same bucket holds the identity estate's blind-index key, under a name in
+// the engine's own namespace ([secrets.Reserved]). Every route that takes a
+// name refuses one with `403 reserved_name` before anything else — whatever the
+// caller holds — and the listing counts them per keyring key without naming
+// any. It was once an ordinary name here, and that made a DELETE a way to
+// orphan every address in the directory.
+//
+// # A rekey is the whole rotation, the identity estate included
+//
+// The keyring that seals this bucket also seals every person's name, address
+// and second factor in the identity estate, whose rows are derived from a log
+// and can only be changed by a record. So `POST /secrets/rekey` moves both —
+// the store's rows at the version it read, and the identity estate's through
+// the node's own writer ([Identity]) — and the listing counts both, because
+// the answer an operator retires the old key on is "nothing is under it".
 //
 // # There is exactly one route that returns a value, and it is break-glass
 //
@@ -48,6 +55,7 @@
 package secretsapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -58,6 +66,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -73,11 +82,34 @@ var log = logging.Get("api.secrets")
 // refused rather than sealed.
 const MaxValueBytes = 64 << 10
 
+// Identity is the identity estate's half of a keyring rotation: the personal
+// values — names, addresses, second factors — the same keyring seals in rows
+// no store write can reach. The engine's `IdentityKeyring` is what a running
+// node hands in.
+type Identity interface {
+	// SealedKeys counts the values those rows hold, by the keyring key
+	// each is sealed under, opening none of them.
+	SealedKeys(ctx context.Context) (iamdomain.SealedCount, error)
+
+	// Reseal moves every person's values onto the active key.
+	Reseal(ctx context.Context) (iamdomain.ResealReport, error)
+}
+
+// IdentityResealed is what a rekey moved in the identity estate, COUNTED: how
+// many people's records it published and how many values those carried. Never
+// the ids — a caller holding `secrets:write` is not thereby somebody who reads
+// the directory.
+type IdentityResealed struct {
+	People int `json:"people"`
+	Values int `json:"values"`
+}
+
 // Service is the /secrets surface.
 type Service struct {
-	store *fleetsecrets.Store
-	keyID string
-	now   func() time.Time
+	store    *fleetsecrets.Store
+	identity Identity
+	keyID    string
+	now      func() time.Time
 
 	// guard decides every route and the reveal a GET asks for on top of
 	// its route. No chart: not one verb here asks a relation.
@@ -97,6 +129,13 @@ type Options struct {
 	// ActiveKeyID is the keyring key a rekey re-seals onto: Tier A's
 	// secrets.active_key_id. Required for the same reason.
 	ActiveKeyID string
+
+	// Identity is the identity estate's half of a rotation. NIL-ABLE, and
+	// the absence is a real state rather than a fault: a node that started
+	// with no active company runs no identity estate, so it has none to
+	// count or move — and every answer here SAYS so (`identity: null`)
+	// rather than reading as an estate with nothing under an old key.
+	Identity Identity
 
 	// Now is injectable so a test can pin a row's timestamp.
 	Now func() time.Time
@@ -129,10 +168,11 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{
-		store: fleetsecrets.New(opts.Fleet, opts.Cipher),
-		keyID: opts.ActiveKeyID,
-		now:   now,
-		guard: authz.ContextGuard(authz.NoChart{}),
+		store:    fleetsecrets.New(opts.Fleet, opts.Cipher),
+		identity: opts.Identity,
+		keyID:    opts.ActiveKeyID,
+		now:      now,
+		guard:    authz.ContextGuard(authz.NoChart{}),
 	}, nil
 }
 
@@ -165,11 +205,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 
 // list serves GET /secrets — every name, with no values.
 //
-// THE ENGINE'S OWN KEYS ARE COUNTED AND NEVER NAMED. A person's data key is not
-// the operator's to read, write or delete, and a listing of them was the first
-// step to every one of those; what an operator
-// does need is to see a rotation reach them, so `engine_keys` says how many
-// there are under each keyring key and nothing else.
+// THE ENGINE'S OWN KEYS ARE COUNTED AND NEVER NAMED. The blind-index key is not
+// the operator's to read, write or delete, and a listing of it was the first
+// step to every one of those; what an operator does need is to see a rotation
+// reach it, so `engine_keys` says how many there are under each keyring key and
+// nothing else. `identity_values` is the same count for the identity estate's
+// sealed values, by key — null on a node that runs no identity estate.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
@@ -181,12 +222,21 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "count the engine's keys", err)
 		return
 	}
+	var identity *iamdomain.SealedCount
+	if s.identity != nil {
+		counted, err := s.identity.SealedKeys(r.Context())
+		if err != nil {
+			s.fail(w, "count the identity estate's sealed values", err)
+			return
+		}
+		identity = &counted
+	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, render(row))
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
-		"secrets": out, "engine_keys": engine,
+		"secrets": out, "engine_keys": engine, "identity_values": identity,
 	})
 }
 
@@ -200,9 +250,8 @@ func reserved(w http.ResponseWriter, name string) bool {
 	}
 	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeReservedName, map[string]string{
 		"detail": secrets.ErrReservedName.Error(),
-		"hint": "a person's key and the address index's key belong to the " +
-			"identity estate: remove a person with `crewlet iam remove`; a " +
-			"rekey moves these keys with everything else",
+		"hint": "the address index's key belongs to the identity estate; a " +
+			"rekey moves it with everything else",
 	})
 	return true
 }
@@ -361,11 +410,17 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
 }
 
-// rekey serves POST /secrets/rekey — re-seal every stale row.
+// rekey serves POST /secrets/rekey — re-seal every stale row, and every person's
+// values in the identity estate.
 //
 // THE NAMES, not a count: a pass that moved 12 of 13 rows raises a question a
 // number cannot answer, and this is what an operator reads before retiring
-// the old key.
+// the old key. The engine's key and the identity estate's values are counted,
+// for the listing's reason.
+//
+// THE STORE FIRST, THEN THE ESTATE, and a failure in either is the one
+// `rekey_incomplete` carrying what did move: both halves are their own retry,
+// so running the gesture again finishes it.
 func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 	// THE CALLER'S EXPECTED KEY, refused on a mismatch rather than
 	// ignored. A CLI whose Tier A names a different active key than this
@@ -405,15 +460,51 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	var identity *IdentityResealed
+	if s.identity != nil {
+		report, err := s.identity.Reseal(r.Context())
+		identity = &IdentityResealed{People: len(report.People), Values: report.Values}
+		if err != nil || len(report.Unknown) > 0 {
+			// UNKNOWN IS INCOMPLETE TOO: a record nobody could confirm may
+			// not have landed, and the operator is about to drop the key
+			// its value is under on the strength of this answer.
+			log.ErrorContext(r.Context(), "secret_rekey_identity_incomplete",
+				"error", errText(err), "moved", rekeyed.Moved,
+				"engine_keys_moved", rekeyed.EngineKeys,
+				"identity_people", identity.People, "identity_values", identity.Values,
+				"identity_unknown", len(report.Unknown),
+				"by", by.Name, "operator", by.OperatorID)
+			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeRekeyIncomplete, httpjson.Detail{
+				"moved":             nonNil(rekeyed.Moved),
+				"engine_keys_moved": rekeyed.EngineKeys,
+				"identity":          identity,
+				"identity_unknown":  len(report.Unknown),
+				"hint": "not every person's values could be confirmed re-sealed " +
+					"in the identity estate; run the rekey again, which moves " +
+					"only what is still under an old key",
+			})
+			return
+		}
+	}
 	log.InfoContext(r.Context(), "secrets_rekeyed", "moved", rekeyed.Moved,
-		"engine_keys_moved", rekeyed.EngineKeys, "key_id", s.keyID,
-		"by", by.Name, "operator", by.OperatorID)
-	// THE ENGINE'S KEYS AS A COUNT beside the operator's names: the operator
-	// retiring the old key needs to know they moved, and nothing more.
+		"engine_keys_moved", rekeyed.EngineKeys, "identity", identity,
+		"key_id", s.keyID, "by", by.Name, "operator", by.OperatorID)
+	// THE ENGINE'S KEYS AND THE IDENTITY ESTATE'S VALUES AS COUNTS beside the
+	// operator's names: the operator retiring the old key needs to know they
+	// moved, and nothing more — and null where this node runs no identity
+	// estate, which is a different answer from "nothing to move".
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"key_id": s.keyID, "moved": nonNil(rekeyed.Moved),
-		"engine_keys_moved": rekeyed.EngineKeys,
+		"engine_keys_moved": rekeyed.EngineKeys, "identity": identity,
 	})
+}
+
+// errText is an error as a log attribute, or empty for none.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // nonNil is a list as JSON renders it for a reader that ranges over it: an

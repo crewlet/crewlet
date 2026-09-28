@@ -1498,10 +1498,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// written here is one this node and every peer opens with the key
 	// their Tier A names, and a second cipher would make a rotation
 	// readable only on the node that served the request.
-	secretSurface, err := secretsapi.New(secretsapi.Options{
+	// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a record can
+	// move — nil on a node with no active company, and never a typed nil,
+	// which the surface would read as an estate to ask.
+	secretOpts := secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
-	})
+	}
+	if keyring := e.IdentityKeyring(); keyring != nil {
+		secretOpts.Identity = keyring
+	}
+	secretSurface, err := secretsapi.New(secretOpts)
 	if err != nil {
 		return nil, err
 	}

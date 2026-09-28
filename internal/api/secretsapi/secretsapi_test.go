@@ -1,8 +1,10 @@
 package secretsapi_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +24,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -347,35 +350,19 @@ func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 
 // THE ENGINE'S OWN KEYS ARE UNREACHABLE HERE, whatever the caller holds.
 //
-// A person's data key lives in the same bucket as the operator's credentials.
-// When the engine's keys carried operator names, this surface listed every
-// one, a reveal copied a person's key out before their removal could shred it,
-// and a DELETE shredded somebody with no removal on record. Every route that
-// takes a name now refuses one BY NAME — including a caller carrying every
-// grant — the listing counts them without naming any, and a rekey moves and
-// counts them. For every kind of key the engine keeps: the directory's
-// blind-index key is as much the engine's as a person's.
+// The directory's blind-index key lives in the same bucket as the operator's
+// credentials. When it carried an operator name, this surface listed it and a
+// DELETE orphaned every address in the directory. Every route that takes a name
+// now refuses one BY NAME — including a caller carrying every grant — the
+// listing counts them without naming any, and a rekey moves and counts them.
 func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
 	t.Parallel()
-	for _, key := range []string{
-		"iam/person/018f3a9c-0000-7000-8000-000000000001/dek",
-		"iam/blind-index-key",
-	} {
-		t.Run(key, func(t *testing.T) {
-			t.Parallel()
-			engineKeyUnreachable(t, key)
-		})
-	}
-}
-
-// engineKeyUnreachable is [TestTheEnginesOwnKeysAreUnreachableHere] over one key.
-func engineKeyUnreachable(t *testing.T, key string) {
-	t.Helper()
+	const key = "iam/blind-index-key"
 	fleet := coordmem.NewFleet()
-	if err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Set(
-		t.Context(), key, "the-person-key", secrets.Author{Name: "node-a",
-			Kind: string(iam.ActorSystem)}, "iam", clock); err != nil {
-		t.Fatalf("seed the engine key: %v", err)
+	if created, err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Create(
+		t.Context(), key, "the-engine-key", secrets.Author{Name: "node-a",
+			Kind: string(iam.ActorSystem)}, "iam", clock); err != nil || !created {
+		t.Fatalf("seed the engine key: (%v, %v)", created, err)
 	}
 	h := mounted(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k1", "k2"), ActiveKeyID: "k1",
@@ -395,12 +382,12 @@ func engineKeyUnreachable(t *testing.T, key string) {
 			t.Errorf("%s of an engine key answered %d %s, want 403 reserved_name",
 				tc.name, code, body)
 		}
-		if strings.Contains(body, "the-person-key") {
+		if strings.Contains(body, "the-engine-key") {
 			t.Errorf("%s of an engine key carried its value: %s", tc.name, body)
 		}
 	}
 	if got, err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Get(
-		t.Context(), key); err != nil || got != "the-person-key" {
+		t.Context(), key); err != nil || got != "the-engine-key" {
 		t.Fatalf("after every refused gesture the engine key reads %q (%v)", got, err)
 	}
 
@@ -419,6 +406,94 @@ func engineKeyUnreachable(t *testing.T, key string) {
 	if code != http.StatusOK || !strings.Contains(body, `"engine_keys_moved":1`) ||
 		strings.Contains(body, key) {
 		t.Errorf("rekey = %d %s, want the engine key moved and counted", code, body)
+	}
+}
+
+// fakeIdentity is the identity estate's half of a rotation, as the rekey and
+// the listing ask it.
+type fakeIdentity struct {
+	count    iamdomain.SealedCount
+	report   iamdomain.ResealReport
+	err      error
+	resealed int
+}
+
+func (f *fakeIdentity) SealedKeys(context.Context) (iamdomain.SealedCount, error) {
+	return f.count, nil
+}
+
+func (f *fakeIdentity) Reseal(context.Context) (iamdomain.ResealReport, error) {
+	f.resealed++
+	return f.report, f.err
+}
+
+// A REKEY IS THE WHOLE ROTATION, THE IDENTITY ESTATE INCLUDED.
+//
+// The keyring that seals the store also seals every person's name, address and
+// second factor, in rows only a record can change — so a rekey that moved the
+// store alone reported a finished rotation while every person's values were
+// still under the key the operator was about to drop. The rekey now moves both
+// and counts both, the listing counts both, and a node that runs no identity
+// estate SAYS so (`null`) rather than reading as an estate with nothing to
+// move. An outcome nobody could confirm is `rekey_incomplete`, because the old
+// key is dropped on the strength of this answer.
+//
+// Mutation: drop the call to Reseal and the first case fails.
+func TestARekeyMovesTheIdentityEstateToo(t *testing.T) {
+	t.Parallel()
+	opts := func(identity secretsapi.Identity) secretsapi.Options {
+		return secretsapi.Options{
+			Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"),
+			ActiveKeyID: "k1", Identity: identity,
+			Now: func() time.Time { return clock },
+		}
+	}
+
+	moved := &fakeIdentity{
+		count: iamdomain.SealedCount{People: map[string]int{"k0": 3},
+			Invitations: map[string]int{"k0": 1}},
+		report: iamdomain.ResealReport{People: []string{"p1", "p2"}, Values: 5},
+	}
+	h := mounted(t, opts(moved), iam.AllGrants...)
+	code, body := call(t, h, http.MethodGet, "/secrets", "")
+	if code != http.StatusOK || !strings.Contains(body,
+		`"identity_values":{"people":{"k0":3},"invitations":{"k0":1}}`) {
+		t.Errorf("the listing = %d %s, want the identity estate's values counted "+
+			"by key", code, body)
+	}
+	code, body = call(t, h, http.MethodPost, "/secrets/rekey", "")
+	if code != http.StatusOK || moved.resealed != 1 ||
+		!strings.Contains(body, `"identity":{"people":2,"values":5}`) ||
+		strings.Contains(body, "p1") {
+		t.Errorf("rekey = %d %s (re-sealed %d times), want the identity estate "+
+			"moved once and counted, naming nobody", code, body, moved.resealed)
+	}
+
+	absent := mounted(t, opts(nil), iam.AllGrants...)
+	if code, body := call(t, absent, http.MethodGet, "/secrets", ""); code !=
+		http.StatusOK || !strings.Contains(body, `"identity_values":null`) {
+		t.Errorf("a node with no identity estate listed %d %s, want it said", code, body)
+	}
+	if code, body := call(t, absent, http.MethodPost, "/secrets/rekey", ""); code !=
+		http.StatusOK || !strings.Contains(body, `"identity":null`) {
+		t.Errorf("a node with no identity estate rekeyed %d %s, want it said", code, body)
+	}
+
+	for name, identity := range map[string]*fakeIdentity{
+		"an outcome nobody could confirm": {report: iamdomain.ResealReport{
+			People: []string{"p1"}, Values: 2, Unknown: []string{"p2"}}},
+		"a person whose values would not open": {
+			report: iamdomain.ResealReport{People: []string{"p1"}, Values: 2},
+			err:    errors.New("open p2's name: secret could not be decrypted")},
+	} {
+		h := mounted(t, opts(identity), iam.AllGrants...)
+		code, body := call(t, h, http.MethodPost, "/secrets/rekey", "")
+		if code != http.StatusInternalServerError ||
+			!strings.Contains(body, `"rekey_incomplete"`) ||
+			!strings.Contains(body, `"identity":{"people":1,"values":2}`) {
+			t.Errorf("%s: rekey = %d %s, want rekey_incomplete carrying what "+
+				"did move", name, code, body)
+		}
 	}
 }
 

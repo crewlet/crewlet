@@ -1011,11 +1011,12 @@ type Secrets interface {
 	// row, not a failure.
 	//
 	// THE ENGINE'S OWN KEY MATERIAL NEEDS THE SANDBOX RUNS' DISCIPLINE, and
-	// last-write-wins is exactly wrong for it: a person's data key that two
-	// writers minted at once is one whose loser's values were sealed under
-	// a key the store no longer holds, and a key re-written after a removal
-	// destroyed it is a removal undone. So beside the operator's plain put,
-	// the three conditional writes a key's lifecycle needs.
+	// last-write-wins is exactly wrong for it: a company key two nodes
+	// minted at once is one whose loser derived values under a key the
+	// store no longer holds. So beside the operator's plain put, three
+	// conditional writes: a create for a key's mint, an update at the
+	// version read for a rekey, and a delete at the version judged for a
+	// sweep that decided a row is nobody's.
 	CreateSecret(ctx context.Context, rec SecretRecord) (bool, error)
 
 	// UpdateSecret replaces a sealed value only while the row is still at

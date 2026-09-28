@@ -334,7 +334,8 @@ func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
 func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
-	node.body = `{"moved":["A","B"],"engine_keys_moved":3}`
+	node.body = `{"moved":["A","B"],"engine_keys_moved":3,` +
+		`"identity":{"people":2,"values":5}}`
 
 	moved, err := node.client(t).Rekey(t.Context(), "key-2")
 	if err != nil {
@@ -343,8 +344,10 @@ func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 	if node.last.query != "key_id=key-2" {
 		t.Errorf("query = %q, want the expected key to travel", node.last.query)
 	}
-	if strings.Join(moved.Moved, ",") != "A,B" || moved.EngineKeys != 3 {
-		t.Errorf("moved = %v, want what the node reported", moved)
+	if strings.Join(moved.Moved, ",") != "A,B" || moved.EngineKeys != 3 ||
+		moved.Identity == nil || moved.Identity.People != 2 || moved.Identity.Values != 5 {
+		t.Errorf("moved = %+v, want what the node reported, the identity "+
+			"estate's half included", moved)
 	}
 }
 
@@ -374,25 +377,41 @@ func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
 	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	node.status = http.StatusForbidden
-	node.body = `{"error":"reserved_name","hint":"remove a person with crewlet iam remove"}`
+	node.body = `{"error":"reserved_name","hint":"the address index's key belongs to the identity estate"}`
 	if _, err := node.client(t).Get(t.Context(), key); !errors.Is(err,
 		secrets.ErrReservedName) {
 		t.Errorf("the node's reserved_name answered %v, want ErrReservedName", err)
 	}
 }
 
-// A LISTING SAYS HOW MANY OF THE ENGINE'S KEYS A ROTATION HAS TO MOVE, from
-// the count the node carries beside the names — and names none of them.
-func TestAListingCountsTheEnginesKeys(t *testing.T) {
+// A LISTING SAYS HOW MUCH A ROTATION HAS TO MOVE THAT NO COMMAND NAMES, from
+// the counts the node carries beside the names — the engine's keys and the
+// identity estate's values — and names none of it. A node that runs no
+// identity estate says so with a null, which reads back as nil rather than as
+// an estate with nothing in it.
+func TestAListingCountsWhatNoCommandNames(t *testing.T) {
 	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
-	node.body = `{"secrets":[],"engine_keys":{"total":4,"by_key":{"k1":3,"k2":1}}}`
-	keys, err := node.client(t).EngineKeys(t.Context())
+	node.body = `{"secrets":[],"engine_keys":{"total":4,"by_key":{"k1":3,"k2":1}},` +
+		`"identity_values":{"people":{"k1":5,"k2":2},"invitations":{"k1":1}}}`
+	held, err := node.client(t).EngineKeys(t.Context())
 	if err != nil {
 		t.Fatalf("EngineKeys: %v", err)
 	}
-	if keys.Total != 4 || keys.StaleUnder("k2") != 3 {
-		t.Errorf("the count reads %+v, want 4 with 3 under a key other than k2", keys)
+	if held.Keys.Total != 4 || held.Keys.StaleUnder("k2") != 3 {
+		t.Errorf("the count reads %+v, want 4 with 3 under a key other than k2",
+			held.Keys)
+	}
+	if held.Identity == nil || held.Identity.Outside("k2") != 5 ||
+		held.Identity.InvitationsOutside("k2") != 1 {
+		t.Errorf("the identity estate reads %+v, want 5 values and 1 invitation "+
+			"under a key other than k2", held.Identity)
+	}
+
+	node.body = `{"secrets":[],"engine_keys":{"total":0},"identity_values":null}`
+	if held, err = node.client(t).EngineKeys(t.Context()); err != nil ||
+		held.Identity != nil {
+		t.Errorf("a node with no identity estate read back as %+v (%v)", held, err)
 	}
 }
 
