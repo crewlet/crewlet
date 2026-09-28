@@ -31,7 +31,7 @@ subcommand below is served by it.
 | `crewlet objects hold -for DURATION [-reason TEXT]` | Hold the map through planned maintenance, at most 24h: no member is removed however long it is gone |
 | `crewlet objects release` | End a hold |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a build older than the field) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
-| `crewlet fleet broker remove <node> -confirm <node> [-force]` | Stop the metadata group counting a member that is gone for good, through a live member's system account. Refused while the node holds a live presence lease; `-force` is for a member wedged in a way that still renews it |
+| `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -804,6 +804,7 @@ counted from the resend. Read `status` before re-sending a hold.
 ```
 crewlet fleet broker list [-json] [<config.yaml>] [-url URL] [-token TOKEN]
 crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet fleet broker remove -peer <peer> -confirm <peer> [-force] [<config.yaml>] [-url URL] [-token TOKEN]
 ```
 
 The fleet broker's membership. Two records say who its members are: every node
@@ -820,14 +821,21 @@ reach. They are clients of the routes in the
 ### `crewlet fleet broker list`
 
 The question it answers is **does the broker still count a member I have
-lost?** One row per live node — what it advertises, its roles, and how the
-group counts it (`leader`, `current`, `offline, last heard 5m ago`, or `-` for a
-node that is no voter) — then one row per voter no live node is, and under the
-table every disagreement in words:
+lost?** One row per live node — what it advertises, its roles, how the group
+counts it (`leader`, `current`, `offline, last heard 5m ago`, or `-` for a node
+that is no voter) and its **peer id** where it is a voter — then one row per
+voter no live node is, and under the table every disagreement in words.
+
+The group counts each voter by its raft peer id, which is derived from the
+node id. A member hears another's name only from that server, so a voter whose
+survivors have restarted since it died is listed as `(name unknown)` by its
+peer id alone; a voter is matched to its node by peer id, never by the name the
+answering member happens to have heard.
 
 - **DEAD MEMBER** — a voter no live node is, or whose node came back as a leaf
   or a client. Every election and every create goes on counting it; the line
-  prints the `remove` command for once it is not coming back.
+  prints the `remove` command for once it is not coming back — by `-peer` for a
+  voter nobody can name, since it has no node id to give.
 - **NOT COUNTED** — a live node advertising a member the group does not count:
   still joining, or removed while it ran.
 - **UNKNOWN** — a node whose presence does not say what its broker is, which a
@@ -840,13 +848,23 @@ it came.
 
 ### `crewlet fleet broker remove`
 
-Stops the metadata group counting a member, by node id, once the group has
-committed the change — printing which member's system account carried it and
-the voters that remain. **Refused while the node holds a live presence lease**:
-it is still running, and a running member removed from the group rejoins it as
-a voter at its next restart, so stop it first. `-force` removes it anyway, for a
-member wedged in a way that still renews its lease. The member being removed
-never carries its own removal while another member is live.
+Stops the metadata group counting a member once the group has committed the
+change — printing which member's system account carried it and the voters that
+remain. Name it by **node id**, which reaches it by the peer id the id hashes
+to whether or not any member still remembers its name, or by **`-peer`** with
+the peer id `list` shows, for a voter nobody can name. **Refused while its node
+holds a live presence lease as a member** (or without saying what its broker
+is): it is still running, and a running member removed from the group rejoins
+it as a voter at its next restart, so stop it first. `-force` removes it anyway,
+for a member wedged in a way that still renews its lease. A node alive under
+the voter's name as a **leaf** or a **client** is removed without `-force`: the
+member it was is gone for good. The member being removed never carries its own
+removal — if it is the only live member, the command says so.
+
+The whole removal is bounded by one wait: the carrying member's commit budget
+and a round trip. A carrying member that does not answer ends it as an outcome
+nobody knows — it may have committed the change first — rather than another
+member proposing it again; `list` reads the group.
 
 Only the group's leader answers a removal, and a member removed because its
 host died was often that leader — so the removal asks again every second while
