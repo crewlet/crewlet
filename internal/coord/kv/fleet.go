@@ -74,9 +74,10 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
-	// opens nineteen of these in a row and logs nothing between them, so a
-	// node that hung here emitted nothing at all until its budget expired —
-	// and the log could not say which bucket it was on.
+	// opens every bucket of both coordination stores in a row and logs
+	// nothing between them, so a node that hung here emitted nothing at all
+	// until its budget expired — and the log could not say which bucket it
+	// was on.
 	//
 	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
 	// the create ends rather than where this function does.

@@ -507,7 +507,7 @@ flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
     DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written by a state log's applier</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>nineteen buckets on the stream's own connection</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>a bucket per lifetime, on the stream's own connection</i>"]
     STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL

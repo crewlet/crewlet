@@ -484,9 +484,10 @@ comes back as a peer having won the race. A node no longer fails to start
 because it could not hear.
 
 **A create that is taking a while says so while it is happening.** Provisioning
-was otherwise silent — a node opens eighteen buckets and several streams in a
-row and logged nothing between them, so one that hung emitted nothing at all
-until its budget expired and the log could not say which object it was on. Any
+was otherwise silent — a node opens every coordination bucket and several
+streams in a row and logged nothing between them, so one that hung emitted
+nothing at all until its budget expired and the log could not say which object
+it was on. Any
 create still running after 10 seconds now writes one `WARN` naming it
 (`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`),
 and so does the lookup that precedes it
