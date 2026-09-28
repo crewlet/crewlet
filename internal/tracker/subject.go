@@ -32,30 +32,49 @@
 // by the writer (see [ScopeSet]), and a purge is the record that writes the
 // most objects that are not its subject. Every one of them is a CROSS-OBJECT
 // effect, listed here so a layout that splits tasks across partitions can route
-// each one rather than rediscover it:
+// each one rather than rediscover it. What each effect writes is a DOCUMENT
+// change as well as a row change from record version 4 on ([rewriteVersion]),
+// and a task reached by several of them is rewritten once with all of them:
 //
 //   - its DEPENDENTS: their `waiting_on` relation to it is taken out of their
 //     documents, and their dependency edges naming it deleted;
 //   - the BLOCKERS it waits on: it is taken out of the mirror their documents
-//     keep of who waits on them;
+//     keep of who waits on them, and out of their mirror rows;
 //   - every task with any other RELATION to it: the relation is taken out of
-//     that task's document;
+//     that task's document and rows;
 //   - every task whose body REFERENCES it: the reference row is deleted (the
 //     key it named resolves to nothing afterwards, so no later record of that
-//     task writes it back);
+//     task writes it back — the one effect with no document half);
 //   - its SUBTREE: each direct child is re-parented onto the purged task's own
 //     parent, document and pointer, and every descendant's ancestry is
 //     rebuilt.
 //
 // Within one estate the writer names all of them ([purgeReach]) and the decide
-// refuses a purge whose scope comes up short of the rows it decides on. Under
-// the partitioned layout a scope may not cross partitions, so the first four
-// become facts the purge's partition hands to the others' — the dependents'
-// and relations' through the propagation feed, as every other cross-project
-// dependency does — while the subtree stays inside the purge's own partition,
-// because that layout refuses a parent in another project. (Today it is not
-// refused, which is why a descendant in another project is named at its own
-// project's path here.)
+// refuses a purge whose scope comes up short of the rows it decides on.
+//
+// # What the partitioned layout has to carry for it
+//
+// Under the partitioned layout a scope may not cross partitions, so the first
+// four effects on a task in ANOTHER partition have to be facts the purge's
+// partition hands to that one, decided there under its own scope — while the
+// subtree stays inside the purge's own partition, because that layout refuses a
+// parent in another project. (Today it is not refused, which is why a
+// descendant in another project is named at its own project's path here.)
+//
+// THE PROPAGATION FEED THAT LAYOUT PLANS FOR DEPENDENCIES DOES NOT CARRY THEM.
+// Its blocker-state fact rewrites the target's dependency ROWS naming a
+// blocker, and nothing in it touches a document; so a dependent in another
+// partition would get the purged blocker's edge back from its own document on
+// its next record, and a blocker or a related task there would go on naming
+// the purged task in its document and its rows. What the layout needs is a
+// fact of its own — the purged task's id, decided in the target partition by
+// taking it out of every document there that names it (the relations, the
+// dependents mirror) and out of the rows those documents derive. The same fact
+// has to clear the REFERENCES there too: a reference across partitions is
+// stored by the key it names rather than by the task's id, so the purged
+// task's partition cannot delete it, and left behind it is a link to a key
+// that resolves to nothing — the dangling link a reader cannot tell from a
+// typo, which within one partition the purge already removes.
 //
 // WHAT NO SCOPE CAN NAME is a task that comes to name the purged one AFTER the
 // purge was decided and before it lands — a relation, a dependency or a child
