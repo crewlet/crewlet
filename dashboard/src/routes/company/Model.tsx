@@ -38,7 +38,8 @@ import {
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { GridColumn } from "~/app/frame/DataGrid.tsx";
-import { useAgents, useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { useEngineHealth } from "~/lib/engineHealth.ts";
+import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { eventHistoryLabel, fmtElapsed, plural, tsKey } from "~/lib/format.ts";
