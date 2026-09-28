@@ -105,7 +105,9 @@
 //   - A holder whose node membership removed is dropped. Its register row
 //     still pins the partition's logs until an operator evicts it.
 //   - A serving holder whose lease says it is draining or released is leaving
-//     on its own, and the map says so: a drain is never reversed. So is a
+//     on its own, and the map says so: a drain is never reversed — the last
+//     server's included, since the map never RETIRES the last server but
+//     cannot keep routing to one that has stopped serving. So is a
 //     joiner that says so having read the map that named it — it gave the
 //     join up — but never one that has not: that is an earlier tenure's
 //     word, and a rejoin read as a leave would never finish.
@@ -128,7 +130,14 @@
 //     node never deletes a partition file on its own, so the maintainer and
 //     a node cannot reach opposite conclusions about one.
 //   - A leaving holder the target wants again, and whose lease still says it
-//     serves, is serving again — the cheapest copy there is.
+//     serves, is serving again — the cheapest copy there is. So is one the
+//     target does not want, while NOBODY ELSE SERVES the partition, whose
+//     lease still says it serves having read the map that made it a leaver:
+//     the last server of a partition whose drain a restart cut short, its
+//     own check of the leave refusing it. It is the partition's only copy,
+//     and left leaving it would be one routers have nowhere to send the
+//     partition to and a joiner no donor to fetch from; serving, it is let
+//     go like any server, once the target serves.
 //   - A joiner the target moved away from before it served is withdrawn at
 //     once: it served nothing, and left to finish, one stuck with no donor
 //     would hold its node's one join for ever.

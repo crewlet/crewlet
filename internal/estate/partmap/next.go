@@ -372,6 +372,7 @@ func (c *converging) settle(g int) {
 		c.changed = true
 	}
 
+	unserved := servers(p) == 0
 	for i := range p.Holders {
 		h := &p.Holders[i]
 		said, _ := c.says(h.Node, g)
@@ -380,6 +381,20 @@ func (c *converging) settle(g int) {
 			// 6. Wanted again, and it has not started to leave: the
 			// cheapest copy there is, the one already serving — on
 			// the word of a node the tick counts able.
+			c.set(h, Serving)
+		case h.State == Leaving && unserved && said == PartServing && c.able[h.Node] &&
+			c.acted(h.Node, h.Since):
+			// 6'. Serving what NOBODY ELSE SERVES, wanted or not, having
+			// read the map that made it a leaver: its own check of the
+			// leave refused it — the last server of a partition whose
+			// drain a restart cut short, before any other copy served
+			// — so it is the partition's only copy, and left leaving,
+			// routers would have nowhere to send the partition while
+			// it answers for it, and a joiner no donor to fetch from,
+			// for as long as it stayed up. Serving again, it is let go
+			// like any server the target does not name: under the two
+			// conditions, once the target serves — which is also why
+			// this and that never both hold, and nothing flaps.
 			c.set(h, Serving)
 		case h.State == Joining && !inTarget(h.Node) && said != PartServing:
 			// 7. A joiner the target moved away from before it served

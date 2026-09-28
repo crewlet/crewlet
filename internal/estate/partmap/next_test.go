@@ -425,6 +425,119 @@ func TestTheLastServerIsNeverLetGo(t *testing.T) {
 	}
 }
 
+// THE LAST SERVER RESTARTING MID-MOVE SERVES AGAIN. A partition is moved off
+// its one server, A, onto B, whose join has not finished. A shuts down and its
+// lease says it is draining the partition: the map writes that down, and
+// nobody serves it. A comes back, reads the map that says it is leaving, and
+// its own check of the leave refuses it — B does not serve — so its lease says
+// it serves, at that map's epoch. A copy that serves and that nobody else
+// serves is the partition's only one, so the map lists it serving again,
+// whether the target names it or not: left leaving, routers would have
+// nowhere to send the partition while A answers for it, and B no donor to
+// join from, for as long as A stayed up. Once B serves, A goes under the two
+// conditions like any server the target does not name.
+//
+// Only at A's word having read the map that made it a leaver: a serving from
+// before that is a node that has not seen its leave yet, and whose next word
+// is the one to go by.
+func TestTheLastServerRestartingMidMoveServesAgain(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		behind bool // A's serving names an epoch before its leave
+		want   HolderState
+	}{
+		"having read its leave":    {want: Serving},
+		"before reading its leave": {behind: true, want: Leaving},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := settled(t, smallLayout, 1, "data-a", "data-b")
+			g, p := s.targetedAt("data-a")
+			id := s.state.Map.Partitions[g].ID
+			next, err := Move(s.state, p, "data-a", "op", "hot disk", s.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.state = next
+			s.tick()
+			if got := s.holder(g, "data-b").State; got != Joining {
+				t.Fatalf("B is %s after the move, want joining", got)
+			}
+
+			a := s.nodes["data-a"]
+			a.meta.Partitions[id] = PartDraining
+			a.meta.MapGeneration, a.meta.MapEpoch = s.state.Map.Generation, s.state.Map.Epoch
+			s.tick()
+			if got := s.holder(g, "data-a"); got.State != Leaving {
+				t.Fatalf("A, draining on its own, is %s", got.State)
+			}
+			leftAt := s.holder(g, "data-a").Since
+
+			a.meta.Partitions[id] = PartServing
+			a.meta.MapEpoch = leftAt
+			if c.behind {
+				a.meta.MapEpoch = leftAt - 1
+			}
+			for range 3 {
+				s.tick()
+			}
+			if got := s.holder(g, "data-a").State; got != c.want {
+				t.Fatalf("A, back and serving the partition nobody else serves, is %s, want %s "+
+					"(serving %v)", got, c.want, s.state.Map.Serving(p))
+			}
+			if c.behind {
+				return
+			}
+			if got := s.state.Map.Serving(p); !slices.Equal(got, []string{"data-a"}) {
+				t.Fatalf("%s is served by %v, want A", p, got)
+			}
+			s.settle(50)
+			s.converged()
+			if got := s.state.Map.Serving(p); !slices.Equal(got, []string{"data-b"}) {
+				t.Fatalf("%s is served by %v after the move settled, want B", p, got)
+			}
+		})
+	}
+}
+
+// A LEAVER THAT STILL SERVES STAYS LEAVING WHILE ANOTHER COPY SERVES. Its own
+// check of the leave may refuse it on a view a beat older than the map — so
+// its lease says it serves, at the epoch that made it a leaver — but with the
+// target serving, the partition has a server, and the leave stands: the node
+// drains on its next check. Taken back, it would be retired again in the same
+// tick and restamped, and the map would move its epoch every tick for as long
+// as the node's view lagged.
+func TestALeaverThatStillServesStaysLeavingWhileAnotherServes(t *testing.T) {
+	t.Parallel()
+	s := settled(t, smallLayout, 1, "data-a", "data-b")
+	g, p := s.targetedAt("data-a")
+	next, err := Move(s.state, p, "data-a", "op", "hot disk", s.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.state = next
+	for round := 0; ; round++ {
+		if round > 50 {
+			t.Fatal("A was never told to leave")
+		}
+		s.tick()
+		if s.holder(g, "data-a").State == Leaving {
+			break
+		}
+		s.act()
+	}
+	a := s.nodes["data-a"]
+	a.meta.MapGeneration, a.meta.MapEpoch = s.state.Map.Generation, s.state.Map.Epoch
+	if said := a.meta.Partitions[s.state.Map.Partitions[g].ID]; said != PartServing {
+		t.Fatalf("A says %q of %s, want serving", said, p)
+	}
+	epoch := s.state.Map.Epoch
+	if s.tick() {
+		t.Fatalf("a tick with the target serving changed the map: A is %s at epoch %d, "+
+			"from epoch %d", s.holder(g, "data-a").State, s.state.Map.Epoch, epoch)
+	}
+}
+
 // A JOINER IS PROMOTED AT ITS OWN WORD, AT THE EPOCH THAT NAMED IT: its lease
 // says it serves the partition, and names this map's generation at an epoch
 // at least the one that named it — never an older tenure's serving, and never
