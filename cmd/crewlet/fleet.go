@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
 // `crewlet fleet broker` — the fleet broker's membership, and the removal of a
@@ -82,7 +81,9 @@ type brokerView struct {
 	Kind     string `json:"kind"`
 	External bool   `json:"external"`
 	Nodes    []struct {
-		Node  string   `json:"node"`
+		Node string `json:"node"`
+		// Peer is the id the group counts the node by, were it a voter.
+		Peer  string   `json:"peer"`
 		Kind  string   `json:"kind"`
 		Roles []string `json:"roles"`
 	} `json:"nodes"`
@@ -158,14 +159,15 @@ func renderBroker(w io.Writer, v brokerView) error {
 	}
 	fmt.Fprintln(w)
 
-	// A VOTER IS MATCHED TO ITS NODE BY PEER ID, as the engine matches
-	// them: the name is only what the answering member has heard, and a
-	// voter whose name it has not is still the node whose id hashes to it.
+	// A VOTER IS MATCHED TO ITS NODE BY PEER ID, the one the node's row
+	// carries, as the engine matches them: the name is only what the
+	// answering member has heard, and a voter whose name it has not is
+	// still the node whose id hashes to it.
 	live := map[string]bool{}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "NODE\tADVERTISES\tROLES\tVOTER\tPEER")
 	for _, n := range v.Nodes {
-		peer := jetstream.PeerIDOf(n.Node)
+		peer := n.Peer
 		live[peer] = true
 		voter := voterOf(v.Group, peer)
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", n.Node, n.Kind,

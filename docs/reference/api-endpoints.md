@@ -2941,17 +2941,18 @@ within five seconds is absent with `group_error` saying why, never an empty one.
 The group counts each voter by its raft **peer id**, which nats-server derives
 from the server's name — the node id. A member learns another's name only from
 that server itself, so a voter whose survivors have restarted since it died is
-listed with no `name` at all, by its `peer` alone; the two records are held
-against each other by peer id, so such a voter is still recognised as the live
-node it is where one is.
+listed with no `name` at all, by its `peer` alone; each node row carries the
+`peer` it is counted by, and the two records are held against each other by
+peer id, so such a voter is still recognised as the live node it is where one
+is.
 
 ```json
 {
   "node": "node-a", "kind": "member", "external": false,
   "nodes": [
-    {"node": "node-a", "kind": "member", "roles": ["data", "ingress", "seats", "workers"]},
-    {"node": "old-1", "kind": "unknown", "roles": ["data", "ingress", "seats", "workers"]},
-    {"node": "sat-eu-1", "kind": "leaf", "roles": ["seats"]}
+    {"node": "node-a", "peer": "ePFsSWs4", "kind": "member", "roles": ["data", "ingress", "seats", "workers"]},
+    {"node": "old-1", "peer": "mTNLbbt3", "kind": "unknown", "roles": ["data", "ingress", "seats", "workers"]},
+    {"node": "sat-eu-1", "peer": "zYqdsRpE", "kind": "leaf", "roles": ["seats"]}
   ],
   "group": {"cluster": "acme", "leader": "node-a", "peers": [
     {"name": "", "peer": "X57jblDH", "current": false, "offline": true, "active": 7200000000000},

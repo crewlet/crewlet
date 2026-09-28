@@ -144,6 +144,13 @@ type BrokerFinding struct {
 // BrokerNode is one live node's broker, as its presence advertises it.
 type BrokerNode struct {
 	Node string `json:"node"`
+	// Peer is the raft peer id the metadata group counts this node by when
+	// it is a voter ([jetstream.PeerIDOf] of its node id) — what a client
+	// matches a voter to its node by, since the voter's name is only what
+	// the answering member has heard. Carried rather than left to each
+	// client to derive, because the derivation is nats-server's and a
+	// browser has no synchronous hash to repeat it with.
+	Peer string `json:"peer"`
 	// Kind is the advertised kind as an operator reads it — "unknown" for
 	// a presence that does not say.
 	Kind  string   `json:"kind"`
@@ -513,7 +520,8 @@ func (f *FleetBroker) List(ctx context.Context) (BrokerView, error) {
 	for _, id := range sortedProfileIDs(live) {
 		profile := live[id]
 		view.Nodes = append(view.Nodes, BrokerNode{
-			Node: id, Kind: profile.Broker.String(), Roles: profile.Roles.Names(),
+			Node: id, Peer: jetstream.PeerIDOf(id), Kind: profile.Broker.String(),
+			Roles: profile.Roles.Names(),
 		})
 	}
 	if f.e.profile.Broker == placement.BrokerClient {

@@ -5,6 +5,7 @@
   "nodes": [
     {
       "node": "node-a",
+      "peer": "ePFsSWs4",
       "kind": "member",
       "roles": [
         "data",
@@ -15,6 +16,7 @@
     },
     {
       "node": "node-b",
+      "peer": "NrtCLpuY",
       "kind": "member",
       "roles": [
         "data",
@@ -23,6 +25,7 @@
     },
     {
       "node": "old-1",
+      "peer": "mTNLbbt3",
       "kind": "unknown",
       "roles": [
         "data",
@@ -33,6 +36,7 @@
     },
     {
       "node": "sat-eu-1",
+      "peer": "zYqdsRpE",
       "kind": "leaf",
       "roles": [
         "seats"

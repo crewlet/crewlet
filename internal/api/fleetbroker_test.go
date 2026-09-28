@@ -193,10 +193,12 @@ func TestTheBrokerAnswerFixtureIsTheEnginesOwn(t *testing.T) {
 	view := engine.BrokerView{
 		Node: "node-a", Kind: "member",
 		Nodes: []engine.BrokerNode{
-			{Node: "node-a", Kind: "member", Roles: []string{"data", "ingress", "seats", "workers"}},
-			{Node: "node-b", Kind: "member", Roles: []string{"data", "seats"}},
-			{Node: "old-1", Kind: "unknown", Roles: []string{"data", "ingress", "seats", "workers"}},
-			{Node: "sat-eu-1", Kind: "leaf", Roles: []string{"seats"}},
+			{Node: "node-a", Peer: peer("node-a"), Kind: "member",
+				Roles: []string{"data", "ingress", "seats", "workers"}},
+			{Node: "node-b", Peer: peer("node-b"), Kind: "member", Roles: []string{"data", "seats"}},
+			{Node: "old-1", Peer: peer("old-1"), Kind: "unknown",
+				Roles: []string{"data", "ingress", "seats", "workers"}},
+			{Node: "sat-eu-1", Peer: peer("sat-eu-1"), Kind: "leaf", Roles: []string{"seats"}},
 		},
 		Group: &jetstream.MetaGroup{Cluster: "acme", Leader: "node-a", Peers: []jetstream.MetaPeer{
 			{Name: "node-a", Peer: peer("node-a"), Self: true, Leader: true, Current: true},

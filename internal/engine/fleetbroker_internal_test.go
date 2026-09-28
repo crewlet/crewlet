@@ -194,6 +194,9 @@ func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 	kinds := map[string]string{}
 	for _, n := range view.Nodes {
 		kinds[n.Node] = n.Kind
+		if n.Peer != jetstream.PeerIDOf(n.Node) {
+			t.Errorf("%s's row names peer %q, want the id the group counts it by", n.Node, n.Peer)
+		}
 	}
 	if kinds["old-1"] != "unknown" || kinds["leaf-1"] != "leaf" || kinds["node-a"] != "member" {
 		t.Errorf("advertised kinds %v", kinds)
