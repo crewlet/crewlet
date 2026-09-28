@@ -46,17 +46,6 @@
 // as nobody — and never a person whose document failed to decode, which is the
 // unknown answer and a 503 wherever it reaches a request.
 //
-// # The FIRST person is the one enrolment arbitrated on one subject
-//
-// Person subjects never contend, which is right for every enrolment but one:
-// the person a one-time founder code creates carries the whole ceiling, so two
-// founders redeeming two codes at once must not both land. A founding
-// therefore TAKES the exemption on the company's one bootstrap subject before
-// it claims anything, and ends every earlier attempt — a removal on that
-// attempt's own person subject, contending with the record that would make it
-// the founder — before it claims the address an abandoned attempt may still
-// hold. founding.go is the whole state machine.
-//
 // # What a record states that it is not the subject of
 //
 // Every record declares a SCOPE — the set of identity BUCKETS its apply may
@@ -199,12 +188,11 @@ const (
 	// called a posture. So the kind is named for what it DOES, and the
 	// counter keeps the name the bearer already spells it by.
 	//
-	// ONE OBJECT, for [KindBootstrap]'s reason turned round: two operators
-	// invalidating the company's sessions must contend, because the whole
-	// value of the gesture is that nothing issued before it survives, and
-	// two concurrent bumps that did not contend would each read the same
-	// current value and write the same new one — leaving every cookie
-	// minted between them valid.
+	// ONE OBJECT, DELIBERATELY: two operators invalidating the company's
+	// sessions must contend, because the whole value of the gesture is that
+	// nothing issued before it survives, and two concurrent bumps that did
+	// not contend would each read the same current value and write the same
+	// new one — leaving every cookie minted between them valid.
 	//
 	// IT INSTALLS A GATE ([OpInvalidate]), which is what buys it the root
 	// scope: a node that could not decode it would go on honouring every
@@ -212,20 +200,6 @@ const (
 	// that, and there is no bucket to file it under because it is about
 	// nobody in particular.
 	KindInvalidation ObjectKind = "invalidation"
-
-	// KindBootstrap is the company's FIRST-PERSON bootstrap, on ONE
-	// subject for the whole domain, with no id.
-	//
-	// ONE OBJECT, DELIBERATELY: a bootstrap code is what turns an engine
-	// that nobody can sign in to into one with an administrator, and the
-	// person it creates carries the whole ceiling, so exactly one may ever
-	// be created. Sharing one subject means two foundings TAKING codes
-	// contend and exactly one holds the first-person exemption at a time,
-	// which is the whole property — every mint, take and withdrawal reads
-	// in order beside it — and it costs nothing, because this is the
-	// rarest write the company ever makes. Minting is deliberately NOT
-	// exclusive: a fleet offers one code per node (see founding.go).
-	KindBootstrap ObjectKind = "bootstrap"
 
 	// KindSweep is the retention sweep for ONE bucket, by the bucket
 	// number.
@@ -272,7 +246,7 @@ const (
 	KindBarrier ObjectKind = "barrier"
 )
 
-// ObjectKinds are the eleven, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the ten, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies,
@@ -286,8 +260,7 @@ const (
 // rather than a domain.
 var ObjectKinds = []ObjectKind{
 	KindPerson, KindEmail, KindLogin, KindSeat, KindSession,
-	KindInvalidation, KindBootstrap, KindSweep, KindEviction,
-	KindGeneration, KindBarrier,
+	KindInvalidation, KindSweep, KindEviction, KindGeneration, KindBarrier,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -296,7 +269,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// TEN OF ELEVEN DO. The barrier shares one subject across the whole domain, so
+// NINE OF TEN DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one and write an anchor row per read into the transaction holding this
 // store's only writer.
@@ -304,13 +277,12 @@ func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
 
 // Identified reports whether this kind's subject carries an id.
 //
-// EIGHT OF ELEVEN DO. The bootstrap, the invalidation and the barrier are the
-// three kinds with exactly one object in the whole domain, and each is a
-// singleton for a reason stated at its constant rather than because an id was
-// hard to choose.
+// EIGHT OF TEN DO. The invalidation and the barrier are the two kinds with
+// exactly one object in the whole domain, and each is a singleton for a reason
+// stated at its constant rather than because an id was hard to choose.
 func (k ObjectKind) Identified() bool {
 	switch k {
-	case KindBootstrap, KindInvalidation, KindBarrier:
+	case KindInvalidation, KindBarrier:
 		return false
 	}
 	return true
@@ -319,7 +291,7 @@ func (k ObjectKind) Identified() bool {
 // RootScoped reports whether a record on this kind may state the whole estate
 // as its scope.
 //
-// FOUR OF ELEVEN MAY, and it is the tightest rule in this package because the
+// FOUR OF TEN MAY, and it is the tightest rule in this package because the
 // cost of the root term here is the highest in the tree: a deferred record at
 // the root blocks every read whose closure it covers, which is every read in
 // the domain — so one record a node cannot decode would freeze every
@@ -336,12 +308,6 @@ func (k ObjectKind) Identified() bool {
 // must: it installs a gate too, so it is never deferred, and it is about
 // everybody — a bucket would be a claim that it ends one sixty-fourth of the
 // company's sessions.
-//
-// THE BOOTSTRAP MAY NOT, although it is the other kind with no id and would
-// be the natural place to reach for "the whole estate". It writes a row like
-// any other record and it is deferrable like any other record, so it takes
-// [BootstrapBucket] — the bucket of its own subject — and a node that cannot
-// decode it blocks a sixty-fourth of the domain rather than all of it.
 func (k ObjectKind) RootScoped() bool {
 	switch k {
 	case KindInvalidation, KindEviction, KindGeneration, KindBarrier:
@@ -393,9 +359,6 @@ func SeatSubject(seatID string) Subject {
 func SessionSubject(lineage string) Subject {
 	return Subject{Kind: KindSession, ID: lineage}
 }
-
-// BootstrapSubject is the company's one bootstrap.
-func BootstrapSubject() Subject { return Subject{Kind: KindBootstrap} }
 
 // InvalidationSubject is the company's one session-invalidation counter.
 func InvalidationSubject() Subject { return Subject{Kind: KindInvalidation} }
@@ -463,8 +426,9 @@ func (s Subject) Validate() error {
 			s.Kind)
 	}
 	if s.ID == "" && s.Kind.Identified() {
-		return fmt.Errorf("iamdomain: a %s subject needs an id — the bootstrap "+
-			"and the barrier are the only kinds with exactly one object", s.Kind)
+		return fmt.Errorf("iamdomain: a %s subject needs an id — the "+
+			"invalidation and the barrier are the only kinds with exactly one "+
+			"object", s.Kind)
 	}
 	if strings.ContainsAny(s.ID, " \t\n*>") {
 		return fmt.Errorf("iamdomain: subject id %q carries whitespace or a "+

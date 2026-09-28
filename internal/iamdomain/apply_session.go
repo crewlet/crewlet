@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// SESSIONS AND THE BOOTSTRAP: the two kinds whose rows are about getting in.
+// SESSIONS: the rows that say who is signed in.
 
 // applySession dispatches the ops on [KindSession].
 //
@@ -98,72 +98,4 @@ func (a *Applier) writeSessionClose(ctx context.Context, tx *sql.Tx,
 	}
 	written, _ := result.RowsAffected()
 	return int(written), nil
-}
-
-// applyBootstrap writes the company's one way in before it has anybody.
-//
-// ONE SUBJECT FOR THE WHOLE DOMAIN, so every code's life reads in order and two
-// foundings taking codes contend: exactly one attempt at a time may hold the
-// exemption that creates a person carrying the whole ceiling. What the apply
-// writes is one code's row; everything that decides WHICH record may be
-// written is the writer's (founding.go).
-func (a *Applier) applyBootstrap(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
-	if at.record.Op != OpBootstrap {
-		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on the "+
-			"bootstrap, which this build has no case for", at.position,
-			at.record.Op)
-	}
-	bootstrap, err := DecodeBootstrapDoc(at.record.Mutation)
-	if err != nil {
-		return 0, fmt.Errorf("iamdomain: the bootstrap record at %s: %w",
-			at.position, err)
-	}
-	document, err := EncodeBootstrapDoc(bootstrap)
-	if err != nil {
-		return 0, fmt.Errorf("iamdomain: re-encode the bootstrap at %s: %w",
-			at.position, err)
-	}
-	// A MINT, A TAKE AND A WITHDRAWAL ARE ONE STATEMENT, distinguished by
-	// what the payload carries: a mint names a verifier and no person, a
-	// founding's take names the person it creates, a withdrawal says so.
-	// The whole life of the one bootstrap object sits consecutively on
-	// one subject, so an operator reads it in order whatever each record
-	// is called.
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO iam_bootstrap_codes
-			(id, verifier, expires_at, redeemed_at, person_id, minted_by,
-			 bucket, created_at, version, document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			redeemed_at = excluded.redeemed_at,
-			person_id   = excluded.person_id,
-			version     = excluded.version,
-			document    = excluded.document
-		WHERE excluded.version > iam_bootstrap_codes.version`,
-		bootstrap.ID, []byte(bootstrap.Verifier), millis(bootstrap.ExpiresAt),
-		redeemedAt(at, bootstrap), bootstrap.Person, bootstrap.MintedBy,
-		int64(BootstrapBucket()), at.unix(), at.packed, document)
-	if err != nil {
-		return 0, fmt.Errorf("iamdomain: write the bootstrap code: %w", err)
-	}
-	written, _ := result.RowsAffected()
-	return int(written), nil
-}
-
-// redeemedAt is the broker instant a bootstrap was spent, or zero.
-//
-// DERIVED FROM THE PAYLOAD rather than carried as its own field, because the
-// two would then be able to disagree: a record naming a person with no
-// redemption instant, or an instant with nobody behind it, are both states the
-// estate has no reading for.
-//
-// SPENT COVERS BOTH WAYS A CODE STOPS BEING TAKEABLE — a founding took it, or
-// an operator superseded it — and the row keeps WHICH: `person_id` is set on
-// the first and empty on the second, and the document says `withdrawn` on the
-// second.
-func redeemedAt(at applyContext, bootstrap Bootstrap) int64 {
-	if bootstrap.Person == "" && !bootstrap.Withdrawn {
-		return 0
-	}
-	return at.unix()
 }

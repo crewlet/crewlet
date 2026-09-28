@@ -260,7 +260,6 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 			"bucket"},
 		"iam_credentials":        {"bucket"},
 		"iam_invites":            {"bucket"},
-		"iam_bootstrap_codes":    {"bucket"},
 		"iam_sessions":           {"bucket"},
 		"iam_revocation_epochs":  {"bucket"},
 		"iam_session_generation": {"generation"},

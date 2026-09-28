@@ -52,8 +52,6 @@ func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 			iamdomain.PeopleScope("p1")},
 		iamdomain.KindInvalidation: {iamdomain.InvalidationSubject(),
 			iamdomain.RootScope()},
-		iamdomain.KindBootstrap: {iamdomain.BootstrapSubject(),
-			iamdomain.BucketScope(iamdomain.BootstrapBucket())},
 		iamdomain.KindSweep: {iamdomain.SweepSubject(17),
 			iamdomain.BucketScope(17)},
 		iamdomain.KindBarrier: {iamdomain.BarrierSubject(),
@@ -324,21 +322,6 @@ func TestValidateRefusesAScopeAWriterCouldNotHaveMeant(t *testing.T) {
 				t.Errorf("a writer was allowed to state %+v", scope)
 			}
 		})
-	}
-	// THE BOOTSTRAP MAY NOT, although it is the other kind with no id and
-	// is the natural place to reach for "the whole estate". It writes a row
-	// like any other record and is deferrable like any other record, so it
-	// takes the bucket of its own subject and a node that cannot decode it
-	// blocks a sixty-fourth of the domain rather than all of it.
-	if err := iamdomain.RootScope().Validate(
-		iamdomain.BootstrapSubject()); err == nil {
-		t.Error("the bootstrap was allowed to claim the whole estate — one " +
-			"undecodable bootstrap record would then freeze every login in " +
-			"the company")
-	}
-	if err := iamdomain.BucketScope(iamdomain.BootstrapBucket()).Validate(
-		iamdomain.BootstrapSubject()); err != nil {
-		t.Errorf("the bootstrap was refused its own bucket: %v", err)
 	}
 	// And the kinds that MAY state the root do.
 	for _, subject := range []iamdomain.Subject{

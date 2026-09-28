@@ -217,80 +217,79 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	}
 }
 
-// THE FIRST PERSON MAY CARRY THE CEILING, and the exemption closes behind them.
-func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
+// THE FIRST PERSON IS INVITED UNDER A TIER A TOKEN, on an estate with nobody
+// in it, and carries what the token could confer.
+//
+// There is no exemption for them. A company with nobody in it still holds the
+// deployment's own token, which is a party like any other: its invitation is
+// held to its grants, and the node's own writer redeems it on the invitation's
+// authority exactly as it redeems every later one. Nothing on the way may ask
+// for somebody to be enrolled already — that would be a company nobody could
+// ever enter.
+//
+// Mutation: hold the invitation to an enrolled issuer and the first issue is
+// refused; confer the node writer's own grants at the redemption and the
+// founder is refused the ceiling.
+func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	mint := func(id string, expires time.Time) {
-		t.Helper()
-		if err := rig.draining(func() error {
-			_, err := rig.writer.MintBootstrap(rig.t.Context(),
-				iamdomain.BootstrapMint{
-					ID: id, Verifier: id, MintedBy: "node-a",
-					ExpiresAt: expires, OpID: "op-mint-" + id,
-					Reason: "a fresh estate",
-				})
-			return err
-		}); err != nil {
-			t.Fatalf("mint %s: %v", id, err)
-		}
-		rig.drain()
+	if anybody, err := rig.reader(t).AnyPerson(rig.t.Context()); err != nil || anybody {
+		t.Fatalf("the rig's estate is not empty (%v, %v)", anybody, err)
 	}
-	// THE FOUNDER IS THE CODE'S, derived and never chosen — the founding
-	// refuses any other person — so a code nobody minted names the one its
-	// digest would derive, and is refused as dead before that matters.
-	first := func(code, login string) error {
-		held, err := rig.reader(t).BootstrapCode(rig.t.Context(), code)
-		if err != nil {
-			t.Fatalf("read code %s: %v", code, err)
-		}
-		person := held.FounderID()
-		if held.ID == "" {
-			person = iamdomain.BootstrappedPersonID(code, time.Time{})
-		}
-		return rig.draining(func() error {
-			_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
-				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
-				Name: "The founder", Email: login + "@example.com",
-				Login:  login + ".founder",
-				Grants: iam.AllGrants, Colleague: iam.ColleagueWrite,
-				BootstrapCode: code,
-				OpID:          "op-first-" + person, Reason: "the first operator",
-			})
-			return err
+	token := rig.writer.As(principalNamed("token:ops", iam.KindMachine, iam.AllGrants))
+	var issued iamdomain.InviteIssued
+	if err := rig.draining(func() error {
+		var err error
+		issued, err = token.Invite(rig.t.Context(), iamdomain.InviteMint{
+			Email: "founder@example.com", Grants: iam.AllGrants,
+			Colleague: iam.ColleagueWrite,
+			ExpiresAt: brokerAt.Add(168 * time.Hour),
+			OpID:      operationKey(), Reason: "the first person",
 		})
+		return err
+	}); err != nil {
+		t.Fatalf("a Tier A token could not invite the first person into an "+
+			"empty estate: %v", err)
 	}
-
-	// A CODE NOBODY MINTED, and one that has aged out, are nobody's way in,
-	// even on an empty estate.
-	if err := first("no-such-code", "ghost"); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Errorf("a code that is not on the log created the first person (%v)",
-			err)
+	rig.drain()
+	person, err := iamdomain.InvitedPersonID(issued.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	mint("stale-code", brokerAt.Add(-time.Minute))
-	if err := first("stale-code", "late"); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Errorf("an aged-out code created the first person (%v)", err)
-	}
-
-	mint("live-code", brokerAt.Add(24*time.Hour))
-	if err := first("live-code", "founder"); err != nil {
-		t.Fatalf("the first person was refused the ceiling on a live code: "+
-			"%v — the node's writer could never confer it on its own grants, "+
-			"and the code is the one stated exemption", err)
-	}
-	// THE EXEMPTION IS CLOSED THE MOMENT SOMEBODY EXISTS: the same code
-	// presented again names the same founder, who is now enrolled, and is
-	// answered as a company that has started rather than enrolled twice.
-	if err := first("live-code", "second"); !errors.Is(err, iamdomain.ErrRefused) ||
-		!errors.Is(err, iamdomain.ErrBootstrapClosed) {
-		t.Errorf("a second person was created on the first-person exemption, "+
-			"or refused as anything but a company that has started (%v)", err)
-	}
-	// AND WITHOUT THE CODE the node writer confers only what it holds.
-	person := uuid.Must(uuid.NewV7()).String()
 	if err := rig.draining(func() error {
 		_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+			Name: "The founder", Email: "founder@example.com",
+			Login:  "the.founder",
+			Grants: iam.AllGrants, Colleague: iam.ColleagueWrite,
+			Invitation: issued.ID, InvitationSecret: issued.Secret,
+			OpID: "op-redeem-" + person, Reason: "redeemed the first invitation",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("the first person was refused the grants their invitation "+
+			"carried: %v — the node's writer could never confer them on its "+
+			"own, and the invitation is the authority", err)
+	}
+	rig.drain()
+	held, err := rig.reader(t).PersonByLogin(rig.t.Context(), "the.founder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(held.Grants) != len(iam.AllGrants) {
+		t.Errorf("the first person carries %v, want every grant the token "+
+			"conferred", held.Grants)
+	}
+	if anybody, err := rig.reader(t).AnyPerson(rig.t.Context()); err != nil || !anybody {
+		t.Errorf("the estate still reads as empty once the first person is "+
+			"in (%v, %v)", anybody, err)
+	}
+
+	// AND WITHOUT AN INVITATION the node writer confers only what it holds.
+	nobody := uuid.Must(uuid.NewV7()).String()
+	if err := rig.draining(func() error {
+		_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
+			PersonID: nobody, Kind: iam.KindPerson, Stage: iam.StageActive,
 			Name: "Nobody", Email: "nobody@example.com", Login: "nobody.here",
 			Grants: iam.AllGrants,
 			OpID:   "op-nobasis", Reason: "no basis",
@@ -298,7 +297,7 @@ func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
 		return err
 	}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("the node's own writer conferred the whole ceiling with no "+
-			"code behind it (%v)", err)
+			"invitation behind it (%v)", err)
 	}
 }
 

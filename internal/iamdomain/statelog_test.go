@@ -124,12 +124,6 @@ func suitePayload(kind iamdomain.ObjectKind, id string) (
 			V: iamdomain.DocumentVersion, Person: suitePerson, Epoch: 1,
 			AbsoluteExpiresAt: time.Unix(1_800_000_000, 0).UTC(),
 		}, person
-	case iamdomain.KindBootstrap:
-		return iamdomain.OpBootstrap, "", iamdomain.Bootstrap{
-			V: iamdomain.DocumentVersion, ID: "suite-code",
-			Verifier: "sealed:verifier", MintedBy: "suite-node",
-			ExpiresAt: time.Unix(1_800_000_000, 0).UTC(),
-		}, iamdomain.BucketScope(iamdomain.BootstrapBucket())
 	case iamdomain.KindSweep:
 		return iamdomain.OpSweep, "", iamdomain.Sweep{
 			V: iamdomain.DocumentVersion, Bucket: 0,

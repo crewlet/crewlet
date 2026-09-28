@@ -237,9 +237,8 @@ type Session struct {
 	AbsoluteExpiresAt time.Time `json:"absolute_expires_at,omitzero"`
 
 	// ProvedAt is when the holder proved who they are to open this
-	// session — a password and its second factor, an invitation or the
-	// bootstrap code — which is what a
-	// step-up surface asks to be recent.
+	// session — a password and its second factor, or an invitation — which
+	// is what a step-up surface asks to be recent.
 	//
 	// ON THE SESSION AND NOT THE PERSON, because proof is a fact about one
 	// sign-in: a person proving themselves on a laptop proves nothing
@@ -254,8 +253,8 @@ type Session struct {
 	ProvedAt time.Time `json:"proved_at,omitzero"`
 
 	// EnrolmentOnly marks a session that may do nothing but ENROL A SECOND
-	// FACTOR: opened by a password alone — a sign-in, a step-up, an
-	// invitation's redemption or the founding — for a person who holds
+	// FACTOR: opened by a password alone — a sign-in, a step-up or an
+	// invitation's redemption — for a person who holds
 	// none, on a deployment whose `api.auth.local.totp` requires one.
 	//
 	// ON THE SESSION, decided ONCE by the sign-in that opened it, rather
@@ -482,44 +481,6 @@ func (c Claims) Empty() bool {
 	return c.EmailBlind == "" && c.Login == "" && c.SeatID == ""
 }
 
-// Bootstrap is the company's own way in before it has anybody.
-type Bootstrap struct {
-	V int `json:"v"`
-
-	// ID is this code's own id.
-	ID string `json:"id"`
-
-	// Verifier is what a presented code is checked against, never the
-	// code: a code readable out of a replicated database by anyone who can
-	// read a replicated database is not a credential.
-	Verifier string `json:"verifier,omitempty"`
-
-	// MintedBy is the node that issued it, which is what an operator
-	// reading a code they did not expect needs first.
-	MintedBy string `json:"minted_by,omitempty"`
-
-	ExpiresAt time.Time `json:"expires_at,omitzero"`
-
-	// Person is set by a founding's TAKE, naming the person the founding
-	// creates — the first-person exemption is theirs from that record
-	// until the code ages out or the attempt is released.
-	Person string `json:"person,omitempty"`
-
-	// Withdrawn is set by a RE-ISSUE that supersedes this code, which is
-	// the third statement on this subject beside a mint and a take.
-	//
-	// IT IS NOT A TAKE WITH NO PERSON. The two produce the same row state
-	// — spent, no longer takeable — and they are opposite events: one is
-	// somebody setting out to become the founder and the other is an
-	// operator re-issuing because nobody did. An estate that could not
-	// tell them apart would answer "this code was used" about a code
-	// nobody ever typed, which is the sentence an investigation most needs
-	// to be right.
-	Withdrawn bool `json:"withdrawn,omitempty"`
-
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
 // Sweep deletes one bucket's expired rows below a POSITION.
 //
 // A POSITION AND NEVER A CLOCK, which is the whole of why this is a record
@@ -544,10 +505,10 @@ type Sweep struct {
 	Changes  uint64 `json:"changes,omitempty"`
 	Sessions uint64 `json:"sessions,omitempty"`
 
-	// Expired is the instant sessions, invitations and bootstrap codes
-	// are collected against once they are over — and, on a record at
-	// [SweepRecordVersion], redeemed invitations and bootstrap codes and
-	// revoked or expired credentials too — already net of
+	// Expired is the instant sessions and invitations are collected
+	// against once they are over — and, on a record at
+	// [SweepRecordVersion], redeemed invitations and revoked or expired
+	// credentials too — already net of
 	// [SessionRowGrace], so the applier compares and never subtracts.
 	//
 	// THE PUBLISHER READ IT, ONCE, and that is the whole of the clock
@@ -760,26 +721,6 @@ func DecodeRemoval(data []byte) (Removal, error) {
 	return r, nil
 }
 
-// EncodeBootstrapDoc is the bytes the one-time code's document travels as,
-// with every field a newer build wrote folded back in.
-func EncodeBootstrapDoc(b Bootstrap) ([]byte, error) { return jsoncarry.Encode(b, b.Extra) }
-
-// DecodeBootstrapDoc reads the one-time code's document, keeping every field
-// this build has no home for, and refuses one written at a version above
-// [DocumentVersion].
-func DecodeBootstrapDoc(data []byte) (Bootstrap, error) {
-	var b Bootstrap
-	extra, err := jsoncarry.Decode(data, &b, bootstrapFields)
-	if err != nil {
-		return Bootstrap{}, fmt.Errorf("iamdomain: decode a bootstrap: %w", err)
-	}
-	if err := checkVersion(b.V); err != nil {
-		return Bootstrap{}, err
-	}
-	b.Extra = extra
-	return b, nil
-}
-
 // EncodeSweep is the bytes a retention sweep's payload travels as, with every
 // field a newer build wrote folded back in.
 func EncodeSweep(s Sweep) ([]byte, error) { return jsoncarry.Encode(s, s.Extra) }
@@ -900,7 +841,6 @@ var (
 	revocationFields   = jsoncarry.Names(Revocation{})
 	statusFields       = jsoncarry.Names(StatusChange{})
 	removalFields      = jsoncarry.Names(Removal{})
-	bootstrapFields    = jsoncarry.Names(Bootstrap{})
 	sweepFields        = jsoncarry.Names(Sweep{})
 	invalidationFields = jsoncarry.Names(Invalidation{})
 	evictionFields     = jsoncarry.Names(Eviction{})

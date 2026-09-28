@@ -1113,8 +1113,8 @@ func (r *writeRig) dropSeat(handle string) {
 // Both halves matter and the second is what was broken. A party holding the
 // COMPANY's own grant could enrol itself a colleague, which is the escalation
 // this estate exists to close; and the node's own writer — which authors the
-// bootstrap enrolment and the invite redemption on behalf of people with no
-// principal yet — holds fleet:operate, so every one of those paths was
+// invite redemption on behalf of people with no principal yet — holds
+// fleet:operate, so every one of those paths was
 // refused on a real deployment while the surface's own suite, built on a stub
 // writer, stayed green.
 func TestAnAdministrativeRecordNeedsPeopleManageAndNotTheCompanysGrant(t *testing.T) {

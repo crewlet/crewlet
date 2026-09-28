@@ -34,7 +34,6 @@ func TestEveryOmittedNameIsListedInItsDocumentsFieldSet(t *testing.T) {
 		{Revocation{}, revocationFields},
 		{StatusChange{}, statusFields},
 		{Removal{}, removalFields},
-		{Bootstrap{}, bootstrapFields},
 		{Sweep{}, sweepFields},
 		{Invalidation{}, invalidationFields},
 		{Eviction{}, evictionFields},

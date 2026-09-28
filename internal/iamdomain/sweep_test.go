@@ -388,8 +388,8 @@ var _ = context.Background
 // A VERSION-2 SWEEP COLLECTS WHAT WAS SPENT, from the rows AND the document.
 //
 // Version 1 kept every redeemed invitation — with the sealed address it was
-// for — every redeemed bootstrap code, and every revoked or expired credential,
-// verifier and all, for the life of the company. Version 2 collects each a week
+// for — and every revoked or expired credential, verifier and all, for the
+// life of the company. Version 2 collects each a week
 // past the moment it stopped being presentable, which the record's own instant
 // says; anything that stopped more recently, and anything still presentable,
 // stays.
@@ -456,14 +456,6 @@ func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
 						(id, email_blind, redeemed_at, bucket, created_at,
 						 version, document)
 					VALUES (?, ?, ?, ?, 1, 1, x'')`, "invite-"+id, "blind-"+id,
-					redeemed.UnixMilli(), bucket); err != nil {
-					return err
-				}
-				if _, err := tx.ExecContext(t.Context(), `
-					INSERT INTO iam_bootstrap_codes
-						(id, verifier, redeemed_at, bucket, created_at,
-						 version, document)
-					VALUES (?, x'00', ?, ?, 1, 1, x'')`, "code-"+id,
 					redeemed.UnixMilli(), bucket); err != nil {
 					return err
 				}
@@ -546,8 +538,7 @@ func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
 				document, kept)
 		}
 		for table, want := range map[string][]string{
-			"iam_invites":         {"invite-spent-recently"},
-			"iam_bootstrap_codes": {"code-spent-recently"},
+			"iam_invites": {"invite-spent-recently"},
 		} {
 			if got := rig.column(`SELECT id FROM ` + table + ` ORDER BY id`); !slices.Equal(got, want) {
 				t.Errorf("%s holds %v, want %v", table, got, want)

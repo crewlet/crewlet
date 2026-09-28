@@ -1,7 +1,6 @@
 package iamdomain
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -14,8 +13,8 @@ import (
 //
 // An enrolment is a sequence — the address claim, the login claim, the person —
 // and every append names the person id the caller minted. Where the caller is
-// a person holding a one-time credential (an invitation link, the bootstrap
-// code), a FRESH id per attempt makes the sequence impossible to finish once
+// a person holding a one-time credential (an invitation link), a FRESH id per
+// attempt makes the sequence impossible to finish once
 // it has stopped: the first attempt's address claim holds the address for the
 // id it named, and every later attempt names another id, so the retry that
 // would have finished the enrolment is refused as "that address belongs to
@@ -26,12 +25,12 @@ import (
 // of one redemption names one person, a claim its first attempt took is one
 // the retry already holds, and the sequence finishes wherever it stopped. What
 // keeps a derived person single-use is the credential rather than the id — a
-// spent invitation and a spent code are refused before any record is formed.
+// spent invitation is refused before any record is formed.
 //
 // A UUID7, because every person id is one: the directory pages in id order and
 // that order is creation order. Its instant is the credential's own — the
-// invitation's id is a uuid7 minted when it was issued, and a bootstrap code's
-// row carries the broker instant it was minted at — and its random bits are a
+// invitation's id is a uuid7 minted when it was issued — and its random bits
+// are a
 // digest of the credential's identity under a label of their own, so two
 // derivations can never meet and no derivation can meet a minted id except by
 // the collision a uuid7's 74 random bits already rule out.
@@ -49,64 +48,6 @@ func InvitedPersonID(invitationID string) (string, error) {
 			"invitation this build issues is one", invitationID)
 	}
 	return derivedID("invitation", invitationID, instantOf(id)).String(), nil
-}
-
-// BootstrappedPersonID is the person a founding with this bootstrap code
-// creates.
-//
-// mintedAt is the code's own row's instant — the broker's, identical on every
-// node — rather than a clock read at redemption, which would differ on every
-// attempt and derive a different person each time.
-//
-// # It carries the founder SHAPE
-//
-// Its last four bytes are a mark over the rest ([FounderAttempt]), so a person
-// id says by itself that a founding attempt made it. That is what lets the
-// next founding find an earlier attempt's reservation after the code it was
-// taken with has been swept off the log — the reservation outlives the code
-// row by as long as nobody releases it, and a founding that could not
-// recognise it would be refused the founder's own address by it for ever. The
-// three namespaces a login can take are kept apart the same way, by the shape
-// of the value rather than by a lookup somebody has to remember to make.
-func BootstrappedPersonID(codeID string, mintedAt time.Time) string {
-	id := derivedID("bootstrap", codeID, mintedAt)
-	mark := founderMark(id)
-	copy(id[founderMarkAt:], mark[:])
-	return id.String()
-}
-
-// FounderAttempt reports whether a person id has the shape only
-// [BootstrappedPersonID] gives one: a uuid7 whose last four bytes are the
-// mark over the rest.
-//
-// A SHAPE AND NOT A PROOF. Nothing but a founding derives an id carrying it —
-// every other person id is minted fresh or derived from an invitation, and a
-// fresh uuid7 carries it by chance once in four billion — and what reads it
-// only ever releases a RESERVATION on an estate nobody is enrolled in, so a
-// chance match costs one unfinished enrolment its claims and nothing else.
-func FounderAttempt(personID string) bool {
-	id, err := uuid.Parse(personID)
-	if err != nil || id.Version() != 7 || id.String() != personID {
-		return false
-	}
-	mark := founderMark(id)
-	return bytes.Equal(id[founderMarkAt:], mark[:])
-}
-
-// founderMarkAt is where the founder mark starts: the LAST four bytes, which
-// leaves the instant, the version, the variant and forty-two bits of the
-// code's digest ahead of it — enough that two codes minted in the same
-// millisecond derive two people but for a one-in-four-trillion collision.
-const founderMarkAt = 12
-
-// founderMark is the four-byte mark a founder id carries over its first
-// twelve bytes, under a label nothing else derives with.
-func founderMark(id uuid.UUID) [16 - founderMarkAt]byte {
-	sum := sha256.Sum256(append([]byte("crewlet/iam/founder-mark\x00"),
-		id[:founderMarkAt]...))
-	var mark [16 - founderMarkAt]byte
-	copy(mark[:], sum[:])
-	return mark
 }
 
 // CreatedPersonID is the person an administrator's create names, derived from

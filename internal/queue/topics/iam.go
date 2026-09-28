@@ -52,7 +52,7 @@ const (
 // IamLogSubject builds the subject for one claim.
 //
 // An EMPTY id is legal and means a kind with exactly one object, which the
-// bootstrap and the barrier both are. An empty KIND is not: it would publish
+// invalidation and the barrier both are. An empty KIND is not: it would publish
 // to the prefix itself, a real subject inside the wildcard that the applier's
 // switch has no case for, so it answers the empty string and callers must
 // treat that as "not publishable" rather than as a subject.

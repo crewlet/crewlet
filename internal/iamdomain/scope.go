@@ -108,16 +108,6 @@ func BucketOf(personID string) Bucket {
 	return Bucket(h.Sum64() % uint64(Buckets))
 }
 
-// BootstrapBucket is the bucket the company's bootstrap state falls in.
-//
-// The bootstrap has no person, and it still needs a bucket, because the sweep
-// that collects an expired bootstrap code is the same per-bucket sweep that
-// collects everything else — a second mechanism for one table would be a table
-// that stops being swept the day somebody forgets it exists. It is the bucket
-// of the literal subject, so it is a fixed number derived the same way every
-// other one is rather than a constant somebody chose.
-func BootstrapBucket() Bucket { return BucketOf(string(KindBootstrap)) }
-
 // String renders a bucket ZERO-PADDED to two digits.
 //
 // So a subject listing and a scope path both sort the way the buckets do: `07`
@@ -334,8 +324,8 @@ func (s ScopeSet) Validate(subject Subject) error {
 				"this domain queues behind, so the first record a node cannot "+
 				"decode freezes every suspension, every revocation and every "+
 				"login at once — only an eviction and a reanchor may state it, "+
-				"and every other record, the bootstrap's included, enumerates "+
-				"the buckets its apply writes", subject)
+				"and every other record enumerates the buckets its apply "+
+				"writes", subject)
 		}
 		return nil
 	}

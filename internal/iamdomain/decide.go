@@ -68,26 +68,23 @@ func (e *ErrClaimed) Error() string {
 // and no other grant could enrol somebody carrying secrets:read — or enrol a
 // colleague holding everything and sign in as them.
 //
-// TWO ENROLMENTS ARE NOT THE WRITER'S TO AUTHORISE, and each names what is:
-//
-//   - A REDEMPTION ([Enrolment.Invitation]) confers what the INVITATION's
-//     author conferred when they issued it, and was held to their grants then
-//     ([Writer.Invite]). The person record's decide reads the invitation in its
-//     own snapshot and refuses anything it does not cover — more grants, more
-//     reach, a different address, a link already spent or aged out — so the
-//     node that processes a redemption decides nothing a second time.
-//   - THE FIRST PERSON ([Enrolment.BootstrapCode]) is the one stated
-//     exemption: nobody holds a credential yet, so there is nobody whose
-//     grants could bound it, and it is taken by whoever proved they can read
-//     a file on the host. It is TAKEN before anything else, on the company's
-//     one bootstrap subject, which is what makes it exclusive — see
-//     founding.go — and the person record's decide refuses unless this
-//     attempt's take is the current one and nobody else is enrolled, so the
-//     exemption closes the moment anybody exists.
+// ONE ENROLMENT IS NOT THE WRITER'S TO AUTHORISE, and it names what is: a
+// REDEMPTION ([Enrolment.Invitation]) confers what the INVITATION's author
+// conferred when they issued it, and was held to their grants then
+// ([Writer.Invite]). The person record's decide reads the invitation in its
+// own snapshot and refuses anything it does not cover — more grants, more
+// reach, a different address, a link already spent or aged out — so the node
+// that processes a redemption decides nothing a second time.
 //
 // The node's own writer holds fleet:operate and people:manage and nothing
-// else, so on its own authority it may confer those two; everything the
-// bootstrap and a redemption hand out comes from the basis they name.
+// else, so on its own authority it may confer those two; everything a
+// redemption hands out comes from the invitation it names.
+//
+// THERE IS NO EXEMPTION FOR THE FIRST PERSON. A company with nobody in it
+// still holds the Tier A token every serving node requires, and that token is
+// a party like any other: its invitation is held to its grants exactly as an
+// administrator's is, so the first person is invited, and bounded, the way
+// everybody after them is.
 //
 // # A refused enrolment leaves its key, and the key duty collects it
 //
@@ -113,13 +110,11 @@ func (e *ErrClaimed) Error() string {
 // person who could never finish, and the next invitation to that address
 // would be refused as "claimed" by the first.
 //
-// EVERY BASIS IS CHECKED BEFORE THE FIRST CLAIM TOO, exactly as the writer's
+// THE BASIS IS CHECKED BEFORE THE FIRST CLAIM TOO, exactly as the writer's
 // own grants are: the claims go first because they are what can be refused,
-// and a refusal the estate could already establish — a link somebody spent, a
-// code a day old — met only at the person record leaves a reservation holding
-// the caller's own address and login behind it. An invitation's is a read; the
-// first person's is its TAKE, a write, because the take is also what makes it
-// the only founding in progress. The person record's snapshot stays the
+// and a refusal the estate could already establish — a link somebody spent —
+// met only at the person record leaves a reservation holding the caller's own
+// address and login behind it. The person record's snapshot stays the
 // AUTHORITY; what survives the early check is only a race lost between the
 // two, which is the legal residue above.
 func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, error) {
@@ -129,7 +124,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	if err := in.validate(); err != nil {
 		return statelog.Result{}, err
 	}
-	if in.Invitation == "" && in.BootstrapCode == "" {
+	if in.Invitation == "" {
 		// THE WRITER'S OWN AUTHORITY, checked BEFORE the first claim:
 		// it reads nothing, so there is no reason to leave a claimed
 		// address behind a refusal that was knowable up front.
@@ -173,21 +168,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// KEY, too, for the blinder's reason: a refusal after the mint leaves a
 	// key behind for somebody who never existed.
 	basis := w.basisOf(ctx, in, blind)
-	switch {
-	case in.BootstrapCode != "":
-		// THE FIRST PERSON TAKES THE EXEMPTION, which is a write rather
-		// than a read: it is what makes this founding the only one in
-		// progress, and what ends every earlier attempt before this one
-		// claims the address that attempt may still hold. See
-		// [Writer.takeExemption].
-		taken, err := w.takeExemption(ctx, at, in)
-		if err != nil {
-			return statelog.Result{}, err
-		}
-		if taken.Outcome == statelog.OutcomeUnknown {
-			return unresolved(in.OpID), nil
-		}
-	case basis != nil:
+	if basis != nil {
 		// A REDEMPTION'S IS A READ: it decides nothing the record does
 		// not decide again, and makes a refusal the snapshot can already
 		// establish cost nothing but the read.
@@ -294,9 +275,9 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	result, err := w.publishAt(ctx, at,
 		w.request(&rec, in.OpID, statelog.PatternArbitrated, decide))
 	// AN ENROLMENT THAT CONFERS ANYTHING IS A GRANT CHANGE — from nothing
-	// to what it carries — and the first person a bootstrap code creates,
-	// holding the whole ceiling, is the one row of those an audit most
-	// needs to find.
+	// to what it carries — and the first person a company enrols, invited
+	// under the deployment's own token, is the one row of those an audit
+	// most needs to find.
 	if added, _ := grantDelta(nil, in.Grants); len(added) > 0 {
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
 			Person: in.PersonID, Added: added, By: w.Actor,
@@ -319,7 +300,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 // a second request under one derivation, and landing it would rewrite their
 // grants, their name and their credentials with another request's:
 //
-//   - A REDEMPTION is refused outright, as a link or a code already used: the
+//   - A REDEMPTION is refused outright, as a link already used: the
 //     person it created signs in from here on, and a retry answered with a
 //     session would let whoever holds the link and the first password sign in
 //     past a second factor enrolled since, and after a password change.
@@ -334,7 +315,7 @@ func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 	if err != nil || !enrolled {
 		return err
 	}
-	if in.Invitation == "" && in.BootstrapCode == "" {
+	if in.Invitation == "" {
 		applied, err := opApplied(ctx, tx, in.OpID)
 		if err != nil || applied {
 			return err
@@ -364,18 +345,12 @@ func (in *Enrolment) notYetEnrolled(ctx context.Context, tx *sql.Tx,
 // basis rather than learning which step fired.
 //
 //   - A REDEMPTION's link has been used: the person it created is enrolled.
-//   - A BOOTSTRAP's code has created its founder, which is the company having
-//     started.
 //   - AN ADMINISTRATOR'S key already names somebody, and a new person is a new
 //     operation under a new key.
 func (in *Enrolment) alreadyEnrolled() error {
-	switch {
-	case in.Invitation != "":
+	if in.Invitation != "" {
 		return fmt.Errorf("%w: invitation %s has already been used — the "+
 			"person it created is enrolled", ErrRefused, in.Invitation)
-	case in.BootstrapCode != "":
-		return fmt.Errorf("%w: %w: the one-time code already created its "+
-			"person", ErrRefused, ErrBootstrapClosed)
 	}
 	return fmt.Errorf("%w: person %s already exists, and operation %s is not "+
 		"the one that created them — a new person is a new operation under a "+
@@ -418,21 +393,13 @@ func opApplied(ctx context.Context, tx *sql.Tx, opID string) (bool, error) {
 // ONE FUNCTION FOR BOTH READS [Writer.Enrol] makes of an invitation — the
 // advisory one before the first claim and the authoritative one in the person
 // record's snapshot — so the two cannot drift into asking different questions.
-// The first person's early check is its take instead ([Writer.takeable]),
-// which moves the code from live to taken; this is what the person record
-// then asks of that take.
 func (w *Writer) basisOf(ctx context.Context, in Enrolment, blind string) func(*sql.Tx) error {
-	switch {
-	case in.Invitation != "":
-		return func(tx *sql.Tx) error {
-			return w.redeemable(ctx, tx, in, blind)
-		}
-	case in.BootstrapCode != "":
-		return func(tx *sql.Tx) error {
-			return w.bootstrappable(ctx, tx, in)
-		}
+	if in.Invitation == "" {
+		return nil
 	}
-	return nil
+	return func(tx *sql.Tx) error {
+		return w.redeemable(ctx, tx, in, blind)
+	}
 }
 
 // Enrolment is what creating a person needs.
@@ -443,9 +410,9 @@ type Enrolment struct {
 	// every one of them has to name the same person: an id minted inside
 	// the first would not be available to form the second's payload, and
 	// an id minted per append would enrol three people. A redemption
-	// DERIVES it from the credential rather than minting it
-	// ([InvitedPersonID], [BootstrappedPersonID]), so a retry names the
-	// person its first attempt already claimed for.
+	// DERIVES it from the invitation rather than minting it
+	// ([InvitedPersonID]), so a retry names the person its first attempt
+	// already claimed for.
 	PersonID string
 
 	Kind  iam.Kind
@@ -495,11 +462,6 @@ type Enrolment struct {
 	// any other ([Writer.redeemable]).
 	Seat string
 
-	// BootstrapCode is the id of the one-time code this enrolment redeems,
-	// or empty. When set, it is the first person, and the one stated
-	// exemption from the conferral rule — see [Writer.Enrol].
-	BootstrapCode string
-
 	// OpID is the operation id for the whole gesture. Each append derives
 	// its own from it with a suffix, so a retry of the sequence dedupes
 	// step by step rather than all-or-nothing.
@@ -520,10 +482,6 @@ type Enrolment struct {
 // been published.
 func (in Enrolment) validate() error {
 	switch {
-	case in.Invitation != "" && in.BootstrapCode != "":
-		return errors.New("iamdomain: an enrolment redeems an invitation or " +
-			"the one-time code, never both — each is a different authority " +
-			"for what it confers, and one record cannot be bounded by two")
 	case in.Invitation != "" && in.Email == "":
 		return fmt.Errorf("%w: redeeming an invitation enrols the address it "+
 			"was issued to, and this enrolment names none", ErrNotFindable)
@@ -590,27 +548,12 @@ func (in Enrolment) validate() error {
 		// as `anonymous` beside every change they made, and failed
 		// [iam.Principal.Validate] on every request they sent. So every
 		// path that creates a person names one: an administrator types
-		// it, the first operator types it, and an invitation's form
-		// proposes one from the address for the person to keep or change.
+		// it, and an invitation's form proposes one from the address for
+		// the person to keep or change.
 		return fmt.Errorf("%w: enrolling a person needs a login — lowercase "+
 			"segments joined by DOTS (jane.doe). It is the name every change "+
 			"they make is recorded under while they hold no seat, and without "+
 			"one they would be recorded as nobody", ErrInvalidLogin)
-	}
-	if in.BootstrapCode != "" {
-		// THE FOUNDER'S GRANTS ARE BOUNDED BY NO WRITER — that is the
-		// exemption — so the one bound they meet is that this build can
-		// name each of them. It was met only at the person record, after
-		// the take and both claims had landed, which left a reservation
-		// holding the founder's address and login behind a refusal
-		// knowable before anything was written.
-		for _, g := range in.Grants {
-			if !g.Valid() {
-				return fmt.Errorf("%w: %q is not a grant this build knows, "+
-					"and conferring a spelling nothing can check is not "+
-					"conferring the ceiling", ErrRefused, g)
-			}
-		}
 	}
 	return LoginFits(in.Kind, in.Login)
 }
@@ -2697,10 +2640,6 @@ type InviteMint struct {
 // once rather than the design's two, because "on my own record" and "on
 // somebody else's" have the same answer and splitting them is how one of the
 // two arms comes to be checked and the other not.
-//
-// THE BOOTSTRAP IS THE STATED EXEMPTION and it is not reached through here:
-// [Writer.Enrol] creates the first person, while nobody holds a credential at
-// all.
 func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	statelog.Result, error) {
 

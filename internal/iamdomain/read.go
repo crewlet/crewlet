@@ -665,84 +665,56 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	return nil
 }
 
-// AnyPerson reports whether this estate holds anybody at all.
+// AnyPerson reports whether this estate holds anybody at all — whether a
+// person or a machine is enrolled.
 //
-// WHAT IT IS FOR is the bootstrap decision: a fresh deployment's identity
-// estate is empty, and the one-time code that creates the first person must
-// stop working the moment it is not. It is a COUNT rather than a listing
-// precisely because it is asked by an unauthenticated route — the answer is
-// one bit, and a roster is what it must never become.
-//
-// IT IS [anybodyEnrolled], the predicate the person record's own decide and a
-// code's mint are refused on, so the route's open flag, the boot mint and the
-// record cannot disagree about whether the company has started.
-func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
-	var held bool
-	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		var err error
-		held, err = anybodyEnrolled(ctx, tx, "")
-		return err
-	})
-	return held, err
-}
-
-// anybodyEnrolled is THE ONE ANSWER to "has this company started": whether a
-// person or a machine other than `besides` is enrolled, read inside a
-// transaction already open.
-//
-// ONE PREDICATE, and it was four. The first-person route's open flag, the boot
-// path's decision to mint a code, the re-issue's refusal and the enrolment's
-// own check each asked the question for themselves, and three answers
-// disagreed with the fourth: the reads counted every row, so one bootstrap
-// refused after its address claim left a reservation that closed the route for
-// good while the record would still have admitted a founder; and the re-issue
-// asked for an ACTIVE, CREDENTIALLED ADMINISTRATOR, so a company whose only
-// person was suspended was handed a code the record then refused.
+// WHAT IT IS FOR is `/health`'s `identity`: a fresh deployment's identity
+// estate is empty, and an operator looking at one, or a dashboard whose
+// sign-in form nobody can use yet, needs to be told the next step is to
+// invite the first person rather than left looking at a sign-in that fails.
+// It is a COUNT rather than a listing precisely because it is asked by an
+// unauthenticated route — the answer is one bit, and a roster is what it must
+// never become.
 //
 // A RESERVATION IS NOBODY — a claim whose content record has not landed has no
 // kind and may do nothing — and a REMOVED person is nobody, their row a
-// tombstone. A SUSPENDED one is somebody: the company has started, and the way
-// back in for it is an administrator or a Tier A token, never a second founder
-// carrying the whole ceiling.
-//
-// `besides` is the founder a retried bootstrap is creating, whose own row is
-// not "somebody else"; empty asks about everybody.
+// tombstone. A SUSPENDED one is somebody: the company has started.
 //
 // # "Nobody" is an absence, and a retained record can hide somebody
 //
 // SETTLED IS NOT APPLIED: this node's checkpoint moves past a record it
 // RETAINS — a newer build's, one signed under a keyring key it was not
 // restarted with — without writing its rows, so an enrolment it retained reads
-// here exactly like nobody. Answered as nobody, a node holding the first
-// person's enrolment as a retained record would open the founder route and
-// admit a second founder carrying the whole ceiling. So "nobody" is said only
-// where no retained record could be the somebody — the whole deferral index,
-// because a retained enrolment may be in any bucket — and otherwise this is
-// the unknown arm, [statelog.ErrUnavailable], which clears once the node
-// applies what it holds. "Somebody" needs no such proof: a row is a fact.
-func anybodyEnrolled(ctx context.Context, tx *sql.Tx, besides string) (bool, error) {
+// here exactly like nobody. So "nobody" is said only where no retained record
+// could be the somebody — the whole deferral index, because a retained
+// enrolment may be in any bucket — and otherwise this is the unknown arm,
+// [statelog.ErrUnavailable], which clears once the node applies what it holds.
+// "Somebody" needs no such proof: a row is a fact.
+func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
 	var held bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM iam_people
-		  WHERE kind <> '' AND id <> ?)`, besides).
-		Scan(&held); err != nil {
-		return false, fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
-	}
-	if held {
-		return true, nil
-	}
-	retained, err := deferredFor(ctx, tx, "")
-	if err != nil {
-		return false, err
-	}
-	if retained {
-		return false, fmt.Errorf("%w: iamdomain: this node holds a record it "+
-			"could not apply, so its empty directory may be a company whose "+
-			"first person it has not written — ask a node that is not "+
-			"retaining one, or retry once this one applies it",
-			statelog.ErrUnavailable)
-	}
-	return false, nil
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind <> '')`).
+			Scan(&held); err != nil {
+			return fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
+		}
+		if held {
+			return nil
+		}
+		retained, err := deferredFor(ctx, tx, "")
+		if err != nil {
+			return err
+		}
+		if retained {
+			return fmt.Errorf("%w: iamdomain: this node holds a record it "+
+				"could not apply, so its empty directory may be a company "+
+				"whose first person it has not written — ask a node that is "+
+				"not retaining one, or retry once this one applies it",
+				statelog.ErrUnavailable)
+		}
+		return nil
+	})
+	return held, err
 }
 
 // HoldsBlinds reports whether any row this node holds carries a value derived

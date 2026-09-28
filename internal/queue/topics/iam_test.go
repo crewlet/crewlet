@@ -28,7 +28,7 @@ func TestAnIamSubjectRoundTripsThroughItsInverse(t *testing.T) {
 		"a retention sweep, by its bucket":    {"sweep", "17"},
 		"a reanchor, by its generation":       {"generation", "3"},
 		"an eviction, by the node it gates":   {"eviction", "node-a.example"},
-		"the bootstrap, which has no id":      {"bootstrap", ""},
+		"the invalidation, which has no id":   {"invalidation", ""},
 		"the barrier, which has no id either": {"barrier", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -98,7 +98,7 @@ func TestTheIamWildcardCoversItsOwnGrammar(t *testing.T) {
 	// two, and are the shapes a wildcard written as `prefix.*.>` would
 	// silently exclude.
 	for _, s := range []string{
-		topics.IamLogSubject("bootstrap", ""),
+		topics.IamLogSubject("invalidation", ""),
 		topics.IamLogSubject("barrier", ""),
 		topics.IamLogSubject("login", "jane.doe"),
 	} {

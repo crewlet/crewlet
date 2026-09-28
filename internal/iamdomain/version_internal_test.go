@@ -90,7 +90,6 @@ func TestACredentialRidesExactlyTheRecordsWhoseTrailRowReadsIt(t *testing.T) {
 		{OpStatus, PersonSubject(person), PeopleScope(person), true},
 		{OpClose, SessionSubject("0192f00d-0000-7000-8000-0000000000bb"),
 			PeopleScope(person), true},
-		{OpBootstrap, BootstrapSubject(), BucketScope(BootstrapBucket()), true},
 		// THE GATES, pinned at version 1 for ever.
 		{OpRemove, PersonSubject(person), PeopleScope(person), false},
 		{OpInvalidate, InvalidationSubject(), RootScope(), false},

@@ -403,8 +403,8 @@ var ErrRefused = errors.New("iamdomain: this party may not author that record")
 // That was wrong in both directions and wrong loudly in one. An automation
 // holding the company's own grant could enrol itself a colleague, which is
 // the escalation this estate exists to close; and the NODE's own writer —
-// which authors the bootstrap enrolment, the invite redemption and the
-// sweeps — holds [iam.GrantFleetOperate] and never
+// which authors the invite redemption and the sweeps — holds
+// [iam.GrantFleetOperate] and never
 // config:write, so every one of those paths was refused. Nothing noticed,
 // because the surface that exercises them builds a stub writer.
 func (w *Writer) mayAdminister(op OpKind) error {
@@ -419,11 +419,10 @@ func (w *Writer) mayAdminister(op OpKind) error {
 // requires.
 //
 // EXPORTED so the parties that must hold it can be CHECKED rather than
-// remembered. The node's own writer is one — it authors the bootstrap
-// enrolment and the invite redemption on behalf of people who have no
-// principal yet — and a grant list that drifts away from this one refuses
-// every enrolment on a fresh deployment, silently, on a path whose tests use
-// a stub writer.
+// remembered. The node's own writer is one — it authors the invite
+// redemption on behalf of people who have no principal yet — and a grant list
+// that drifts away from this one refuses every redemption, silently, on a path
+// whose tests use a stub writer.
 const AdminGrant = iam.GrantPeopleManage
 
 // publish runs one decide through the framework's own write authority, as a

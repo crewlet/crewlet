@@ -33,9 +33,9 @@ const BaseRecordVersion = 1
 
 // SweepRecordVersion is what a sweep record carries.
 //
-// VERSION 2 COLLECTS MORE: beside what version 1 does, the credentials, the
-// redeemed invitations and the redeemed bootstrap codes that stopped being
-// presentable before the record's collection instant ([Writer.Sweep]).
+// VERSION 2 COLLECTS MORE: beside what version 1 does, the credentials and
+// the redeemed invitations that stopped being presentable before the record's
+// collection instant ([Writer.Sweep]).
 //
 // A VERSION AND NOT A FIELD, because a sweep deletes by a predicate every node
 // evaluates for itself. A clause an older build does not know would be carried
@@ -319,17 +319,6 @@ const (
 	// seen the same set in a different order.
 	OpInvalidate OpKind = "invalidate"
 
-	// OpBootstrap moves the company's ONE bootstrap through its own life:
-	// a code minted, taken by a founding, or withdrawn by a re-issue. Its
-	// subject is [KindBootstrap].
-	//
-	// ONE OP FOR THE WHOLE LIFE, unlike a session's pair, because there is
-	// exactly one bootstrap object and its records sit consecutively on one
-	// subject: an operator reads them in order whatever they are called,
-	// and a second op would buy a word at the cost of a second thing the
-	// classification table has to name.
-	OpBootstrap OpKind = "bootstrap"
-
 	// OpSweep deletes one bucket's expired rows below a POSITION the
 	// publisher resolved once. Its subject is [KindSweep].
 	//
@@ -352,11 +341,11 @@ const (
 	OpGeneration OpKind = "generation"
 )
 
-// OpKinds are the seventeen, in the order they are documented.
+// OpKinds are the sixteen, in the order they are documented.
 var OpKinds = []OpKind{
 	OpInvite, OpClaim, OpRedeem, OpRelease, OpEnrol, OpUpdate, OpStatus,
-	OpRevoke, OpRemove, OpOpen, OpClose, OpInvalidate, OpBootstrap, OpSweep,
-	OpBarrier, OpEviction, OpGeneration,
+	OpRevoke, OpRemove, OpOpen, OpClose, OpInvalidate, OpSweep, OpBarrier,
+	OpEviction, OpGeneration,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

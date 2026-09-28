@@ -51,8 +51,8 @@ import (
 
 // SessionRowGrace is how long a row nobody can present is kept past the moment
 // it stopped being presentable: a session past its absolute deadline or ended,
-// an invitation or a bootstrap code past its expiry or redeemed, a credential
-// past its expiry or revoked.
+// an invitation past its expiry or redeemed, a credential past its expiry or
+// revoked.
 //
 // A WEEK — the design's 168 hours — which is the invitation horizon and the
 // default absolute session lifetime. For a credential it is also what keeps a
@@ -117,9 +117,9 @@ type SweepPlan struct {
 	Changes  uint64
 	Sessions uint64
 
-	// Expired is the instant before which a session, an invitation, a
-	// bootstrap code or a credential that is over is collected: now less
-	// [SessionRowGrace], read once, here.
+	// Expired is the instant before which a session, an invitation or a
+	// credential that is over is collected: now less [SessionRowGrace],
+	// read once, here.
 	Expired time.Time
 
 	// Due are the buckets holding something at least [SweepSlack] past its
@@ -266,21 +266,12 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 			WHERE bucket = ? AND redeemed_at = 0
 			  AND expires_at > 0 AND expires_at < ? LIMIT 1`,
 			[]any{bucket, over}},
-		{"bootstrap codes", over <= 0, `
-			SELECT 1 FROM iam_bootstrap_codes
-			WHERE bucket = ? AND redeemed_at = 0
-			  AND expires_at > 0 AND expires_at < ? LIMIT 1`,
-			[]any{bucket, over}},
 		// AND WHAT A VERSION-2 RECORD ALSO COLLECTS — see
 		// [SweepRecordVersion]. Asked here because the publisher only
 		// writes version 2, so a bucket holding nothing but a spent
 		// invitation or a revoked token is a bucket with something due.
 		{"redeemed invitations", over <= 0, `
 			SELECT 1 FROM iam_invites
-			WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ? LIMIT 1`,
-			[]any{bucket, over}},
-		{"redeemed bootstrap codes", over <= 0, `
-			SELECT 1 FROM iam_bootstrap_codes
 			WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ? LIMIT 1`,
 			[]any{bucket, over}},
 		{"revoked credentials", over <= 0, `

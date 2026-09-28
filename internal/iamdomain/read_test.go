@@ -113,10 +113,10 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 	}
 }
 
-// AND THE ESTATE KNOWS WHETHER ANYBODY IS IN IT, which is the bootstrap
-// decision: the one-time code that creates the first person stops working the
-// moment it is not. A COUNT and never a listing, because it is asked by an
-// unauthenticated route and the answer is one bit.
+// AND THE ESTATE KNOWS WHETHER ANYBODY IS IN IT, which is what `/health` tells
+// an operator of a fresh install: nobody is enrolled yet, so the next step is
+// to invite the first person. A COUNT and never a listing, because it is asked
+// by an unauthenticated route and the answer is one bit.
 func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -127,8 +127,8 @@ func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 		t.Fatalf("AnyPerson: %v", err)
 	}
 	if held {
-		t.Fatal("a fresh estate reports somebody in it, so the one-time " +
-			"bootstrap code would never be offered")
+		t.Fatal("a fresh estate reports somebody in it, so its operator is " +
+			"never told to invite the first person")
 	}
 
 	if err := rig.enrol(iamdomain.Enrolment{
@@ -146,8 +146,8 @@ func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 		t.Fatalf("AnyPerson: %v", err)
 	}
 	if !held {
-		t.Error("an estate holding a person reports itself empty, so the " +
-			"one-time bootstrap code would go on creating operators")
+		t.Error("an estate holding a person reports itself empty, so its " +
+			"operator goes on being told nobody is in")
 	}
 }
 
@@ -278,9 +278,9 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 // document. Every reader used to decode that document as a person and fail, so
 // the row turned into the UNKNOWN answer wherever it was touched: a Tier A
 // token whose machine enrolment stopped after its login claim answered 503 on
-// every guarded route, the directory listing failed whole, and the bootstrap
-// counted it as somebody and closed for good. It is nobody, and every read
-// here says so in its own shape.
+// every guarded route, the directory listing failed whole, and the estate
+// counted it as somebody. It is nobody, and every read here says so in its own
+// shape.
 func TestAReservationIsReadAsOneAndNotAsAnUndecodablePerson(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -315,9 +315,9 @@ func TestAReservationIsReadAsOneAndNotAsAnUndecodablePerson(t *testing.T) {
 		t.Fatalf("AnyPerson: %v", err)
 	}
 	if anybody {
-		t.Error("a reservation counts as somebody enrolled, so a founder " +
-			"whose bootstrap stopped after its address claim is refused the " +
-			"retry that would finish it")
+		t.Error("a reservation counts as somebody enrolled, so an estate " +
+			"whose first enrolment stopped after its address claim reads as " +
+			"a company that has started")
 	}
 
 	page, err := reader.People(t.Context(), iamdomain.PeopleQuery{})

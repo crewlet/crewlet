@@ -313,8 +313,6 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		rows, err = a.applySession(ctx, tx, at)
 	case KindInvalidation:
 		rows, err = a.applyInvalidation(ctx, tx, at)
-	case KindBootstrap:
-		rows, err = a.applyBootstrap(ctx, tx, at)
 	case KindSweep:
 		rows, err = a.applySweep(ctx, tx, at)
 	case KindEviction:
@@ -375,10 +373,18 @@ func (a applyContext) unix() int64 { return a.brokerAt.UnixMilli() }
 //
 // FROM THE PERSON, not from the scope: the scope is what a DEFERRAL is filed
 // under and may legitimately be wider than one person, while a row belongs to
-// exactly one bucket. A record about nobody — a sweep, a gate — states its own.
+// exactly one bucket.
+//
+// A RECORD ABOUT NOBODY takes its SUBJECT's, which is the one row such a record
+// writes through here — its trail row: an invitation's lands beside the
+// invitation itself, in its address's bucket, which is the one its scope
+// names; an invalidation, with no id, in the bucket of its kind.
 func (a applyContext) bucket() int64 {
-	if a.record.Person == "" {
-		return int64(BootstrapBucket())
+	switch {
+	case a.record.Person != "":
+		return int64(BucketOf(a.record.Person))
+	case a.record.Subject.ID != "":
+		return int64(BucketOf(a.record.Subject.ID))
 	}
-	return int64(BucketOf(a.record.Person))
+	return int64(BucketOf(string(a.record.Subject.Kind)))
 }

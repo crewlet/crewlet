@@ -51,10 +51,6 @@ var ReproducibleTables = []string{
 	// record of its redemption.
 	"iam_invites",
 
-	// The company's own way in before it has anybody: the codes that turn
-	// an engine nobody can sign in to into one with an administrator.
-	"iam_bootstrap_codes",
-
 	// One row per live session lineage. Rotations are NOT rows — a
 	// rotation id is derived — so this table grows with sign-ins rather
 	// than with requests.

@@ -220,8 +220,7 @@ const invitationIDDomain = "crewlet/iam/invitation-id/v1"
 // cluster port, and in the access log of every proxy a link's GET passed
 // through. When the link was the id alone, every one of those places held a
 // working invitation — the one credential in this estate kept as itself rather
-// than as a verifier, where a bootstrap code, a token and a recovery code all
-// keep a hash. So the link now carries `<id>.<secret>`, and what the estate
+// than as a verifier, where a token and a recovery code both keep a hash. So the link now carries `<id>.<secret>`, and what the estate
 // keeps is [InvitationVerifier] of the secret and never the secret.
 //
 // # Derived, not minted, and still unguessable

@@ -146,12 +146,6 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 					WHERE bucket = ? AND redeemed_at = 0
 					  AND expires_at > 0 AND expires_at < ?
 					LIMIT ?)`},
-			{"bootstrap codes", `
-				DELETE FROM iam_bootstrap_codes WHERE rowid IN (
-					SELECT rowid FROM iam_bootstrap_codes
-					WHERE bucket = ? AND redeemed_at = 0
-					  AND expires_at > 0 AND expires_at < ?
-					LIMIT ?)`},
 		} {
 			if err := spend(collect.what, collect.sql, bucket, expired); err != nil {
 				return int(written), err
@@ -167,20 +161,15 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 	}
 
 	// VERSION 2: WHAT WAS SPENT, and not only what lapsed. A redeemed
-	// invitation and a redeemed bootstrap code are as unpresentable as
-	// expired ones, and version 1 kept them for ever — every address
-	// anybody was ever invited at, sealed, in every node's estate.
+	// invitation is as unpresentable as an expired one, and version 1 kept
+	// them for ever — every address anybody was ever invited at, sealed, in
+	// every node's estate.
 	for _, collect := range []struct {
 		what, sql string
 	}{
 		{"redeemed invitations", `
 			DELETE FROM iam_invites WHERE rowid IN (
 				SELECT rowid FROM iam_invites
-				WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ?
-				LIMIT ?)`},
-		{"redeemed bootstrap codes", `
-			DELETE FROM iam_bootstrap_codes WHERE rowid IN (
-				SELECT rowid FROM iam_bootstrap_codes
 				WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ?
 				LIMIT ?)`},
 	} {

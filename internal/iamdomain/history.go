@@ -58,11 +58,6 @@ var historyClass = map[OpKind]HistoryClass{
 	OpOpen:  ClassSession,
 	OpClose: ClassSession,
 
-	// A BOOTSTRAP IS A CHANGE, and it is the sharpest one in the domain:
-	// it is how somebody who had no account acquired the company's first
-	// administrator. It belongs in the horizon that keeps things.
-	OpBootstrap: ClassChange,
-
 	// AN INVALIDATION IS A CHANGE TOO, although what it does is end
 	// sessions, and the two arguments that separate the horizons both
 	// point the same way here. The short horizon exists because a sign-in

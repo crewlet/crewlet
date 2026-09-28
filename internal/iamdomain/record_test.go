@@ -220,7 +220,7 @@ func TestEveryOpIsClassifiedOrDeliberatelySilent(t *testing.T) {
 	// And the classification is reachable for the ops that have one.
 	for _, op := range []iamdomain.OpKind{
 		iamdomain.OpEnrol, iamdomain.OpRevoke, iamdomain.OpRemove,
-		iamdomain.OpBootstrap,
+		iamdomain.OpInvalidate,
 	} {
 		class, ok := iamdomain.ClassOf(op)
 		if !ok || class != iamdomain.ClassChange {

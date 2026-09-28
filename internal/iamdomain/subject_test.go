@@ -59,7 +59,7 @@ func TestASubjectRoundTripsThroughTheWireGrammar(t *testing.T) {
 		"a sweep":               iamdomain.SweepSubject(7),
 		"an eviction":           iamdomain.EvictionSubject("node-a.example"),
 		"a reanchor":            iamdomain.GenerationSubject(3),
-		"the bootstrap":         iamdomain.BootstrapSubject(),
+		"the invalidation":      iamdomain.InvalidationSubject(),
 		"the barrier":           iamdomain.BarrierSubject(),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -136,18 +136,16 @@ func TestValidateRefusesASubjectThatAddressesNothing(t *testing.T) {
 	}
 }
 
-// THE THREE SINGLETON KINDS ARE THE THREE THE GRAMMAR SAYS THEY ARE.
+// THE TWO SINGLETON KINDS ARE THE TWO THE GRAMMAR SAYS THEY ARE.
 //
 // Both directions: a kind that stopped needing an id would silently start
 // publishing to the log's own prefix, and a singleton that acquired one would
-// stop being a singleton — which for the bootstrap means two live ways into an
-// engine that has no other way in, and for the invalidation means two
-// operators ending the company's sessions without ever contending, each
-// reading the same generation and writing the same new one.
+// stop being a singleton — which for the invalidation means two operators
+// ending the company's sessions without ever contending, each reading the same
+// generation and writing the same new one.
 func TestTheSingletonKindsAreTheOnesWithNoId(t *testing.T) {
 	t.Parallel()
 	singletons := map[iamdomain.ObjectKind]bool{
-		iamdomain.KindBootstrap:    true,
 		iamdomain.KindInvalidation: true,
 		iamdomain.KindBarrier:      true,
 	}
