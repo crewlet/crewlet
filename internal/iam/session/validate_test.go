@@ -431,7 +431,7 @@ func TestAPreLoginCookieIsNeverHonoured(t *testing.T) {
 		"a bearer with a forged mac": strings.Join(
 			append(strings.Split(rig.cookie, ".")[:8], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), "."),
 		"a bearer at another version": "v1" +
-			strings.TrimPrefix(rig.cookie, "v2"),
+			strings.TrimPrefix(rig.cookie, session.Version),
 		"a bearer whose person was swapped": swapPerson(t, rig.cookie),
 	} {
 		t.Run(name, func(t *testing.T) {
