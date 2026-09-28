@@ -639,7 +639,7 @@ stream:
                                     #   `store_max_bytes` wherever you set one,
                                     #   and Tier A refuses a limit smaller than
                                     #   the ceilings declared inside it
-  # tracker_vectors_max_bytes: 34359738368
+  # tracker_vectors_max_bytes: 68719476736
                                     #   the vector changelog's ceiling
                                     #   (1 GiB..2 TiB). SIZED FOR THE PEAK: the
                                     #   stream keeps one message per source, so
@@ -648,15 +648,21 @@ stream:
                                     #   EVERY source in a few hours, and for the
                                     #   following week all of them are in the
                                     #   window: the whole corpus, ~17 MB per
-                                    #   agent seat per year of it. UNSET DERIVES
-                                    #   half the mutation log's ceiling, set or
-                                    #   derived (so 2..32 GiB from a volume
-                                    #   alone): both logs grow per seat-year,
-                                    #   and half is the peak twice over at any
-                                    #   horizon the mutation log's ceiling
-                                    #   covers. A ceiling sized from the steady
-                                    #   state would refuse the one operation it
-                                    #   exists to survive
+                                    #   agent seat per YEAR OF HISTORY. UNSET
+                                    #   DERIVES what the mutation log derives
+                                    #   from the volume (a quarter of its free
+                                    #   space, 4..64 GiB), whatever
+                                    #   tracker_log_max_bytes is set to: that
+                                    #   field bounds a trailing window of
+                                    #   records, and this log's peak is the
+                                    #   company's whole history. At 64 GiB it
+                                    #   holds a model change twice over for
+                                    #   ~2 000 seat-years (400 seats in their
+                                    #   fifth year); past that, set ~34 MB per
+                                    #   agent seat per year of history. A
+                                    #   ceiling sized from the steady state
+                                    #   would refuse the one operation it exists
+                                    #   to survive
   # pages_log_max_bytes: 4294967296 #   the knowledge base's log, the ordered
                                     #   stream every native page write goes
                                     #   through (1..256 GiB). UNSET DERIVES a

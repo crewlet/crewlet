@@ -187,49 +187,44 @@ func TestTheLogCeilingIsDerivedFromTheVolume(t *testing.T) {
 	}
 }
 
-// THE CORPUS LOGS ARE DERIVED FROM THE MUTATION LOG'S CEILING — the one an
-// operator wrote, or the one the volume derives — at the ratio each corpus grows
-// at: a quarter for the knowledge base's log, a half for the vector changelog.
+// THE KNOWLEDGE BASE'S LOG IS DERIVED FROM THE MUTATION LOG'S CEILING — the one
+// an operator wrote, or the one the volume derives — at a quarter of it, the
+// rate its records grow at beside the tracker's. Both logs hold a trailing
+// window of records, so a blocked trim fills both in the same time.
 //
-// Both were once something else. The knowledge base's log was a fixed 4 GiB,
-// reserved on top of a budget the other two logs had already been scaled to
-// fill, and later a quarter of the DERIVED value alone — so an operator who sized
-// the mutation log for their company left it sized for their disk. The vector
-// changelog was a fixed 16 GiB, twice the peak of one 100-seat company, which a
-// 1 000-seat company's model change overflowed in its first year.
-func TestTheCorpusLogsAreDerivedFromTheMutationLogsCeiling(t *testing.T) {
+// It was once a fixed 4 GiB, reserved on top of a budget the other two logs had
+// already been scaled to fill, and later a quarter of the DERIVED value alone —
+// so an operator who sized the mutation log for their company left it sized
+// for their disk.
+func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
 	for name, tc := range map[string]struct {
-		stream        config.Stream
-		free          int64
-		pages, vector int64
+		stream config.Stream
+		free   int64
+		want   int64
 	}{
-		"an unmeasured volume, at the floors": {free: 0, pages: 1 * gib, vector: 2 * gib},
-		"a small disk":                        {free: 8 * gib, pages: 1 * gib, vector: 2 * gib},
-		"an ordinary disk":                    {free: 200 * gib, pages: 12*gib + gib/2, vector: 25 * gib},
-		"a large array, at the clamp":         {free: 4000 * gib, pages: 16 * gib, vector: 32 * gib},
+		"an unmeasured volume, at the floor": {free: 0, want: 1 * gib},
+		"a small disk":                       {free: 8 * gib, want: 1 * gib},
+		"an ordinary disk":                   {free: 200 * gib, want: 12*gib + gib/2},
+		"a large array, at the clamp":        {free: 4000 * gib, want: 16 * gib},
 		// THE OPERATOR'S FIGURE FOR THE COMPANY, on a disk that would
 		// have derived far less.
 		"a mutation log an operator sized": {stream: config.Stream{TrackerLogMaxBytes: 512 * gib},
-			free: 8 * gib, pages: 128 * gib, vector: 256 * gib},
+			free: 8 * gib, want: 128 * gib},
 		"the largest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesCeiling},
-			free: 8 * gib, pages: config.PagesLogMaxBytesCeiling, vector: 512 * gib},
+			free: 8 * gib, want: config.PagesLogMaxBytesCeiling},
 		// AND NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE, or a
 		// node could derive a ceiling its own validation refuses to be
 		// told.
 		"the smallest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesFloor},
-			free: 4000 * gib, pages: config.PagesLogMaxBytesFloor, vector: config.TrackerVectorsMaxBytesFloor},
+			free: 4000 * gib, want: config.PagesLogMaxBytesFloor},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if got, derived := tc.stream.PagesMaxBytes(tc.free); got != tc.pages || !derived {
+			if got, derived := tc.stream.PagesMaxBytes(tc.free); got != tc.want || !derived {
 				t.Errorf("the knowledge base's log derives (%d, derived %v), want (%d, true)",
-					got, derived, tc.pages)
-			}
-			if got, derived := tc.stream.VectorsMaxBytes(tc.free); got != tc.vector || !derived {
-				t.Errorf("the vector changelog derives (%d, derived %v), want (%d, true)",
-					got, derived, tc.vector)
+					got, derived, tc.want)
 			}
 		})
 	}
@@ -246,40 +241,63 @@ func TestTheCorpusLogsAreDerivedFromTheMutationLogsCeiling(t *testing.T) {
 	}
 }
 
-// THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, and the peak is a model change
-// republishing every source at once — the whole corpus inside the window, 93×
-// the steady state. A ceiling sized from the steady state would refuse the one
-// operation it exists to survive.
+// THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, FROM THE VOLUME.
 //
-// The peak grows with the company exactly as the mutation log does, so the
-// check is the ratio at a horizon: whatever mutation-log ceiling a company was
-// sized with covers some number of years of its records, and the changelog
-// derived beside it must hold that company's model change over the same years
-// twice over. And the largest company the engine is sized for — 10 000 seats in
-// its fifth year — must be able to WRITE a ceiling that holds its peak twice.
+// The peak is a model change republishing every source at once — the whole
+// corpus inside the window, 93× the steady state — and the corpus is the
+// company's whole history, while the mutation log's ceiling bounds a trailing
+// window. So an unset changelog asks for what the mutation log derives from the
+// volume, whatever the mutation log is set to:
+//
+//   - the reference company's fifth-year model change (8.46 GB) fits twice
+//     over on a 64 GiB volume — half the mutation log's ceiling, the rule
+//     this replaced, asked for 8 GiB there and the pool scaled it under the
+//     peak;
+//   - an operator who sized a small mutation log for a fleet that trims does
+//     not shrink the changelog with it — beside a 4 GiB mutation log that
+//     rule asked for 2 GiB, which the reference company outgrows in its
+//     second year;
+//   - on no volume does it ask for less than the fixed 16 GiB default, capped
+//     by the same share of free space, that the first rule replaced.
+//
+// And the largest company the engine is sized for — 10 000 seats in its fifth
+// year — must be able to WRITE a ceiling that holds its peak twice.
 func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 	t.Parallel()
-	const (
-		// Per 100 seats per year: the mutation log's records (the
-		// reference company's 156 MB `min_age` week, over the year) and
-		// the vector corpus (8.46 GB at its fifth year).
-		logPerYear    = 156_000_000 * 365 / 7
-		corpusPerYear = 8_460_000_000 / 5
-	)
-	for _, mutation := range []int64{config.DerivedLogMaxBytesFloor,
-		config.DerivedLogMaxBytesCeiling, 512 << 30, config.TrackerLogMaxBytesCeiling} {
-		s := config.Stream{TrackerLogMaxBytes: mutation}
-		got, _ := s.VectorsMaxBytes(0)
-		// The years of a 100-seat company's records this mutation log
-		// holds, and that company's peak over them.
-		years := float64(mutation) / logPerYear
-		peak := years * corpusPerYear
-		if float64(got) < 2*peak {
-			t.Errorf("beside a %d-byte mutation log (%.1f years of the reference "+
-				"company) the vector changelog derives %d, under twice the model "+
-				"change's %.0f over those years", mutation, years, got, peak)
+	const gib = int64(1) << 30
+	// The vector corpus per 100 seats per year: 8.46 GB at the reference
+	// company's fifth year.
+	const corpusPerYear = 8_460_000_000 / 5
+	const referenceYearFive = 5 * corpusPerYear
+
+	if got, _ := (config.Stream{}).VectorsMaxBytes(64 * gib); got < 2*referenceYearFive {
+		t.Errorf("on 64 GiB free the vector changelog derives %d, under twice "+
+			"the reference company's fifth-year model change (%d)", got, 2*referenceYearFive)
+	}
+	sized := config.Stream{TrackerLogMaxBytes: 4 * gib}
+	got, derived := sized.VectorsMaxBytes(64 * gib)
+	if want, _ := (config.Stream{}).VectorsMaxBytes(64 * gib); got != want || !derived {
+		t.Errorf("beside a 4 GiB mutation log the vector changelog derives (%d, "+
+			"derived %v), want the volume's (%d, true): the mutation log's "+
+			"ceiling is a trailing window and says nothing about the corpus", got, derived, want)
+	}
+	for _, free := range []int64{0, 8 * gib, 16 * gib, 64 * gib, 200 * gib, 4000 * gib} {
+		got, derived := config.Stream{}.VectorsMaxBytes(free)
+		if want := config.DerivedLogMaxBytes(free); got != want || !derived {
+			t.Errorf("unset on %d free derives (%d, derived %v), want the "+
+				"mutation log's own derivation (%d, true)", free, got, derived, want)
+		}
+		if replaced := min(int64(16)*gib, config.DerivedLogMaxBytes(free)); got < replaced {
+			t.Errorf("unset on %d free derives %d, under the %d the 16 GiB "+
+				"default asked for there", free, got, replaced)
+		}
+		if got < config.TrackerVectorsMaxBytesFloor || got > config.TrackerVectorsMaxBytesCeiling {
+			t.Errorf("unset on %d free derives %d, outside the %d..%d Tier A "+
+				"accepts", free, got, config.TrackerVectorsMaxBytesFloor,
+				config.TrackerVectorsMaxBytesCeiling)
 		}
 	}
+
 	const largest = 10_000 / 100 * 5 * corpusPerYear
 	if config.TrackerVectorsMaxBytesCeiling < 2*largest {
 		t.Errorf("Tier A accepts at most %d bytes of vector changelog, under twice "+

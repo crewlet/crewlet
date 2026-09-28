@@ -1475,16 +1475,18 @@ type Stream struct {
 	// field from the steady state would refuse the one operation it exists
 	// to survive.
 	//
-	// UNSET DERIVES HALF THE MUTATION LOG'S CEILING — the one set above, or
-	// the one derived from the volume — because both logs grow per
-	// seat-year, and at whatever horizon that ceiling covers the peak is
-	// 0.21 of it: half is twice the peak with room to spare. So it follows
-	// the company the mutation log was sized for, where the fixed 16 GiB it
-	// replaced was twice the peak of a 100-seat company and overflowed a
-	// 1 000-seat company's model change within its first year. The same
-	// share of the one budget, scaling and refusals the mutation log's
-	// field describes apply here unchanged.
-	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=2199023255552" desc:"Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives half the mutation log's ceiling, set or derived, 2 GiB..32 GiB from a volume alone."`
+	// UNSET DERIVES FROM THE VOLUME, as the mutation log does: the same
+	// quarter of the free space the streams live on, clamped to 4 GiB..64
+	// GiB, whatever tracker_log_max_bytes is set to. Never from the
+	// mutation log's ceiling, because the two hold different things: that
+	// ceiling bounds a trailing window of records, and this log's peak is
+	// the company's whole history, which grows every year it trims
+	// healthily. At the 64 GiB clamp it holds a model change twice over for
+	// about 2 000 seat-years of corpus (400 seats in their fifth year); a
+	// larger or older company sets it, at about 34 MB per agent seat per
+	// year of history. The same share of the one budget, scaling and
+	// refusals the mutation log's field describes apply here unchanged.
+	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=2199023255552" desc:"Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives what the mutation log derives from the volume, a quarter of its free space clamped to 4 GiB..64 GiB, whatever tracker_log_max_bytes is set to."`
 
 	// PagesLogMaxBytes is the byte ceiling on the knowledge base's log, the
 	// ordered stream every native page write goes through.

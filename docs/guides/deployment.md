@@ -66,12 +66,12 @@ never below 1 GiB each, so:
   4 GiB is the three 1 GiB floors. Below it the node refuses to boot with an
   error naming the log it could not reserve, the bytes it needed, the bytes
   the broker had left, and the Tier A field that sets the ceiling.
-- **More room buys longer logs, up to a point.** Unset, the mutation log asks
-  for a quarter of the free space (4..64 GiB), the knowledge base's log for a
-  quarter of that, and the vector changelog for half of it. They are scaled
-  down together whenever they ask for more than that half, which on a first
-  boot is every volume with less than about 300 GiB free; from there up each
-  log gets what it asked for.
+- **More room buys longer logs, up to a point.** Unset, the mutation log and
+  the vector changelog each ask for a quarter of the free space (4..64 GiB),
+  and the knowledge base's log for a quarter of the mutation log's. They are
+  scaled down together whenever they ask for more than that half, which on a
+  first boot is every volume with less than about 384 GiB free; from there up
+  each log gets what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes` or `stream.pages_log_max_bytes` later,

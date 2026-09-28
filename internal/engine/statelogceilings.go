@@ -101,17 +101,19 @@ const MinDomainCeiling int64 = 1 << 30
 // small disk. So an unset value takes a quarter of the stream volume's free
 // space, clamped.
 //
-// The other two are CORPUS logs, and a fixed default is wrong for them for the
-// same reason with a company's size in place of the disk: each grows per
-// seat-year exactly as the mutation log does, so an unset one takes the
-// mutation log's ceiling — set or derived — over the ratio the corpora grow at.
-// The knowledge base's log takes a quarter of it for the ratio its records
-// grow at; the vector changelog takes half, because its peak is not its steady
-// state: the stream keeps one message per source and bounds their age, so a
-// week's minting is small, but changing the embedding model rewrites every
-// source in a few hours, and for the following week every source's current
-// message is inside the window. Half is that peak twice over at any horizon
-// the mutation log's ceiling covers (config.DerivedVectorsLogDivisor).
+// The knowledge base's log holds the same kind of thing as the mutation log — a
+// trailing window of records, as long as a blocked trim lasts — at about a
+// quarter of the rate, so an unset one takes a quarter of the mutation log's
+// ceiling, set or derived, and a blocked trim fills both in the same time.
+//
+// The vector changelog holds something else: its peak is not its steady state
+// but the whole corpus, because the stream keeps one message per source and
+// bounds their age, so a week's minting is small, but changing the embedding
+// model rewrites every source in a few hours, and for the following week every
+// source's current message is inside the window. No ratio relates that to a
+// trailing window — the corpus grows every year the company exists — so an
+// unset one takes the same share of the volume the mutation log derives,
+// whatever the mutation log is set to (config.Stream.VectorsMaxBytes).
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():

@@ -81,8 +81,8 @@ const (
 	// 256 GiB bound refused: a model change there overflowed any value an
 	// operator was allowed to write from about year one and a half. Two
 	// tebibytes is the next power of two above it, a typo guard at that
-	// scale, and above the half of the mutation log's own ceiling an
-	// unset value can derive ([Stream.VectorsMaxBytes]).
+	// scale, and far above the most an unset value derives
+	// ([Stream.VectorsMaxBytes]).
 	TrackerVectorsMaxBytesFloor   int64 = 1 << 30
 	TrackerVectorsMaxBytesCeiling int64 = 2 << 40
 
@@ -103,36 +103,6 @@ const (
 	// grows at about a quarter of the tracker's rate, and at a quarter of
 	// the tracker's ceiling a blocked trim fills both in the same time.
 	DerivedPagesLogDivisor = 4
-
-	// DerivedVectorsLogDivisor is how much smaller an unset
-	// TrackerVectorsMaxBytes is than the mutation log's ceiling.
-	//
-	// TWO, and like the knowledge base's divisor the ratio is the corpus:
-	// both logs grow per seat-year, so one number relates them at every
-	// company size and every horizon. The mutation log takes 8.13 GB per 100
-	// seats a year (the reference company's 156 MB `min_age` window, a week
-	// of records, over the year), and that is what its ceiling holds after a
-	// trim blocked for as long as the ceiling lasts. The changelog's peak is
-	// a model change republishing every source at once, the whole corpus
-	// inside the window: 1.69 GB per 100 seats a year of it (8.46 GB at the
-	// reference company's fifth year). So whatever horizon a mutation-log
-	// ceiling covers, the changelog's peak over that horizon is 0.21 of it,
-	// twice the peak — the margin the changelog has always been sized with,
-	// because a width change refused partway leaves the corpus in two spaces
-	// — is 0.42, and HALF is the smallest whole divisor that covers it.
-	//
-	// It replaces a FIXED 16 GiB, which was twice the peak of one company
-	// (100 seats, fifth year) and so wrong for every other: a 1 000-seat
-	// company's model change overflowed it within its first year. The
-	// mutation log's ceiling is the one figure Tier A has for how big the
-	// company is — derived from the volume the streams live on, or written
-	// by an operator who sized it — so deriving from it sizes the changelog
-	// for the same company. And under a partitioned layout the default is the
-	// DOMAIN's budget, divided evenly across its logs like every other
-	// (statelog's Layout.LogShare), so a fixed default shrank every
-	// partition's share as the partition count grew while the corpus each
-	// partition holds did not.
-	DerivedVectorsLogDivisor = 2
 
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
@@ -322,38 +292,62 @@ func (s Stream) LogMaxBytes(free int64) (int64, bool) {
 //
 // DERIVED FROM THE MUTATION LOG'S CEILING — the one an operator wrote, or the
 // one the volume derives — rather than from the disk directly, so the two stay
-// in the ratio their corpora grow at: 1 GiB beside the mutation log's 4 GiB
+// in the ratio their records grow at: 1 GiB beside the mutation log's 4 GiB
 // derived floor, 16 GiB beside its 64 GiB clamp, 256 GiB beside the largest
-// value an operator may write. It used to take the DERIVED value alone, which
-// kept the ratio on every volume and on no configured deployment: an operator
-// who sized the mutation log for their company left the knowledge base's log
-// sized for their disk.
+// value an operator may write. The ratio holds at every horizon because both
+// logs hold the same kind of thing — a trailing window of records, as long as
+// a blocked trim lasts — so a blocked trim fills both in the same time. It used
+// to take the DERIVED value alone, which kept the ratio on every volume and on
+// no configured deployment: an operator who sized the mutation log for their
+// company left the knowledge base's log sized for their disk.
+//
+// Held inside the bounds Tier A accepts for the field, so a node never derives
+// a ceiling its own validation would refuse to be told: a quarter of the
+// smallest mutation log an operator may write is under a gibibyte.
 func (s Stream) PagesMaxBytes(free int64) (int64, bool) {
 	if s.PagesLogMaxBytes > 0 {
 		return s.PagesLogMaxBytes, false
 	}
-	return s.corpusShare(free, DerivedPagesLogDivisor,
-		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling), true
+	tracker, _ := s.LogMaxBytes(free)
+	return min(max(tracker/DerivedPagesLogDivisor, PagesLogMaxBytesFloor),
+		PagesLogMaxBytesCeiling), true
 }
 
 // VectorsMaxBytes is the vector changelog's ceiling, and whether it was
 // derived.
 //
-// # Sized for the PEAK, from the mutation log's ceiling
+// # Sized for the PEAK, and the peak is the whole corpus
 //
 // The peak and the steady state differ by 93x: the stream keeps one message per
 // source and bounds their age, so a week's minting is small — but changing the
 // embedding model rewrites every source in a few hours, and for the following
-// week every source's current message is inside the window. Sizing an unset
-// value from the steady state would refuse the one operation it exists to
-// survive.
+// week every source's current message is inside the window: the whole corpus,
+// about 17 MB per agent seat per year of the company's history (8.46 GB for the
+// reference company's 100 seats in its fifth year). Sizing an unset value from
+// the steady state would refuse the one operation it exists to survive.
 //
-// That peak is the corpus, which grows with the company exactly as the mutation
-// log does, so an unset value is HALF THE MUTATION LOG'S CEILING
-// ([DerivedVectorsLogDivisor] says why half): the one an operator wrote, or the
-// share of the stream volume's free space the mutation log derives. That also
-// bounds it by the disk, which a broker's reservation needs — a default nobody
-// chose for this volume would be refused on it.
+// # From the VOLUME, as the mutation log is, and never from the mutation log
+//
+// The two hold different things. The mutation log's ceiling bounds a TRAILING
+// WINDOW — the records of however long a blocked trim lasts — while the
+// changelog's peak is everything the company has written since it began. So
+// no ratio relates them: the corpus over a mutation-log ceiling is 0.21 times
+// the company's age over that ceiling's horizon, which grows every year a
+// company trims healthily. Half the mutation log's ceiling was tried on that
+// ratio, and on the volumes most deployments have it was half what it
+// replaced: the reference company on 64 GiB free had its fifth-year model
+// change refused partway, and an operator who set a small mutation log for a
+// fleet that trims shrank the changelog with it.
+//
+// What the two logs share is the volume, so an unset changelog asks for the
+// same quarter of its free space the mutation log derives ([DerivedLogMaxBytes]),
+// whatever the mutation log is set to: on every volume at least what the fixed
+// 16 GiB default capped by that same share asked for, and more wherever the
+// volume can back more. At the 64 GiB clamp it holds a model change twice over
+// for about 2 000 seat-years of corpus — 400 seats in their fifth year. A
+// larger or older company sets the field, at about 34 MB per agent seat per
+// year of history (twice the corpus), and the headroom alarm says when one has
+// outgrown it.
 //
 // An operator who WROTE a number gets it: they named a ceiling for a broker they
 // can see, and silently lowering it would be the engine deciding a limit an
@@ -362,18 +356,7 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 	if s.TrackerVectorsMaxBytes > 0 {
 		return s.TrackerVectorsMaxBytes, false
 	}
-	return s.corpusShare(free, DerivedVectorsLogDivisor,
-		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling), true
-}
-
-// corpusShare is an unset corpus log's ceiling: the mutation log's ceiling —
-// the one an operator wrote, or the one the volume derives — over the ratio
-// the two corpora grow at, held inside the bounds Tier A accepts for the
-// field, so a node never derives a ceiling its own validation would refuse to
-// be told.
-func (s Stream) corpusShare(free int64, divisor int, floor, ceiling int64) int64 {
-	tracker, _ := s.LogMaxBytes(free)
-	return min(max(tracker/int64(divisor), floor), ceiling)
+	return DerivedLogMaxBytes(free), true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

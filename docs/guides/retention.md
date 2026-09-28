@@ -1388,11 +1388,14 @@ count toward the day they happened in rather than toward today.
 Two excursions are designed for and do not alarm:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
-   year five bottoms the vector log's headroom at about 75 % beside the 64 GiB
-   mutation log a large volume derives, and at about 58 % for a company as old
-   as its mutation log's ceiling lasts — the vector log is half that ceiling,
-   and the whole corpus is a fifth of what the mutation log takes over the same
-   years. The alarm threshold is 10 %, well clear of either.
+   year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
+   64 GiB volume asks for — about 26 % at the 10.7 GiB it is created with
+   once the one budget scales every log to fit the broker there — and at about
+   88 % at the 64 GiB a volume of 384 GiB or more gets. The alarm threshold is
+   10 %, clear of each. The corpus is the company's whole history — about
+   17 MB per agent seat per year — so a larger or older company sets
+   `stream.tracker_vectors_max_bytes` at about twice it: 34 MB per agent seat
+   per year of history.
 2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
    occupancy on every peer; see [Replication](replication.md).
 

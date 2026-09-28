@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -350,6 +351,40 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 	return holds, exists, nil
 }
 
+// THE VECTOR CHANGELOG A FIRST BOOT CREATES HOLDS A MODEL CHANGE, on the volume
+// most deployments have.
+//
+// Its peak is the whole corpus — a model change republishes every source, and
+// for a week all of them are in the window — which is 8.46 GB for the reference
+// company in its fifth year. On a 64 GiB volume under an embedded broker (whose
+// limit is three quarters of the free space, so the logs share 24 GiB) that is
+// what the created ceiling must hold, whatever the mutation log is set to: the
+// rule that took half the mutation log's ceiling asked for 8 GiB there and the
+// share scaled it to 6.9 GiB, under the peak — and beside an operator's 4 GiB
+// mutation log it asked for 2 GiB.
+func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
+	t.Parallel()
+	const free = 64 * gib
+	const yearFivePeak = int64(8_460_000_000)
+	host := sizingHost{budget: jetstream.StorageBudget{Limit: free / 4 * 3,
+		Source: jetstream.BudgetServerStore}}
+	for name, stream := range map[string]config.Stream{
+		"every ceiling derived":                  {},
+		"a 4 GiB mutation log an operator wrote": {TrackerLogMaxBytes: 4 * gib},
+	} {
+		sized, err := sizeCeilings(t.Context(), host, stream, free,
+			"/var/lib/crewlet/stream", LayoutZero())
+		if err != nil {
+			t.Fatalf("%s: sizeCeilings: %v", name, err)
+		}
+		if got := sized[search.Domain{}.Name()].Bytes; got < yearFivePeak {
+			t.Errorf("%s: the vector changelog is created at %d bytes on %d free, "+
+				"under the reference company's fifth-year model change (%d)",
+				name, got, free, yearFivePeak)
+		}
+	}
+}
+
 // A LOG CREATED BESIDE ONES THAT EXIST FITS THE SHARE, on every reading of the
 // broker's budget.
 //
@@ -361,12 +396,14 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 // they hold again.
 func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 	t.Parallel()
-	// 40 GiB free: the tracker asks for 10 GiB, the vector changelog for
-	// 5 and the knowledge base's log for 2.5. The tracker's stream already
-	// holds 16 — more than its ask, so what the other two asked for does
-	// not fit what it leaves of any share below, and a sizing that counted
-	// the tracker at its ask, or added what it holds to free space, would
-	// hand them all of it.
+	// 40 GiB free: the tracker and the vector changelog each ask for 10 GiB
+	// and the knowledge base's log for 2.5. The tracker's stream already
+	// holds 16 — more than its ask, so what the other two asked for does not
+	// fit what it leaves of any share below, and a sizing that counted the
+	// tracker at its ask, or added what it holds to free space, would hand
+	// them all of it. (At a volume where the tracker's ask equals what it
+	// holds, counting it at either reads the same, and neither mistake
+	// shows.)
 	const free = 40 * gib
 	const trackerHolds = 16 * gib
 	for name, tc := range map[string]struct {
@@ -424,12 +461,10 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 // adding them back grew the pool on every restart by half of what the logs
 // hold: at 16 GiB free the first boot scaled 9 GiB of asks into an 8 GiB share,
 // and a restart divided 12 and reported every stream as a difference nobody
-// had made. At 8 GiB free the logs ask for 7 GiB (the mutation log's 4 GiB
-// floor, a quarter and a half of it) against a 4 GiB share, so the first boot
-// scales them, and a restart whose pool had grown would scale them less.
+// had made.
 func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	t.Parallel()
-	const free = 8 * gib
+	const free = 16 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
 		unread error
@@ -476,15 +511,12 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 // three, where every stream must be reported at exactly what it holds.
 func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 	t.Parallel()
-	// 64 GiB free under a limit four bytes past 30 GiB: the tracker asks
-	// for 16 GiB, the vector changelog for 8 and the knowledge base's log
-	// for 4, into a share of half of it. The four bytes are what put the
-	// rounding where it bites — the remainder the tracker's stream leaves
-	// divides to one byte past the vector changelog's fit (4601750675
-	// against 4601750674), where a limit of exactly 30 GiB divides evenly.
+	// 64 GiB free under a 30 GiB limit: the tracker and the vector
+	// changelog each ask for 16 GiB and the knowledge base's log for 4,
+	// into a 15 GiB share.
 	const free = 64 * gib
 	host := sizingHost{budget: jetstream.StorageBudget{
-		Limit: 30*gib + 4, Source: jetstream.BudgetServerStore,
+		Limit: 30 * gib, Source: jetstream.BudgetServerStore,
 	}}
 	boot := func() map[string]domainCeiling {
 		t.Helper()

@@ -818,7 +818,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives half the mutation log's ceiling, set or derived, 2 GiB..32 GiB from a volume alone."
+          "description": "Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives what the mutation log derives from the volume, a quarter of its free space clamped to 4 GiB..64 GiB, whatever tracker_log_max_bytes is set to."
         },
         "type": {
           "anyOf": [
