@@ -106,7 +106,10 @@ type Meta struct {
 	// name: EVERY partition it has a file of, in whatever state, so a
 	// partition it does not list is one it holds nothing of — which is how a
 	// node that was told to leave a partition it never adopted says it has
-	// gone. Nil when the lease does not say, which says nothing either way.
+	// gone. Nil when the lease does not say, which says nothing either way:
+	// a peer's lease this build could not read. [Meta.Encode] never writes
+	// one — every writer knows what files it holds, and one holding none
+	// says so with an empty set.
 	Partitions map[string]PartitionState
 
 	// FreeBytes is what is free on the volume the node's partition files
@@ -138,12 +141,23 @@ const (
 )
 
 // ErrMetaIncomplete is a lease this build refuses to write because it does not
-// say what the map decides by.
-var ErrMetaIncomplete = errors.New("estate/partmap: the estate lease is incomplete")
+// say what the map decides by — or says it in a way a reader would read as
+// something else.
+var ErrMetaIncomplete = errors.New("estate/partmap: the estate lease does not say " +
+	"what the map decides by")
 
 // Encode renders the lease's Meta, refusing one that leaves out what the map
-// decides by: a weight in range, the layout, and whether the store is
-// healthy — a writer that does not know says unhealthy and why.
+// decides by: a weight in range, the layout, whether the store is healthy — a
+// writer that does not know says unhealthy and why — and what it holds.
+//
+// NOR IS A LEASE WRITTEN THAT A READER WOULD READ AS ANOTHER CLAIM. Written as
+// an empty set, an unsaid holding would read as "holds nothing", which is
+// exactly what lets the maintainer drop a leaving holder from the set the
+// trim counts while its node may still be draining; a partition named as no
+// layout names it is dropped by [MetaFromLease], so it too reads as one not
+// held; and a state this build does not know is one no reader of this build
+// acts on. Each is a writer's bug, and refused here it is found at the
+// writer.
 func (m Meta) Encode() (map[string]any, error) {
 	switch {
 	case m.Weight < 1 || m.Weight > placement.MaxWeight:
@@ -153,6 +167,18 @@ func (m Meta) Encode() (map[string]any, error) {
 		return nil, fmt.Errorf("%w: it names no layout", ErrMetaIncomplete)
 	case m.Healthy == nil:
 		return nil, fmt.Errorf("%w: it does not say whether the store is healthy", ErrMetaIncomplete)
+	case m.Partitions == nil:
+		return nil, fmt.Errorf("%w: it does not say what the node holds; a node holding "+
+			"nothing says so with an empty set", ErrMetaIncomplete)
+	}
+	for _, id := range slices.Sorted(maps.Keys(m.Partitions)) {
+		if _, err := statelog.ParsePartitionID(id); err != nil {
+			return nil, fmt.Errorf("%w: it names partition %q: %w", ErrMetaIncomplete, id, err)
+		}
+		if state := m.Partitions[id]; !state.Valid() {
+			return nil, fmt.Errorf("%w: it says %s is %q, a state this build does not know",
+				ErrMetaIncomplete, id, state)
+		}
 	}
 	out := map[string]any{
 		metaWeight:     m.Weight,

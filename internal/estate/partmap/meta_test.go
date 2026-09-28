@@ -98,19 +98,38 @@ func TestAnEstateLeaseFailsSoftFieldByField(t *testing.T) {
 }
 
 // A LEASE THAT DOES NOT SAY WHAT THE MAP DECIDES BY IS NOT WRITTEN: its weight,
-// its layout and its health. A writer that does not know its health says
-// unhealthy and why.
+// its layout, its health and what it holds. A writer that does not know its
+// health says unhealthy and why; every writer knows what files it holds, and
+// one holding none says so with an empty set. Nor is a lease written that a
+// reader would read as another claim: a partition named as no layout names it
+// reads as one not held, and a state this build does not know is one no
+// reader of this build can act on.
 func TestAnIncompleteEstateLeaseIsNotWritten(t *testing.T) {
 	t.Parallel()
+	holds := func(id string, s PartitionState) map[string]PartitionState {
+		return map[string]PartitionState{id: s}
+	}
+	nothing := map[string]PartitionState{}
 	for name, m := range map[string]Meta{
-		"no weight":   {Layout: layoutNo(1), Healthy: yes()},
-		"too heavy":   {Weight: 65, Layout: layoutNo(1), Healthy: yes()},
-		"no layout":   {Weight: 1, Healthy: yes()},
-		"health left": {Weight: 1, Layout: layoutNo(1)},
+		"no weight":        {Layout: layoutNo(1), Healthy: yes(), Partitions: nothing},
+		"too heavy":        {Weight: 65, Layout: layoutNo(1), Healthy: yes(), Partitions: nothing},
+		"no layout":        {Weight: 1, Healthy: yes(), Partitions: nothing},
+		"health left":      {Weight: 1, Layout: layoutNo(1), Partitions: nothing},
+		"holdings left":    {Weight: 1, Layout: layoutNo(1), Healthy: yes()},
+		"a malformed name": {Weight: 1, Layout: layoutNo(1), Healthy: yes(), Partitions: holds("tracker.7", PartServing)},
+		"an unknown state": {Weight: 1, Layout: layoutNo(1), Healthy: yes(), Partitions: holds("tracker.007", "verifying")},
 	} {
 		if _, err := m.Encode(); !errors.Is(err, ErrMetaIncomplete) {
 			t.Errorf("%s: Encode = %v, want ErrMetaIncomplete", name, err)
 		}
+	}
+	meta, err := Meta{Weight: 1, Layout: layoutNo(1), Healthy: yes(), Partitions: nothing}.Encode()
+	if err != nil {
+		t.Fatalf("a lease holding nothing: %v", err)
+	}
+	got, _ := MetaFromLease(roundTrip(t, meta))
+	if got.Partitions == nil || len(got.Partitions) != 0 {
+		t.Fatalf("a lease holding nothing reads back holding %v", got.Partitions)
 	}
 }
 
@@ -118,7 +137,8 @@ func TestAnIncompleteEstateLeaseIsNotWritten(t *testing.T) {
 // name the same node and say nothing about what it holds of the estate.
 func TestOnlyAnEstateLeaseIsAPresence(t *testing.T) {
 	t.Parallel()
-	meta, err := Meta{Weight: 1, Layout: layoutNo(1), Healthy: yes()}.Encode()
+	meta, err := Meta{Weight: 1, Layout: layoutNo(1), Healthy: yes(),
+		Partitions: map[string]PartitionState{}}.Encode()
 	if err != nil {
 		t.Fatal(err)
 	}
