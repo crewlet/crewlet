@@ -138,6 +138,56 @@ func TestASplitTurnIsWholeAfterTheSecondScatter(t *testing.T) {
 	}
 }
 
+// A PAGE OF TURNS IS HELD TO ITS WINDOW WHOLE, across nodes. A turn that began
+// on one node before the window and resumed on another inside it is listed by
+// the second node — its half starts in the window — and only the fold of both
+// halves says it did not. And a window in the past is bounded above: a bar
+// three days ago is answered with that bar's turns, not the fleet's newest.
+//
+// Mutation: drop the fleet's check of the merged start against the window, and
+// the resumed turn is listed; stop carrying `until` on the wire, and the bar's
+// page is today's.
+func TestAPageOfTurnsIsHeldToItsWindowAcrossNodes(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+	now := time.Now().UTC()
+	since := now.Add(-time.Hour)
+	phaseOn(t, a, "early", "resumed", since.Add(-time.Minute), 10, "m")
+	phaseOn(t, b, "late", "resumed", since.Add(time.Minute), 10, "m")
+	completionOn(t, b, "late-done", "resumed", since.Add(2*time.Minute))
+	phaseOn(t, b, "own", "inside", since.Add(5*time.Minute), 10, "m")
+	bar := now.Add(-72 * time.Hour).Truncate(time.Hour)
+	phaseOn(t, a, "past", "in-the-bar", bar.Add(10*time.Minute), 10, "m")
+
+	fan := fanFrom(a, "node-a", "node-b")
+	page, coverage, err := fan.Turns(t.Context(), store.TurnQuery{Since: since})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete {
+		t.Fatalf("coverage %+v", coverage)
+	}
+	if ids := turnIDs(page); !slices.Equal(ids, []string{"inside"}) {
+		t.Errorf("the last hour listed %v, want only the turn that began in it", ids)
+	}
+	page, _, err = fan.Turns(t.Context(), store.TurnQuery{Since: bar, Until: bar.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := turnIDs(page); !slices.Equal(ids, []string{"in-the-bar"}) {
+		t.Errorf("a bar three days ago listed %v, want its own turn", ids)
+	}
+}
+
+func turnIDs(page eventfan.TurnPage) []string {
+	out := []string{}
+	for _, t := range page.Turns {
+		out = append(out, t.TurnID)
+	}
+	return out
+}
+
 // A SILENT NODE IS NAMED, and the rest of the fleet still answers.
 func TestASilentNodeIsNamed(t *testing.T) {
 	t.Parallel()
@@ -428,11 +478,12 @@ func TestPhaseTokensAreEveryNodesSpendNewestFirst(t *testing.T) {
 	}
 }
 
-// servesAsV1 stands a peer on the broker that behaves as a build speaking only
-// history protocol v1 does: it refuses any other version by name, and answers a
-// v1 listing with its own row — IGNORING every filter it does not know, which is
-// exactly what an older build does with a field it cannot read.
-func servesAsV1(t *testing.T, b *memory.Broker, node string, row store.EventRecord) {
+// servesAs stands a peer on the broker that behaves as a build speaking history
+// protocol up to `version` does: it refuses a newer version by name, and answers
+// any other listing with its own row, in the version it was asked — IGNORING
+// every filter, which is exactly what an older build does with a field it
+// cannot read.
+func servesAs(t *testing.T, b *memory.Broker, node string, version int, row store.EventRecord) {
 	t.Helper()
 	q := client(t, b)
 	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
@@ -442,12 +493,12 @@ func servesAsV1(t *testing.T, b *memory.Broker, node string, row store.EventReco
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, err
 		}
-		if req.Version != 1 {
-			return json.Marshal(map[string]any{"version": 1, "node": node, "error": fmt.Sprintf(
-				"this node speaks history protocol v1 and was asked in v%d", req.Version)})
+		if req.Version > version {
+			return json.Marshal(map[string]any{"version": version, "node": node, "error": fmt.Sprintf(
+				"this node speaks history protocol up to v%d and was asked in v%d", version, req.Version)})
 		}
 		answer, _ := json.Marshal(map[string]any{"rows": []store.EventRecord{row}, "full": false})
-		return json.Marshal(map[string]any{"version": 1, "node": node, "answer": json.RawMessage(answer)})
+		return json.Marshal(map[string]any{"version": req.Version, "node": node, "answer": json.RawMessage(answer)})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -476,7 +527,7 @@ func TestAFilterAnOlderPeerCannotApplyIsNotAnsweredAround(t *testing.T) {
 	at := time.Now().UTC().Add(-time.Minute)
 	appendTo(t, a, store.EventRecord{ID: "on-channel", Type: "a2a_asked", Category: "task",
 		Time: at, Tags: map[string]string{"channel_id": "ch-1"}})
-	servesAsV1(t, broker, "node-old", store.EventRecord{ID: "old-unrelated", Type: "x",
+	servesAs(t, broker, "node-old", 1, store.EventRecord{ID: "old-unrelated", Type: "x",
 		Category: "task", Time: at.Add(time.Second)})
 	fan := fanFrom(a, "node-a", "node-old")
 
@@ -508,6 +559,68 @@ func TestAFilterAnOlderPeerCannotApplyIsNotAnsweredAround(t *testing.T) {
 	if coverage.Complete || !missing(coverage, "node-old", "v2") {
 		t.Errorf("the axis's coverage %+v does not name node-old — its bars carry no "+
 			"failed split and would under-count", coverage)
+	}
+}
+
+// A v3 FILTER IS NOT ANSWERED AROUND BY A v2 PEER.
+//
+// The company's phases used to narrow by a role name; they narrow by the
+// seat's own id now, and a v2 build reads only the role — so it would answer
+// "this seat's phases" with every seat's. A listing and an axis narrowed by
+// `suspended` are the same hazard: a v2 build counts the completion that
+// parked a turn as one that ended it. Each goes out as v3, the v2 peer refuses
+// by version, and the coverage names it; the unnarrowed question is still
+// answered by the whole fleet.
+//
+// Mutation: ask the narrowed phases in v1, and the v2 peer's row is listed as
+// this seat's; drop the Suspended case from [listParams.version], and the axis
+// is summed over the v2 peer's unfiltered bars.
+func TestAV3FilterIsNotAnsweredAroundByAV2Peer(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Add(-time.Minute)
+	appendTo(t, a, store.EventRecord{ID: "mine", Type: "agent_phase_completed", Category: "agent",
+		Time: at, Tags: map[string]string{"agent_id": "agent-a", "agent_role": "Engineer"},
+		Payload: []byte(`{"phase":"execute"}`)})
+	servesAs(t, broker, "node-v2", 2, store.EventRecord{ID: "twin", Type: "agent_phase_completed",
+		Category: "agent", Time: at.Add(time.Second)})
+	fan := fanFrom(a, "node-a", "node-v2")
+
+	all, coverage, err := fan.Phases(t.Context(), "", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete || len(all.Rows) != 2 {
+		t.Errorf("the company's phases: %v, coverage %+v — want both nodes' rows", idsOf(all.Rows), coverage)
+	}
+	seat, coverage, err := fan.Phases(t.Context(), "agent-a", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idsOf(seat.Rows); !slices.Equal(got, []string{"mine"}) {
+		t.Errorf("one seat's phases = %v, want only its own — a v2 peer's unfiltered row is not a match", got)
+	}
+	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
+		t.Errorf("coverage %+v does not name node-v2 as unable to answer v3", coverage)
+	}
+
+	ended := false
+	_, coverage, err = fan.List(t.Context(), store.ListQuery{Suspended: &ended, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
+		t.Errorf("a listing narrowed by suspended: coverage %+v does not name node-v2", coverage)
+	}
+	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{
+		ListQuery: store.ListQuery{Type: "agent_turn_completed", Suspended: &ended}, Bucket: store.BucketHour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
+		t.Errorf("an axis narrowed by suspended: coverage %+v does not name node-v2", coverage)
 	}
 }
 

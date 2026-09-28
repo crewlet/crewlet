@@ -1,594 +1,525 @@
 /**
- * Live › Now running: what the company is doing this minute.
+ * Live › Now running: what the company is doing this minute, and the phases
+ * it just finished.
  *
- * It replaces a board that answered "is the engine up" and nothing about the
- * work: five bands delivering nine scalars, four of which were summaries of
- * other screens, and NO PER-SEAT INFORMATION AT ALL — no seat list, no phase,
- * no model. It also moved on its own: a section appeared between two others
- * whenever a turn crossed a staleness threshold, the stat strip reflowed from
- * one column to three as tiles came and went, and on disconnect the whole
- * record card collapsed to a paragraph.
+ * FIVE CARDS, ALWAYS IN THE SAME PLACE, whether or not they hold anything —
+ * an empty one says so — because a screen whose sections come and go with the
+ * data cannot be read at a glance, which is the only way this one is read:
  *
- * This one answers the two questions an operator actually arrives with, in
- * that order:
+ *  - RUNNING TURNS: one `LiveTurnRow` per seat the engine says is working —
+ *    the row Home draws, with where the turn is, how long it has run, the call
+ *    it is making and whether it has stopped moving;
+ *  - WAITING ON A PERSON: every coding run parked on a question, with who it
+ *    asks, how long it has waited and how long its box is still held, and an
+ *    Answer that sends the reply by the run's turn;
+ *  - IN A BOX: the rest of the detached coding runs in flight;
+ *  - ACTIVITY: the engine's own count of events over the window, and the
+ *    latest few;
+ *  - RECENT PHASES: the settled model calls, paged (`RecentPhases.tsx`).
  *
- *   1. What is my company doing right now?  → live seats, what is in a box
- *   2. What has it been doing?              → throughput, spend, the feed
+ * The spend panels and the onboarding cards that used to sit here went: the
+ * spend is Spend's, on the replicated usage domain, and the onboarding cards
+ * pointed at screens the sidebar already names.
  *
- * The third — "is anything waiting on me" — used to be here as an attention
- * band, and it is the Inbox's now: a condition waiting on somebody is a claim
- * on them rather than a statistic about the company, and two screens owning
- * one queue is two screens to keep agreeing about it. The band went; the
- * QUEUE ITSELF was left behind computing on every clock tick with nothing
- * rendering it, and with it a `stream` poll and a connection subscription
- * whose only reader was that dead memo.
+ * # The two conditions whose home is here
  *
- * The layout is FIXED. Every section is always present, in the same place, in
- * the same size, whether or not it has anything in it — an empty one says so.
- * A dashboard whose sections move when the data moves cannot be read at a
- * glance, which is the only way this screen is ever read.
+ * `lib/attention.ts` gives Live two subjects — a ROUND that has stopped moving
+ * and a coding RUN parked on a question. Neither is a card of its own any
+ * more: a quiet round is marked on its own running row, and a parked run is a
+ * row of Waiting on a person, each beside what it is about rather than in a
+ * list of alarms that restated the rows around it.
+ *
+ * # One set of filters for the whole screen
+ *
+ * `seat=` (a handle), `phase=` and `failed=` narrow every card that can honour
+ * them, and the window (`15m`, `1h`, `6h`) is the activity strip's. The seat
+ * is the seat's HANDLE: the engine resolves it to the id every node derives,
+ * so two unit seats sharing a role name are two filters.
  */
 
 import { useMemo } from "react";
-import { href, useNavigator } from "~/app/router.tsx";
-import { EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { WindowMeters } from "~/components/budget.tsx";
 import {
   ActivityStrip,
-  BarList,
   Button,
   Card,
   EmptyState,
-  EmptyValue,
-  Legend,
-  StatCard,
-  StatGroup,
-  Tag,
+  FilterChip,
+  FilterChipGroup,
+  Select,
 } from "@crewlethq/ui";
-// A phase is drawn in the series of the band the engine folds it into.
-import { phaseColor } from "~/lib/spend.ts";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
-import { mergeRuns, RunStatus } from "./Runs.tsx";
 import {
-  ArrowRightGlyph,
-  BookOpenGlyph,
-  ZapGlyph,
-  UsersGlyph,
-  LinkGlyph,
-  BrainGlyph,
+  ChartNoAxesGanttGlyph,
+  CircleQuestionMarkGlyph,
   ClockGlyph,
   SquareTerminalGlyph,
-  ChartNoAxesGanttGlyph,
-  CoinsGlyph,
+  XGlyph,
 } from "@crewlethq/icons/glyphs";
-import {
-  useAgents,
-  useEvents,
-  useOrg,
-  useOrgBudget,
-  useSandboxes,
-  useTokens,
-} from "~/lib/store-hooks.ts";
+import { href, useParam } from "~/app/router.tsx";
+import { EventRow, QueryState } from "~/components/common.tsx";
+import { CoverageNote } from "~/components/CoverageNote.tsx";
+import { DecisionRow } from "~/components/DecisionRow.tsx";
+import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
+import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { mergeRuns, RunStatus } from "./Runs.tsx";
+import { RecentPhases } from "./RecentPhases.tsx";
+import { useAgents, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { activityOf, awaitingPerson, indexOrg, nameOfIn } from "~/lib/seats.ts";
-import { fmtCount, plural, relTime, tsKey } from "~/lib/format.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { awaitingPerson, indexOrg, workingLongestFirst } from "~/lib/seats.ts";
+import { phaseKey, type PhaseRecord } from "~/lib/phases.ts";
+import { plural, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { MAX_EVENTS } from "~/contract/wire.ts";
-import { cutInto, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
+import { cutInto, spanOf, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
-import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
-import { Mark } from "~/ui/glyph.tsx";
-import { useAttention } from "~/lib/useAttention.ts";
-import { WHERE_OF, watchedIn } from "~/lib/attention.ts";
+import type { AgentRow, EventSeries, SandboxRun } from "~/protocol/index.ts";
 
 /**
- * WHICH WINDOWS THE STRIP HAS.
+ * WHICH WINDOWS THE STRIP HAS: the short end of the shared vocabulary, since
+ * this screen is about now and the event log owns every longer question.
  *
- * The short end of the shared vocabulary, and NO CUSTOM INTERVAL — this strip
- * is drawn from the events THIS TAB is holding, which is the last
- * [MAX_EVENTS] and nothing older, so a window ending last Tuesday could only
- * ever render as empty. Cost's picker offers the long end of the same
- * vocabulary, so `1d` means one thing on both screens even though neither
- * offers it to the other's reader.
+ * MINUTES AT EVERY WIDTH, asked of the engine and then summed into the
+ * strip's cells: six hours is 360 minute bars, well inside the engine's cap,
+ * and a sum of whole bars into a cell is exact where re-bucketing hours into
+ * a sixty-cell strip would not be.
  */
-const STRIP_OFFER: Offer = { ranges: ["15m", "1h", "6h"], custom: false, fallback: "1h" };
+const STRIP_OFFER: Offer = {
+  ranges: ["15m", "1h", "6h"],
+  custom: false,
+  fallback: "1h",
+  buckets: ["minute"],
+};
 
 /**
- * The most cells the strip is ever cut into.
- *
- * A CAP rather than a fixed count, and [cutInto] is where both halves are
- * decided: sixty is what an hour of minute cells already drew and what the
- * stylesheet is sized for, and a wider window widens the cell rather than
- * adding slivers past it.
+ * The most cells the strip is ever cut into: sixty is an hour of minute
+ * cells, and a wider window widens the cell rather than adding slivers.
  */
 const STRIP_CELLS = 60;
 
 /**
- * How many coding runs the "In a box" panel draws before it says how many more.
+ * How many events the Activity card lists under its strip: seven rows is the
+ * height of the In a box card beside it at eight, so the pair ends level.
+ */
+export const LATEST_EVENTS = 7;
+
+/**
+ * How many coding runs In a box draws before it says how many more.
  *
- * EIGHT, which is the feed's seven beside it plus a row: both lists are on a
- * landing screen read at a glance, and a row is `--size-row-md` tall, so eight is a
- * screenful rather than a scroll. The set is NOT bounded by the seat count the
- * way the live tiles are — a run parked on a question that nobody ever answers
- * stays in the record until the retention sweep takes it, so a company can
- * accumulate more of these than it has seats. The full list is one click away
- * and the panel says how much of it is not here.
+ * EIGHT: a row is `--size-row-md` tall, so eight is a screenful rather than a
+ * scroll. The set is not bounded by the seat count the way the running turns
+ * are — a seat can run several boxes — so the full list is one click away and
+ * the card says how much of it is not here.
  */
 const IN_BOX_ROWS = 8;
 
+/** How often the durable coding-run rows are read again. */
+const RUNS_POLL_MS = 30_000;
+
+/** How often a seat's own latest events are read again, when one is chosen. */
+const SEAT_EVENTS_POLL_MS = 15_000;
+
+/** The phases the engine emits, the turn's own two first. */
+const PHASES = [
+  "execute",
+  "review",
+  "onboarding",
+  "sandbox",
+  "subagent",
+  "auxiliary",
+  "judge",
+] as const;
+
+/** The phase a running turn is in, in the vocabulary the phase filter uses. */
+function runningPhase(row: AgentRow): string {
+  if (row.turn?.stage === "parked") return "sandbox";
+  return row.live_call?.phase ?? row.current_phase ?? "context";
+}
+
 export function LiveNow() {
-  const nav = useNavigator();
+  const now = useNow();
   const agents = useAgents();
   const sandboxes = useSandboxes();
-  const events = useEvents();
+  const pushed = useEvents();
   const org = useOrg();
-  const tokens = useTokens();
-  const budget = useOrgBudget();
-  const now = useNow();
-  // THE DURABLE CODING RUNS, the same source the Inbox reads: the attention
-  // queue counts down a parked run's pause window, which only the durable row
-  // carries, and two screens computing one queue from two sources would
-  // disagree about whether anybody is waiting.
-  const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: 30_000 });
-  // NOT ALIGNED to a bucket: the strip's cell is its own, finer than either of
-  // the engine's, and its newest cell is the minute in progress.
+  const viewer = useViewer();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const { open: openPeek } = usePeekControls();
+
+  // EVERY FILTER IS A FILTER, so it replaces the history entry.
+  const [seat, setSeat] = useParam("seat", "", "filter");
+  const [phase, setPhase] = useParam("phase", "", "filter");
+  const [failed, setFailed] = useParam("failed", "", "filter");
+  // NOT ALIGNED to a bucket: the strip's newest cell is the minute in progress.
   const range = useTimeRange(now, STRIP_OFFER, false);
 
-  const index = useMemo(() => indexOrg(org), [org]);
-  const nameOf = useMemo(() => nameOfIn(index), [index]);
+  const seatRow = agents.find((a) => a.handle === seat);
+  const agentSeats = useMemo(() => index.seats.filter((s) => s.kind === "agent"), [index.seats]);
+  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
 
-  const live = useMemo(
+  // --- running turns -----------------------------------------------------
+  const running = useMemo(
     () =>
-      index.seats
-        .filter((s) => s.kind === "agent")
-        .map((seat) => ({ seat, agent: agents.find((a) => a.role === seat.name) }))
-        .filter(({ agent }) => activityOf(agent) === "working"),
-    [index.seats, agents],
+      workingLongestFirst(agents).filter(
+        (a) => (!seat || a.handle === seat) && (!phase || runningPhase(a) === phase),
+      ),
+    [agents, seat, phase],
+  );
+  // THE PHASES THE RUNNING ROWS ARE DRAWING, so a phase that completes lands
+  // in Recent phases at once instead of behind the "new rows" button.
+  const runningKeys = useMemo(
+    () =>
+      agents.flatMap((a) =>
+        a.live_call
+          ? [phaseKey(a.live_call.turn_id, a.live_call.phase, a.live_call.iteration)]
+          : [],
+      ),
+    [agents],
   );
 
-  /**
-   * WHAT IS IN A BOX RIGHT NOW — the durable rows and the live projection
-   * folded by the Runs screen's own function.
-   *
-   * NOTHING IS CUT TO "NOT FINISHED" ANY MORE, because nothing finished can
-   * arrive: a settled run's record is deleted, and the projection drops its
-   * entry on completion, so both sources carry only live runs.
-   *
-   * Both sources, because neither alone is "right now": the projection is
-   * reconciled against the durable record only every thirty seconds, so a run
-   * the events never announced reaches it a reconcile late, and the store is a
-   * poll behind a box that came up two seconds ago. Counting only the projection is what made the tile below disagree
-   * with the Inbox about whether anything was waiting.
-   */
-  const inFlight = useMemo(() => mergeRuns(runs?.runs ?? [], sandboxes), [runs, sandboxes]);
-  const parked = inFlight.filter((r) => awaitingPerson(r.status)).length;
+  // --- coding runs -------------------------------------------------------
+  // THE DURABLE ROWS AND THE PUSH, folded by the Runs screen's own function:
+  // the push is a reconcile behind a box that came up two seconds ago, the
+  // store a poll behind it, and neither alone is "right now".
+  const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const inFlight = useMemo(
+    () =>
+      mergeRuns(runs.data?.runs ?? [], sandboxes).filter((r) => !seat || r.agent_handle === seat),
+    [runs.data, sandboxes, seat],
+  );
+  const waiting = inFlight.filter((r) => awaitingPerson(r.status));
+  const boxed = inFlight.filter((r) => !awaitingPerson(r.status));
 
-  const { open: openPeek } = usePeekControls();
-  // THE CONDITIONS WHOSE HOME IS THIS SCREEN — see the card below.
-  const attention = useAttention();
-  const watching = attention.filter((a) => WHERE_OF[a.subject] === "live");
-
-  // The activity strip is keyed by the BUCKET, never by index: keying the cells
-  // `p0..p59` over a window recomputed from the clock shifts every cell's
-  // content one position left on each roll, and rewrites the lot.
+  // --- activity ----------------------------------------------------------
   const { cell, cells } = cutInto(spanOf(range.window), STRIP_CELLS);
-  const strip = useMemo(() => {
-    const end = Math.floor(now / cell) * cell;
-    const buckets = new Map<number, number>();
-    for (let t = end - (cells - 1) * cell; t <= end; t += cell) buckets.set(t, 0);
-    for (const ev of events) {
-      const t = Math.floor(tsKey(ev.timestamp) / cell) * cell;
-      if (buckets.has(t)) buckets.set(t, (buckets.get(t) ?? 0) + 1);
+  const series = useQuery(
+    "event_series",
+    { since: range.since, until: range.until, bucket: "minute", ...(seat ? { seat } : {}) },
+    { pollMs: 30_000 },
+  );
+  const strip = useMemo(
+    () => stripOf(series.data, now, cell, cells),
+    [series.data, now, cell, cells],
+  );
+  // A SEAT'S OWN LATEST EVENTS come from the engine, narrowed by its id: the
+  // push names no seat on an event, so filtering it here would be a guess.
+  const seatEvents = useQuery(
+    "events",
+    { seat, limit: LATEST_EVENTS },
+    { enabled: seat !== "", pollMs: SEAT_EVENTS_POLL_MS },
+  );
+  const latest = seat ? (seatEvents.data?.events ?? []) : pushed.slice(0, LATEST_EVENTS);
+
+  // A recorded phase names its seat by id and by role; the chart names it.
+  const nameOfPhase = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const a of agents) {
+      if (a.agent_id && a.handle)
+        byId.set(a.agent_id, index.byHandle.get(a.handle)?.name ?? a.role);
     }
-    return [...buckets.entries()].map(([t, v]) => ({ t, v }));
-  }, [events, now, cell, cells]);
+    return (r: PhaseRecord) => byId.get(r.agentId) ?? r.role;
+  }, [agents, index]);
 
-  // The feed's own retention is the limit of what this panel can HONESTLY
-  // claim: 400 events fill in minutes on a busy company, so a strip covering
-  // an hour has to say where the record actually starts rather than drawing
-  // the gap as quiet.
-  const oldestHeld = events.length ? tsKey(events[events.length - 1]!.timestamp) : 0;
-  const covered = cells * cell;
-  const stripTruncated = events.length >= MAX_EVENTS && oldestHeld > now - covered;
-
-  const seatCount = index.seats.filter((s) => s.kind === "agent").length;
-  const humanCount = index.seats.length - seatCount;
-  const idle = agents.filter((a) => activityOf(a) === "idle").length;
-  const orgMeter = budget?.org;
-
-  const phaseSpend = useMemo(
-    () =>
-      (tokens?.by_phase ?? [])
-        .map((p) => ({
-          // THE SERIES' OWN IDENTITY, which their BarList and Legend both
-          // require: a ranked list is re-ranked by every push, and a row
-          // keyed by position hands the focused row's node to whichever
-          // series has taken that place.
-          id: p.phase,
-          label: p.phase,
-          value: p.total_tokens,
-          display: fmtCount(p.total_tokens),
-          color: phaseColor(p.phase),
-          sub: `${p.calls.toLocaleString()} calls`,
-        }))
-        .sort((a, b) => b.value - a.value),
-    [tokens],
-  );
-
-  const topSeats = useMemo(
-    () =>
-      (tokens?.by_agent ?? [])
-        .slice()
-        .sort((a, b) => b.total_tokens - a.total_tokens)
-        .slice(0, 6)
-        .map((a) => ({
-          id: a.handle || a.role,
-          label: a.role,
-          value: a.total_tokens,
-          display: fmtCount(a.total_tokens),
-          href: href(["agents", "seats", a.handle || a.role]),
-        })),
-    // `href` is a pure function of its arguments, not the navigator: listing
-    // `nav` here made this recompute on every route change and named a
-    // dependency the body does not read.
-    [tokens],
-  );
+  const filtering = !!(seat || phase || failed === "true");
+  const eventLog = href(["live", "events"], seat ? { seat } : undefined);
 
   return (
     <>
+      {/* THE WINDOW ALONE. The shell's header already carries how many seats
+          are working, on every screen; a second count here drew the same
+          number twice side by side and pushed the shell's chip off a phone's
+          page bar. */}
       <PageActions>
-        {
-          <>
-            <Tag appearance="outline">{plural(seatCount, "agent seat")}</Tag>
-            {humanCount > 0 && <Tag appearance="outline">{plural(humanCount, "human")}</Tag>}
-            <TimeRangePicker range={range} ariaLabel="Activity window" />
-            <Button
-              variant="secondary"
-              leadingIcon={<BrainGlyph size="sm" />}
-              onClick={() => nav.to(["live", "turns"])}
-            >
-              Turns
-            </Button>
-          </>
-        }
+        <TimeRangePicker range={range} ariaLabel="Activity window" />
       </PageActions>
-      <PageNote>
-        What the company is doing at this moment — which seats are working, what is running in a
-        box, what is being watched, and what it is costing. WHAT NEEDS A PERSON is not here: it is
-        the Inbox, because a condition waiting on somebody is a claim on them rather than a
-        statistic about the company.
-      </PageNote>
 
-      {/* 2. What the company is doing. */}
-      {/* StatGroup IS the flush panel this row sat in — same surface, same
-          hairline, same clip — so there is no Panel around it any more. */}
-      <StatGroup columns={4}>
-        <StatCard
-          icon={<ZapGlyph size="xs" />}
-          label="Working now"
-          value={live.length}
-          // THE OTHER HALF OF THE SAME COUNT, not a list of who. `sub` is one
-          // ellipsized line and a seat's name is founder prose, so the join was
-          // cut mid-word and named a seat nobody configured. WHO is working is
-          // the Live seats card immediately below, which draws one tile per seat
-          // — so the caption spends its line on the fact that card does not
-          // carry, and does it on one branch rather than two that differ by a
-          // suffix and drift.
-          sub={`${plural(idle, "seat")} idle and waiting for work`}
-        />
-        <StatCard
-          icon={<SquareTerminalGlyph size="xs" />}
-          label="Coding runs"
-          value={inFlight.length}
-          sub={
-            parked > 0
-              ? `${plural(parked, "run")} paused on a question`
-              : "detached sandbox runs in flight"
-          }
-        />
-        <StatCard
-          icon={<ChartNoAxesGanttGlyph size="xs" />}
-          label={`Events · last ${windowLabel(range.window)}`}
-          value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
-          sub={
-            stripTruncated
-              ? "the tab holds the last 400 events, so this hour is partial"
-              : "everything the engine published"
-          }
-        />
-        <StatCard
-          icon={<CoinsGlyph size="xs" />}
-          label="Tokens"
-          value={
-            tokens ? fmtCount(tokens.totals.total_tokens) : <EmptyValue label="Not counted yet" />
-          }
-          sub={
-            tokens
-              ? `${tokens.totals.calls.toLocaleString()} model calls`
-              : "no spend has been recorded yet"
-          }
-        />
-      </StatGroup>
-
-      <div className="grid grid-auto-lg">
-        <Card>
-          <Card.Header
-            icon={<UsersGlyph size="sm" />}
-            count={live.length}
-            actions={
-              <Button size="small" variant="ghost" onClick={() => nav.to(["agents", "roster"])}>
-                All seats
-              </Button>
-            }
+      <div className="live-now">
+        <div className="toolbar live-filters">
+          <Select
+            width="auto"
+            value={seat}
+            onChange={(value) => setSeat(String(value))}
+            options={[
+              { value: "", label: "Every seat" },
+              ...agentSeats.map((s) => ({ value: s.handle, label: s.name })),
+            ]}
+            ariaLabel="Seat"
+            menuClassName="seat-filter-menu"
+            placeholder="Every seat"
+            active={seat !== ""}
+          />
+          {/* A PICKER, like the seat beside it: seven phase chips wrapped to
+              three rows on a phone, and this toolbar is sticky. */}
+          <Select
+            width="auto"
+            value={phase}
+            onChange={(value) => setPhase(String(value))}
+            options={[
+              { value: "", label: "Every phase" },
+              ...PHASES.map((p) => ({ value: p, label: p })),
+            ]}
+            ariaLabel="Phase"
+            placeholder="Every phase"
+            active={phase !== ""}
+          />
+          <FilterChipGroup
+            label="Failures"
+            hideLabel
+            semantics="radio"
+            allowNone
+            // `failed=true`, THE SPELLING Turns uses for the same filter, so
+            // an address carried from one Live screen to the other means the
+            // same thing on both.
+            value={failed === "true" ? "true" : ""}
+            onValueChange={(next) => setFailed(next ? "true" : "")}
           >
-            <Card.Title>Live seats</Card.Title>
-          </Card.Header>
-          {live.length ? (
-            <div className="seat-grid">
-              {live.map(({ seat, agent }) => (
-                // THE TILE IS ALREADY AN ANCHOR to the seat's page, so the
-                // peek is opened from a wrapper that generates NO BOX of its
-                // own: `display: contents` leaves the card itself the grid
-                // item, where a wrapping div would become one and the cards in
-                // a row would stop matching heights. The click still bubbles —
-                // `display: contents` removes the box, not the node — and
-                // `rowPeekHandler` is the frame's one copy of which clicks
-                // mean elsewhere, so ⌘-click still opens the seat's page.
-                <div
-                  key={seat.handle}
-                  style={{ display: "contents" }}
-                  onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
-                >
-                  <SeatCard seat={seat} agent={agent} nameOf={nameOf} />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              size="compact"
-              icon={<ClockGlyph size={32} />}
-              title="No seat is mid-turn"
-              description={
-                seatCount
-                  ? "Every seat is attached to its mailbox and waiting. Work arrives from a webhook, a schedule, or a colleague."
-                  : "No agent seats are defined. Import a company configuration to spawn some."
-              }
-            />
+            <FilterChip value="true">failed phases</FilterChip>
+          </FilterChipGroup>
+          {filtering && (
+            <Button
+              size="small"
+              variant="ghost"
+              leadingIcon={<XGlyph size="xs" />}
+              onClick={() => {
+                setSeat("");
+                setPhase("");
+                setFailed("");
+              }}
+            >
+              Clear
+            </Button>
           )}
-        </Card>
+        </div>
 
-        <Card>
-          <Card.Header
-            icon={<ChartNoAxesGanttGlyph size="sm" />}
-            actions={
-              <Button size="small" variant="ghost" onClick={() => nav.to(["live", "events"])}>
-                Event log
-              </Button>
-            }
-          >
-            <Card.Title>{`Activity · last ${windowLabel(range.window)}`}</Card.Title>
-          </Card.Header>
-          <div className="col gap-3">
-            {/* THEIR STRIP IS ONE PICTURE WITH A NAME. Ours was sixty bare
-                divs with a per-cell `title` and no accessible name at all,
-                and it scaled opacity with the value as well as height —
-                which is the defect their own doc names, since the quietest
-                buckets then sat under 3:1. The per-cell tooltip is what is
-                lost; `summary` says the peak and the total instead. */}
-            <ActivityStrip
-              buckets={strip}
-              label={`Events over the last ${windowLabel(range.window)}`}
-              summary={({ peak, total, buckets }) =>
-                `${plural(total, "event")} over ${buckets} buckets, ${peak} in the busiest.`
+        <div className="live-row-pair">
+          <Card padding="none" className="live-card">
+            <Card.Header
+              icon={<LiveDot running={running.length} />}
+              count={running.length}
+              actions={
+                <a className="t-link" href={href(["live", "turns"], seat ? { seat } : undefined)}>
+                  Every turn
+                </a>
               }
-            />
-            {stripTruncated && (
-              <span className="t-caption">
-                This tab keeps the last {MAX_EVENTS} events, matching the engine's own feed
-                retention — the earliest minutes here are cut off rather than quiet.
-              </span>
+            >
+              <Card.Title as="h3">Running turns</Card.Title>
+            </Card.Header>
+            {running.length > 0 ? (
+              <ul className="live-list">
+                {running.map((row) => (
+                  <LiveTurnRow key={row.id} row={row} index={index} now={now} />
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                size="compact"
+                icon={<ClockGlyph size={32} />}
+                title={filtering ? "No running turn matches these filters" : "No seat is mid-turn"}
+                description={
+                  filtering
+                    ? "A turn appears here the moment it starts, if it matches."
+                    : agentSeats.length
+                      ? "Every seat is waiting for work. A turn starts when a webhook, a schedule or a colleague wakes one."
+                      : "No agent seats are defined yet."
+                }
+              />
             )}
-            <div className="list">
-              {events.slice(0, 7).map((ev) => (
-                <EventRow key={ev.id} event={ev} />
-              ))}
-              {!events.length && (
-                <EmptyState
-                  size="compact"
-                  icon={<ChartNoAxesGanttGlyph size={32} />}
-                  title="Nothing has happened yet"
-                  description="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
+          </Card>
+
+          <Card padding="none" className="live-card">
+            <Card.Header icon={<CircleQuestionMarkGlyph size="sm" />} count={waiting.length}>
+              <Card.Title as="h3">Waiting on a person</Card.Title>
+            </Card.Header>
+            {waiting.length > 0 ? (
+              <ul className="decision-list">
+                {waiting.map((run) => (
+                  <DecisionRow
+                    key={run.turn_id}
+                    subject={{ kind: "run", at: run.paused_at || run.updated_at, run }}
+                    decider={{ handle: viewer.handle }}
+                    now={now}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                size="compact"
+                icon={<CircleQuestionMarkGlyph size={32} />}
+                title="No run is waiting on anybody"
+                description="A coding run that stops to ask a question is listed here, with an Answer that resumes it."
+              />
+            )}
+          </Card>
+        </div>
+
+        <div className="live-row-pair live-row-even">
+          <Card padding="none" className="live-card">
+            <Card.Header
+              icon={<SquareTerminalGlyph size="sm" />}
+              count={boxed.length}
+              actions={
+                <a className="t-link" href={href(["live", "runs"])}>
+                  All runs
+                </a>
+              }
+            >
+              <Card.Title as="h3">In a box</Card.Title>
+            </Card.Header>
+            {runs.error && !runs.data ? (
+              <QueryState error={runs.error} loading={false} />
+            ) : boxed.length > 0 ? (
+              <div className="list">
+                {boxed.slice(0, IN_BOX_ROWS).map((run) => (
+                  <InBoxRow
+                    key={run.turn_id}
+                    run={run}
+                    who={seatName(run.agent_handle) || run.role}
+                    now={now}
+                    onOpen={() => openPeek({ kind: "run", id: run.turn_id })}
+                  />
+                ))}
+                {/* WHAT IS NOT SHOWN, said: a list cut at eight with no note
+                    reads as a company with eight runs. */}
+                {boxed.length > IN_BOX_ROWS && (
+                  <a className="list-row clickable" href={href(["live", "runs"])}>
+                    <span className="t-caption">
+                      {plural(boxed.length - IN_BOX_ROWS, "more run")} in a box — all runs
+                    </span>
+                  </a>
+                )}
+              </div>
+            ) : (
+              <EmptyState
+                size="compact"
+                icon={<SquareTerminalGlyph size={32} />}
+                title="Nothing is running in a box"
+                description="No coding run is in flight. A finished run's record is its turn's trace."
+              />
+            )}
+          </Card>
+
+          <Card padding="none" className="live-card">
+            <Card.Header
+              icon={<ChartNoAxesGanttGlyph size="sm" />}
+              subtitle={
+                series.data
+                  ? `${plural(series.data.total, "event")} in the last ${windowLabel(range.window)}`
+                  : `the last ${windowLabel(range.window)}`
+              }
+              actions={
+                <a className="t-link" href={eventLog}>
+                  Event log
+                </a>
+              }
+            >
+              <Card.Title as="h3">Activity</Card.Title>
+            </Card.Header>
+            {/* BOTH READS THIS CARD MAKES OF THE FLEET: the count, and a seat's
+                own latest events, each of which a node can be missing from. */}
+            <CoverageNote
+              coverage={[series.data?.coverage, seat ? seatEvents.data?.coverage : undefined]}
+              what="this activity"
+            />
+            <div className="live-strip">
+              {series.error && !series.data ? (
+                <QueryState error={series.error} loading={false} />
+              ) : (
+                <ActivityStrip
+                  buckets={strip}
+                  label={`Events over the last ${windowLabel(range.window)}`}
+                  summary={({ peak, total, buckets }) =>
+                    `${plural(total, "event")} over ${buckets} buckets, ${peak} in the busiest.`
+                  }
                 />
               )}
             </div>
-          </div>
-        </Card>
-      </div>
-
-      {/* WHAT IS BEING WATCHED: the conditions whose home is here
-          (`lib/attention.ts`, `where: live`) — a round that has stopped
-          moving, and every coding run parked on a question. They are watched
-          rather than decided, and a run waiting on a PERSON already reaches
-          them in their own Inbox, so this is the company-wide view of both.
-          Always drawn, for the reason every section here is. */}
-      <Card padding="none">
-        <Card.Header icon={<ClockGlyph size="sm" />} count={watching.length}>
-          <Card.Title>Being watched</Card.Title>
-        </Card.Header>
-        {watching.length > 0 ? (
-          <ul className="live-watch">
-            {watching.map((item) => (
-              <li key={item.id} className="live-watch-row">
-                <span className="attention-icon" data-severity={item.severity}>
-                  <Mark name={item.icon} size="sm" />
-                </span>
-                <span className="col live-watch-body">
-                  <strong className="t-cell">{item.title}</strong>
-                  <span className="t-caption">{item.detail}</span>
-                </span>
-                {item.path && (
-                  <a className="t-link" href={href(item.path, item.query)}>
-                    Open
-                  </a>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState
-            size="compact"
-            icon={<ClockGlyph size={32} />}
-            title="Nothing is being watched"
-            description={`Checked and clear: ${watchedIn("live")}.`}
-          />
-        )}
-      </Card>
-
-      {/* WHAT IS IN A BOX, as rows rather than as one integer.
-          The tile above has always counted these and the screen's own note
-          promises "what is running in a box", and a count is the one shape
-          that cannot answer which run or whose. Always drawn, empty included,
-          for the reason every other section here is: a dashboard whose
-          sections come and go with the data cannot be read at a glance. */}
-      <Card padding="none">
-        <Card.Header
-          icon={<SquareTerminalGlyph size="sm" />}
-          count={inFlight.length}
-          subtitle="detached coding runs that have not finished"
-          actions={
-            <Button size="small" variant="ghost" onClick={() => nav.to(["live", "runs"])}>
-              All runs
-            </Button>
-          }
-        >
-          <Card.Title>In a box</Card.Title>
-        </Card.Header>
-        {inFlight.length > 0 ? (
-          <div className="list">
-            {inFlight.slice(0, IN_BOX_ROWS).map((run) => (
-              // A REAL LINK to the run's page, peeking on a plain click — the
-              // same rule every row in the product follows, written once in
-              // `rowPeekHandler`.
-              <a
-                key={run.turn_id}
-                className="list-row clickable"
-                href={peekHref({ kind: "run", id: run.turn_id })}
-                onClick={rowPeekHandler(() => openPeek({ kind: "run", id: run.turn_id }))}
-              >
-                <RunStatus status={run.status} />
-                <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
-                  <span className="truncate t-cell">
-                    {run.task_description || "No task was recorded"}
-                  </span>
-                  <span className="truncate t-caption">
-                    {run.role || run.agent_handle}
-                    {run.coding_agent ? ` · ${run.coding_agent}` : ""}
-                  </span>
-                </span>
-                <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>
-              </a>
-            ))}
-            {/* WHAT IS NOT SHOWN, said rather than left to be inferred: a list
-                cut at eight with no note reads as a company with eight runs. */}
-            {inFlight.length > IN_BOX_ROWS && (
-              <a className="list-row clickable" href={href(["live", "runs"])}>
-                <span className="t-caption">
-                  {plural(inFlight.length - IN_BOX_ROWS, "more run")} in a box — all runs ↗
-                </span>
-              </a>
-            )}
-          </div>
-        ) : (
-          <EmptyState
-            size="compact"
-            icon={<SquareTerminalGlyph size={32} />}
-            title="Nothing is running in a box"
-            description="A coding run starts when a seat calls the sandbox tool. Every finished one is still in the record under Runs."
-          />
-        )}
-      </Card>
-
-      <div className="grid grid-auto-lg">
-        <Card>
-          <Card.Header
-            icon={<CoinsGlyph size="sm" />}
-            subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
-            actions={
-              <Button size="small" variant="ghost" onClick={() => nav.to(["spend"])}>
-                Spend
-              </Button>
-            }
-          >
-            <Card.Title>Spend by phase</Card.Title>
-          </Card.Header>
-          <div className="col gap-3">
-            <BarList data={phaseSpend} emptyLabel="No model calls in this window." />
-            {phaseSpend.length > 0 && (
-              <Legend
-                items={phaseSpend.map((p) => ({ id: p.id, label: p.label, color: p.color }))}
+            {seat && seatEvents.error && !seatEvents.data ? (
+              // A SEAT'S EVENTS THAT COULD NOT BE READ are not a quiet seat.
+              <QueryState error={seatEvents.error} loading={false} />
+            ) : latest.length > 0 ? (
+              <div className="live-feed">
+                {latest.map((ev) => (
+                  <EventRow key={ev.id} event={ev} compact />
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                size="compact"
+                icon={<ChartNoAxesGanttGlyph size={32} />}
+                title="Nothing has happened yet"
+                description="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
               />
             )}
-            {orgMeter && orgMeter.windows.length > 0 && (
-              // THE CALENDAR WINDOWS, not the spend window above: each bar is
-              // one capped window of the company's shared counter against its
-              // own ceiling, in the colour the engine judged it.
-              <WindowMeters windows={orgMeter.windows} whose="The company's" />
-            )}
-          </div>
-        </Card>
-
-        <Card>
-          <Card.Header
-            icon={<UsersGlyph size="sm" />}
-            subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
-          >
-            <Card.Title>Top seats by spend</Card.Title>
-          </Card.Header>
-          <BarList data={topSeats} emptyLabel="No seat has spent tokens in this window." />
-        </Card>
-      </div>
-
-      <Section
-        title="Getting more out of this"
-        hint="every one of these is a real screen backed by a real answer"
-      >
-        <div className="grid grid-auto">
-          {[
-            {
-              icon: <BrainGlyph size="sm" />,
-              title: "Turns",
-              body: "Every phase the models ran, round by round, with the tools each round called and the prompts they saw.",
-              path: ["live", "turns"],
-            },
-            {
-              icon: <LinkGlyph size="sm" />,
-              title: "Agent-to-agent",
-              body: "The private channels seats opened with each other: one ask, one answer, then closed.",
-              path: ["live", "a2a"],
-            },
-            {
-              icon: <BookOpenGlyph size="sm" />,
-              title: "Knowledge",
-              body: "Search the company knowledge base the way an agent does, and read what each seat has learned for itself.",
-              path: ["knowledge"],
-            },
-          ].map((card) => (
-            <a key={card.title} className="seat-card" href={href(card.path)}>
-              <div className="row">
-                <span className="attention-icon" data-severity="info">
-                  {card.icon}
-                </span>
-                <strong className="t-body">{card.title}</strong>
-                <span className="spacer" />
-                <ArrowRightGlyph size="sm" />
-              </div>
-              <span className="t-caption">{card.body}</span>
-            </a>
-          ))}
+          </Card>
         </div>
-      </Section>
+
+        <RecentPhases
+          seat={seat}
+          agentId={seatRow?.agent_id ?? ""}
+          phase={phase}
+          failed={failed === "true"}
+          runningKeys={runningKeys}
+          nameOf={nameOfPhase}
+          now={now}
+        />
+      </div>
     </>
+  );
+}
+
+/**
+ * The strip's cells, summed from the engine's minute bars.
+ *
+ * KEYED BY THE CELL'S OWN INSTANT, never by position: keyed `p0..p59`, a
+ * window recomputed from the clock shifts every cell's content one place left
+ * on each roll and rewrites the lot. A bar is added to the cell its start falls
+ * in, so a cell's value is exactly the engine's count over it.
+ */
+export function stripOf(
+  series: EventSeries | null | undefined,
+  now: number,
+  cell: number,
+  cells: number,
+): { t: number; v: number }[] {
+  const end = Math.floor(now / cell) * cell;
+  const buckets = new Map<number, number>();
+  for (let t = end - (cells - 1) * cell; t <= end; t += cell) buckets.set(t, 0);
+  for (const bar of series?.bars ?? []) {
+    const t = Math.floor(Date.parse(bar.at) / cell) * cell;
+    if (buckets.has(t)) buckets.set(t, (buckets.get(t) ?? 0) + bar.count);
+  }
+  return [...buckets.entries()].map(([t, v]) => ({ t, v }));
+}
+
+/** One coding run in flight, as a row that opens it beside the list. */
+function InBoxRow({
+  run,
+  who,
+  now,
+  onOpen,
+}: {
+  run: SandboxRun;
+  who: string;
+  now: number;
+  onOpen: () => void;
+}) {
+  return (
+    // A REAL LINK to the run's page, peeking on a plain click — the rule
+    // every row in the product follows, written once in `rowPeekHandler`.
+    <a
+      className="list-row clickable"
+      href={peekHref({ kind: "run", id: run.turn_id })}
+      onClick={rowPeekHandler(onOpen)}
+    >
+      <RunStatus status={run.status} />
+      <span className="col live-box-body">
+        <span className="truncate t-cell">{run.task_description || "No task was recorded"}</span>
+        <span className="truncate t-caption">
+          {who}
+          {run.coding_agent ? ` · ${run.coding_agent}` : ""}
+        </span>
+      </span>
+      <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>
+    </a>
   );
 }

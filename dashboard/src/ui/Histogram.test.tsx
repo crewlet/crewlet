@@ -170,3 +170,20 @@ test("a bar's height is carried by a fill inside its slot", () => {
   expect(fills.map((f) => f.style.height)).toEqual(["0%", "100%"]);
   expect(slots[0]!.hasAttribute("data-empty")).toBe(true);
 });
+
+// THE FAILED SHARE IS THE FOOT OF ITS OWN BAR, and said in the bar's title.
+// The column's height stays the bucket's whole count, so totals compare as
+// before; a bar the engine sent no split for draws the plain fill, since a
+// split the answer did not carry is not a split of zero.
+test("a bar's failed share is drawn at its foot and named in its title", () => {
+  const bars = [{ ...days(2, [8])[0]!, failed: 2 }, { ...days(2, [0, 5])[1]! }];
+  const { container } = render(
+    <Histogram bars={bars} bucket="day" total={13} noun="turn" over="window" now={NOW} />,
+  );
+  const [split, plain] = [...container.querySelectorAll(".histogram-bar")];
+  const foot = split!.querySelector<HTMLElement>(".histogram-failed");
+  expect(foot?.style.height).toBe("25%");
+  expect(split!.getAttribute("title")).toMatch(/8 turns, 2 failed$/);
+  expect(plain!.querySelector(".histogram-failed")).toBeNull();
+  expect(plain!.getAttribute("title")).not.toMatch(/failed/);
+});

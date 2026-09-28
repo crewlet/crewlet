@@ -426,14 +426,15 @@ func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, erro
 	return TurnDetail{Rows: rows, Total: total, Traces: traces}, g.coverage, nil
 }
 
-// Phases answers the company's phase records, newest first, payload included.
-func (f *Fleet) Phases(ctx context.Context, role string, limit int, before *store.Cursor) (Listing, Coverage, error) {
+// Phases answers the company's phase records, newest first, payload included —
+// or one seat's, named by the id every node derives for its handle.
+func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
 	limit = phaseLimit(limit)
-	p := phasesParams{Role: role, Limit: limit, Before: cursorOf(before)}
+	p := phasesParams{AgentID: agentID, Limit: limit, Before: cursorOf(before)}
 	g, err := gather(ctx, f, QuestionPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.Phases(ctx, role, limit, before)
+			rows, more, err := f.Local.Phases(ctx, agentID, limit, before)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
@@ -500,6 +501,12 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	}
 	q.Limit = turnPage(q.Limit)
 	q.IDs = nil
+	// THE WINDOW IS PINNED to this node's clock before anybody is asked, for
+	// [Fleet.PhaseTokens]' reason — and because the whole turn has to be
+	// held against it: a node's half of a resumed turn can start inside the
+	// window while the turn began outside it on another node.
+	q.Since, q.Until = q.Window(time.Now().UTC())
+	q.SinceDays = 0
 	first, err := gather(ctx, f, QuestionTurns, turnsParamsOf(q), nil,
 		func(ctx context.Context) (turnsPart, error) { return turnsPartOf(ctx, f.Local, q) })
 	if err != nil {
@@ -552,6 +559,9 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 		// have failed.
 		partials = slices.DeleteFunc(partials, func(p store.TurnPartial) bool {
 			if q.Failed != nil && p.Failed != *q.Failed {
+				return true
+			}
+			if p.StartedAt.Before(q.Since) {
 				return true
 			}
 			return !byTokens && !q.Before.IsZero() && !p.StartedAt.Before(q.Before)

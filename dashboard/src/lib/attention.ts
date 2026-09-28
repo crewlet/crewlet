@@ -66,10 +66,12 @@ export const SUBJECTS: Record<Subject, string> = {
  *  - `engine`: the sidebar's health card and Home's status sentence, which
  *    are what a reader sees on every screen; an engine condition is a fact
  *    about the product they are looking at, not an item in anybody's queue.
- *  - `live`: Live › Now running, beside the rounds and runs it is about. A
- *    round that has not moved is watched, not decided, and a coding run
- *    parked on a question already reaches the person it asks through their
- *    own decisions (`decisions`), so the company-wide list of them is live.
+ *  - `live`: Live › Now running, BESIDE the rounds and runs it is about — a
+ *    quiet round is marked on its own running-turn row (`LiveTurnRow`), and a
+ *    parked run is a row of Waiting on a person with its Answer. A round that
+ *    has not moved is watched, not decided, and a coding run parked on a
+ *    question already reaches the person it asks through their own decisions
+ *    (`decisions`), so the company-wide list of them is live.
  *
  * TOTAL OVER [Subject], so a new subject is a type error until it has a home.
  */

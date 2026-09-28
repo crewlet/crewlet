@@ -510,7 +510,7 @@ export function useTurnView(turnId: string): TurnView {
     // the delegate call that spawned it rather than to this turn.
     //
     // THE WORD IS "ITERATIONS" EVERYWHERE NOW. "Rounds" is this product's word
-    // for a phase's TOOL rounds — `Model.tsx`'s column, every phase card's `3r`
+    // for a phase's TOOL rounds — Recent phases' column, every phase card's `3r`
     // — and one word over two quantities put "Rounds 1" directly above "3r" for
     // the same turn on the same screen.
     iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),

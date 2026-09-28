@@ -33,6 +33,14 @@ test("execute carries its round against the cap the phase was granted", () => {
   expect(steps.map((s) => s.label)).toEqual(["Context", "Execute · round 7 of 25", "Review"]);
 });
 
+// FROM THE OPENING FRAME, not from the first answer: the frame carries the cap
+// so the stepper can say it while the model is still thinking, and a slow first
+// round drew a bare "Execute" for as long as it took.
+test("execute says round one of the cap before the first round comes back", () => {
+  const { steps } = turnSteps(row({ round_num: -1, rounds_used: 0, max_rounds: 24 }));
+  expect(steps.map((s) => s.label)).toEqual(["Context", "Execute · round 1 of 24", "Review"]);
+});
+
 // SAID ONCE, WHERE THERE IS ROOM FOR IT: a phone's card takes the round out
 // of the step and says it beside the stepper, and the step is plain.
 test("the round can leave the step's label and is still said once", () => {

@@ -192,10 +192,9 @@ export function SeatCard({
           {/* NOT A BARE DASH. "round —" on a seat that is plainly working reads
               as a field the engine failed to report; the engine reported it
               exactly — `-1` is the opening frame a phase publishes before its
-              first provider call, so the phase has started and its first model
-              round has not come back. `t-num` stays: it is what keeps the digits
-              from jittering as the round advances, and it does nothing to a
-              word. */}
+              first provider call, so round 1 is in flight, and the hint says it
+              has not come back. `t-num` keeps the digits from jittering as the
+              round advances. */}
           <span className="t-caption t-num" title={round?.hint}>
             {round?.text}
           </span>
@@ -215,43 +214,91 @@ export function SeatCard({
  * columns rather than as prose. The category is a WORD, not a hue: eight
  * coloured category chips in one list, repeated on every row, is most of what
  * made the old feed unreadable.
+ *
+ * WHO IS SAID ONCE. An engine event's source and actor are routinely the same
+ * name — a lifecycle event is published BY the node and ABOUT the node — and
+ * drawing both put `harness-0` in two adjacent columns while the sentence
+ * between them was cut to "Organization…". The tail names the source only
+ * where it differs from the actor.
+ *
+ * `compact` is the row a CARD draws, beside other cards: the time and one
+ * line that is the actor followed by what happened, with no tail — the
+ * source and the category are the log's columns, one click away, and at half
+ * a page's width they were what the sentence gave its room up to.
  */
-export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => void }) {
+export function EventRow({
+  event,
+  onOpen,
+  compact = false,
+}: {
+  event: FeedRow;
+  onOpen?: () => void;
+  compact?: boolean;
+}) {
   const now = useNow();
-  const body = (
+  const actor = event.actor || "engine";
+  const what = event.summary || event.type;
+  const failedMark = event.failed && (
+    <TriangleAlertGlyph
+      size="xs"
+      aria-label="failed"
+      style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
+    />
+  );
+  const time = (
+    <time
+      className="feed-time"
+      dateTime={event.timestamp}
+      title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
+    >
+      {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
+          in the title; which DAY a row belongs to is a heading between days
+          (`routes/live/Activity.tsx`), because a date is a property of
+          the rows under it rather than of the first of them — and rendered
+          here it put `fmtDateTime` in a 62px column and wrapped one row per
+          day to three lines. */}
+      {fmtTime(event.timestamp)}
+    </time>
+  );
+  const source = event.source && event.source !== actor ? event.source : "";
+  // THE ENGINE'S OWN SENTENCES OFTEN OPEN WITH THEIR ACTOR ("Agent PM
+  // finished reflecting"), so a card's line prefixed with the actor read
+  // "Agent PM Agent PM finished…". Where the sentence already names them
+  // first, the actor IS its opening words, drawn in the actor's weight.
+  const opens = what.startsWith(`${actor} `);
+  const rest = opens ? what.slice(actor.length) : ` ${what}`;
+  // THE HOVER TEXT IS THE DRAWN LINE, built from the same two pieces: it
+  // spelled "actor — what" over a line reading "actor what", so the full
+  // text of a cut line was not the text that was cut.
+  const said = `${actor}${rest}`;
+  const body = compact ? (
     <>
-      <time
-        className="feed-time"
-        dateTime={event.timestamp}
-        title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
-      >
-        {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
-            in the title; which DAY a row belongs to is a heading between days
-            (`routes/live/Activity.tsx`), because a date is a property of
-            the rows under it rather than of the first of them — and rendered
-            here it put `fmtDateTime` in a 62px column and wrapped one row per
-            day to three lines. */}
-        {fmtTime(event.timestamp)}
-      </time>
-      <span className="feed-actor truncate">{event.actor || "engine"}</span>
-      <span className="feed-what truncate">
-        {event.failed && (
-          <TriangleAlertGlyph
-            size="xs"
-            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
-          />
-        )}
-        {event.summary || event.type}
+      {time}
+      {/* ONE LINE, and its title is the whole of it: a sentence cut at the
+          card's edge is still readable on hover. */}
+      <span className="feed-what truncate" title={said}>
+        {failedMark}
+        <span className="feed-actor">{actor}</span>
+        {rest}
+      </span>
+    </>
+  ) : (
+    <>
+      {time}
+      <span className="feed-actor truncate">{actor}</span>
+      <span className="feed-what truncate" title={what}>
+        {failedMark}
+        {what}
       </span>
       <span className="feed-tail">
-        {event.source && <span className="truncate">{event.source}</span>}
+        {source && <span className="truncate">{source}</span>}
         <span className="muted">{humanize(event.category) || "system"}</span>
       </span>
     </>
   );
   return (
     <a
-      className={cx("feed-row", event.failed && "failed")}
+      className={cx("feed-row", compact && "compact", event.failed && "failed")}
       href={href(["live", "events", event.id])}
       onClick={onOpen}
     >

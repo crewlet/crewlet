@@ -367,24 +367,70 @@
   gap: var(--spacing-1);
 }
 
-/* ---- Live's watched conditions ------------------------------------------ */
+/* ---- Live › Now running ------------------------------------------------- */
 
-.live-watch {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.live-watch-row {
+/* THE SAME SHELL AND RHYTHM AS HOME: cards on a 20px stack, paired rows at the
+   design's 1.62 : 1 where one card is the primary (the running turns beside
+   what waits on a person) and even where neither is. */
+.live-now {
   display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) var(--row-inline);
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+.live-filters {
+  flex-wrap: wrap;
+}
+.live-row-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
+.live-row-even {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.live-card {
+  min-width: 0;
+}
+/* 928px IS HOME'S OWN FOLD, for the same reason: the waiting card's Answer
+   and the run rows need the width the running column would leave them. */
+@container page (width < 928px) {
+  .live-row-pair,
+  .live-row-even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.live-strip {
+  padding: var(--spacing-3) var(--spacing-4);
   border-top: 1px solid var(--color-border-default);
 }
-.live-watch-body {
+.live-feed {
+  border-top: 1px solid var(--color-border-default);
+}
+.live-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+.live-box-body {
   flex: 1 1 auto;
-  gap: 2px;
+  gap: 0;
   min-width: 0;
+}
+.live-quiet {
+  flex: none;
+}
+/* A card's note sits on the card's own inset, above the rows it is about. */
+.live-card > .coverage-note {
+  margin: var(--spacing-3) var(--spacing-4) 0;
+}
+.coverage-nodes {
+  margin: var(--spacing-1) 0 0;
+  padding-inline-start: var(--spacing-5);
 }
 
 /* ---- Seat cards --------------------------------------------------------- */
@@ -1810,6 +1856,11 @@ a.prof-row:hover {
 }
 .feed-row:last-child {
   border-bottom: none;
+}
+/* A CARD'S ROW: the time and one line — the actor, then what happened —
+   taking every pixel the time leaves. See `EventRow`'s `compact`. */
+.feed-row.compact {
+  grid-template-columns: 62px minmax(0, 1fr);
 }
 .feed-row:hover {
   background: var(--color-surface-hover);
@@ -4253,6 +4304,16 @@ span.list-position-step {
    own declaration on the same element whichever sheet is bundled first. */
 .crewlet-select__menu.whose-day-menu {
   --crewlet-select-menu-max-height: 24rem;
+}
+
+/* A SEAT FILTER'S MENU: "Every seat" and the agents, one line each, TEN
+   before it scrolls (20rem at the kit's row height). The kit's 12rem is six
+   rows, which on the example company cut the list at its fifth agent with no
+   cue that three more sat under the edge — and a seat you cannot see is a
+   filter you cannot pick. A company with more seats than that scrolls, as a
+   long list should. Two classes, for the reason `whose-day-menu` gives. */
+.crewlet-select__menu.seat-filter-menu {
+  --crewlet-select-menu-max-height: 20rem;
 }
 
 /* ---- The census, and a meter in a cell ---------------------------------- */

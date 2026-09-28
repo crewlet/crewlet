@@ -1269,8 +1269,11 @@ test("the turns tab asks for this seat's turns by its handle", async () => {
   expect(askedFor("tokens")[0]?.params).toMatchObject({ seat: "swe", days: 7 });
   expect(screen.getByText("Where its tokens go")).toBeTruthy();
   expect(screen.getAllByText("4,321").length).toBeGreaterThan(0);
+  // LIVE NOW READS `seat=`, so the seat's model activity is its running turn
+  // and its recent phases there — not the turn list, which it pointed at
+  // while Live read no seat.
   expect(screen.getByRole("link", { name: "All its model activity" }).getAttribute("href")).toBe(
-    "#/live/turns?seat=swe",
+    "#/live?seat=swe",
   );
 });
 

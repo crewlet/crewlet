@@ -518,10 +518,13 @@ sequenceDiagram
 - **A question is asked in the lowest protocol version that answers it.**
   An older build ignores a filter it does not know and would answer a wider
   question than was asked, merged in as though it matched; so a listing
-  narrowed by a newer filter (`channel_id`, `seat`) — and the event axis,
-  whose failed split an older build never sends — goes out in the version
-  that introduced it, and a node on the older build refuses by version and
-  is named. Everything else is still answered by the whole fleet during a
+  narrowed by a newer filter (`channel_id`, `seat`, `suspended`), a page of
+  turns in a window of two instants (an older build reads only whole days
+  back from its own clock), the
+  company's `phases` narrowed to one seat, which an older build narrowed by a
+  role name two unit seats can share, and the event axis, whose failed split
+  an older build never sends — goes out in the version that introduced it,
+  and a node on the older build refuses by version and is named. Everything else is still answered by the whole fleet during a
   rolling upgrade.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor

@@ -338,7 +338,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Now running",
         icon: "zap",
         path: ["live"],
-        hint: "What the company is doing at this moment",
+        hint: "What the company is doing at this moment, and the phases it just finished",
       },
       {
         key: "turns",

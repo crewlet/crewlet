@@ -823,6 +823,20 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 		return store.ListQuery{}, err
 	}
 	q.WorkItem = item
+	// WHETHER A COMPLETION PARKED ITS TURN, three-valued as the turn list's
+	// `failed` is and for its reason: absent is every row. It is what a turns
+	// axis counts over — `type=agent_turn_completed&suspended=false` is the
+	// turns that ENDED, one each, where the type alone counts a turn that
+	// parked on a coding run and resumed twice.
+	if raw := strings.TrimSpace(p.String("suspended")); raw != "" {
+		switch raw {
+		case "true", "false":
+			flag := raw == "true"
+			q.Suspended = &flag
+		default:
+			return store.ListQuery{}, badParams("suspended", raw, []string{"true", "false"})
+		}
+	}
 	// THE EVENTS ONE SEAT PUBLISHED, named by its handle — see seatParam.
 	agentID, err := s.seatParam(p)
 	if err != nil {

@@ -194,7 +194,14 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 		before = &store.Cursor{Time: at, ID: id}
 	}
 	limit := Clamp(p.Int("limit", 0), DefaultPhasePage, store.MaxPhasePage)
-	listing, coverage, err := s.Events.Phases(ctx, p.String("role"), limit, before)
+	// ONE SEAT'S PHASES, by its HANDLE — see seatParam. It took a role name,
+	// which two unit seats stamped from one template share, so Live's
+	// `seat=` narrowed "this seat's rounds" to every such seat's.
+	agentID, err := s.seatParam(p)
+	if err != nil {
+		return nil, err
+	}
+	listing, coverage, err := s.Events.Phases(ctx, agentID, limit, before)
 	if err != nil {
 		return nil, err
 	}

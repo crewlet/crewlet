@@ -728,8 +728,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
 | `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(operator)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) |
 | `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
-| `#/live` | **Live › Now running** — what the company is doing at this moment | `window=15m\|1h\|6h` |
-| `#/live/turns` · `#/live/turns/{id}` | **Turns** — every turn, round by round; one turn | |
+| `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
+| `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable | |
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
@@ -2297,7 +2297,7 @@ twice and none nowhere:
 |---|---|---|
 | `seat` — the Inbox's "Needs a decision", and Home's "N conditions need a look" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
 | `engine` — the sidebar's health card and Home's status sentence | the engine and this node's link to it | a fact about the product the reader is looking at, on every screen, not an item in anybody's queue |
-| `live` — Live › Now running, "Being watched" | a round that has stopped moving, every coding run parked on a question | watched rather than decided; a run waiting on a PERSON already reaches them through their own decisions |
+| `live` — Live › Now running, beside what each is about | a round that has stopped moving (a caution or failure mark on its own running-turn row, never while the turn is parked), every coding run parked on a question (a row of **Waiting on a person**, answered in place) | watched rather than decided; a run waiting on a PERSON already reaches them through their own decisions, and a list of alarms restating the rows around it was a second copy of each |
 
 On Home the queue is COUNTED, not drawn: the `seat` conditions that are not
 the reader's own decisions — a seat stopped for a reason other than its
@@ -2928,6 +2928,104 @@ of which is what makes them worth having at all:
 The seat screen makes the same split, where it answers a second question:
 which of these turns is happening right now, readable at a glance from the
 accent ring rather than only by finding a badge.
+
+## Live › Now running and the turn list
+
+**Now running** (`#/live`) is five cards in fixed places, each saying so when
+it is empty, because a screen whose sections come and go with the data cannot
+be read at a glance:
+
+- **Running turns** — one row per seat the engine says is working, the row
+  Home's Live now draws (`LiveTurnRow`): what it is doing and on what — the
+  item's key, or on a turn charged to no item the trigger's own summary
+  ("Executing · Drafting the 2.4 launch brief") rather than a bare verb —
+  where the turn is (Context → Execute "round 7 of 25" → Review, and "round 1
+  of 25" from the phase's opening frame, before the model has answered once;
+  on a phone the round leads the call line instead, so Review keeps its place
+  on the stepper's one line),
+  how long it has run from the turn's own start —
+  so a turn still gathering context is already timed — the call it is making
+  or last made, and the whole row a link to its trace. A round with no update
+  for two minutes is marked **no update**, for ten **stalled**, in the
+  caution and failure tones — and never while the turn is parked, because a
+  detached coding run is silent on purpose.
+- **Waiting on a person** — every coding run parked on a question: whose, the
+  question, who it asks (the chart's names for the seats the engine resolved),
+  how long it has waited and how long its box is still held, and **Answer**,
+  which sends `answer_run{turn_id, answer}` as the person reading.
+- **In a box** — the rest of the detached runs in flight, eight before it
+  says how many more. Empty, it says *No coding run is in flight. A finished
+  run's record is its turn's trace* — a settled run's row is deleted, so the
+  sentence it replaced, promising every finished run under Runs, was false.
+- **Activity** — the engine's own count of events over the window
+  (`event_series`, minute bars summed exactly into the strip's cells) and the
+  latest seven events, each the time and ONE line: the actor, then what
+  happened. The source and category are the log's columns, a link away; at
+  half a page they were what the sentence gave its room up to, and the same
+  node printed as actor and as source is now said once everywhere.
+- **Recent phases** — the settled model calls, the only reader of `phases`,
+  paged with the engine's cursor (**Load 60 older**). There is no second
+  "running now" table: the running half of every phase is the turn rows above.
+
+`seat=` (a handle), `phase=` and `failed=true` narrow every card that can
+honour them, and the window (`15m`, `1h`, `6h`) is the activity strip's.
+`failed=true` is the spelling Turns uses for its own failure filter, so an
+address carried from one Live screen to the other means the same thing on
+both. The seat menu offers every agent the chart holds, in every unit, and
+shows ten before it scrolls. The page carries no working count of its own:
+the shell's header chip says how many seats are working on every screen, and
+a second one beside it said the same number twice and pushed the chip off a
+phone's page bar. A seat is
+asked for by its handle and the phases finishing on the push are matched on
+the seat's own id, never on a role name two unit seats can share. The
+spend panels and the onboarding cards are gone: the spend is Spend's, and
+the cards pointed at screens the sidebar already names.
+
+**Which finished phases are let in at once.** The settled list follows the
+rule above — nothing spliced in under a reader — and it states what counts as
+already seen: every row of a page the engine answered (the first, which can
+land after a restored scroll position, and each older page somebody pressed
+for) and the phases the running rows were drawing. Only a phase another turn
+finished while the reader was down the list waits behind the button.
+
+**Turns** (`#/live/turns`) opens on the axis, and the axis is the ENGINE's:
+`event_series` over `agent_turn_completed` with `suspended=false` — the turns
+that ENDED, one completion each, since a turn that parks on a coding run
+writes a completion for the segment that parked it — over the whole window,
+on every node, with each bar's failed share drawn at its foot. It was folded
+from the page of rows the screen held, which drew a week from the newest two
+hundred turns. The list under it is paged (a hundred a page, **Load older**),
+in the engine's order: `sort=-started` or `sort=-tokens`, the order Spend's
+costliest-turns drill-down lands on. Columns: Started, Seat, What it did,
+State (re-run, parked, running, failure — a headed column, sized to its
+badges), Iterations, Tokens, Took. The chart's key sits under its title, the
+count and the failed share first, so on a phone the explanatory tail is what
+gives way. Any node
+that did not answer either read is named above the list (`CoverageNote`).
+
+**The list is asked for the window itself** — `since` and `until`, the
+window's two instants on the turn's START — and the engine's answer is the
+list, with no second filter here. It was asked for "the last N days", N being
+the window's LENGTH, and filtered in the browser: a one-hour bar picked three
+days ago was asked as the last day, every row that came back was newer than
+the bar, and the list said "No turns in this window" under an axis counting a
+dozen. **Load older** is offered whenever the engine's cursor says there is
+more, on a page with no row as well, since the fleet's cursor can stop above
+every turn a node held.
+
+**The seat and the failure narrowing are controls, not chips.** The plan drew
+`seat=` and `failed=` as chips; they are a `Select` (every agent seat the chart
+holds, read from the same org index every screen walks — the top-level roles
+alone are the founders, so a menu built from them offered no seat at all) and a three-way `Segmented` (All · Carried a failure · Clean). A chip
+per seat is the eighteen-pill row the next section retired, and a chip is a
+two-state toggle where `failed=` has THREE values — every turn, only the ones
+that carried a failure, only the clean ones — and "absent" is the default an
+operator opens the screen for. **The axis is not narrowed by failure**, and
+its subtitle says so while `failed=` is set: "carried a failure" is a fact
+about a whole turn (any of its records failed), while the axis counts
+completion records, each with only its own flag — narrowed that way it would
+count a different set of turns from the list under the same heading, so it
+stays every turn with the failed share at each bar's foot.
 
 ## Controls that mean what they look like
 

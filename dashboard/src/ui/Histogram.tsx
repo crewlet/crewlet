@@ -43,6 +43,13 @@ export interface Bar {
   /** The bucket's START, RFC3339. */
   at: string;
   count: number;
+  /**
+   * How many of `count` failed, where the engine split them — `event_series`
+   * sends it on every bar. Drawn as the danger-toned foot of the fill and
+   * said in the bar's title; absent draws the plain fill, because a split the
+   * answer did not carry is not a split of zero.
+   */
+  failed?: number;
 }
 
 /**
@@ -113,11 +120,28 @@ export function Histogram({
       <div className="histogram" style={{ height }} role="group" aria-label={label}>
         {bars.map((b) => {
           const at = Date.parse(b.at);
-          const title = `${when(b.at, bucket)} — ${plural(b.count, noun)}`;
+          const failed = Math.min(b.count, b.failed ?? 0);
+          const title =
+            `${when(b.at, bucket)} — ${plural(b.count, noun)}` +
+            (failed > 0 ? `, ${failed.toLocaleString()} failed` : "");
           const size = {
             height: `${(b.count / peak) * 100}%`,
             minHeight: b.count === 0 ? EMPTY_PX : MIN_PX,
           };
+          // THE FAILED SHARE IS THE FOOT OF THE SAME FILL, not a second bar
+          // beside it: the column's height is still the bucket's whole count,
+          // so a reader compares totals as before and reads the failures as a
+          // part of each rather than as a series of their own.
+          const fill = (
+            <span className="histogram-fill" style={size}>
+              {failed > 0 && (
+                <span
+                  className="histogram-failed"
+                  style={{ height: `${(failed / b.count) * 100}%` }}
+                />
+              )}
+            </span>
+          );
           // THE CONTROL IS THE SLOT AND THE BAR IS A FILL INSIDE IT. Drawn as
           // the slot itself, a seven-day window holding one busy day painted a
           // solid block a seventh of the card wide — a panel rather than a
@@ -140,7 +164,7 @@ export function Histogram({
               data-empty={b.count === 0 ? "" : undefined}
               onClick={() => onPick({ from: at, to: at + step })}
             >
-              <span className="histogram-fill" style={size} />
+              {fill}
             </button>
           ) : (
             <div
@@ -149,7 +173,7 @@ export function Histogram({
               title={title}
               data-empty={b.count === 0 ? "" : undefined}
             >
-              <span className="histogram-fill" style={size} />
+              {fill}
             </div>
           );
         })}

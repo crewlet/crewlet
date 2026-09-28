@@ -228,6 +228,22 @@ type ListQuery struct {
 	// events that merely involve a seat and pulls in their traces.
 	AgentID string
 
+	// Suspended selects by whether a completion record PARKED its turn — the
+	// `suspended` flag a turn's segment carries when it launched a detached
+	// coding run ([types.AgentTurnCompleted.Suspended]) — and nil means every
+	// row. THREE-VALUED, like the turn list's `failed`, because the absent
+	// case is the ordinary one: false is "not a suspension", which every row
+	// that carries no such flag is, so `Type: agent_turn_completed` with
+	// false is the turns that ENDED, and true the ones that parked.
+	//
+	// It is what a turns axis counts over. One turn that parks and resumes
+	// writes two completion records, so counting the type alone draws that
+	// turn twice beside a list that shows it once — and the second record is
+	// the one that ended it. Read from the payload, as [suspendedExpr] is for
+	// the turn list, since the flag was never promoted to a column: the type
+	// filter narrows first, so the read is over completion records only.
+	Suspended *bool
+
 	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
 	// inside it. Rows written before migration 0014 carry an empty
@@ -561,6 +577,15 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 	addIndexed("work_key", q.WorkKey)
 	addIndexed("work_item", q.WorkItem)
 	addIndexed("channel_id", q.ChannelID)
+	if q.Suspended != nil {
+		// [suspendedExpr]'s own rule, qualified for whichever FROM this is.
+		where = append(where, "COALESCE(json_extract("+col("payload")+", '$.suspended'), 0) = ?")
+		flag := 0
+		if *q.Suspended {
+			flag = 1
+		}
+		args = append(args, flag)
+	}
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a
 	// term the planner has to filter on.
@@ -1301,14 +1326,18 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // makes an activity screen slow. A boolean on the shared type would put that
 // one keystroke away.
 //
-// `role` narrows to one seat when a caller wants it; empty means the company.
-// more reports that records exist past this page — see [pastPage].
-func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *Cursor) (rows []EventRecord, more bool, err error) {
+// `agentID` narrows to ONE SEAT, by the id every node derives for its handle
+// ([org.DeriveAgentID]) — the promoted `agent_id` column [ListQuery.AgentID]
+// reads — and empty means the company. Not a role name: two unit seats stamped
+// from one template share one, so a role filter answered "this seat's phases"
+// with every such seat's, and a rename changes it while the history keeps the
+// old one. more reports that records exist past this page — see [pastPage].
+func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before *Cursor) (rows []EventRecord, more bool, err error) {
 	query := phasesSQL
 	args := []any{EncodeTime(now().Add(-EventHistory))}
-	if role != "" {
-		query += ` AND agent_role = ?`
-		args = append(args, role)
+	if agentID != "" {
+		query += ` AND agent_id = ?`
+		args = append(args, agentID)
 	}
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL

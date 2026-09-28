@@ -10,9 +10,9 @@
  *
  * This screen used to be the PHASE monitor, which is a level below: sixty rows
  * for one turn on a busy seat, so "what has the company been doing" was
- * answered by scrolling past the rounds of whatever ran last. The phase view
- * is still here, as the other lens, because "which model call is hung right
- * now" is a real question and a turn row cannot answer it.
+ * answered by scrolling past the rounds of whatever ran last. The phases are
+ * Live › Now running's now, as its settled half, beside the running turns a
+ * phase is a leg of; a lens here was a second copy of that list.
  *
  * # The fold is the engine's, not the browser's
  *
@@ -32,40 +32,49 @@
  * completed a segment and will complete again, so it is marked as such rather
  * than as running or as finished.
  *
- * # A log needs a time axis, and this one had none
+ * # A log needs a time axis, and the ENGINE counts it
  *
  * A list of turns is log-shaped: a hundred rows in a column say what happened
  * and have no dimension for WHEN, so a burst at four in the morning and a
  * steady trickle across a week read identically. The axis is the shape every
  * log tool has for exactly that reason — and it is a control, so the spike it
  * draws is the window the next click narrows to.
+ *
+ * It was folded in the browser from the page of rows this screen held, which
+ * drew a seven-day axis out of the newest two hundred turns and called a busy
+ * company quiet before lunch on its first day. It is `event_series` now, over
+ * the turns that ENDED — `agent_turn_completed` with `suspended=false`, one
+ * record per turn, since a turn that parked on a coding run writes a
+ * completion for the segment that parked it — counted by the engine over the
+ * whole window on every node, with the failed share of each bar drawn at its
+ * foot. The list is paged; the axis is not.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
-import { UsersGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
+import { CoverageNote } from "~/components/CoverageNote.tsx";
+import { Button, Card, Select, Skeleton, Tag } from "@crewlethq/ui";
+import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
 // demands a `panelId` naming a TabPanel neither of these rows controls. Both
 // rows here drive a `useParam` that re-runs this screen's query, which is the
 // exact case our own `activate="manual"` exists for — arrowing across three
-// options would ask the engine three times. See the report.
+// options would ask the engine three times.
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import { useClient, useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useAgents, useOrg } from "~/lib/store-hooks.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { plural, tsKey } from "~/lib/format.ts";
+import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
+import { plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { BUCKET_MS, RANGE_MS, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
-import type { Bucket, Offer, Window } from "~/lib/range.ts";
+import { spanWords, useTimeRange } from "~/lib/range.ts";
+import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
-import { ModelActivity } from "../agents/Model.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import {
   DateCell,
@@ -76,9 +85,8 @@ import {
   TurnWhatCell,
   UnsettledCell,
 } from "~/app/frame/cells.tsx";
-import { MAX_TURN_DAYS, runningNow } from "~/lib/turns.ts";
-import { PageNote } from "~/app/frame/PageNote.tsx";
-import type { TurnRow } from "~/protocol/index.ts";
+import { runningNow } from "~/lib/turns.ts";
+import type { EventSeries, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
 
 /**
  * WHICH WINDOWS A TURNS LIST HAS.
@@ -100,164 +108,135 @@ const TURN_OFFER: Offer = {
 };
 
 /**
- * How many rows one answer carries.
+ * How many rows one page carries.
  *
- * THE ENGINE'S OWN CEILING (`store.MaxTurnPage`) rather than the read's default
- * of fifty, and the axis is why: the bars below are folded from these rows, so
- * a page sized to "what a person scans" would draw a seven-day axis out of the
- * newest fifty turns and report a busy company as quiet before lunch on its
- * first day. A turn row carries no payload and no prompts — it is a group-by
- * over promoted columns — so two hundred of them is a narrow answer.
+ * ONE HUNDRED: the axis above is the engine's count over the whole window, so
+ * the page no longer has to hold the window to draw it — it was the engine's
+ * ceiling of two hundred for exactly that reason. A hundred is two screens of
+ * rows a person scans before they narrow by seat or failure, and "Load older"
+ * is one press past it.
  */
-const PAGE = 200;
+export const TURN_PAGE = 100;
+
+/** The two orders the engine's turn list answers in (`store.TurnQuery.Sort`). */
+export const TURN_SORTS = ["-started", "-tokens"] as const;
+
+/**
+ * What the axis says while the list is narrowed by failure.
+ *
+ * THE AXIS IS NOT NARROWED BY IT, and says so. "Carried a failure" is a fact
+ * about a whole turn — any of its records failed — and the axis counts
+ * completion records, one per turn, each with only its OWN failed flag: an
+ * `event_series` narrowed that way would count a different set of turns from
+ * the list under it, under the same heading. So the axis stays every turn,
+ * with the failed share already drawn at each bar's foot.
+ */
+export const AXIS_UNFILTERED = " · every turn, not only the filtered ones";
+
+/** The turns that ENDED, one record each — what the axis counts. */
+export const ENDED_TURNS = { type: "agent_turn_completed", suspended: "false" } as const;
 
 export function Turns() {
-  // TWO LENSES ON ONE PATH, which is what a `view=` is for: turns are what
-  // the company did, and phases are the model calls inside them. They are
-  // not two destinations — a reader switching between them is asking the
-  // same question at two magnifications.
-  const [view, setView] = useParam("view", "turns", "filter");
-  if (view === "phases") {
-    return (
-      <>
-        <TurnLens view={view} onChange={setView} />
-        <ModelActivity />
-      </>
-    );
-  }
-  return <TurnList view={view} onChange={setView} />;
-}
-
-function TurnLens({
-  view,
-  onChange,
-  children,
-}: {
-  view: string;
-  onChange: (v: string) => void;
-  /** The controls only one of the two lenses has — the turn list's window. */
-  children?: React.ReactNode;
-}) {
-  return (
-    <PageActions>
-      {
-        <>
-          <Segmented
-            ariaLabel="Turns or the phases inside them"
-            value={view}
-            onChange={onChange}
-            options={[
-              { value: "turns", label: "Turns" },
-              { value: "phases", label: "Phases" },
-            ]}
-          />
-          {children}
-        </>
-      }
-    </PageActions>
-  );
-}
-
-/**
- * How many whole days of turns the engine has to be asked for.
- *
- * THE READ TAKES DAYS, not two instants: `store.TurnQuery` has `SinceDays` and
- * a cursor on the turn's start, so an hour and a day are the same question at
- * the wire and the window itself is applied here, over the rows that came
- * back. Rounded UP and floored at one, because a six-hour window asking for
- * zero days would fall through to the read's own default of seven and quietly
- * fetch a week to draw six hours of it.
- */
-function windowDays(window: Window): number {
-  return Math.min(MAX_TURN_DAYS, Math.max(1, Math.ceil(spanOf(window) / RANGE_MS["1d"])));
-}
-
-/**
- * The axis, folded from the rows this screen loaded.
- *
- * THE ONE PLACE A CLIENT-SIDE FOLD IS THE HONEST ANSWER, and `ui/Histogram`
- * states why it is normally not: bars folded in the browser are right for
- * whatever the tab happens to hold and absent for every other window. There is
- * no turn series at the engine to ask instead. `event_series` counts EVENTS
- * and a turn is dozens of them, so an axis drawn from it would put a bar of
- * three hundred over a list of five; and the turns read has no `since`/`until`
- * at all. So the fold is over the page of rows, the panel says so in those
- * words, and the total under the axis is the count of the rows above it —
- * never a claim about the store.
- *
- * EVERY BUCKET IS A BAR, including the empty ones, for `Histogram`'s own
- * reason: a quiet stretch is a fact about the company and a missing column is
- * a gap in the chart, and a reader who has not counted the columns cannot tell
- * those apart.
- */
-function foldBars(rows: TurnRow[], since: string, until: string, bucket: Bucket): Bar[] {
-  const step = BUCKET_MS[bucket];
-  // FLOORED TO THE BUCKET, so the first column covers a whole one. The rows
-  // are already filtered to the window, so a bar can never claim a turn the
-  // list below it would not show.
-  const from = Math.floor(tsKey(since) / step) * step;
-  const to = tsKey(until);
-  const counts = new Map<number, number>();
-  for (const row of rows) {
-    const at = tsKey(row.started_at);
-    if (at <= 0) continue;
-    const cell = Math.floor(at / step) * step;
-    counts.set(cell, (counts.get(cell) ?? 0) + 1);
-  }
-  const bars: Bar[] = [];
-  for (let at = from; at < to; at += step) {
-    bars.push({ at: new Date(at).toISOString(), count: counts.get(at) ?? 0 });
-  }
-  return bars;
-}
-
-function TurnList({ view, onChange }: { view: string; onChange: (v: string) => void }) {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
   const org = useOrg();
+  const { socket } = useClient();
   // THE PUSH, for what a turn still running is doing (`runningNow`).
   const agents = useAgents();
   const { open: openPeek } = usePeekControls();
   // EVERY FILTER IS A FILTER, so it replaces the history entry: a reader
   // narrowing to one seat and then to the failures has walked one screen,
   // not three.
-  // A SEAT BY ITS HANDLE, which the engine resolves to the seat's own id. It
-  // was a role name, so the sidebar's seat rows — which link here with
-  // `seat=<handle>` — landed on every seat's turns, and two unit seats
-  // stamped from one template could not be told apart.
+  // A SEAT BY ITS HANDLE, which the engine resolves to the seat's own id —
+  // never a role name, which a rename changes and two unit seats share.
   const [seat, setSeat] = useParam("seat", "", "filter");
   const [failed, setFailed] = useParam("failed", "", "filter");
+  // THE ENGINE'S ORDER, and the one key the grid below would read for its
+  // own: the list is sorted where the whole set is, so a column head that
+  // sorted the loaded page would be a different question.
+  const [sortRaw, setSort] = useParam("sort", "-started", "filter");
+  const sort = (TURN_SORTS as readonly string[]).includes(sortRaw) ? sortRaw : "-started";
   // ALIGNED, because this window drives a chart as well as a list: the top
   // edge is the END of the bucket in progress, so the current column is drawn
   // while it is still being spent and the window's identity — and therefore
   // the query — changes once per column rather than once per second.
   const range = useTimeRange(now, TURN_OFFER);
   const { since, until, bucket } = range;
-  const list = useQuery(
-    "turns",
-    {
-      days: windowDays(range.window),
-      limit: PAGE,
+  // THE WINDOW ITSELF, as its two instants on the turn's start. The read took
+  // whole days back from NOW, so a bar picked three days ago was asked as "the
+  // last day", every row that came back was newer than the bar, and the list
+  // under an axis counting a dozen turns said there were none.
+  const params = useMemo(
+    () => ({
+      since,
+      until,
+      limit: TURN_PAGE,
+      sort,
       ...(seat ? { seat } : {}),
       ...(failed ? { failed } : {}),
-    },
+    }),
+    [since, until, sort, seat, failed],
+  );
+  const list = useQuery("turns", params, { pollMs: 20_000 });
+  const series = useQuery(
+    "event_series",
+    { ...ENDED_TURNS, since, until, bucket, ...(seat ? { seat } : {}) },
     { pollMs: 20_000 },
   );
-  const turns = useMemo(() => list.data?.turns ?? [], [list.data]);
-  // THE WINDOW, half-open, applied to what came back. The engine was asked in
-  // whole days, so a six-hour window arrives holding a day of turns — and a
-  // list that showed them under a heading saying six hours would disagree
-  // with its own axis on every row.
-  const rows = useMemo(() => {
-    const from = tsKey(since);
-    const to = tsKey(until);
-    return turns.filter((t) => {
-      const at = tsKey(t.started_at);
-      return at >= from && at < to;
-    });
-  }, [turns, since, until]);
-  const bars = useMemo(() => foldBars(rows, since, until, bucket), [rows, since, until, bucket]);
-  // HOW MANY RUNS EACH TRIGGER GOT, over the rows this page holds. A turn id
+
+  // THE OLDER PAGES, keyed on the question they continue — a new filter or
+  // window is a new list, and its first page must not be followed by the
+  // previous list's second.
+  const question = JSON.stringify(params);
+  const [older, setOlder] = useState<{ for: string; pages: TurnsAnswer[] }>({
+    for: "",
+    pages: [],
+  });
+  const [paging, setPaging] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const pages = older.for === question ? older.pages : [];
+  const last = pages.at(-1) ?? list.data;
+
+  const turns = useMemo(() => {
+    // ONE ROW PER TURN across pages: a turn still running when the first page
+    // was answered can be listed again by a later one.
+    const seen = new Set<string>();
+    const out: TurnRow[] = [];
+    for (const t of [...(list.data?.turns ?? []), ...pages.flatMap((p) => p.turns)]) {
+      if (seen.has(t.turn_id)) continue;
+      seen.add(t.turn_id);
+      out.push(t);
+    }
+    return out;
+  }, [list.data, pages]);
+  // THE ENGINE HELD EVERY PAGE TO THE WINDOW, so what came back is the list:
+  // a second filter here was how an answer for the wrong window became an
+  // empty screen rather than a wrong one.
+  const rows = turns;
+  // THE CURSOR ALONE SAYS WHETHER THERE IS MORE — and it can be present on a
+  // page with no row, when a node stopped before any turn above it could be
+  // shown, so "Load older" is offered on an empty page too.
+  const more = !!last?.next;
+
+  const loadOlder = useCallback(async () => {
+    if (!last?.next) return;
+    setPaging(true);
+    setPageError(null);
+    try {
+      const page = await socket.query("turns", { ...params, before: last.next });
+      setOlder((prev) => ({
+        for: question,
+        pages: [...(prev.for === question ? prev.pages : []), page],
+      }));
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "query_failed");
+    } finally {
+      setPaging(false);
+    }
+  }, [socket, params, question, last]);
+
+  const bars = useMemo(() => barsOf(series.data), [series.data]);
+  // HOW MANY RUNS EACH TRIGGER GOT, over the rows this list holds. A turn id
   // names one run (see `adr/0017`), so a redelivered trigger is several rows
   // and nothing else on the screen says they are the same work.
   const reruns = useMemo(() => {
@@ -270,80 +249,89 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
     }
     return counts;
   }, [rows]);
-  // WHAT `[` AND `]` WALK: the rows this list actually loaded, windowed and
-  // sorted as the reader left them. Published rather than handed to the rail,
+  // WHAT `[` AND `]` WALK: the rows this list actually loaded, in the order
+  // the engine answered them. Published rather than handed to the rail,
   // because only the list knows that order — see `PeekHost`.
   usePeekNeighbours(
     useMemo(() => rows.map((t) => ({ kind: "turn" as const, id: t.turn_id })), [rows]),
   );
-  const seats = (org?.roles ?? []).filter((r) => r.kind !== "human" && !!r.handle);
-  const chosen = seats.find((r) => r.handle === seat);
+  // EVERY AGENT SEAT THE ORG HOLDS, from the one index every screen walks it
+  // with. `org.roles` is only the seats ABOVE every unit — on a real company
+  // that is the founders, humans with no turns — so a menu built from it
+  // offered "Every seat" and nothing else, and `?seat=` from a link drew the
+  // bare handle because no option matched it.
+  const index = useMemo(() => indexOrg(org), [org]);
+  const seats = useMemo(
+    () => index.seats.filter((s) => s.kind === "agent" && !!s.handle),
+    [index.seats],
+  );
+
+  const total = series.data?.total ?? 0;
+  const failedTotal = series.data?.failed ?? 0;
 
   return (
     <>
-      <TurnLens view={view} onChange={onChange}>
-        <Tag appearance="outline">{windowLabel(range.window)}</Tag>
+      <PageActions>
         <TimeRangePicker range={range} ariaLabel="Window" />
-      </TurnLens>
-      <PageNote>
-        One row per unit of work — a wake, a decision, its rounds and its reply. The phase lens is
-        the same window one level down, where a single turn can be sixty rows.
-      </PageNote>
+      </PageActions>
 
       <Card>
         <Card.Header
           icon={<ChartNoAxesGanttGlyph size="sm" />}
-          // THE HINT RIDES THE SUBTITLE, which gives way first (the kit's
-          // `flex-shrink: 100`). It sat in `actions`, which never shrinks, so
-          // on a phone the title was cut to "W" while the hint kept its whole
-          // width.
-          subtitle={`${plural(rows.length, "turn")} on this page, over ${spanWords(since, until)} · one bar per ${bucket}, click one to narrow the window`}
+          // UNDER THE TITLE, the chart key's place on every chart card (the
+          // seat's own turns chart included): beside the title a phone left the
+          // subtitle about thirty characters and cut it at the failed count —
+          // the one number the red stack encodes. The count comes first and
+          // the explanatory tail last, so what gives way is the hint.
+          className="card-head-stacked"
+          subtitle={`${
+            series.data
+              ? `${plural(total, "turn")} ended over ${spanWords(since, until)}${failedTotal > 0 ? `, ${failedTotal.toLocaleString()} failed` : ""}`
+              : `over ${spanWords(since, until)}`
+          }${failed ? AXIS_UNFILTERED : ""} · one bar per ${bucket}, click one to narrow the window`}
         >
-          <Card.Title>When</Card.Title>
+          <Card.Title>Turns that ended</Card.Title>
         </Card.Header>
-        {rows.length > 0 ? (
+        {series.error && !series.data ? (
+          <QueryState error={series.error} loading={false} />
+        ) : series.data ? (
           <Histogram
             bars={bars}
             bucket={bucket}
-            total={rows.length}
+            total={total}
             noun="turn"
-            // THE PAGE'S OWN COUNT, which is what the caption above already
-            // says: these bars are folded from the turns this screen is
-            // holding rather than counted by the engine over the window.
-            over="loaded"
+            // THE ENGINE'S COUNT, over the whole window and every node that
+            // answered — never the page this screen happens to hold.
+            over="window"
             axis
             now={now}
             onPick={range.set}
-            label="Turns over the window"
+            label="Turns that ended over the window"
           />
         ) : (
-          // NOT AN EMPTY CHART. Bars of zero across a window say "the company
-          // was quiet"; what is true here is that this page holds no turn in
-          // the window, which a widened range or a cleared filter may change.
-          <span className="t-caption">No turn on this page started in this window.</span>
+          <Skeleton variant="box" height={96} label="Counting turns" />
         )}
       </Card>
 
-      <div className="row gap-2 wrap">
-        <Button
-          size="small"
-          variant={seat ? "primary" : "secondary"}
-          onClick={() => setSeat("")}
-          leadingIcon={<UsersGlyph size="xs" />}
-        >
-          {seat ? (chosen?.name ?? seat) : "every seat"}
-        </Button>
-        {seats.slice(0, 8).map((r) => (
-          <Button
-            key={r.handle}
-            size="small"
-            variant={seat === r.handle ? "primary" : "secondary"}
-            onClick={() => setSeat(seat === r.handle ? "" : (r.handle ?? ""))}
-          >
-            {r.name}
-          </Button>
-        ))}
-        <span className="spacer" />
+      <CoverageNote
+        coverage={[series.data?.coverage, list.data?.coverage, ...pages.map((p) => p.coverage)]}
+        what="these turns"
+      />
+
+      <div className="toolbar">
+        <Select
+          width="auto"
+          value={seat}
+          onChange={(value) => setSeat(String(value))}
+          options={[
+            { value: "", label: "Every seat" },
+            ...seats.map((s) => ({ value: s.handle, label: s.name })),
+          ]}
+          ariaLabel="Seat"
+          menuClassName="seat-filter-menu"
+          placeholder="Every seat"
+          active={seat !== ""}
+        />
         <Segmented
           ariaLabel="Which turns"
           value={failed || "all"}
@@ -352,6 +340,16 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
             { value: "all", label: "All" },
             { value: "true", label: "Carried a failure" },
             { value: "false", label: "Clean" },
+          ]}
+        />
+        <span className="spacer" />
+        <Segmented
+          ariaLabel="Order"
+          value={sort}
+          onChange={setSort}
+          options={[
+            { value: "-started", label: "Newest" },
+            { value: "-tokens", label: "Most tokens" },
           ]}
         />
       </div>
@@ -374,62 +372,47 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
         <DataGrid<TurnRow>
           rows={rows}
           rowKey={(t) => t.turn_id}
+          // THE ENGINE ORDERED THE WHOLE SET; a head that re-sorted the pages
+          // loaded would answer a different question under the same arrow.
+          serverSorted
           // THE ROW IS A REAL LINK to the turn's page, so ⌘-click, the middle
           // button and the status bar all behave — and a plain click opens the
-          // turn beside the list instead, because this screen is scanned and
-          // sending a reader away to read one summary is the navigation every
-          // log learned not to make.
-          // THE FRAME'S OWN ANSWER to where a turn lives, rather than a
-          // second copy of the route: the rail's `Open ↗` is built from the
-          // same reference, so the link a row carries and the way out of the
-          // panel it opens can never name different pages.
+          // turn beside the list instead, because this screen is scanned.
           rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
           onRowActivate={(t, e) => {
             const go = () => openPeek({ kind: "turn", id: t.turn_id });
             // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's
             // one copy of "which clicks mean elsewhere" and reads a mouse
-            // event; the `enter` chord carries no button at all and is never
-            // "open elsewhere".
+            // event; the `enter` chord carries no button at all.
             if (!("button" in e)) {
               go();
               return;
             }
             rowPeekHandler(go)?.(e);
           }}
-          defaultSort="-started"
           columns={[
             {
               key: "started",
               header: "Started",
               shrink: true,
-              sortValue: (t) => tsKey(t.started_at),
               cell: (t) => <DateCell at={t.started_at} now={now} />,
             },
             {
               key: "seat",
               header: "Seat",
               shrink: true,
-              sortValue: (t) => t.role ?? "",
-              // NOT `SeatCell`, and not the seat chip this column used to
-              // draw: both are links, and the row around them is one now — an
-              // anchor inside an anchor is markup no browser agrees about.
-              // The seat's own page is one click away from the turn.
+              // NOT `SeatCell`: it is a link, and the row around it is one.
               cell: (t) =>
                 t.role ? (
                   <SeatLabel {...seatBadge(t.role)} />
                 ) : (
-                  // NOT a dash: a turn with no seat is not a turn whose seat
-                  // went unrecorded, it is the engine's own work.
+                  // NOT a dash: a turn with no seat is the engine's own work.
                   <span className="muted">the engine</span>
                 ),
             },
             {
               key: "summary",
               header: "What it did",
-              sortValue: (t) => t.summary ?? "",
-              // THE KEY, not a link to it — see the row's own comment. It
-              // still says which item this turn was about, and the turn's page
-              // links to it from inside.
               // A TURN STILL RUNNING says what it is doing and what it is on,
               // from the push (`runningNow`): the store's row has neither yet.
               cell: (t) => {
@@ -445,93 +428,34 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
             },
             {
               key: "state",
-              header: "",
-              label: "State",
+              // HEADED, like every other column: an unlabelled slot between
+              // What it did and Iterations read as a gap, and a badge under no
+              // heading has to be decoded from its colour.
+              header: "State",
               shrink: true,
               // NOTHING AT ALL for a turn with no state to show, so a phone's
-              // card drops the line (`.grid-cell:empty`) rather than printing
-              // a bare "STATE" label on every settled turn.
-              cell: (t) =>
-                !(t.work_key && reruns.get(t.work_key)! > 1) &&
-                !t.parked &&
-                t.complete &&
-                !t.failed ? null : (
-                  <span className="row gap-1">
-                    {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger
-                      that failed without reaching outside the engine and was
-                      redelivered is several rows here — and two rows for one
-                      message read as the company having done the work twice.
-                      Counted over the rows this page holds, which is what the
-                      tooltip says. */}
-                    {t.work_key && reruns.get(t.work_key)! > 1 && (
-                      <Tag
-                        appearance="outline"
-                        title={
-                          `one of ${reruns.get(t.work_key)} runs of the same trigger on this ` +
-                          `page — a turn that fails without acting is redelivered and runs again`
-                        }
-                      >
-                        re-run
-                      </Tag>
-                    )}
-                    {t.parked && (
-                      <Tag
-                        appearance="outline"
-                        title="waiting on a coding run it launched — it completes again when the run is collected"
-                      >
-                        parked
-                      </Tag>
-                    )}
-                    {!t.complete && !t.parked && (
-                      <Tag
-                        variant="info"
-                        title="no completion record — running, or it died mid-flight"
-                      >
-                        running
-                      </Tag>
-                    )}
-                    {/* A FAILURE IS THE DANGER TONE, the one every other failure
-                      mark in the product wears. It was amber — the one state
-                      that asks a person for a decision, which a failed turn
-                      does not. */}
-                    {t.failed && (
-                      <Tag variant="danger" title="at least one event of this turn was a failure">
-                        failure
-                      </Tag>
-                    )}
-                  </span>
-                ),
+              // card drops the line rather than printing a bare label.
+              cell: (t) => <TurnState turn={t} reruns={reruns} />,
             },
             {
               key: "iterations",
-              // SELF-ITERATE ROUNDS, and the word says so. Headed "Rounds" this
-              // column sat directly above phase rows printing TOOL rounds under
-              // the same word — "Rounds 1" over a 3r execute and a 1r review.
+              // SELF-ITERATE ROUNDS, and the word says so — a phase's TOOL
+              // rounds are on its own record, under another word.
               header: (
-                <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
+                <span title="self-iterate rounds — the tool rounds each phase used are on the turn's own page">
                   Iterations
                 </span>
               ),
               label: "Iterations",
               shrink: true,
               align: "right",
-              sortValue: (t) => (t.complete ? t.iterations : null),
               cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
-            },
-            {
-              key: "phases",
-              header: "Phases",
-              shrink: true,
-              align: "right",
-              sortValue: (t) => t.phases,
-              cell: (t) => <NumberCell value={t.phases} />,
             },
             {
               key: "tokens",
               header: "Tokens",
               shrink: true,
               align: "right",
-              sortValue: (t) => (t.complete ? t.total_tokens : null),
               cell: (t) => (t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />),
             },
             {
@@ -539,14 +463,9 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               header: "Took",
               shrink: true,
               align: "right",
-              sortValue: (t) => t.duration_ms,
-              // A RUNNING TURN HAS NO DURATION, and rendering its zero would
-              // make the busiest turns look like the cheapest — so the cell is
-              // handed null rather than the zero, and draws the dash that says
-              // nothing was measured. `DurationCell` is also the right
-              // spelling for a FINISHED span: `fmtElapsed`, which this column
-              // used, is the live-stopwatch format, and a turn with a
-              // completion record is not a stopwatch.
+              // A RUNNING TURN HAS NO DURATION, and its zero would make the
+              // busiest turns look like the cheapest — so the cell is handed
+              // null and draws the dash that says nothing was measured.
               cell: (t) => (
                 <DurationCell ms={t.complete && t.duration_ms > 0 ? t.duration_ms : null} />
               ),
@@ -554,6 +473,82 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
           ]}
         />
       </QueryState>
+
+      {(rows.length > 0 || more || pageError) && (
+        <div className="row gap-2">
+          {pageError ? (
+            <QueryState error={pageError} loading={false} />
+          ) : more ? (
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => void loadOlder()}
+              disabled={paging}
+              loading={paging}
+            >
+              {sort === "-started" ? "Load older" : "Load more"}
+            </Button>
+          ) : (
+            <span className="t-caption">
+              {sort === "-started"
+                ? "That is every turn that started in this window."
+                : "That is every turn in this window."}
+            </span>
+          )}
+          {rows.length > 0 && (
+            <span className="t-caption">{plural(rows.length, "turn")} listed</span>
+          )}
+        </div>
+      )}
     </>
+  );
+}
+
+/** The engine's bars, with their failed share. */
+export function barsOf(series: EventSeries | null | undefined): Bar[] {
+  return (series?.bars ?? []).map((b) => ({ at: b.at, count: b.count, failed: b.failed }));
+}
+
+/** What a turn IS beyond finished — re-run, parked, running, failed — or nothing. */
+function TurnState({ turn: t, reruns }: { turn: TurnRow; reruns: Map<string, number> }) {
+  const rerun = !!t.work_key && (reruns.get(t.work_key) ?? 0) > 1;
+  if (!rerun && !t.parked && t.complete && !t.failed) return null;
+  return (
+    <span className="row gap-1">
+      {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger that failed
+          without reaching outside the engine and was redelivered is several
+          rows here — and two rows for one message read as the company having
+          done the work twice. Counted over the rows this list holds. */}
+      {rerun && (
+        <Tag
+          appearance="outline"
+          title={
+            `one of ${reruns.get(t.work_key!)} runs of the same trigger listed here — ` +
+            `a turn that fails without acting is redelivered and runs again`
+          }
+        >
+          re-run
+        </Tag>
+      )}
+      {t.parked && (
+        <Tag
+          appearance="outline"
+          title="waiting on a coding run it launched — it completes again when the run is collected"
+        >
+          parked
+        </Tag>
+      )}
+      {!t.complete && !t.parked && (
+        <Tag variant="info" title="no completion record — running, or it died mid-flight">
+          running
+        </Tag>
+      )}
+      {/* A FAILURE IS THE DANGER TONE, the one every failure mark wears. */}
+      {t.failed && (
+        <Tag variant="danger" title="at least one event of this turn was a failure">
+          failure
+        </Tag>
+      )}
+    </span>
   );
 }

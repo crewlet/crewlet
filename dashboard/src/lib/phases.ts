@@ -89,6 +89,16 @@ export interface PhaseRecord {
   phase: string;
   iteration: number;
   role: string;
+  /**
+   * The seat's own id — the one every node derives for its handle — off the
+   * durable record's `agent_id`, and "" where nothing named it (a live call
+   * carries no id; its seat is the push row it hangs off).
+   *
+   * WHAT "ONE SEAT'S PHASES" IS MATCHED ON, never `role`: two unit seats
+   * stamped from one template share a role name, and a rename changes it
+   * while the history keeps the old one.
+   */
+  agentId: string;
   model: string;
   providerKey: string;
   /** Live means the phase has not published its completed event yet. */
@@ -394,6 +404,7 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     phase: call.phase,
     iteration: call.iteration,
     role,
+    agentId: "",
     model: call.model,
     providerKey: "",
     live: call.in_progress !== false && !call.failed,
@@ -468,6 +479,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     phase,
     iteration,
     role: String(p.role ?? ev.actor ?? ""),
+    agentId: String(p.agent_id ?? ev.tags?.agent_id ?? ""),
     model: String(p.model ?? ""),
     providerKey: String(p.provider_key ?? ""),
     live: false,

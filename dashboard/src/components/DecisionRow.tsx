@@ -367,6 +367,7 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
   const sub = joined([
     key ? <Key key="k" value={key} /> : "",
     run.question ? `“${run.question}”` : "",
+    audienceOf(run, index),
     relTime(since, now),
   ]);
   return (
@@ -379,6 +380,20 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
       actions={<AnswerRunButton turnId={run.turn_id} seat={who.name} question={run.question} />}
     />
   );
+}
+
+/**
+ * WHO THE QUESTION IS PUT TO, as the chart names them: the handles the engine
+ * resolved when the run parked — the seat's lead chain, where the audience
+ * the run wrote named nobody the chart has — or that audience as written
+ * before any were resolved. Nothing where it named no audience at all.
+ */
+export function audienceOf(run: SandboxRun, index: OrgIndex): string {
+  const handles = run.audience_handles ?? [];
+  if (handles.length > 0) {
+    return `asks ${handles.map((h) => index.byHandle.get(h)?.name ?? h).join(", ")}`;
+  }
+  return run.audience ? `asks ${run.audience}` : "";
 }
 
 /**

@@ -77,6 +77,28 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	q.WorkItem = item
+	// THE WINDOW AS TWO INSTANTS ON THE TURN'S START, or as whole days back
+	// from now — never both, since one would silently lose. `days` alone
+	// cannot name a window in the past: a bar picked three days ago was
+	// answered with the last day's turns, every one outside it.
+	since, err := instantParam(p, "since")
+	if err != nil {
+		return nil, err
+	}
+	until, err := instantParam(p, "until")
+	if err != nil {
+		return nil, err
+	}
+	if p.Has("days") && (!since.IsZero() || !until.IsZero()) {
+		return nil, fmt.Errorf("%w: name the window by days or by since and until, "+
+			"not both", ErrBadParams)
+	}
+	if !since.IsZero() && !until.IsZero() && !since.Before(until) {
+		return nil, fmt.Errorf("%w: since=%s is not before until=%s — the window "+
+			"starts at since and ends before until", ErrBadParams,
+			since.Format(time.RFC3339), until.Format(time.RFC3339))
+	}
+	q.Since, q.Until = since, until
 	before, err := instantParam(p, "before")
 	if err != nil {
 		return nil, err

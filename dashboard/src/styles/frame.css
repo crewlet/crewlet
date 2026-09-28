@@ -1932,6 +1932,20 @@ a.cell-seat:hover {
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
+/* THE FAILED FOOT of a bar (`Bar.failed`): the bottom of the same fill, in
+   the danger tone every failure in the product wears. */
+.histogram-fill {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+.histogram-failed {
+  display: block;
+  width: 100%;
+  background: var(--color-feedback-danger);
+}
+
 button.histogram-bar {
   cursor: pointer;
 }

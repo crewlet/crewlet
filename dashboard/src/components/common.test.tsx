@@ -1,5 +1,5 @@
 /**
- * The seat card: the roster's row on People, and Live now's.
+ * The seat card: the roster's row on People.
  *
  * It is the one surface that draws a turn phase and is not itself a turn view,
  * which is how it came to draw every phase in one `info` fill while every other
@@ -93,8 +93,8 @@ test("the phase is said as its word", () => {
 
 test("a working seat whose first round has not come back says so", () => {
   render(<SeatCard seat={seat()} agent={running("execute", -1)} nameOf={(k) => k} />);
-  expect(screen.getByText("starting")).toBeTruthy();
-  expect(screen.getByTitle(/first model round has not come back/)).toBeTruthy();
+  expect(screen.getByText("round 1")).toBeTruthy();
+  expect(screen.getByTitle(/first model round is in flight and has not come back/)).toBeTruthy();
   expect(screen.getByText("Ada Lovelace").closest("a")?.textContent).not.toContain("—");
 });
 

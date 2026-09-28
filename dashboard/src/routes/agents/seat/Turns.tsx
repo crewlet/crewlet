@@ -193,7 +193,7 @@ export function Turns({
               : undefined
           }
           actions={
-            <a className="t-link" href={href(["live", "turns"], { seat: handle })}>
+            <a className="t-link" href={href(["live"], { seat: handle })}>
               All its model activity
             </a>
           }

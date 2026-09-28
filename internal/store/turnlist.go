@@ -228,8 +228,17 @@ type Turn struct {
 // TurnQuery selects a page of turns.
 type TurnQuery struct {
 	// SinceDays is the window in whole days back from now. Zero takes
-	// [DefaultTurnDays].
+	// [DefaultTurnDays]. Ignored when Since is set.
 	SinceDays int
+
+	// Since and Until name the window as INSTANTS on the turn's START, which
+	// SinceDays cannot: a window is selected by where it BEGINS and ENDS, and
+	// "the last day" answered for a one-hour bar three days ago is a page of
+	// turns every one of which falls outside it. Since is inclusive and
+	// falls back to SinceDays at its zero value; Until is exclusive and is
+	// no upper bound at its zero value. See [TurnQuery.Window].
+	Since time.Time
+	Until time.Time
 
 	// AgentRole and AgentID each narrow to one seat; a caller passes
 	// whichever it holds, for [EventLog.AgentPhases]' own reason.
@@ -273,6 +282,43 @@ type TurnQuery struct {
 	IDs []string
 
 	Limit int
+}
+
+// Window is the START window a query selects in, as two instants against now:
+// Since (or SinceDays back, or [DefaultTurnDays]) floored at [MaxTurnDays] and
+// at the history horizon, and Until, zero when the query names no upper
+// bound. [PhaseTokenQuery.Window]'s rule, for its reason: a fleet pins the
+// window to the asker's clock with this, and every node applies the same one.
+func (q TurnQuery) Window(now time.Time) (since, until time.Time) {
+	since = q.Since
+	if since.IsZero() {
+		days := q.SinceDays
+		switch {
+		case days <= 0:
+			days = DefaultTurnDays
+		case days > MaxTurnDays:
+			days = MaxTurnDays
+		}
+		since = now.Add(-time.Duration(days) * 24 * time.Hour)
+	}
+	// THE FLOOR IS THE HISTORY WINDOW as well as the caller's, for the
+	// reason `agentPhaseSQL`'s own comment gives: a read without it answers
+	// below the retention horizon on a node whose sweep is behind, and a
+	// turns list showing turns the spend rollup excludes is the exact
+	// comparison an operator makes to decide whether a seat went quiet.
+	if floor := now.Add(-time.Duration(MaxTurnDays) * 24 * time.Hour); since.Before(floor) {
+		since = floor
+	}
+	if history := now.Add(-EventHistory); since.Before(history) {
+		since = history
+	}
+	until = q.Until
+	// An inverted window selects nothing, and says so by being empty
+	// rather than by reading as the unbounded one.
+	if !until.IsZero() && until.Before(since) {
+		since = until
+	}
+	return since.UTC(), until.UTC()
 }
 
 // TurnSort is the order a turns page is cut in.
@@ -511,13 +557,6 @@ func laterOf(a, b *time.Time) *time.Time {
 // more reports that this log holds turns past the page — see [pastPage]. A
 // share is never a page and is never more: it answers every turn it names.
 func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []TurnPartial, more bool, err error) {
-	days := q.SinceDays
-	switch {
-	case days <= 0:
-		days = DefaultTurnDays
-	case days > MaxTurnDays:
-		days = MaxTurnDays
-	}
 	limit := q.Limit
 	switch {
 	case limit <= 0:
@@ -537,19 +576,41 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 		limit, probe = len(q.IDs), len(q.IDs)
 	}
 
-	// THE FLOOR IS THE HISTORY WINDOW as well as the caller's, for the
-	// reason `agentPhaseSQL`'s own comment gives: a read without it answers
-	// below the retention horizon on a node whose sweep is behind, and a
-	// turns list showing turns the spend rollup excludes is the exact
-	// comparison an operator makes to decide whether a seat went quiet.
-	floor := now().Add(-time.Duration(days) * 24 * time.Hour)
-	if history := now().Add(-EventHistory); history.After(floor) {
-		floor = history
+	// A SHARE IS NOT A WINDOW: the turns were selected where they were
+	// listed, and applying the window again here would drop the half of a
+	// resumed turn that ran before it — which is the half that says when the
+	// turn began. Only the history horizon bounds it.
+	at := now()
+	history := at.Add(-EventHistory)
+	floor, until := q.Window(at)
+	if shares {
+		floor, until = history, time.Time{}
 	}
 
 	where, args := q.turnWhere(floor, shares)
 
 	having := []string{}
+	if !shares {
+		// A TURN IS IN THE WINDOW WHEN IT STARTED THERE, and the row floor
+		// alone cannot say so: a turn that began a minute before the floor
+		// and ran on into the window has rows on both sides, and folding
+		// only the later ones listed it as starting where the window did,
+		// with the tokens of its second half. So a turn holding ANY row
+		// below the floor — within the history this log still answers for —
+		// is not in the window at all: one probe per GROUP on schema/0018's
+		// (turn_id, event_time) index, never a second scan of the window.
+		having = append(having, `NOT EXISTS (SELECT 1 FROM crewlet_events AS earlier
+		        WHERE earlier.turn_id = crewlet_events.turn_id
+		          AND earlier.event_time < ? AND earlier.event_time >= ?)`)
+		args = append(args, EncodeTime(floor), EncodeTime(history))
+		if !until.IsZero() {
+			// THE UPPER EDGE IS ON THE START TOO, and only here: a row
+			// predicate would cut a turn that started inside the window
+			// off at its edge, and fold half of it.
+			having = append(having, "MIN(event_time) < ?")
+			args = append(args, EncodeTime(until))
+		}
+	}
 	if !q.Before.IsZero() && !shares && q.Sort != TurnSortTokens {
 		having = append(having, "MIN(event_time) < ?")
 		args = append(args, EncodeTime(q.Before))

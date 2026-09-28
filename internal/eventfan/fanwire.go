@@ -43,23 +43,45 @@ import (
 //   - v1: the base format.
 //   - v2: `channel_id` and `agent_id` on a listing's filters, and the
 //     `failed` split on every histogram bar and total.
-const Protocol = 2
+//   - v3: `suspended` on a listing's filters, `agent_id` on the company's
+//     phases — the question that narrowed by a role name, which two unit
+//     seats share, and now narrows by the seat's own id — and `since` and
+//     `until` on a page of turns, the window as the asker's two instants on
+//     the turn's start rather than whole days back from each peer's clock.
+const Protocol = 3
 
 // versionOf is the lowest scatter version that answers one question with
 // these parameters.
 //
-// A HISTOGRAM IS ALWAYS v2, because its answer carries the failed split and a
-// v1 peer would contribute bars with none — a sum that under-counts failures
-// by exactly that node's share, with nothing to say so. A listing is v2 only
-// when it narrows by a v2 filter, so every other listing is still answered by
-// the whole fleet during an upgrade.
+// A HISTOGRAM IS ALWAYS AT LEAST v2, because its answer carries the failed
+// split and a v1 peer would contribute bars with none — a sum that
+// under-counts failures by exactly that node's share, with nothing to say so —
+// and higher when its filters are. A listing is asked in its filters' version,
+// so one narrowing by nothing new is still answered by the whole fleet during
+// an upgrade. The company's phases narrowed to a seat are v3: an older peer
+// reads only the role name the question used to carry, and would answer every
+// seat's.
 func versionOf(q Question, params any) int {
 	switch q {
 	case QuestionSeries:
+		if p, ok := params.(seriesParams); ok {
+			return max(2, p.List.version())
+		}
 		return 2
 	case QuestionEvents:
-		if p, ok := params.(listParams); ok && p.version() > 1 {
+		if p, ok := params.(listParams); ok {
 			return p.version()
+		}
+	case QuestionPhases:
+		if p, ok := params.(phasesParams); ok && p.AgentID != "" {
+			return 3
+		}
+	case QuestionTurns:
+		// A PEER THAT READS ONLY `since_days` would answer the last week
+		// for a one-hour bar three days ago — a page of the wrong turns,
+		// every one of which the asker then has to throw away.
+		if p, ok := params.(turnsParams); ok && (!p.Since.IsZero() || !p.Until.IsZero()) {
+			return 3
 		}
 	}
 	return 1
@@ -67,7 +89,10 @@ func versionOf(q Question, params any) int {
 
 // version is the lowest scatter version that honours every filter set.
 func (p listParams) version() int {
-	if p.ChannelID != "" || p.AgentID != "" {
+	switch {
+	case p.Suspended != nil:
+		return 3
+	case p.ChannelID != "" || p.AgentID != "":
 		return 2
 	}
 	return 1
@@ -198,6 +223,9 @@ type listParams struct {
 	// v2 — see [listParams.version].
 	ChannelID string `json:"channel_id,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`
+
+	// v3.
+	Suspended *bool `json:"suspended,omitempty"`
 }
 
 func listParamsOf(q store.ListQuery) listParams {
@@ -206,7 +234,7 @@ func listParamsOf(q store.ListQuery) listParams {
 		TraceID: q.TraceID, Actor: q.Actor, TurnID: q.TurnID,
 		WorkKey: q.WorkKey, WorkItem: q.WorkItem, RelatedAgent: q.RelatedAgent,
 		Since: q.Since, Until: q.Until, Before: cursorOf(q.Before), Limit: q.Limit,
-		ChannelID: q.ChannelID, AgentID: q.AgentID,
+		ChannelID: q.ChannelID, AgentID: q.AgentID, Suspended: q.Suspended,
 	}
 }
 
@@ -216,7 +244,7 @@ func (p listParams) query() store.ListQuery {
 		TraceID: p.TraceID, Actor: p.Actor, TurnID: p.TurnID,
 		WorkKey: p.WorkKey, WorkItem: p.WorkItem, RelatedAgent: p.RelatedAgent,
 		Since: p.Since, Until: p.Until, Before: p.Before.cursor(), Limit: p.Limit,
-		ChannelID: p.ChannelID, AgentID: p.AgentID,
+		ChannelID: p.ChannelID, AgentID: p.AgentID, Suspended: p.Suspended,
 	}
 }
 
@@ -247,10 +275,15 @@ type turnsParams struct {
 	Before    time.Time      `json:"before,omitzero"`
 	Sort      store.TurnSort `json:"sort,omitempty"`
 	Limit     int            `json:"limit"`
+
+	// v3 — see [versionOf].
+	Since time.Time `json:"since,omitzero"`
+	Until time.Time `json:"until,omitzero"`
 }
 
 func turnsParamsOf(q store.TurnQuery) turnsParams {
 	return turnsParams{
+		Since: q.Since, Until: q.Until,
 		SinceDays: q.SinceDays, AgentRole: q.AgentRole, AgentID: q.AgentID,
 		Model: q.Model, WorkKey: q.WorkKey, WorkItem: q.WorkItem,
 		Failed: q.Failed, Before: q.Before, Sort: q.Sort, Limit: q.Limit,
@@ -259,6 +292,7 @@ func turnsParamsOf(q store.TurnQuery) turnsParams {
 
 func (p turnsParams) query(ids []string) store.TurnQuery {
 	return store.TurnQuery{
+		Since: p.Since, Until: p.Until,
 		SinceDays: p.SinceDays, AgentRole: p.AgentRole, AgentID: p.AgentID,
 		Model: p.Model, WorkKey: p.WorkKey, WorkItem: p.WorkItem,
 		Failed: p.Failed, Before: p.Before, Sort: p.Sort, Limit: p.Limit,
@@ -266,6 +300,9 @@ func (p turnsParams) query(ids []string) store.TurnQuery {
 	}
 }
 
+// phasesParams is both phase questions' parameters. The company's phases read
+// only AgentID (v3) and a seat's read both, since a seat's history is matched by
+// either identifier its rows were written under.
 type phasesParams struct {
 	AgentID string      `json:"agent_id,omitempty"`
 	Role    string      `json:"role,omitempty"`
@@ -396,7 +433,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		rows, more, err := log.Phases(ctx, p.Role, p.Limit, p.Before.cursor())
+		rows, more, err := log.Phases(ctx, p.AgentID, p.Limit, p.Before.cursor())
 		if err != nil {
 			return nil, err
 		}

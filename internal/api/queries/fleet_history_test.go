@@ -166,3 +166,43 @@ func TestTurnsRefusesAnUnknownSortAndACursorOnARanking(t *testing.T) {
 		t.Errorf("a ranked page was refused: %v", err)
 	}
 }
+
+// THE TURNS LIST TAKES A WINDOW OF TWO INSTANTS, which is what a bar picked on
+// its axis IS — and refuses a window named twice or backwards rather than
+// silently answering one of them.
+func TestTurnsAnswersAWindowInThePast(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	bar := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Hour)
+	for id, at := range map[string]time.Time{
+		"in-the-bar": bar.Add(10 * time.Minute),
+		"today":      time.Now().UTC().Add(-time.Minute),
+	} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id + "-p0", Type: "agent_phase_completed", Time: at, Category: "lifecycle",
+			Tags: map[string]string{"turn_id": id, "agent_role": "PM"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
+	got, err := r.Answer(t.Context(), "turns", map[string]any{
+		"since": bar.Format(time.RFC3339), "until": bar.Add(time.Hour).Format(time.RFC3339),
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns, _ := got.(map[string]any)["turns"].([]store.Turn)
+	if len(turns) != 1 || turns[0].TurnID != "in-the-bar" {
+		t.Fatalf("the bar three days ago listed %+v, want its own turn", turns)
+	}
+	for _, params := range []map[string]any{
+		{"days": 7, "since": bar.Format(time.RFC3339)},
+		{"since": bar.Format(time.RFC3339), "until": bar.Format(time.RFC3339)},
+		{"until": "yesterday"},
+	} {
+		if _, err := r.Answer(t.Context(), "turns", params, ""); !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("turns %v answered %v, want %v", params, err, queries.ErrBadParams)
+		}
+	}
+}

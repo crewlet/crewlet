@@ -230,7 +230,7 @@ describe("what it surfaces", () => {
         ],
       }),
     );
-    expect(opening[0]?.detail).toContain("starting");
+    expect(opening[0]?.detail).toContain("round 1");
     expect(opening[0]?.detail).not.toContain("?");
 
     const stalled = attentionQueue(

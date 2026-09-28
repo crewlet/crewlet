@@ -909,9 +909,22 @@ test("the roster's round label names the round the rest of the product names", (
     { round_num: -1, rounds_used: 3 },
   ] as LiveCall[];
   for (const call of calls) {
-    const round = roundOf(call);
-    expect(roundLabel(call).text).toBe(round > 0 ? `round ${round}` : "starting");
+    expect(roundLabel(call).text).toBe(`round ${roundOf(call)}`);
   }
   expect(roundLabel({ round_num: -1, rounds_used: 3 } as LiveCall).text).toBe("round 3");
   expect(roundLabel(null).text).toBe("starting");
+});
+
+// THE OPENING FRAME IS ROUND ONE. It is published immediately before the
+// phase's first provider call and carries the cap so a row can say "round 1 of
+// 24" before the model answers; read as round zero, a slow first answer drew
+// Execute with no round at all while the task strip said "round 1".
+test("a call whose first round has not come back is on round one", () => {
+  const opening = { round_num: -1, rounds_used: 0, max_rounds: 24 } as LiveCall;
+  expect(roundOf(opening)).toBe(1);
+  expect(roundLabel(opening)).toEqual({
+    text: "round 1",
+    hint: "the first model round is in flight and has not come back",
+  });
+  expect(roundOf(null)).toBe(0);
 });

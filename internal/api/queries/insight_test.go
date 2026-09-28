@@ -348,14 +348,6 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 	if last["exhausted"] != true {
 		t.Errorf("a short page does not report the end of the record: %v", last)
 	}
-
-	// The role filter narrows server-side, so a busy company's other seats are
-	// never fetched and thrown away.
-	mine := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "phases",
-		map[string]any{"role": "Engineer"}))
-	if got := rows(t, mine["phases"]); len(got) != 1 {
-		t.Errorf("role filter returned %d rows, want 1", len(got))
-	}
 }
 
 // rows reads a list of records out of a JSON-decoded answer.

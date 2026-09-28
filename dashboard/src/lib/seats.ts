@@ -621,12 +621,22 @@ export function leadsInLine(index: OrgIndex, lead: string, handle: string): bool
  * The round a live call is on, ONE-BASED: `round_num` is the engine's
  * zero-based round in flight and `rounds_used` the rounds that have come
  * back, so the round is whichever of `round_num + 1` and `rounds_used` is
- * ahead — 0 for no call. Every "round x of y" the product draws — the
- * stepper, the peek, a task card's strip — reads it here, because each that
- * read `round_num` raw named a round one lower than the others.
+ * ahead — and never less than ONE while there is a call, 0 for none. Every
+ * "round x of y" the product draws — the stepper, the peek, a task card's
+ * strip — reads it here, because each that read `round_num` raw named a round
+ * one lower than the others.
+ *
+ * AT LEAST ONE, because a call's first frame IS its first round. The opening
+ * frame (`round_num` -1) is published immediately before the phase's first
+ * provider call, and it carries the granted cap precisely so a row can say
+ * "round 1 of 24" before the model has answered once
+ * (`internal/agent/runner/telemetry.go`). Read as round zero, a slow first
+ * answer drew a bare "Execute" with no round for as long as the model took —
+ * eight seconds on the harness's slowed stub — while the card beside it said
+ * "starting" and the task strip said "round 1".
  */
 export function roundOf(call: LiveCall | null | undefined): number {
-  return call ? Math.max(call.rounds_used ?? 0, (call.round_num ?? -1) + 1) : 0;
+  return call ? Math.max(1, call.rounds_used ?? 0, (call.round_num ?? -1) + 1) : 0;
 }
 
 /**
@@ -636,12 +646,9 @@ export function roundOf(call: LiveCall | null | undefined): number {
  * THE NUMBER IS [roundOf]'s, so the roster's card and the attention queue name
  * the round the stepper, the peek and a task's strips name: this helper once
  * decoded `round_num` itself, a second reading of one field beside the one the
- * rest of the product shares. What it adds is the word for NO round yet —
- * `round_num` is `-1` before the first model round has come back (and absent
- * from an older engine), which is not round zero and not a missing value: it is
- * a turn that has started and is waiting. Drawn as a dash, two of five working
- * seats on the roster read "round —" with nothing saying why — the one fact the
- * sentinel carries.
+ * rest of the product shares. What it adds is the HINT for a first round that
+ * has not come back — `round_num` is `-1` then, which is round one in flight
+ * rather than a missing value — and the word for no call at all.
  *
  * A `hint` rather than a second word on screen, because the card has room for a
  * short label and not for a clause; the clause is what a reader gets on hover
@@ -651,16 +658,16 @@ export function roundLabel(call: LiveCall | null | undefined): {
   text: string;
   hint: string;
 } {
-  const round = roundOf(call);
-  if (round <= 0) {
-    return {
-      text: "starting",
-      hint: "the turn has begun and its first model round has not come back",
-    };
+  if (!call) {
+    return { text: "starting", hint: "the turn has begun and no model round has opened yet" };
   }
+  const round = roundOf(call);
   return {
     text: `round ${round}`,
-    hint: "the model round this turn is on, counting from one",
+    hint:
+      (call.round_num ?? -1) < 0 && (call.rounds_used ?? 0) === 0
+        ? "the first model round is in flight and has not come back"
+        : "the model round this turn is on, counting from one",
   };
 }
 
@@ -1088,6 +1095,21 @@ export type SeatState = SeatActivity | "offline";
 /** The engine's word for a seat, or `offline` while no row is held for it. */
 export function activityOf(row: AgentRow | null | undefined): SeatState {
   return row?.activity ?? "offline";
+}
+
+/**
+ * The seats the engine says are WORKING, the turn that has been going longest
+ * first — the order every list of running turns draws (Home's Live now, Live ›
+ * Now running), because the longest-running turn is the one a reader is most
+ * likely looking for, and two lists of one set in two orders read as two sets.
+ */
+export function workingLongestFirst(agents: readonly AgentRow[]): AgentRow[] {
+  return agents
+    .filter((a) => activityOf(a) === "working")
+    .sort(
+      (a, b) =>
+        (Date.parse(a.turn?.started_at ?? "") || 0) - (Date.parse(b.turn?.started_at ?? "") || 0),
+    );
 }
 
 /**

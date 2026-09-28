@@ -33,6 +33,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     phase: "execute",
     iteration: 1,
     role: "Dev A",
+    agentId: "",
     model: "scripted",
     providerKey: "",
     live: false,
