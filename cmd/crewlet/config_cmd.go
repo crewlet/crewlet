@@ -12,12 +12,15 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -784,18 +787,97 @@ func publishChart(ctx context.Context, boot *config.Bootstrap, t importTarget,
 	// domain's prose bound is megabytes, and a broker's default max_payload
 	// is one mebibyte — so an import that carried content would be refused
 	// on exactly the companies large enough to need it.
+	writes := make([]contentWrite, 0, len(authored.Units)+len(authored.Seats))
 	for _, unit := range authored.Units {
-		if err := client.WriteUnit(ctx, unit); err != nil {
-			return fmt.Errorf("write the unit %s: %w", unit.Key, err)
-		}
+		writes = append(writes, contentWrite{what: "the unit " + unit.Key,
+			write: func(ctx context.Context) error { return client.WriteUnit(ctx, unit) }})
 	}
 	for _, seat := range authored.Seats {
-		if err := client.WriteSeat(ctx, seat); err != nil {
-			return fmt.Errorf("write the seat %s: %w", seat.Handle, err)
-		}
+		writes = append(writes, contentWrite{what: "the seat " + seat.Handle,
+			write: func(ctx context.Context) error { return client.WriteSeat(ctx, seat) }})
+	}
+	if err := writeContent(ctx, writes, chartContentWriters); err != nil {
+		return err
 	}
 	fmt.Fprintf(stdout, "wrote to %s\n", client.Describe())
 	return nil
+}
+
+// chartContentWriters is how many of an import's content writes are in flight
+// at once.
+//
+// NOT ONE, because each write is answered only once the node has APPLIED it
+// (a 200 means the next read there sees it), so one at a time the import paid
+// a round trip plus a wait on the node's applier per object, in series — on
+// the order of half a minute for sixty seats. The writes are independent:
+// every one arbitrates on its own object's subject, and the structure they
+// state was placed by the import record before the first of them went out.
+//
+// THE PER-PRINCIPAL QUERY ALLOWANCE, and not more: an import is one caller
+// against one node, and internal/store sizes that node's reader pool for two
+// people's worth of stream.MaxInFlightQueries. Each write takes one snapshot
+// to decide in, so at this bound an import occupies one person's share of the
+// pool and leaves the other for whoever is watching while it runs. What a
+// wider bound would buy is shorter imports of very large companies; what it
+// would cost is the dashboard queueing behind the import on a small host.
+const chartContentWriters = stream.MaxInFlightQueries
+
+// contentWrite is one object's content write in an import.
+type contentWrite struct {
+	what  string
+	write func(context.Context) error
+}
+
+// writeContent runs writes with at most limit in flight, in the order given,
+// and reports the first failure in that order.
+//
+// A FAILURE STOPS WHAT HAS NOT STARTED and lets what has started finish, which
+// is the sequential loop's behaviour widened to limit: nothing is sent after
+// the import is known to have failed, and nothing already sent is abandoned
+// half-answered. Every write before the failing one was STARTED, since they
+// are started in order, so the one reported is the first failure in the file's
+// own order however the in-flight writes happened to interleave — the same
+// file against the same node reports the same object.
+func writeContent(ctx context.Context, writes []contentWrite, limit int) error {
+	failures := make([]error, len(writes))
+	var (
+		wg     sync.WaitGroup
+		failed atomic.Bool
+	)
+	slots := make(chan struct{}, max(limit, 1))
+	for i, w := range writes {
+		slots <- struct{}{}
+		if failed.Load() {
+			<-slots
+			break
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			if err := w.write(ctx); err != nil {
+				failures[i] = fmt.Errorf("write %s: %w", w.what, err)
+				failed.Store(true)
+			}
+		}()
+	}
+	wg.Wait()
+	var first error
+	more := 0
+	for _, err := range failures {
+		switch {
+		case err == nil:
+		case first == nil:
+			first = err
+		default:
+			more++
+		}
+	}
+	if more > 0 {
+		return fmt.Errorf("%w\n\n(%d more content write(s) failed beside it)",
+			first, more)
+	}
+	return first
 }
 
 // settingsHalfOf is the file with its two chart keys removed.

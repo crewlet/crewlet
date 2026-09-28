@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,7 +13,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -308,5 +312,125 @@ func TestAChartRefusalCarriesTheNodesOwnSentence(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "node-2 is still running protocol 3") {
 		t.Errorf("the error drops what the node said: %v", err)
+	}
+}
+
+// AN IMPORT'S CONTENT WRITES OVERLAP, UP TO THE BOUND AND NO FURTHER.
+//
+// Each write is answered only once the node has applied it, so one at a time
+// an import paid that wait once per object, in series. The writes are
+// independent — each arbitrates on its own object's subject — so they run
+// chartContentWriters at a time: a loop that went back to one at a time never
+// reaches the bound here and fails on the deadline, and one that ignored it
+// would be seen past it.
+func TestAnImportsContentWritesOverlapUpToTheBound(t *testing.T) {
+	t.Parallel()
+	if chartContentWriters < 2 {
+		t.Fatalf("chartContentWriters is %d, which is the serial import back",
+			chartContentWriters)
+	}
+	var inFlight, peak atomic.Int32
+	release := make(chan struct{})
+	writes := make([]contentWrite, 3*chartContentWriters)
+	for i := range writes {
+		writes[i] = contentWrite{what: fmt.Sprintf("w%d", i),
+			write: func(context.Context) error {
+				now := inFlight.Add(1)
+				for {
+					was := peak.Load()
+					if now <= was || peak.CompareAndSwap(was, now) {
+						break
+					}
+				}
+				<-release
+				inFlight.Add(-1)
+				return nil
+			}}
+	}
+	done := make(chan error, 1)
+	go func() { done <- writeContent(context.Background(), writes, chartContentWriters) }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for inFlight.Load() < int32(chartContentWriters) {
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatalf("only %d content writes were ever in flight at once, want %d",
+				peak.Load(), chartContentWriters)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("writeContent: %v", err)
+	}
+	if got := peak.Load(); got != int32(chartContentWriters) {
+		t.Errorf("%d content writes were in flight at once, want at most %d",
+			got, chartContentWriters)
+	}
+}
+
+// THE FAILURE REPORTED IS THE FIRST IN THE FILE'S ORDER, however the writes in
+// flight interleaved: the same file against the same node names the same
+// object. Here the later object fails first and the earlier one after it.
+func TestAnImportReportsTheFirstFailureInTheFilesOrder(t *testing.T) {
+	t.Parallel()
+	later := make(chan struct{})
+	ok := func(context.Context) error { return nil }
+	writes := []contentWrite{
+		{what: "the unit engineering", write: ok},
+		{what: "the seat cto", write: func(context.Context) error {
+			// BOUNDED, so an import that ran these one at a time — where
+			// the later write never starts — fails the assertions below
+			// rather than hanging the suite.
+			select {
+			case <-later:
+			case <-time.After(10 * time.Second):
+			}
+			return errors.New("the unit moved")
+		}},
+		{what: "the seat dev", write: ok},
+		{what: "the seat ops", write: func(context.Context) error {
+			defer close(later)
+			return errors.New("an address somebody holds")
+		}},
+	}
+	err := writeContent(context.Background(), writes, 4)
+	if err == nil {
+		t.Fatal("two failed writes were reported as a success")
+	}
+	if !strings.HasPrefix(err.Error(), "write the seat cto: the unit moved") {
+		t.Errorf("reported %q, want the seat cto's failure, which is first in "+
+			"the file", err)
+	}
+	if !strings.Contains(err.Error(), "1 more content write(s) failed") {
+		t.Errorf("the second failure went unmentioned: %v", err)
+	}
+}
+
+// NOTHING STARTS AFTER A WRITE FAILS: the import is known to have failed, and
+// every write sent after that is one more object changed by an import that
+// will be reported as not having happened.
+func TestNothingStartsAfterAnImportWriteFails(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var ran []int
+	writes := make([]contentWrite, 5)
+	for i := range writes {
+		writes[i] = contentWrite{what: fmt.Sprintf("w%d", i),
+			write: func(context.Context) error {
+				mu.Lock()
+				ran = append(ran, i)
+				mu.Unlock()
+				if i == 2 {
+					return errors.New("refused")
+				}
+				return nil
+			}}
+	}
+	if err := writeContent(context.Background(), writes, 1); err == nil {
+		t.Fatal("a failed write was reported as a success")
+	}
+	if !slices.Equal(ran, []int{0, 1, 2}) {
+		t.Errorf("ran %v, want nothing after the failure at 2", ran)
 	}
 }

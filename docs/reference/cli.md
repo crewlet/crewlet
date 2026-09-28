@@ -233,13 +233,19 @@ the file:
    anchors and `${VAR}` pointers intact — to `PUT /config`;
 2. the **structure**, as one record on the chart's own subject, to
    `POST /chart/import`;
-3. each unit's and each seat's **content**, one record per object.
+3. each unit's and each seat's **content**, one record per object, four at a
+   time.
 
 The order is load-bearing rather than tidy. The settings go first because a
 seat whose model chain names a provider is only valid once that provider
 exists. The structure goes before the content because a content write states
 the unit it believes a seat sits in, and the domain refuses a value that
-disagrees with the row.
+disagrees with the row. The content writes themselves are independent — each
+is arbitrated on its own object — so up to four are in flight at once, the
+same allowance one person's dashboard has against a node, which keeps a large
+import from queueing everybody watching it. If one is refused, nothing further
+is sent, the writes already in flight finish, and the import reports the first
+refusal in the file's own order.
 
 The chart import is **keyed on the chart's own content hash**, the same key
 the [boot seed](#crewlet-run) computes, so re-importing an unchanged file is a
