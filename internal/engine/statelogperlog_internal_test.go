@@ -639,6 +639,81 @@ func TestALogOfLayoutZerosOnePartitionIsNeverStopped(t *testing.T) {
 	}
 }
 
+// ANOTHER LAYOUT'S RECORDS UNDER THIS LOG'S KEY ARE NOT THIS LOG'S.
+//
+// A log's key is layout-blind — layout 1's `tracker@tracker.000` and a
+// repartitioned layout 2's are one string — so the positions register's rows
+// and the published floors carry the layout beside it, and every read of them
+// that goes on to use a position or a floor takes them through this node's
+// layout ([layoutPositions], [layoutFloors]). Read without it, another
+// layout's node at the bottom of the log is counted by this log's trim, and
+// another layout's floor far past this log's end is this log's: the
+// readmission bound refuses a node holding everything, and the write fence
+// reads this node as below a floor its own log never reached.
+func TestAnotherLayoutsRecordsUnderThisLogsKeyAreNotThisLogs(t *testing.T) {
+	t.Parallel()
+	_, s, _ := aPartitionedStateLog(t)
+	running := s.Log("tracker@tracker.000")
+	linearizableRead(t, running)
+	at := running.runner.Committed()
+	const far = uint64(1) << 40
+
+	if err := s.fleet.PutPositions(t.Context(), coord.NodePositions{
+		NodeID: "node-layout-2", At: time.Now().UTC(), Layout: 2,
+		Domains: map[string]coord.DomainPosition{running.key: {Generation: at.Generation}},
+	}); err != nil {
+		t.Fatalf("publish another layout's row: %v", err)
+	}
+	if err := s.fleet.PutFloor(t.Context(), coord.TrimFloor{
+		Domain: running.key, Layout: 2, Generation: at.Generation, TrimTo: far, Floor: far,
+	}); err != nil {
+		t.Fatalf("publish another layout's floor: %v", err)
+	}
+	// AND A NODE OF THIS LAYOUT HOLDING EVERYTHING, which a readmission of
+	// it is judged on.
+	back := coord.NodePositions{NodeID: "node-back", At: time.Now().UTC(), Layout: 1,
+		Domains: map[string]coord.DomainPosition{}}
+	for _, identity := range s.running() {
+		if identity.domain.ClaimsIdentity() {
+			c := identity.runner.Committed()
+			back.Domains[identity.key] = coord.DomainPosition{
+				Generation: c.Generation, Seq: c.Seq, AppliedThrough: c.Seq}
+		}
+	}
+	if err := s.fleet.PutPositions(t.Context(), back); err != nil {
+		t.Fatalf("publish node-back's row: %v", err)
+	}
+	s.publishPositions(t.Context())
+
+	// THE TRIM'S COUNTED SET.
+	r := &retention{fleet: s.fleet, state: s, nodeID: "node-p",
+		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
+	shared, err := r.read(t.Context())
+	if err != nil {
+		t.Fatalf("read the tick's inputs: %v", err)
+	}
+	var reported []string
+	for _, p := range reportedPositions(shared.positions, running.key) {
+		reported = append(reported, p.NodeID)
+	}
+	slices.Sort(reported)
+	if want := []string{"node-back", "node-p"}; !slices.Equal(reported, want) {
+		t.Errorf("the trim counts %v on %s, want %v: another layout's node is "+
+			"not on this log", reported, running.key, want)
+	}
+	// THE READMISSION BOUND.
+	if err := s.Readmissible(t.Context(), "node-back"); err != nil {
+		t.Errorf("a node holding every record of this layout's logs is refused "+
+			"readmission: %v", err)
+	}
+	// THE FENCE'S FLOOR.
+	floor, err := s.trimFloor(t.Context(), running.key, at.Generation)
+	if err != nil || floor != 0 {
+		t.Errorf("the fence reads %s's floor as %d (%v); another layout's floor "+
+			"is not this log's, and this layout has published none", running.key, floor, err)
+	}
+}
+
 // A RECOVERY LOCKS ITS PARTITIONS AND NO OTHERS, IN ONE ORDER.
 //
 // Work on one partition must never wait on work on another, and two callers
