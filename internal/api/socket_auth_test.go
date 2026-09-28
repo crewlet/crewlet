@@ -208,9 +208,15 @@ func TestACookieAuthenticatesTheHandshake(t *testing.T) {
 
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
+	// WITH THE ORIGIN A BROWSER SENDS on every handshake: the socket is
+	// judged by the writes' cross-site rule, which refuses a cookie that
+	// arrives with no Origin at all.
 	conn, _, err := websocket.Dial(t.Context(),
 		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream",
-		&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {live.String()}}})
+		&websocket.DialOptions{HTTPHeader: http.Header{
+			"Cookie": {live.String()},
+			"Origin": {b.API.ExternalURL},
+		}})
 	if err != nil {
 		t.Fatalf("a handshake carrying a live session's cookie was refused: %v", err)
 	}
