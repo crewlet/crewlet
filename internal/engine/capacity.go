@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -837,11 +838,30 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 
 // capacityParticipants is who must acknowledge.
 //
-// EVERY NODE THE FLEET HAS A POSITION FOR, union everything currently holding
-// a presence lease — NOT the retention counted set, which is about whose
-// position pins the trim. This set is about whose process could hold an
-// outstanding request, and a node that was evicted from the first is still a
-// machine that can run one.
+// EVERY NODE THE FLEET HAS A POSITION FOR, union every live node whose PROCESS
+// could hold an outstanding request, union this node — NOT the retention
+// counted set, which is about whose position pins the trim. This set is about
+// whose process could hold a request the seal has to retire, and a node that
+// was evicted from the first is still a machine that can run one.
+//
+// # Two questions among the live nodes, asked apart
+//
+// The seal's proof is that every BROKER process restarted, because a request
+// the broker has already queued is retired by the process holding it going
+// away, and every PUBLISHER must be admitted. So a live node takes part if it
+// holds the estate — it publishes records ([capacityHolders]) — or if its
+// broker is a member, which holds queued requests whatever its roles
+// ([capacityMembers]). Counted over data nodes alone, a member that holds no
+// data was never waited for, and the seal could pass while its broker still
+// held a request that would resize the log after it.
+//
+// A node whose presence does not say what its broker is counts as a member:
+// excluding it could pass a seal it should hold, where including one that is
+// not a member only waits for an acknowledgement an operator can exclude.
+//
+// A leaf that holds no data takes no part: its broker runs no JetStream and
+// queues nothing, and its seats publish through a data node, which is admitted
+// in its own right.
 func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 	seen := map[string]bool{}
 	rows, err := e.backends.Fleet.Positions(ctx)
@@ -853,15 +873,14 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 		seen[row.NodeID] = true
 	}
 	if e.backends.Coord != nil {
-		// DATA NODES ONLY: a node without `data` publishes to no state
-		// log — its seats write through a data node, which is the
-		// publisher this handshake is about — so it has no request to
-		// retire and nothing to acknowledge.
-		ids, err := dataNodes(ctx, e.backends.Coord)
+		held, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 		if err != nil {
 			return nil, fmt.Errorf("engine: list the live nodes: %w", err)
 		}
-		for _, id := range ids {
+		for _, id := range capacityHolders(held) {
+			seen[id] = true
+		}
+		for _, id := range capacityMembers(held) {
 			seen[id] = true
 		}
 	}
@@ -869,6 +888,34 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 	// no presence lease and may have published no position yet.
 	seen[e.id] = true
 	return sortedKeys(seen), nil
+}
+
+// capacityHolders is every live node holding a copy of the replicated estate —
+// the publishers of its records.
+//
+// UNDER THE SINGLE-FILE LAYOUT every data node holds the whole estate, so a
+// node's presence is what says it does; there is no lease of the estate's own
+// to read until the partitioned estate places it by partition.
+func capacityHolders(held []coord.Lease) []string {
+	return dataNodesOf(held)
+}
+
+// capacityMembers is every live node whose broker is a member of the fleet's,
+// or does not say — see [Engine.capacityParticipants] for why a node that does
+// not say is counted.
+func capacityMembers(held []coord.Lease) []string {
+	var out []string
+	for _, lease := range held {
+		profile, ok := placement.FromLease(lease)
+		if !ok {
+			continue
+		}
+		switch profile.Broker {
+		case placement.BrokerMember, placement.BrokerUnknown:
+			out = append(out, profile.ID)
+		}
+	}
+	return out
 }
 
 // capacityIncarnations is each participant's identity as of the baseline, read

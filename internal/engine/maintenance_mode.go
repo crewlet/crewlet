@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -78,11 +79,13 @@ func (e *Engine) admit(ctx context.Context, streams []string) error {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode != statelog.ModeNormal {
 		return nil
 	}
-	if !holdsData(e.boot) {
+	if !e.profile.HoldsData() {
 		// NO STATE-LOG PUBLISHER TO ADMIT: this node's seats write through
 		// a data node, which is admitted in its own right. An admission
 		// here would be a publisher a capacity operation waited on for
-		// ever.
+		// ever — and that holds for a node whose broker is a member too,
+		// since what its broker queues is retired by the restart it
+		// ACKNOWLEDGES, not by anything an admission says.
 		return nil
 	}
 	admission := coord.Admission{
@@ -145,9 +148,17 @@ func (e *Engine) withdraw(ctx context.Context) error {
 // carrying its own mode is what lets one record answer both questions: the
 // barrier filters on the mode, and the participant set is read from the same
 // place.
+//
+// # And every node whose restart is evidence
+//
+// A DATA NODE, whose process publishes records, AND A BROKER MEMBER, whose
+// broker holds requests queued against the log whatever this node's roles —
+// the two the participant set counts ([Engine.capacityParticipants]). A member
+// that holds no data and did not acknowledge would be named a participant the
+// seal waits on for ever, since nothing else it could write says it restarted.
 func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode == statelog.ModeNormal ||
-		!holdsData(e.boot) {
+		!acknowledges(e.profile) {
 		return
 	}
 	for _, stream := range streams {
@@ -180,6 +191,14 @@ func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 			"stream", stream, "operation", op.OperationID, "attempt", op.Attempt,
 			"mode", e.mode, "incarnation", e.incarnation)
 	}
+}
+
+// acknowledges reports whether a node's restart into a maintenance mode is
+// evidence a capacity seal needs: it holds data, or its broker is a member.
+// This node's own kind is always known — it is derived from its stream block —
+// so there is no unknown to resolve here.
+func acknowledges(p placement.NodeProfile) bool {
+	return p.HoldsData() || p.Broker == placement.BrokerMember
 }
 
 // Mode is what this node started for.

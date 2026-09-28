@@ -200,9 +200,11 @@ node's seats do, and each of those tools asks a data node over the broker:
   are kept on the stateless node, and `store.objects` is refused there.
 - **It is never counted as a copy.** The trim waits on the positions of data
   nodes only, the search fan-out divides its buckets between data nodes only,
-  a capacity operation asks data nodes only to acknowledge, and the object
-  store places chunks on data nodes only — a stateless node publishes to no
-  state log.
+  and the object store places chunks on data nodes only — a stateless node
+  publishes to no state log. A capacity operation asks the data nodes and
+  every broker **member** to acknowledge, whatever their roles; a leaf's broker
+  queues nothing, so a stateless leaf is not asked
+  ([who has to acknowledge](retention.md#who-has-to-acknowledge)).
 
 Seat admission on a stateless node asks a data node whether its copy is
 established, so a stateless node claims no seat until one is. While no data

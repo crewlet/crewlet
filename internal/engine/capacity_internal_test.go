@@ -13,7 +13,6 @@ import (
 
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -21,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -974,21 +974,29 @@ func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
 	}
 }
 
-// A NODE THAT HOLDS NO DATA IS NOT A PARTICIPANT, AND ADMITS NOTHING. It
-// publishes to no state log — its seats write through a data node, which is
-// the publisher this handshake is about — so a participant set that named it
-// would wait for an acknowledgement it has no reason to give, and an admission
-// it wrote would be a publisher a capacity operation waited on for ever.
-func TestAStatelessNodeHasNoPartInACapacityOperation(t *testing.T) {
+// WHO TAKES PART IN A CAPACITY SEAL IS DECIDED BY THE DATA AND BY THE BROKER,
+// asked apart. The seal's proof is that every broker process restarted and
+// every publisher was admitted, so a live node takes part when it holds the
+// estate (it publishes) or when its broker is a member (it queues requests) —
+// and when its presence does not say what its broker is, because leaving out a
+// node that may be a member could pass a seal it should hold. A leaf or a
+// client of an external cluster that holds no data does neither.
+func TestWhoTakesPartInACapacitySealIsTheDataAndTheBrokerMembers(t *testing.T) {
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-coordinator", statelog.ModeMaintenance)
 	backend := coordmem.New()
 	e.backends.Coord = backend
-	for id, roles := range map[string][]string{
-		"data-a": {"data", "seats"}, "agent-1": {"seats"},
+	for id, meta := range map[string]map[string]any{
+		"data-member":      {"roles": []string{"data", "seats"}, "broker": "member"},
+		"data-client":      {"roles": []string{"data"}, "broker": "client"},
+		"dataless-member":  {"roles": []string{"seats"}, "broker": "member"},
+		"an-older-build":   {"roles": []string{"seats"}},
+		"a-newer-kind":     {"roles": []string{"seats"}, "broker": "observer"},
+		"stateless-leaf":   {"roles": []string{"seats"}, "broker": "leaf"},
+		"stateless-client": {"roles": []string{"seats"}, "broker": "client"},
 	} {
 		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
-			Owner: id + ":boot-1", TTL: time.Minute, Meta: map[string]any{"roles": roles},
+			Owner: id + ":boot-1", TTL: time.Minute, Meta: meta,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -997,15 +1005,24 @@ func TestAStatelessNodeHasNoPartInACapacityOperation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capacityParticipants: %v", err)
 	}
-	if want := []string{"data-a", "node-coordinator"}; !slices.Equal(got, want) {
+	want := []string{"a-newer-kind", "an-older-build", "data-client", "data-member",
+		"dataless-member", "node-coordinator"}
+	if !slices.Equal(got, want) {
 		t.Fatalf("participants = %v, want %v", got, want)
 	}
 
-	stateless, _ := capacityFixture(t, "agent-1", statelog.ModeNormal)
-	stateless.backends.Fleet = fleet
-	stateless.boot = &config.Bootstrap{Node: config.Node{Roles: []string{"seats"}}}
-	if err := stateless.admit(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
-		t.Fatalf("admit: %v", err)
+	// AND A NODE THAT HOLDS NO DATA ADMITS NOTHING, whatever its broker: it
+	// publishes to no state log, and an admission it wrote would be a
+	// publisher a capacity operation waited on for ever.
+	for _, broker := range []placement.BrokerKind{placement.BrokerLeaf, placement.BrokerMember} {
+		stateless, _ := capacityFixture(t, "agent-1", statelog.ModeNormal)
+		stateless.backends.Fleet = fleet
+		stateless.profile = placement.NodeProfile{
+			ID: "agent-1", Roles: placement.Roles(placement.RoleSeats), Broker: broker,
+		}
+		if err := stateless.admit(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+			t.Fatalf("admit: %v", err)
+		}
 	}
 	admissions, err := fleet.Admissions(ctx)
 	if err != nil {
@@ -1013,5 +1030,96 @@ func TestAStatelessNodeHasNoPartInACapacityOperation(t *testing.T) {
 	}
 	if len(admissions) != 0 {
 		t.Fatalf("a node that publishes to no state log recorded %+v", admissions)
+	}
+}
+
+// TestADatalessMemberMustAcknowledgeASeal: a broker member that holds no data
+// is a participant, and restarted into seal mode it acknowledges — so the seal
+// holds once it has, and not before.
+//
+// The pairing is the partitioned estate's dedicated broker member, which Tier A
+// refuses while the single-file layout runs; the profile is built here so the
+// engine's half of the handshake is certified before the configuration can
+// produce one. Left out of the participants, its broker could still hold a
+// queued request to resize the log after the seal passed; named but unable to
+// acknowledge, it would wedge every seal for ever.
+func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
+	ctx := context.Background()
+	coordinator, fleet := capacityFixture(t, "data-a", statelog.ModeSeal)
+	backend := coordmem.New()
+	coordinator.backends.Coord = backend
+	profiles := map[string]placement.NodeProfile{
+		"data-a": {ID: "data-a", Roles: placement.Roles(placement.RoleData, placement.RoleSeats),
+			Broker: placement.BrokerMember},
+		"broker-1": {ID: "broker-1", Roles: placement.Roles(placement.RoleSeats),
+			Broker: placement.BrokerMember},
+		"agent-1": {ID: "agent-1", Roles: placement.Roles(placement.RoleSeats),
+			Broker: placement.BrokerLeaf},
+	}
+	coordinator.profile = profiles["data-a"]
+	for id, profile := range profiles {
+		if id == coordinator.id {
+			// THE COORDINATOR holds no presence in a maintenance mode;
+			// it names itself.
+			continue
+		}
+		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
+			Owner: id + ":boot-1", TTL: time.Minute, Meta: profile.Meta(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	participants, err := coordinator.capacityParticipants(ctx)
+	if err != nil {
+		t.Fatalf("capacityParticipants: %v", err)
+	}
+	if want := []string{"broker-1", "data-a"}; !slices.Equal(participants, want) {
+		t.Fatalf("participants = %v, want %v: a member that holds no data holds "+
+			"queued requests all the same, and a leaf holds none", participants, want)
+	}
+	op := coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1", TargetMaxBytes: 1 << 33,
+		Phase: coord.PhaseBaselined, Attempt: 1, Participants: participants,
+		WriteIncarnations: map[string]string{"data-a": "data-a:old", "broker-1": "broker-1:old"},
+		EnteredAt:         time.Now().UTC(), By: "ops-3",
+	}
+	if _, _, err := fleet.OpenMaintenance(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+
+	// EVERY NODE RESTARTS INTO SEAL MODE, each acknowledging as its own
+	// profile says it must — the leaf included, which must write nothing.
+	coordinator.acknowledge(ctx, []string{op.Stream})
+	acks, err := fleet.MaintenanceAcks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, _ := barrierEvidence(op, acks); held {
+		t.Fatal("the seal held before the dataless member restarted into seal mode")
+	}
+	for _, id := range []string{"broker-1", "agent-1"} {
+		node, _ := capacityFixture(t, id, statelog.ModeSeal)
+		node.backends.Fleet = fleet
+		node.profile = profiles[id]
+		node.acknowledge(ctx, []string{op.Stream})
+	}
+	acks, err = fleet.MaintenanceAcks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ack := range acks {
+		if ack.NodeID == "agent-1" {
+			t.Errorf("a leaf that holds no data acknowledged: its broker queues " +
+				"nothing and it is no participant, so the record is noise at best")
+		}
+	}
+	held, incarnations := barrierEvidence(op, acks)
+	if !held {
+		t.Fatalf("the seal does not hold with every participant restarted into "+
+			"seal mode: the dataless member never acknowledged (acks: %+v)", acks)
+	}
+	if incarnations["broker-1"] != "broker-1:boot-1" {
+		t.Errorf("the dataless member's evidence is %q, want the incarnation it "+
+			"restarted as", incarnations["broker-1"])
 	}
 }

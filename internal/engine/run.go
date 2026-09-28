@@ -707,7 +707,17 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	e := &Engine{
-		boot:     opts.Bootstrap,
+		boot: opts.Bootstrap,
+		// SET HERE, BEFORE ANYTHING READS IT, and once: the admission
+		// handshake below asks it whether this node publishes and whether
+		// its broker is a member, and the node is handed this exact value
+		// — two constructions of it would be two places to disagree about
+		// what this node does. Through the bootstrap's own accessor, which
+		// parses the roles with the validator that already refused an
+		// unknown one at load, derives the broker kind from the stream
+		// block, and is what the fleet view reads a peer's presence row
+		// back through.
+		profile:  opts.Bootstrap.Profile(nodeID),
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		mcp:                 mcp.NewBridge(nil),
@@ -935,14 +945,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	e.installEpoch(company, opts.ActivatedAt)
 
-	// SET BEFORE the node, because the node is handed this exact value —
-	// two constructions of it would be two places to disagree about what
-	// this node does.
-	// THROUGH THE NODE BLOCK'S OWN ACCESSOR, not a second construction of
-	// the same thing: it parses the roles with the validator that already
-	// refused an unknown one at load, and it is what the fleet view reads
-	// a peer's presence row back through.
-	e.profile = opts.Bootstrap.Profile(nodeID)
 	// BEFORE the node, which registers every seat's mailbox through it on
 	// its first walk, and AFTER the lease TTL, which a retirement claims a
 	// seat for.
