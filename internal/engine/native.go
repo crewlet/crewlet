@@ -735,7 +735,11 @@ func (n *native) openChart(e *Engine, sl *stateLog, nodeID string) error {
 		// written to a seat is sealed rather than put on a log every
 		// node applies. Nil is a real configuration — a company with no
 		// store — and a write that needs one is then refused by name.
-		Seal:      e.chartSealer(),
+		Seal: e.chartSealer(),
+		// AND WHERE A RUNTIME HALF KEEPS ITS CREDENTIALS, which the
+		// chart cannot read: the organization model's own types, whose
+		// tags say which of a seat's or a unit's values are sealed.
+		Runtime:   org.RuntimeShape{},
 		Actor:     nodeID,
 		ActorKind: chart.AuthorOperator,
 		// THE NODE ITSELF IS THE DEPLOYMENT, so it authors every class

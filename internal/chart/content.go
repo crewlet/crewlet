@@ -223,7 +223,7 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 			if !found {
 				return statelog.Decision{}, notPlaced(ctx, tx, object)
 			}
-			runtime, runtimeChanges, err := nextRuntime(object,
+			runtime, runtimeChanges, err := w.nextRuntime(object,
 				prior.Runtime, content.Runtime, content.ClearRuntime)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -237,7 +237,25 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			// ASKED BEFORE ANYTHING IS SEALED, and again by
+			// [Writer.record] as every record is: sealing writes the
+			// company's secret store, and a party refused the record
+			// must not have written there on the way to the refusal.
 			need := contentRequirement(changed)
+			if err = w.mayAuthor(object, need); err != nil {
+				return statelog.Decision{}, err
+			}
+			// ONLY A HALF THAT CHANGES IS SEALED: one carried from the
+			// row is the row's own bytes, sealed by the write that put
+			// it there, and re-sealing it would be a write to the store
+			// nobody asked for. Under the unit's IDENTITY, which no
+			// rename moves — see seal.go.
+			if runtimeChanges {
+				sealAs := ObjectRef{Kind: KindUnit, ID: prior.Origin()}
+				if runtime, err = w.sealRuntime(ctx, object, sealAs, runtime); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
 			payload := UnitPayload{
 				V: DocumentVersion, Key: key, Name: content.Name,
 				Type: content.Type, Purpose: content.Purpose,
@@ -266,9 +284,11 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 // IT READS THE ROW IT PATCHES for what only that row can say: which of the
 // fields that ask for the company's grant it changes (grant.go's header), what
 // to carry when the caller left the runtime half out, and — because a seat's
-// email is a value a read MASKS — the stored value a write that hands the mask
-// back is restored from, rather than written as eight characters of
-// `__redacted__`.
+// email and every credential in its runtime half are values a read MASKS —
+// the stored value a write that hands the mask back is restored from, rather
+// than written as the twelve characters of `__redacted__`. Whatever literal
+// the write does carry, in the address or anywhere in the half, is SEALED
+// before the record is formed (seal.go), under the seat's identity.
 //
 // IT NEVER TOUCHES THE SEAT'S `manages:` LIST, which is structure
 // ([SeatContent]): the record is written at version 3, whose content apply
@@ -321,7 +341,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 					"record's own blast radius is filed under that value: %w",
 					object, unit, prior.UnitKey, ErrRefused)
 			}
-			runtime, runtimeChanges, err := nextRuntime(object,
+			runtime, runtimeChanges, err := w.nextRuntime(object,
 				prior.Runtime, content.Runtime, content.ClearRuntime)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -335,13 +355,23 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			// ASKED BEFORE THE EMAIL IS SEALED, and again by
+			// ASKED BEFORE ANYTHING IS SEALED, and again by
 			// [Writer.record] as every record is: sealing writes the
 			// company's secret store, and a party refused the record
 			// must not have written there on the way to the refusal.
 			need := contentRequirement(changed)
 			if err = w.mayAuthor(object, need); err != nil {
 				return statelog.Decision{}, err
+			}
+			// UNDER THE SEAT'S IDENTITY, the handle it was created
+			// under, which no rename moves and no later hire is given —
+			// see seal.go. Only a runtime half that CHANGES is sealed:
+			// one carried from the row is the row's own bytes.
+			sealAs := ObjectRef{Kind: KindSeat, ID: prior.Origin()}
+			if runtimeChanges {
+				if runtime, err = w.sealRuntime(ctx, object, sealAs, runtime); err != nil {
+					return statelog.Decision{}, err
+				}
 			}
 			payload := SeatPayload{
 				V: DocumentVersion, Handle: handle,
@@ -351,7 +381,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 				Project:              content.Project, Space: content.Space,
 				Runtime: runtime,
 			}
-			email, err := w.resolveMasked(ctx, object, "email",
+			email, err := w.resolveMasked(ctx, object, sealAs, "email",
 				content.Email, prior.Email)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -510,8 +540,18 @@ func (w *Writer) publishContent(ctx context.Context, object ObjectRef,
 // clear, it is refused. Stated alone, it must be a JSON object, and it changes
 // the row where the two differ as JSON — key order and whitespace aside — and
 // is the row's own bytes where they do not.
-func nextRuntime(object ObjectRef, prior, stated json.RawMessage, clear bool) (
-	json.RawMessage, bool, error) {
+//
+// A STATED HALF'S MASKS ARE RESTORED FIRST ([Writer.restoreRuntime]), so the
+// comparison is between what the record would carry and what the row holds:
+// a half read masked and handed back unchanged is the row's own and asks for
+// nothing, where compared as it arrived every such round trip was a change.
+// What is NOT sealed here is the literal: a literal where the row holds a
+// reference is always a change, since sealing it overwrites the store under
+// a name the row already references — a rotation a comparison of the two
+// references could never see — so the caller seals once the party is known
+// to be entitled to the change.
+func (w *Writer) nextRuntime(object ObjectRef, prior, stated json.RawMessage,
+	clear bool) (json.RawMessage, bool, error) {
 
 	switch {
 	case clear && len(stated) > 0:
@@ -523,16 +563,24 @@ func nextRuntime(object ObjectRef, prior, stated json.RawMessage, clear bool) (
 	case len(stated) == 0:
 		return prior, false, nil
 	}
-	restated, err := canonicalObject(stated)
-	if err != nil {
+	if _, err := canonicalObject(stated); err != nil {
 		return nil, false, fmt.Errorf("chart: the runtime half of the write on "+
 			"%s is not a JSON object (%v) — it is decoded onto the object, and "+
 			"a value of any other shape decodes onto nothing, so the object "+
 			"would run with no model chain and no credentials. Leave it out "+
 			"to keep the one it has: %w", object, err, ErrRefused)
 	}
+	restored, err := w.restoreRuntime(object, prior, stated)
+	if err != nil {
+		return nil, false, err
+	}
+	restated, err := canonicalObject(restored)
+	if err != nil {
+		return nil, false, fmt.Errorf("chart: the runtime half of the write on "+
+			"%s: %w", object, err)
+	}
 	if !holdsObject(prior, restated) {
-		return stated, true, nil
+		return restored, true, nil
 	}
 	// THE SAME HALF, RESTATED, IS THE ROW'S OWN: the record carries the
 	// bytes the row holds, so a restatement in another key order is no
@@ -611,11 +659,11 @@ func canonicalObject(raw json.RawMessage) (string, error) {
 // with no prior value cannot be restored, so storing it would either write the
 // literal — an outage that names nothing hours later — or silently clear a
 // value the caller believed they were leaving alone.
-func (w *Writer) resolveMasked(ctx context.Context, object ObjectRef,
+func (w *Writer) resolveMasked(ctx context.Context, object, sealAs ObjectRef,
 	field, value, prior string) (string, error) {
 
 	if value != redact.FieldMask {
-		return w.sealValue(ctx, object, field, value)
+		return w.sealValue(ctx, object, sealAs, []string{field}, value)
 	}
 	if prior == "" {
 		return "", fmt.Errorf("chart: %s on %s arrived as %q and there is no "+

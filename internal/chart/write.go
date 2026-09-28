@@ -90,6 +90,10 @@ type Writer struct {
 	// write that needs one rather than storing the literal.
 	seal Sealer
 
+	// runtime finds the credentials in an object's runtime half, which
+	// this domain cannot read. Never nil: see [NewWriter].
+	runtime Runtime
+
 	// Now is the writer's clock, for the AUTHORED instant only. Nothing
 	// this clock produces reaches a row: every instant the applier stores
 	// is the broker's, which is what makes one node's copy byte-identical
@@ -106,6 +110,12 @@ type WriterDeps struct {
 	// secret store configured can still author a chart, and a write that
 	// needs sealing refuses by name rather than storing a literal.
 	Seal Sealer
+
+	// Runtime is where a runtime half keeps its credentials — internal/org's
+	// answer, since the half is its shape. REQUIRED, unlike Seal: without it
+	// a writer cannot tell a credential in the half from anything else, and
+	// the half would reach the log exactly as it arrived.
+	Runtime Runtime
 
 	Actor      string
 	ActorKind  AuthorKind
@@ -127,6 +137,13 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 		return nil, fmt.Errorf("chart: a writer needs the replicated estate, " +
 			"which is where every rule it enforces is read from")
 	}
+	if deps.Runtime == nil {
+		return nil, fmt.Errorf("chart: a writer needs the runtime half's shape " +
+			"(internal/org's) — without it a credential in a seat's mcp_env, " +
+			"its sandbox env or its own app is one this writer cannot find, " +
+			"and it would reach the log, every node's rows and every backup " +
+			"in the clear")
+	}
 	if deps.Actor == "" {
 		return nil, fmt.Errorf("chart: a writer needs an actor — a " +
 			"reorganisation is the change a company most needs an audit of, " +
@@ -145,7 +162,8 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: deps.Publisher, db: deps.DB, seal: deps.Seal,
-		Actor: deps.Actor, ActorKind: deps.ActorKind,
+		runtime: deps.Runtime,
+		Actor:   deps.Actor, ActorKind: deps.ActorKind,
 		Grants:     slices.Clone(deps.Grants),
 		OperatorID: deps.OperatorID, TurnID: deps.TurnID,
 		Revision: deps.Revision, Now: now,

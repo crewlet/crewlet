@@ -187,6 +187,16 @@ type Seat struct {
 	// tables, arbitrated on the tree's subject — and a content record
 	// carrying them would be a second writer of the shape of the company,
 	// contending with nobody.
+	//
+	// # Opaque, and still never holding a credential in the clear
+	//
+	// Every credential in it — its `mcp_env`, the sandbox's env and its
+	// setup steps' files and env, its own Slack, Mattermost and GitHub App
+	// credentials — is a `${VAR}` reference by the time a record carries
+	// it: the writer finds them through [Runtime], which internal/org
+	// answers from its own tagged types, and seals every literal before
+	// publication (seal.go). A surface serving the half masks it
+	// ([MaskRuntime]).
 	Runtime json.RawMessage `json:"runtime,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`

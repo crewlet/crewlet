@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -35,13 +36,17 @@ import (
 // broker can settle it.
 
 type writeRig struct {
-	t       *testing.T
-	db      *store.DB
-	log     *js.DomainLog
-	writer  *chart.Writer
-	sealer  *fakeSealer
-	applier *chart.Applier
-	waiter  *rigWaiter
+	t      *testing.T
+	db     *store.DB
+	log    *js.DomainLog
+	writer *chart.Writer
+	sealer *fakeSealer
+
+	// publisher is the rig's log, kept so a case can build a writer of its
+	// own over it.
+	publisher *statelog.Publisher
+	applier   *chart.Applier
+	waiter    *rigWaiter
 
 	verifier *statelog.Verifier
 	consumed uint64
@@ -114,7 +119,8 @@ func newWriteRig(t *testing.T) *writeRig {
 	sealer := newSealer(t)
 	writer, err := chart.NewWriter(chart.WriterDeps{
 		Publisher: publisher, DB: db, Seal: sealer,
-		Actor: "ana", ActorKind: chart.AuthorHuman,
+		Runtime: org.RuntimeShape{},
+		Actor:   "ana", ActorKind: chart.AuthorHuman,
 		// THE RIG'S PARTY AUTHORS EVERYTHING — every class, a removal
 		// included — so every case here is about the rule it names
 		// rather than about the grant gate. What the gate itself does is
@@ -127,7 +133,8 @@ func newWriteRig(t *testing.T) *writeRig {
 	}
 	return &writeRig{
 		t: t, db: db, log: log, writer: writer, sealer: sealer,
-		applier: chart.NewApplier("node-a", nil), waiter: waiter,
+		publisher: publisher,
+		applier:   chart.NewApplier("node-a", nil), waiter: waiter,
 		verifier: testVerifier(t, chart.Domain{}),
 	}
 }
@@ -592,6 +599,31 @@ func TestAWriterWithNoActorIsRefused(t *testing.T) {
 	full := chart.WriterDeps{Publisher: nil, DB: r.db}
 	if _, err := chart.NewWriter(full); err == nil {
 		t.Fatal("a writer with neither a publisher nor an actor was built")
+	}
+}
+
+// A WRITER THAT CANNOT READ THE RUNTIME HALF IS REFUSED AT CONSTRUCTION.
+//
+// The half is internal/org's shape, so a writer is handed what finds the
+// credentials in it. Built without that, it could not tell a bot token from a
+// model name and would put every credential in the half on the log in the
+// clear — which is exactly what the writer did while the address was the one
+// field it knew how to seal.
+func TestAWriterThatCannotReadTheRuntimeHalfIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	deps := chart.WriterDeps{
+		Publisher: r.publisher, DB: r.db, Seal: r.sealer,
+		Actor: "ana", ActorKind: chart.AuthorHuman,
+	}
+	if _, err := chart.NewWriter(deps); err == nil {
+		t.Fatal("a writer with no runtime shape was built")
+	}
+	// THE CONTROL: the same deps with the shape build, so what refused
+	// above is the missing shape and nothing else.
+	deps.Runtime = org.RuntimeShape{}
+	if _, err := chart.NewWriter(deps); err != nil {
+		t.Fatalf("a writer with every dependency was refused: %v", err)
 	}
 }
 
