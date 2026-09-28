@@ -264,8 +264,10 @@ semantic index's head and its per-list counts, counts the embedding space and
 runs one indexed anti-join that returns nothing, and stops; a tick on one that
 is behind cannot monopolise the provider budget. The one long tick is a
 **training** of the semantic index: about 120 µs a source to read every code
-and make one exact pass, plus a k-means of up to half a minute — a little over
-two minutes at the largest partition an index serves. It renews the duty's
+and make one exact pass, plus a k-means and a filing of every code that run on
+**half the node's cores** — so the seats and the searches on that node keep the
+other half — which comes to a little over three minutes at the largest
+partition an index serves. It renews the duty's
 lease as it runs, stops publishing the moment it cannot, and is cut off at
 five minutes, so a wedged tick never holds the duty.
 Both source kinds are covered: the tracker's work items and the knowledge

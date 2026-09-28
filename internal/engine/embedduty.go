@@ -51,11 +51,13 @@ import (
 // # The one tick that is long, and how it keeps its lease
 //
 // A tick that TRAINS the semantic index (ADR-0022) reads every code and makes
-// one exact pass over the wide table, then runs a k-means across every core —
-// about 120 µs a source for the reading and ≈ 33 s of k-means at the largest
-// list count, which projects to a little over two minutes at the ≈ 545 000
-// sources a node searches inside its budget through an index
-// (BenchmarkIndexTraining, [search.IVFMaxLists]). That is longer than the
+// one exact pass over the wide table, then runs a k-means and files every code
+// on HALF the cores, leaving the rest to the seats and the searches — about
+// 120 µs a source for the reading and ≈ 125 s of k-means and filing at the
+// largest list count on half of four busy cores, which projects to a little
+// over three minutes at the ≈ 545 000 sources a node searches inside its
+// budget through an index (BenchmarkIndexTraining,
+// BenchmarkIVFTrainingShare, [search.IVFMaxLists]). That is longer than the
 // interval and within reach of the lease's TTL, so the tick RENEWS the lease
 // on the interval while it runs ([embedDuty.keepClaimed]) and is cut off the
 // moment a renewal does not confirm it: a step cut off publishes nothing, so
@@ -77,10 +79,11 @@ const embedDutyTTL = 3 * search.EmbedInterval
 // embedTickBudget bounds one tick outright, the lease renewed or not.
 //
 // FIVE MINUTES: the longest legitimate tick is a training at the largest
-// partition an index serves, projected at a little over two minutes on four
-// cores under load from the measured per-source reading and the k-means at
-// [search.IVFMaxLists] lists (BenchmarkIndexTraining,
-// BenchmarkIVFRecallAtScale) — so this is more than twice that. A tick past it
+// partition an index serves, projected at a little over three minutes from the
+// measured per-source reading and the k-means and filing at
+// [search.IVFMaxLists] lists on the half of four busy cores a training runs on
+// (BenchmarkIndexTraining, BenchmarkIVFTrainingShare) — so this leaves more
+// than a third of it spare. A tick past it
 // is a wedged one, which the lease renewal would otherwise let hold the duty
 // for ever while no node embedded anything; cut off, it publishes nothing and
 // the next tick starts over.

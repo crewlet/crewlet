@@ -129,7 +129,8 @@ const (
 	// minute reading the training set takes there is nearly four of the
 	// five minutes a tick may run (the engine's embedTickBudget) on an idle
 	// node, and nothing to spare under load. At 2 048 the same training is
-	// about two minutes.
+	// about two minutes on every core, and a little over three on the half
+	// of them a training runs on ([ivfCoreShare]).
 	// The rule reaches 2 048 at about 131 000 sources, and at ≈ 545 000 — the
 	// most one node searches inside [SemanticScanBudget] through an index at
 	// its probe ceiling — the mean list still holds ≈ 266 rows, four times
@@ -355,8 +356,13 @@ func (x IVF) ProbeOrder(code []uint64) []int {
 // answer, so the result does not depend on how many workers ran or in what
 // order they finished.
 func (x IVF) Assign(codes Codes) []int32 {
+	return x.assign(codes, ivfWorkers())
+}
+
+// assign is [IVF.Assign] on the given number of workers.
+func (x IVF) assign(codes Codes, workers int) []int32 {
 	out := make([]int32, codes.Len())
-	parallelRanges(codes.Len(), func(from, to int) {
+	parallelRanges(workers, codes.Len(), func(from, to int) {
 		for i := from; i < to; i++ {
 			out[i] = int32(x.Nearest(codes.At(i)))
 		}
@@ -463,8 +469,16 @@ const ivfStream = 0x1CEB00DA
 // It stops between rounds when ctx ends — a training runs inside a duty tick
 // whose lease is bounded, and one that would outlive it must publish nothing
 // ([Embedder.Tick]). The caller chooses lists ([IVFLists]); codes must hold at
-// least that many rows outside heldOut.
+// least that many rows outside heldOut. It runs on [ivfWorkers] of the cores.
 func TrainIVF(ctx context.Context, codes Codes, lists int, seed uint64, heldOut []int) (IVF, error) {
+	return trainIVF(ctx, codes, lists, seed, heldOut, ivfWorkers())
+}
+
+// trainIVF is [TrainIVF] on the given number of workers, which changes how
+// long it takes and never what it answers.
+func trainIVF(ctx context.Context, codes Codes, lists int, seed uint64, heldOut []int,
+	workers int) (IVF, error) {
+
 	n := codes.Len()
 	if lists <= 0 || n-len(heldOut) < lists {
 		return IVF{}, fmt.Errorf("search: train %d lists over %d codes, %d of "+
@@ -492,23 +506,23 @@ func TrainIVF(ctx context.Context, codes Codes, lists int, seed uint64, heldOut 
 			return IVF{}, fmt.Errorf("search: the index's training stopped "+
 				"after %d of %d rounds: %w", round, IVFTrainIterations, err)
 		}
-		changed := x.assignInto(points, assignment, distance)
+		changed := x.assignInto(points, assignment, distance, workers)
 		if round > 0 && changed == 0 {
 			// CONVERGED: the update below would rebuild these same
 			// centroids, since every tie keeps the bit it has.
 			break
 		}
-		x.update(points, assignment, distance)
+		x.update(points, assignment, distance, workers)
 	}
 	return x, nil
 }
 
 // assignInto files every point in its nearest list, recording its distance,
 // and reports how many moved.
-func (x IVF) assignInto(points Codes, assignment, distance []int32) int {
+func (x IVF) assignInto(points Codes, assignment, distance []int32, workers int) int {
 	var mu sync.Mutex
 	changed := 0
-	parallelRanges(points.Len(), func(from, to int) {
+	parallelRanges(workers, points.Len(), func(from, to int) {
 		moved := 0
 		for i := from; i < to; i++ {
 			code := points.At(i)
@@ -532,7 +546,7 @@ func (x IVF) assignInto(points Codes, assignment, distance []int32) int {
 
 // update moves every centroid to its list's per-bit majority, and re-seeds the
 // lists that emptied.
-func (x IVF) update(points Codes, assignment, distance []int32) {
+func (x IVF) update(points Codes, assignment, distance []int32, workers int) {
 	lists := x.Lists()
 	// THE MEMBERS OF EACH LIST, by a counting sort, so the per-list pass
 	// below reads its own rows and needs one bit counter rather than one per
@@ -552,7 +566,7 @@ func (x IVF) update(points Codes, assignment, distance []int32) {
 	}
 
 	bitsPerCode := 64 * x.words
-	parallelRanges(lists, func(from, to int) {
+	parallelRanges(workers, lists, func(from, to int) {
 		counter := make([]int32, bitsPerCode)
 		for j := from; j < to; j++ {
 			own := members[start[j]:start[j+1]]
@@ -632,16 +646,61 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 	return rows[:k]
 }
 
-// parallelRanges splits [0, n) into contiguous ranges and runs fn on each,
-// returning when all have.
+// ivfCoreShare is the share of this process's cores the index's CPU-bound
+// steps — the k-means and filing every code — run on, as a divisor: HALF.
 //
-// GOMAXPROCS WORKERS, because training is the one CPU-bound thing the embed
-// duty does and it does it rarely — once per doubling of a partition — so
-// finishing inside the duty's own tick matters more than leaving a core idle.
+// # Why not every core
+//
+// The training runs on whichever node holds the embedding duty, and that node
+// is also running seats and answering searches — the first stage of every
+// semantic search is itself a CPU-bound scan. On every core, a training at the
+// largest partition an index serves took the whole node for over a minute.
+// Measured at 500 000 topical sources and 2 048 lists on this repository's
+// four-core container, shared with two other test runs, with two searchers
+// scanning 40 000 codes throughout (BenchmarkIVFTrainingShare): on every core
+// the k-means took 48 s and the filing 31 s while the searchers' p95 went from
+// 7.1 ms idle to 26.4 ms; on half, 72 s and 42 s, and 13.9 ms. Without the
+// searchers the same pair was 30 s and 17 s against 42 s and 27 s. So half
+// the cores costs the training about 1.45 times as long and halves what it
+// adds to every search's latency meanwhile.
+//
+// # Why it still fits the tick
+//
+// The training is bounded by the duty's tick ([Embedder.Tick]; the engine's
+// embedTickBudget, five minutes, with the lease renewed every
+// [EmbedInterval] by a goroutine the training does not starve — it leaves the
+// other half of the cores). At the ≈ 545 000 sources a node searches through
+// an index, the reading at about 120 µs a source is ≈ 65 s, and the k-means
+// and filing on half of four busy cores ≈ 125 s: a little over three minutes
+// in the worst case measured, against the five. A node allowed two cores
+// trains on one worker, which is how it trained on one core before this share
+// existed — at half the corpus a two-core node's searches can serve.
+//
+// # Why a constant
+//
+// It scales with the cores already — [ivfWorkers] reads GOMAXPROCS, which
+// follows a container's CPU limit — and there is no deployment for which a
+// different share is the honest answer: a node with cores to spare finishes a
+// rare training sooner, and one without them needs the other half for its
+// seats. An operator who wants the whole engine on fewer cores sets GOMAXPROCS.
+const ivfCoreShare = 2
+
+// ivfWorkers is how many goroutines a training runs its k-means and its filing
+// on: [ivfCoreShare] of the cores this process may use, never fewer than one.
+func ivfWorkers() int { return workersFor(runtime.GOMAXPROCS(0)) }
+
+// workersFor is [ivfWorkers] for a process allowed procs cores.
+func workersFor(procs int) int { return max(procs/ivfCoreShare, 1) }
+
+// parallelRanges splits [0, n) into at most workers contiguous ranges and runs
+// fn on each, returning when all have.
+//
 // Every caller writes a disjoint range, which is what keeps the answer
-// independent of this number.
-func parallelRanges(n int, fn func(from, to int)) {
-	workers := min(runtime.GOMAXPROCS(0), max(n, 1))
+// independent of the number of workers — so a training's cost can be bounded
+// ([ivfWorkers]) without its result depending on the bound, or on the cores
+// of whichever node holds the duty.
+func parallelRanges(workers, n int, fn func(from, to int)) {
+	workers = min(workers, max(n, 1))
 	if workers <= 1 {
 		fn(0, n)
 		return
