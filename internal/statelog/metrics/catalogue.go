@@ -198,8 +198,8 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogReadRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "level", "code"},
-			Shows: "Every refusal code, counted. Twelve codes with different " +
-				"remedies had no counter between them, so an operator had no " +
+			Shows: "Every refusal code, counted. The codes, each with its own " +
+				"remedy, had no counter between them, so an operator had no " +
 				"rejection rate for any of them.",
 		},
 		{
