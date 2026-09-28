@@ -169,6 +169,8 @@ func TestTheDiskRulesFollowTheDataRoleOnEveryBroker(t *testing.T) {
 				"store:\n  scratch: true\n  replicated_path: /var/r.db\n", "store", "conflict"},
 			"a node without data holding objects": {
 				"store:\n  scratch: true\n  objects:\n    weight: 2\n", "store.objects", "conflict"},
+			"a node without data offering an estate share": {
+				"store:\n  scratch: true\n  estate:\n    weight: 2\n", "store.estate", "conflict"},
 		} {
 			t.Run(string(kind)+"/"+name, func(t *testing.T) {
 				t.Parallel()

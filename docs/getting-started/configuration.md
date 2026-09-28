@@ -255,6 +255,44 @@ A revision that changes either takes effect at the map duty's next tick, with
 no restart; changing either re-places data, so the fleet copies chunks to
 their new holders before anything is deleted from the old ones.
 
+### Estate
+
+How the company keeps its **replicated estate** — its tracker, its knowledge
+base and their search vectors — once a layout divides it into partitions: how
+many copies of each partition the estate map keeps, and what those copies are
+spread across.
+
+```yaml
+estate:                                  # optional — the zero block is the default
+  replicas: 3                            # copies of each partition, each on a
+                                         #   different data node, 1..10; 0 or unset is 3
+  failure_domain: zone                   # a node label KEY; no two copies of a
+                                         #   partition share its value while enough
+                                         #   values exist
+```
+
+**Under the single-file layout this build runs, the block places nothing.**
+Every data node holds the whole estate, so there is no partition to place and
+no estate map to place it in: the map's duty reads the block on every tick,
+finds no partitioned layout, and writes nothing. It is validated and carried
+now so that the revision a company is running when its estate is partitioned
+already says how many copies it wants.
+
+**`replicas`** is the company's, not a node's, for `objects.replicas`' reason:
+every node applies it from the same activation, and a node applying an older
+revision late cannot set it back. Three is the default because it is the
+smallest count that survives losing a copy *while* a second is being rebuilt,
+and the smallest at which a partition still holds the two verified snapshots
+its logs' trim waits for while one of its holders has lost its store. A fleet
+with fewer data nodes keeps one copy on each. `crewlet validate` given both
+files warns about `replicas: 1` on a data node that is one of a fleet: each
+partition would be kept on one disk, and a disk lost would be every partition
+it held.
+
+**`failure_domain`** reads exactly as [`objects.failure_domain`](#objects)
+does, and a data node missing the key is warned about the same way — once, if
+both blocks name the same key.
+
 ---
 
 ## Providers
@@ -818,6 +856,18 @@ store:
                                     #   `dir` has. 0 is the default, 1. It rides
                                     #   the store's own membership lease, with
                                     #   `node.labels` and the store's health
+  # estate:                         # this node's part in the ESTATE MAP, which
+                                    #   places the replicated estate's
+                                    #   partitions once a layout divides it —
+                                    #   see the company's `estate` block.
+                                    #   REFUSED on a node without `data`
+  #   weight: 1                     #   this node's share of the partitions
+                                    #   relative to the other data nodes',
+                                    #   1..64; 0 is the default, 1. It rides
+                                    #   the node's estate membership lease.
+                                    #   Under the single-file layout every data
+                                    #   node holds the whole estate whatever its
+                                    #   weight
 
 coordination:
   type: local                       # one node holding its own seat leases;

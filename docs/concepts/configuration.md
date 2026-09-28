@@ -9,7 +9,7 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
 | **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets, and how many copies of its files the object store keeps (`objects`) |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets, how many copies of its files the object store keeps (`objects`), and how many copies of each partition of its replicated estate the estate map keeps once the estate is partitioned (`estate`) |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
@@ -111,7 +111,7 @@ peers divide the seats by; counting it would strand the difference.
 work.** A node without it keeps nothing that has to outlive it, and Tier A
 holds it to that whatever its broker: `store.scratch: true` is required (its
 store is deleted at every boot), and `store.replicated_path`,
-`store.snapshot_dir` and `store.objects` are refused. See
+`store.snapshot_dir`, `store.objects` and `store.estate` are refused. See
 [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data).
 
 **The broker is not a role.** How a node's broker takes part in the fleet's
@@ -155,14 +155,17 @@ whitespace or unprintable character anywhere, because it is matched
 exactly wherever it is named: a key with a space inside it is refused
 rather than accepted as a label nothing could name. Labels are advertised
 to peers on this node's presence lease — and, on a data node, on its object
-store's membership lease — so a label change takes effect one heartbeat after
-the restart that made it — not at the next config activation.
+store's and its estate's membership leases — so a label change takes effect
+one heartbeat after the restart that made it — not at the next config
+activation.
 
 Nothing here means anything to the engine on its own: the org decides
 what to select on, and the company's
-[`objects.failure_domain`](../getting-started/configuration.md#objects) names
-the key its file copies are spread across. A data node missing that key is
-warned about by `crewlet validate` given both files.
+[`objects.failure_domain`](../getting-started/configuration.md#objects) and
+[`estate.failure_domain`](../getting-started/configuration.md#estate) name
+the keys its copies are spread across. A data node missing such a key is
+warned about by `crewlet validate` given both files — once per key, naming
+every block that spreads across it.
 
 ### Tier B example (`company.yaml`)
 

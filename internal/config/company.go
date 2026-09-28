@@ -52,6 +52,12 @@ type Company struct {
 	// shipped placement — see [Objects].
 	Objects Objects `yaml:"objects,omitempty" json:"objects,omitzero"`
 
+	// Estate is the company's replicated estate as the estate map places it
+	// once a layout divides it: how many copies each partition keeps and
+	// what they are spread across. The zero value is the shipped placement,
+	// and under the single-file layout it places nothing — see [Estate].
+	Estate Estate `yaml:"estate,omitempty" json:"estate,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -465,6 +471,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Learning.validate(field("learning")))
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Objects.validate(field("objects")))
+	p.wrap(c.Estate.validate(field("estate")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
 	p.wrap(c.validateContainerKeys())

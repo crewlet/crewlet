@@ -688,10 +688,7 @@ func (b *Bootstrap) Warnings() []Warning {
 	// a member with peers — a solo member is the single-process deployment
 	// the default exists for.
 	if b.Node.Roles == nil {
-		kind := b.BrokerKind()
-		fleet := kind == placement.BrokerLeaf ||
-			(kind == placement.BrokerMember && len(b.Stream.Cluster.members().Others) > 0)
-		if fleet {
+		if b.declaresFleet() {
 			out = append(out, advisory(field("node.roles"), fmt.Sprintf(
 				"is not declared, so this fleet node runs every role — %s — "+
 					"including %q, which keeps a copy of the company's state on "+
@@ -716,6 +713,16 @@ func (b *Bootstrap) Warnings() []Warning {
 				"`-debug` to `crewlet run`"))
 	}
 	return out
+}
+
+// declaresFleet reports whether this document says its node is one of several:
+// a leaf, or a member with peers. A solo member is the single-process
+// deployment, and a client of an external cluster says nothing either way —
+// the cluster's other clients are in no file this one can see.
+func (b *Bootstrap) declaresFleet() bool {
+	kind := b.BrokerKind()
+	return kind == placement.BrokerLeaf ||
+		(kind == placement.BrokerMember && len(b.Stream.Cluster.members().Others) > 0)
 }
 
 // logsAtDebug reports whether ANY destination this document INSTALLS would
@@ -775,26 +782,92 @@ func TierWarnings(boot *Bootstrap, company *Company) []Warning {
 	}
 	var out []Warning
 
+	data := boot.Profile("").HoldsData()
+
 	// A DATA NODE MISSING THE COMPANY'S FAILURE-DOMAIN LABEL is placed on
 	// as a domain of its own, which is the safe degradation and a silent
 	// one: the founder asked for copies spread across zones, and a node
-	// with no `zone` is a zone of one, so two copies of a chunk can land
-	// in the one real zone this node shares with a labelled peer. Neither
-	// tier can see it alone — Tier B names the key and Tier A carries the
-	// labels — so it is said here, where both are in hand.
+	// with no `zone` is a zone of one, so two copies of a chunk — or of a
+	// partition — can land in the one real zone this node shares with a
+	// labelled peer. Neither tier can see it alone — Tier B names the key
+	// and Tier A carries the labels — so it is said here, where both are in
+	// hand.
+	//
+	// ONE RULE FOR BOTH MAPS, and one warning per missing KEY: the object
+	// store and the estate read a failure domain the same way, and two
+	// blocks naming one label are one label this node lacks, not two.
 	//
 	// A WARNING RATHER THAN A REFUSAL, because a fleet mid-way through
 	// labelling its nodes is a real and correct state, and refusing the
 	// revision there would refuse the one that asks for the spreading.
-	if key := company.Objects.FailureDomain; key != "" && boot.Profile("").HoldsData() {
-		if _, labelled := boot.Node.Labels[key]; !labelled {
-			out = append(out, advisory(entry(field("node.labels"), key), fmt.Sprintf(
-				"the company spreads copies of its files across %q "+
-					"(objects.failure_domain), and this data node carries no "+
-					"%q label: it counts as a domain of its own, so a copy placed "+
-					"here may share a %s with another. Set node.labels.%s",
-				key, key, key, key)))
+	if data {
+		out = append(out, missingDomainLabels(boot.Node.Labels, []spreadBlock{
+			{field: "objects.failure_domain", key: company.Objects.FailureDomain,
+				copies: "copies of its files"},
+			{field: "estate.failure_domain", key: company.Estate.FailureDomain,
+				copies: "copies of its estate's partitions"},
+		})...)
+	}
+
+	// ONE COPY OF EVERY PARTITION IN A FLEET is valid and is a company that
+	// loses whatever a single disk held: with `estate.replicas: 1` each
+	// partition of the estate is kept on one data node, so a node lost is
+	// every partition it held gone until a backup is restored — where the
+	// default keeps three, and a node lost is a rebuild the fleet does on
+	// its own. Only Tier B names the count and only Tier A says the node is
+	// in a fleet, so it is said here. A fleet with ONE data node keeps one
+	// copy whatever this says, so raising it costs that fleet nothing.
+	//
+	// It says what it will mean, because it means nothing yet: under the
+	// single-file layout every data node holds the whole estate.
+	if data && company.Estate.ReplicaCount() == 1 && boot.declaresFleet() {
+		out = append(out, advisory(field("estate.replicas"),
+			"is 1, and this data node is one of a fleet: once the estate is "+
+				"divided into partitions each is kept on ONE data node, so a disk "+
+				"lost loses every partition it held until a backup is restored. "+
+				"Leave it unset for the default of 3. Under the single-file layout "+
+				"every data node still holds the whole estate"))
+	}
+	return out
+}
+
+// spreadBlock is one company block that spreads copies across a node label.
+type spreadBlock struct {
+	// field is where the block names the key, key the key it names, and
+	// copies what it spreads, for the warning's words.
+	field, key, copies string
+}
+
+// missingDomainLabels is one warning for every failure-domain KEY the blocks
+// name that labels does not carry — naming every block that spreads across it.
+func missingDomainLabels(labels map[string]string, blocks []spreadBlock) []Warning {
+	var keys []string
+	named := map[string][]spreadBlock{}
+	for _, b := range blocks {
+		if b.key == "" {
+			continue
 		}
+		if _, labelled := labels[b.key]; labelled {
+			continue
+		}
+		if _, seen := named[b.key]; !seen {
+			keys = append(keys, b.key)
+		}
+		named[b.key] = append(named[b.key], b)
+	}
+	out := make([]Warning, 0, len(keys))
+	for _, key := range keys {
+		var copies, fields []string
+		for _, b := range named[key] {
+			copies = append(copies, b.copies)
+			fields = append(fields, b.field)
+		}
+		out = append(out, advisory(entry(field("node.labels"), key), fmt.Sprintf(
+			"the company spreads %s across %q (%s), and this data node carries "+
+				"no %q label: it counts as a domain of its own, so a copy placed "+
+				"here may share a %s with another. Set node.labels.%s",
+			strings.Join(copies, " and "), key, strings.Join(fields, ", "),
+			key, key, key)))
 	}
 	return out
 }

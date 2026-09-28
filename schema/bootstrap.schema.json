@@ -549,6 +549,9 @@
           ],
           "description": "Lock wait before a write gives up, whether it waits in the driver or in the store's own queue, and the anchor for the one retry it then gets; 0 takes the store default."
         },
+        "estate": {
+          "$ref": "#/$defs/StoreEstate"
+        },
         "max_open_conns": {
           "anyOf": [
             {
@@ -610,6 +613,32 @@
             "boolean",
             "null"
           ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "StoreEstate": {
+      "additionalProperties": false,
+      "properties": {
+        "weight": {
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "This node's share of the replicated estate's partitions relative to the other data nodes, 1..64; 0 is the default, 1. Read once the estate is divided into partitions; under the single-file layout every data node holds all of it."
         }
       },
       "type": [

@@ -467,6 +467,12 @@ func (b *Bootstrap) ValidateRoles() error {
 					"holds none — it reads and writes objects through the nodes "+
 					"that do", placement.RoleData)
 		}
+		if b.Store.Estate != (StoreEstate{}) {
+			p.add(field("store.estate"), ErrConflict,
+				"is a node's share of the replicated estate, and a node without "+
+					"%q holds none — it reads and writes the estate through the "+
+					"nodes that do", placement.RoleData)
+		}
 	}
 	b.refusedUntilPartitioned(&p, roles)
 	return p.err()
@@ -1197,7 +1203,47 @@ type Store struct {
 	// `data` role and this block unset holds an equal share beside its
 	// store. Refused on a node without `data`, which holds nothing.
 	Objects StoreObjects `yaml:"objects,omitempty" json:"objects,omitzero"`
+
+	// Estate is this node's part in the estate map: how large a share of
+	// the replicated estate's partitions it offers to hold, once a layout
+	// divides the estate into them.
+	//
+	// UNDER store. FOR OBJECTS' REASON — a fact about this node's disk
+	// rather than about the company — and refused on a node without `data`,
+	// which holds none. Under the single-file layout every data node holds
+	// the whole estate whatever its weight: the weight rides its estate
+	// lease, and the map it is read by is written only once the estate is
+	// partitioned.
+	Estate StoreEstate `yaml:"estate,omitempty" json:"estate,omitzero"`
 }
+
+// StoreEstate is one data node's part in the estate map.
+//
+// NO DIRECTORY YET, deliberately. Where a node keeps its partition files is a
+// fact about its disk too, and it arrives with the partition files it locates:
+// under the single-file layout the estate is the one file at
+// `store.replicated_path`, and a directory no file is ever opened in would be a
+// setting that changes nothing — the configured-and-nothing-happened shape
+// every other block here refuses.
+type StoreEstate struct {
+	// Weight is this node's share of the partitions relative to the other
+	// data nodes': a node of weight 2 is placed on about twice as many
+	// partitions as one of weight 1. Set it in proportion to the space its
+	// disk offers the estate. 0 is the default share, 1.
+	Weight int `yaml:"weight,omitempty" json:"weight,omitempty" js:"min=0;max=64" desc:"This node's share of the replicated estate's partitions relative to the other data nodes, 1..64; 0 is the default, 1. Read once the estate is divided into partitions; under the single-file layout every data node holds all of it."`
+}
+
+// EstateWeight is the share this node offers, with the default applied.
+func (e StoreEstate) EstateWeight() int {
+	if e.Weight == 0 {
+		return DefaultEstateWeight
+	}
+	return e.Weight
+}
+
+// DefaultEstateWeight is a data node's share of the estate when it names none:
+// equal to every other node that names none.
+const DefaultEstateWeight = 1
 
 // StoreObjects is one data node's part in the object store.
 type StoreObjects struct {
@@ -1252,6 +1298,10 @@ func (s *Store) validate(path Path) error {
 	}
 	if w := s.Objects.Weight; w < 0 || w > mapplacement.MaxWeight {
 		p.add(at(at(path, "objects"), "weight"), ErrOutOfRange,
+			"must be 0 (the default share) or 1..%d, got %d", mapplacement.MaxWeight, w)
+	}
+	if w := s.Estate.Weight; w < 0 || w > mapplacement.MaxWeight {
+		p.add(at(at(path, "estate"), "weight"), ErrOutOfRange,
 			"must be 0 (the default share) or 1..%d, got %d", mapplacement.MaxWeight, w)
 	}
 	return p.err()
