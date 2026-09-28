@@ -21,6 +21,8 @@
  *    silence over a store it never reached.
  */
 
+import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
@@ -1097,6 +1099,12 @@ export interface EngineHealth {
 export interface FleetNode {
   id: string;
   roles: string[];
+  /**
+   * How the node's broker takes part in the fleet's — derived from its own
+   * `stream` block, never from its roles. `unknown` for a node running a build
+   * older than the field; absent only from an engine older still.
+   */
+  broker?: BrokerKind | string;
   labels?: Record<string, string> | null;
   /** The lease's fencing token — node id plus a per-process suffix. */
   owner?: string;
@@ -3811,6 +3819,7 @@ export interface QueryMap {
   token_series: TokenSeries;
   stream: EngineHealth;
   fleet: FleetAnswer;
+  fleet_broker: FleetBrokerAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;

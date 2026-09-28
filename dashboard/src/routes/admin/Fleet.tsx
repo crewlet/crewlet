@@ -87,6 +87,7 @@ import type {
   FleetSeatLease,
   PlacedObjects,
 } from "~/protocol/index.ts";
+import { BrokerMembership } from "./FleetBroker.tsx";
 import { ObjectsHoldDialog, ObjectsMemberDialog } from "./ObjectsDialog.tsx";
 import { RetentionPanels } from "./Retention.tsx";
 
@@ -658,6 +659,9 @@ function MemberPending({ member: m, epoch }: { member: FleetObjectMember; epoch:
 function FleetScreen() {
   const now = useNow();
   const { data, loading, error, refetch } = useQuery("fleet", undefined, { pollMs: POLL_MS });
+  // THE BROKER'S MEMBERSHIP, polled beside the lease table on the same
+  // cadence: a member that died is noticed on both at once.
+  const broker = useQuery("fleet_broker", undefined, { pollMs: POLL_MS });
   const { open: openPeek } = usePeekControls();
 
   const nodes = useMemo(() => data?.nodes ?? [], [data]);
@@ -802,6 +806,23 @@ function FleetScreen() {
                 // duties panel naming a different node was one word describing
                 // two things.
                 cell: (n) => <TagsCell tags={n.roles} />,
+              },
+              {
+                key: "broker",
+                header: "Broker",
+                shrink: true,
+                sortValue: (n) => n.broker ?? "",
+                // HOW ITS BROKER TAKES PART, which the roles no longer say: a
+                // node's broker is what its stream block makes it. `unknown`
+                // is a value — a node on a build older than the field, which
+                // a capacity seal counts as a member — and it is marked,
+                // because it is the one reading here that is a guess.
+                cell: (n) =>
+                  n.broker ? (
+                    <Tag variant={n.broker === "unknown" ? "warning" : "neutral"}>{n.broker}</Tag>
+                  ) : (
+                    <EmptyValue label="This engine predates the broker kind" />
+                  ),
               },
               {
                 key: "seats",
@@ -994,6 +1015,12 @@ function FleetScreen() {
         </div>
 
         <ObjectPlacement objects={data?.objects} now={now} onChanged={refetch} />
+
+        <BrokerMembership
+          answer={broker.data ?? undefined}
+          error={broker.error}
+          onChanged={broker.refetch}
+        />
 
         {/* `> 0`, NOT the bare length. `0 || 0` is `0`, and React renders a
             zero as the text "0" — so a healthy fleet drew a stray digit under

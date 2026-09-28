@@ -1147,4 +1147,52 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${node}`);
 }
 //#endregion
-export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };
+//#region src/protocol/broker.ts
+/**
+* The fleet broker's membership as the wire knows it: the kinds a node's broker
+* can be, the disagreements the engine names between what the nodes advertise
+* and what the metadata group counts, and how long a removal may take.
+*
+* Every constant here is a COPY of something the engine owns, because this is
+* a separate build that cannot import a Go identifier — and each copy is held
+* to the engine's by a gate on the engine side (`internal/api`'s
+* `broker_client_test.go`), in both directions, so it cannot drift silently.
+*/
+/**
+* How a node's broker takes part in the fleet's — `placement.BrokerKind`, as
+* `String()` renders it.
+*
+* `unknown` IS A VALUE, not an absence: a node running a build older than the
+* field says nothing, and the engine renders that as `unknown` so the cell is
+* never empty — an empty cell reads as nothing to look at, and this one is
+* counted as a member wherever that is the safe reading.
+*/
+var BROKER_KINDS = [
+	"member",
+	"leaf",
+	"client",
+	"unknown"
+];
+/**
+* The disagreements between the two records of the broker's membership —
+* `engine.BrokerFindingKinds`.
+*/
+var BROKER_FINDING_KINDS = [
+	"dead_member",
+	"not_in_group",
+	"unknown_kind"
+];
+/**
+* How long a removal's request may take before the dialog gives up on it.
+*
+* THREE MINUTES AND TEN SECONDS, the command line's own wait and for its
+* reason: the member carrying a removal waits for the metadata group to commit
+* it within the budget one clustered metadata change gets, the node that
+* received the request waits that and a read's round trip on top
+* (`engine.BrokerRemoveWait`, two minutes and ten seconds), and a minute more
+* covers the node listing the fleet and reaching the member. A dialog that
+* gave up first would report a removal the group went on to commit as failed.
+*/
+var BROKER_REMOVE_TIMEOUT_MS = 19e4;
+//#endregion
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };

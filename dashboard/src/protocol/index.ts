@@ -23,6 +23,17 @@ export {
   newGateOpID,
 } from "./gate.ts";
 export type { GateAction } from "./gate.ts";
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS } from "./broker.ts";
+export type {
+  BrokerFinding,
+  BrokerFindingKind,
+  BrokerKind,
+  BrokerNode,
+  BrokerRemoved,
+  FleetBrokerAnswer,
+  MetaGroup,
+  MetaPeer,
+} from "./broker.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";
 export {
   apiToken,

@@ -334,9 +334,6 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 		// than an entity browser, so no room asks — which is not the same as
 		// nobody reading it.
 		"config_entities": "docs/guides/configure-via-api.md reads it over REST, not a room",
-		// The operator's CLI: `crewlet fleet broker list` is a client of
-		// GET /fleet/broker, the named route over this question.
-		"fleet_broker": "`crewlet fleet broker list` reads it over REST, not a room",
 	}
 
 	asked := roomQueries(t)
