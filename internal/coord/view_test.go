@@ -47,7 +47,12 @@ func (s *stubLister) set(err error, leases ...coord.Lease) {
 	s.leases, s.err = leases, err
 }
 
-// awaitListing waits for the lister's next call to complete.
+// awaitListing waits for the lister's next call to RETURN.
+//
+// That is not the moment the view has the answer: the view records a listing
+// after the call returns, under its own lock, so a case that reads the view
+// straight after this can see the answer from before it. A case asserting what
+// a listing changed waits for the change itself ([awaitAnswer]).
 func (s *stubLister) awaitListing(t *testing.T) {
 	t.Helper()
 	select {
@@ -55,6 +60,37 @@ func (s *stubLister) awaitListing(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the view never listed")
 	}
+}
+
+// awaitAnswer waits until the view's answer satisfies ok, and fails naming the
+// last answer if it never does.
+//
+// A POLL ON THE ANSWER ITSELF, because that is what a case asserts: the only
+// other signal is the lister's call returning, which comes before the view has
+// recorded what it returned — and a case that read the view on that signal
+// failed whenever the reader won the race (in about one run in thirty under
+// the race detector).
+func awaitAnswer(t *testing.T, view *coord.LeaseView, what string,
+	ok func(leases []coord.Lease, err error) bool) {
+
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		leases, _, err := view.Leases()
+		if ok(leases, err) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the view never answered %s: it answers %d lease(s), %v",
+				what, len(leases), err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// holding is an [awaitAnswer] condition: n leases and no error.
+func holding(n int) func([]coord.Lease, error) bool {
+	return func(leases []coord.Lease, err error) bool { return err == nil && len(leases) == n }
 }
 
 // fakeClock is a clock a case moves by hand.
@@ -111,7 +147,7 @@ func TestAViewAnswersFromMemoryBetweenListings(t *testing.T) {
 		t.Fatal(err)
 	}
 	runView(t, view)
-	store.awaitListing(t)
+	awaitAnswer(t, view, "its first listing", holding(2))
 	for range 100 {
 		leases, _, err := view.Leases()
 		if err != nil || len(leases) != 2 {
@@ -145,10 +181,7 @@ func TestAViewThatCannotListAnswersUnknown(t *testing.T) {
 	}
 
 	runView(t, view)
-	store.awaitListing(t)
-	if leases, _, err := view.Leases(); err != nil || len(leases) != 1 {
-		t.Fatalf("after its first listing the view answered %d, %v", len(leases), err)
-	}
+	awaitAnswer(t, view, "its first listing", holding(1))
 
 	// THE STORE STOPS ANSWERING. Inside the trust the last listing is
 	// still the answer; past it, the answer is unknown and says why.
@@ -165,17 +198,17 @@ func TestAViewThatCannotListAnswersUnknown(t *testing.T) {
 	if !errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("a listing older than a lease survives answered %v, want unknown", err)
 	}
-	if want := "the store is unreachable"; !strings.Contains(err.Error(), want) {
-		t.Fatalf("the unknown answer %q does not say why (%q)", err, want)
-	}
+	// SAYING WHY once the failed listing is recorded, which is after the
+	// store's call returned.
+	const why = "the store is unreachable"
+	awaitAnswer(t, view, "unknown, naming why", func(_ []coord.Lease, err error) bool {
+		return errors.Is(err, coord.ErrUnavailable) && strings.Contains(err.Error(), why)
+	})
 
 	// AND IT RECOVERS WITH THE STORE.
 	store.set(nil, node("a"), node("b"))
 	view.Invalidate()
-	store.awaitListing(t)
-	if leases, _, err := view.Leases(); err != nil || len(leases) != 2 {
-		t.Fatalf("after the store came back the view answered %d, %v", len(leases), err)
-	}
+	awaitAnswer(t, view, "the recovered store's two leases", holding(2))
 }
 
 // AN INVALIDATION LISTS AGAIN, and a stream of them is one listing per
@@ -203,9 +236,7 @@ func TestAnInvalidationListsAgainAndAStreamOfThemIsHeldApart(t *testing.T) {
 	}
 	store.awaitListing(t)
 	gap := time.Since(first)
-	if leases, _, err := view.Leases(); err != nil || len(leases) != 1 {
-		t.Fatalf("after an invalidation the view still answered %d, %v", len(leases), err)
-	}
+	awaitAnswer(t, view, "the invalidated listing's one lease", holding(1))
 	// NOT SOONER THAN THE FLOOR after the listing before it — a node that
 	// never answers would otherwise make every failed request a listing.
 	if gap < coord.MinViewRefresh*9/10 {
