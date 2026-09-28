@@ -119,24 +119,13 @@ var tagKeys = map[string]string{
 	"notification_source": "notification_source",
 }
 
-// The two events that carry spend: a phase completion, which is an LLM call's,
-// and a detached coding run's usage record, which is what its box reported.
-//
-// Gated on the type rather than on "does the payload happen to have these
-// fields", because several other events carry a `model`, a `turn_id` or a
-// token count — agent_turn_completed sums its own phases — and a rollup that
-// counted them would be counting spend twice or calls that never happened.
-const (
-	spendEventType = "agent_phase_completed"
-	runUsageType   = "sandbox_run_usage"
-)
-
-// spendEventTypes are the event types whose rows carry spend in the promoted
-// columns, in the order a statement binds them.
-func spendEventTypes() []string { return []string{spendEventType, runUsageType} }
-
 // SpendFor pulls one spend record out of a phase completion or a coding run's
-// usage record.
+// usage record — the events [tokens.IsSpendEvent] names — by [tokens.Spent],
+// the rule the live projection reads the same events by. So every reader of
+// the columns counts a run beside the phases with no second rule — the Tokens
+// view by model, phase, seat and turn, and the turns list's sums — and a
+// refresh that swaps the live window for these rows places every record where
+// the screen already had it.
 //
 // Read from the event's serialized form for the same reason [extractTags] is:
 // an event type this build has never heard of still arrives with its fields
@@ -147,7 +136,7 @@ func spendEventTypes() []string { return []string{spendEventType, runUsageType} 
 // Nil for every other event, which is what leaves the promoted columns at
 // their defaults — see schema/0015 for why they are columns.
 // It reads the SHALLOW form, like [extractTags] fifty lines below and unlike
-// the version this replaces: nine scalars are wanted, and decoding into
+// the version this replaces: a dozen scalars are wanted, and decoding into
 // map[string]any deep-decoded the engine's largest payload — a phase
 // completion carries the phase's whole prompt and tool log — on the
 // publishing goroutine of every LLM call. map[string]json.RawMessage leaves
@@ -157,51 +146,41 @@ func spendEventTypes() []string { return []string{spendEventType, runUsageType} 
 // per-field accessors exist: it fails the whole call on one wrong-typed
 // field, where these zero only the offender.
 //
-// A RUN'S RECORD stands under [tokens.RunPhase] and under its coding agent as
-// its model — see [tokens.Record] — so every reader of the columns counts it
-// beside the phases with no second rule: the Tokens view by model, phase, seat
-// and turn, and the turns list's sums.
+// The price is not a column: [EventLog.PhaseTokens] reads it back out of the
+// payload, for the reason [phaseTokenSQL] gives.
 func SpendFor(eventType string, payload []byte) *Spend {
-	if eventType != spendEventType && eventType != runUsageType {
+	if !tokens.IsSpendEvent(eventType) {
 		return nil
 	}
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &body); err != nil {
 		// The call happened, and dropping it because its payload would
-		// not decode understates the spend this exists to report.
-		return &Spend{}
+		// not decode understates the spend this exists to report. Read
+		// as a payload with no fields, it still stands where its TYPE
+		// puts it.
+		body = nil
 	}
-	if eventType == runUsageType {
-		return &Spend{
-			Phase:        tokens.RunPhase,
-			Model:        jsonString(body["coding_agent"]),
-			TurnID:       jsonString(body["turn_id"]),
-			WorkKey:      jsonString(body["work_key"]),
-			InputTokens:  jsonInt(body["input_tokens"]),
-			OutputTokens: jsonInt(body["output_tokens"]),
-			TotalTokens:  jsonInt(body["total_tokens"]),
-		}
+	record, _ := tokens.Spent(eventType, rawFields(body))
+	return &Spend{
+		Phase:        record.Phase,
+		HostPhase:    record.HostPhase,
+		Worker:       record.Worker,
+		Model:        record.Model,
+		TurnID:       record.TurnID,
+		WorkKey:      record.WorkKey,
+		Iteration:    record.Iteration,
+		InputTokens:  record.InputTokens,
+		OutputTokens: record.OutputTokens,
+		TotalTokens:  record.TotalTokens,
 	}
-	spend := &Spend{
-		Phase:        jsonString(body["phase"]),
-		HostPhase:    jsonString(body["host_phase"]),
-		Worker:       jsonString(body["worker"]),
-		Model:        jsonString(body["model"]),
-		TurnID:       jsonString(body["turn_id"]),
-		WorkKey:      jsonString(body["work_key"]),
-		Iteration:    jsonInt(body["iteration"]),
-		InputTokens:  jsonInt(body["input_tokens"]),
-		OutputTokens: jsonInt(body["output_tokens"]),
-		TotalTokens:  jsonInt(body["total_tokens"]),
-	}
-	if spend.Model == "" {
-		// An entry that names no model is identified by the provider
-		// slot it ran on. The backfill in schema/0015 does the same, so
-		// history and new rows agree on what "model" means.
-		spend.Model = jsonString(body["provider_key"])
-	}
-	return spend
 }
+
+// rawFields is a shallowly decoded payload as [tokens.Fields].
+type rawFields map[string]json.RawMessage
+
+func (f rawFields) String(field string) string { return jsonString(f[field]) }
+func (f rawFields) Int(field string) int       { return jsonInt(f[field]) }
+func (f rawFields) Float(field string) float64 { return jsonFloat(f[field]) }
 
 // ExtractTags pulls the filterable dimensions out of an event's serialized
 // form.
@@ -272,6 +251,23 @@ func jsonInt(raw json.RawMessage) int {
 		return 0
 	}
 	return int(v)
+}
+
+// jsonFloat reads a fractional number out of a raw JSON field, zero for
+// anything that is not one.
+func jsonFloat(raw json.RawMessage) float64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return 0
+	}
+	v, err := n.Float64()
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // jsonString reads a JSON value as a string, yielding "" for anything that is

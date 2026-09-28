@@ -1,12 +1,16 @@
-// Package tokens rolls per-phase LLM spend up into the breakdown a dashboard
-// renders: by phase, by model, by worker, by agent and by turn.
+// Package tokens rolls spend up into the breakdown a dashboard renders: by
+// phase, by model, by worker, by agent and by turn. Spend is two kinds of
+// record — each completed phase's LLM calls, and each detached coding run's
+// usage in its box — and both are [Record]s.
 //
 // ONE IMPLEMENTATION, and that is the whole point of the package existing.
 // This aggregation had three copies once — the REST endpoint's, a
 // re-implementation in the browser, and whatever a reconnect left behind — and
 // a reader routinely saw a refresh disagree with the page it replaced. Now the
 // projection HOLDS records and this folds them, so the live rollup and the
-// queried one cannot differ.
+// queried one cannot differ. The same holds one step earlier: which events
+// carry spend and how one becomes a record is [Spent], which both producers
+// call.
 //
 // A leaf package, importing nothing from Crewlet, because both ends need it:
 // the live projection (which holds the records) and the event store (which
@@ -41,8 +45,9 @@ const MaxRecentTurns = 500
 // its CODING AGENT: the box reports no model, and credited to the model the
 // engine's own Execute loop ran on, the millions of tokens a coding CLI spent
 // made a small native model's row — and every rate derived from it — wrong.
-// It carries no Iteration, HostPhase or Worker. Both producers map it the same
-// way, and nothing here tells it from a phase: every dimension sums the same.
+// It carries no Iteration, HostPhase or Worker. Both producers map it through
+// [Spent], and nothing here tells it from a phase: every dimension sums the
+// same.
 type Record struct {
 	EventID   string `json:"event_id"`
 	Timestamp string `json:"timestamp"`
@@ -388,14 +393,6 @@ func Aggregate(records []Record, opts Options) Rollup {
 // PhaseAuxiliary is the phase whose records carry a worker. Named here rather
 // than imported from the event catalogue so this package stays a leaf.
 const PhaseAuxiliary = "auxiliary"
-
-// RunPhase is the phase a detached coding run's usage record is counted under:
-// `execute`, because the executor is what launches a run — `run_sandbox` is its
-// tool — and a run is its work continued in a box. The usage event names no
-// phase, so both producers ([Record]'s) state this one, from here, rather than
-// each spelling the word; named here rather than imported from the phase
-// vocabulary so this package stays a leaf.
-const RunPhase = "execute"
 
 func bucketFor(m map[string]*Bucket, key string) *Bucket {
 	b := m[key]

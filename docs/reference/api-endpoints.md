@@ -3709,11 +3709,14 @@ empty `next_run`.
 
 ### `GET /tokens/breakdown`
 
-Rolls up per-phase LLM spend across the whole org so the dashboard's
-**Tokens** view can render every breakdown from a single fetch.
-Reads `agent_phase_completed` events via
-the event store's phase-token query and groups them by phase, model,
-auxiliary worker, agent, and turn.
+Rolls up spend across the whole org so the dashboard's **Tokens** view can
+render every breakdown from a single fetch. Reads the two spend records via the
+event store's phase-token query — each phase's LLM calls
+(`agent_phase_completed`) and each detached coding run's usage in its box
+(`sandbox_run_usage`, under `execute` and its coding agent as the model) — and
+groups them by phase, model, auxiliary worker, agent, and turn. The live window
+the dashboard streams reads the same events by the same rule, so a refresh
+never moves a figure between rows.
 
 **Query parameters**
 

@@ -44,6 +44,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 var log = logging.Get("api.livestate")
@@ -507,7 +508,7 @@ func (s *LiveState) Apply(env *Envelope) Change {
 		return change
 	}
 
-	if env.Type == phaseCompletedType || env.Type == runUsageType {
+	if tokens.IsSpendEvent(env.Type) {
 		change.Tokens = s.foldSpend(*env, payload)
 	}
 

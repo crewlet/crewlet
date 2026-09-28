@@ -1061,16 +1061,19 @@ const (
 // already pay — the event_type and event_time predicates are what choose the
 // rows, and json_extract runs only on the ones they keep.
 //
-// BOTH SPEND TYPES ([spendEventTypes]): the phase completions, and each coding
-// run's usage record, whose columns [SpendFor] fills under the execute phase
-// and its coding agent. Two ranges of the (event_type, event_time) index.
-const phaseTokenSQL = `
+// EVERY SPEND TYPE ([tokens.SpendEvents]): the phase completions, and each
+// coding run's usage record, whose columns [SpendFor] fills under the execute
+// phase and its coding agent. One range of the (event_type, event_time) index
+// a type, and one placeholder a type, bound from the same list — so a spend
+// type added there is read here rather than silently left out of every window.
+var phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
        COALESCE(json_extract(payload, '$.cost_usd'), 0)
 FROM crewlet_events
-WHERE event_type IN (?, ?) AND event_time >= ?`
+WHERE event_type IN (` + strings.TrimSuffix(strings.Repeat("?, ", len(tokens.SpendEvents())), ", ") +
+	`) AND event_time >= ?`
 
 // AgentPhaseLimit bounds a seat's phase history.
 //
@@ -1237,8 +1240,11 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	// claims: a phase stamped in the future by a skewed clock inside a
 	// window headed "counted through now" is a number with no window.
 	sql := phaseTokenSQL + " AND event_time < ?"
-	types := spendEventTypes()
-	args := []any{types[0], types[1], EncodeTime(since), EncodeTime(until)}
+	var args []any
+	for _, spend := range tokens.SpendEvents() {
+		args = append(args, spend)
+	}
+	args = append(args, EncodeTime(since), EncodeTime(until))
 	if q.AgentRole != "" {
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)

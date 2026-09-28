@@ -15,51 +15,33 @@ import (
 // re-implementation in the browser, and whatever a reconnect left behind —
 // and a refresh routinely disagreed with the page it replaced.
 
-// The two spend events: a phase completion, and a detached coding run's usage
-// record ([store.SpendFor] promotes the same two).
-const (
-	phaseCompletedType = "agent_phase_completed"
-	runUsageType       = "sandbox_run_usage"
-)
-
 // foldSpend records one spend record — a completed phase's, or a coding run's
 // — reporting whether it counted.
+//
+// THE RECORD IS [tokens.Spent]'s, the rule the event store fills its columns
+// by ([store.SpendFor]), so the live rollup and a queried one place every
+// record in the same rows. Only the three dimensions that rule leaves to its
+// producer are set here: the envelope's id and stamp, and the seat, read from
+// the payload fields this projection keys its seat rows on.
 //
 // Deduped by event id so a redelivered envelope cannot inflate the rollup —
 // and a coding run's record is published again, under the same id, by every
 // retried collect of its launch — and window-pruned so a long-lived process
 // does not keep aggregating spend that has aged out.
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
+	record, ok := tokens.Spent(env.Type, payloadFields(payload))
+	if !ok {
+		return false
+	}
 	if env.ID != "" {
 		if _, counted := s.spendIDs[env.ID]; counted {
 			return false
 		}
 		s.spendIDs[env.ID] = struct{}{}
 	}
-	record := tokens.Record{
-		EventID:      env.ID,
-		Timestamp:    env.Timestamp,
-		AgentID:      str(payload, "agent_id"),
-		AgentRole:    str(payload, "role", "agent_role"),
-		Phase:        str(payload, "phase"),
-		HostPhase:    str(payload, "host_phase"),
-		Worker:       str(payload, "worker"),
-		Model:        str(payload, "model", "provider_key"),
-		TurnID:       str(payload, "turn_id"),
-		WorkKey:      str(payload, "work_key"),
-		Iteration:    num(payload, "iteration"),
-		InputTokens:  num(payload, "input_tokens"),
-		OutputTokens: num(payload, "output_tokens"),
-		TotalTokens:  num(payload, "total_tokens"),
-		CostUSD:      fraction(payload, "cost_usd"),
-	}
-	if env.Type == runUsageType {
-		// A RUN'S RECORD stands under the execute phase that launched it
-		// and under its coding agent, the one name there is for what spent
-		// it — the same mapping the event store's columns take, so the
-		// live rollup and a queried one cannot place it differently.
-		record.Phase, record.Model = tokens.RunPhase, str(payload, "coding_agent")
-	}
+	record.EventID, record.Timestamp = env.ID, env.Timestamp
+	record.AgentID = str(payload, "agent_id")
+	record.AgentRole = str(payload, "role", "agent_role")
 	// The stamp is PARSED ONCE, here, and carried with the record. The
 	// prune below tests every retained record's age on every spend event,
 	// and re-parsing them — up to three layouts each, twice per pass —
@@ -166,3 +148,10 @@ func LiveSpendWindowDays() int {
 	}
 	return days
 }
+
+// payloadFields is a decoded payload as [tokens.Fields].
+type payloadFields map[string]any
+
+func (p payloadFields) String(field string) string { return str(p, field) }
+func (p payloadFields) Int(field string) int       { return num(p, field) }
+func (p payloadFields) Float(field string) float64 { return fraction(p, field) }

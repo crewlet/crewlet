@@ -150,10 +150,12 @@ var excluded = map[string]string{
 		"every node on a 15-second tick, so a durable row per report is about " +
 		"two million a year per node to answer a question the live projection " +
 		"and GET /budgets answer for free. What the audit log holds instead is " +
-		"the spend the counter is charged with, recorded per phase in the " +
-		"agent_phase_completed rows internal/tokens aggregates, so \"what did " +
-		"we spend last month\" is answerable and \"what was the counter " +
-		"reading at 14:03:15\" is not a question anybody asks",
+		"the spend the counter is charged with, recorded where it was spent — " +
+		"per phase in the agent_phase_completed rows and per coding run in the " +
+		"sandbox_run_usage rows, the two spend records internal/tokens " +
+		"aggregates — so \"what did we spend last month\" is answerable and " +
+		"\"what was the counter reading at 14:03:15\" is not a question " +
+		"anybody asks",
 	"tool_skill_page_changed": "a NUDGE between nodes that one tool-skill " +
 		"page moved, and the delivery that caused it is already a row, " +
 		"written by the webhook receiver. What a skill change did to a " +
