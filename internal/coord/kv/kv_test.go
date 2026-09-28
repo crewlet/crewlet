@@ -34,6 +34,14 @@ func jsOf(nc *nats.Conn) jetstream.JetStream {
 // outside this process can reach it, and it dies with the test.
 func embeddedNATS(t *testing.T) *nats.Conn {
 	t.Helper()
+	_, nc := embeddedServer(t)
+	return nc
+}
+
+// embeddedServer is [embeddedNATS] with the server beside the connection, for
+// a case that reads what the broker itself counts.
+func embeddedServer(t testing.TB) (*server.Server, *nats.Conn) {
+	t.Helper()
 	dir := t.TempDir()
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "coordkv-test",
@@ -59,7 +67,7 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 		t.Fatalf("connect to embedded server: %v", err)
 	}
 	t.Cleanup(nc.Close)
-	return nc
+	return ns, nc
 }
 
 // bucketSeq gives every store its own set of buckets.

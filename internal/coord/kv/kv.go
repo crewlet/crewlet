@@ -97,9 +97,9 @@
 // build's own duty record lapses in that same bucket, so the two holdings
 // never overlap.
 //
-// The check reads the whole seat lease bucket, once per duty claim, which is
-// once per tick of each duty; a gated seat claim already reads it on every
-// claim, so this adds no read that grows with anything but the duty count.
+// The check is judged by the gates' view of both lease buckets (gate.go), once
+// per duty claim — once per tick of each duty — at the cost of a gate rather
+// than of a listing of every lease in the fleet.
 //
 // The shape is check, claim, RE-CHECK, give back, the same degradation as the
 // protocol gate below, because a KV cannot put a predicate over a second
@@ -146,8 +146,11 @@
 // changes from silent mixed-protocol operation to a claim we immediately give
 // back. Combined with the gate's existing asymmetry — only newer nodes wait,
 // older ones were never gated — that is a faithful degradation and a
-// deliberate difference, not an oversight. The gate reads both lease buckets,
-// because the contract counts every live lease.
+// deliberate difference, not an oversight. The gate judges both lease buckets,
+// because the contract counts every live lease — through a view of them kept
+// by a watch and made exact by a sequence barrier, never a listing per claim:
+// gate.go is where that is argued, with the three cheaper shapes that break
+// it.
 //
 // # Every listing is ONE CERTIFIED PASS, and never the client's ListKeys
 //
@@ -415,6 +418,11 @@ type Store struct {
 	// an older build live, so the wait is reported when it starts and when it
 	// ends rather than on every claim. See olderLayoutHolds.
 	dutiesWaiting atomic.Bool
+
+	// gate is the two gates' view of both lease buckets (gate.go), which
+	// is what every gated claim, every duty claim and FleetProtocolFloor
+	// judge instead of listing the fleet's leases.
+	gate *gateView
 }
 
 var _ coord.Backend = (*Store)(nil)
@@ -532,7 +540,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 
 	log.DebugContext(ctx, "coord_kv_open", "leases", leases.Bucket(), "duties", duties.Bucket(),
 		"epochs", epochs.Bucket(), "ttl", leaseFacts.age, "max_duty_ttl", coord.MaxDutyTTL)
-	return &Store{
+	s := &Store{
 		js: js,
 		// The seat lease bucket's ceiling is the age IN FORCE on it, never
 		// this node's configured TTL: validateTTL refuses a claim against
@@ -558,7 +566,9 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		epochs:    epochs,
 		epochRead: readers[2],
 		ttl:       leaseFacts.age,
-	}, nil
+	}
+	s.gate = newGateView(s)
+	return s, nil
 }
 
 // openDuties creates or adopts the duty bucket, raising its age to
@@ -758,24 +768,9 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	key := encodeResource(resource)
 
 	for range casAttempts {
-		snap, err := s.readForClaim(ctx, l, resource, opts.Ungated)
+		snap, err := s.readForClaim(ctx, l, resource)
 		if err != nil {
 			return nil, err
-		}
-		// The gate, fleet-wide: refuse while ANY live lease is held at an
-		// older protocol. The disagreement is about what HOLDING A LEASE
-		// means, so it is not scoped to the resource being claimed.
-		// Asymmetric by construction — it only ever looks for a LOWER
-		// protocol, so an older node (which has no such check to run) is
-		// never blocked.
-		if !opts.Ungated {
-			blocked, gateErr := s.blockedByOlder(ctx, snap.all, snap.clock, protocol)
-			if gateErr != nil {
-				return nil, gateErr
-			}
-			if blocked {
-				return nil, nil
-			}
 		}
 
 		mine := snap.mine
@@ -786,7 +781,25 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			}
 		}
 		if held && mine.value.Owner != opts.Owner {
+			// A PEER HOLDS IT, which is the answer whatever the gate
+			// would say — the gate's own refusal is this same (nil, nil)
+			// — so no gate is judged for a claim that cannot write.
 			return nil, nil
+		}
+		// The gate, fleet-wide: refuse while ANY live lease is held at an
+		// older protocol. The disagreement is about what HOLDING A LEASE
+		// means, so it is not scoped to the resource being claimed.
+		// Asymmetric by construction — it only ever looks for a LOWER
+		// protocol, so an older node (which has no such check to run) is
+		// never blocked.
+		if !opts.Ungated {
+			blocked, gateErr := s.gate.blocked(ctx, protocol)
+			if gateErr != nil {
+				return nil, gateErr
+			}
+			if blocked {
+				return nil, nil
+			}
 		}
 		if held && mine.value.Epoch == claimingEpoch {
 			// One of THIS owner's own concurrent claims holds the record
@@ -801,8 +814,8 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		}
 		if l == s.duties {
 			// Checked only once no peer holds the duty here, so a node
-			// that lost the duty to a peer pays no scan for it.
-			waiting, layoutErr := s.olderLayoutHolds(ctx, snap)
+			// that lost the duty to a peer judges no gate for it.
+			waiting, layoutErr := s.olderLayoutHolds(ctx)
 			if layoutErr != nil {
 				return nil, layoutErr
 			}
@@ -945,9 +958,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 // The read-back is not paranoia: coord.Lease.ExpiresAt must be the STORE's
 // deadline, and the write only returns a revision number. Reading the record
 // we just wrote is how the server's own timestamp for it reaches the caller.
-// On the gated path the same read doubles as the protocol gate's re-check, and
-// on a duty the layout gate is re-checked too, so each degradation described
-// in the package doc costs one read, not two.
+// On the gated path the protocol gate is judged again AFTER the write, and on
+// a duty the layout gate is too — each through the view's barrier (gate.go),
+// which waits for every write before this re-check to be in the view, so a
+// record an older node wrote before our claim cannot be missed by it.
 func (s *Store) settle(
 	ctx context.Context,
 	l *lane,
@@ -957,7 +971,7 @@ func (s *Store) settle(
 	protocol int,
 	fresh bool,
 ) (*coord.Lease, error) {
-	snap, err := s.readForClaim(ctx, l, resource, opts.Ungated)
+	snap, err := s.readForClaim(ctx, l, resource)
 	if err != nil {
 		return nil, err
 	}
@@ -970,7 +984,7 @@ func (s *Store) settle(
 		return nil, nil
 	}
 	if !opts.Ungated {
-		blocked, err := s.blockedByOlder(ctx, snap.all, snap.clock, protocol)
+		blocked, err := s.gate.blocked(ctx, protocol)
 		if err != nil {
 			return nil, err
 		}
@@ -979,7 +993,7 @@ func (s *Store) settle(
 		}
 	}
 	if l == s.duties {
-		waiting, err := s.olderLayoutHolds(ctx, snap)
+		waiting, err := s.olderLayoutHolds(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1259,29 +1273,11 @@ func (s *Store) PreferredResources(ctx context.Context, class coord.Class, nodeI
 // The two questions differ, and this one exists to explain a refusal: a floor
 // that omitted the very record that caused one would send an operator looking
 // for a peer that is not there.
+//
+// Judged by the gates' view (gate.go), so it costs what a gate costs rather
+// than a listing of the fleet's leases.
 func (s *Store) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
-	all, err := s.scanAll(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-	clk := s.newClock()
-	floor, found := 0, false
-	for _, e := range all {
-		p := coord.StoredProtocol(e.value.Protocol)
-		if found && p >= floor {
-			// Cannot lower the floor, so its liveness is not worth a
-			// clock read.
-			continue
-		}
-		held, err := s.held(ctx, e, clk)
-		if err != nil {
-			return 0, false, err
-		}
-		if held {
-			floor, found = p, true
-		}
-	}
-	return floor, found, nil
+	return s.gate.floor(ctx)
 }
 
 // --- the epochs bucket ----------------------------------------------------
@@ -1398,53 +1394,28 @@ func (s *Store) pinHint(ctx context.Context, resource, preferred string) error {
 
 // --- reading --------------------------------------------------------------
 
-// snapshot is what one claim decision reads: every lease record it must judge,
-// the one it is about, and the clock those judgements are taken against.
+// snapshot is what one claim decision reads: the record it is about, and the
+// clock that record is judged against.
 type snapshot struct {
-	all  []entry
-	mine *entry
-	// scannedLeases reports that all holds every record of the seat lease
-	// bucket, so the layout gate can judge them without a second scan.
-	scannedLeases bool
-	clock         *clock
+	mine  *entry
+	clock *clock
 }
 
-// readForClaim gathers what TryAcquire needs.
+// readForClaim reads the record a claim is about, by itself, from the
+// stream LEADER.
 //
-// An UNGATED claim reads one key instead of the whole of both lease buckets,
-// and that is not a micro-optimisation: node presence and object-store
-// membership are each renewed on every heartbeat of every node, and scanning
-// the fleet's leases to renew one's own would make the read cost of a
-// heartbeat grow with the fleet.
-//
-// THE RECORD THE CLAIM IS ABOUT IS ALWAYS READ BY ITSELF, from the leader,
-// gated or not. The claim writes at its revision and settle judges the
-// claim's own write by it, so it must be the newest the quorum holds: a
-// scan's copy of it comes from whichever replica the pass landed on, and a
-// replica one write behind hands settle the claiming record this very call
-// replaced — which read as "superseded" and answered (nil, nil) for a lease
-// the store held under this owner until its TTL. The scan is what the GATE
-// judges, and only older-protocol records move that judgement.
-func (s *Store) readForClaim(ctx context.Context, l *lane, resource string, ungated bool) (snapshot, error) {
-	snap := snapshot{clock: s.newClock()}
+// The claim writes at its revision and settle judges the claim's own write by
+// it, so it must be the newest the quorum holds: a copy one write behind
+// hands settle the claiming record this very call replaced, which read as
+// "superseded" and answered (nil, nil) for a lease the store held under this
+// owner until its TTL. What the gates judge is not in the snapshot at all: the
+// gates' view answers them (gate.go).
+func (s *Store) readForClaim(ctx context.Context, l *lane, resource string) (snapshot, error) {
 	mine, err := s.readOne(ctx, l, resource)
 	if err != nil {
 		return snapshot{}, err
 	}
-	snap.mine = mine
-	if ungated {
-		if mine != nil {
-			snap.all = []entry{*mine}
-		}
-		return snap, nil
-	}
-
-	all, err := s.scanAll(ctx)
-	if err != nil {
-		return snapshot{}, err
-	}
-	snap.all, snap.scannedLeases = all, true
-	return snap, nil
+	return snapshot{mine: mine, clock: s.newClock()}, nil
 }
 
 // olderLayoutHolds reports whether a record written by a build that predates
@@ -1459,8 +1430,8 @@ func (s *Store) readForClaim(ctx context.Context, l *lane, resource string, unga
 // seat_claims_blocked_by_older_protocol is the same warning for seats, and it
 // repeats on every placement sweep. A duty cannot afford that: it is claimed
 // per tick, and the integration loop claims once per surface.
-func (s *Store) olderLayoutHolds(ctx context.Context, snap snapshot) (bool, error) {
-	waiting, err := s.scanForOlderLayout(ctx, snap)
+func (s *Store) olderLayoutHolds(ctx context.Context) (bool, error) {
+	waiting, err := s.gate.olderLayout(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -1477,31 +1448,6 @@ func (s *Store) olderLayoutHolds(ctx context.Context, snap snapshot) (bool, erro
 				"duty bucket again")
 	}
 	return waiting, nil
-}
-
-// scanForOlderLayout is olderLayoutHolds's read, without the reporting.
-func (s *Store) scanForOlderLayout(ctx context.Context, snap snapshot) (bool, error) {
-	entries := snap.all
-	if !snap.scannedLeases {
-		scanned, err := s.scan(ctx, s.leases)
-		if err != nil {
-			return false, err
-		}
-		entries = scanned
-	}
-	for _, e := range entries {
-		if e.lane != s.leases || e.value.Layout >= layoutDutyLane {
-			continue
-		}
-		held, err := s.held(ctx, e, snap.clock)
-		if err != nil {
-			return false, err
-		}
-		if held {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // readOne reads a single lease record from a bucket, as the stream LEADER holds
@@ -1524,19 +1470,6 @@ func (s *Store) readOne(ctx context.Context, l *lane, resource string) (*entry, 
 			coord.ErrUnavailable, resource)
 	}
 	return &e, nil
-}
-
-// scanAll reads every record of both lease buckets.
-func (s *Store) scanAll(ctx context.Context) ([]entry, error) {
-	leases, err := s.scan(ctx, s.leases)
-	if err != nil {
-		return nil, err
-	}
-	duties, err := s.scan(ctx, s.duties)
-	if err != nil {
-		return nil, err
-	}
-	return append(leases, duties...), nil
 }
 
 // scan reads every lease record of one bucket in one pass.
@@ -1742,26 +1675,6 @@ func (s *Store) storeNow(ctx context.Context, l *lane) (time.Time, error) {
 			coord.ErrUnavailable)
 	}
 	return info.TimeStamp.UTC(), nil
-}
-
-// blockedByOlder is the mixed-version gate's predicate.
-//
-// A record at this protocol or newer cannot block, so only an older one's
-// liveness is judged, and a fleet running one build reads no clock for it.
-func (s *Store) blockedByOlder(ctx context.Context, entries []entry, clk *clock, protocol int) (bool, error) {
-	for _, e := range entries {
-		if coord.StoredProtocol(e.value.Protocol) >= protocol {
-			continue
-		}
-		held, err := s.held(ctx, e, clk)
-		if err != nil {
-			return false, err
-		}
-		if held {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // --- errors ---------------------------------------------------------------

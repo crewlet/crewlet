@@ -148,7 +148,9 @@ func (b *Backends) Conn() *nats.Conn { return b.conn }
 //     queue, because a node that released its broker while still holding
 //     leases looks alive to its peers: renewals keep succeeding against a
 //     store it can no longer reach work through, and its seats stay
-//     unclaimable for a full TTL.
+//     unclaimable for a full TTL. The lease store's own background watch —
+//     the view its gates are judged by — is stopped first, while its
+//     connection is still open, so it ends rather than failing.
 //
 //  3. Shut down the embedded SERVER, if this node started one. Last of the
 //     three broker steps, because everything above it is a client of it.
@@ -173,6 +175,9 @@ func (b *Backends) Close(ctx context.Context) {
 			log.WarnContext(ctx, "queue_stop_failed", "error", err)
 		}
 	}
+	if closer, ok := b.Coord.(backgroundCloser); ok {
+		closer.Close()
+	}
 	if b.conn != nil {
 		b.conn.Close()
 		b.conn = nil
@@ -187,6 +192,12 @@ func (b *Backends) Close(ctx context.Context) {
 		}
 		b.Store = nil
 	}
+}
+
+// backgroundCloser is a coordination store that runs something in the
+// background of its own — the KV store's gate view — and stops it.
+type backgroundCloser interface {
+	Close()
 }
 
 // OpenBackends builds everything a node runs on.
