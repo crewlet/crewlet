@@ -1069,6 +1069,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		{`DELETE FROM tracker_task_tags WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_relations WHERE task_id = ? OR other_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
+		{`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
@@ -1115,7 +1116,62 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	return written + marker + moved + history, nil
+	forgotten, err := forgetRecords(ctx, tx, id, historyID(c))
+	if err != nil {
+		return 0, fmt.Errorf("tracker: purge %s at %s: %w", id, c.position, err)
+	}
+	return written + marker + moved + history + forgotten, nil
+}
+
+// forgetRecords deletes what a purged task's own records wrote beside its
+// rows: every history row but the purge's own (keep), the inbox notices those
+// rows routed, and the turn records.
+//
+// THESE HOLD THE CONTENT, which is what a purge is for. A history row keeps
+// its record's whole mutation in `document` — every title, every body and
+// every comment the task was ever given — plus an excerpt, and an inbox notice
+// keeps an excerpt of its own; the object tables the purge already emptied
+// were the smaller half. Left, a purged task's text stayed readable on every
+// node for the life of the company, while this package's docs and the purge
+// report said it was destroyed.
+//
+// THE PURGE'S OWN ROW STAYS, and the notices it routed: that it happened, to
+// which key, by whom and why is the one account of the task that survives, and
+// the lead's `purged` wake is read through it.
+//
+// AFTER the purge's history row is written, so its effective instant is still
+// the maximum over every row about this subject — the closed form every node
+// computes — rather than over a set this function had already emptied.
+func forgetRecords(ctx context.Context, tx *sql.Tx, id, keep string) (int, error) {
+	kind := string(KindTask)
+	written := 0
+	for _, statement := range []struct {
+		sql  string
+		args []any
+	}{
+		// THE NOTICES FIRST, found through the history rows that routed
+		// them: a notice is keyed on its record, and this is a seek on
+		// that key where a match on its subject would scan every inbox.
+		{`DELETE FROM tracker_notifications WHERE record_id IN (
+			SELECT id FROM tracker_history
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`,
+			[]any{id, kind, keep}},
+		{`DELETE FROM tracker_history
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?`,
+			[]any{id, kind, keep}},
+		{`DELETE FROM tracker_turns WHERE task_id = ?`, []any{id}},
+	} {
+		res, err := tx.ExecContext(ctx, statement.sql, statement.args...)
+		if err != nil {
+			return 0, err
+		}
+		n, err := affected(res)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	return written, nil
 }
 
 // reparent moves each child onto parent and rebuilds its subtree's ancestry.

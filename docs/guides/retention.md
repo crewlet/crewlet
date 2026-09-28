@@ -1220,6 +1220,13 @@ Three different things:
 crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 ```
 
+It removes every row the task's own records wrote, not only the task's: its
+comments and body revisions, and every history row, inbox notice and turn
+record about it — a history row carries its record's whole change, so leaving
+those would leave the text the purge was run to destroy. One account survives,
+and it is the purge's own: its history row and the project lead's `purged`
+notice, which say that it happened, to which key, by whom and why.
+
 The confirmation is the task's **key**, not its id: the id is already on the
 command line, so repeating it confirms nothing, while the key has to be looked
 up — which is the point of asking. The **reason is required** because it is the
