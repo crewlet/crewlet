@@ -50,8 +50,8 @@ import (
 // index leading on `source` present, the planner used it instead of the
 // primary key, and each of 1 200 candidates scanned half of `kb_vectors`
 // looking for its `source_id` — 1 min 44 s against 50 ms. Both indexes are
-// dropped by 0025, and `TestEveryIndexServesARegisteredQuery` is what stops
-// them coming back.
+// dropped by the replicated estate's migration 0004, and
+// `TestEveryIndexServesARegisteredQuery` is what stops them coming back.
 //
 // # The query's own sign code is computed inline, and that too is measured
 //
@@ -67,6 +67,33 @@ import (
 // filter after the scan that the filter exists to shrink, and joining
 // `kb_vectors` inside the stage-1 subquery to reach it is the shape the
 // hundred seconds above came from.
+//
+// # Why the source filter has no index of its own, and why that is measured
+//
+// A filter on this table narrows the part of the scan that COSTS: the sign
+// code's distance is computed only for a row the predicate admits, and next to
+// it reading a 400-byte row is nearly free. So the filter halves the search
+// for a source holding a fifth of the corpus with or without an index — and it
+// has one anyway, because the primary key is `(source, source_id)` and the
+// planner seeks its automatic index on `source = ?`. The gate asserts that
+// plan for the statement this file builds.
+//
+// Measured at 40 000 sources and 3 072 dimensions, one reader, p50: the
+// unfiltered scan 58 ms; a source holding 20 % of the corpus 29 ms, 50 % 48 ms,
+// 80 % 66 ms. Every index tried beside it was no faster for a filtered query
+// and some were far slower for the unfiltered one, which is 0004's finding
+// again: `(model, dim, source)` 85 ms unfiltered, `(model, dim, source,
+// search_shard)` 159 ms, and a COVERING `(source, search_shard, model, dim,
+// bits, …)` — a second copy of the whole table — 28 ms for the 20 % source
+// against the primary key's 29. None narrows the BUCKET range either: this
+// planner seeks `source = ?` and reads the range as a residual predicate,
+// which is exactly what the table scan already does with it.
+//
+// What the primary key's plan costs is a random access per admitted row, and a
+// source holding MOST of the corpus pays for that: forcing a scan (`+b.source`)
+// measured 57 ms against the seek's 66 at 80 % and 41 against 48 at 50 %, and
+// 32 against 29 at 20 %. Within the noise of the machine at every mix, and no
+// caller can know the mix — so the planner's choice stands.
 
 // SemanticQuery is one semantic search.
 type SemanticQuery struct {
@@ -156,17 +183,53 @@ const SemanticScanBudget = time.Second
 // facts, and collapsing them here would make a broken index look exactly like
 // a company that has written nothing down.
 func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, error) {
+	statement, args, err := semanticStatement(q)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search: the semantic scan: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []SemanticHit
+	for rows.Next() {
+		var hit SemanticHit
+		var source string
+		if err := rows.Scan(&source, &hit.ID, &hit.Container, &hit.Distance); err != nil {
+			return nil, fmt.Errorf("search: read a semantic hit: %w", err)
+		}
+		hit.Source = Source(source)
+		out = append(out, hit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("search: the semantic scan: %w", err)
+	}
+	return out, nil
+}
+
+// semanticStatement is the one statement [Semantic] issues for q, and its
+// arguments.
+//
+// A FUNCTION OF ITS OWN so the plan gate explains THIS statement rather than a
+// copy of it. The copy the gate used to hold had neither the source filter nor
+// the container filter nor the bucket range, and every caller in the tree
+// passes at least one of them — so the plan the gate certified was the plan of
+// a query nothing issues, and the plans of the queries that ARE issued were
+// certified by nobody.
+func semanticStatement(q SemanticQuery) (string, []any, error) {
 	if len(q.Vector) == 0 {
-		return nil, fmt.Errorf("search: the semantic half needs a query vector")
+		return "", nil, fmt.Errorf("search: the semantic half needs a query vector")
 	}
 	if q.Model == "" || q.Dim <= 0 {
-		return nil, fmt.Errorf("search: the semantic half needs the model and " +
+		return "", nil, fmt.Errorf("search: the semantic half needs the model and " +
 			"the width the corpus was embedded at — without both, one pool " +
 			"holds two embedding spaces and the ranking between them is " +
 			"arithmetic on incompatible vectors")
 	}
 	if want := 4 * q.Dim; len(q.Vector) != want {
-		return nil, fmt.Errorf("search: the query vector is %d bytes and the "+
+		return "", nil, fmt.Errorf("search: the query vector is %d bytes and the "+
 			"width says %d — vector_distance_cos over mismatched lengths is "+
 			"undefined and fails the whole statement", len(q.Vector), want)
 	}
@@ -236,27 +299,7 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 		WHERE length(v.embedding) = ?
 		ORDER BY distance, c.source, c.source_id
 		LIMIT ?`
-
-	rows, err := tx.QueryContext(ctx, statement, args...)
-	if err != nil {
-		return nil, fmt.Errorf("search: the semantic scan: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var out []SemanticHit
-	for rows.Next() {
-		var hit SemanticHit
-		var source string
-		if err := rows.Scan(&source, &hit.ID, &hit.Container, &hit.Distance); err != nil {
-			return nil, fmt.Errorf("search: read a semantic hit: %w", err)
-		}
-		hit.Source = Source(source)
-		out = append(out, hit)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("search: the semantic scan: %w", err)
-	}
-	return out, nil
+	return statement, args, nil
 }
 
 // placeholders builds `?, ?, …`.

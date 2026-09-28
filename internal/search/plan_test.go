@@ -21,15 +21,17 @@ import (
 // piece of schema whose mistake looks exactly like a mistake nobody made.
 //
 // Measured at the pin, 20 000 sources at 3 072 dimensions, warm: the two-stage
-// search was 1 min 44 s with the two indexes 0024 created, 50 ms without them,
-// against 259 ms for the exact scan they were meant to beat. Two thousand
-// times, from two indexes nobody would look at twice.
+// search was 1 min 44 s with the two indexes the replicated estate's migration
+// 0003 created, 50 ms without them, against 259 ms for the exact scan they were
+// meant to beat. Two thousand times, from two indexes nobody would look at
+// twice.
 //
 // # What it walks
 //
-// Every statement this package issues against the vector tables, run through
-// EXPLAIN QUERY PLAN on a corpus large enough that the planner has a real
-// choice. Then the inverse: every index the schema declares must appear in at
+// Every statement this package issues against the vector tables — the
+// two-stage search in each shape its callers issue it, built by the function
+// [search.Semantic] calls — run through EXPLAIN QUERY PLAN on a corpus large
+// enough that the planner has a real choice. Then the inverse: every index the schema declares must appear in at
 // least one of those plans, or it is a copy of the row order nobody reads and
 // a trap the planner can still fall into.
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
@@ -43,22 +45,6 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		statement string
 		args      []any
 	}{
-		"the two-stage search": {`
-			SELECT c.source, c.source_id, c.container,
-			       vector_distance_cos(v.embedding, ?) AS distance
-			FROM (
-				SELECT b.source, b.source_id, b.container
-				FROM kb_vectors_bin b
-				WHERE b.model = ? AND b.dim = ?
-				ORDER BY vector_distance_cos(b.bits, vector1bit(?)),
-				         b.source, b.source_id
-				LIMIT ?
-			) AS c
-			JOIN kb_vectors v ON v.source = c.source AND v.source_id = c.source_id
-			WHERE length(v.embedding) = ?
-			ORDER BY distance, c.source, c.source_id
-			LIMIT ?`,
-			[]any{query, model, dim, query, 1200, 4 * dim, 150}},
 		"the evaluation's exact scan": {`
 			SELECT source, source_id FROM kb_vectors
 			WHERE model = ? AND dim = ? AND length(embedding) = ?
@@ -77,6 +63,40 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			ORDER BY t.updated_at LIMIT ?`,
 			[]any{model, dim, 100}},
 	}
+	// THE TWO-STAGE SEARCH IN EVERY SHAPE A CALLER ISSUES IT, built by the
+	// function Semantic itself calls rather than copied: a copy is a plan
+	// for a statement nothing runs. The copy this replaced had no filter at
+	// all, and both callers in the tree pass a source — the knowledge search
+	// its container scope as well, and a fan-out its bucket range.
+	shapes := map[string]search.SemanticQuery{
+		"the two-stage search": {},
+		"the two-stage search over one source": {
+			Sources: []search.Source{search.SourceTask},
+		},
+		"the two-stage search over one source in a scope": {
+			Sources:    []search.Source{search.SourcePage},
+			Containers: []string{"ENG", "OPS"},
+		},
+		"the two-stage search over one source under an assignment": {
+			Sources:    []search.Source{search.SourcePage},
+			Containers: []string{"ENG"},
+			Shards:     search.Assignment{From: 0, To: 32},
+		},
+		"the two-stage search under an assignment": {
+			Shards: search.Assignment{From: 16, To: 48},
+		},
+	}
+	for name, shape := range shapes {
+		shape.Vector, shape.Model, shape.Dim = query, model, dim
+		statement, args, err := search.SemanticStatement(shape)
+		if err != nil {
+			t.Fatalf("%s: build the statement: %v", name, err)
+		}
+		registered[name] = struct {
+			statement string
+			args      []any
+		}{statement, args}
+	}
 
 	plans := map[string][]string{}
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
@@ -92,22 +112,32 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// THE JOIN REACHES kb_vectors BY ITS PRIMARY KEY. This is the exact
-	// failure that cost the hundred seconds: an index leading on `source`
-	// alone made every candidate scan half the table.
-	joined := strings.Join(plans["the two-stage search"], "\n")
-	if !strings.Contains(joined, "sqlite_autoindex_kb_vectors_1") ||
-		!strings.Contains(joined, "source_id=?") {
-		t.Fatalf("the second stage reaches kb_vectors by something other than "+
-			"its primary key:\n%s\n\nA seek on `source` alone scans half the "+
-			"company per candidate, through rows twelve kilobytes wide — "+
-			"measured at 1 min 44 s against 50 ms", joined)
-	}
-	// AND THE FIRST STAGE SCANS THE NARROW TABLE. The cost model is
-	// N x c_row over 400-byte rows; an index over it is that scan plus a
-	// random access per row.
-	if !strings.Contains(joined, "SCAN kb_vectors_bin") {
-		t.Fatalf("the first stage does not scan kb_vectors_bin:\n%s", joined)
+	for name := range shapes {
+		joined := strings.Join(plans[name], "\n")
+		// THE JOIN REACHES kb_vectors BY ITS PRIMARY KEY. This is the exact
+		// failure that cost the hundred seconds: an index leading on
+		// `source` alone made every candidate scan half the table.
+		if !strings.Contains(joined, "sqlite_autoindex_kb_vectors_1") ||
+			!strings.Contains(joined, "source_id=?") {
+			t.Fatalf("%s: the second stage reaches kb_vectors by something "+
+				"other than its primary key:\n%s\n\nA seek on `source` alone "+
+				"scans half the company per candidate, through rows twelve "+
+				"kilobytes wide — measured at 1 min 44 s against 50 ms",
+				name, joined)
+		}
+		// AND THE FIRST STAGE READS THE NARROW TABLE ITSELF — a scan, or
+		// the primary key's own seek on `source` where a source filter
+		// gives it one — and never a secondary index. The cost model is
+		// N x c_row over 400-byte rows, and every secondary index measured
+		// over it was that read plus a random access per row: see the
+		// package doc for what each one cost.
+		first := firstStage(plans[name])
+		if first != "SCAN kb_vectors_bin AS b" &&
+			!strings.Contains(first, "USING INDEX sqlite_autoindex_kb_vectors_bin_1") {
+			t.Fatalf("%s: the first stage reads kb_vectors_bin through %q:\n%s\n\n"+
+				"only a scan or the primary key's own seek keeps it N x c_row",
+				name, first, joined)
+		}
 	}
 
 	// THE INVERSE: an index no registered plan reaches.
@@ -148,6 +178,16 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		}
 	}
 	t.Logf("vector indexes: %v", declared)
+}
+
+// firstStage is the plan step that reads kb_vectors_bin.
+func firstStage(steps []string) string {
+	for _, step := range steps {
+		if strings.Contains(step, "kb_vectors_bin") || strings.Contains(step, " b USING") {
+			return step
+		}
+	}
+	return ""
 }
 
 // explain runs one statement through EXPLAIN QUERY PLAN.
