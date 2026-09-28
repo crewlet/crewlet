@@ -136,13 +136,14 @@ empty answer is the one this estate cannot survive, since "no rows" is
 legitimate everywhere it is asked.
 
 That is why a **resource name is segmented**. A lease is named
-`seat:{handle}`, `node:{id}`, `worker:{duty}` or `objects:{id}`, and the part
-before the colon is the **class**; the key it becomes carries that class as a
+`seat:{handle}`, `node:{id}`, `worker:{duty}`, `objects:{id}` or `estate:{id}`,
+and the part before the colon is the **class**; the key it becomes carries that class as a
 subject token of its own, so `seat` is a wildcard and the seats are addressable
-without the nodes. The reads that pay for it run on a ticker: the two
-membership reads — the fleet's, which asks for the presence leases, and the
-object store's, which asks for the `objects:` leases its data nodes hold —
-each read one class instead of every lease in the fleet, and the sweep's
+without the nodes. The reads that pay for it run on a ticker: the membership
+reads — the fleet's, which asks for the presence leases, the object store's,
+which asks for the `objects:` leases its data nodes hold, and, once a layout
+divides the replicated estate, the estate map's, which asks for the `estate:`
+leases — each read one class instead of every lease in the fleet, and the sweep's
 placement hints come from the `epochs` bucket — the one with no expiry at all,
 holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
@@ -179,6 +180,15 @@ claimed by the [object store](object-store.md#membership-is-the-objects-lease)
 itself, renewed on its own loop, released only once its chunk server has
 stopped, and carries the store's own account of its health.
 
+**The estate map's membership is a class of its own too**, `estate:{id}`, for
+the same two reasons: a data node claims it once its estate runtime is up and
+releases it LAST in a drain, after it has stopped serving every partition it
+holds, and it carries what the estate map decides by — the node's weight, the
+layout it runs, the map epoch it last acted on, what it holds of each
+partition and whether its store is healthy. A lease that does not say its
+store is healthy counts as a failed one, the reverse of the objects lease's
+reading, because the estate lease was born with the field.
+
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with
 an empty result rather than an error — which reads to a caller exactly like a
@@ -194,7 +204,7 @@ then returned by no listing at all, which every node reads as a free seat.
 ```mermaid
 flowchart LR
     subgraph COORD["coordination store — shared by the fleet"]
-        L[("leases<br/>seats · presence · object-store membership")]
+        L[("leases<br/>seats · presence · object-store and estate membership")]
         D[("duties<br/>fleet singletons")]
         E[("epochs<br/>the fencing counter")]
         C[("config<br/>activation pointer")]
@@ -224,7 +234,7 @@ flowchart LR
 
 | Slot | Answers | Documented in |
 |---|---|---|
-| `leases` | Which node runs which seat, which nodes are alive at all, and which data nodes are members of the object store and how their stores are | [Seat Ownership](seat-ownership.md#the-lease), [Object Store](object-store.md#membership-is-the-objects-lease) |
+| `leases` | Which node runs which seat, which nodes are alive at all, which data nodes are members of the object store and how their stores are, and — once a layout divides the replicated estate — which data nodes are members of the estate map and what each holds of every partition | [Seat Ownership](seat-ownership.md#the-lease), [Object Store](object-store.md#membership-is-the-objects-lease) |
 | `duties` | Which node holds which [singleton duty](seat-ownership.md#singleton-duties). Its own bucket because a duty and a seat want opposite TTLs: see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own) | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
 | `epochs` | The monotonic fencing counter each seat's, duty's and node's tokens are minted from. Its own bucket because it is the one thing here that must never expire (see the retention table below) | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` | Which company revision is current. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
