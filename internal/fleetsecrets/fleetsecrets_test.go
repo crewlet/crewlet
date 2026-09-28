@@ -612,6 +612,40 @@ func TestTheEnginesKeyLifecycleNeverActsOnAKeyItHasNotSeen(t *testing.T) {
 	}
 }
 
+// A SWEEP'S DELETE OF AN OPERATOR ROW IS CONDITIONED ON THE VERSION IT JUDGED.
+//
+// The org chart's orphan sweep decides a sealed value is nobody's and deletes
+// it; a chart write re-sealing that same field in between writes the row
+// again, and a plain delete would then destroy a value a row names. The
+// conditional delete spares it — and still refuses the engine's own names,
+// because this is the operator's view.
+func TestAnOperatorRowIsDeletedOnlyAtTheVersionJudged(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, _ := fleetStore(t, ring(t, "k1"))
+	mustSet(t, s, "CHART_SEAT_ANA_EMAIL_0123456789", "ana@example.com")
+	judged, found, err := s.Describe(ctx, "CHART_SEAT_ANA_EMAIL_0123456789")
+	if err != nil || !found {
+		t.Fatalf("Describe = (%v, %v)", found, err)
+	}
+	mustSet(t, s, "CHART_SEAT_ANA_EMAIL_0123456789", "ana.o@example.com")
+	if removed, err := s.UnsetAt(ctx, "CHART_SEAT_ANA_EMAIL_0123456789",
+		judged.Version); err != nil || removed {
+		t.Fatalf("a delete at the version before a rewrite = (%v, %v), want "+
+			"the row spared", removed, err)
+	}
+	now, _, _ := s.Describe(ctx, "CHART_SEAT_ANA_EMAIL_0123456789")
+	if removed, err := s.UnsetAt(ctx, "CHART_SEAT_ANA_EMAIL_0123456789",
+		now.Version); err != nil || !removed {
+		t.Fatalf("a delete at the current version = (%v, %v), want it removed",
+			removed, err)
+	}
+	if _, err := s.UnsetAt(ctx, "iam/person/x/dek", 1); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("the operator's view deleted an engine name: %v", err)
+	}
+}
+
 // ---- the migration --------------------------------------------------- //
 
 func localStore(t *testing.T, cipher secrets.Cipher) *store.SecretValues {

@@ -320,6 +320,30 @@ func (s *Store) Unset(ctx context.Context, name string) (bool, error) {
 	return s.unset(ctx, name)
 }
 
+// UnsetAt removes a value only while it is still at the version the caller
+// judged it at, reporting whether it removed it.
+//
+// FOR A SWEEP, never a person: an operator's unset is last-write-wins like
+// their set, while a duty that decided a row is nobody's must not delete one
+// written since it decided — a chart write re-sealing that very field between
+// the census and the delete would otherwise have its value destroyed under a
+// row that names it. False is such a row, or one already gone, and neither is
+// a failure. NO KEYRING NEEDED, for [Estate.Unset]'s reason.
+func (s *Store) UnsetAt(ctx context.Context, name string, version uint64) (bool, error) {
+	if s == nil {
+		return false, secrets.ErrNoKeyring
+	}
+	if err := operatorName(name); err != nil {
+		return false, err
+	}
+	removed, err := s.fleet.DeleteSecretAt(ctx, name, version)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: unset %s at version %d: %w",
+			name, version, err)
+	}
+	return removed, nil
+}
+
 // unset deletes one row, once the caller's view has established it may.
 func (s *Store) unset(ctx context.Context, name string) (bool, error) {
 	removed, err := s.fleet.DeleteSecret(ctx, name)
