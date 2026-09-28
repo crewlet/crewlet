@@ -1299,13 +1299,15 @@ func (a *Applier) unnameInOthers(ctx context.Context, tx *sql.Tx, id string,
 // `scoped_through` AND NEVER `version`, for the reason [Task] gives: the
 // version is the task's own subject's arbitration anchor, and stamping it from
 // here would make the task's next write form an expectation the broker refuses
-// for ever. The guard is the rank move's (see [Applier.applyRankOrder]): a row
-// already at or past this record — this record's own redelivery — is left as
-// it is.
+// for ever. A row already at or past this record — this record's own
+// redelivery — is left as it is.
 //
-// The pointer column is rewritten from the document with it, because the
-// document is what every later record derives the column from; a change that
-// moves no parent writes the value it read.
+// The two columns such a record moves — the parent pointer (a purge's
+// re-parenting) and the rank (a rank move) — are rewritten from the document
+// with it, because the document is what every later record derives them from;
+// a change that moves neither writes the values it read, and a rank the
+// document never carried takes [upsertTask]'s fallback, which is what the
+// task's own next record would write.
 func rewriteOther(ctx context.Context, tx *sql.Tx, id string, c applyContext,
 	change func(*Task) bool) (int, error) {
 
@@ -1321,10 +1323,14 @@ func rewriteOther(ctx context.Context, tx *sql.Tx, id string, c applyContext,
 	if err != nil {
 		return 0, fmt.Errorf("tracker: encode task %s at %s: %w", id, c.position, err)
 	}
+	rank := task.Rank
+	if rank == "" {
+		rank = RankOrigin
+	}
 	res, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET document = ?, parent_id = ?, scoped_through = ?
+		UPDATE tracker_tasks SET document = ?, parent_id = ?, rank = ?, scoped_through = ?
 		WHERE id = ? AND ? > MAX(version, scoped_through)`,
-		document, nullableStringPtr(task.Parent), c.packed, id, c.packed)
+		document, nullableStringPtr(task.Parent), string(rank), c.packed, id, c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: rewrite task %s at %s: %w", id, c.position, err)
 	}

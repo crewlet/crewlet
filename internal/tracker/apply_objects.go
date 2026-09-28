@@ -346,18 +346,26 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 		// move ranks backwards on a redelivery.
 		return 0, nil
 	}
+	// INTO EACH MOVED TASK'S DOCUMENT, not its rank column alone
+	// ([rewriteOther]): the document is what the task's own next record is
+	// merged from, and a rank written only to the column was put back by it
+	// — every drag undone by the next edit to the card that was dragged.
+	//
+	// AND ONLY A TASK IN THIS ORDER'S PROJECT: a placement is a position in
+	// one project's order, which is the container this record's scope names,
+	// so a task filed elsewhere has no position in it and a write to it
+	// would be outside what the record declared.
 	for _, placement := range order.Placements {
-		moved, err := tx.ExecContext(ctx, `
-			UPDATE tracker_tasks SET rank = ?, scoped_through = ?
-			WHERE id = ? AND ? > MAX(version, scoped_through)`,
-			string(placement.Rank), c.packed, placement.Task, c.packed)
+		n, err := rewriteOther(ctx, tx, placement.Task, c, func(task *Task) bool {
+			if task.Project != order.Project {
+				return false
+			}
+			task.Rank = placement.Rank
+			return true
+		})
 		if err != nil {
 			return 0, fmt.Errorf("tracker: move task %s at %s: %w",
 				placement.Task, c.position, err)
-		}
-		n, err := affected(moved)
-		if err != nil {
-			return 0, err
 		}
 		rows += n
 	}

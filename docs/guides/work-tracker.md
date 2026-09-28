@@ -754,7 +754,10 @@ furniture, and a seat's job is the work rather than the furniture around it.
 
 A board is drag-ordered, and the order is a real value on the task rather than
 a position in a list. Dragging one task writes one record; the key it mints
-sits between its new neighbours.
+sits between its new neighbours, and it is part of the task from then on — the
+task's next edit keeps it, and reading the task back returns it. A drag
+places tasks in the board's own project only: a task filed in another project
+named in one is left where it is.
 
 Repeated insertion at the same point makes keys grow — about one character per
 sixty-two placements — and past a threshold the engine **re-spreads** the

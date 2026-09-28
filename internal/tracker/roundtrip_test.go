@@ -723,6 +723,87 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 	}
 }
 
+// A RANK MOVE SURVIVES THE MOVED TASK'S NEXT EDIT.
+//
+// A task's own record is merged from its stored DOCUMENT, and the move wrote
+// the rank column alone: the document kept the rank the task was created at,
+// the next edit to the card wrote that back, and every drag was undone by
+// whatever next touched the card — a title fixed, a status moved. A detail
+// read, which decodes the document, showed the old rank all along.
+func TestARankMoveSurvivesTheMovedTasksNextEdit(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2"} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, newTask(id), nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	created := oneTask(t, r, "t-2").Rank
+	moved, err := tracker.KeyBetween(oneTask(t, r, "t-1").Rank, created)
+	if err != nil || moved == created {
+		t.Fatalf("a key between the two cards: %q, %v", moved, err)
+	}
+	if _, err := r.writer.MoveTasks(t.Context(), "op-move", "ENG",
+		[]tracker.Placement{{Task: "t-2", Rank: moved}}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+	if held := oneTask(t, r, "t-2"); held.Rank != moved {
+		t.Errorf("the moved task's document says rank %q, want %q", held.Rank, moved)
+	}
+
+	title := "edited after the move"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "t-2", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT rank FROM tracker_tasks WHERE id = 't-2'`); len(got) != 1 ||
+		got[0] != string(moved) {
+		t.Errorf("the moved task's rank is %v after its next edit, want %q — the "+
+			"edit put back the rank the move replaced", got, moved)
+	}
+	if held := oneTask(t, r, "t-2"); held.Rank != moved || held.Title != title {
+		t.Errorf("after the edit the document says rank %q and title %q, want %q "+
+			"and %q", held.Rank, held.Title, moved, title)
+	}
+}
+
+// A PLACEMENT FOR A TASK IN ANOTHER PROJECT IS NOT WRITTEN.
+//
+// A placement is a position in ONE project's order, and that project is the
+// container the record's scope names — so a task filed elsewhere has no
+// position in it, and writing one would be a write outside what the record
+// declared, which a record deferred on that task's project would not have held
+// back.
+func TestAPlacementForATaskInAnotherProjectIsNotWritten(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations"})
+	before := oneTask(t, r, "t-1").Rank
+	elsewhere, err := tracker.KeyBetween(before, "")
+	if err != nil || elsewhere == before {
+		t.Fatalf("a key other than the task's own: %q, %v", elsewhere, err)
+	}
+	if _, err := r.writer.MoveTasks(t.Context(), "op-move", "OPS",
+		[]tracker.Placement{{Task: "t-1", Rank: elsewhere}}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT rank FROM tracker_tasks WHERE id = 't-1'`); len(got) != 1 ||
+		got[0] != string(before) {
+		t.Errorf("a task in ENG took rank %v from OPS's order, want its own %q", got, before)
+	}
+	if held := oneTask(t, r, "t-1"); held.Rank != before {
+		t.Errorf("a task in ENG's document took rank %q from OPS's order", held.Rank)
+	}
+}
+
 // A WRITE AGAINST A SUBJECT THIS NODE IS BEHIND ON IS REFUSED, NOT WAITED OUT.
 //
 // # The failure this exists to catch
