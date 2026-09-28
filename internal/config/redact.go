@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Redacted is what a masked credential reads as on every HTTP surface.
@@ -24,14 +24,13 @@ import (
 // drift is a working credential replaced by twelve characters.
 const Redacted = redact.FieldMask
 
-// secretTag marks a field that holds a credential.
-//
-// A TAG rather than a list of paths, and that is the whole point: a path list
-// is maintained by whoever remembers it exists, so the day somebody adds
-// integrations.newthing.token the config surface starts publishing it and
-// nothing fails. A tag lives on the field, and [TestEveryCredentialFieldIsTagged]
-// fails the build when a field that looks like a credential does not carry one.
-const secretTag = "secret"
+// WHICH FIELDS ARE CREDENTIALS is the `secret:"true"` tag, read through
+// [secrets.Field] and nothing else — the one definition this document's mask,
+// the org chart's seal and the chart surface's mask all share, so they cannot
+// come to disagree about which values are secret. A tag rather than a list of
+// paths, because a path list is maintained by whoever remembers it exists, and
+// [TestEveryCredentialFieldIsTagged] fails the build when a field that looks
+// like a credential does not carry one.
 
 // Redact returns a copy of the company with every credential masked.
 //
@@ -114,7 +113,7 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 				continue
 			}
 			copyMasking(src.Field(i), dst.Field(i),
-				secret || field.Tag.Get(secretTag) == "true")
+				secret || secrets.Field(field))
 		}
 	case reflect.Slice:
 		if src.IsNil() {
@@ -283,7 +282,7 @@ func (r *restorer) restore(target, prior reflect.Value, secret bool) {
 			if prior.IsValid() {
 				previous = prior.Field(i)
 			}
-			r.restore(target.Field(i), previous, secret || field.Tag.Get(secretTag) == "true")
+			r.restore(target.Field(i), previous, secret || secrets.Field(field))
 		}
 	case reflect.Slice:
 		r.restoreSlice(target, prior, secret)
@@ -370,31 +369,21 @@ func uniqueMembers(prior reflect.Value) map[string]reflect.Value {
 	return byKey
 }
 
-// mask hides a literal credential and leaves a reference alone.
+// mask hides a literal credential and leaves a reference alone: [secrets.Mask]
+// for a value under a credential field, and the value itself anywhere else.
 //
-// # Only a WHOLE reference is shown
-//
-// A value that is exactly one ${VAR} names a credential and carries none: the
-// engine resolves it where a provider is built, so nothing it points at is in
-// this document to leak, and it is the half an operator edits.
-//
-// Anything else is masked, including a value that merely CONTAINS a
-// reference. "Bearer sk-live-${SUFFIX}" and "sk-live-SECRET-${ROTATION}" are
-// legitimate (the resolver expands embedded references), and the literal
-// half of each is a credential. The previous rule showed any value containing
-// "${" and so published exactly that half; a malformed "${line#host=}" or an
-// unclosed "${" is not a reference at all by the resolver's own grammar. The
-// names an embedded reference carries are not lost to the operator:
-// [References] reads the unredacted document and lists every one with its
-// path, and a masked value is restored from the prior revision on a write.
+// ONLY A WHOLE REFERENCE IS SHOWN, the shared rule's reason. The previous rule
+// here showed any value containing "${" and so published exactly the literal
+// half of "sk-live-SECRET-${ROTATION}"; a malformed "${line#host=}" is not a
+// reference at all by the resolver's own grammar. The names an embedded
+// reference carries are not lost to the operator: [References] reads the
+// unredacted document and lists every one with its path, and a masked value
+// is restored from the prior revision on a write.
 func mask(value string, secret bool) string {
-	if !secret || value == "" {
+	if !secret {
 		return value
 	}
-	if _, whole := envref.Whole(value); whole {
-		return value
-	}
-	return Redacted
+	return secrets.Mask(value)
 }
 
 // UnresolvedMasks lists the credential fields still holding the redaction
@@ -434,7 +423,7 @@ func findMasks(v reflect.Value, path Path, secret bool, found *[]Path) {
 				continue
 			}
 			findMasks(v.Field(i), at(path, jsonName(field)),
-				secret || field.Tag.Get(secretTag) == "true", found)
+				secret || secrets.Field(field), found)
 		}
 	case reflect.Slice, reflect.Array:
 		for i := range v.Len() {
