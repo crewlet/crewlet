@@ -429,12 +429,12 @@ back with it, and several of those hand somebody a way in that no bearer
 carries, so everybody signing in again once lets them straight back:
 
 - **Somebody removed or suspended since is enrolled and active again**, with
-  the password, second factor and provider link they held when the artefact
+  the password and second factor they held when the artefact
   was taken. A removal comes back whole — their row, their credentials, and
   the key their name and address are sealed under, because the coordination
   snapshot carries the secret store's bucket as it stood.
-- **A credential withdrawn since is back.** A password, a second factor or
-  a provider link revoked, a second factor reset and recovery codes
+- **A credential withdrawn since is back.** A password or a second factor
+  revoked, a second factor reset and recovery codes
   regenerated since are all as they were when the artefact was taken — so a
   factor you reset because a phone was lost works again, and so do the
   recovery codes it replaced.

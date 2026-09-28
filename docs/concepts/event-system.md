@@ -289,8 +289,7 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
 #       the publishing node's, and the fleet-wide record is iam_history
 iam_session_started        # method, second factor, lineage, client address
 iam_session_ended          # logout / logout_all / idle / absolute / revoked
-                           # / idp_revoked / person_removed /
-                           # credential_changed. An idle or absolute end, and
+                           # / person_removed / credential_changed. An idle or absolute end, and
                            # a token's session whose value changed or whose
                            # entry was removed, is noticed when the bearer is
                            # next presented, once per session per node
@@ -301,11 +300,6 @@ iam_login_failures         # ONE per client per minute, from the engine's own
                            # engine resolved. Never what was presented
 iam_stepup_completed       # a signed-in person confirming who they are
 iam_credential_minted, iam_credential_revoked, iam_mfa_reset
-iam_identity_linked        # a provider subject pinned to a person, via an
-                           # invitation redeemed through the provider or an
-                           # administrator, with by and operator_id; never
-                           # the subject itself
-iam_identity_unlinked      # and taken off them again, with by and operator_id
 iam_grants_changed         # one per person write, from the writer that
                            # decided it: added, removed, by, record version
 iam_token_first_use        # a Tier A token used, once per token per hour

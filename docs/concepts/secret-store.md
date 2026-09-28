@@ -154,18 +154,15 @@ secrets:
 ### The engine's own keys share the bucket, and never the namespace
 
 The same bucket holds key material the **engine** keeps for itself: each
-person's data key (deleting it is what removing somebody does), each provider
-sign-in's refresh token (the deactivation probe's only way to ask the identity
-provider about a session), and the identity directory's blind-index key, which
-every stored address is matched under. They live here because this is the one
+person's data key (deleting it is what removing somebody does) and the identity
+directory's blind-index key, which every stored address is matched under. They live here because this is the one
 store a delete reaches on every node at once — and they are **not your
 secrets**:
 
 | Name | What it is |
 |---|---|
 | `iam/person/<id>/dek` | One person's data key — their name and address are sealed under it |
-| `iam/session/<lineage>/refresh` | One provider session's refresh token |
-| `iam/blind-index-key` | The key an address or a provider subject is blinded under in the identity directory |
+| `iam/blind-index-key` | The key an address is blinded under in the identity directory |
 
 The namespace has one owner, the identity directory (`iam/`); an owner is
 reserved before it writes its first key, so no engine key is ever briefly an
@@ -185,12 +182,7 @@ operator is never told "nothing to move" while every person's key is still
 sealed under the key they are about to retire.
 
 To act on one, use the gesture it belongs to: `crewlet iam remove` destroys a
-person's key, and `crewlet iam revoke` ends their sessions. A refresh token
-needs no gesture of its own: the key duty collects each one once its session
-is over — by sign-out, expiry, a revocation or an invalidation — whether or not
-a provider is still configured, and the deactivation probe drops only the
-tokens of sessions it ended itself
-([Retention § The identity duties](../guides/retention.md#the-identity-duties)).
+person's key, and `crewlet iam revoke` ends their sessions.
 The blind-index key is never minted over one that was deleted — it comes back
 with the coordination store it lived in, from the backup that holds it
 ([Backups § Restoring](../guides/backup.md#restoring)).

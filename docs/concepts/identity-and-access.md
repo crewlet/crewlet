@@ -135,9 +135,9 @@ narrow service account be cut down to reading: the public read posture
 nothing else.
 
 **`api.auth.max_grants` bounds all eleven.** A person's grants live in the
-replicated store and an identity provider's group mapping is written at the
-provider; the ceiling is the operator's statement, in the tier that holds the
-keyring, of what either may ever confer. It is required once the API is served.
+replicated store, written by whoever holds `people:manage`; the ceiling is the
+operator's statement, in the tier that holds the keyring, of what that
+directory may ever confer. It is required once the API is served.
 
 It is intersected at **decision time, per node, per request**, and nothing is
 written when it changes. That is what makes lowering it immediate — no config
@@ -213,8 +213,7 @@ this one's whole reach under a second name, and a ceiling that withheld it
 would withhold every settings edit with it. Hand it out as you would a shell on
 those hosts. A machine token may carry it — `iamdomain` mints it onto one
 deliberately, because applying a configuration from a deploy job is what a
-token is for — so minting a token with it is handing that job host access; and
-`crewlet validate` warns when an identity provider's group mapping confers it.
+token is for — so minting a token with it is handing that job host access.
 Every write that can start a process — the company document, the chart's
 runtime half, connecting an integration — asks for a
 [recent step-up](#some-gestures-ask-how-recently-you-proved-who-you-are), which
@@ -589,8 +588,7 @@ credential after the `#`. A browser never sends a URL's fragment to any server,
 so neither half reaches a proxy's access log on the way to the page. The screen
 then asks `/auth/invite/{id}` itself, with the id in the path and the secret
 **beside** it and never in a URL: in the `X-Crewlet-Invite-Secret` header to
-render, in the JSON body to redeem, and in the form to redeem through the
-identity provider. The id alone opens nothing — it is the row's key, in every
+render and in the JSON body to redeem. The id alone opens nothing — it is the row's key, in every
 snapshot, backup and access log — and what the estate keeps of the secret is
 its SHA-256. A missing or wrong secret is answered exactly as an id nobody
 issued is: the same `410`, counted against the caller's source, because told
@@ -889,13 +887,13 @@ enrol one**:
   signs a person out everywhere. It admits exactly three: `GET /auth/session`,
   `POST /auth/totp` and `POST /auth/step-up` (enrolling asks a proof inside
   `step_up_sensitive`, and somebody who took longer than that to find their
-  phone re-confirms the password without signing out). The two sign-outs of
-  this session, `POST /auth/logout` and `POST /auth/logout/oidc`, are reached
-  too, because the guard does not stand in front of them at all — see
+  phone re-confirms the password without signing out). The sign-out of this
+  session, `POST /auth/logout`, is reached too, because the guard does not
+  stand in front of it at all — see
   [Every route is guarded](#every-route-is-guarded-and-the-exemptions-are-the-list).
 - Completing `POST /auth/totp` through that session **replaces it** with a
   whole one, as a step-up does: the restricted session is ended first, the new
-  one keeps its absolute deadline and carried grants, and the enrolment's
+  one keeps its absolute deadline, and the enrolment's
   answer carries the new session beside `"status": "enrolled"`, its cookie on
   the response. It also keeps the restricted session's **proof instant** —
   when the password was proved — and is never dated at the enrolment: the code
@@ -936,9 +934,7 @@ A node running an older build refuses the scoped cookie outright, as a cookie
 not of its format — during a rolling upgrade somebody part-way through enrolling
 may be asked to sign in again there, and is never served whole.
 
-A sign-in through an **identity provider** is never restricted: its second
-factor is the provider's and invisible here. A Tier A token's exchanged
-session is never restricted either. `optional` opens whole sessions on a
+A Tier A token's exchanged session is never restricted. `optional` opens whole sessions on a
 password alone, which is why it is refused off loopback unless
 `accept_insecure` says so.
 
@@ -1086,11 +1082,11 @@ audit trail's per-client, per-minute failure tally, which counts how many
 different names one client tried.
 
 A credential that **names nobody** — an invitation link, a founder's one-time
-code, an identity provider's round trip — meets no curve at all: there is no
-subject to pair with its address, each is 256 bits from `crypto/rand` (or the
-provider's own), and a callback nobody started fails for free, so a curve on
-the address alone was a way to hold a whole company's provider sign-ins shut.
-Every refusal of one is still a failed attempt in the tally.
+code — meets no curve at all: there is no subject to pair with its address,
+and each is 256 bits from `crypto/rand`, so a curve on the address alone would
+only have been a way for one stranger to hold every invitation and founding
+from that address shut. Every refusal of one is still a failed attempt in the
+tally.
 
 An attempt still being checked counts as a failure against its pair until it
 resolves, so a burst of concurrent guesses at one account is served one after
@@ -1175,9 +1171,7 @@ dashboard's assets, the webhooks, the sign-in routes. Nothing there acts on
 whom a bearer names, and comparing one anyway answered a right value and a
 wrong one at different speeds (a matching Tier A token reads the identity
 directory for its seat binding first) on routes whose refusals nothing counts.
-Such a request is simply anonymous, and the one unguarded route that reads a
-resolution, the provider step-up start, refuses any request presenting a
-bearer. The Forge relay's own JWT on `/webhooks/forge` is that route's to
+Such a request is simply anonymous. The Forge relay's own JWT on `/webhooks/forge` is that route's to
 verify, and never the guard's.
 
 ---
@@ -1214,10 +1208,9 @@ second-factor code the same way or the line after it, and never either as a
 flag, because a recovery code on a command line stays good in the shell's
 history — and signs out after,
 so the session it opened does not outlive the command. It reads no
-`CREWLET_API_TOKEN`. A deployment that signs in only through an identity
-provider serves no password route, so the command cannot sign in there: the
-request has to be made from a session the provider's round trip opened in a
-browser, and the dashboard has no screen that makes it. The decision is made in the owner's own snapshot, on the
+`CREWLET_API_TOKEN`. A deployment on `backend: none` signs no people in, so
+there is no person there to mint for; its machines are service accounts. The
+decision is made in the owner's own snapshot, on the
 **id** of the party minting rather than its login, because a login is a name a
 rename moves between people — and that party is the one the identity writer was
 derived for from the signed-in principal, never a field of the request, so the
@@ -1310,333 +1303,6 @@ position in the value is what tells "not yet" from "gone"), one whose identity
 applier is past the sixty-second stall grace, one holding a record it cannot
 decode about the owner, and one that runs no identity domain at all. A `401`
 there would teach a pipeline that a credential that is fine is broken.
-
----
-
-## Signing in through an identity provider
-
-A login through OpenID Connect is **two requests** — the browser goes to the
-provider, and the provider sends it back with a code — and between them the
-engine has to remember three values: the `state` it will compare, the `nonce`
-it will find in the ID token, and the **PKCE verifier** it will present at the
-exchange.
-
-The obvious place to keep them is a map on the node that started the login.
-That map is why a fleet cannot serve logins: a load balancer puts the two
-requests on whichever nodes it likes, so a login begun on one and finished on
-another finds nothing — intermittently, in proportion to how many nodes are
-running, and never on the single-node deployment anybody tests on. So the three
-values are **sealed into a cookie the browser carries**, under the fleet
-keyring every node holds, and no node remembers anything.
-
-Sealed, not merely signed. One of the three is a secret: the PKCE verifier is
-what proves the party redeeming the code is the party that asked for it, so an
-attacker who can *read* it has defeated exactly the protection PKCE is.
-
-**What the test suite certifies, and what it cannot.** Every part of the round
-trip here — discovery, PKCE, the code exchange, the key set, each ID-token
-check, the deactivation probe — is exercised against an issuer the suite runs
-itself, in an `httptest` TLS server that signs real tokens with keys it minted.
-That certifies the *protocol*. It cannot certify a particular provider's
-quirks — the shape its groups claim takes, how often it rotates signing keys,
-whether it honours `prompt=login` and `max_age`, what its refresh tokens do —
-because no provider is reached from CI. Those are verified by an operator's own
-sign-in against their provider, and the [discovery report](#what-is-checked-in-an-id-token-and-what-each-check-is-for)
-is the first thing to read when one does not work.
-
-The flight cookie lives ten minutes — long enough for a person to fetch their
-phone for a second factor at the provider, short enough that a cookie carrying
-a verifier is not sitting in a browser for the length of a meeting. It is
-named as the session cookie is: `__Host-crewlet_oidc_flight` on an https
-deployment, which a browser sets only from this exact host, `Secure`, at
-`Path=/` and with no `Domain` — so no sibling host can plant a login in
-progress beside it — and `crewlet_oidc_flight` on plain http, which can hold
-no prefixed cookie. On https the bare name is never read: a flight a sibling
-host planted would be one its author began, finished with whatever provider
-account the browser holds. That name — and `Path=/`, which the prefix requires
-— arrived with the prefix, so while a fleet on https rolls onto the build that
-introduced it, a provider sign-in that started on a node of one build and came
-back to a node of the other finds no flight under the name it reads and is
-refused; the person starts it again. A flight lives ten minutes, so that is the
-whole of the cost, and a deployment moving from http to https pays the same
-once for a sign-in begun in those minutes.
-
-### What a sign-in wave costs the provider
-
-Every callback exchanges a code at the provider's token endpoint, and so does
-anybody who starts a flight and calls back with a made-up code — an
-unauthenticated caller can make one exchange per round trip. So a node puts
-**at most eight requests** on one provider's token endpoint at once, code
-exchanges and deactivation probes together. A callback beyond the eight
-**waits its turn** on its own request rather than being refused: at a hundred
-milliseconds an exchange, a 3,000-person company signing in at nine o'clock
-clears in about 37 seconds, and a browser that gives up waiting is answered
-`503` and counted as no attempt, having asked the provider nothing — and
-having spent nothing either: the reload of that same callback, once a turn is
-free, is exchanged then.
-
-A turn is held **for the provider's answer and nothing else**. Every refused
-sign-in answers at one deadline measured from admission — see
-[A sign-in endpoint is not a roster](#a-sign-in-endpoint-is-not-a-roster) —
-about four times as long as an exchange takes, so a refusal that waited out
-that deadline inside a turn would hold one of the eight having asked the
-provider nothing, and a refusal is what anybody can cause: eight at a time
-would keep every turn, and every sign-in and every
-[deactivation probe](#the-deactivation-probe) on the node would wait behind
-them. So a callback gives its turn back the moment the provider has answered,
-or the moment it knows it will not ask, and is refused only after that — and a
-flight the node has already finished (see below) is refused without waiting
-for a turn at all.
-
-Everything a node sends the provider — the discovery document, the key set,
-every exchange and every probe — goes through one HTTP client with a
-transport of its own, holding **at most ten connections** to that host: the
-eight exchanges and the two fetches beside them. The discovery document and
-the key set are each fetched **once however many sign-ins ask**, on a request
-no single browser owns, so a node restarted in the middle of the morning's
-wave asks the provider for its metadata once rather than once per person, and
-one person closing their tab fails nobody else's sign-in. Once a node holds the
-discovery document, nobody waits for it again: past its day it is served at
-once and re-read behind the answer, and a re-read that fails holds the next one
-back for a minute, so a metadata host that hangs or fails costs no sign-in a
-wait and is not asked again by every sign-in start. A node that holds none asks
-again straight away, since it has nothing else to answer with. The key set is
-re-read at most **once a minute** for a key id it does not name — a forged
-token's — and that minute is counted from the last attempt, a failed one
-included, so an outage at the provider does not turn every such token into a
-request at a host that just failed; inside it a key the set does name is
-served from the copy already held, however old.
-
-And a flight is exchanged **once**. Whoever started a flight holds its cookie
-and its `state`, and a made-up code is free, so the same cookie presented over
-and over would be an exchange at the provider per request for its whole ten
-minutes. The node that finishes a flight remembers it — from the moment the
-flight holds its turn at the token endpoint, never before, so a flight whose
-browser left while it waited was never spent — until the flight would have
-expired anyway — up to 8,192 of them, about a megabyte, far more than a
-morning's wave finishes inside ten minutes — so a cookie presented a second
-time to that node is refused as a failed sign-in before the provider hears of
-it, and before it waits for a turn: it has nothing to wait for. Two
-presentations of one flight that both arrive before either is exchanged are
-settled inside the turn — the first to hold one is exchanged, and the second
-finds the flight spent and gives its turn straight back. A flight is
-remembered by a digest of its **PKCE verifier**, the random secret it has
-always carried sealed, rather than by a field added for the purpose: a flight
-is sealed by one node and opened by whichever node the callback reaches, which
-during a rolling upgrade may be a different build, and a field the older build
-never sealed would have refused every sign-in whose two halves straddled the
-upgrade. The record is per node: a fleet's load balancer
-can hand the same cookie to each node once, which bounds the replay rather than
-removing it, and a coordination write per callback would put a fleet-wide write
-on a path anybody can drive.
-
-### What is checked in an ID token, and what each check is for
-
-An ID token is a bearer assertion by a third party. Every check is invisible
-while it works — removing any one changes no successful sign-in — and each one,
-removed, is a different way to sign in as somebody else.
-
-| Check | Removed, it means |
-|---|---|
-| The signature, under a key the **issuer** publishes | Anybody who can reach the callback signs in as anybody |
-| The **algorithm**, pinned to the asymmetric families — RS256/384/512, PS256/384/512, and ES256 and ES384 over P-256 and P-384 keys | A key source handing back bytes turns a published symmetric key into a signing secret. (The classic confusion attack is refused by the key *type* first; the pin is what still stands when the key source changes. And each algorithm is bound to the key it is defined over before any arithmetic — an RS or PS algorithm to an RSA key, ES256 to a P-256 key, ES384 to a P-384 key — so an ES256 header naming an RSA key fails, and so does an ES384 token signed with a P-256 key, which the signature library alone would accept: it checks a key's type and a signature's length, never an elliptic key's curve) |
-| The **issuer**, compared exactly | Any provider's token is accepted — including a free tenant the attacker registered |
-| The **audience**, which must contain this client | Every other application at that provider becomes a way in here |
-| The **nonce**, from the flight cookie | An ID token captured from any other login replays into this one |
-| The **expiry**, required rather than honoured-when-present | A token with no `exp` is valid for ever, so one captured off the wire replays until the provider rotates its key |
-
-Every **time claim** — `exp`, `iat` and `nbf` — is judged within **60
-seconds** of the node's clock. Each was written by the *provider's* clock, and
-two hosts' clocks are never exactly one: a provider running a few seconds ahead
-issues every token "in the future", and judged to the second, each sign-in on a
-node that is behind would be refused for a reason nobody can see. A minute is
-room for two imperfect clocks and nothing more; what it costs is a minute on a
-token lifetime a provider sets in hours.
-
-A step-up's `auth_time` is **not** given that minute. It becomes the proof the
-replacement session is stamped with, and that session's deadline is the proof
-plus the same window the confirmation asked for — so an `auth_time` is accepted
-only while the window it opens is still open. Judged within the skew, a proof
-up to a minute past the window was accepted, the old session ended and a
-replacement opened already stale, and the gesture that asked for it refused
-it again. A provider whose clock runs behind reads older by its lag, which
-costs the person that much of their window and never admits a stale proof.
-
-Beyond those, a token naming more than one audience must name this client as
-its `azp`, and when the company sets `oidc.require_acr` the asserted
-authentication context must match — requesting `acr_values` is a request the
-provider is free to ignore, so the check on the way back is what enforces it.
-
-When a node fetches the provider's discovery document — on first use, then
-once a day — it reports what the document says will not work there, one
-`oidc_provider_metadata_concern` warning per problem, naming the field: an
-`id_token_signing_alg_values_supported` naming no algorithm above (every
-sign-in would be refused as an unverifiable token), a
-`response_types_supported` without `code`, a `code_challenge_methods_supported`
-without `S256` (a provider that ignores the PKCE challenge lets whoever
-intercepts a code redeem it), and a `scopes_supported` without
-`offline_access` while this deployment asks for it (no refresh token, so no
-deactivation probe). **None of them refuses anything**: every one of those
-lists is optional and unevenly kept, so an absent list says nothing, and a
-sign-in refused because a document omitted a value would be an outage caused
-by metadata.
-
-### Linking is explicit, and an email match is never a link
-
-The engine does not create a person because a provider asserted an address, and
-it does not attach a provider subject to an existing person because the
-addresses agree. Both are the same hazard: at most providers a user can set
-their own address, so "the addresses match" is a claim the attacker controls —
-and the person it would link them to is whoever is most worth becoming. A
-subject is **linked** to a person in exactly two ways:
-
-- **An invitation redeemed through the provider.** The invitation's page
-  offers the provider (`provider_start`), and its form **posts** to
-  `POST /auth/invite/{id}/provider` with the link's secret beside the login,
-  which sends the browser to the provider with the invitation and that secret
-  sealed beside the PKCE verifier. When the person comes back, the callback
-  enrols the person the invitation creates — its grants, its reach, its
-  address, its seat, the login they chose, no password — and links the
-  account the provider came back with to them, then signs them in. The
-  invitation is the authority; the provider says only who arrived. **It is a
-  POST from the invitation's own page and never a link**, because the account
-  it links is whichever one the browser is already signed in with at the
-  provider, which answers without anybody typing anything: started by a link,
-  anybody holding an invitation — their own — could send a colleague through
-  it and pin the *colleague's* account to a person they chose. A post is
-  origin-checked like every other change, so no other site can start one, and
-  the provider sign-in link refuses an invitation outright.
-- **An administrator.** `PATCH /iam/people/{id}` with `oidc_subject` (or
-  `crewlet iam link ID SUBJECT`) pins the account whose `sub` claim that is,
-  at the deployment's own provider.
-
-A link is a **claim** on the subject, arbitrated like an address or a login:
-two administrators pinning one account to two people contend and exactly one
-wins, and the other is told who holds it — `409 subject_conflict`. It is
-**never relinked in passing**, from either side. An account somebody holds is
-taken off them only by unlinking them first; and a person already linked to one
-account is moved to another only by a change that names the account it
-replaces, so an invitation re-redeemed through a *different* account than its
-first attempt pinned is refused rather than switched. A person holds one link.
-
-Unlinking — `"oidc_subject": ""`, `crewlet iam unlink`, or revoking the link's
-credential id — ends their provider sign-in from the next request on every node
-that has applied it, and a removal ends it with everything else. Each link and
-unlink is announced as `iam_identity_linked` (with `via: invite` or `via:
-admin`) and `iam_identity_unlinked`.
-
-The directory never shows a subject back. The estate holds it only as a keyed
-blind, under a class of its own so it can never collide with an address, and
-the directory says a person is linked and to which provider.
-
-There is no `auto_provision`. It is the same decision written as a config
-field, and a field is how it ends up on by accident.
-
-### Group grants ride the session that presented them
-
-`api.auth.oidc.group_grants` maps groups onto grants, and the groups are read
-from the **one** ID-token claim `api.auth.oidc.groups_claim` names — `groups`
-at most providers, `roles` or a namespaced URL at others. One name and never a
-list of aliases, because trying several would be a guess about which claim
-carries authority; an empty name reads none, and naming none while mapping
-groups is refused by validation, since that mapping could never apply. A claim
-that is neither a list of names nor one name refuses the sign-in naming the
-claim, rather than signing somebody in with nothing their mapping promised.
-The result of that mapping is recorded **on the session the sign-in opens**, never
-on the person: a person's groups are known only at a login and are true only
-for as long as the provider's assertion is, so written to the person's row they
-would outlive the provider saying them, and two sessions from two providers
-would overwrite each other's. What a signed-in person holds is therefore
-
-> (the grants declared on their own record ∪ the grants their session carries)
-> ∩ this node's `api.auth.max_grants`
-
-taken per node, per request. A union rather than a replacement, because the
-two answer different questions — a group removal at the provider must not
-silently revoke something an administrator granted here. A person who has not
-signed in through the provider carries nothing, and group-derived authority
-lapses with the session that presented it; a node that has not yet applied a
-brand-new session's row serves its reads on the declared set alone, which only
-ever narrows. `GET /auth/session` shows the effective set.
-
-`crewlet validate` **warns** about a mapping that confers `secrets:read`,
-`secrets:write`, `people:manage` or `config:write`: adding somebody to a group
-is an act performed at the provider that nobody here reviews, and those grants
-hand over the company's credentials, every person here — invite, suspend,
-re-grant, remove — or, for `config:write`, host access. Each warning names the
-group and the grant and says which of those it hands over, and the warnings
-come out in the groups' own order, so two runs over one file print the same
-thing. A warning rather than a refusal, because a company may mean it;
-declaring such a grant on the person's own record puts the decision where it is
-reviewed.
-
-### Signing out of the provider too
-
-A sign-out here ends this engine's session and leaves the provider's, so on a
-machine somebody else uses next, "sign in with the provider" answers straight
-from the old session without anybody typing anything. `POST /auth/logout/oidc`
-is the sign-out for that machine: it ends the session here exactly as the plain
-sign-out does, then sends the browser to the provider's `end_session_endpoint`
-naming this client and asking to come back to the dashboard. Register
-`<api.external_url>/dashboard` as a post-logout redirect URI at the provider,
-or it leaves the person on its own page. No `id_token_hint` is sent, because the
-engine keeps no ID token once a sign-in completes — a provider that insists on
-one asks the person to confirm, and the session here is over either way. A
-provider that publishes no end-session endpoint, publishes one that is not an
-`https` address on a host, or cannot be reached, gets a plain sign-out that
-says so: `provider_session: not_ended`. Like the plain
-sign-out it is not behind the request guard, so a node that cannot read its
-identity estate still ends the session here as far as it can and still sends
-the browser on to the provider.
-
-### The deactivation probe
-
-A provider that suspends or deletes an account tells nobody. Every other
-revocation in this engine is a write somebody makes here and is felt within an
-applier's lag; a central deactivation would be felt only when the session's
-absolute lifetime ran out.
-
-So the engine asks, hourly by default, using the only thing it has: the refresh
-token the login obtained. A provider whose account is gone answers
-`invalid_grant`, and the session ends as `idp_revoked` — recorded in
-`iam_history` like every identity write, and announced as `iam_session_ended`
-on the feed of the node whose duty ended it, once the close has landed. **Every other error is
-`unknown`, and ends nothing** — treating an unreachable provider as a
-deactivation would sign the whole company out the first time somebody else's
-service had an outage.
-
-The token is **kept when the person signs in**, sealed into the company's secret
-store beside the session it belongs to, and nothing on the request path ever
-reads it back. A sign-in whose token cannot be kept there is **refused with a
-503** and the session it opened is closed: admitted, it would be the one
-session the probe exists to reach and never could. A provider that rotates
-refresh tokens hands back a new one on each exchange, and the probe records it —
-otherwise the next pass would present a token the provider had retired and read
-the refusal as an off-boarding. Once a session has ended, by any lever, its
-token is dropped on the next pass.
-
-The probe is a fleet singleton, `iam_deactivation_probe`, run by whichever
-worker node holds its lease, at `oidc.deactivation_probe`. See
-[the identity duties](../guides/retention.md#the-identity-duties) for how it and
-the estate's other duties are scheduled.
-
-A provider sign-in resolves the subject through the person's **link**, and only
-a live one: an unlinked subject, one a person was moved off and one whose
-person was removed sign nobody in. A subject that two people hold live links
-to — which the broker never admits, and a restore can — signs **neither** of
-them in, because the subject is the whole of what a provider sign-in proves.
-The browser is answered `409 subject_conflict`: a definite refusal with no
-`Retry-After`, since waiting never clears it and only an administrator removing
-one of the links does. It names neither holder — who else holds the link is not
-the caller's to learn — while the node's log line `api_oidc_subject_conflict`
-and `crewlet iam check` (a duplicated `link` claim) name both, for the
-administrator who decides.
-
-Without `offline_access` there is no refresh token and therefore no probe, and
-validation says so rather than leaving you believing an off-boarding is felt
-sooner than it is. An unset `api.auth.oidc.scopes` asks for `openid`,
-`profile`, `email` and `offline_access`; a list you write replaces that set
-whole, so a list without `offline_access` is the one that warns.
 
 ---
 
@@ -1769,8 +1435,8 @@ because each is a row in a domain that **lags independently**.
 
 **`reauth_at` is the session's own proof plus `step_up`**, and
 `sensitive_reauth_at` the same proof plus `step_up_sensitive`. Every session a
-sign-in opens — a password and its second factor, an identity provider's
-token, a redeemed invitation, the bootstrap code, a step-up — records the
+sign-in opens — a password and its second factor, a redeemed invitation, the
+bootstrap code, a step-up — records the
 instant it was proved on its row, and the guard composes both deadlines from
 that and this node's two windows at decision time — which of them a gesture
 asks for is [the authority table's](#some-gestures-ask-how-recently-you-proved-who-you-are). Proof is a
@@ -1780,20 +1446,18 @@ opening a new session rather than by moving a field. That new session **ends
 the one it replaces** — first, so a close that does not land fails the step-up
 rather than leaving two live sessions — and it confirms the sign-in rather
 than repeating it: it keeps the replaced session's absolute deadline, or
-confirming a session would keep it alive for ever, and the grants its identity
-provider's groups conferred, or stepping up would cost the authority it was
-for. A session exchanged from a Tier A token is the one exception, and it is
+confirming a session would keep it alive for ever. A session exchanged from a Tier A token is the one exception, and it is
 not a session's proof at all: the guard re-composes it from the token's entry
 on every request, exactly as it composes the bearer, so it is fresh by
 construction for as long as the entry is held — the break-glass credential
-must reach a sensitive gesture on the day the identity provider is down. A
+must reach a sensitive gesture on the day nobody can sign in as a person. A
 node that has not yet applied the session's row — the read-only grace in the
 table above — claims no proof it cannot see.
 
 **503 and never 401 on a node that is behind.** A browser reads 401 as "sign in
 again" and discards the cookie, so one stalled applier answering 401 would log
-everybody on that node out and stampede the identity provider with the
-re-authentications. The grace exists only for the arm a lagging node can
+everybody on that node out and send them all back through the sign-in page —
+and its throttle — at once. The grace exists only for the arm a lagging node can
 honestly serve — reads of a session it has not yet seen — and it ends at the
 same sixty seconds the alarm table already calls a stall, so a node serving
 stale identity is by definition a node already alarmed.
@@ -1859,7 +1523,7 @@ the person whose cookie happened to be in the jar.
 
 **A Tier A token can be exchanged for a session** (`POST /auth/token`), so a
 browser can use break-glass without holding the token's value — which matters
-on the one day it exists for, when the identity provider is down. The session
+on the one day it exists for, when nobody can sign in as a person. The session
 is the token and nothing else: it names the token's login (`token:<id>`) rather
 than a person, and every request re-composes it from the entry this node holds
 *now*, through the same function the bearer goes through — the entry's grants
@@ -1908,8 +1572,8 @@ or because a client must reach it to obtain a credential at all.
 | `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
 | `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
-| `/auth/config`, `/auth/login`, `/auth/bootstrap`, `/auth/oidc/start`, `/auth/oidc/callback`, `/auth/invite/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link is the credential. Exact paths plus the one prefix, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
-| `/auth/logout`, `/auth/logout/oidc` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered them `503` before they ran, and a person left a shared machine still signed in. Each verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges both. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
+| `/auth/config`, `/auth/login`, `/auth/bootstrap`, `/auth/invite/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link is the credential. Exact paths plus the one prefix, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
+| `/auth/logout` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered it `503` before it ran, and a person left a shared machine still signed in. It verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges it. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
 
 Everything else needs one, **reads included**. `allow_anonymous_read` used to
 decide this and defaulted to open, so `/events`, `/agents/{id}/memory` and
@@ -2155,7 +1819,7 @@ proof its verb asks for, and there are three answers:
 |---|---|---|
 | none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm |
 | `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures — and every identity-directory write the row below does not name: enrolling, inviting or removing somebody, the bootstrap code, minting or revoking a machine token, and ending somebody else's sessions |
-| `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; changing what somebody already enrolled may do or how they prove who they are — an edit of their row, a second-factor reset, revoking a password, a second factor, the recovery codes or a provider link, and enrolling or replacing your own second factor or regenerating your recovery codes; and ending every session in the company |
+| `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; changing what somebody already enrolled may do or how they prove who they are — an edit of their row, a second-factor reset, revoking a password, a second factor or the recovery codes, and enrolling or replacing your own second factor or regenerating your recovery codes; and ending every session in the company |
 
 The two windows are the design's: every identity-directory write asks the
 ordinary one, and the sensitive one is kept for the gestures that hand over a
@@ -2183,23 +1847,8 @@ the gesture is told what they lack, rather than sent to confirm who they are
 only to be refused by a rule the confirmation never changes. A proof that is too
 old is `403 step_up_required` naming the window it needs, and the remedy is the
 caller's own: confirm who you are and send the same request again —
-`POST /auth/step-up` with your password and second factor, or, if you sign in
-through the identity provider, `/auth/oidc/start?step_up=<window>` with the
-window the refusal named, which asks the provider to authenticate you *now*.
-
-**A provider's proof is dated by the provider.** A provider answers a sign-in
-from its own session whenever it can, so the instant a token reaches this engine
-says nothing about when anybody typed anything: somebody who signed in at their
-provider last week arrives here in a second. A provider sign-in is therefore
-proved at the ID token's `auth_time`, and one whose token asserts none proved
-nothing this engine can date — stale in both windows. The provider step-up asks
-with `prompt=login` and a `max_age` of the window it was asked for (which makes
-`auth_time` required), and is accepted only on an `auth_time` inside that
-window; like the password step-up it replaces the session it was made from. The
-window is `max_age` because `prompt=login` is only a request: a provider free
-to ignore it answered a confirmation asked with the ordinary hour from its own
-session half an hour old — accepted, and then refused again by the sensitive
-gesture it was for, round after round.
+`POST /auth/step-up` with your password and second factor. The step-up
+replaces the session it was made from with one proved now.
 
 What counts as having proved is a fact about the **credential**. A session
 proved when it signed in or stepped up, and each node composes the two
@@ -2208,8 +1857,8 @@ shortened window takes effect at once. A credential with nobody at a keyboard
 is **fresh by construction**, because there is nothing else it could ever
 present — but not all of them in both windows. A Tier A token, the session
 exchanged from one and the development principal are fresh in both: the
-break-glass credential has to reach a sensitive gesture on the day the identity
-provider is down. A **personal access or service token** is fresh for `step_up`
+break-glass credential has to reach a sensitive gesture on the day nobody can
+sign in as a person. A **personal access or service token** is fresh for `step_up`
 only, and never for `step_up_sensitive`: every sensitive gesture needs a person
 present, and a token proves nobody is. That is two locks, not one. A token can
 never carry `secrets:read` or `people:manage` — the grants behind the sensitive
@@ -2266,16 +1915,14 @@ Identity has **two trails**, and they answer different questions.
 
 | Event | Published by | How often |
 |---|---|---|
-| `iam_session_started` | The sign-in surface, on a password, app-code, identity-provider, invitation, bootstrap-code or token sign-in | Once per session |
+| `iam_session_started` | The sign-in surface, on a password, app-code, invitation, bootstrap-code or token sign-in | Once per session |
 | `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are: the person, the new session and the one it replaced, the second factor presented and the client — and never which surface it was for, because a step-up proves the session for every surface until `reauth_at`, and the request that prompted it is refused before it and never reaches it, so the only source would be the client's word | Once per step-up |
-| `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), the deactivation probe (`idp_revoked`), or the request guard noticing a deadline (`idle`, `absolute`) or a token's exchanged session whose value changed or whose entry was removed (`credential_changed`) | Once per ending, from the fact that ended it: a deadline or a changed credential once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute`, and a token's session past its deadline by the time it is presented after a rotation is announced by the deadline |
+| `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), or the request guard noticing a deadline (`idle`, `absolute`) or a token's exchanged session whose value changed or whose entry was removed (`credential_changed`) | Once per ending, from the fact that ended it: a deadline or a changed credential once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute`, and a token's session past its deadline by the time it is presented after a rotation is announced by the deadline |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
 | `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | Once per person per fifteen-minute window per node, naming the address the failure that took it there came from |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
-| `iam_identity_linked` | The identity writer, when a provider subject is pinned to a person — `via: invite` for an invitation redeemed through the provider, `via: admin` for an administrator, with the credential they acted through as `operator_id` | Once per link, and only once the person it names exists |
-| `iam_identity_unlinked` | The identity writer, when an administrator takes a person's provider subject off them, with the credential they acted through as `operator_id` | Once per unlink |
 | `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `iam_token_first_use` | The request guard, for a Tier A token | Once per token per hour per node — or every request, for a token whose entry sets `audit_every_use` |
@@ -2288,8 +1935,7 @@ Anybody who can reach the API can fail to sign in as often as they like, for
 free, with no credential to revoke and no identity on the row. A row per
 attempt would hand the size of every node's event store — and of every backup
 and snapshot taken from it — to whoever is making the attempts. So a failed
-sign-in, a refused second factor, an identity-provider round trip that did not
-verify, a wrong bootstrap code or a stale one (`410 bootstrap_code_stale`), an
+sign-in, a refused second factor, a wrong bootstrap code or a stale one (`410 bootstrap_code_stale`), an
 invitation link that answers `410` (nobody
 issued it, it was redeemed or aged out, or its address is already enrolled —
 the id in the link is the credential, so a source walking ids is guessing at
@@ -2360,14 +2006,6 @@ events filtered out of the store:
   own signature, so an hour of use writes nothing, and a touch event would be
   the one row per request the rest of this design exists to avoid.
 
-**Neither link event carries the subject.** It identifies a person at a third
-party, so the estate holds it only as a keyed blind — and an event row is the
-one copy removing that person would never reach: it lands in every node's
-event store, on the activity feed and at every collector, none of which a
-removal's key deletion touches. The row names the person, the provider's
-issuer and who pinned it; which of the provider's accounts is theirs is a
-question for the provider.
-
 ---
 
 ## Where identity is kept: the fifth state-log domain
@@ -2405,7 +2043,6 @@ claim arbitrates on.**
 | An email address | `crewlet.iam.log.email.<blind>` | create-only, expectation zero |
 | A login | `crewlet.iam.log.login.<login>` | create-only, expectation zero |
 | A seat binding | `crewlet.iam.log.seat.<seat handle>` | create-only, expectation zero |
-| An identity-provider subject (a **link**) | `crewlet.iam.log.link.<blind>` | create-only, expectation zero |
 | A session | `crewlet.iam.log.session.<lineage>` | create-only, expectation zero |
 | A person's own content | `crewlet.iam.log.person.<id>` | conditional on the row's version |
 | The first-person bootstrap | `crewlet.iam.log.bootstrap` | one object for the whole company: every code's mint, take and withdrawal, so exactly one founding can take the exemption |
@@ -2417,8 +2054,7 @@ person holds it. Two administrators enrolling *different* addresses never
 contend at all.
 
 Because a record has exactly one subject, **an enrolment is a sequence**: take
-the address, take the login, take the provider subject when the enrolment came
-through an identity provider, then write the person. A sequence that stops
+the address, take the login, then write the person. A sequence that stops
 halfway leaves a claimed address with no person — a *reservation*, a legal,
 named state rather than a person holding an address somebody else also holds.
 Nothing collects it on a clock, because its claims still hold their subjects on
@@ -2429,20 +2065,19 @@ reservation something else does end is a **founding's**: it holds the founder's
 own address and login, so the next founding removes it before it claims them —
 see [How the first person exists](#how-the-first-person-exists).
 
-That half-finished row is a **reservation**: it holds the address, login, seat
-or provider subject its claims took, and it has no kind, no stage and no
+That half-finished row is a **reservation**: it holds the address, login or
+seat its claims took, and it has no kind, no stage and no
 credential, so it may do nothing. Every reader reports it as one rather than as
-a person — `GET /iam/people` lists it with `"reserved": true`, a sign-in, a
-provider sign-in through its subject or a Tier A token binding through its
-login finds nobody who can act, a session naming it finds no person, and the
+a person — `GET /iam/people` lists it with `"reserved": true`, a sign-in or a
+Tier A token binding through its login finds nobody who can act, a session naming it finds no person, and the
 first-person bootstrap does not count it as somebody enrolled. It is never a
 reason for a 503.
 
 > **If you are reading the schema and reaching for a unique index as a
 > backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
-> *can* arise from a restore or a reanchor. Four **non-unique, partial**
+> *can* arise from a restore or a reanchor. Three **non-unique, partial**
 > indexes — over the address blind, the login and the seat id on a person's
-> row, and over the subject blind on a credential — are what the
+> row — are what the
 > `iam_claims` duty reads to *report* one — a WARN line each hour it stands,
 > and a `claim_duplicated` finding in `crewlet iam check` naming everybody who
 > holds it. A unique index would convert an anomaly an operator can repair
@@ -2512,7 +2147,7 @@ Rotating it is a migration, not a setting.
 | Table | What it holds |
 |---|---|
 | `iam_people` | One person or machine, and the three claims denormalised onto their row so a duplicate can be *reported* |
-| `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, and a **link**: an identity-provider subject's blind, which only the link's claim ever writes and which a person's own record never carries. Never a secret that could be presented to anything |
+| `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, the recovery codes' digests, and an app code's sealed seed. Never a secret that could be presented to anything |
 | `iam_invites` | An address spoken for by somebody who has no person yet, and the grants redeeming it confers |
 | `iam_bootstrap_codes` | How a company with nobody in it acquires its first administrator |
 | `iam_sessions` | One row per session **lineage**. A re-issue is not a row — the deadline it moves is inside the cookie's own signature — so this grows with sign-ins, not with requests |
@@ -2752,7 +2387,7 @@ you fix it.
 What a stall gates instead is the request path, one request at a time: a node
 that has not yet applied a revocation is designed to answer a session with
 **503**, never 401. A 401 tells a browser to sign in again, and one stalled
-applier would stampede your identity provider.
+applier would sign everybody on that node out at once.
 
 **A seats-only node does not run this domain at all.** It is the first domain
 whose participation narrows on `node.roles`: ingress runs it because it serves
@@ -2794,8 +2429,8 @@ today is smaller, and lives in two places:
   each carrying an id recorded as the author of anything written with it, the
   `grants` it may use and the `colleague` level it reaches the company's work
   at; `max_grants`, the ceiling above; `backend`, how people sign in; and the
-  `session`, `audit`, `local` and `oidc` blocks under it. `allow_anonymous_read`
-  and `disabled` are both retired and refused by name — see
+  `session`, `audit` and `local` blocks under it. `allow_anonymous_read`,
+  `disabled` and `oidc` are all retired and refused by name — see
   [Configuration § Auth](configuration.md#auth) for what replaced each.
 - **The identity directory** — who is a *person*, who is a machine, and which
   seat each is bound to, written with `crewlet iam` or through `/iam` rather

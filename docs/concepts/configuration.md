@@ -746,9 +746,6 @@ What that means in practice:
   and no one else. A machine token **can** carry it — applying a configuration
   from a deploy job is what one is for — so minting one with it is handing that
   job host access.
-- `crewlet validate` warns when an identity provider's group mapping confers it
-  (below): adding somebody to a group at the provider is an act nobody here
-  reviews.
 - `people:manage` being a separate grant does **not** bound a `config:write`
   holder. It keeps directory changes a reviewable gesture of their own; a
   holder of host access can reach the store the directory lives in regardless.
@@ -784,6 +781,13 @@ development build, so no copied setting can carry it into a deployment that
 pulled a tag. That is also why it is a flag: a field is the thing that gets
 copied into an image. It grants `api.auth.max_grants` and no more, where
 `disabled` granted everything regardless.
+
+`api.auth.oidc` is retired too, and `backend: oidc` with it: the engine no
+longer signs anybody in through an identity provider. A person signs in with a
+password and a second factor the engine holds (`backend: local`), or the
+deployment has no people and its Tier A tokens are the only credentials
+(`backend: none`). The block is refused by name, so a file that still carries
+it is told what happened rather than asked to check its spelling.
 
 ### What is served without a credential
 
@@ -861,15 +865,14 @@ bind time:
 
 | Setting | Why it cannot be defaulted |
 |---------|----------------------------|
-| `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, it is the OIDC redirect base, and it is what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
-| `api.auth.max_grants` | The ceiling on what a directory record or an identity provider's group mapping may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
-| `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when the identity provider is down. Required on **every** backend, `none` included |
+| `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, and it is what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
+| `api.auth.max_grants` | The ceiling on what a directory record may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
+| `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when an administrator has locked themselves out. Required on **every** backend, `none` included |
 
 ### What `crewlet validate` warns about
 
-Five API postures are **valid** and worth reading before a deployment runs on
-them — every warned group listed in the order of its name, so two runs over one
-file print the same thing. None can be a refusal, because each is a configuration that works exactly
+Three API postures are **valid** and worth reading before a deployment runs on
+them. None can be a refusal, because each is a configuration that works exactly
 as written with its consequence somewhere else:
 
 | Warning | Why it is not a refusal |
@@ -877,9 +880,6 @@ as written with its consequence somewhere else:
 | `api.auth.local.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, a password backend with an optional second factor, already is one |
 | `api.external_url` is `https://` and `api.trusted_proxies` is empty | The engine never terminates TLS itself, so something in front of it does — and unless it is named, every caller's source is its address. The sign-in throttle then keys every caller's attempts at one login together, so a stranger guessing at somebody's login slows that person's own sign-in, and every audit row names the proxy. Not a refusal because one front end is right with the list empty: a balancer that passes each client's own address through as the peer rather than in a header |
-| An OIDC `scopes` list written without `offline_access` (an unset list asks for it) | Nothing notices a deactivation. An identity provider tells this engine nothing when somebody is disabled, so the session it already minted works until its absolute deadline — and the deactivation probe, which is what would end it early, is a refresh-token exchange with nothing to exchange |
-| A group mapping conferring `secrets:read`, `secrets:write` or `config:write` | Adding somebody to a directory group is an ordinary act performed by whoever administers the identity provider. The first two read and write this company's credentials, and `config:write` is [host access](#configwrite-is-host-access). Declaring them on the person's own record puts the decision where it is reviewed |
-| A group mapping conferring `people:manage` | Membership of that group lets whoever administers the identity provider make somebody able to invite, suspend, re-grant and remove every person here — the grant that decides who holds every other one — and nobody here reviews a membership change. Declaring it on the person's own record puts the decision where it is reviewed |
 
 `api.trusted_proxies` is a **CIDR list, never a bool**, because the question a
 forwarded header poses is not "does this deployment sit behind a proxy" but "is

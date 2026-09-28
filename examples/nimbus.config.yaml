@@ -181,15 +181,15 @@ api:
   # trusted_proxies: ["10.0.0.0/8"]
 
   auth:
-    # How PEOPLE sign in: local (passwords held here), oidc (an identity
-    # provider), or none.  Left unset it derives from which block is
-    # present, and with neither it is `none` — this example's posture: the
+    # How PEOPLE sign in: local (passwords and a second factor held here)
+    # or none.  Left unset it derives from whether the `local` block is
+    # present, and without it it is `none` — this example's posture: the
     # token below is the only credential, which is what a walkthrough on
     # one machine wants.
     backend: none
 
     # THE CEILING: the most authority this deployment will ever let a
-    # directory record or an identity provider's group mapping confer.
+    # directory record confer.
     # Required once a port is set, with no default — one granting
     # everything is a ceiling that does nothing, and one granting a subset
     # silently locks out whatever it left out.  These are the eleven —

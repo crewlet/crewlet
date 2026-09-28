@@ -202,12 +202,10 @@ api:
 
   auth:
     # No people sign in to this one — the token below is the only
-    # credential.  `local` adds passwords and a second factor; `oidc`
-    # hands sign-in to an identity provider.
+    # credential.  `local` adds passwords and a second factor.
     backend: none
 
-    # THE CEILING on what a directory record or an IdP group mapping may
-    # ever confer.  Required once a port is set, and deliberately without
+    # THE CEILING on what a directory record may ever confer.  Required once a port is set, and deliberately without
     # a default.
     max_grants:
       - state:read

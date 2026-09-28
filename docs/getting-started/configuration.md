@@ -757,8 +757,8 @@ api:
                         #   source — in every audit row, and in the
                         #   sign-in throttle's key for every login
   auth:
-    backend: local      # local | oidc | none. Unset derives from which of
-                        #   the two blocks below is present
+    backend: local      # local | none. Unset derives from whether the
+                        #   `local` block below is present
     bootstrap: open     # open (default) | closed — whether POST
                         #   /auth/bootstrap may create the first person
     max_grants:         # THE CEILING. Required once port is set
@@ -790,21 +790,6 @@ api:
                                #   Enforced wherever a person sets a password
                                #   — the founding and every redemption — and
                                #   what /auth/config tells a form to refuse
-    # oidc:             # present on the `oidc` backend instead
-    #   issuer: "https://acme.okta.com/oauth2/default"    # https only
-    #   client_id: "0oa1b2c3d4"
-    #   client_secret: "${CREWLET_OIDC_CLIENT_SECRET}"    # an env var, never
-    #                                                     #   a store secret
-    #   scopes: [openid, email, profile, groups, offline_access]  # unset asks
-    #                             #   for openid, profile, email and offline_access;
-    #                             #   a list REPLACES that set, openid always added
-    #   groups_claim: groups      # the ONE id-token claim groups are read
-    #                             #   from. Empty reads none; required once
-    #                             #   group_grants maps anything
-    #   deactivation_probe: 1h    # 5m..24h — the only thing that notices a
-    #                             #   person disabled at the provider
-    #   group_grants:
-    #     crewlet-ops: [fleet:operate, state:read]
     tokens:             # the DEPLOYMENT's machine credentials. At least one
                         #   is required once port is set, on every backend
       - id: founder     # acts under the login token:founder — lowercase
@@ -860,19 +845,17 @@ unit keyed on a name somebody will rename.
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
 at `https://crewlet.example.com`. That outside address is **`api.external_url`**,
 and it is **required** once a port is set. It was `integrations.public_base_url`
-in the company document and moved here because it answers four questions at
-once, three of which happen before a company document has been loaded at all:
+in the company document and moved here because it answers three questions at
+once, two of which happen before a company document has been loaded at all:
 the session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its
-host is the origin every write and every socket handshake is checked against, it
-is the OIDC redirect base, and it is what every webhook URL and pasted app
-manifest is built on. The engine sits behind a TLS-terminating proxy and cannot
+host is the origin every write and every socket handshake is checked against,
+and it is what every webhook URL and pasted app manifest is built on. The engine sits behind a TLS-terminating proxy and cannot
 read any of that off the request it receives.
 
 **`api.auth.max_grants` is the ceiling**, and it is required once a port is set.
 A person's grants live in the replicated store and are written by whoever holds
-authority over people; an OIDC group mapping is written by whoever administers
-the identity provider. This is the bound on what either may confer, stated in
-the tier that holds the keyring and never read from Tier B. It is intersected
+authority over people. This is the bound on what that directory may confer,
+stated in the tier that holds the keyring and never read from Tier B. It is intersected
 **per node, per request**, so lowering it takes effect on the next request that
 node serves — no apply, no restart of the fleet — which also makes a fleet whose
 nodes disagree a legal state during a rollout. Each node therefore publishes a
@@ -881,8 +864,8 @@ fleet view report a mixed one.
 
 **At least one `api.auth.tokens` entry is required**, on every backend. A fresh
 deployment's identity estate is empty, so a Tier A token is what creates the
-first person; on a running one it is the way back in when the identity provider
-is down or an administrator has locked themselves out. Each entry states its own
+first person; on a running one it is the way back in when an administrator has
+locked themselves out. Each entry states its own
 `grants` — required and non-empty, because a credential's blast radius belongs
 where it is pinned — and its value must be at least 26 characters, checked on
 what the `${VAR}` resolves to.
@@ -1196,7 +1179,7 @@ integrations:
 
 ```
 
-> **`public_base_url` moved out of this block**, to [`api.external_url`](#tier-a) in the operator's own Tier A file, and the key here is refused by name. One address now answers four questions that used to be answered separately: the session cookie's `Secure` flag and `__Host-` prefix, the origin every write is checked against, the OIDC redirect URI, and the base every webhook URL and pasted app manifest is built on. It had to move tiers rather than only change name — the cookie and the redirect are decided *before* a company document is loaded, and they are part of what authenticates the request that would go on to load one. It is also what [tool-skill](../concepts/tool-skills.md) prose reaches as the reserved variable `${crewlet_base_url}`, which is why a company may not declare a `skill_variables` entry of that name.
+> **`public_base_url` moved out of this block**, to [`api.external_url`](#tier-a) in the operator's own Tier A file, and the key here is refused by name. One address now answers three questions that used to be answered separately: the session cookie's `Secure` flag and `__Host-` prefix, the origin every write is checked against, and the base every webhook URL and pasted app manifest is built on. It had to move tiers rather than only change name — the cookie and the origin check are decided *before* a company document is loaded, and they are part of what authenticates the request that would go on to load one. It is also what [tool-skill](../concepts/tool-skills.md) prose reaches as the reserved variable `${crewlet_base_url}`, which is why a company may not declare a `skill_variables` entry of that name.
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
 - **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
 - **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.scope`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).

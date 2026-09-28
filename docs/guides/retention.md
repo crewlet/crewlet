@@ -761,9 +761,8 @@ re-ask late. Every domain takes 30 days for its ledger as a whole, because the
 client that re-asks is the same for all of them — and the identity domain keeps
 its **session** subjects' rows for **one hour**: a row per sign-in and per
 sign-out, whose operation ids nobody re-asks after the request that wrote them
-(a sign-in is answered inside its request; a sign-out, an administrator ending
-somebody's session and the deactivation probe each re-decide rather than
-re-ask). Kept 30 days they were the busiest thing that domain wrote, for a
+(a sign-in is answered inside its request; a sign-out and an administrator
+ending somebody's session each re-decide rather than re-ask). Kept 30 days they were the busiest thing that domain wrote, for a
 question nobody asks after an hour. The hour is the publisher's own
 five-second resolve budget with a wide margin, and it is its own maintenance
 job, `iam_ops_session`, so what it deletes is counted apart.
@@ -797,7 +796,7 @@ their clocks were. The record names *positions* the publisher resolved once —
 instant, also read once, against which the same record collects the rows that
 are **over** rather than old: sessions that ended or passed their absolute
 deadline; invitations and bootstrap codes that expired unredeemed **or were
-redeemed**; and credentials — passwords, provider links, machine tokens — that
+redeemed**; and credentials — passwords, second factors, machine tokens — that
 were **revoked or passed their own expiry**. Each is kept for a week (168
 hours) after it stopped being presentable, so the sessions and credentials
 screens can still say what ended and why; after that the trail row, kept for
@@ -835,20 +834,19 @@ its own copy of it.
 
 ### The identity duties
 
-Five things keep the identity estate honest, and four of them are fleet
+Four things keep the identity estate honest, and three of them are fleet
 singletons, each on its own lease so that a flap on one costs that one an
-interval rather than all of them. Each of the four runs once as soon as a node
+interval rather than all of them. Each of the three runs once as soon as a node
 claims it — so a restored node names a duplicate the moment it is back rather
 than an hour later — and then on its interval.
 
 | Duty | Interval | What it does |
 |---|---|---|
 | `iam_sweep` | 1 hour | Resolves `api.auth.audit.changes` (400 days) and `api.auth.audit.sessions` (90 days) to positions and publishes one sweep record for each bucket that is **due** — one holding something at least a day past its horizon. The day of slack is what bounds the log: a bucket is swept at most about once a day, so the sweep adds at most 64 records a day however often it runs. |
-| `iam_deactivation_probe` | `oidc.deactivation_probe` (1 hour) | Asks the identity provider about every live provider session, with the refresh token kept when the person signed in. Only on a deployment with an `oidc` block. |
-| `iam_key_shred` | 15 minutes | Destroys the key of anybody removed whose key outlived the removal, and every key nobody owns once it is an hour old; collects the refresh token of every provider session that is over. |
+| `iam_key_shred` | 15 minutes | Destroys the key of anybody removed whose key outlived the removal, and every key nobody owns once it is an hour old. |
 | `iam_claims` | 1 hour | Logs every duplicated claim and every orphaned reservation at WARN, every tick it stands, naming each holder by id. A login or a seat is logged as it is; an address by its kind alone, never by its keyed blind, which would be a stable pseudonym for it in every system your logs are shipped to. |
 
-The fifth is the operation ledger's sweep, which runs in the ordinary
+The fourth is the operation ledger's sweep, which runs in the ordinary
 maintenance tick on every node.
 
 A node arms these only if it runs the identity domain **and** the `workers`
@@ -900,44 +898,6 @@ the delete is spared, logged as `iam_keys_spared`, and judged again next pass.
 A re-date never writes back a key a removal destroyed — it finds nothing there,
 and the mint creates a fresh key, under which the removed person's values stay
 sealed.
-
-**And it collects every refresh token whose session is over** — by logout,
-expiry, a revocation or a session invalidation — whether or not a provider is
-still configured. That used to be the probe's, and the probe runs only while an
-`oidc` block does: a deployment that dropped its provider kept every token, a
-live credential at that provider, for ever. A token whose session this node has
-not applied is kept — its row is missing because the session has not arrived
-there, or because it arrived in a record this node set aside (a newer build's,
-or one signed under a keyring key it was not restarted with) — since collecting
-it would leave the probe nothing to ask with while the session is still live.
-
-**The probe needs the refresh token, so a provider sign-in keeps it.** It is
-sealed into the company's secret store beside the session it belongs to, and a
-sign-in whose token cannot be kept there is refused with a 503 rather than
-admitted: a session the probe cannot ask about is one nobody can end from the
-provider before its absolute deadline. `invalid_grant` ends the session as
-`idp_revoked`; every other failure — an unreachable provider, a 5xx, a timeout
-— is *unknown* and ends nothing, because reading an outage as a deactivation
-would sign the whole company out during somebody else's incident. A rotated
-refresh token is recorded, or the next pass would present one the provider had
-retired and read the refusal as an off-boarding. The probe drops the token of
-a session it ended itself; a token whose session ended any other way is the key
-duty's to collect.
-
-**One session the probe cannot handle is one session, not the pass.** A token
-it cannot read — one a newer node wrote in the middle of a rolling upgrade — is
-logged by name (`oidc_probe_session_skipped`) and left alone, and every other
-session is still asked about; a close that did not land, or a rotated token that could not be
-recorded, is logged the same way and tried again next pass. Such a pass ends
-with `iam_probe_pass_partial` at WARN, counting what it checked, ended,
-skipped and failed. Only a pass that could do nothing at all — no provider
-metadata, a directory it could not read — logs `iam_probe_failed`.
-
-**The probe's interval can exceed what a lease may live.** A lease is capped at
-three hours and every singleton keeps three claims to a lease, so a duty whose
-interval is longer than an hour claims hourly and runs every so many claims —
-a `deactivation_probe` of `90m` is two claims of 45 minutes, and the interval
-the operator set is the interval kept.
 
 **The claim report never repairs.** The broker cannot put two people on one
 address, one login or one seat, but a restore or a reanchor can, and the

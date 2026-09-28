@@ -72,8 +72,8 @@ A few things worth knowing when deploying Crewlet:
   address hold every sign-in from it at `429`, so one password tried across
   many names from one address is bounded by the password floor, the argon2id
   cost and the verify cap instead, and shown in the audit trail's per-client
-  failure tally; an invitation link, a founder code and a provider round trip
-  meet no curve at all, their 256 bits being what bounds a walk. No curve
+  failure tally; an invitation link and a founder code meet no curve at all,
+  their 256 bits being what bounds a walk. No curve
   stands in front of a bearer — a Tier A token, a machine token or a session
   cookie: a bearer names nobody until it is compared, so a curve there could
   only be keyed on the address, and one was a way for any stranger at an
@@ -118,14 +118,6 @@ A few things worth knowing when deploying Crewlet:
   made the id itself the link**, so an invitation they issued is in every
   backup as a working credential: such an invitation is now redeemable by
   nobody, and the remedy is to issue it again.
-- **An identity provider's assertion is never a link by address.** A person is
-  bound to a provider subject by an invitation somebody issued or by an
-  administrator — never because the provider asserted an address that matches
-  an existing person's. At most providers a user can set their own address, so
-  an email match is a claim the attacker controls, and the person it would
-  link them to is whoever is most worth becoming. There is deliberately no
-  `auto_provision` setting: it is the same decision written as a field, and a
-  field is how it ends up on by accident.
 - **Every API route requires a credential, reads included.** `allow_anonymous_read`
   is gone: it served `/events`, `/agents/{id}/memory` and `/ws/stream` — full
   LLM transcripts, diary entries and the roster — without one, by default, and
@@ -164,9 +156,7 @@ A few things worth knowing when deploying Crewlet:
   keyring that signs every session, and every credential the store holds. Give
   it to the people and pipelines you would give a shell on those hosts. A
   machine token can carry it — a deploy job applying configuration is what one
-  is for — so minting one with it hands that job the same reach, and
-  `crewlet validate` warns when an identity provider's group mapping confers
-  it, as it does for `people:manage` and the two `secrets:` grants. Every write
+  is for — so minting one with it hands that job the same reach. Every write
   under it that can start a process — the company document, the chart's
   runtime half, connecting an integration — asks for a recent step-up, so a
   stolen session cookie alone does not reach it. `people:manage` is a separate
@@ -200,10 +190,9 @@ A few things worth knowing when deploying Crewlet:
   outage — which is how a company gets taught to reset working passwords during
   one.
 - **`api.auth.max_grants` is the ceiling, and it is required.** A person's
-  grants live in the replicated store and an identity provider's group mapping
-  is written at the provider — neither is in a tier this deployment's operator
-  controls. This is the bound on what either may confer, stated in the tier
-  that holds the keyring. It is intersected per node, per request, so lowering
+  grants live in the replicated store, which is not a tier this deployment's
+  operator controls. This is the bound on what that directory may confer,
+  stated in the tier that holds the keyring. It is intersected per node, per request, so lowering
   it needs no write and no restart of the fleet; each node publishes a hash of
   its own so a mixed fleet mid-rollout is visible rather than silent.
 - **A Tier A token is a real credential and is checked as one.** Each entry
@@ -211,8 +200,8 @@ A few things worth knowing when deploying Crewlet:
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
   cannot be the way around the rule. At least one is required on every
   backend: a fresh deployment's identity estate is empty, so it is what creates
-  the first person, and on a running one it is the way back in when the
-  identity provider is down.
+  the first person, and on a running one it is the way back in when an
+  administrator has locked themselves out.
 - **The company configuration is always sealed at rest.** Every revision is
   encrypted and authenticated under the Tier A keyring before it reaches the
   store — there is no plaintext mode, and a node reads only sealed revisions —

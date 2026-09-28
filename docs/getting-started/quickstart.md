@@ -90,7 +90,7 @@ api:
   auth:
     backend: none   # nobody signs in on a laptop — the token below is the
                     #   only credential. `local` adds passwords and a second
-                    #   factor; `oidc` hands sign-in to a provider. On `local`,
+                    #   factor. On `local`,
                     #   `POST /auth/bootstrap` creates the first person from a
                     #   one-time code this node writes beside its store.
     max_grants:     # THE CEILING on what this deployment will ever let a
@@ -454,7 +454,7 @@ Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and
 ### When people sign in rather than share a token
 
 `backend: none` is right for a laptop and wrong the moment more than one person
-uses this. On `local` or `oidc` the first operator is created once, from a
+uses this. On `local` the first operator is created once, from a
 **one-time code this node writes beside its store**:
 
 ```
@@ -509,9 +509,9 @@ attempt lapses; the first finishing closes the route for good.
 Everybody after the first arrives by invitation, which confers exactly the
 grants and reach whoever issued it chose; the link's form proposes a login from
 their address, which they keep or change. A Tier A token stays — it is the way
-back in when the provider is down, and what a pipeline uses — but it is a
-machine credential rather than a person, and it is not how people should be
-signing in.
+back in when an administrator is locked out, and what a pipeline uses — but it
+is a machine credential rather than a person, and it is not how people should
+be signing in.
 
 Your own AI assistant can read and write the same records over MCP. Point any
 client at `/operator/mcp` with your API token:
