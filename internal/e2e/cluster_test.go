@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -613,11 +614,14 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 	// be adopted from, and which member happens to hold the newest one is
 	// a scheduling detail. Reading only member 0 would make this case fail
 	// whenever that member skipped a tick for a reason the design allows.
-	var manifest statelog.Manifest
+	var (
+		manifest statelog.Manifest
+		taker    int
+	)
 	waitFor(t, "a member of the fleet to have taken a snapshot", func() bool {
 		for i := range c.nodes {
 			if m, found := newestSnapshotIn(c.dir(t, i)); found {
-				manifest = m
+				manifest, taker = m, i
 				return true
 			}
 		}
@@ -634,7 +638,23 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 	// that does not name one of its own domains, so a snapshot missing a
 	// domain is one nobody can adopt — and it is indistinguishable from a
 	// healthy one until somebody needs it.
-	for _, want := range []string{"tracker", "vectors", "pages"} {
+	//
+	// ASKED OF THE ENGINE rather than listed here: a literal list of three
+	// outlived the org chart and the identity directory joining the
+	// register, and certified neither. The member that took the artefact
+	// names what it runs; running every role, that is the whole register,
+	// which is asserted too — a fleet narrowed later would otherwise shrink
+	// what this case covers without a word.
+	var runs []string
+	for _, domain := range c.nodes[taker].engine.Domains() {
+		runs = append(runs, domain.Name())
+	}
+	if every := engine.DomainsForRoles(placement.DefaultRoles()); !slices.Equal(runs, every) {
+		t.Fatalf("the member that took the snapshot runs %v and the register "+
+			"holds %v — this case certifies only the domains the taker runs",
+			runs, every)
+	}
+	for _, want := range runs {
 		if _, named := manifest.Domains[want]; !named {
 			t.Errorf("the snapshot names %v and not %q — a recipient refuses "+
 				"an artefact that does not name every domain it registers",
