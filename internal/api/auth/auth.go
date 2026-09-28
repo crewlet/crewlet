@@ -457,32 +457,27 @@ func (g *Guard) entry(candidate string) (config.APIToken, bool) {
 	return matched, matched.ID != ""
 }
 
-// SocketPath is the dashboard's live socket, the one route whose credential
-// may arrive on the query string. It is named here, beside the rule that
-// reads it, so the mux that mounts it and the handler that serves it cannot
-// spell it differently from the guard that admits it.
+// SocketPath is the dashboard's live socket. It is named here, beside the
+// guard that admits it, so the mux that mounts it, the handler that serves it
+// and the rules that single it out (the enrolment refusal among them) cannot
+// spell it differently.
 const SocketPath = "/ws/stream"
 
-// Credential returns the token a request presented, or "".
+// Credential returns the bearer a request presented, or "".
 //
-// THE ONE PLACE A REQUEST'S CREDENTIAL IS READ. The Authorization bearer
-// header on every route; and on the socket path only, the token query
-// parameter as well, because a browser cannot set a header on a WebSocket
-// constructor and the dashboard has no other way to send one. The query is
-// read nowhere else: a token in a URL appears in proxy logs and browser
-// history, which is a price worth paying for exactly one route that has no
-// alternative and for no route that has.
-//
-// The header wins when both are present, so a non-browser client that sent
-// the right header is never judged by a stale query.
+// THE ONE PLACE A REQUEST'S BEARER IS READ, and it is the Authorization
+// header on every route, the socket included. There is deliberately NO
+// query-string credential: a token in a URL is written into every proxy's
+// access log and the browser's history, and the one route that ever took one
+// — this socket, because a browser cannot set a header on a WebSocket
+// constructor — no longer needs it. A browser's handshake carries its session
+// cookie like any other same-origin request, and a script that dials the
+// socket sets the header, which every WebSocket client outside a browser can.
 func (g *Guard) Credential(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	const scheme = "bearer "
 	if len(header) >= len(scheme) && strings.EqualFold(header[:len(scheme)], scheme) {
 		return strings.TrimSpace(header[len(scheme):])
-	}
-	if r.URL.Path == SocketPath {
-		return r.URL.Query().Get("token")
 	}
 	return ""
 }

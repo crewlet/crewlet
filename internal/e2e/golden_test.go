@@ -42,12 +42,11 @@ import (
 // one, so a running company showed an empty dashboard for ever. Every
 // component's own tests passed.
 
-// dial opens a socket the way the dashboard's LiveSocket does.
+// dial opens a socket on the path the dashboard's LiveSocket dials.
 func (n *node) dial(t *testing.T) *websocket.Conn {
 	t.Helper()
-	target := "ws" + strings.TrimPrefix(n.server.URL, "http") + "/ws/stream" +
-		socketCredential()
-	conn, _, err := websocket.Dial(t.Context(), target, nil)
+	target := "ws" + strings.TrimPrefix(n.server.URL, "http") + "/ws/stream"
+	conn, _, err := websocket.Dial(t.Context(), target, socketOptions())
 	if err != nil {
 		t.Fatalf("dial %s: %v", target, err)
 	}

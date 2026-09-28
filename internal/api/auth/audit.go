@@ -268,8 +268,8 @@ func (w *statusWriter) Flush() {
 }
 
 // Hijack passes a socket upgrade through for a library that type-asserts
-// [http.Hijacker], which is how the dashboard's socket reaches a script that
-// presents a Tier A token on its query string.
+// [http.Hijacker], which is how the dashboard's socket upgrades behind this
+// wrapper.
 func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if w.status == 0 {
 		w.status = http.StatusSwitchingProtocols

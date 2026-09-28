@@ -89,7 +89,8 @@ func overSocket(t *testing.T, a *api.App, what string, params map[string]any) ma
 	t.Cleanup(srv.Close)
 
 	conn, _, err := websocket.Dial(t.Context(),
-		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream?token="+fixtureToken, nil)
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + fixtureToken}}})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

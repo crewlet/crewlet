@@ -191,7 +191,7 @@ func newWatchSocketOver(t *testing.T, chart authz.Chart, holders iam.Holders,
 // open dials as one token and reads past the handshake snapshot.
 func (f *watchFixture) open(t *testing.T, token string) *websocket.Conn {
 	t.Helper()
-	conn, _, err := websocket.Dial(t.Context(), f.url+"?token="+token, nil)
+	conn, _, err := websocket.Dial(t.Context(), f.url, &websocket.DialOptions{HTTPHeader: bearer(token)})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

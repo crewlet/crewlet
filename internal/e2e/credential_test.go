@@ -86,12 +86,17 @@ func present(r *http.Request) *http.Request {
 	return r
 }
 
-// socketCredential is the query parameter a WebSocket handshake carries.
+// socketOptions attaches the fixture's credential to a WebSocket handshake.
 //
-// ?token= AND NOT A HEADER, because a browser cannot set one on a WebSocket
-// constructor — which is why that parameter exists at all, and why this suite
-// dials the way the dashboard does rather than the way a script would.
-func socketCredential() string { return "?token=" + e2eToken }
+// A HEADER, because nothing reads a credential off a URL: a query string is
+// written into every proxy's access log, and the engine's socket stopped
+// taking `?token=` once the dashboard's handshake carried its session cookie
+// instead. This suite dials as a script does, with the deployment's token.
+func socketOptions() *websocket.DialOptions {
+	return &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer " + e2eToken}},
+	}
+}
 
 // THE GUARD ACTUALLY REFUSES, through a real engine on a real listener.
 //
@@ -113,10 +118,10 @@ func socketCredential() string { return "?token=" + e2eToken }
 // # It checks both transports, because they are two mounts
 //
 // A socket handshake and a REST read are refused by the same middleware today,
-// and "today" is the word doing the work: the socket carries its credential in
-// a query parameter because a browser cannot set a header on a WebSocket
-// constructor, so it is the one path that has ever had a credential rule of its
-// own. Checking one would leave the other's exemption invisible.
+// and "today" is the word doing the work: the socket is the one path that has
+// ever had a credential rule of its own (it took a token in its query string
+// until the dashboard's handshake carried a session cookie instead). Checking
+// one would leave the other's exemption invisible.
 func TestAnAnonymousCallerIsRefusedByARunningEngine(t *testing.T) {
 	n := start(t)
 

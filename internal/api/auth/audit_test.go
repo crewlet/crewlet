@@ -189,7 +189,8 @@ func TestACredentialNoGuardReliedOnIsNotAFailedAttempt(t *testing.T) {
 	}
 
 	// A socket re-checking the credential it was opened with.
-	req := httptest.NewRequest(http.MethodGet, auth.SocketPath+"?token=not-the-token", nil)
+	req := httptest.NewRequest(http.MethodGet, auth.SocketPath, nil)
+	req.Header.Set("Authorization", "Bearer not-the-token")
 	resolved, _ := g.Resolve(httptest.NewRecorder(), req)
 	if _, how := iam.From(resolved.Context()); how != iam.Anonymous {
 		t.Fatalf("a wrong token resolved as %v, want anonymous", how)
@@ -293,7 +294,8 @@ func TestASocketRevalidationIsNotAUse(t *testing.T) {
 	t.Parallel()
 	tr := newAuditTrail(t)
 	g := tierA(t, tr, true)
-	req := httptest.NewRequest(http.MethodGet, auth.SocketPath+"?token=the-break-glass-token-value", nil)
+	req := httptest.NewRequest(http.MethodGet, auth.SocketPath, nil)
+	req.Header.Set("Authorization", "Bearer the-break-glass-token-value")
 	resolved, _ := g.Resolve(httptest.NewRecorder(), req)
 	if _, how := iam.From(resolved.Context()); how != iam.Resolved {
 		t.Fatalf("the token did not resolve (%v)", how)

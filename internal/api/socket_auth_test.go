@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,16 +16,21 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A CLOSED POSTURE OPENS THE SOCKET ON ITS QUERY TOKEN, through the whole
-// app: the guard middleware and then the stream handler, in that order.
+// THE SOCKET OPENS ON A BEARER IN ITS HEADER AND ON NOTHING IN ITS URL,
+// through the whole app: the guard middleware and then the stream handler, in
+// that order.
 //
-// The stream package's own suite dials the handler directly and so proved
-// only that the HANDLER accepted a query token. The middleware in front of it
-// read the header alone, and under a closed posture answered 401 before the
-// handler ran, so the dashboard could not connect with a valid token on the
-// one posture whose point is that the token is required. This test goes
-// through api.App the way a browser does.
-func TestTheSocketOpensOnItsQueryToken(t *testing.T) {
+// The socket used to take `?token=`, because a browser cannot set a header on
+// a WebSocket constructor. The dashboard's handshake carries its session
+// cookie now ([TestACookieAuthenticatesTheHandshake]) and a script sets the
+// header, so the query is read nowhere: a URL is written into every proxy's
+// access log, and the one route that paid that price no longer has a reason
+// to. A valid token there is refused exactly like a missing one — on the
+// handshake and on the plain GET the dashboard re-asks with.
+//
+// Control: the same token in the header opens the socket and is sent the
+// snapshot, so the refusals are about where the token was presented.
+func TestTheSocketOpensOnAHeaderAndNeverOnItsURL(t *testing.T) {
 	t.Parallel()
 	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b, QueueBackend: "jetstream"})
@@ -35,20 +38,17 @@ func TestTheSocketOpensOnItsQueryToken(t *testing.T) {
 	t.Cleanup(srv.Close)
 	base := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"
 
-	// Without a credential the handshake is refused.
-	if conn, _, err := websocket.Dial(t.Context(), base, nil); err == nil {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-		t.Fatal("a socket opened with no credential at all")
-	}
-	// A wrong token in the query is refused too.
-	if conn, _, err := websocket.Dial(t.Context(), base+"?token=wrong", nil); err == nil {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-		t.Fatal("a socket opened on a wrong token")
+	for _, target := range []string{base, base + "?token=secret"} {
+		if conn, _, err := websocket.Dial(t.Context(), target, nil); err == nil {
+			_ = conn.Close(websocket.StatusNormalClosure, "")
+			t.Fatalf("a socket opened at %s with no bearer in its header", target)
+		}
 	}
 
-	conn, _, err := websocket.Dial(t.Context(), base+"?token=secret", nil)
+	conn, _, err := websocket.Dial(t.Context(), base,
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer secret"}}})
 	if err != nil {
-		t.Fatalf("the dashboard's own handshake was refused: %v", err)
+		t.Fatalf("a handshake carrying the token in its header was refused: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
 
@@ -67,110 +67,50 @@ func TestTheSocketOpensOnItsQueryToken(t *testing.T) {
 	}
 }
 
-// THE SHIPPED BUNDLE'S OWN CREDENTIAL PATH STILL WORKS, asserted at THIS
-// commit rather than left to the next person to notice.
+// THE 401/426 PAIRING ON A PLAIN GET, which the dashboard's socket depends on.
 //
-// # Why this is a gate rather than a note
-//
-// `static/dashboard` is a COMMITTED build output, and the bundle in the tree
-// is what a `go install`ed binary serves. So an auth change lands in Go and
-// the client that has to keep working is a file nobody recompiled — a pairing
-// that can only break silently, because the engine's own suite passes and the
-// dashboard's own suite passes and neither runs the other.
-//
-// Two things the shipped client depends on, and both are load-bearing:
-//
-//   - THE HANDSHAKE CREDENTIAL RIDES `?token=`. A browser cannot set a header
-//     on a WebSocket constructor, so a pasted token has no other channel, and
-//     the bundle the tree ships still opens its socket that way: its sign-in
-//     does not yet hand the socket a session cookie. The guard ALREADY accepts
-//     one on the handshake ([TestACookieAuthenticatesTheHandshake]), which is
-//     the precondition for retiring the query branch — but not the whole of it:
-//     the branch goes when the shipped bundle stops sending `?token=`, which
-//     is what the needle below would then report.
-//   - THE 401/426 PAIRING ON A PLAIN GET. A browser is told nothing about why
-//     a handshake failed — no status, and no close code, because a connection
-//     that never opened sends no close frame — so the client re-asks over
-//     plain HTTP to tell "your token is wrong" from "the engine is down".
-//     Collapse the two and a reader holding a stale token sees "retrying" for
-//     ever.
-func TestTheShippedBundleStillAuthenticates(t *testing.T) {
+// A browser is told nothing about why a handshake failed — no status, and no
+// close code, because a connection that never opened sends no close frame —
+// so the client re-asks the same path over plain HTTP to tell "nobody is
+// signed in" (401, and it sends the reader to sign in) from "the engine is
+// down" (a throw, and it keeps reconnecting). An accepted credential stops
+// one line short of the upgrade with 426. Collapse the two and a reader whose
+// session ended sees "retrying" for ever.
+func TestTheSocketProbeTellsARefusalFromAnOutage(t *testing.T) {
 	t.Parallel()
 	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b})
 
-	// THE PROBE, both arms. A GET with no Upgrade header.
 	for _, tc := range []struct {
-		name  string
-		token string
-		want  int
+		name   string
+		header string
+		query  string
+		want   int
 	}{
-		{"a refused credential", "wrong", http.StatusUnauthorized},
-		{"no credential at all", "", http.StatusUnauthorized},
-		{"an accepted credential", "secret", http.StatusUpgradeRequired},
+		{"no credential at all", "", "", http.StatusUnauthorized},
+		{"a refused bearer", "Bearer wrong", "", http.StatusUnauthorized},
+		{"a valid token in the URL, read by nobody", "", "token=secret", http.StatusUnauthorized},
+		{"an accepted bearer", "Bearer secret", "", http.StatusUpgradeRequired},
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/ws/stream", nil)
-		if tc.token != "" {
-			req.URL.RawQuery = "token=" + tc.token
+		req.URL.RawQuery = tc.query
+		if tc.header != "" {
+			req.Header.Set("Authorization", tc.header)
 		}
 		rec := httptest.NewRecorder()
 		a.ServeHTTP(rec, req)
 		if rec.Code != tc.want {
-			t.Errorf("the probe with %s answered %d, want %d: the dashboard "+
-				"cannot tell a wrong token from a stopped engine, and a reader "+
-				"holding a stale one retries for ever", tc.name, rec.Code, tc.want)
+			t.Errorf("the probe with %s answered %d, want %d", tc.name, rec.Code, tc.want)
 		}
 	}
-
-	// AND THE BUNDLE IN THE TREE IS STILL THE ONE THIS IS ABOUT. Without
-	// this the case above would go on passing while the committed client
-	// had moved to a credential path nothing here serves.
-	bundle := readShippedBundle(t)
-	for _, needle := range []string{"token=", "426"} {
-		if !strings.Contains(bundle, needle) {
-			t.Errorf("the committed dashboard bundle no longer contains %q: "+
-				"it has moved off the credential path this case asserts, so "+
-				"this gate is certifying a client nobody ships", needle)
-		}
-	}
-}
-
-// readShippedBundle is every committed dashboard script, concatenated.
-//
-// THE BUILT BUNDLE rather than dashboard/src, because the built one is what
-// the binary embeds and serves: a source file that says the right thing and a
-// bundle that was never rebuilt is exactly the drift this reads past.
-func readShippedBundle(t *testing.T) string {
-	t.Helper()
-	scripts, err := filepath.Glob("../../static/dashboard/assets/*.js")
-	if err != nil {
-		t.Fatalf("glob: %v", err)
-	}
-	scripts = append(scripts, "../../static/dashboard/protocol.js")
-	var all strings.Builder
-	for _, name := range scripts {
-		raw, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		all.Write(raw)
-	}
-	// The control: a glob that matched nothing reads as a bundle with no
-	// credential path, which is the failure this is meant to REPORT rather
-	// than the one it is meant to be.
-	if all.Len() < 100_000 {
-		t.Fatalf("the committed bundle reads as %d bytes over %d files; this "+
-			"case is looking in the wrong place", all.Len(), len(scripts))
-	}
-	return all.String()
 }
 
 // A SESSION COOKIE AUTHENTICATES THE SOCKET'S HANDSHAKE.
 //
 // A browser attaches its cookie to a WebSocket handshake as it does to any
-// request to its origin, so a person signed in with a session cookie needs no
-// token in the URL — the one channel a pasted token has, and one that lands in
-// proxy logs. Through the whole app, the way a browser arrives: the probe the
+// request to its origin, and that is the dashboard's whole credential there:
+// it cannot set a header on a WebSocket constructor, and a token in the URL
+// is read by nobody. Through the whole app, the way a browser arrives: the probe the
 // dashboard re-asks over plain HTTP answers 426 for a live session and 401 for
 // one this node has applied the end of, and a real handshake carrying only the
 // cookie opens and is sent the snapshot.
