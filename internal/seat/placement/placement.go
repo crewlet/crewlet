@@ -278,7 +278,25 @@ type NodeProfile struct {
 	ID     string
 	Roles  RoleSet
 	Labels map[string]string
+
+	// Held is how many seat leases the node says it holds — the seats it
+	// runs and the ones whose teardown it could not prove — as of its last
+	// presence renewal. NIL WHEN ITS ROW SAYS NOTHING, which a build that
+	// predates the field writes, and which is not the node saying zero (see
+	// [HeldKey]).
+	Held *int
 }
+
+// HeldKey is where a presence row carries [NodeProfile.Held].
+//
+// ON THE PRESENCE ROW because it is the one read every sweep already makes:
+// a node with room for one more seat and nothing free — the steady state of
+// any fleet whose seats do not divide evenly — used to learn that nothing was
+// free by trying every seat it may run, a leader read each, every five
+// seconds. The fleet's own counts answer it from the listing the sweep has
+// already taken. Written by the seat host, beside the profile rather than in
+// it, because it is live state and the profile is configuration.
+const HeldKey = "seats_held"
 
 // RunsSeats reports whether this node claims seats at all. It is the
 // denominator test.
@@ -331,7 +349,33 @@ func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 		ID:     nodeID,
 		Roles:  rolesFromMeta(meta["roles"]),
 		Labels: labelsFromMeta(meta["labels"]),
+		Held:   heldFromMeta(meta[HeldKey]),
 	}
+}
+
+// heldFromMeta accepts the int this build writes and the float64 a JSON round
+// trip through the lease store returns, and reads anything else — absent, a
+// string, a negative or fractional count — as NOT SAYING. A reader that needs
+// a number decides what not saying means for its own question.
+func heldFromMeta(raw any) *int {
+	var n int
+	switch v := raw.(type) {
+	case int:
+		n = v
+	case int64:
+		n = int(v)
+	case float64:
+		if v != float64(int(v)) {
+			return nil
+		}
+		n = int(v)
+	default:
+		return nil
+	}
+	if n < 0 {
+		return nil
+	}
+	return &n
 }
 
 // FromLease reads a peer's profile off a presence lease, reporting false for

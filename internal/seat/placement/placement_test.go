@@ -830,3 +830,43 @@ func TestPresenceCarriesNoObjectShare(t *testing.T) {
 		}
 	}
 }
+
+// A NODE'S SEAT COUNT READS OFF ITS ROW, and a row that does not say is not
+// a row that says zero.
+//
+// Peers sum these counts to learn whether any seat is free. The count arrives
+// as an int from this process and as a float64 after a round trip through the
+// lease store; anything else — absent, as a build from before the count
+// writes it, or not a whole non-negative number — is the node not saying.
+func TestASeatCountReadsOffTheRowAndSilenceIsNotZero(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		raw  any
+		want *int
+	}{
+		"written here":       {raw: 3, want: ptr(3)},
+		"after a round trip": {raw: float64(3), want: ptr(3)},
+		"zero, said":         {raw: float64(0), want: ptr(0)},
+		"absent":             {raw: nil, want: nil},
+		"a string":           {raw: "3", want: nil},
+		"negative":           {raw: float64(-1), want: nil},
+		"a fraction":         {raw: 2.5, want: nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			meta := map[string]any{}
+			if tc.raw != nil {
+				meta[HeldKey] = tc.raw
+			}
+			got := FromMeta("node-a", meta).Held
+			switch {
+			case (got == nil) != (tc.want == nil):
+				t.Fatalf("Held = %v, want %v", got, tc.want)
+			case got != nil && *got != *tc.want:
+				t.Fatalf("Held = %d, want %d", *got, *tc.want)
+			}
+		})
+	}
+}
+
+func ptr(n int) *int { return &n }

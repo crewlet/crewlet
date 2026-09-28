@@ -50,7 +50,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		last, _ := h.LastSweep()
 		return last
 	}
-	plan, liveNodes := h.plan(ctx, seats)
+	plan, liveNodes, peers := h.plan(ctx, seats)
 
 	byHandle := make(map[string]placement.Seat, len(seats))
 	for _, s := range seats {
@@ -135,6 +135,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 
 	var claimed []string
 	var blocked int
+	var fleetFull bool
 	// AFTER the shed above, deliberately: a node that is not ready must
 	// still give back seats it holds beyond its share, or a fleet whose
 	// newest member is mid-hydration cannot rebalance onto it and its
@@ -150,9 +151,25 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		if room > h.claimLimit {
 			room = h.claimLimit
 		}
-		if room > 0 {
+		switch {
+		case room <= 0:
+		case h.fleetHoldsEverySeat(seats, plan, peers):
+			// NOTHING IS FREE, and the fleet's own counts say so: see
+			// [Host.fleetHoldsEverySeat]. Trying every seat to learn it
+			// is the standing cost this skips.
+			fleetFull = true
+		default:
 			claimed, blocked = h.claimUpTo(ctx, plan.Eligible, room)
 		}
+	}
+
+	// WHAT THIS PASS TOOK, ADVERTISED NOW rather than at the next
+	// heartbeat, so a peer deciding whether anything is free counts it:
+	// otherwise that peer goes on trying every seat for up to a heartbeat.
+	// What a pass GIVES BACK is advertised by the release itself (see
+	// [Host.finishRelease]), whichever path releases it.
+	if len(claimed) > 0 {
+		h.renewNodePresence(ctx)
 	}
 
 	if withheld {
@@ -193,6 +210,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		Unplaceable:       plan.Unplaceable,
 		BlockedByProtocol: blocked,
 		Withheld:          withheld,
+		FleetFull:         fleetFull,
 	}
 	// A copy, never &result: a heartbeat appends to the stored record, and
 	// the value returned here would otherwise be the same object.
@@ -540,8 +558,12 @@ func (h *Host) protocolBlock(ctx context.Context) int {
 // undoing the balance for no reason. Before the first successful read there
 // is nothing to reuse, and a fleet of one — this node — is the honest
 // assumption.
-func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan, int) {
-	var live []placement.NodeProfile
+//
+// The third result is the PEERS AS READ BY THIS PASS, and nil when the read
+// failed: a stale roster is good enough to size a share by, and not good
+// enough to conclude from that nothing is free ([Host.fleetHoldsEverySeat]).
+func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan, int, []placement.NodeProfile) {
+	var live, peers []placement.NodeProfile
 
 	leases, err := h.backend.ListLive(ctx, coord.ClassNode)
 	if err != nil {
@@ -560,11 +582,69 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 		h.mu.Lock()
 		h.liveProfiles = live
 		h.mu.Unlock()
+		peers = live
 	}
 
 	plan := placement.Compute(seats, h.profile, live)
 	h.checkFleetRoles(append(slices.Clone(live), h.profile))
-	return plan, plan.SeatNodes
+	return plan, plan.SeatNodes, peers
+}
+
+// fleetHoldsEverySeat reports whether the live seat-running nodes, by their
+// own counts, hold every seat any of them may run — in which case a pass with
+// room has nothing to claim and tries nothing.
+//
+// # Why it asks the counts rather than the seats
+//
+// A node whose share did not come out even — room for one more, and nothing
+// free — is the steady state of most of a fleet, and it learned that nothing
+// was free by trying every seat it may run: a leader read each, plus a walk of
+// the epochs bucket to order them, every five seconds, for an answer that was
+// the same each time. At two thousand seats that was about four thousand
+// messages to that node per pass. Every node already advertises on its
+// presence row, and this pass has already listed those rows to size its share,
+// so the sum of the counts is free.
+//
+// # Why it is safe to be wrong in either direction
+//
+// Nothing is claimed on this answer — a claim is still the lease's
+// compare-and-set — so a wrong answer costs time or reads and never a seat
+// held twice. It errs toward TRYING. Each seat is held by one node at most, so
+// the counts sum to at most the seats held, and a sum that reaches every
+// placeable seat says every one of them is held. A node that says nothing (a
+// build that predates the count) adds nothing to the sum, which can only make
+// it read "something may be free" — the answer that tries; a node whose
+// presence lapsed is not listed, so its seats read as free the moment it goes;
+// and a roster this pass could not read concludes nothing. It can read FULL
+// while a seat is free only for as long as some node's advertised count
+// outlives what it holds — a seat it lost and has not yet noticed, a seat
+// whose role it has not yet released — which that node's next renewal
+// corrects, and which a release corrects at once ([Host.finishRelease]).
+//
+// OWN COUNT FROM MEMORY, never from this node's own row, which is a renewal
+// old.
+func (h *Host) fleetHoldsEverySeat(seats []placement.Seat, plan placement.Plan,
+	peers []placement.NodeProfile) bool {
+
+	if peers == nil {
+		return false
+	}
+	held := h.heldCount()
+	for _, p := range peers {
+		if p.ID == h.nodeID || !p.RunsSeats() || p.Held == nil {
+			continue
+		}
+		held += *p.Held
+	}
+	return held >= len(seats)-len(plan.Unplaceable)
+}
+
+// heldCount is how many seat leases this node holds: the seats it runs and
+// the undead ones it is still renewing.
+func (h *Host) heldCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.held) + len(h.undead)
 }
 
 // checkFleetRoles says something when the fleet has nobody doing one of the
@@ -635,6 +715,11 @@ func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 // the reading side already renders as "did not say".
 func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	meta := h.profile.Meta()
+	// HOW MANY SEATS THIS NODE HOLDS, which its peers sum to learn whether
+	// anything is free ([Host.fleetHoldsEverySeat]). Placement's own key,
+	// written unconditionally: it is the host's own fact, with no hook to
+	// overrun.
+	meta[placement.HeldKey] = h.heldCount()
 	if h.status == nil {
 		return meta
 	}

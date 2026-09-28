@@ -453,6 +453,12 @@ type SweepResult struct {
 	// node at capacity, a node whose peers hold everything and a node
 	// waiting on its own projection all report an identical empty sweep.
 	Withheld bool
+	// FleetFull says this node had room and tried no claim, because the
+	// live seat-running nodes' own counts say they hold every seat any of
+	// them may run ([Host.fleetHoldsEverySeat]). The ordinary state of a
+	// node whose share did not come out even, and distinct from Withheld:
+	// this node is ready, and there is simply nothing to take.
+	FleetFull bool
 }
 
 // Blocked reports whether the mixed-version gate is what stopped this pass

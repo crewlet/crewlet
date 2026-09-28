@@ -833,6 +833,15 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 		log.WarnContext(ctx, "seat_release_unavailable", "seat", handle, "error", err)
 		return false
 	}
+	if released {
+		// THE COUNT THIS NODE ADVERTISES, corrected now rather than at the
+		// next heartbeat: a peer with room decides from the fleet's counts
+		// whether anything is free ([Host.fleetHoldsEverySeat]), and while
+		// this node's row still counted the seat it gave back, every peer
+		// read the fleet as full and the seat sat unclaimed. A no-op while
+		// draining, which drops presence instead.
+		h.renewNodePresence(ctx)
+	}
 	return released
 }
 
