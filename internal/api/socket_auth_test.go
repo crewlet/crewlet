@@ -208,9 +208,17 @@ func TestACookieAuthenticatesTheHandshake(t *testing.T) {
 
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
+	// AND THE ORIGIN A BROWSER SENDS on every WebSocket upgrade — this
+	// deployment's own, the external URL above. The handshake is judged
+	// by the same cross-site rule as a write, which refuses a
+	// cookie-authenticated upgrade carrying none; without the header this
+	// case dialled as no browser does and was refused 403 for it.
 	conn, _, err := websocket.Dial(t.Context(),
 		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream",
-		&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {live.String()}}})
+		&websocket.DialOptions{HTTPHeader: http.Header{
+			"Cookie": {live.String()},
+			"Origin": {b.API.ExternalURL},
+		}})
 	if err != nil {
 		t.Fatalf("a handshake carrying a live session's cookie was refused: %v", err)
 	}
