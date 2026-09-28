@@ -436,8 +436,11 @@ position and the scope.
 
 So a rolling upgrade should finish inside that window. An upgrade that stalls
 half-done leaves the old nodes holding records they cannot apply and refusing
-reads about the objects those records touched — with `deferred` naming exactly
-what to do, which is finish the upgrade.
+reads about the objects those records touched, and writes to them — with
+`deferred` naming exactly what to do, which is finish the upgrade. What a record
+touched includes where it sits: a record about a knowledge space's settings
+covers every page in that space, and a page purge covers the whole space it
+re-files the page's children in.
 
 **A record is written at the lowest version that can apply it whole**, never at
 the newest the build knows, so what an older node holds back is exactly the

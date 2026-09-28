@@ -97,34 +97,39 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 		CreatedAt: at, UpdatedAt: at,
 	}
 
-	result, err := s.publish(ctx, statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:   ScopeSet{Subject: true}.Resolve(subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, _, err := readHeadTx(ctx, tx, pageID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			patch := PagePatch{V: DocumentVersion, Comment: &CommentPatch{
-				ID: comment.ID, Body: &body, Author: comment.Author,
-				AuthorKind: actor.Kind, ReplyTo: comment.ReplyTo,
-				Mentions: mentions,
-			}}
-			// A MENTION SUBSCRIBES, and nothing else does. It is
-			// carried on the patch as the whole watcher set, because
-			// a collection the write touches travels whole — a delta
-			// could not rebuild the row on a replay from zero.
-			if subscribed := subscribeMentions(&head, mentions); subscribed {
-				patch.Watchers = head.Watchers
-				patch.Muted = head.Muted
-			}
-			scope := ScopeSet{Subject: true, Container: head.Container}
-			notify := s.notifyOf(in.Quiet, ChangeComment, head,
-				excerpt(body), mentions)
-			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
-		},
+	result, err := s.onPage(ctx, pageID, func(container string) statelog.Request {
+		return statelog.Request{
+			Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+			Scope:   ScopeSet{Subject: true, Container: container}.Resolve(subject),
+			OpID:    opID,
+			Pattern: statelog.PatternArbitrated,
+			Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				head, _, err := readHeadTx(ctx, tx, pageID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if moved := inContainer(head, container); moved != nil {
+					return statelog.Decision{}, moved
+				}
+				patch := PagePatch{V: DocumentVersion, Comment: &CommentPatch{
+					ID: comment.ID, Body: &body, Author: comment.Author,
+					AuthorKind: actor.Kind, ReplyTo: comment.ReplyTo,
+					Mentions: mentions,
+				}}
+				// A MENTION SUBSCRIBES, and nothing else does. It is
+				// carried on the patch as the whole watcher set, because
+				// a collection the write touches travels whole — a delta
+				// could not rebuild the row on a replay from zero.
+				if subscribed := subscribeMentions(&head, mentions); subscribed {
+					patch.Watchers = head.Watchers
+					patch.Muted = head.Muted
+				}
+				scope := ScopeSet{Subject: true, Container: head.Container}
+				notify := s.notifyOf(in.Quiet, ChangeComment, head,
+					excerpt(body), mentions)
+				return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
+			},
+		}
 	})
 	if err != nil {
 		return Comment{}, Written{}, err
@@ -161,49 +166,54 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	// nothing, so the row's own number is the only one there will be.
 	var read uint64
 
-	result, err := s.publish(ctx, statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:   ScopeSet{Subject: true}.Resolve(subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, revision, err := readHeadTx(ctx, tx, pageID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			read = revision
-			held, err := readCommentTx(ctx, tx, pageID, commentID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			// ONLY THE AUTHOR, operator included. A comment is a remark
-			// somebody made, and an edit anybody could make is a remark
-			// attributed to a person who did not make it — on a record
-			// that outlives the page's body and is quoted in a wake.
-			if held.Author != actor.Name() {
-				return statelog.Decision{}, invalid("comment",
-					"comment %s was written by %s and only its author may edit "+
-						"it — a remark somebody else can rewrite is a remark "+
-						"attributed to a person who did not make it",
-					commentID, held.Author)
-			}
-			if held.Body == body {
+	result, err := s.onPage(ctx, pageID, func(container string) statelog.Request {
+		return statelog.Request{
+			Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+			Scope:   ScopeSet{Subject: true, Container: container}.Resolve(subject),
+			OpID:    opID,
+			Pattern: statelog.PatternArbitrated,
+			Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				head, revision, err := readHeadTx(ctx, tx, pageID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if moved := inContainer(head, container); moved != nil {
+					return statelog.Decision{}, moved
+				}
+				read = revision
+				held, err := readCommentTx(ctx, tx, pageID, commentID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				// ONLY THE AUTHOR, operator included. A comment is a remark
+				// somebody made, and an edit anybody could make is a remark
+				// attributed to a person who did not make it — on a record
+				// that outlives the page's body and is quoted in a wake.
+				if held.Author != actor.Name() {
+					return statelog.Decision{}, invalid("comment",
+						"comment %s was written by %s and only its author may edit "+
+							"it — a remark somebody else can rewrite is a remark "+
+							"attributed to a person who did not make it",
+						commentID, held.Author)
+				}
+				if held.Body == body {
+					out = held
+					return statelog.Decision{}, nil
+				}
 				out = held
-				return statelog.Decision{}, nil
-			}
-			out = held
-			out.Body, out.UpdatedAt = body, at
-			scope := ScopeSet{Subject: true, Container: head.Container}
-			notify := s.notifyOf(false, ChangeCommentEdited, head,
-				excerpt(body), nil)
-			return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
-				V: DocumentVersion, Comment: &CommentPatch{
-					ID: commentID, Body: &body, Author: held.Author,
-					AuthorKind: held.AuthorKind, ReplyTo: held.ReplyTo,
-					Mentions: held.Mentions,
-				},
-			}, notify, at)
-		},
+				out.Body, out.UpdatedAt = body, at
+				scope := ScopeSet{Subject: true, Container: head.Container}
+				notify := s.notifyOf(false, ChangeCommentEdited, head,
+					excerpt(body), nil)
+				return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
+					V: DocumentVersion, Comment: &CommentPatch{
+						ID: commentID, Body: &body, Author: held.Author,
+						AuthorKind: held.AuthorKind, ReplyTo: held.ReplyTo,
+						Mentions: held.Mentions,
+					},
+				}, notify, at)
+			},
+		}
 	})
 	if err != nil {
 		return Comment{}, Written{}, err
@@ -224,23 +234,28 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 	opID := s.newSeqID()
 	subject := PageSubject(pageID)
 
-	result, err := s.publish(ctx, statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:   ScopeSet{Subject: true}.Resolve(subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, _, err := readHeadTx(ctx, tx, pageID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			scope := ScopeSet{Subject: true, Container: head.Container}
-			notify := s.notifyOf(true, ChangeCommentEdited, head, "", nil)
-			return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
-				V:       DocumentVersion,
-				Comment: &CommentPatch{ID: commentID, Removed: true},
-			}, notify, at)
-		},
+	result, err := s.onPage(ctx, pageID, func(container string) statelog.Request {
+		return statelog.Request{
+			Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+			Scope:   ScopeSet{Subject: true, Container: container}.Resolve(subject),
+			OpID:    opID,
+			Pattern: statelog.PatternArbitrated,
+			Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				head, _, err := readHeadTx(ctx, tx, pageID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if moved := inContainer(head, container); moved != nil {
+					return statelog.Decision{}, moved
+				}
+				scope := ScopeSet{Subject: true, Container: head.Container}
+				notify := s.notifyOf(true, ChangeCommentEdited, head, "", nil)
+				return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
+					V:       DocumentVersion,
+					Comment: &CommentPatch{ID: commentID, Removed: true},
+				}, notify, at)
+			},
+		}
 	})
 	if err != nil {
 		return Written{}, err

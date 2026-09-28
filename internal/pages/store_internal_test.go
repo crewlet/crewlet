@@ -78,3 +78,59 @@ func TestARefusalThisPackageHasNoWordForTravelsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// A PAGE WRITE'S SCOPE FOLLOWS THE PAGE, and a decide that finds it elsewhere
+// sends the write back to read where it is.
+//
+// The request's scope is stated before the decide, so it is read outside it —
+// and a page can arrive, or move, in between: the read found nothing and the
+// decide found the page, or the read found one space and the decide another.
+// Published anyway, the write would have probed a space the page is not in,
+// which is the defect the read exists to remove. So the decide refuses a head
+// in any other space than the one the request named, and the loop reads again.
+func TestAPageWriteFollowsItsPageToTheSpaceItIsIn(t *testing.T) {
+	t.Parallel()
+	head := Page{ID: "page-a", Container: "ENG"}
+	for _, stale := range []string{"", "PROD"} {
+		if err := inContainer(head, stale); !errors.Is(err, errPageMoved) {
+			t.Fatalf("a head in ENG against a request scoped to %q = %v, want "+
+				"it refused as moved", stale, err)
+		}
+	}
+	if err := inContainer(head, "ENG"); err != nil {
+		t.Fatalf("a head in the space the request named = %v, want it accepted", err)
+	}
+
+	// THE LOOP: read, publish, and on a move read again.
+	reads := []string{"", "ENG"}
+	var published []string
+	_, err := followMoves(
+		func() (string, error) {
+			next := reads[0]
+			reads = reads[1:]
+			return next, nil
+		},
+		func(container string) (statelog.Result, error) {
+			published = append(published, container)
+			return statelog.Result{}, inContainer(head, container)
+		})
+	if err != nil || len(published) != 2 || published[1] != "ENG" {
+		t.Fatalf("a write whose page arrived after its first read published "+
+			"under %v and answered %v, want a second publish scoped to ENG",
+			published, err)
+	}
+
+	// AND IT IS BOUNDED: a page moving faster than a write can land is
+	// answered as moved rather than chased for ever.
+	var attempts int
+	_, err = followMoves(
+		func() (string, error) { return "PROD", nil },
+		func(string) (statelog.Result, error) {
+			attempts++
+			return statelog.Result{}, inContainer(head, "PROD")
+		})
+	if !errors.Is(err, errPageMoved) || attempts != pageMoveAttempts {
+		t.Fatalf("a page that kept moving was published %d times and answered "+
+			"%v, want %d attempts and a move", attempts, err, pageMoveAttempts)
+	}
+}
