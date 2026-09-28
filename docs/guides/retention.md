@@ -956,6 +956,23 @@ still a `work_activity` question at any age. A month is the floor because below
 it an inbox stops being one — somebody away for four weeks would come back to
 nothing.
 
+The org chart's two trails are **never swept**, on any node. `chart_history` —
+one row per change to a unit or a seat: what happened, by whom, from which
+configuration revision — and `chart_import_ledger` — which revision produced
+which position on the chart's log — are kept for the deployment's life, and no
+maintenance job deletes from either. That is affordable because both grow with
+how often a company *restructures*, which is rare: a hire, a move or a rename is
+one history row of well under a kilobyte, so even a company reorganising every
+week accumulates megabytes over years, beside a tracker that grows by the task.
+It is also what the two tables are for. The history answers "when did this team
+change hands" however long ago it happened, which is exactly the question a
+horizon would start refusing; and the ledger is what makes re-activating a
+revision the chart already imported a no-op on every node, so a swept row would
+turn the routine credential-rotation gesture into a second import that rewrites
+every object and wakes everybody again. (The chart's migration names "the
+ledger's own sweep" beside the ledger's position index; there is none, and the
+index serves the newest-import read.)
+
 ## The storage forecast
 
 For the reference company (100 000 tasks a year, 300 000 comments, 1 000 edits
