@@ -231,8 +231,8 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 		// told its caller to reshape a body that was never wrong. `422
 		// refused` is the human write surface's code for the same thing,
 		// and the detail is the rule's own sentence.
-		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused,
-			map[string]string{"detail": err.Error()})
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeRefused,
+			refusalFields(err))
 		return
 	case errors.Is(err, statelog.ErrConflict):
 		// STALE, NOT bad_params: the write lost a race to somebody else's
@@ -274,6 +274,30 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}
+}
+
+// refusalFields is a domain refusal's answer: the rule's own sentence, and —
+// for a batch — WHICH OPERATION broke WHICH RULE, as fields.
+//
+// THE DOMAIN NAMES THEM FOR A SURFACE TO BRANCH ON ([chart.RefusalError]'s
+// Index and Rule), and a surface that rendered only the sentence left a
+// caller submitting a batch of five hundred to parse "operation 312" out of
+// prose to learn which of its changes to take back — the reading of a refusal
+// out of words written for a person that every other surface here refuses to
+// make an API of. The object is the one the operation named, in the batch's
+// own `{kind, id}` shape, so a client matches it against what it sent.
+func refusalFields(err error) httpjson.Detail {
+	detail := httpjson.Detail{"detail": err.Error()}
+	var refusal *chart.RefusalError
+	if errors.As(err, &refusal) {
+		detail["index"] = refusal.Index
+		detail["rule"] = refusal.Rule
+		detail["object"] = map[string]string{
+			"kind": string(refusal.Operation.Object.Kind),
+			"id":   refusal.Operation.Object.ID,
+		}
+	}
+	return detail
 }
 
 // refuseGrant renders a record the domain refused for a capability its party

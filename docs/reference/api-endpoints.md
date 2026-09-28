@@ -827,7 +827,14 @@ one JSON value but whitespace — a stray `}` or `]`, or a second value.
 
 A refusal by the chart's own rules is `422 refused`, with the rule's own sentence
 as its `detail` — the body was well formed and the chart will not take it, so no
-reshaping of the body would change the answer — a contention another writer won is
+reshaping of the body would change the answer. A refused **batch** also names
+which operation broke which rule, as fields rather than only in the sentence:
+`index` (the operation's position in `operations`, from 0), `rule` (the rule's
+name — `the key is taken`, `the key was removed`, `no such parent`, `the move
+closes a cycle`, `the unit is not empty`, …) and `object` (the `{kind, id}` that
+operation named), so a client that sent five hundred operations knows which one
+to take back without parsing the sentence. A content write's refusal names no
+operation and carries none of the three. A contention another writer won is
 `409 stale` (re-read and write again — nothing about the request was wrong), and
 a node that cannot decide **authority** is `503` rather than `403`: a node that
 is booting or behind the log cannot say who leads a unit, and `403` would send

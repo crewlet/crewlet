@@ -1452,6 +1452,57 @@ func TestARenameAnswersTheRefusalRatherThan200(t *testing.T) {
 	}
 }
 
+// A REFUSED BATCH NAMES WHICH OPERATION BROKE WHICH RULE, AS FIELDS.
+//
+// The domain carries the index and the rule so a surface can branch on them,
+// and the answer carried only the sentence — so a client that sent five
+// hundred operations learned which one to take back by parsing "operation
+// 312" out of prose. The control is a content write's refusal, which names no
+// operation and so carries none of the three.
+func TestARefusedBatchNamesTheOperationAndTheRule(t *testing.T) {
+	t.Parallel()
+	r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
+	r.writer.err = &chart.RefusalError{Index: 3, Rule: chart.RuleKeyTaken,
+		Operation: chart.Operation{Kind: chart.OpCreateSeat,
+			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ana"}},
+		Detail: `seat "ana" is already in the chart`}
+
+	rec := post(r.mux, "/chart/batch",
+		`{"operations":[{"kind":"create_seat","object":{"kind":"seat","id":"ana"},"seat_kind":"agent"}]}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a refused batch answered %d, want 422: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Error  string            `json:"error"`
+		Index  *int              `json:"index"`
+		Rule   string            `json:"rule"`
+		Object map[string]string `json:"object"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Index == nil || *body.Index != 3 {
+		t.Errorf("index = %v, want 3: %s", body.Index, rec.Body)
+	}
+	if body.Rule != chart.RuleKeyTaken {
+		t.Errorf("rule = %q, want %q", body.Rule, chart.RuleKeyTaken)
+	}
+	if body.Object["kind"] != string(chart.KindSeat) || body.Object["id"] != "ana" {
+		t.Errorf("object = %v, want the seat the operation named", body.Object)
+	}
+
+	r.writer.err = fmt.Errorf("%w: the seat is not in the chart", chart.ErrRefused)
+	rec = patch(r.mux, "/chart/seats/ana", `{"name":"Ana"}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a refused content write answered %d, want 422: %s", rec.Code, rec.Body)
+	}
+	for _, field := range []string{`"index"`, `"rule"`, `"object"`} {
+		if strings.Contains(rec.Body.String(), field) {
+			t.Errorf("a refusal naming no operation carried %s: %s", field, rec.Body)
+		}
+	}
+}
+
 // A FIELD A ROUTE DOES NOT READ IS REFUSED, NAMING IT, AND NOTHING IS WRITTEN.
 //
 // Every write here is full post-state or a structural gesture, so a dropped
