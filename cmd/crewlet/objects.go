@@ -304,10 +304,19 @@ func renderObjects(w io.Writer, v objectsView) error {
 
 // shortDuration is a whole duration without its empty minutes and seconds —
 // "1h" rather than "1h0m0s" — for the constants these lines name.
+//
+// ONLY A UNIT'S OWN ZERO IS DROPPED: the seconds when a larger unit precedes
+// them, then the minutes when the hours do. Trimming the bare text "0s" and
+// "0m" cut into a unit's own digits — "10s" came out "1", "50m0s" "5" and
+// "1h30m0s" "1h3".
 func shortDuration(d time.Duration) string {
 	s := d.String()
-	s = strings.TrimSuffix(s, "0s")
-	s = strings.TrimSuffix(s, "0m")
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
 	return s
 }
 
