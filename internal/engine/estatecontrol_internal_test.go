@@ -51,7 +51,7 @@ func storedEstateMap(t *testing.T, nodes ...string) *coordmemory.Fleet {
 }
 
 func estateControlOver(store estateMapStore) *EstateControl {
-	return &EstateControl{store: store, now: func() time.Time { return gestureNow }}
+	return &EstateControl{store: store, running: LayoutZero(), now: func() time.Time { return gestureNow }}
 }
 
 // UNDER THE SINGLE-FILE LAYOUT THERE IS NO ESTATE MAP, and every gesture says
@@ -79,9 +79,27 @@ func TestUnderLayoutZeroEveryEstateGestureSaysThereIsNoMap(t *testing.T) {
 			t.Errorf("%s = (landed %v, %v), want ErrNoMap", name, got.Landed, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), "layout 0") {
+		if msg := err.Error(); !strings.Contains(msg, "layout 0") || !strings.Contains(msg, "whole") {
 			t.Errorf("%s's refusal does not say why there is no map: %v", name, err)
 		}
+	}
+}
+
+// AT A PARTITIONED LAYOUT A MISSING MAP IS A MAP NOT WRITTEN YET, and the
+// refusal says so — never that every data node holds the whole estate, which
+// is layout 0's absence and would send an operator the opposite way.
+func TestAtAPartitionedLayoutAGestureSaysNoMapIsWrittenYet(t *testing.T) {
+	t.Parallel()
+	c := estateControlOver(coordmemory.NewFleet())
+	c.running = DefaultLayoutOne()
+	_, err := c.Out(t.Context(), "a", "ops", "")
+	if !errors.Is(err, partmap.ErrNoMap) {
+		t.Fatalf("Out = %v, want ErrNoMap", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "layout 1") || !strings.Contains(msg, "written yet") ||
+		strings.Contains(msg, "whole") {
+		t.Errorf("a partitioned node's refusal reads %q", msg)
 	}
 }
 

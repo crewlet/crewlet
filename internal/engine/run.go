@@ -906,7 +906,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// publishes. Under the single-file layout every one of them answers
 	// that there is no map — see estatecontrol.go.
 	if backends.Fleet != nil {
-		e.estateControl = &EstateControl{store: backends.Fleet, now: time.Now}
+		e.estateControl = &EstateControl{store: backends.Fleet, running: LayoutZero(), now: time.Now}
 	}
 
 	// AND THE FOLLOWS, on the same reasoning and in the same window: before

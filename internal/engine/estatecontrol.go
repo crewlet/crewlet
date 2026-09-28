@@ -36,12 +36,17 @@ import (
 // [ErrEstateUnavailable], and a map this build cannot rewrite
 // [ErrEstateNewerMap].
 //
-// # Under the single-file layout
+// # Where there is no map
 //
-// There is no estate map — every data node holds the whole estate, and the
-// map's duty writes none for that layout — so [EstateControl.State] answers
-// that there is none, and EVERY gesture is refused with [partmap.ErrNoMap],
-// saying why: there is no partition to place, move or hold anybody for.
+// [EstateControl.State] answers that there is none, and EVERY gesture is
+// refused with [partmap.ErrNoMap], saying why in the words of the layout THIS
+// NODE RUNS, because the two absences send an operator in opposite
+// directions. Under the single-file layout — the only one this build runs —
+// every data node holds the whole estate and the map's duty writes none, so
+// there is no partition to place, move or hold anybody for. At a partitioned
+// layout the estate IS divided and no map has been written yet, so nothing is
+// placed until the duty writes the first — which is a fleet to wait for or
+// look into, never one to be told it holds everything everywhere.
 
 // ErrEstateUnavailable is a gesture whose read or write the coordination store
 // did not answer. It says nothing about the map, which is unchanged or changed
@@ -54,11 +59,20 @@ var ErrEstateUnavailable = errors.New("engine: the estate map could not be read 
 var ErrEstateNewerMap = errors.New("engine: the estate map was written by a newer build; " +
 	"make this gesture from a node running it")
 
-// errNoEstateMap is the refusal of a gesture where there is no estate map:
-// [partmap.ErrNoMap], saying what a fleet with none is.
-var errNoEstateMap = fmt.Errorf("%w: the estate is not divided into partitions — every "+
-	"data node holds the whole of it (layout 0) — so there is no partition to place, "+
-	"move or hold a node for", partmap.ErrNoMap)
+// noEstateMap is the refusal of a gesture where there is no estate map:
+// [partmap.ErrNoMap], saying what a fleet with none is on the layout this node
+// runs — see the file's doc.
+func noEstateMap(running statelog.Layout) error {
+	if running.Number == 0 {
+		return fmt.Errorf("%w: the estate is not divided into partitions — every data "+
+			"node holds the whole of it (layout 0) — so there is no partition to place, "+
+			"move or hold a node for", partmap.ErrNoMap)
+	}
+	return fmt.Errorf("%w: this node runs layout %d and no estate map has been written yet, "+
+		"so no partition is placed; the estate-map duty writes the first once the layout's "+
+		"logs exist and a company and a data node are there to place them on",
+		partmap.ErrNoMap, running.Number)
+}
 
 // estateMapStore is what the gestures need from the coordination store.
 type estateMapStore interface {
@@ -73,7 +87,12 @@ type EstateGesture = MapGesture[partmap.MapState]
 // with no coordination store to hold one.
 type EstateControl struct {
 	store estateMapStore
-	now   func() time.Time
+
+	// running is the layout this node runs, which says what a fleet with no
+	// map is.
+	running statelog.Layout
+
+	now func() time.Time
 }
 
 // Out takes a data node out of the estate map: every partition's target stops
@@ -123,7 +142,7 @@ func (c *EstateControl) CancelMove(ctx context.Context, p statelog.PartitionID, 
 }
 
 // State reads the stored map as it is now, and false while there is none —
-// which, under the single-file layout, is always.
+// which, under the single-file layout this build runs, is always.
 //
 // FROM THE STORE, not a watched view: a gesture's caller wants the map the next
 // gesture will be applied to.
@@ -152,7 +171,7 @@ func (c *EstateControl) record() casMap[partmap.MapState] {
 		},
 		decode:      partmap.DecodeMapStateForUpdate,
 		encode:      partmap.MapState.Encode,
-		noMap:       errNoEstateMap,
+		noMap:       noEstateMap(c.running),
 		unavailable: ErrEstateUnavailable,
 		newer:       ErrEstateNewerMap,
 		fields:      estateGestureFields,
