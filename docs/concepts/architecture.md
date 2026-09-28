@@ -572,7 +572,7 @@ to the adopted log.
 
 | Bucket | What it holds |
 |---|---|
-| **`crewlet_leases`** | `node:` · `seat:` ownership; `objects:` — a data node's membership in the object store, carrying its weight, labels and its store's health; and `estate:` — a data node's membership in the estate map once a layout divides the replicated estate, claimed by its estate runtime and released last in a drain, carrying its weight, the layout it runs, the map epoch it acted on and what it holds of each partition. The bucket's age **is** the lease TTL |
+| **`crewlet_leases`** | `node:` · `seat:` ownership; `objects:` — a data node's membership in the object store, carrying its weight, labels and its store's health; and `estate:` — a data node's membership in the estate map, claimed by its estate runtime once it is up and released last in a drain, carrying its weight, the layout it runs, the map epoch it acted on and what it holds of each partition (while the estate is one file, layout 0's one partition, held whole). The bucket's age **is** the lease TTL |
 | **`crewlet_duties`** | `worker:` ownership. Each record is judged by its own duty's deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |

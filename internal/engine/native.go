@@ -115,6 +115,12 @@ type native struct {
 	// every embedded engine and every test.
 	stopSlices queue.Unsubscribe
 
+	// lease is this data node's estate membership (`estate:{node}`),
+	// claimed once the runtime is up and given back only after it has
+	// stopped — see estatelease.go. Nil where there is no coordination
+	// store to claim it in.
+	lease *memberLease
+
 	// run is the context every goroutine this node started runs under, and
 	// stop is what ends it.
 	//
@@ -372,6 +378,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}()
 	}
 
+	// AND THE ESTATE MEMBERSHIP, once the runtime it describes is up — the
+	// log applying, the index building — and before the runtime is
+	// published, so it is a field written once like every other; the
+	// failure path above gives it back with the rest.
+	n.lease = e.startEstateLease(ctx, n)
+
 	// PUBLISHED LAST, whole: every field above is written before the
 	// store, which is what lets every reader load it without a lock.
 	e.native.Store(n)
@@ -565,6 +577,14 @@ func (n *native) shutdown(ctx context.Context) {
 	// nothing is applying, which is not wrong so much as a shutdown that
 	// looks like a stall in every log line it produces on the way out.
 	n.log.Stop()
+	// AND THE MEMBERSHIP AFTER ALL OF IT: a member is what the estate map
+	// places partitions on and a capacity window waits for, so it is given
+	// back only once nothing of this runtime serves or applies — never at
+	// a drain's first step, which is presence's and the reason this lease
+	// exists (estatelease.go).
+	if n.lease != nil {
+		n.lease.stop(ctx)
+	}
 }
 
 // NativeHydrated reports whether every native projection this node runs has

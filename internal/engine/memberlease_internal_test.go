@@ -36,7 +36,7 @@ func TestAMembershipLeaseThatCannotSayWhatItHoldsIsNotClaimed(t *testing.T) {
 	l := startMemberLease(t.Context(), b, memberLeaseSpec{
 		resource: coord.EstateResource("n1"), node: "n1", owner: "n1:inc",
 		ttl: 300 * time.Millisecond, what: "estate membership", event: "estate",
-		meta: func() (map[string]any, error) {
+		meta: func(context.Context) (map[string]any, error) {
 			beats.Add(1)
 			if !said.Load() {
 				return nil, errors.New("the store is not open")

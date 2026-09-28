@@ -417,16 +417,17 @@ func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
 	}
 
 	// ONE OF EACH KIND the process holds for itself: the host's presence, a
-	// seat and a fleet duty, and the object store's membership, which a loop
-	// of its own claims.
+	// seat and a fleet duty, and the object store's and the estate's
+	// memberships, which loops of their own claim.
 	leases := e.backends.Coord
 	resources := []string{
 		coord.NodeResource("node-7"),
 		coord.SeatResource("ceo"),
 		coord.WorkerResource(objectMapDuty),
 		coord.ObjectsResource("node-7"),
+		coord.EstateResource("node-7"),
 	}
-	eventually(t, "the presence, a seat, the map duty and the membership", func() bool {
+	eventually(t, "the presence, a seat, the map duty and the memberships", func() bool {
 		for _, resource := range resources {
 			if held(t, leases, resource) == nil {
 				return false
@@ -444,7 +445,7 @@ func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
 	// on the store, so a lease of any class under a different owner is a
 	// second identity the list above did not think to name.
 	for _, class := range []coord.Class{coord.ClassNode, coord.ClassSeat,
-		coord.ClassWorker, coord.ClassObjects} {
+		coord.ClassWorker, coord.ClassObjects, coord.ClassEstate} {
 		live, err := leases.ListLive(t.Context(), class)
 		if err != nil {
 			t.Fatalf("list the %s leases: %v", class, err)

@@ -141,9 +141,9 @@ and the part before the colon is the **class**; the key it becomes carries that 
 subject token of its own, so `seat` is a wildcard and the seats are addressable
 without the nodes. The reads that pay for it run on a ticker: the membership
 reads — the fleet's, which asks for the presence leases, the object store's,
-which asks for the `objects:` leases its data nodes hold, and, once a layout
-divides the replicated estate, the estate map's, which asks for the `estate:`
-leases — each read one class instead of every lease in the fleet, and the sweep's
+which asks for the `objects:` leases its data nodes hold, and the estate
+map's, which asks for the `estate:` leases — each read one class instead of
+every lease in the fleet, and the sweep's
 placement hints come from the `epochs` bucket — the one with no expiry at all,
 holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
@@ -187,7 +187,19 @@ holds, and it carries what the estate map decides by — the node's weight, the
 layout it runs, the map epoch it last acted on, what it holds of each
 partition and whether its store is healthy. A lease that does not say its
 store is healthy counts as a failed one, the reverse of the objects lease's
-reading, because the estate lease was born with the field.
+reading, because the estate lease was born with the field. Both membership
+leases are kept by one loop, which claims nothing on a beat that cannot say
+what the lease must: a membership written without its account would be read
+as a claim the node never made.
+
+Every data node running the estate holds one today, while the estate is still
+one file that every data node holds whole (layout 0): it says layout 0, no map
+epoch, and the one partition `estate.000` — `serving` once its copy is
+established, the same readiness a seat's admission waits on, `catching_up`
+before that, and `faulted` when the copy is wrong rather than behind. Nothing
+reads those states until a layout divides the estate. A data node that runs no
+estate — a company on vendor backends for both its tracker and its knowledge
+base, or a node with no company yet — holds none.
 
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with

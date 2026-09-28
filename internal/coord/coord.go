@@ -385,7 +385,7 @@ type AcquireOptions struct {
 	// Meta rides with the record; see Lease.Meta.
 	Meta map[string]any
 
-	// Ungated skips the lower-protocol refusal, and exactly three callers
+	// Ungated skips the lower-protocol refusal, and exactly four callers
 	// need it.
 	//
 	// Node presence: membership is not work. A newer-protocol node that
@@ -400,6 +400,13 @@ type AcquireOptions struct {
 	// whole share of the company's files is copied to the other members —
 	// and copied back when the upgrade finishes — for a node that never
 	// stopped serving a chunk.
+	//
+	// Estate-map membership, for the object store's reason: a data node
+	// that could not claim its `estate:` lease during an upgrade reads to
+	// the estate map as ABSENT, and past the map's grace every partition it
+	// holds is rebuilt on the other members — and a capacity window no
+	// longer counts it as a publisher of the estate's records while it
+	// still is one.
 	//
 	// Singleton duties: a duty record left at protocol 1 by a build that
 	// predates the gate would block every seat claim fleet-wide the moment

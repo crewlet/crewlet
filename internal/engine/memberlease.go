@@ -44,7 +44,7 @@ type memberLease struct {
 
 	// meta is what the lease says this beat, built fresh each time, or why
 	// it cannot be said.
-	meta func() (map[string]any, error)
+	meta func(context.Context) (map[string]any, error)
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -69,8 +69,9 @@ type memberLeaseSpec struct {
 	// what and event name the membership in its log lines.
 	what, event string
 
-	// meta builds what the lease says, fresh for every beat.
-	meta func() (map[string]any, error)
+	// meta builds what the lease says, fresh for every beat, within the
+	// context it is handed.
+	meta func(context.Context) (map[string]any, error)
 }
 
 // startMemberLease claims the lease at once and renews it every interval until
@@ -118,10 +119,13 @@ func startMemberLease(ctx context.Context, leases coord.Backend, spec memberLeas
 // never made; left unrenewed it lapses, and the map counts the node absent,
 // which is the honest reading of a member that cannot say what it is.
 func (l *memberLease) beat(ctx context.Context) {
-	// THE ACCOUNT FIRST, outside the claim's deadline: building it may
-	// probe a disk or read a runtime, and a slow one must not spend the
-	// budget of the write that says so.
-	meta, metaErr := l.meta()
+	// THE ACCOUNT FIRST, under a deadline of its own rather than the
+	// claim's: building it may probe a disk or read a runtime, and a slow
+	// one must not spend the budget of the write that says so — nor hold
+	// the beat past the next one.
+	account, cancelAccount := context.WithTimeout(ctx, l.interval)
+	meta, metaErr := l.meta(account)
+	cancelAccount()
 	l.mu.Lock()
 	if metaErr != nil {
 		if !l.unsaid {

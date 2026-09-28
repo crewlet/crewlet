@@ -46,6 +46,6 @@ func startObjectsLease(ctx context.Context, leases coord.Backend, node, owner st
 		// NEVER UNSAID: every field an objects lease carries is either
 		// measured on the beat or absent until there is something to say,
 		// so there is always an account to write.
-		meta: func() (map[string]any, error) { return meta().Encode(), nil },
+		meta: func(context.Context) (map[string]any, error) { return meta().Encode(), nil },
 	})
 }
