@@ -30,6 +30,8 @@ subcommand below is served by it.
 | `crewlet objects in <node> -confirm <node>` | Put a member back, or vouch for a node the map removed for being gone: one on probation is placed on at once, one not seen since from its next sighting |
 | `crewlet objects hold -for DURATION [-reason TEXT]` | Hold the map through planned maintenance, at most 24h: no member is removed however long it is gone |
 | `crewlet objects release` | End a hold |
+| `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a build older than the field) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
+| `crewlet fleet broker remove <node> -confirm <node> [-force]` | Stop the metadata group counting a member that is gone for good, through a live member's system account. Refused while the node holds a live presence lease; `-force` is for a member wedged in a way that still renews it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -796,6 +798,65 @@ an `out`, an `in` or a `release` the map already says changes nothing — the
 record of who took a member out, why and when included — and writes nothing,
 while a `hold` always writes, replacing the hold in force with its length
 counted from the resend. Read `status` before re-sending a hold.
+
+## `crewlet fleet broker`
+
+```
+crewlet fleet broker list [-json] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+The fleet broker's membership. Two records say who its members are: every node
+advertises its **broker kind** on its presence lease — derived from its
+`stream` block, never from its roles (see
+[Configuration](../concepts/configuration.md#noderoles)) — and the broker's
+**metadata group**, the raft group that places every stream and consumer,
+counts its voters for itself. Both verbs talk to a running node, and the node
+asks a member where it is not one: only a member holds the group, and a removal
+is answered only on its system account, which nothing outside its process can
+reach. They are clients of the routes in the
+[API reference](api-endpoints.md#the-brokers-membership).
+
+### `crewlet fleet broker list`
+
+The question it answers is **does the broker still count a member I have
+lost?** One row per live node — what it advertises, its roles, and how the
+group counts it (`leader`, `current`, `offline, last heard 5m ago`, or `-` for a
+node that is no voter) — then one row per voter no live node is, and under the
+table every disagreement in words:
+
+- **DEAD MEMBER** — a voter no live node is, or whose node came back as a leaf
+  or a client. Every election and every create goes on counting it; the line
+  prints the `remove` command for once it is not coming back.
+- **NOT COUNTED** — a live node advertising a member the group does not count:
+  still joining, or removed while it ran.
+- **UNKNOWN** — a node whose presence does not say what its broker is, which a
+  capacity seal counts as a member.
+
+A group no member could report is said to be unread, never shown as empty. On a
+fleet whose broker is an external cluster it says so and lists nothing: that
+membership is the cluster's own operator's. `-json` prints the node's answer as
+it came.
+
+### `crewlet fleet broker remove`
+
+Stops the metadata group counting a member, by node id, once the group has
+committed the change — printing which member's system account carried it and
+the voters that remain. **Refused while the node holds a live presence lease**:
+it is still running, and a running member removed from the group rejoins it as
+a voter at its next restart, so stop it first. `-force` removes it anyway, for a
+member wedged in a way that still renews its lease. The member being removed
+never carries its own removal while another member is live.
+
+Only the group's leader answers a removal, and a member removed because its
+host died was often that leader — so the removal asks again every second while
+the survivors elect another, and a removal made during an election waits it
+out rather than failing. A group that answers nobody for the whole wait (two
+minutes) has lost its quorum and can change nothing about itself, and the
+refusal says so: bring enough members back for a quorum, then ask again. A
+removal the node did not answer may still have been committed; `list` reads
+the group, and asking again for a member already removed is refused as not a
+member.
 
 ## `crewlet retention`
 

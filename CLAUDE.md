@@ -116,7 +116,8 @@ When in doubt, ask: "If I stopped right now, would a reader of this diff conside
 ```
 cmd/crewlet/          # The one binary. run / validate / schema / migrate /
                       #   budgets / backup / retention / work / objects /
-                      #   secrets / config / llm / search, and the six vendor CLIs
+                      #   fleet / secrets / config / llm / search, and the six
+                      #   vendor CLIs
                       #   (gitlab, github, jira, slack, confluence,
                       #   mattermost).
                       #   Every command the switch dispatches must appear in
