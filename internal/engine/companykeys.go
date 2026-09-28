@@ -266,10 +266,10 @@ func (s personBlindSource) Blinder(ctx context.Context) (*iamdomain.Blinder, err
 // — see [iamdomain.CoversLog]. A node behind the log, or holding a record it
 // retained, may simply not have the blinded rows yet.
 func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
-	if e.native == nil || e.native.iamReader == nil || e.native.log == nil {
-		return fmt.Errorf("%w: this node runs no identity domain, so it "+
-			"cannot tell whether %s was ever in use", iamdomain.ErrNoBlindKey,
-			iamdomain.BlindKeyName)
+	if e.native == nil || e.native.log == nil {
+		return fmt.Errorf("%w: this engine runs no native runtime, so it has no "+
+			"identity rows to tell whether %s was ever in use",
+			iamdomain.ErrNoBlindKey, iamdomain.BlindKeyName)
 	}
 	return judgeBlindKeyMint(ctx, e.IdentityLogEnd, e.native.iamReader.HoldsBlinds)
 }
@@ -285,7 +285,7 @@ func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
 // retained and called the node current while that record's rows were missing.
 func (e *Engine) IdentityLogEnd(ctx context.Context) (uint64, error) {
 	if e.native == nil || e.native.log == nil {
-		return 0, errors.New("engine: this node runs no identity domain, so " +
+		return 0, errors.New("engine: this engine runs no native runtime, so " +
 			"there is no identity log to read the end of")
 	}
 	running := e.native.log.Domain(iamdomain.Domain{}.Name())

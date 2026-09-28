@@ -557,14 +557,10 @@ standing, and the node reads the directory once and — if the answer moved —
 builds a whole new registry for the company it already serves and swaps it in,
 exactly as `parties` does. Both triggers take one lock, so they cannot swap a
 half-built registry past each other, and neither is ever a diff against the
-live one. It is within one apply on every node that runs the identity domain
-(`ingress`, `workers`), with a thirty-second re-read as the net — the chart
-view's own figure, for the chart view's own reasons — and it never appears in
-`applied_subsystems`, because no apply ran. A node that runs no identity domain
-has no applier to signal it: it asks the nodes that do on the thirty-second
-re-read, and builds from the most caught-up answer the fleet signed — never one
-behind the reading it already has (see [Humans in the Org
-Chart](humans-in-the-org.md)).
+live one. It is within one apply on every node, whatever its roles, with a
+thirty-second re-read as the net — the chart view's own figure, for the chart
+view's own reasons — and it never appears in `applied_subsystems`, because no
+apply ran.
 
 **The order is not arbitrary.** A released inbox runs a turn immediately, and
 that turn resolves parties, loads its tool surface and files work into a
@@ -840,8 +836,8 @@ It has no default — a key the engine invented would be one no other node holds
 — and far more than the company's credentials rest on it:
 
 - every record on every state log is signed and verified under it, because the
-  broker authenticates nothing, and every node runs state logs (the tracker,
-  the vectors, the pages and the org chart run on a seats-only satellite too);
+  broker authenticates nothing, and every node runs every state log, a
+  seats-only satellite included;
 - the company document a node fetches from its peers is authenticated by its
   seal, so a node refuses one that arrives unsealed (see [Secrets](#secrets));
 - on a node serving the API it signs every session cookie and derives the key

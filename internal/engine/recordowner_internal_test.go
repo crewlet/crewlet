@@ -175,13 +175,13 @@ func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO IDENTITY DOMAIN CANNOT SAY WHOSE RECORD A LOGIN IS, and says
-// so rather than reading an empty copy of the estate as "nobody".
-func TestANodeWithNoIdentityDomainCannotSayWhoseRecord(t *testing.T) {
+// AN ENGINE WITH NO IDENTITY DIRECTORY CANNOT SAY WHOSE RECORD A LOGIN IS, and
+// says so rather than reading an absent estate as "nobody".
+func TestAnEngineWithNoDirectoryCannotSayWhoseRecord(t *testing.T) {
 	t.Parallel()
 	var e *Engine
-	if _, err := e.HolderRecord(t.Context(), "jane.doe"); !errors.Is(err, errNoIdentityDomain) {
-		t.Errorf("HolderRecord on a nil engine = %v, want %v", err, errNoIdentityDomain)
+	if _, err := e.HolderRecord(t.Context(), "jane.doe"); !errors.Is(err, errNoDirectory) {
+		t.Errorf("HolderRecord on a nil engine = %v, want %v", err, errNoDirectory)
 	}
 }
 

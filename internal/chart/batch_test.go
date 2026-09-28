@@ -488,14 +488,14 @@ func TestARemoveOfAHeldSeatIsRefusedNamingThePerson(t *testing.T) {
 	}
 }
 
-// A NODE THAT CANNOT READ THE DIRECTORY REFUSES, NAMING ITSELF.
+// A WRITER THAT CANNOT ASK THE DIRECTORY REFUSES.
 //
-// This is the arm that makes the whole check worth having. A node that does
-// not run the identity domain holds an EMPTY copy of those rows, so reading
-// them answers "nobody holds this seat" for every seat in the company — which
-// would make a seats-only satellite the one place every removal succeeds, and
-// the one place it is least likely to be noticed.
-func TestASatelliteRefusesASeatRemoveNamingTheNode(t *testing.T) {
+// This is the arm that makes the whole check worth having. A directory that
+// could not be read has said nothing, and reading that silence as "nobody
+// holds this seat" would make a store fault — or a wiring that left the
+// directory out — the one place every removal succeeds, and the one place it
+// is least likely to be noticed.
+func TestAWriterThatCannotAskTheDirectoryRefusesASeatRemove(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	remove := chart.Batch{Operations: []chart.Operation{
@@ -504,15 +504,14 @@ func TestASatelliteRefusesASeatRemoveNamingTheNode(t *testing.T) {
 		op(chart.OpRemoveObject, chart.KindSeat, "ana", ""),
 	}}
 
-	// NO DIRECTORY AT ALL, which is what a node outside the domain's
-	// declared set supplies.
+	// NO DIRECTORY AT ALL, which is the writer's zero value.
 	_, _, err := h.validateWith(remove, nil)
 	refused := refusal(t, err)
 	if refused.Rule != chart.RuleDirectoryUnreadable {
 		t.Fatalf("rule = %q, want %q", refused.Rule, chart.RuleDirectoryUnreadable)
 	}
-	if !strings.Contains(refused.Detail, "node") {
-		t.Errorf("the refusal does not say the remedy is another node: %s",
+	if !strings.Contains(refused.Detail, "no identity directory") {
+		t.Errorf("the refusal does not say the writer holds no directory: %s",
 			refused.Detail)
 	}
 
@@ -533,8 +532,8 @@ func TestASatelliteRefusesASeatRemoveNamingTheNode(t *testing.T) {
 }
 
 // AND A UNIT'S REMOVAL ASKS NOTHING OF THE DIRECTORY, which is the scope
-// control: a unit holds no person, so consulting it would refuse a removal on
-// a satellite for a reason that cannot apply.
+// control: a unit holds no person, so consulting it would refuse a removal
+// over a directory fault for a reason that cannot apply.
 func TestAUnitRemovalNeedsNoDirectory(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

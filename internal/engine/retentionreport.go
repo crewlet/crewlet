@@ -70,10 +70,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 				if !ok {
 					continue
 				}
-				in.Live = append(in.Live, statelog.Presence{
-					NodeID:  profile.ID,
-					Domains: domainNames(participationOf(profile.Roles).Domains()),
-				})
+				in.Live = append(in.Live, statelog.Presence{NodeID: profile.ID})
 			}
 		}
 	}

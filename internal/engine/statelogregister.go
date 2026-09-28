@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -45,6 +44,24 @@ import (
 // terms are compared in. A map would reorder all of them on a whim of the
 // runtime, which is why this is a table rather than a registry each domain
 // writes itself into from an init.
+//
+// # Every node runs every domain
+//
+// There is no per-domain participation and nothing here reads `node.roles`:
+// whatever roles a node declares, it applies every log in this table. The
+// identity estate once narrowed — a seats-only satellite skipped it, since no
+// turn reads it — and the narrowing cost more than it saved. The satellite
+// still consumed inbound deliveries and ran seats whose contact routing turns
+// on who holds each seat, so it needed a second way to read the directory (a
+// signed scatter to the nodes that held it, with nonces, a head check and a
+// thirty-second poll); an adopted snapshot had to be stripped of the domains
+// a node declined; the trim had to leave a decliner out of that log's counted
+// set; and every reader of the estate carried an arm for "this node has no
+// copy". What it saved was one small log that grows with the company's
+// headcount — on a host that already holds the fleet keyring, which opens
+// every company secret. A domain whose rows a role does not read still costs
+// that role's nodes its disk and its applier, and that is the price this
+// table pays for every node answering every question from its own rows.
 //
 // # Why the constructors are functions on the engine rather than methods on
 // the domain
@@ -122,29 +139,6 @@ type registration struct {
 	// ([statelog.Runner.PurgeOpsOfKind]). Nil is one horizon for the
 	// whole ledger, which is every domain but the identity estate's.
 	OpsKindRetention map[string]time.Duration
-
-	// Participates reports whether a node with these roles runs this
-	// domain. Required, and stated per domain rather than defaulted,
-	// because "every node runs everything" is an answer rather than an
-	// absence: a domain whose rows only an ingress node reads still costs
-	// every seats-only satellite its disk and its applier, and a satellite
-	// that holds a directory of people it authenticates nobody against is
-	// the specific thing this exists to prevent.
-	//
-	// THE STREAM IS NOT PART OF WHAT IT SAVES. A domain's stream and the
-	// ceiling reserved for it are the FLEET's, and every node creates and
-	// sizes every registered domain's stream whatever it runs
-	// ([ceilingsFor], [stateLog.provisionAll]), because a stream keeps the
-	// ceiling of whichever node created it first — so a node that does not
-	// run a domain still counts its share of the broker's budget.
-	//
-	// EVERY DOMAIN A NODE DECLARES OR NONE. The set is one fact with five
-	// readers — the applier set, the snapshot manifest, an offer's
-	// usability, the trim's counted set and the store's pinned writers —
-	// and a node running half of what it declared serves rows derived from
-	// one log while another's records pile up unapplied, which nothing
-	// above it can tell from a node that is merely behind.
-	Participates func(placement.RoleSet) bool
 }
 
 // writeSeams is what one domain's write authority is built from: the three
@@ -189,7 +183,6 @@ func register() []registration {
 			},
 			Barrier:      tracker.EncodeBarrier,
 			OpsRetention: statelog.OpsRetention,
-			Participates: everyNode,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.LogMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -216,7 +209,6 @@ func register() []registration {
 			// and there is nothing a barrier could prove.
 			NoBarrier:    true,
 			OpsRetention: statelog.OpsRetention,
-			Participates: everyNode,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, _ := stream.VectorsMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -250,7 +242,6 @@ func register() []registration {
 			},
 			Barrier:      pages.EncodeBarrier,
 			OpsRetention: statelog.OpsRetention,
-			Participates: everyNode,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.PagesMaxBytes(free)
 				return domainCeiling{Bytes: bytes,
@@ -295,7 +286,6 @@ func register() []registration {
 			},
 			Barrier:      chart.EncodeBarrier,
 			OpsRetention: statelog.OpsRetention,
-			Participates: everyNode,
 			// THE ONE CEILING THAT IGNORES THE FREE BYTES, and the
 			// signature keeps the parameter so the table stays one
 			// shape: a chart is sized from the corpus rather than from
@@ -346,9 +336,6 @@ func register() []registration {
 			OpsKindRetention: map[string]time.Duration{
 				string(iamdomain.KindSession): iamdomain.SessionOpsRetention,
 			},
-			// THE FIRST DOMAIN THAT NARROWS, which is what
-			// participationIn's own comment anticipated.
-			Participates: servesPeople,
 			// NOT DERIVED FROM THE DISK either, like the org chart's and
 			// for a different reason: this log grows with the company's
 			// HEADCOUNT and how often people sign in, and a volume has
@@ -420,13 +407,6 @@ func checkRegister(entries []registration) error {
 					name, horizon, kind, entry.OpsRetention)
 			}
 		}
-		if entry.Participates == nil {
-			return fmt.Errorf("engine: the state-log register's entry for %q says "+
-				"nothing about which nodes run it, and an absent predicate is "+
-				"read as running NOWHERE — every node would strip its rows out "+
-				"of an adopted artefact and apply none of its records, silently. "+
-				"Declare everyNode, or the roles it needs", name)
-		}
 		if (entry.Barrier == nil) == !entry.NoBarrier {
 			return fmt.Errorf("engine: the state-log register's entry for %q must state "+
 				"either a barrier encoder or NoBarrier, and states %s — a domain "+
@@ -463,20 +443,12 @@ func registrationFor(name string) (registration, bool) {
 	return registration{}, false
 }
 
-// registeredDomains is every domain this BUILD knows, in the register's order,
-// whatever this node runs.
+// registeredDomains is every domain this build knows, in the register's order —
+// which is every domain this node runs, since every node runs every one.
 //
 // Kept as a derivation rather than folded into every caller, because most of
 // them want exactly this — the list — and reading it off the table is what
 // makes the table the single place a domain is declared.
-//
-// NOT THE SET A NODE APPLIES. That is [participationOf], and the difference
-// matters wherever the answer is about this process rather than about this
-// binary: what to start an applier for, what a snapshot may claim, what a
-// pinned writer is reserved for. What stays on this list is everything a
-// domain's EXISTENCE decides — the streams a maintenance window excludes, the
-// ceilings the broker is sized to — because a stream belongs to the fleet
-// whether or not the node reading this line applies it.
 func registeredDomains() []statelog.Domain {
 	entries := register()
 	domains := make([]statelog.Domain, 0, len(entries))
@@ -484,122 +456,6 @@ func registeredDomains() []statelog.Domain {
 		domains = append(domains, entry.Domain)
 	}
 	return domains
-}
-
-// participation is which registered domains a node runs and which it does not.
-//
-// BOTH HALVES, because the two have opposite dispositions everywhere they are
-// read and a caller holding one cannot derive the other without the register.
-// The run set decides what starts an applier, what a snapshot claims and what
-// an artefact must name; the unrun set decides what is STRIPPED out of an
-// artefact that carries it.
-type participation struct {
-	// Run is this node's own set, in the register's order.
-	Run []registration
-
-	// Unrun is the rest, as bare declarations: nothing here has an
-	// applier or a publisher on this node, and the only thing asked of it
-	// is what tables and which stream to scrub out of an artefact. Its
-	// STREAM still exists and is still sized here — a stream and its
-	// reserved ceiling are the fleet's, created on every node whatever it
-	// runs — so what not running it saves is the disk and the applier.
-	Unrun []statelog.Domain
-}
-
-// Domains is the run set as a plain list, for the callers that want the
-// declarations rather than the registrations.
-func (p participation) Domains() []statelog.Domain {
-	out := make([]statelog.Domain, 0, len(p.Run))
-	for _, entry := range p.Run {
-		out = append(out, entry.Domain)
-	}
-	return out
-}
-
-// Runs reports whether this node applies the named domain.
-func (p participation) Runs(name string) bool {
-	for _, entry := range p.Run {
-		if entry.Domain.Name() == name {
-			return true
-		}
-	}
-	return false
-}
-
-// DomainsForRoles is which state-log domains a node with these roles would
-// run, by name, in the register's order.
-//
-// EXPORTED FOR `crewlet validate`, which is the one surface that answers this
-// question about a configuration NOBODY IS RUNNING. Everything else reads it
-// off a live engine, and must: the engine decides it once at boot and a
-// second derivation is how a screen comes to name a set the appliers do not
-// match. This one has no engine to ask.
-//
-// It exists because the consequence is otherwise invisible until boot. An
-// operator narrowing node.roles narrows what that node applies, and the only
-// other symptom is a peer answering a question this node's copy cannot.
-func DomainsForRoles(roles placement.RoleSet) []string {
-	return domainNames(participationOf(roles).Domains())
-}
-
-// domainNames is a list of declarations as their names, which is the form
-// everything crossing a package boundary takes: a peer's participation
-// travels as strings, because the far side holds declarations of its own and
-// comparing two builds' Domain values would compare two different types.
-func domainNames(domains []statelog.Domain) []string {
-	out := make([]string, 0, len(domains))
-	for _, domain := range domains {
-		out = append(out, domain.Name())
-	}
-	return out
-}
-
-// participationOf divides the register by what a node with these roles runs.
-//
-// DERIVED FROM THE ROLES rather than configured beside them, so there is one
-// place an operator states it and no second list to keep in step. A node that
-// declares no roles runs every role, which [placement.RoleSet] already reads
-// an empty set as — so the default deployment is unchanged, and it is the
-// operator who narrowed the roles who narrows the domains.
-func participationOf(roles placement.RoleSet) participation {
-	return participationIn(register(), roles)
-}
-
-// participationIn is participationOf over a given register, which is what
-// lets a test hand it a NARROWING predicate. Every shipped domain runs
-// everywhere, so the rules below are unreachable through [register] alone and
-// a case that could only call that would be asserting nothing.
-func participationIn(entries []registration, roles placement.RoleSet) participation {
-	// AN EMPTY SET IS EVERY ROLE, resolved HERE rather than left to each
-	// predicate. [placement.RoleSet] settles that convention — "declared
-	// nothing" and "does nothing" must never be the same answer — and a
-	// predicate is exactly where it would be forgotten: a rolling upgrade
-	// puts a peer's presence row with no roles on it in front of this
-	// node, and a predicate reading that as "no roles" would leave the
-	// peer out of every domain it narrows on. It would then not be counted
-	// for that domain's trim, and the fleet would trim past a node that is
-	// still applying.
-	//
-	// It costs nothing today, because every shipped domain runs
-	// everywhere. It is here now because the first domain that narrows is
-	// the one that would have found out.
-	if len(roles) == 0 {
-		roles = placement.DefaultRoles()
-	}
-	var out participation
-	for _, entry := range entries {
-		// A NIL PREDICATE READS AS "NOWHERE", and [checkRegister]
-		// refuses one at boot for that reason: the safe-looking
-		// default, running everywhere, would make a domain nobody
-		// declared a participation for indistinguishable from one
-		// somebody decided runs on every node.
-		if entry.Participates != nil && entry.Participates(roles) {
-			out.Run = append(out.Run, entry)
-			continue
-		}
-		out.Unrun = append(out.Unrun, entry.Domain)
-	}
-	return out
 }
 
 // signerFor and verifierFor are one domain's halves of the record signature.
@@ -640,48 +496,4 @@ func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 		ring.Keys = append(ring.Keys, statelog.Key{ID: key.ID, Material: key.Material})
 	}
 	return ring
-}
-
-// everyNode is the participation of a domain every role needs.
-//
-// All three shipped domains take it, and each for the same reason: an ingress
-// node serves the board, the knowledge base and search over the API; a seats
-// node reads and writes all three inside a turn; and a workers node sweeps
-// them and runs the embedding duty. There is no role that can do its job
-// without them, so filtering would only mean a node refusing its own work.
-//
-// It is a named function rather than a nil check because a domain that runs
-// everywhere is a DECISION, and the next domain's entry is where somebody
-// decides differently.
-func everyNode(placement.RoleSet) bool { return true }
-
-// servesPeople is the participation of the IDENTITY estate, and it is the
-// first predicate in this register that says no to anybody.
-//
-// AN AGENT SEAT NEVER READS THIS DOMAIN. A seat's principal is its own handle,
-// its authority is decided by internal/authz from the ORG CHART, and its work
-// arrives on its mailbox — so a seats-only satellite gains nothing from these
-// rows and would pay for them twice over: the disk and the applier. Not the
-// stream — that and its reserved ceiling are the fleet's, created and sized on
-// every node whatever it runs — so the share of the broker's budget is spent
-// either way. A satellite holding a directory of the company's people, which
-// it authenticates nobody against, is the specific thing the Participates
-// field was added for.
-//
-// INGRESS BECAUSE IT SERVES REQUESTS: resolving who is asking, validating a
-// session bearer against a revocation epoch, and refusing one that is over.
-// WORKERS BECAUSE IT SWEEPS: the per-bucket retention sweep, the
-// duplicate-claim report, and the retry that destroys a key a removal could
-// not reach.
-//
-// # What a node that does NOT run it must never do
-//
-// Answer a question about people from an empty table. `iam_people` on a
-// satellite is empty because the domain is not running, not because the
-// company has nobody — and the two are the same rows. Every reader in this
-// estate is three-valued for that reason: "nobody holds this seat" and "this
-// node does not hold that answer" send a caller to opposite places, and the
-// second is a 503.
-func servesPeople(roles placement.RoleSet) bool {
-	return roles.Has(placement.RoleIngress) || roles.Has(placement.RoleWorkers)
 }

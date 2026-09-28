@@ -183,20 +183,20 @@ func TestABindingThisNodeCannotVouchForIsUnknown(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO IDENTITY DOMAIN CANNOT SAY, and says so.
+// AN ENGINE WITH NO IDENTITY DIRECTORY CANNOT SAY, and says so.
 //
-// Its tables are legitimately empty because the domain is not running, not
-// because nobody is bound — so the answer is an error, which the guard turns
-// into 503, and never the zero row.
-func TestANodeWithNoIdentityDomainCannotSay(t *testing.T) {
+// It has no identity rows at all — a nil engine, or one with no native runtime
+// — and that is not the same fact as nobody being bound, so the answer is an
+// error, which the guard turns into 503, and never the zero row.
+func TestAnEngineWithNoDirectoryCannotSay(t *testing.T) {
 	t.Parallel()
 	var e *Engine
-	if _, err := e.BoundSeat(t.Context(), "token:ops"); !errors.Is(err, errNoIdentityDomain) {
-		t.Errorf("a nil engine answered %v, want %v", err, errNoIdentityDomain)
+	if _, err := e.BoundSeat(t.Context(), "token:ops"); !errors.Is(err, errNoDirectory) {
+		t.Errorf("a nil engine answered %v, want %v", err, errNoDirectory)
 	}
 	if _, err := (&Engine{}).BoundSeat(t.Context(), "token:ops"); !errors.Is(err,
-		errNoIdentityDomain) {
+		errNoDirectory) {
 		t.Errorf("an engine with no identity reader answered %v, want %v", err,
-			errNoIdentityDomain)
+			errNoDirectory)
 	}
 }

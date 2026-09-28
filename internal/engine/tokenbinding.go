@@ -35,16 +35,16 @@ import (
 // went on acting as a removed seat, a renamed one, and — through a handle the
 // chart had since given somebody else — a seat that was never its own.
 
-// errNoIdentityDomain is what a node that applies no identity records answers.
+// errNoDirectory is what an engine holding no identity directory answers — a
+// nil one, or one with no native runtime.
 //
-// AN ERROR AND NOT AN EMPTY BINDING. A node that does not run the domain has
-// a legitimately empty copy of its tables, and reading that emptiness as "this
-// token is bound to nothing" would have a bound credential act as itself on
-// this node and as its seat on the next — one actor under two names in one
-// audit trail. The full API is only ever served beside the domain, so reaching
-// this is a node that cannot tell, which is 503.
-var errNoIdentityDomain = errors.New("engine: this node runs no identity " +
-	"domain, so it cannot say which seat a credential is bound to")
+// AN ERROR AND NOT AN EMPTY ANSWER. Every running node applies the identity
+// log, so reaching this is an engine wired without one, and reading that
+// absence as "this token is bound to nothing" would have a bound credential act
+// as itself here and as its seat on every other node — one actor under two
+// names in one audit trail. It cannot tell, which is 503.
+var errNoDirectory = errors.New("engine: this engine holds no identity " +
+	"directory, so it cannot say who holds what")
 
 // BoundSeat is the identity directory's binding for a Tier A token's login, as
 // the seat table reads a holder's row.
@@ -94,11 +94,11 @@ var errNoIdentityDomain = errors.New("engine: this node runs no identity " +
 // still reach a node whose identity applier is the thing they came to fix.
 func (e *Engine) BoundSeat(ctx context.Context, login string) (session.PersonRow, error) {
 	if e == nil {
-		return session.PersonRow{}, errNoIdentityDomain
+		return session.PersonRow{}, errNoDirectory
 	}
 	reader := e.IAM()
 	if reader == nil {
-		return session.PersonRow{}, errNoIdentityDomain
+		return session.PersonRow{}, errNoDirectory
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestReadBudget)
 	defer cancel()

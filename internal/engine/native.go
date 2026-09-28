@@ -107,14 +107,10 @@ type native struct {
 	chartWriter *chart.Writer
 	chartReader *chart.Reader
 
-	// iamReader and iamWriter are the identity estate's two sides, or nil
-	// on a node that runs no iam domain.
-	//
-	// NIL IS A REAL POSTURE here where the chart's is not, and the
-	// difference is the domain's own: iam is the first that NARROWS —
-	// a seats-only satellite does not apply it — so a node without them
-	// serves no sign-in surface rather than failing to boot. What a seat
-	// needs is the chart, which every node runs.
+	// iamReader and iamWriter are the identity estate's two sides, built
+	// unconditionally for the chart's reason: every node runs the domain,
+	// so one whose identity log failed to come up is a boot failure rather
+	// than a nil to branch on.
 	iamReader *iamdomain.Reader
 	iamWriter *iamdomain.Writer
 
@@ -131,11 +127,6 @@ type native struct {
 	// search fan-out. Nil when there is no queue to serve on, which is
 	// every embedded engine and every test.
 	stopSlices queue.Unsubscribe
-
-	// stopHolders withdraws this node as an answerer for the fleet's
-	// identity directory — see fleetdirectory.go. Nil on a node that runs
-	// no identity domain, which asks rather than answers.
-	stopHolders queue.Unsubscribe
 
 	// run is the context every goroutine this node started runs under, and
 	// stop is what ends it.
@@ -330,34 +321,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 	}
 
-	// THE CHART, WHICH EVERY COMPANY HAS. There is no backend setting for
-	// it and no second place to keep one, so its absence is a boot failure
-	// naming the domain rather than a reader that answers nil.
-	// THE IDENTITY ESTATE, before the chart, and the order says which
-	// failure an operator reads first: a node that cannot say who reports
-	// to whom cannot run a seat at all, and one that cannot sign anybody
-	// in merely serves no sign-in surface.
+	// THE IDENTITY ESTATE AND THE CHART, which every node runs. There is no
+	// backend setting for either and no second place to keep one, so each
+	// one's absence is a boot failure naming the domain rather than a reader
+	// that answers nil. The identity estate goes first because the chart's
+	// writer consults it before a seat removal.
 	if err = n.openIAM(e, sl, nodeID); err != nil {
 		return err
-	}
-	// AND THIS NODE ANSWERS FOR THE NODES THAT HOLD NO DIRECTORY. A
-	// seats-only satellite asks the fleet who holds each seat (see
-	// fleetdirectory.go), and every node that runs the domain answers, on
-	// the search slices' terms: registered here, withdrawn first on the
-	// way down.
-	if n.iamReader != nil && e.backends.Queue != nil {
-		// SIGNED UNDER THE FLEET'S KEYRING, as every state-log record is:
-		// an unsigned answer is one anything on the broker could give.
-		signer, signerErr := statelog.NewSigner(holdersSignatureLabel, sl.ring)
-		if signerErr != nil {
-			return fmt.Errorf("engine: sign the identity directory's "+
-				"answers: %w", signerErr)
-		}
-		n.stopHolders, err = serveHolders(runCtx, e.backends.Queue, nodeID,
-			n.iamReader, signer)
-		if err != nil {
-			return fmt.Errorf("engine: serve the identity directory: %w", err)
-		}
 	}
 	if err = n.openChart(e, sl, nodeID); err != nil {
 		return err
@@ -444,17 +414,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		defer n.done.Done()
 		e.watchChart(runCtx)
 	}()
-	// AND THE PARTY REGISTRY'S DIRECTORY TRIGGER, on EVERY node: one that
-	// runs the identity domain reads its own rows, and one that does not
-	// asks the fleet — never its own empty copy, which would read as
-	// "nobody holds any seat". Handed over BEFORE the loop starts, so the
-	// first rebuild it runs already reads the directory — and before the
-	// boot publish, so the first registry does too.
-	dir, at, err := e.directoryFor(ctx, n)
-	if err != nil {
-		return err
-	}
-	e.useDirectory(dir, at)
+	// AND THE PARTY REGISTRY'S DIRECTORY TRIGGER, reading this node's own
+	// identity rows. Handed over BEFORE the loop starts, so the first
+	// rebuild it runs already reads the directory — and before the boot
+	// publish, so the first registry does too.
+	e.useDirectory(iamDirectory{reader: n.iamReader}, n.iamReader.At)
 	n.done.Add(1)
 	go func() {
 		defer n.done.Done()
@@ -522,14 +486,6 @@ func (n *native) shutdown(ctx context.Context) {
 		// that outlived the scan costs it a silent empty slice it
 		// counts as answered.
 		_ = n.stopSlices(context.WithoutCancel(ctx))
-	}
-	if n.stopHolders != nil {
-		// AND THE DIRECTORY'S ANSWERER, for the same reason: an answer
-		// cut off mid-read is a reply that never arrives, which a
-		// satellite already reads correctly as a node that did not
-		// answer — but only if the registration is gone before the
-		// context that ends the read.
-		_ = n.stopHolders(context.WithoutCancel(ctx))
 	}
 	n.stop()
 	n.done.Wait()
@@ -659,37 +615,11 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 	return out
 }
 
-// Domains is every state-log domain THIS NODE runs, in the fixed order the
-// register declares.
-//
-// EXPOSED SO A CALLER DOES NOT WRITE THE LIST AGAIN. A second copy is what
-// makes a fourth domain silently absent from whatever walks it — the shape
-// that keeps a fleet comparison, an operator listing or a report certifying
-// two domains after somebody added a third.
-//
-// THIS NODE'S, not this build's: every caller is asking what to render, what
-// to compare or what to report ABOUT THIS PROCESS, and a listing that named a
-// domain the node declined would show it permanently at position zero with no
-// applier behind it — which is what a broken node looks like. Before the state
-// log is up it is the whole register, because that is the most honest answer
-// available: the node has not yet decided.
-func (e *Engine) Domains() []statelog.Domain {
-	if e.native == nil || e.native.log == nil {
-		return registeredDomains()
-	}
-	return e.native.log.part.Domains()
-}
-
 // openIAM builds the identity estate's two sides over its running domain.
 //
-// # A node that runs no iam domain gets neither, and that is not a failure
-//
-// iam is the first domain in the register that NARROWS: a seats-only
-// satellite does not apply it, because no turn reads it and shedding a
-// company's seats because a human cannot sign in would be an outage caused by
-// the wrong subsystem. So this returns cleanly with both sides nil, and
-// `crewlet run` then serves no sign-in surface on that node — which is the
-// honest shape rather than one that answers 503 to every attempt.
+// EVERY NODE RUNS IT, whatever its roles, so a node whose identity domain did
+// not come up is a boot failure naming the domain — exactly as the chart's is —
+// rather than a node that quietly serves no sign-in surface.
 //
 // # The writer acts as THE NODE, and every surface narrows it
 //
@@ -699,7 +629,9 @@ func (e *Engine) Domains() []statelog.Domain {
 func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	running := sl.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
-		return nil
+		return fmt.Errorf("engine: this node runs no identity domain, so it " +
+			"cannot say who anybody is — the domain is in the register and its " +
+			"stream failed to come up")
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
 		DB: e.backends.Store, Log: running.reader,
@@ -764,22 +696,8 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 // first person.
 var nodeWriterGrants = []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}
 
-// holdersOrNil is the identity directory as the chart's seam, or a genuine
-// nil.
-//
-// THE CONVERSION IS EXPLICIT because a typed nil in an interface is not nil:
-// returning the pointer directly would hand the chart a non-nil Holders
-// wrapping a nil Reader, and every seat removal would panic instead of being
-// refused — which is the one shape worse than the empty-table read this
-// refusal exists to prevent.
-func (n *native) holdersOrNil() chart.Holders {
-	if n.iamReader == nil {
-		return nil
-	}
-	return n.iamReader
-}
-
-// IAM is this node's identity read side, or nil where the domain does not run.
+// IAM is this node's identity read side, or nil on an engine with no native
+// runtime (`crewlet validate`, and a test).
 func (e *Engine) IAM() *iamdomain.Reader {
 	if e.native == nil {
 		return nil
@@ -787,7 +705,8 @@ func (e *Engine) IAM() *iamdomain.Reader {
 	return e.native.iamReader
 }
 
-// IAMWriter is this node's identity write side, or nil.
+// IAMWriter is this node's identity write side, or nil on an engine with no
+// native runtime.
 func (e *Engine) IAMWriter() *iamdomain.Writer {
 	if e.native == nil {
 		return nil
@@ -831,12 +750,9 @@ func (n *native) openChart(e *Engine, sl *stateLog, nodeID string) error {
 	if err != nil {
 		return fmt.Errorf("engine: chart writer: %w", err)
 	}
-	// THE DIRECTORY THE SEAT REMOVAL CONSULTS, or nil on a node that runs
-	// no identity domain — under which every seat removal here is REFUSED
-	// naming this node rather than decided on an empty table. See
-	// [chart.Holders]; openIAM ran before this, so the reader is whatever
-	// it established.
-	n.chartWriter = writer.WithHolders(n.holdersOrNil())
+	// THE DIRECTORY THE SEAT REMOVAL CONSULTS — this node's own identity
+	// rows, which openIAM has just established. See [chart.Holders].
+	n.chartWriter = writer.WithHolders(n.iamReader)
 	// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for is a
 	// level served: the refusal ladder, the coverage probe and the barrier
 	// a linearizable read waits through.

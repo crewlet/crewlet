@@ -130,14 +130,13 @@ func nodeAPIToken(surface string) (string, error) {
 //
 // # One posture produces a nil, and it is not a fault
 //
-// THIS NODE RUNS NO IAM DOMAIN. It is the first domain in the register that
-// narrows: a seats-only satellite does not apply it, because no turn reads
-// identity and shedding a company's seats because a human cannot sign in
-// would be an outage caused by the wrong subsystem. Such a node serves seats
-// and no sign-in, which is what its `node.roles` asked for, and the routes
-// are ABSENT rather than answering an error: a 404 says this deployment does
-// not sign in that way, where a 503 would say it does and is broken and send
-// an operator looking for an outage.
+// THIS NODE STARTED WITH NO COMPANY. Every node runs the identity domain,
+// whatever its roles, but the state log it rides on is part of the native
+// runtime, and a node that booted before any revision was active opens none —
+// it serves its HTTP surface unconfigured until the first revision arrives.
+// Such a node has no directory to sign anybody in against, and the routes are
+// ABSENT rather than answering an error, as every other surface the native
+// runtime feeds is on that node.
 //
 // A keyring that cannot sign for the fleet USED TO BE a second such posture,
 // and it is not any more: Tier A refuses a file without a usable keyring and
@@ -150,9 +149,9 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 	if reader == nil || writer == nil {
 		log := logging.Get("cli")
 		log.Info("api_sign_in_absent",
-			"reason", "this node runs no identity domain",
-			"hint", "node.roles narrows which domains a node applies; a "+
-				"seats-only satellite serves no sign-in surface")
+			"reason", "this node started with no active company, so it runs "+
+				"no native runtime and holds no identity directory",
+			"hint", "activate a company revision and restart the node")
 		return nil, nil, nil
 	}
 	signer, err := session.New(session.Options{
@@ -271,20 +270,20 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 // directorySurface builds /iam, or reports that this node serves none.
 //
 // NIL IS A REAL POSTURE, exactly as [signInSurface]'s is and for the same
-// reason: a node that runs no identity domain holds a legitimately empty copy
-// of that estate, and a surface over it would serve an empty directory as
-// though the company had nobody in it. The routes are ABSENT rather than
-// answering an error — which takes returning an untyped nil; see
-// [surfaceMounter] for what a typed one did.
+// reason: a node that started with no active company holds no identity rows,
+// and a surface over it would serve an empty directory as though the company
+// had nobody in it. The routes are ABSENT rather than answering an error —
+// which takes returning an untyped nil; see [surfaceMounter] for what a typed
+// one did.
 func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 	auth *authapi.Service) (surfaceMounter, error) {
 
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
 		logging.Get("cli").Info("api_directory_absent",
-			"reason", "this node runs no identity domain",
-			"hint", "node.roles narrows which domains a node applies; a "+
-				"seats-only satellite serves no directory")
+			"reason", "this node started with no active company, so it runs "+
+				"no native runtime and holds no identity directory",
+			"hint", "activate a company revision and restart the node")
 		return nil, nil
 	}
 	surface, err := iamapi.New(iamapi.Options{
@@ -387,9 +386,9 @@ func (b bootstrapMinter) MintCode(ctx context.Context) (iamapi.BootstrapFile, er
 // person bound to an AGENT seat went unreported while every request they made
 // was refused.
 //
-// NIL ON A NODE RUNNING NO CHART DOMAIN, which is the same third value
-// [seatHeld] answers with: its copy of the chart is legitimately empty, so the
-// arm is skipped rather than asked.
+// NIL ON A NODE WITH NO CHART READER — one that started with no active
+// company — which is the same third value [seatHeld] answers with: there are
+// no rows to ask, so the arm is skipped rather than asked.
 func danglingBindings(e *engine.Engine) iamapi.Bindings {
 	if e.Chart() == nil {
 		return nil

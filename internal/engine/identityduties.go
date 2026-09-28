@@ -155,12 +155,11 @@ type identityDuties struct {
 
 // startIdentityDuties arms every identity duty this node can run.
 //
-// A NODE THAT RUNS NO IDENTITY DOMAIN ARMS NONE — a seats-only satellite
-// applies no identity records, so it has no rows to report on and no estate
-// to publish into — and NOR DOES ONE THAT RUNS NO WORKERS: every duty here is a
-// worker singleton, whose claim that node's roles gate refuses on every tick
-// ([Engine.workerDuty]), so arming them there would be loops that never run,
-// reported by [Engine.IdentityDuties] as duties that do. Within that, each duty
+// A NODE THAT RUNS NO WORKERS ARMS NONE, although it runs the identity domain
+// as every node does: every duty here is a worker singleton, whose claim that
+// node's roles gate refuses on every tick ([Engine.workerDuty]), so arming them
+// there would be loops that never run, reported by [Engine.IdentityDuties] as
+// duties that do. Within that, each duty
 // is armed only where it has what it needs: the probe needs a provider and
 // custody, the key duty the company's secret store.
 func (e *Engine) startIdentityDuties(ctx context.Context, boot *config.Bootstrap) {
@@ -226,8 +225,7 @@ func (e *Engine) stopIdentityDuties() {
 // SEPARATE FROM THE START so a case can hold the arming decision — which
 // duties, at which interval — without running a loop.
 func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
-	if e.native == nil || e.native.iamReader == nil || e.native.iamWriter == nil ||
-		boot == nil || !e.profile.RunsWorkers() {
+	if e.native == nil || boot == nil || !e.profile.RunsWorkers() {
 		return nil
 	}
 	reader, writer := e.native.iamReader, e.native.iamWriter

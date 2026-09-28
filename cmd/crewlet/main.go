@@ -1564,9 +1564,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	// AND THE THIRD CREDENTIAL, a machine token the directory minted —
 	// built on EVERY node, not only those that sign people in: it needs no
-	// keyring, and on a node running no identity domain its read answers
-	// "cannot say", so a token minted elsewhere is a 503 there rather than
-	// a 401 telling a pipeline its credential is broken.
+	// keyring, and on a node that started with no company, and so holds no
+	// directory, its read answers "cannot say" — a 503 rather than a 401
+	// telling a pipeline its credential is broken.
 	machineTokens, err := auth.NewTokens(auth.TokensDeps{
 		Directory: e, Chart: engine.SeatViewOf(e),
 	})
@@ -1897,9 +1897,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// THE SAME ANSWER /chart/check reads, so a gauge on /health and
 		// the screen that renders the report cannot disagree.
 		SeatHeld: seatHeld(e),
-		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that runs no
-		// identity domain — see [signInSurface] for why that is honest
-		// rather than a fault.
+		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that started
+		// with no active company — see [signInSurface] for why that is
+		// honest rather than a fault.
 		Auth: authSurface,
 		// AND THE OTHER END OF THE COOKIE IT MINTS. Nil exactly when
 		// Auth is: a node that cannot sign one has none to check.
@@ -1907,8 +1907,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// AND OF THE TOKENS /iam/credentials MINTS — `crewlet iam
 		// token`'s value, presented as CREWLET_API_TOKEN.
 		Tokens: machineTokens,
-		// THE COMPANY'S IDENTITY DIRECTORY, nil on a node that runs no
-		// identity domain — see [directorySurface].
+		// THE COMPANY'S IDENTITY DIRECTORY, nil on a node that started with
+		// no active company — see [directorySurface].
 		IAM: directory,
 		// AND THE HUMAN WRITE SURFACE over the tracker and the knowledge
 		// base, nil on a company that runs neither natively — see

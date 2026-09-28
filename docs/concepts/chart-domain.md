@@ -163,12 +163,12 @@ state a duty reports, never corruption. Arbitration across the two would need
 one log, and one log for the chart and the directory would serialise every
 hire against every sign-in.
 
-On a node that cannot read the directory the removal is **refused naming the
-node**, not allowed. That is the one place the seam's absence is a refusal
-rather than a skip: a report may omit a finding it cannot compute, and a write
-may not proceed on evidence it does not have — otherwise a seats-only
-satellite is the one place every removal succeeds, and the one place it is
-least likely to be noticed.
+On a node that cannot read the directory the removal is **refused**, not
+allowed. That is the one place the directory's silence is a refusal rather than
+a skip: a report may omit a finding it cannot compute, and a write may not
+proceed on evidence it does not have — otherwise a store fault is the one
+moment every removal succeeds, and the one moment it is least likely to be
+noticed.
 
 **A fresh deployment's chart is seeded from the company file**, by `crewlet run
 -company company.yaml`, and only while the chart is empty — see

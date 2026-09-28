@@ -14,9 +14,8 @@ same anchor ADR-0019 derives the agent id from — and never by the address an
 administrator typed. That is the claim subject (`iam.seat.<identity>`), the
 `seat_id` column, the seat a removal's tombstone records and the stamp a later
 bind leaves on it, and every reading of them: the seat holders and bindings the
-directory answers, the fleet's scatter answer to a satellite, the notify
-registry's standing, the request path's seat table and the dangling-binding
-rule.
+directory answers, the notify registry's standing, the request path's seat
+table and the dangling-binding rule.
 
 A bind accepts any address the seat answers to and resolves it through the
 chart's own resolution, inside the decide's snapshot, to the identity it

@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // ttlBackend is a coord.Backend that reports a lease TTL, which is the shape
@@ -64,24 +63,18 @@ func TestTheLeaseTTLInForceBeatsThisNodesOwnConfig(t *testing.T) {
 	}
 }
 
-// THE STORE PINS ONE WRITER PER DOMAIN THIS NODE RUNS, NOT PER DOMAIN THIS
-// BUILD REGISTERS.
+// THE STORE PINS ONE WRITER PER REGISTERED DOMAIN, WHATEVER THE ROLES.
 //
-// Every running domain's apply loop holds one connection of the replicated
-// pool for its life, and the pool is sized for exactly the pins declared. A
-// satellite whose roles exclude a domain starts no applier for it, so a pin
-// reserved for one is a connection nothing ever takes — a reader's connection,
-// for the life of the process. And a pin short is worse: the applier that
-// finds none refuses at its first round and its domain's rows never move.
-//
-// The rows are every role set [placement.ParseRoles] accepts a node declaring
-// on its own, the empty one included, because "declared nothing" is every
-// role. What each must pin is counted off the register's own predicates here
-// rather than read back through [participationOf], so a pool sized from the
-// whole register fails the one row where the two differ.
-func TestTheStorePinsAWriterPerDomainTheRolesRun(t *testing.T) {
+// Every domain's apply loop holds one connection of the replicated pool for its
+// life, and the pool is sized for exactly the pins declared: a pin short and the
+// applier that finds none refuses at its first round, so its domain's rows never
+// move. Every node runs every domain — a seats-only satellite the identity
+// estate too — so every role set a node can declare on its own, the empty one
+// included, pins the whole register. Mutation: size the pins from anything the
+// roles narrow and a narrowed row comes up short.
+func TestTheStorePinsAWriterPerRegisteredDomain(t *testing.T) {
 	t.Parallel()
-	registered := len(register())
+	want := len(register())
 	for _, roles := range [][]string{
 		nil,
 		{"ingress"},
@@ -94,49 +87,15 @@ func TestTheStorePinsAWriterPerDomainTheRolesRun(t *testing.T) {
 			t.Parallel()
 			b := testBootstrap(t)
 			b.Node.Roles = roles
-			set, err := placement.ParseRoles(roles)
-			if err != nil {
-				t.Fatalf("ParseRoles(%v): %v", roles, err)
-			}
-			if len(set) == 0 {
-				set = placement.DefaultRoles()
-			}
-			want := 0
-			for _, entry := range register() {
-				if entry.Participates(set) {
-					want++
-				}
-			}
-
 			opts, err := storeOptions(&b, nil)
 			if err != nil {
 				t.Fatalf("storeOptions: %v", err)
 			}
 			if opts.PinnedWriters != want {
-				t.Errorf("roles %v pin %d writer(s), want %d — one per domain "+
-					"these roles run, of the %d registered", roles,
-					opts.PinnedWriters, want, registered)
-			}
-			if got := len(participationOf(set).Run); opts.PinnedWriters != got {
-				t.Errorf("roles %v pin %d writer(s) and start %d apply loop(s) — "+
-					"the two are one decision", roles, opts.PinnedWriters, got)
+				t.Errorf("roles %v pin %d writer(s), want one per registered "+
+					"domain (%d): every node starts an apply loop for each",
+					roles, opts.PinnedWriters, want)
 			}
 		})
-	}
-
-	// THE ROW THE WHOLE TABLE EXISTS FOR, stated on its own: a seats-only
-	// satellite runs every domain but the identity estate's. Without a
-	// row where the count differs from the register's length, a pool
-	// sized from the register passes every case above.
-	b := testBootstrap(t)
-	b.Node.Roles = []string{"seats"}
-	opts, err := storeOptions(&b, nil)
-	if err != nil {
-		t.Fatalf("storeOptions: %v", err)
-	}
-	if opts.PinnedWriters != registered-1 {
-		t.Errorf("a seats-only node pins %d writer(s) of %d registered domains, "+
-			"want %d: it runs no identity estate, so a pin for one is a reader's "+
-			"connection nothing takes", opts.PinnedWriters, registered, registered-1)
 	}
 }

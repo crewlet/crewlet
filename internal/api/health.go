@@ -131,8 +131,8 @@ type Health struct {
 	// [IdentityReady], [IdentityUnclaimed] or [IdentityUnknown]. See
 	// [Founding] for why it is on this body.
 	//
-	// ABSENT on a node that serves no sign-in surface: one running no
-	// identity domain holds a legitimately empty copy of that estate, and
+	// ABSENT on a node that serves no sign-in surface: one that started
+	// with no active company holds no identity rows at all, and
 	// `unclaimed` from it would be the one false line this body carries.
 	// Like [Health.Consistency], IT DOES NOT MOVE Status — a company
 	// waiting for its founder is not a node that should leave rotation.

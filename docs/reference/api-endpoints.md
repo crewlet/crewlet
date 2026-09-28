@@ -69,10 +69,10 @@ one JSON object, and it always has the same three parts in the same places:
   (`surface_busy`) — carries a `Retry-After` in seconds, derived from the
   refusal where the refusal knows (a node behind its log estimates from its
   own backlog) and a few seconds otherwise. A `503` for a missing piece of
-  THIS node's configuration — a node that runs no identity domain asked a
-  question only one that does can answer — carries NONE, because no wait
-  changes what the node runs: the header's absence is the answer, and the
-  `hint` names what to do instead. So does a refusal from the state log
+  THIS node's configuration — a node that started with no active company
+  asked a question only its identity directory can answer — carries NONE,
+  because no wait changes what the node holds: the header's absence is the
+  answer, and the `hint` names what to do instead. So does a refusal from the state log
   that waiting cannot clear on THIS node — a node evicted from the fleet, one
   holding a record it cannot decode, a log at its byte ceiling
   (`log_full`), a record larger than the broker takes in one message
@@ -2679,7 +2679,7 @@ founder code is:
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
-| `identity` | Whether this company has its **first person**: `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh install waiting for its founder to redeem the [one-time code](../concepts/identity-and-access.md#how-the-first-person-exists) — and `unknown` where this node cannot read its identity estate, which is never reported as `unclaimed`, because a dashboard told nobody is in would offer a founder route to a company that may have started. **Absent** on a node that serves no sign-in surface: one running no identity domain holds a legitimately empty copy of that estate. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
+| `identity` | Whether this company has its **first person**: `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh install waiting for its founder to redeem the [one-time code](../concepts/identity-and-access.md#how-the-first-person-exists) — and `unknown` where this node cannot read its identity estate, which is never reported as `unclaimed`, because a dashboard told nobody is in would offer a founder route to a company that may have started. **Absent** on a node that serves no sign-in surface: one that started with no active company holds no identity rows at all, and `unclaimed` from it would be false. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `bootstrap_code_path` | **This node's** founder code file, present only while `identity` is `unclaimed` and the file holds a code the log still honours — live, or taken by a founding that has not finished. The path and never the value: reading it needs shell on this host. On a fleet every node that booted onto the empty estate offers its own, and each names only its own; a code that has died is not named, since it is not a way in (a restart of this node or `crewlet iam bootstrap-code` replaces it). |
 | `bootstrap_code_expires_at` | When the code in `bootstrap_code_path` stops working, RFC 3339 in UTC. Present exactly when the path is. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |

@@ -139,8 +139,8 @@ type retention struct {
 	rates map[string]*uint64
 
 	// bindings follows the seat bindings this node's chart does not hold,
-	// for `iam_binding_dangling`. Nil on a node that runs no identity
-	// domain. See bindings.go.
+	// for `iam_binding_dangling`. Nil on an engine with no native runtime.
+	// See bindings.go.
 	bindings *bindingWatch
 
 	// floors follows how long this node has been unable to read the trim
@@ -439,23 +439,15 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 			return in, fmt.Errorf("list the live nodes: %w", err)
 		}
 		for _, lease := range leases {
-			// THE PEER'S OWN ROLES, off the presence lease it
-			// already publishes them on, run through the SAME
-			// predicate this node uses on its own. A peer that
-			// declines a domain publishes no position for it, and
-			// counted at zero it would block that domain's trim for
-			// as long as it lives — so the set it runs has to be
-			// readable from here, and deriving it from the roles
-			// means there is one fact rather than a second thing to
-			// publish and keep in step.
+			// EVERY LIVE NODE COUNTS FOR EVERY DOMAIN, because every
+			// node runs every domain whatever its roles: one that has
+			// published no position for a log is between boot and its
+			// first heartbeat, never declining it.
 			profile, ok := placement.FromLease(lease)
 			if !ok {
 				continue
 			}
-			in.live = append(in.live, statelog.Presence{
-				NodeID:  profile.ID,
-				Domains: domainNames(participationOf(profile.Roles).Domains()),
-			})
+			in.live = append(in.live, statelog.Presence{NodeID: profile.ID})
 		}
 	}
 	return in, nil

@@ -41,9 +41,9 @@
 // because those are the only writers that set the `Retry-After` and the
 // envelope together: a dozen 503s written through [FailWith] told a client to
 // come back and never said when. Zero seconds writes NO header, and that is a
-// setting rather than an omission — a node that runs no identity domain will
-// not run one after any wait, and the header's absence is how a client learns
-// not to hammer it. `internal/api`'s source walk holds the settings surfaces to this,
+// setting rather than an omission — a node missing its keyring has none after
+// any wait, and the header's absence is how a client learns not to hammer it.
+// `internal/api`'s source walk holds the settings surfaces to this,
 // to hand-built bodies, and to codes minted outside the table.
 package httpjson
 

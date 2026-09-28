@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -17,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -92,63 +90,38 @@ func TestUnsuspendingRestoresThem(t *testing.T) {
 	}
 }
 
-// EVERY NODE READS THE DIRECTORY ITS ROLES GIVE IT — decided by the wiring a
-// running node goes through, not asserted of a hand-built engine.
+// EVERY NODE READS ITS OWN DIRECTORY, WHATEVER ITS ROLES — decided by the
+// wiring a running node goes through, not asserted of a hand-built engine.
 //
-// A node that runs the identity domain reads its OWN rows, gated on its own
-// applier's position, and answers the fleet's question for the nodes that
-// cannot. A seats-only satellite runs no identity domain, so its copy of the
-// tables is empty: it must neither read that copy ("nobody holds any seat") nor
-// fall back to the chart, since it consumes deliveries and runs seats like
-// every other node. It asks the fleet. Alone in its fleet, with nobody running
-// the domain and nothing ever written to its log, the fleet's answer is the
-// empty directory — a CONSULTED reading that withholds nothing.
-func TestEachNodeReadsTheDirectoryItsRolesGiveIt(t *testing.T) {
+// Every node runs the identity domain, a seats-only satellite included, so each
+// reads its OWN rows, gated on its own applier's position. The satellite is the
+// case that matters: it consumes inbound deliveries and runs seats like every
+// other node, so a registry built there from anything but the directory would
+// attribute a suspended person's messages to their seat. Mutation: narrow the
+// identity domain off a seats-only node and it opens no reader.
+func TestEveryNodeReadsItsOwnDirectoryWhateverItsRoles(t *testing.T) {
 	t.Parallel()
-
-	t.Run("a node running the identity domain reads its own rows", func(t *testing.T) {
-		t.Parallel()
-		e := bootDirectoryNode(t, nil)
-		dir, at := e.partyDirectory()
-		if _, own := dir.(iamDirectory); !own || at == nil {
-			t.Fatalf("the directory is %T (position gate %v), want this node's "+
-				"own rows gated on its own applier", dir, at != nil)
-		}
-		// AND IT ANSWERS FOR THE NODES THAT HOLD NONE.
-		request, err := json.Marshal(holdersRequest{Version: holdersProtocol})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancel()
-		replies, err := e.backends.Queue.Ask(ctx, topics.IamHolders, request, 1)
-		if err != nil || len(replies) != 1 {
-			t.Fatalf("asked the fleet's directory: %d replies, %v — a node "+
-				"running the domain must answer it", len(replies), err)
-		}
-	})
-
-	t.Run("a seats-only node asks the fleet", func(t *testing.T) {
-		t.Parallel()
-		e := bootDirectoryNode(t, []string{"seats"})
-		if e.IAM() != nil {
-			t.Fatal("a seats-only node opened the identity domain, so this case " +
-				"is not about the node it names")
-		}
-		dir, at := e.partyDirectory()
-		if _, fleet := dir.(*fleetDirectory); !fleet || at != nil {
-			t.Fatalf("the directory is %T (position gate %v), want the fleet's, "+
-				"asked on every net tick", dir, at != nil)
-		}
-		reg := e.Registry()
-		if !reg.Standing().Consulted() || reg.Standing().Unread() {
-			t.Errorf("the registry was built from %+v, want the fleet's reading",
-				reg.Standing())
-		}
-		if _, ok := reg.ByExternalID("slack", founderSlack); !ok {
-			t.Error("a fleet whose directory has nobody bound withheld a seat")
-		}
-	})
+	for name, roles := range map[string][]string{
+		"a node declaring no roles": nil,
+		"a seats-only satellite":    {"seats"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := bootDirectoryNode(t, roles)
+			if e.IAM() == nil {
+				t.Fatal("the node opened no identity domain")
+			}
+			dir, at := e.partyDirectory()
+			if _, own := dir.(iamDirectory); !own || at == nil {
+				t.Fatalf("the directory is %T (position gate %v), want this "+
+					"node's own rows gated on its own applier", dir, at != nil)
+			}
+			if reg := e.Registry(); !reg.Standing().Consulted() || reg.Standing().Unread() {
+				t.Errorf("the registry was built from %+v, want this node's "+
+					"own reading", reg.Standing())
+			}
+		})
+	}
 }
 
 // AN ENGINE WITH NO NATIVE RUNTIME IS CHART-ONLY, and a signal changes nothing.
