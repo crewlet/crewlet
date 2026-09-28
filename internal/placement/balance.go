@@ -62,6 +62,40 @@ const (
 	DefaultMaxRounds = 60
 )
 
+// PromisedWindow is how many copies of every placeable member's target a
+// tolerance must span for [Balance] to promise reaching it: a copy and a half.
+// Below it a copy count within the tolerance may not exist, and the balance
+// may spend every round it has and still report it did not converge — its doc
+// has the corpus behind both halves.
+const PromisedWindow = 1.5
+
+// Reachable is the finest tolerance [Balance] promises to reach for this draw,
+// never finer than the one asked for: the tolerance itself wherever it spans
+// [PromisedWindow] copies of every placeable member's target, and otherwise
+// the one that spans exactly that many copies of the smallest target. A draw
+// with nothing placeable is answered the tolerance it was asked for.
+//
+// FOR A MAP WHOSE GROUP COUNT IS FIXED. The object map's cure for a target too
+// small for the tolerance is more groups (objstore/placement.TargetPGBits),
+// and it balances at [DefaultTolerance] because a split will come. A map that
+// can never split — the estate map, whose groups are its layout's partitions —
+// would otherwise run [DefaultMaxRounds] rounds on every change and store
+// whichever shares the closest round happened to measure, moving data in
+// search of an evenness its count cannot express; asked for what it can
+// promise, it converges, and a share moves only for a copy that matters.
+func (d Draw) Reachable(tolerance float64) float64 {
+	least := math.Inf(1)
+	for _, t := range targets(newDrawer(d)) {
+		if t > 0 {
+			least = min(least, t)
+		}
+	}
+	if math.IsInf(least, 1) {
+		return tolerance
+	}
+	return max(tolerance, PromisedWindow/least)
+}
+
 // A balance corrects each share by a step of its own length, adapted round by
 // round like Rprop's: it grows by stepGrowth while the error it corrects keeps
 // its sign, and shrinks by stepShrink when a correction overshoots — never

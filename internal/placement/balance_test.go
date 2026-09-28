@@ -344,10 +344,6 @@ func window(m objplacement.Map, tolerance float64) float64 {
 	return tolerance * least
 }
 
-// promisedWindow is the window from which Balance promises its tolerance: a
-// copy and a half (see its doc).
-const promisedWindow = 1.5
-
 // promisedRounds is what this package's corpus holds a promised fleet's
 // balance to. The corpus's slowest takes 15 rounds, so twenty leaves room for
 // a change of tuning and shows a correction that has stopped converging well
@@ -471,7 +467,7 @@ func TestBalanceReachesTheToleranceWhereverACopyAndAHalfFitsInIt(t *testing.T) {
 		switch {
 		case w < 1:
 			finer++
-		case w < promisedWindow:
+		case w < placement.PromisedWindow:
 			near++
 		default:
 			promised++
@@ -521,13 +517,13 @@ func TestBalanceReachesTheToleranceWhereverACopyAndAHalfFitsInIt(t *testing.T) {
 					t.Fatalf("the balance stopped unconverged with rounds to spare: %+v", report)
 				}
 				switch {
-				case w >= promisedWindow && !report.Converged:
+				case w >= placement.PromisedWindow && !report.Converged:
 					t.Fatalf("a tolerance of %.2f copies at its smallest target was not "+
 						"reached: %+v", w, report)
-				case w >= promisedWindow && report.Rounds > promisedRounds:
+				case w >= placement.PromisedWindow && report.Rounds > promisedRounds:
 					t.Fatalf("a tolerance of %.2f copies took %d rounds, want at most %d",
 						w, report.Rounds, promisedRounds)
-				case w >= 1 && w < promisedWindow && report.Converged:
+				case w >= 1 && w < placement.PromisedWindow && report.Converged:
 					mu.Lock()
 					nearReached++
 					mu.Unlock()
@@ -553,7 +549,7 @@ func TestTheFleetsTheBalanceMissedNowBalance(t *testing.T) {
 	t.Parallel()
 	check := func(t *testing.T, what string, m objplacement.Map) {
 		t.Helper()
-		if w := window(m, placement.DefaultTolerance); w < promisedWindow {
+		if w := window(m, placement.DefaultTolerance); w < placement.PromisedWindow {
 			t.Fatalf("%s: a tolerance of %.2f copies is outside the promise", what, w)
 		}
 		if _, report := balance(m, placement.BalanceOptions{}); !report.Converged {

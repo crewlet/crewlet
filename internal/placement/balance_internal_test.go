@@ -77,3 +77,58 @@ func TestAStepAdaptsToWhatTheLastOneDid(t *testing.T) {
 		t.Fatalf("a step overshooting for ever reached %v, want %v", s.length, minStep)
 	}
 }
+
+// A MAP THAT CANNOT SPLIT IS BALANCED TO WHAT ITS COUNT CAN PROMISE. Reachable
+// answers the tolerance asked for wherever it spans a copy and a half of every
+// target, and otherwise the tolerance that spans exactly that at the smallest
+// — a light member's, not the mean's. And the reason it exists, measured: forty
+// equal members over the 321 fixed groups of the estate's default layout
+// target 24 copies each, where two percent is half a copy — a tolerance no
+// copy count may meet — and at what Reachable answers the balance converges.
+func TestReachableIsTheFinestToleranceABalancePromises(t *testing.T) {
+	t.Parallel()
+	wide := fleet(10, 3) // 3072 copies over ten: 307.2 each, 6.1 copies at 2%
+	if got := wide.Reachable(DefaultTolerance); got != DefaultTolerance {
+		t.Errorf("a fleet whose targets hold the tolerance was answered %.4f, want %.4f",
+			got, DefaultTolerance)
+	}
+
+	light := drawOf(3, "", member("a", 1, ""), member("b", 4, ""), member("c", 4, ""),
+		member("d", 4, ""))
+	light.Groups = partitionsOf(40)
+	least := slices.Min(nonZero(targets(newDrawer(light))))
+	if got, want := light.Reachable(DefaultTolerance), PromisedWindow/least; math.Abs(got-want) > 1e-12 {
+		t.Errorf("a light member's %.2f-copy target was answered %.4f, want %.4f "+
+			"— the SMALLEST target governs", least, got, want)
+	}
+
+	out := fleet(3, 3)
+	for i := range out.Members {
+		out.Members[i].Out = true
+	}
+	if got := out.Reachable(DefaultTolerance); got != DefaultTolerance {
+		t.Errorf("a draw with nothing placeable was answered %.4f, want what it asked", got)
+	}
+
+	estate := fleet(40, 3)
+	estate.Groups = partitionsOf(321)
+	_, strict := Balance(estate, BalanceOptions{})
+	tolerance := estate.Reachable(DefaultTolerance)
+	_, reached := Balance(estate, BalanceOptions{Tolerance: tolerance})
+	t.Logf("forty members over 321 groups: at 2%% %+v; at %.4f %+v", strict, tolerance, reached)
+	if !reached.Converged {
+		t.Fatalf("a balance asked for the tolerance Reachable answered (%.4f) did not "+
+			"reach it: %+v", tolerance, reached)
+	}
+}
+
+// nonZero is the entries that are not zero.
+func nonZero(values []float64) []float64 {
+	var out []float64
+	for _, v := range values {
+		if v != 0 {
+			out = append(out, v)
+		}
+	}
+	return out
+}

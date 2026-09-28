@@ -96,7 +96,9 @@
 // and more often not below half a copy; one that does not stops at
 // [DefaultMaxRounds] and answers the closest layout it measured, reporting
 // Converged false, and the cure is more groups, not more rounds. [Balance]
-// has the measurements.
+// has the measurements. A map that can never add groups — the estate map,
+// whose groups are its layout's partitions — asks [Draw.Reachable] for the
+// finest tolerance its count promises instead, and converges to that.
 //
 // # Failure domains
 //
