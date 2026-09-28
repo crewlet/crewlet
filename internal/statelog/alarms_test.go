@@ -473,7 +473,8 @@ func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 	return -1
 }
 
-// A LOG'S SHARE OF THE CENSUS IS PER SEAT, PER DOMAIN LOG, AND NEVER ZERO.
+// A LOG'S SHARE OF THE CENSUS IS PER SEAT, PER DOMAIN LOG, NEVER ZERO — AND
+// PLUS WHAT THE ENGINE READS ON ITS OWN, WHOLE.
 //
 // The reference company — 100 seats, one tracker log — is the 12 500 the
 // sizing was derived from, so that is what its log is expected to take. A
@@ -482,24 +483,31 @@ func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 // across its own logs, ROUNDING UP, so no partition of a small company is told
 // to expect nothing; and a company with no agent seat is still one seat's
 // worth, since its operators read too and an expectation of zero is an alarm
-// that cannot fire.
+// that cannot fire. The engine's own periodic reads are added after the
+// division and not divided, since each of them is a barrier on every log it
+// reads: without them a one-seat company on one data node reading exactly its
+// census put 293 barriers a day on a log expected to take 125.
 func TestALogsCensusIsPerSeatAndPerDomainLog(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name        string
-		seats, logs int
-		want        int
+		name   string
+		census statelog.Census
+		want   int
 	}{
-		{"the reference company on layout 0", 100, 1, 12_500},
-		{"twice the company", 200, 1, 25_000},
-		{"no agent seat", 0, 1, 125},
-		{"a small company on two partitions", 3, 2, 188},
-		{"the reference company on 256 partitions", 100, 256, 49},
-		{"no log to share it across", 5, 0, 0},
+		{"the reference company on layout 0", statelog.Census{Seats: 100, Logs: 1}, 12_500},
+		{"twice the company", statelog.Census{Seats: 200, Logs: 1}, 25_000},
+		{"no agent seat", statelog.Census{Logs: 1}, 125},
+		{"a small company on two partitions", statelog.Census{Seats: 3, Logs: 2}, 188},
+		{"the reference company on 256 partitions", statelog.Census{Seats: 100, Logs: 256}, 49},
+		{"no log to share it across", statelog.Census{Seats: 5, Background: 168}, 0},
+		{"one seat beside one data node's passes",
+			statelog.Census{Seats: 1, Logs: 1, Background: 168}, 293},
+		{"the engine's own reads are not divided across partitions",
+			statelog.Census{Seats: 3, Logs: 2, Background: 504}, 692},
+		{"a negative background adds nothing", statelog.Census{Seats: 1, Logs: 1, Background: -5}, 125},
 	} {
-		if got := statelog.CensusExpectation(tc.seats, tc.logs); got != tc.want {
-			t.Errorf("%s: %d seats over %d log(s) expects %d a day, want %d",
-				tc.name, tc.seats, tc.logs, got, tc.want)
+		if got := tc.census.Expected(); got != tc.want {
+			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)
 		}
 	}
 	if statelog.LinearizableReadsPerSeatDay*100 != 12_500 {

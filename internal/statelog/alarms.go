@@ -128,18 +128,46 @@ const (
 	// is a DECLARED expectation rather than a measurement, which is exactly
 	// why it needs an alarm — nothing else notices when a company outgrows
 	// the assumptions its deployment was sized against, and the symptom
-	// arrives as a full log rather than as a slow one. [CensusExpectation]
-	// turns it into one log's figure.
+	// arrives as a full log rather than as a slow one.
+	//
+	// It is the SEATS' term of a log's census and not the whole of it: the
+	// engine's own periodic reads append barriers too, whatever the seats
+	// do, and [Census.Background] is where they are counted. [Census]
+	// turns both into one log's figure.
 	LinearizableReadsPerSeatDay = 125
 )
 
-// CensusExpectation is one log's share of the census: the linearizable reads a
-// day a company of seats agent seats was sized to put on a log of a domain the
-// layout divides into logs logs.
+// Census is what one log's share of the census is derived from.
+type Census struct {
+	// Seats is the running company's agent seats.
+	Seats int
+
+	// Logs is how many logs the layout divides the log's domain into.
+	Logs int
+
+	// Background is the barrier records a day the ENGINE'S OWN periodic
+	// reads put on this log, whatever the company's seats do — the object
+	// store's passes, which pin the estate on every data node on a fixed
+	// cadence (the engine's figure for them is upkeep.PinsPerDay per node
+	// that runs them). NOT DIVIDED across the domain's logs: each pin is a
+	// barrier on every log it reads, so each log takes all of them.
+	//
+	// It exists because the seats' term alone was not what a log receives.
+	// A one-seat company on one data node, reading exactly its census, put
+	// 293 barriers a day on a log expected to take 125, and three data
+	// nodes of an idle two-seat company put 504 on one expected to take
+	// 250 — census_drift fired on companies whose sizing was right, and it
+	// fired LOUDER the smaller the company, since the engine's own reads do
+	// not shrink with it.
+	Background int
+}
+
+// Expected is the log's share of the census: the linearizable reads a day it
+// was sized to take.
 //
 // # Per seat, and at least one
 //
-// The reads come from a seat's tools, so the company's figure is
+// The seats' reads come from their tools, so the company's figure is
 // [LinearizableReadsPerSeatDay] times its seats. A company with NO agent seat
 // is counted as one: its operators still read through the dashboard and the
 // operator MCP, and an expectation of zero would be an alarm that could never
@@ -158,14 +186,18 @@ const (
 // the census, and the reference company, whose reads are mostly the
 // tracker's, would fire the alarm doing exactly the work it was sized for.
 //
-// Zero where there is nothing to share it across (logs below one), which the
+// # Plus what the engine reads on its own, whole
+//
+// [Census.Background] is added after the division, for the reason it gives.
+//
+// Zero where there is nothing to share it across (Logs below one), which the
 // alarm reads as "no expectation" rather than as one exceeded.
-func CensusExpectation(seats, logs int) int {
-	if logs < 1 {
+func (c Census) Expected() int {
+	if c.Logs < 1 {
 		return 0
 	}
-	company := LinearizableReadsPerSeatDay * max(seats, 1)
-	return (company + logs - 1) / logs
+	company := LinearizableReadsPerSeatDay * max(c.Seats, 1)
+	return (company+c.Logs-1)/c.Logs + max(c.Background, 0)
 }
 
 // Kind names one alarm.
@@ -326,9 +358,9 @@ type Reading struct {
 	PoolWaitP95 time.Duration
 
 	// LinearizableReads and LinearizableReadsExpected are one log's
-	// observed and designed-for daily read rates — the barrier records the
-	// log received in the last day, from every node, and its share of the
-	// census ([CensusExpectation]) — and CensusLog names that log: of every
+	// observed and designed-for daily read rates — the barrier records
+	// committed to the log in the last day, from every node, and its share
+	// of the census ([Census.Expected]) — and CensusLog names that log: of every
 	// log this node applies, the one furthest past its share, since the
 	// reading describes one node and a log over its share is over it
 	// however quiet the others are.

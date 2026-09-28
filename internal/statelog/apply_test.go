@@ -2398,15 +2398,19 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	}
 }
 
-// A LOG'S BARRIERS ARE COUNTED WHERE THEY ARE APPLIED, ONCE EACH, UNDER THE LOG.
+// A LOG'S BARRIERS ARE COUNTED WHERE THEY ARE APPLIED, ONCE EACH, UNDER THE LOG,
+// AT THE HOUR THEY WERE COMMITTED.
 //
 // The census a log is held against is its linearizable reads, and a barrier
 // record is what each one costs it. Every node applies every record, so the
 // applier's count is the whole fleet's — which is the number `census_drift`
 // needs and a node's own appends are not. Keyed by the stream, because a
-// domain with a log per partition has a rate per partition; and counted from
-// the batch that committed, so a record redelivered below the checkpoint is
-// not a second read.
+// domain with a log per partition has a rate per partition; counted from the
+// batch that committed, so a record redelivered below the checkpoint is not a
+// second read; and filed in the rolling window at the hour the BROKER stored
+// it, so a node replaying days of backlog — back from an outage, or past a
+// snapshot a day old — does not read days of reads as the last one. The
+// cumulative series counts every barrier applied, as an exporter diffs it.
 func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -2418,24 +2422,43 @@ func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
 			Writer: fmt.Sprintf("node-%d", seq),
 		}
 	}
-	for seq := uint64(1); seq <= 5; seq++ {
+	// SEQUENCES 1–4 ARE THREE DAYS OLD — a backlog this node replays on its
+	// return — and 5–8 are the last minutes'. Barriers at 2, 4, 6 and 8.
+	now := time.Now().UTC()
+	stored := func(seq uint64) time.Time {
+		if seq <= 4 {
+			return now.Add(-72*time.Hour + time.Duration(seq)*time.Second)
+		}
+		return now.Add(-10*time.Minute + time.Duration(seq)*time.Second)
+	}
+	for seq := uint64(1); seq <= 8; seq++ {
 		if seq%2 == 0 {
-			h.fetch.offer(seq, barrier(seq))
+			h.fetch.offerStored(seq, stored(seq), barrier(seq))
 			continue
 		}
-		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq),
+		h.fetch.offerStored(seq, stored(seq), env(seq, "edit", fmt.Sprintf("o%d", seq),
 			fmt.Sprintf("op-%d", seq), 1))
 	}
-	if err := h.run(5); err != nil {
+	if err := h.run(8); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	// A REDELIVERY of a barrier the checkpoint already holds.
-	h.fetch.offer(4, barrier(4))
-	h.fetch.offer(6, env(6, "edit", "o6", "op-6", 1))
-	if err := h.run(6); err != nil {
+	h.fetch.offerStored(6, stored(6), barrier(6))
+	h.fetch.offerStored(9, stored(9), env(9, "edit", "o9", "op-9", 1))
+	if err := h.run(9); err != nil {
 		t.Fatalf("run the redelivery: %v", err)
 	}
 
+	var applied uint64
+	for _, snapshot := range h.metrics.Read() {
+		if snapshot.Name == metrics.StatelogBarriersApplied {
+			applied += snapshot.Total
+		}
+	}
+	if applied != 4 {
+		t.Errorf("the applier applied 4 barriers and the cumulative series "+
+			"counts %d", applied)
+	}
 	var counted uint64
 	for _, snapshot := range h.metrics.ReadWindow() {
 		if snapshot.Name != metrics.StatelogBarriersApplied {
@@ -2447,6 +2470,7 @@ func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
 		counted += snapshot.Total
 	}
 	if counted != 2 {
-		t.Fatalf("the log carried 2 barriers and the applier counted %d", counted)
+		t.Fatalf("the log took 2 barriers in the last day and the window counts "+
+			"%d: a replayed backlog's barriers were filed as today's reads", counted)
 	}
 }

@@ -1377,7 +1377,13 @@ it comes from an assumed 125 linearizable reads a day per agent seat, which is
 12 500 for the reference company's 100 seats. The
 [`census_drift`](../reference/alarms.md) alarm holds every log to that
 assumption: a log is expected to take 125 reads a day per seat, divided across
-its domain's logs, and the alarm fires on the one furthest past twice its share.
+its domain's logs, plus what the engine reads on its own — every data node's
+object-store repair and collection pin the tracker's log 168 times a day, on
+each of its logs — and the alarm fires on the one furthest past twice its share.
+The rate is the log's, counted where every node applies it, and each barrier is
+counted in the hour it was **committed**: a node back from days away, or
+adopting a snapshot a day old, replays days of barriers in minutes, and they
+count toward the day they happened in rather than toward today.
 
 Two excursions are designed for and do not alarm:
 

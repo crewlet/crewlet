@@ -127,11 +127,18 @@ type retention struct {
 
 	// seats is the running company's agent-seat count, which the census a
 	// log's read rate is held against scales with
-	// ([statelog.CensusExpectation]). READ AT EVERY EVALUATION, because a
+	// ([statelog.Census]). READ AT EVERY EVALUATION, because a
 	// revision that hires or retires seats moves it and the trim is not
 	// rebuilt for one. Nil counts no seat, which the expectation reads as
 	// the one seat it never goes below.
 	seats func() int
+
+	// background is the barrier records a day the engine's OWN periodic
+	// reads put on each log of a domain, whatever the seats do
+	// ([statelog.Census.Background], [Engine.backgroundBarriers]). Read at
+	// every evaluation too, because the data nodes that make them join and
+	// leave. Nil puts none.
+	background func(domain string) int
 
 	// mu guards the coverage cache below. The tick and every API request
 	// assemble a report, on different goroutines.
@@ -191,6 +198,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		index:       e.indexReading,
 		objects:     e.objectsReading,
 		seats:       func() int { return seatCount(e.Company()) },
+		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},
 		done:        make(chan struct{}),
 	}

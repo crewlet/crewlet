@@ -5,7 +5,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/objstore"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/objstore/transfer"
+	"github.com/crewlet/crewlet/internal/objstore/upkeep"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -161,7 +169,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	recorder.Add(metrics.TrackerFeedUnreadable, 3, metrics.Attrs{"source": "tracker"})
 	trackerLog := estateLog(tracker.Domain{})
 	recorder.Add(metrics.StatelogBarriersApplied,
-		uint64(3*statelog.CensusExpectation(100, 1)),
+		uint64(3*statelog.Census{Seats: 100, Logs: 1}.Expected()),
 		metrics.Attrs{"domain": "tracker", "stream": estateSpec(tracker.Domain{}).Name})
 
 	r := &retention{metrics: recorder, state: censusLogs(LayoutZero(), trackerLog),
@@ -180,7 +188,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		t.Errorf("three untranslatable records reached the reading as %d",
 			reading.FeedUnreadable)
 	}
-	if reading.LinearizableReadsExpected != statelog.CensusExpectation(100, 1) ||
+	if reading.LinearizableReadsExpected != (statelog.Census{Seats: 100, Logs: 1}).Expected() ||
 		reading.CensusLog != trackerLog.String() {
 		t.Errorf("the declared read rate reached the reading as %d on %q, so "+
 			"`census_drift` compares against nothing",
@@ -294,6 +302,12 @@ func censusLogs(layout statelog.Layout, ids ...statelog.LogID) *stateLog {
 // is what every node's applier sees. And it was one figure for the estate,
 // where a partitioned domain divides its census across its logs as it divides
 // its ceiling. The vector log, which no read appends to, is held to nothing.
+//
+// AND THE ENGINE'S OWN READS ARE PART OF WHAT A LOG TAKES. Every data node's
+// object passes pin the tracker's estate on a fixed cadence, whatever the
+// seats do, so a small company doing exactly its census put more barriers on
+// its log than its seats' share allowed — and fired the alarm, louder the
+// smaller it was.
 func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
 	t.Parallel()
 	zero := LayoutZero()
@@ -304,16 +318,43 @@ func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
 	stream := func(l statelog.Layout, id statelog.LogID) string { name, _ := l.Stream(id); return name }
 
 	for _, tc := range []struct {
-		name     string
-		layout   statelog.Layout
-		logs     []statelog.LogID
-		seats    int
-		applied  map[statelog.LogID]int
-		appended int
-		fires    bool
-		log      string
-		expected int
+		name       string
+		layout     statelog.Layout
+		logs       []statelog.LogID
+		seats      int
+		background map[string]int
+		applied    map[statelog.LogID]int
+		appended   int
+		fires      bool
+		log        string
+		expected   int
 	}{
+		{
+			name: "one seat on one data node, at its census beside the passes",
+			// 125 a day from the seat and 168 from the one data
+			// node's passes: 293, which past twice the seat's 125
+			// fired on a company whose sizing was right.
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 1,
+			background: map[string]int{"tracker": upkeep.PinsPerDay},
+			applied:    map[statelog.LogID]int{trackerLog: 125 + upkeep.PinsPerDay},
+			fires:      false, log: "tracker", expected: 125 + upkeep.PinsPerDay,
+		},
+		{
+			name: "an idle two-seat company on three data nodes",
+			// 504 a day from the passes alone, past twice the
+			// seats' 250.
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 2,
+			background: map[string]int{"tracker": 3 * upkeep.PinsPerDay},
+			applied:    map[statelog.LogID]int{trackerLog: 3 * upkeep.PinsPerDay},
+			fires:      false, log: "tracker", expected: 250 + 3*upkeep.PinsPerDay,
+		},
+		{
+			name:   "the passes are no cover past twice the whole census",
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 1,
+			background: map[string]int{"tracker": upkeep.PinsPerDay},
+			applied:    map[statelog.LogID]int{trackerLog: 2*(125+upkeep.PinsPerDay) + 1},
+			fires:      true, log: "tracker", expected: 125 + upkeep.PinsPerDay,
+		},
 		{
 			name: "a 200-seat company at 1.2 times its per-seat census",
 			// 30 000 a day: past twice the fixed 12 500, inside twice
@@ -378,7 +419,8 @@ func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
 					metrics.Attrs{"domain": "tracker"})
 			}
 			r := &retention{metrics: recorder, state: censusLogs(tc.layout, tc.logs...),
-				seats: func() int { return tc.seats }}
+				seats:      func() int { return tc.seats },
+				background: func(domain string) int { return tc.background[domain] }}
 			var reading statelog.Reading
 			r.observed(&reading)
 			if reading.CensusLog != tc.log || reading.LinearizableReadsExpected != tc.expected {
@@ -442,5 +484,46 @@ roles:
 	}
 	if got := r.seats(); got != want {
 		t.Errorf("the census counts %d seats, and the running company has %d", got, want)
+	}
+	if r.background == nil {
+		t.Error("the trim was handed nothing the engine reads on its own, so the " +
+			"census holds a small company's log to its seats' reads alone")
+	}
+}
+
+// THE ENGINE'S OWN READS ARE THE OBJECT PASSES' PINS, ON EVERY MEMBER.
+//
+// Each data node's repair and collection pin the estate of every domain a
+// declared table names, on a fixed cadence — so the barriers a day the engine
+// puts on each of those logs is the passes' steady count for every member of
+// the object map, taken out or on probation included, since each still runs
+// them; on any other log, nothing; and while no map is known, nothing, since
+// no node places and so none pins.
+func TestTheEnginesOwnReadsAreThePassesPinsOnEveryMember(t *testing.T) {
+	t.Parallel()
+	cache := transfer.NewCache(nil)
+	e := &Engine{objects: &objectStore{cache: cache}}
+	if got := e.backgroundBarriers(tracker.Domain{}.Name()); got != 0 {
+		t.Errorf("with no map known the engine puts %d a day on the tracker's log, want none", got)
+	}
+	cache.Observe(objstore.MapState{Map: objplacement.Map{
+		Generation: uuid.New(), Epoch: 1, Replicas: 1, PGBits: objplacement.MinPGBits,
+		Members: []placement.Member{
+			{Node: "a", Weight: 1, Share: 1 << 16}, {Node: "b", Weight: 1, Share: 1 << 16},
+			{Node: "c", Weight: 1, Share: 1 << 16, Out: true},
+		},
+	}}, 1)
+	if got, want := e.backgroundBarriers(tracker.Domain{}.Name()), 3*upkeep.PinsPerDay; got != want {
+		t.Errorf("three members put %d a day on the tracker's log, want %d", got, want)
+	}
+	for _, other := range []statelog.Domain{pages.Domain{}, search.Domain{}} {
+		if got := e.backgroundBarriers(other.Name()); got != 0 {
+			t.Errorf("the passes put %d a day on the %s log, which no declared "+
+				"table names", got, other.Name())
+		}
+	}
+	if upkeep.PinsPerDay != 168 {
+		t.Errorf("the passes pin %d times a day, and a repair every ten minutes "+
+			"and a collection every hour is 168", upkeep.PinsPerDay)
 	}
 }

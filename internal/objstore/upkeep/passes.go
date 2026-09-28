@@ -52,6 +52,21 @@ const RepairInterval = membership.OutGrace
 // every node, rather than leaving a decommission to wait out the hour.
 const CollectInterval = time.Hour
 
+// PinsPerDay is how many times one data node's passes pin the estate in a day
+// at their steady cadence: a repair every [RepairInterval] and a collection
+// every [CollectInterval], 144 and 24. Each pin is a linearizable read, which
+// appends one barrier to the log of every domain a declared table names — so
+// this is what the engine's OWN reads put on each of those logs per data node,
+// whatever a company's seats do, and the census those logs' read rates are
+// held against counts it (statelog.Census.Background).
+//
+// THE STEADY CADENCE ONLY. A pass that failed is retried sooner, and a map
+// that moved starts a repair and, once the fleet settles, a collection at
+// once; each is a burst while something is changing or failing, which the
+// alarms for those report, and a figure sized for the burst would hide a
+// company outgrowing its census behind the engine's worst hour.
+const PinsPerDay = int(24*time.Hour/RepairInterval + 24*time.Hour/CollectInterval)
+
 // fetchConcurrency is how many chunks one repair pass copies at once.
 //
 // FOUR, a RECOVERY THROTTLE in the sense of Ceph's osd_recovery_max_active

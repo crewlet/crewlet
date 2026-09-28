@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	"github.com/crewlet/crewlet/internal/objstore/placement"
+	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/objstore/transfer"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -903,6 +904,45 @@ func (e *Engine) objectsReading(now time.Time, out *statelog.Reading) {
 	epoch, since := p.seen()
 	fillPassesReading(p.node.Status(), epoch, since, now, out)
 }
+
+// backgroundBarriers is the barrier records a day the object store's passes put
+// on each log of domain, whatever the company's seats do: [upkeep.PinsPerDay]
+// for every data node that runs them, on every log of a domain a declared
+// table names ([references.All]) and on no other.
+//
+// EVERY MEMBER OF THE OBJECT MAP runs them — one taken out and one on
+// probation included, since each still repairs and collects — so the count is
+// the map's members, read off the map this node already caches rather than a
+// listing of its own. Zero while no map is known: no node's passes run before
+// one is written, since a pass places by it.
+//
+// EVERY LOG OF THE DOMAIN TAKES ALL OF IT, rather than a share: a pin is a
+// barrier on each log of the domains it reads, so each log takes every data
+// node's ([statelog.Census.Background]).
+func (e *Engine) backgroundBarriers(domain string) int {
+	if !pinnedDomains()[domain] {
+		return 0
+	}
+	o := e.objects
+	if o == nil || o.cache == nil {
+		return 0
+	}
+	m, placed := o.cache.Current()
+	if !placed {
+		return 0
+	}
+	return upkeep.PinsPerDay * len(m.Members)
+}
+
+// pinnedDomains is every domain a declared table names — the domains whose
+// logs the object passes pin.
+var pinnedDomains = sync.OnceValue(func() map[string]bool {
+	out := map[string]bool{}
+	for _, t := range references.All {
+		out[t.Domain] = true
+	}
+	return out
+})
 
 // fillHealthReading is the store's health as the alarms read it.
 func fillHealthReading(health disk.Health, out *statelog.Reading) {

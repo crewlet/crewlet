@@ -2612,7 +2612,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				continue
 			}
 			if rec.Kind == BarrierKind {
-				tally.barriers++
+				tally.barrier(rec.StoredAt, txStart)
 			}
 			// THE FRAMEWORK'S OWN WRITE FIRST, from the
 			// always-decodable envelope, because it happens
@@ -2993,8 +2993,30 @@ type results struct {
 
 	// barriers is how many of the records this batch consumed for the
 	// first time were barriers, whatever became of them — each is a record
-	// on the log, which is what the census counts.
-	barriers int
+	// on the log, which is what the census counts — BY THE HOUR THE BROKER
+	// STORED EACH, as the start of that hour. Nil until the first.
+	barriers map[time.Time]uint64
+}
+
+// barrier counts one barrier the broker stored at storedAt, or at applied — the
+// transaction's own instant — for a record that carries no broker instant,
+// which is the only instant there is for it.
+//
+// BY ITS COMMIT HOUR, never the hour it is applied in: the census reads these
+// as the reads the log took in the last day, and a node that replays a backlog
+// — back from days away, or adopting a snapshot a day old — applies days of
+// barriers in minutes. Counted where they were applied, that node read as a
+// company several times past its census for the next day, on reads that were
+// never made in it.
+func (t *results) barrier(storedAt, applied time.Time) {
+	at := storedAt
+	if at.IsZero() {
+		at = applied
+	}
+	if t.barriers == nil {
+		t.barriers = map[time.Time]uint64{}
+	}
+	t.barriers[at.UTC().Truncate(time.Hour)]++
 }
 
 // countAborts records the transactions the store rolled back under this apply.
@@ -3034,11 +3056,12 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 	}
 	// THE LOG'S READ RATE, as this node applies it: every node's barriers,
 	// counted after the transaction that consumed them committed — so an
-	// attempt the store rolled back and ran again counts once. Keyed by
-	// the STREAM, which names one log in every layout, because a domain
-	// with a log per partition has a rate per partition.
-	if tally.barriers > 0 {
-		r.metrics.Add(metrics.StatelogBarriersApplied, uint64(tally.barriers),
+	// attempt the store rolled back and ran again counts once — and filed
+	// in the window at the hour each was COMMITTED ([results.barrier]).
+	// Keyed by the STREAM, which names one log in every layout, because a
+	// domain with a log per partition has a rate per partition.
+	for hour, n := range tally.barriers {
+		r.metrics.AddAt(metrics.StatelogBarriersApplied, n, hour,
 			metrics.Attrs{"domain": domain, "stream": r.spec.Name})
 	}
 	// THE COMMIT-TO-APPLY GAP, from the BROKER's own timestamp rather

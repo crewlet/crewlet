@@ -538,12 +538,13 @@ func (r *retention) observed(out *statelog.Reading) {
 // it, and the alarm could not fire until the company was six times past what
 // its logs were sized for.
 //
-// # The share is the census's, per seat and per log
+// # The share is the census's, per seat and per log, plus the engine's own
 //
 // Declared rather than configured — it is a term in the log's own sizing, so
 // an operator who could set it would be silencing the alarm rather than
-// resizing the deployment it is about — and scaled by the company's own seats
-// and divided across the domain's logs ([statelog.CensusExpectation]).
+// resizing the deployment it is about — scaled by the company's own seats and
+// divided across the domain's logs, plus what the engine's own periodic reads
+// put on the log whatever the seats do ([statelog.Census]).
 func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
 	received := map[string]int{}
 	for _, snapshot := range reading {
@@ -555,6 +556,10 @@ func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
 	if r.seats != nil {
 		seats = r.seats()
 	}
+	background := func(string) int { return 0 }
+	if r.background != nil {
+		background = r.background
+	}
 	worst := -1.0
 	for _, running := range r.state.running() {
 		if barrierEncoder(running.domain) == nil {
@@ -563,8 +568,11 @@ func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
 			// linearizable read.
 			continue
 		}
-		expected := statelog.CensusExpectation(seats,
-			len(r.state.layout.LogsOf(running.id.Domain)))
+		expected := statelog.Census{
+			Seats:      seats,
+			Logs:       len(r.state.layout.LogsOf(running.id.Domain)),
+			Background: background(running.id.Domain),
+		}.Expected()
 		if expected <= 0 {
 			continue
 		}

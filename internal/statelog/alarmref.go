@@ -82,7 +82,8 @@ var alarmMeaning = map[Kind]string{
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
 		"its share of the census allows — 125 a day per agent seat, over its " +
-		"domain's logs — so every sizing decision under it is stale.",
+		"domain's logs, plus what each data node's object-store passes read " +
+		"on their own schedule — so every sizing decision under it is stale.",
 	KindObjectsMissing: "Parts of the company's files that the placement map " +
 		"puts on this node are held by no member of the fleet — every member " +
 		"asked answered that it has no copy — so those files cannot be read " +

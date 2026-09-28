@@ -224,7 +224,12 @@ func Catalogue() []Instrument {
 				"record. It is the rate `census_drift` holds against the " +
 				"census, per log: a node's own appends are only its share of " +
 				"the fleet's reads, and on a fleet of several serving nodes " +
-				"they describe a company that many times quieter than it is.",
+				"they describe a company that many times quieter than it is. " +
+				"The alarm's 24-hour window files each barrier at the hour the " +
+				"broker stored it, so a node replaying a backlog does not read " +
+				"days of reads as one; this cumulative series counts them as " +
+				"they are applied, so it jumps by a backlog's barriers when " +
+				"one is replayed.",
 		},
 		{
 			Name: StatelogLingerYields, Kind: KindCounter, Unit: UnitCount,
