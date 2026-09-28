@@ -52,18 +52,20 @@ import (
 //
 // A tick that TRAINS the semantic index (ADR-0022) reads every code and makes
 // one exact pass over the wide table, then runs a k-means and files every code
-// on HALF the cores, leaving the rest to the seats and the searches — about
-// 120 µs a source for the reading and ≈ 125 s of k-means and filing at the
-// largest list count on half of four busy cores, which projects to a little
-// over three minutes at the ≈ 545 000 sources a node searches inside its
-// budget through an index (BenchmarkIndexTraining,
-// BenchmarkIVFTrainingShare, [search.IVFMaxLists]). That is longer than the
-// interval and within reach of the lease's TTL, so the tick RENEWS the lease
-// on the interval while it runs ([embedDuty.keepClaimed]) and is cut off the
-// moment a renewal does not confirm it: a step cut off publishes nothing, so
-// the singleton never has two writers. And every tick is bounded outright by
-// [embedTickBudget], because a renewal is also what would keep a WEDGED tick
-// holding the duty for ever.
+// on HALF the cores and never fewer than two, leaving the rest to the seats
+// and the searches — about 120 µs a source for the reading and ≈ 125 s of
+// k-means and filing at the largest list count on two workers of four busy
+// cores (≈ 130 s on both of two), which projects to a little over three
+// minutes at the ≈ 545 000 sources a node searches inside its budget through
+// an index (BenchmarkIndexTraining, BenchmarkIVFTrainingShare,
+// [search.IVFMaxLists]); on ONE worker it projected to 290–310 s, which is why
+// a training is never halved below two where a node has them. A training tick
+// is longer than the interval and within reach of the lease's TTL, so the tick
+// RENEWS the lease on the interval while it runs ([embedDuty.keepClaimed]) and
+// is cut off the moment a renewal does not confirm it: a step cut off publishes
+// nothing, so the singleton never has two writers. And every tick is bounded
+// outright by [embedTickBudget], because a renewal is also what would keep a
+// WEDGED tick holding the duty for ever.
 
 // embedDutyName is the fleet singleton the embedding duty claims.
 const embedDutyName = "embeddings"
@@ -81,9 +83,11 @@ const embedDutyTTL = 3 * search.EmbedInterval
 // FIVE MINUTES: the longest legitimate tick is a training at the largest
 // partition an index serves, projected at a little over three minutes from the
 // measured per-source reading and the k-means and filing at
-// [search.IVFMaxLists] lists on the half of four busy cores a training runs on
-// (BenchmarkIndexTraining, BenchmarkIVFTrainingShare) — so this leaves more
-// than a third of it spare. A tick past it
+// [search.IVFMaxLists] lists on the two workers a training runs on at four busy
+// cores or two (BenchmarkIndexTraining, BenchmarkIVFTrainingShare) — so this
+// leaves more than a third of it spare. A node allowed a single core, whose
+// one worker competes with its searches for it, is the exception the search
+// package's core share states. A tick past it
 // is a wedged one, which the lease renewal would otherwise let hold the duty
 // for ever while no node embedded anything; cut off, it publishes nothing and
 // the next tick starts over.

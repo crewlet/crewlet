@@ -15,21 +15,33 @@ import (
 	"time"
 )
 
-// A TRAINING TAKES AT MOST ITS SHARE OF THE CORES, and never none.
+// A TRAINING TAKES AT MOST ITS SHARE OF THE CORES, never fewer than the two
+// workers its tick needs where the node has two, and never none.
 //
 // The node holding the embedding duty also runs seats and answers searches,
 // and the k-means and the filing are the only work on it that can occupy
 // every core for a minute at a time. Unbounded they did: the training ran on
-// GOMAXPROCS workers. A node allowed a single core still trains, on it.
+// GOMAXPROCS workers. Halved without a floor, a two- or three-core node
+// trained on ONE, whose training at the largest partition an index serves
+// does not fit the duty's tick ([ivfMinWorkers]) — so every tick on it was cut
+// off and its partition never got an index. A node allowed a single core
+// still trains, on it.
 func TestATrainingTakesAtMostItsShareOfTheCores(t *testing.T) {
 	t.Parallel()
 	for procs := 1; procs <= 256; procs++ {
 		workers := workersFor(procs)
-		if workers < 1 {
+		switch {
+		case workers < 1:
 			t.Fatalf("a node allowed %d core(s) trains on %d workers — it would "+
 				"never train", procs, workers)
-		}
-		if procs >= ivfCoreShare && workers > procs/ivfCoreShare {
+		case workers > procs:
+			t.Fatalf("a node allowed %d core(s) trains on %d workers, more than "+
+				"it has", procs, workers)
+		case workers < min(procs, 2):
+			t.Fatalf("a node allowed %d cores trains on %d worker(s): below two, "+
+				"a training at the largest partition an index serves overruns the "+
+				"tick, and the partition is never indexed", procs, workers)
+		case workers > max(procs/ivfCoreShare, 2):
 			t.Fatalf("a node allowed %d cores trains on %d workers, more than "+
 				"1/%d of them", procs, workers, ivfCoreShare)
 		}

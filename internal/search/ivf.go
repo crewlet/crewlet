@@ -670,7 +670,8 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 }
 
 // ivfCoreShare is the share of this process's cores the index's CPU-bound
-// steps — the k-means and filing every code — run on, as a divisor: HALF.
+// steps — the k-means and filing every code — run on, as a divisor: HALF, and
+// never fewer than [ivfMinWorkers] workers where the node has that many cores.
 //
 // # Why not every core
 //
@@ -695,9 +696,19 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // other half of the cores). At the ≈ 545 000 sources a node searches through
 // an index, the reading at about 120 µs a source is ≈ 65 s, and the k-means
 // and filing on half of four busy cores ≈ 125 s: a little over three minutes
-// in the worst case measured, against the five. A node allowed two cores
-// trains on one worker, which is how it trained on one core before this share
-// existed — at half the corpus a two-core node's searches can serve.
+// in the worst case measured, against the five. That holds on every node the
+// share gives two workers or more, which is every node with two cores or more
+// ([ivfMinWorkers] says why a two- or three-core node is not halved), and the
+// k-means stops growing once the list count reaches [IVFMaxLists] — its sample
+// is a fixed number of rows a list — so past that the filing and the reading
+// are the only terms a larger partition lengthens.
+//
+// A node allowed ONE core trains on it, as every build has, and no share can
+// leave its searches anything. With the same two searchers on that one core
+// the training measured 237 s of k-means and 139 s of filing at 500 000
+// sources (BenchmarkIVFTrainingShare -cpu 1) — over the tick at the largest
+// partition however it is divided, because a single core with two searches
+// always in flight is already past the load its corpus table is measured at.
 //
 // # Why a constant
 //
@@ -708,12 +719,35 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // seats. An operator who wants the whole engine on fewer cores sets GOMAXPROCS.
 const ivfCoreShare = 2
 
+// ivfMinWorkers is the fewest workers a training runs on wherever the node has
+// that many cores: TWO, so the share halves only a node with four or more.
+//
+// Half of two cores is one worker, and on two cores that bought the searches
+// nothing while it nearly doubled the training. Measured at GOMAXPROCS 2 over
+// the same fixture with the same two searchers (BenchmarkIVFTrainingShare
+// -cpu 2), once on an otherwise idle host and once on this container shared
+// with other runs: one worker took 149 s of k-means and 90 s of filing (135 s
+// and 81 s shared), two took 78 s and 52 s (77 s and 47 s), and the searchers'
+// p95 was 23.0 ms against 24.8 ms (22.9 against 24.7), from 4.4 ms with no
+// training. Two searches always in flight on two cores already queue for each
+// other's time slices, so one training worker more or less moves their tail
+// by a scheduler quantum rather than by a core. And one worker does not fit
+// the tick: at the ≈ 545 000 sources an index serves it projects to 290–310 s
+// with the reading, against the engine's five-minute embedTickBudget, so every
+// tick on such a node would be cut off and its partition never indexed; on two
+// it is about 195 s. A three-core node takes two workers for the same reason,
+// where half would have been one.
+const ivfMinWorkers = 2
+
 // ivfWorkers is how many goroutines a training runs its k-means and its filing
-// on: [ivfCoreShare] of the cores this process may use, never fewer than one.
+// on: [ivfCoreShare] of the cores this process may use, never fewer than
+// [ivfMinWorkers] of them — nor more than it has.
 func ivfWorkers() int { return workersFor(runtime.GOMAXPROCS(0)) }
 
 // workersFor is [ivfWorkers] for a process allowed procs cores.
-func workersFor(procs int) int { return max(procs/ivfCoreShare, 1) }
+func workersFor(procs int) int {
+	return max(procs/ivfCoreShare, min(procs, ivfMinWorkers), 1)
+}
 
 // ivfStride is how many indices a training worker covers between two readings
 // of whether its tick has ended: ONE THOUSAND AND TWENTY-FOUR.

@@ -265,12 +265,16 @@ runs one indexed anti-join that returns nothing, and stops; a tick on one that
 is behind cannot monopolise the provider budget. The one long tick is a
 **training** of the semantic index: about 120 µs a source to read every code
 and make one exact pass, plus a k-means and a filing of every code that run on
-**half the node's cores** — so the seats and the searches on that node keep the
-other half — which comes to a little over three minutes at the largest
-partition an index serves. It renews the duty's
-lease as it runs, stops publishing — and hands its cores back within a fraction
-of a second — the moment it cannot, and is cut off at five minutes, so a wedged
-tick never holds the duty.
+**half the node's cores, and never fewer than two** — so the seats and the
+searches on a node of four cores or more keep the other half — which comes to
+a little over three minutes at the largest partition an index serves. Two is
+the floor because on a two- or three-core node one worker bought the searches
+nothing measurable and made that training longer than the tick. A node with a
+**single core** trains on it, as it always did, and with searches always in
+flight on that core it cannot finish a training of the largest partition inside
+the tick. The training renews the duty's lease as it runs, stops publishing —
+and hands its cores back within a fraction of a second — the moment it cannot,
+and is cut off at five minutes, so a wedged tick never holds the duty.
 Both source kinds are covered: the tracker's work items and the knowledge
 base's published pages. A **rename does not re-embed a page** — the vector is
 stored against the page's own edit number rather than the log version a rename
