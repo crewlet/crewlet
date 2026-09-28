@@ -18,7 +18,9 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { DetailRail, peekRow } from "./DetailRail.tsx";
+import { PeekRestingWidth, PeekWidthRequest, usePeekWidth } from "./peekWidth.ts";
 import { Router } from "~/app/router.tsx";
+import { CANVAS_PEEK_WIDTH } from "~/app/layout.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -31,12 +33,19 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-function rail() {
+function rail(resting?: number) {
+  const body = (
+    <DetailRail ref={{ kind: "seat", id: "ceo" }}>
+      <p>a seat</p>
+    </DetailRail>
+  );
   return render(
     <Router>
-      <DetailRail ref={{ kind: "seat", id: "ceo" }}>
-        <p>a seat</p>
-      </DetailRail>
+      {resting === undefined ? (
+        body
+      ) : (
+        <PeekRestingWidth.Provider value={resting}>{body}</PeekRestingWidth.Provider>
+      )}
     </Router>,
   );
 }
@@ -67,11 +76,45 @@ test("a drag moves the value the grid track resolves", () => {
   // out, so the edge is given here — 1016, a 1024 window less the inset.
   aside!.getBoundingClientRect = () => ({ right: 1016 }) as DOMRect;
   fireEvent.mouseDown(grip!);
-  // A pointer at 516 asks for a 500px rail — inside the 360..640 it clamps to.
+  // A pointer at 516 asks for a 500px rail — inside the 330..640 it clamps to.
   fireEvent.mouseMove(window, { clientX: 516 });
   expect(published()).toBe("500px");
   fireEvent.mouseUp(window);
   expect(localStorage.getItem("crewlet.peek.width")).toBe("500");
+});
+
+// A CANVAS RESTS ITS PEEK NARROWER: a chart is shrunk into what the rail
+// leaves it, so the org chart asks for the approved 330 rather than a list's
+// 420 — and the rail honours the screen's width until the reader drags one.
+test("the rail rests at the width the screen under it asked for", () => {
+  rail(CANVAS_PEEK_WIDTH);
+  expect(published()).toBe(`${CANVAS_PEEK_WIDTH}px`);
+});
+
+// THE READER'S WIDTH IS THEIR PREFERENCE, on every screen: a width dragged on
+// one screen is not undone by the next one's resting width.
+test("a width the reader dragged wins over the screen's resting width", () => {
+  localStorage.setItem("crewlet.peek.width", "500");
+  rail(CANVAS_PEEK_WIDTH);
+  expect(published()).toBe("500px");
+});
+
+// A SCREEN ASKS, AND TAKES IT BACK: the next screen's rail must not rest at
+// the last one's width.
+test("a screen's request for a resting width is withdrawn when it goes", () => {
+  const asked: (number | null)[] = [];
+  function Canvas() {
+    usePeekWidth(CANVAS_PEEK_WIDTH);
+    return null;
+  }
+  const view = render(
+    <PeekWidthRequest.Provider value={(width) => asked.push(width)}>
+      <Canvas />
+    </PeekWidthRequest.Provider>,
+  );
+  expect(asked).toEqual([CANVAS_PEEK_WIDTH]);
+  view.unmount();
+  expect(asked).toEqual([CANVAS_PEEK_WIDTH, null]);
 });
 
 test("a closed rail leaves no width pinned on the document", () => {

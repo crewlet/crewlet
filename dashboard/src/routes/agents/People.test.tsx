@@ -26,6 +26,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { People } from "./People.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -48,10 +49,11 @@ afterEach(() => {
   location.hash = "";
 });
 
-function mount(org?: OrgProjection) {
+function mount(org?: OrgProjection, agents?: unknown[]) {
   const store = new Store();
   store.applyHealth({ status: "healthy" });
   if (org) store.applyOrg(org);
+  if (agents) store.applyAgents(agents);
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
@@ -63,9 +65,11 @@ function mount(org?: OrgProjection) {
   };
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <People />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <People />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
 }
@@ -180,4 +184,61 @@ test("a filtered group head counts what matched, not what the unit holds", async
 
   expect(screen.getByText("1 seat matching")).toBeTruthy();
   expect(screen.queryByText(/directly in it/)).toBeNull();
+});
+
+// ONE FIELD, IN THE BAR, ON EVERY SECTION. The roster left the bar's "Find a
+// seat" out and drew a filter box of its own in its toolbar, so the bar
+// changed shape between tabs. On a list of every seat, finding a seat IS
+// narrowing the list to it: the bar's field is the roster's filter.
+test("the bar's Find a seat is the roster's filter, and it draws no second field", async () => {
+  mount(ORG);
+  await settle();
+  const fields = screen.getAllByRole("searchbox");
+  expect(fields).toHaveLength(1);
+  expect(fields[0]!.getAttribute("aria-label")).toBe("Find a seat");
+  expect(fields[0]!.closest(".page-actions")).not.toBeNull();
+  await act(async () => {
+    fireEvent.change(fields[0]!, { target: { value: "dev-a" } });
+  });
+  await settle();
+  expect(new URLSearchParams(location.hash.split("?")[1] ?? "").get("q")).toBe("dev-a");
+  expect(document.querySelectorAll(".seat-card")).toHaveLength(1);
+});
+
+// ---------------------------------------------------------------------------
+// The order, and the seats the chart dropped
+// ---------------------------------------------------------------------------
+
+/** The names on the cards, in the order they are drawn. */
+function drawnNames(): string[] {
+  return [...document.querySelectorAll(".seat-card strong")].map((el) => el.textContent ?? "");
+}
+
+// THE ORDER IS THE NAME'S, NEVER A LIVE FIELD'S. The roster this replaced
+// sorted on a timestamp every push moves, so cards changed places under the
+// reader's cursor while a turn ran. A push that makes Dev B the most recently
+// active seat must leave the flat list alphabetical.
+test("the roster is ordered by name, whatever the live rows say", async () => {
+  mount(ORG, [
+    { role: "Dev B", activity: "working", live_call: { updated_at: "2031-01-01T00:00:09Z" } },
+    { role: "Dev A", activity: "idle", live_call: { updated_at: "2031-01-01T00:00:01Z" } },
+    { role: "Dee", activity: "idle" },
+  ]);
+  await settle();
+  await act(async () => {
+    location.hash = "#/agents/roster?group=flat";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  await settle();
+  expect(drawnNames()).toEqual(["Dee", "Dev A", "Dev B"]);
+});
+
+// A SEAT THE ENGINE STILL REPORTS AND THE CHART DROPPED is drawn in its own
+// group rather than vanishing: a revision that removes a seat does not stop
+// the turn it was on.
+test("a seat the chart no longer holds is listed as removed from the company", async () => {
+  mount(ORG, [{ role: "Old Seat", handle: "old-seat", activity: "working" }]);
+  await settle();
+  expect(screen.getByText("Removed from the company")).toBeTruthy();
+  expect(screen.getByText("Old Seat")).toBeTruthy();
 });

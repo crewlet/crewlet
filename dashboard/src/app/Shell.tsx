@@ -68,13 +68,14 @@ import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useMediaQuery } from "~/lib/media.ts";
-import { densityScale, listReserve, peekColumnMin } from "./layout.ts";
+import { PEEK_WIDTH, densityScale, listReserve, peekColumnMin } from "./layout.ts";
 import { onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { useKeymap } from "./keymap.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
 import { FillRequest } from "./fill.tsx";
+import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
 /**
  * What a screen tells the frame about itself.
@@ -304,6 +305,9 @@ function Frame({ children }: { children: ReactNode }) {
   // `fill` is what honours it: the scroller stops scrolling and the content
   // column takes the height that is left.
   const [filling, setFilling] = useState(false);
+  // AND ONE THAT ASKED FOR A NARROWER PEEK — a canvas, which the rail shrinks
+  // rather than narrows. See `app/frame/peekWidth.ts`.
+  const [restingPeek, setRestingPeek] = useState<number | null>(null);
   const [tokenOpen, setTokenOpen] = useState(false);
   // THE NEW TASK SHEET, and what the door it was opened from knows. The frame
   // holds it for the reason it holds the palette: four doors — the sidebar's
@@ -418,7 +422,9 @@ function Frame({ children }: { children: ReactNode }) {
 
   const screen = (
     <FillRequest.Provider value={setFilling}>
-      <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+      <PeekWidthRequest.Provider value={setRestingPeek}>
+        <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+      </PeekWidthRequest.Provider>
     </FillRequest.Provider>
   );
 
@@ -458,7 +464,11 @@ function Frame({ children }: { children: ReactNode }) {
               <StateBar degraded={degraded} coverage={coverage} />
             </PageHeader>
           }
-          footer={<PeekHost />}
+          footer={
+            <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
+              <PeekHost />
+            </PeekRestingWidth.Provider>
+          }
         >
           {row?.renderer === "column" ? (
             <div className="section-frame">

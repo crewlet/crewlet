@@ -36,6 +36,12 @@ export interface NewTaskPreset {
   assignee?: string;
   /** The labels it starts with — a lane of a board grouped by label. */
   labels?: string[];
+  /**
+   * The seat the task ASKS — a seat's Message, which files a task carrying
+   * `ask` so the answer lands in the asker's Inbox. A handle; absent for an
+   * ordinary task.
+   */
+  ask?: string;
 }
 
 export type OpenNewTask = (preset?: NewTaskPreset) => void;

@@ -4031,6 +4031,66 @@ export interface DecisionsAnswer {
   complete?: boolean;
 }
 
+/** One company day of one seat's turns, summed across every node. */
+export interface SeatActivityDay {
+  /** A company date label, `2026-09-23`. */
+  day: string;
+  turns: number;
+  failed: number;
+  tokens: number;
+}
+
+/** One seat's totals over the window before, with `previous=true`. */
+export interface SeatActivityTotals {
+  turns: number;
+  failed: number;
+  reviewed: number;
+  first_pass: number;
+  sent_back: number;
+  tokens: number;
+}
+
+/**
+ * One seat's turns over a window of company days, from the replicated usage
+ * domain — every node's days summed (`seat_activity`).
+ */
+export interface SeatActivityRow {
+  handle: string;
+  role?: string;
+  agent_id?: string;
+  /** False for a seat whose days are in the window and that has left the chart. */
+  in_chart: boolean;
+  turns: number;
+  failed: number;
+  reviewed: number;
+  first_pass: number;
+  /** `first_pass` over REVIEWED turns, 0–100 — ABSENT when none was reviewed,
+   *  which is no rate at all rather than 0%. */
+  first_pass_pct?: number;
+  /** Reviews that sent work back, not turns. */
+  sent_back: number;
+  /** Duration quantiles within `quantile_resolution`; absent with no turn. */
+  p50_ms?: number;
+  p90_ms?: number;
+  tokens: number;
+  /** Every day of the window, oldest first, a quiet day as zeros. */
+  per_day: SeatActivityDay[];
+  last_turn_at?: string;
+  previous?: SeatActivityTotals;
+}
+
+/** `seat_activity`: every agent seat's turns over `days` company days. */
+export interface SeatActivityAnswer {
+  since: string;
+  until: string;
+  days: number;
+  previous_since?: string;
+  previous_until?: string;
+  seats: SeatActivityRow[];
+  /** The worst relative error of a quantile (0.06). */
+  quantile_resolution: number;
+}
+
 export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
@@ -4045,6 +4105,7 @@ export interface QueryMap {
   phases: PhasesPage;
   tokens: Rollup;
   token_series: TokenSeries;
+  seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;

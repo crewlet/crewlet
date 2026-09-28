@@ -90,7 +90,8 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { handleLabel, indexOrg, type Seat } from "~/lib/seats.ts";
+import { handleLabel, indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { projectsByUnit } from "~/lib/orgchart.ts";
 import { DEFAULT_TYPE, PRIORITIES, STATUSES, statusLabel, typeName } from "~/lib/work.ts";
 import { humanize, utf8Bytes } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
@@ -209,6 +210,8 @@ export interface NewTaskDraft {
   /** `YYYY-MM-DD`, or "". */
   due: string;
   labels: string[];
+  /** The seat the task asks, by handle, or "" for an ordinary task. */
+  ask: string;
 }
 
 /**
@@ -234,19 +237,29 @@ export function createArgs(draft: NewTaskDraft): Record<string, unknown> {
   if (draft.priority && draft.priority !== "none") args.priority = draft.priority;
   if (draft.due) args.due = draft.due;
   if (draft.labels.length > 0) args.labels = draft.labels;
+  if (draft.ask) args.ask = draft.ask;
   return args;
 }
 
 /**
- * Which project the sheet opens on: the door's, else the person's own (where
- * their create lands when it names none — the engine's answer, `viewer`),
- * else the first active project. "" while none is known, and the create
- * refuses naming the field rather than guessing.
+ * Which project the sheet opens on: the door's, else the ASSIGNEE's (the
+ * project filed under the preset seat's own unit, or the nearest unit above it
+ * that has one), else the person's own (where their create lands when it names
+ * none — the engine's answer, `viewer`), else the first active project. ""
+ * while none is known, and the create refuses naming the field rather than
+ * guessing.
+ *
+ * THE ASSIGNEE'S UNIT OUTRANKS THE PERSON'S OWN because a door that names a
+ * seat and no project — a seat's Message, a board lane grouped by assignee
+ * across every project — is filing work FOR that seat: the Agent CEO's ask
+ * belongs on the board its unit works from, not on whichever project the asker
+ * happens to sit in or the first one in the list.
  */
 export function startingProject(
   preset: NewTaskPreset,
   own: string,
   projects: readonly WorkProjectRow[],
+  index?: OrgIndex,
 ): string {
   const known = (key: string | undefined) => !!key && projects.some((p) => p.key === key);
   // BEFORE THE LIST HAS ANSWERED, a named project is trusted as given: a
@@ -254,6 +267,14 @@ export function startingProject(
   // lands would draw the sheet empty and then fill it.
   if (projects.length === 0) return preset.project || own;
   if (known(preset.project)) return preset.project!;
+  const chain = preset.assignee ? (index?.byHandle.get(preset.assignee)?.unit?.chain ?? []) : [];
+  if (chain.length) {
+    const byUnit = projectsByUnit(projects);
+    for (const unit of [...chain].reverse()) {
+      const key = byUnit.get(unit.name)?.[0];
+      if (key) return key;
+    }
+  }
   if (known(own)) return own;
   return projects[0]!.key;
 }
@@ -281,6 +302,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     priority: preset.priority ?? "",
     due: "",
     labels: preset.labels ?? [],
+    ask: preset.ask ?? "",
   }));
   const set = <K extends keyof NewTaskDraft>(key: K, value: NewTaskDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
@@ -309,9 +331,9 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     setDraft((d) =>
       rows.some((p) => p.key === d.project)
         ? d
-        : { ...d, project: startingProject(preset, viewer.project, rows) },
+        : { ...d, project: startingProject(preset, viewer.project, rows, index) },
     );
-  }, [rows, preset, viewer.project]);
+  }, [rows, preset, viewer.project, index]);
 
   const detailRead = useQuery(
     "work_project",
@@ -335,6 +357,10 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   }, [detail]);
 
   const title = draft.title.trim();
+  // A SEAT'S MESSAGE IS THIS SHEET WITH `ask` SET: one form for filing work,
+  // whether it is a task or a question, so an ask carries the same project,
+  // assignee and refusals a task does — and the answer lands in the Inbox.
+  const asked = draft.ask ? (index.byHandle.get(draft.ask)?.name ?? draft.ask) : "";
   const titleBudget = textBudget(draft.title, TASK_TITLE_MAX_BYTES, "a title");
   const bodyBudget = textBudget(draft.body, TASK_BODY_MAX_BYTES, "a description");
   const hold = blockedBy(draft);
@@ -369,7 +395,9 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       return;
     }
     const result = await write.run(createArgs(draft), {
-      done: `Filed “${title}” in ${draft.project}`,
+      done: asked
+        ? `Asked ${asked} — the answer lands in your Inbox`
+        : `Filed “${title}” in ${draft.project}`,
     });
     if (!result) return;
     if (result.kind === "applied") {
@@ -423,7 +451,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       open
       variant="sheet"
       stackBody
-      title="New task"
+      title={asked ? `Ask ${asked}` : "New task"}
       icon={<PlusGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
@@ -440,7 +468,11 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
         held ? (
           <span className="new-task-hold">{held}</span>
         ) : viewer.name ? (
-          <span>Filed as {viewer.name}</span>
+          <span>
+            {asked
+              ? `Asked as ${viewer.name} — the answer lands in your Inbox`
+              : `Filed as ${viewer.name}`}
+          </span>
         ) : undefined
       }
       footer={
@@ -455,7 +487,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
             blocked={blocked}
             onPress={() => void submit()}
           >
-            Create task
+            {asked ? "Send" : "Create task"}
           </WriteButton>
         </>
       }
@@ -491,7 +523,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
               error={titleBudget.over}
               value={draft.title}
               autoFocus
-              placeholder="What needs doing"
+              placeholder={asked ? "What you want to ask" : "What needs doing"}
               onChange={(event) => set("title", event.target.value)}
             />
           )}

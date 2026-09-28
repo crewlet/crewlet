@@ -75,8 +75,6 @@ import {
 } from "@crewlethq/icons/glyphs";
 // A phase is drawn in the series of the band the engine folds it into.
 import { phaseColor } from "~/lib/spend.ts";
-// ONE PHASE PILL for this screen and the Model screen alike — it is uilet's
-import { PhaseTag } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
   useAgents,
@@ -501,6 +499,9 @@ function configuredProperties(role: ConfigRole | null, human: boolean): Property
   ];
 }
 
+/** The window the Overview's turn count covers: a week of company days. */
+const OVERVIEW_ACTIVITY_DAYS = 7;
+
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
   const org = useOrg();
@@ -583,6 +584,17 @@ export function SeatScreen({ handle }: { handle: string }) {
     { id: handle },
     { enabled: !human && (tab === "overview" || tab === "turns") },
   );
+  // HOW MANY TURNS, OVER A WINDOW THAT SAYS SO, FROM EVERY NODE. The tile read
+  // the length of the phase history above — a page of at most fifty from the
+  // answering node's own event log — so a busy seat's count stopped at fifty
+  // and a quiet one's described one node of the fleet. `seat_activity` sums
+  // every node's company days from the replicated usage domain.
+  const activity = useQuery(
+    "seat_activity",
+    { seat: handle, days: OVERVIEW_ACTIVITY_DAYS },
+    { enabled: !human && tab === "overview" && handle !== "" },
+  );
+  const activityRow = activity.data?.seats?.find((r) => r.handle === handle);
   const memory = useQuery("agent_memory", { id: handle }, { enabled: tab === "memory" });
   // WHAT THIS SEAT HAS SAID ON A SURFACE THE ENGINE DOES NOT OWN. The ledger
   // is what stops it replying twice in one chat thread, and it has been
@@ -1097,11 +1109,28 @@ export function SeatScreen({ handle }: { handle: string }) {
               {!human && (
                 <StatCard
                   icon={<LayersGlyph size="xs" />}
-                  label="Turns in the record"
+                  label={`Turns · ${OVERVIEW_ACTIVITY_DAYS} days`}
                   // Zero is a MEASUREMENT — this seat has taken no turns — and
-                  // an em dash would claim nobody looked.
-                  value={turns.length}
-                  sub="the phase history loaded below"
+                  // an em dash would claim nobody looked; an unanswered read is
+                  // neither, and says so.
+                  value={
+                    activityRow ? (
+                      activityRow.turns.toLocaleString()
+                    ) : activity.error ? (
+                      <EmptyValue label="Not answered" />
+                    ) : (
+                      <EmptyValue label="Reading" />
+                    )
+                  }
+                  sub={
+                    activityRow
+                      ? activityRow.failed > 0
+                        ? `${activityRow.failed.toLocaleString()} failed, every node`
+                        : "none failed, every node"
+                      : activity.error
+                        ? "the usage history did not answer"
+                        : undefined
+                  }
                 />
               )}
               <StatCard
@@ -2331,242 +2360,6 @@ export function SeatScreen({ handle }: { handle: string }) {
             )}
           </div>
         )}
-      </div>
-    </>
-  );
-}
-
-/**
- * One seat, beside the list it was found in.
- *
- * # It asks nothing
- *
- * Every fact a peek needs about a seat is already pushed: the ROSTER carries
- * who it is and the AGENTS slice carries what it is doing, both over the socket
- * the shell already holds. So opening this costs no request, and a seat that is
- * working updates in the rail while the reader watches it — where a query would
- * answer once and then be stale for exactly as long as the peek is interesting.
- * The seat PAGE asks two further questions (`agent`, `agent_memory`); neither of
- * them answers "is this the one I meant".
- *
- * # The last turn is the STREAM's, and it says so
- *
- * `usePhaseEvents` holds the phases that completed while this tab has been
- * open. That is a smaller claim than the page's Model activity tab, which
- * queries the event store, and the empty state below says which of the two it
- * is — "nothing streamed here yet" rather than "this seat has never run",
- * because the second would be a lie the page immediately disproves.
- *
- * # A human seat has no runtime
- *
- * So it gets no runtime panels at all, in the peek exactly as in the tab strip
- * on the page: a panel that cannot have content is not an empty state, it is a
- * claim that the reader is missing something.
- */
-export function SeatPeek({ handle }: { handle: string }) {
-  const org = useOrg();
-  const agents = useAgents();
-  const sandboxes = useSandboxes();
-  const phaseEvents = usePhaseEvents();
-  const now = useNow();
-
-  const index = useMemo(() => indexOrg(org), [org]);
-  const nameOf = useMemo(() => nameOfIn(index), [index]);
-  const health = useEngineHealth();
-  const seat = findSeat(index, handle);
-  const agent = liveRow(agents, handle, seat);
-  // The ROLE NAME, which is what a phase record carries. `role !== ""` below is
-  // load-bearing rather than defensive: an unresolved handle must match NO
-  // phase, where an empty role compared against a record's own empty one would
-  // match every phase the engine recorded without one.
-  const role = agent?.role ?? seat?.name ?? "";
-
-  const lastTurn = useMemo(() => {
-    const streamed = streamedPhases(phaseEvents, (r) => role !== "" && r.role === role);
-    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role, agent.turn)] : [];
-    // Newest turn first, so the head of the list is the one being asked about.
-    return groupTurns(mergePhases(streamed, live))[0] ?? null;
-  }, [phaseEvents, agent, role]);
-
-  // NOT AN EMPTY RAIL. A `peek=seat:` reaches this from a pasted or hand-edited
-  // URL as often as from a row, so the honest answer names the handle that
-  // resolved to nothing rather than drawing a header over no seat.
-  if (!seat) {
-    return (
-      <EmptyState
-        size="compact"
-        icon={<UserGlyph size={32} />}
-        title={`No seat called “${handle}”`}
-        description="Seats are addressed by handle. A company revision may have renamed or removed this one."
-      />
-    );
-  }
-
-  const human = seat.kind === "human";
-  const reports = seat.reports;
-  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
-
-  return (
-    <>
-      <ObjectHeader
-        size="peek"
-        kind="Seat"
-        icon={human ? "user" : "cpu"}
-        identifier={handleLabel(seat.handle) || undefined}
-        title={seat.name}
-        status={human ? <Tag appearance="outline">human seat</Tag> : <StateBadge agent={agent} />}
-        // THE RAIL READS NOTHING GUARDED. It is opened from a row in a list,
-        // and a per-peek read of the whole company document would be an
-        // operator-gated fetch on every `[`/`]` step through one — so the model
-        // fact is `unread`, which [FactLine] DROPS.
-        //
-        // It used to pass a NULL ROLE, which the fact line rendered as "needs an
-        // operator token": a rail that had asked nobody telling every reader,
-        // holding a token or not, that they were missing one. The comment here
-        // already claimed this said "unread". Now it does.
-        facts={seatFacts({
-          seat,
-          agent,
-          reading: { state: "unread" },
-          hierarchy: index.hierarchy,
-          human,
-          held: heldBy(seat.handle, agent, health),
-        })}
-      />
-
-      <div className="col gap-3">
-        <section className="col gap-2">
-          <div className="t-label">Doing now</div>
-          {/* THE SAME SENTENCE THE PAGE PRINTS, out of the same function. A
-              rail and the page behind it describing one seat in two different
-              words is how a reader comes to believe they are two seats. */}
-          <p className="t-body">{stateLine(agent, { now, seat, nameOf })}</p>
-          {seat.goal && <p className="t-caption">Standing goal: {seat.goal}</p>}
-          {human && (
-            // WHY THERE IS NOTHING BELOW, rather than a second sentence about
-            // what this seat is. The status line above already says that; what
-            // a reader cannot see is the reason the runtime panels are missing.
-            <p className="t-caption">
-              No runtime here: the engine never spawns a human seat, so there are no turns, no model
-              and no spend for it to report.
-            </p>
-          )}
-          {agent?.last_error && (
-            <Callout variant="danger">
-              <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
-              {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
-            </Callout>
-          )}
-          {sandbox && awaitingPerson(sandbox.status) && (
-            // THE ONE THING A READER CAN ACT ON from a list. A run parked on a
-            // question stops this seat until somebody answers it, and a peek
-            // that showed "writing code in a sandbox" and nothing else would
-            // hide the half that needs them.
-            <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
-              A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
-            </Callout>
-          )}
-        </section>
-
-        {!human && (
-          <section className="col gap-2">
-            <div className="t-label">Last turn</div>
-            {lastTurn ? (
-              <div className="thread-entry">
-                <div className="row gap-1">
-                  {lastTurn.live ? (
-                    <Tag variant="info" dot>
-                      running
-                    </Tag>
-                  ) : lastTurn.failed ? (
-                    <Tag variant="danger">failed</Tag>
-                  ) : (
-                    <Tag appearance="outline">finished</Tag>
-                  )}
-                  <span className="truncate t-cell">
-                    {lastTurn.trigger?.summary || lastTurn.trigger?.type || "turn"}
-                  </span>
-                  <span className="spacer" />
-                  <span className="t-caption">{relTime(lastTurn.at, now)}</span>
-                </div>
-                <div className="row gap-1 wrap">
-                  {lastTurn.phases.map((p) => (
-                    <PhaseTag key={p.key} phase={p.phase} />
-                  ))}
-                  <span className="spacer" />
-                  <span className="t-caption">{fmtCount(lastTurn.totalTokens)} tokens</span>
-                  <a className="t-link" href={href(["live", "turns", lastTurn.turnId])}>
-                    turn ↗
-                  </a>
-                </div>
-              </div>
-            ) : (
-              <p className="t-caption">
-                Nothing has streamed to this tab yet. What the engine has RECORDED for this seat is
-                on its own Model activity tab — this panel only ever shows what completed while the
-                tab was open.
-              </p>
-            )}
-          </section>
-        )}
-
-        <section className="col gap-2">
-          <div className="t-label">Direct reports</div>
-          {reports.length > 0 ? (
-            <div className="list">
-              {reports.map((r) => {
-                const about = r.goal || r.unit?.name || "";
-                return (
-                  <a key={r.key} className="thread-entry" href={href(seatPath(r))}>
-                    <div className="row gap-2">
-                      <SeatAvatar
-                        name={r.name}
-                        size="xs"
-                        kind={r.kind === "human" ? "human" : "agent"}
-                        decorative
-                        title={r.name}
-                      />
-                      <span className="truncate t-cell" style={{ flex: 1, minWidth: 0 }}>
-                        {r.name}
-                      </span>
-                      {r.kind === "human" ? (
-                        // THE CIRCLE SAYS IT. A tag reading "human" beside a person's
-                        // circle was the outline said twice; the word stays for a
-                        // screen reader, which does not see the outline.
-                        <span className="sr-only">human</span>
-                      ) : (
-                        <StateBadge agent={agents.find((a) => a.role === r.name)} />
-                      )}
-                    </div>
-                    {/* THE SAME CORRECTION THE CARD ABOVE CARRIES, and the rail
-                        is where it bit hardest: this panel is 360px at its
-                        narrowest, so a one-line cut lost the goal's subject
-                        after a few words — which is exactly the question a peek
-                        is opened to answer. `.thread-entry` is already a flex
-                        column with its own gap, so the clamped line needs no
-                        wrapper. */}
-                    {about && (
-                      <span className="clamp t-caption" title={about}>
-                        {about}
-                      </span>
-                    )}
-                  </a>
-                );
-              })}
-            </div>
-          ) : index.hierarchy ? (
-            <p className="t-caption">
-              Nobody reports to this seat. Delegation follows the chart, so work it cannot do itself
-              goes sideways or nowhere.
-            </p>
-          ) : (
-            // NOT NOBODY: THE ENGINE DID NOT SAY. The header fact three inches
-            // above this already reads "not reported by this engine" out of the
-            // same `index.hierarchy`, and a rail asserting both in one breath is
-            // a rail lying in one of them.
-            <p className="t-caption">{reportsCaption(seat, index.hierarchy)}.</p>
-          )}
-        </section>
       </div>
     </>
   );

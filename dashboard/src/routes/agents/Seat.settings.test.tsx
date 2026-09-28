@@ -23,7 +23,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { SeatPeek, SeatScreen } from "./Seat.tsx";
+import { SeatScreen } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -448,36 +448,6 @@ test("the model fact is the same on every tab", async () => {
     expect(headerFacts(), name).toContain("fast → backup → big");
     expect(headerFacts(), name).not.toContain("needs an operator token");
   }
-});
-
-// THE RAIL ASKS NOBODY, SO IT CLAIMS NOTHING.
-//
-// `SeatPeek` reads nothing guarded on purpose — a per-peek fetch of the whole
-// company document would make every `[`/`]` step through a list an
-// operator-gated read. It passed a null role for that, and the fact line
-// rendered the null as "needs an operator token", so a rail that had asked
-// nobody told every reader, token or not, that they were missing one.
-test("the seat rail states no model rather than claiming a missing token", async () => {
-  const store = new Store();
-  store.applyOrg(projection);
-  const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () =>
-    Promise.reject(new Error("the rail asks nothing guarded"));
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <ViewerProvider>
-        <Router>
-          <SeatPeek handle="ceo" />
-        </Router>
-      </ViewerProvider>
-    </ClientContext.Provider>,
-  );
-  await settle();
-
-  expect(screen.queryByText(/needs an operator token/)).toBeNull();
-  // AND NO MODEL ROW AT ALL: `FactLine` drops a fact whose value is empty, the
-  // same rule a human seat's runtime follows.
-  expect(headerFacts()).not.toContain("Model");
 });
 
 // A HUMAN SEAT'S CONFIGURED PANEL CARRIES NO MODEL ROW.

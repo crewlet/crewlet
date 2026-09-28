@@ -144,6 +144,107 @@ func SeatTurns(ctx context.Context, estate Estate, q SpendQuery) ([]TurnsRow, er
 	return out, nil
 }
 
+// SeatDay is one node's whole head row for one seat on one day, with the
+// tokens that day's spend cells add up to — every number a seat's activity
+// answer folds, from one read.
+type SeatDay struct {
+	Day, Node, AgentID string
+	Handle, Role       string
+
+	Turns, Failed, Reviewed, FirstPass, SentBack int64
+
+	// Durations is the day's turn-duration histogram on this node. Merged
+	// across days and nodes by adding counts, which is the only way a
+	// quantile over both stays exact to the bin (see [Hist]).
+	Durations Hist
+
+	// LastEndedAt is when the newest turn this node ended for the seat that
+	// day finished; zero when none did.
+	LastEndedAt time.Time
+
+	// Tokens is the day's `total` over every spend cell of the seat on this
+	// node — input plus output, the cache counts being a breakdown of input.
+	Tokens int64
+}
+
+// SeatDays reads every node's head row for the company days q.From..q.To,
+// inclusive, in (day, node, seat) order, each with its day's token total.
+//
+// TWO STATEMENTS IN ONE TRANSACTION rather than a join: the head row is the
+// record's guard and every seat record writes one, so a token total without a
+// head row cannot exist, and summing the spend cells per (day, node, seat) in
+// its own GROUP BY keeps the head read a plain seek on `usage_turns`' key. Both
+// read the same snapshot, so the pair is one state of the estate.
+func SeatDays(ctx context.Context, estate Estate, q SpendQuery) ([]SeatDay, error) {
+	if err := q.check(); err != nil {
+		return nil, err
+	}
+	var out []SeatDay
+	err := estate.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT day, node, agent_id, handle, role, turns, failed, reviewed,
+			       first_pass, sent_back, duration_hist, last_ended_at
+			  FROM usage_turns
+			 WHERE day >= ? AND day <= ? AND (? = '' OR agent_id = ?)
+			 ORDER BY day, node, agent_id`,
+			q.From, q.To, q.AgentID, q.AgentID)
+		if err != nil {
+			return err
+		}
+		at := map[[3]string]int{}
+		err = func() error {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var r SeatDay
+				var hist string
+				var lastEnded int64
+				if scanErr := rows.Scan(&r.Day, &r.Node, &r.AgentID, &r.Handle, &r.Role,
+					&r.Turns, &r.Failed, &r.Reviewed, &r.FirstPass, &r.SentBack,
+					&hist, &lastEnded); scanErr != nil {
+					return scanErr
+				}
+				if histErr := r.Durations.UnmarshalJSON([]byte(hist)); histErr != nil {
+					return fmt.Errorf("the histogram of %s/%s/%s: %w", r.Day, r.Node, r.AgentID, histErr)
+				}
+				if lastEnded != 0 {
+					r.LastEndedAt = store.DecodeTime(lastEnded)
+				}
+				at[[3]string{r.Day, r.Node, r.AgentID}] = len(out)
+				out = append(out, r)
+			}
+			return rows.Err()
+		}()
+		if err != nil {
+			return err
+		}
+		sums, err := tx.QueryContext(ctx, `
+			SELECT day, node, agent_id, SUM(total)
+			  FROM usage_tokens
+			 WHERE day >= ? AND day <= ? AND (? = '' OR agent_id = ?)
+			 GROUP BY day, node, agent_id`,
+			q.From, q.To, q.AgentID, q.AgentID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = sums.Close() }()
+		for sums.Next() {
+			var day, node, agent string
+			var total int64
+			if err := sums.Scan(&day, &node, &agent, &total); err != nil {
+				return err
+			}
+			if i, ok := at[[3]string{day, node, agent}]; ok {
+				out[i].Tokens = total
+			}
+		}
+		return sums.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("usage: read the seat days for %s..%s: %w", q.From, q.To, err)
+	}
+	return out, nil
+}
+
 // ScheduleRun is one schedule fire some node dispatched, as the company feed
 // reads it.
 type ScheduleRun struct {

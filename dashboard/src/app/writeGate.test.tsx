@@ -109,6 +109,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "held on somebody else's day but for a lead's own reorder",
     suite: "routes/me/MyWork.test.tsx",
   },
+  "routes/agents/SeatPeek.tsx": {
+    why:
+      "a seat peek's Message, which opens the New task sheet asking that seat — held " +
+      "with its reason for a reader who cannot file",
+    suite: "routes/agents/SeatPeek.test.tsx",
+  },
   "app/palette/answer.ts": {
     why:
       "the palette's answer from the company's knowledge, asked only for a reader " +

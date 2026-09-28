@@ -94,6 +94,26 @@ test("an outcome is named in words, and a skip is never the needs-you amber", ()
   expect(container.querySelector(".crewlet-tag--warning")).toBeNull();
 });
 
+// THE FACES ARE THE CHART'S BADGES. Handed the whole name the kit made "AS",
+// "AI" and "AA" of three seats the chart draws as SW, FS and AS.
+test("a stack of the seats a schedule wakes draws each seat's own badge", () => {
+  const names: Record<string, string> = {
+    swe: "Agent SWE",
+    fs: "Agent Frontend SWE",
+    as: "Agent AI Systems Engineer",
+  };
+  const who = (h: string) => ({ name: names[h]!, kind: "agent" as const });
+  const { container } = render(
+    <Router>
+      <Wakes runners={["swe", "fs", "as"]} who={who} />
+    </Router>,
+  );
+  const faces = [...container.querySelectorAll(".crewlet-avatar-stack__member")].map((el) =>
+    el.textContent?.trim(),
+  );
+  expect(faces).toEqual(["SW", "FS", "AS"]);
+});
+
 // SEVERAL SEATS ARE A COUNT AND FACES. A chip per seat in a column that never
 // wraps cut three names to "A" and "Age…"; the names are still said.
 test("a schedule waking several seats says how many, and names them for a screen reader", () => {

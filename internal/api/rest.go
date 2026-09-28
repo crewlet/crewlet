@@ -64,6 +64,9 @@ var namedRoutes = []struct {
 	// parameter of it: the two answers have different shapes, and one route
 	// returning either would make every caller branch on what came back.
 	{method: "GET", pattern: "/tokens/series", what: "token_series"},
+	// EVERY SEAT'S TURNS over company days. A literal segment under
+	// /agents, which the stream service serves exactly and nothing deeper.
+	{method: "GET", pattern: "/agents/activity", what: "seat_activity"},
 	{method: "GET", pattern: "/schedules", what: "schedules"},
 	// ONE SCHEDULE'S OWN HISTORY. Three path segments because a schedule's
 	// identity is all three — two units may each declare a "standup", and a

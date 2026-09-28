@@ -19,6 +19,7 @@ import {
   StarPage,
   WorkingNow,
   foldTabs,
+  noteFits,
 } from "./PageHeader.tsx";
 import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
@@ -331,5 +332,48 @@ describe("the section tabs fold what does not fit into More", () => {
       await waitFor(() => expect(drawn()).toHaveLength(7));
       expect(screen.queryByRole("button", { name: "More" })).toBeNull();
     });
+  });
+});
+
+// A TAB'S FIGURE IS A PLAIN NUMBER in the tab's quiet ink, as every approved
+// artboard draws it ("Roster 8") — never a pill, which read as a second
+// control inside each tab. And a figure nobody published is not drawn.
+test("a section's figure is a plain number beside its name, and only if published", () => {
+  const agents = WORKSPACES.find((w) => w.key === "agents")!;
+  render(
+    <Router>
+      <SectionTabs
+        row={agents}
+        path={["agents"]}
+        query={new URLSearchParams()}
+        counts={{ roster: "8", schedules: "6" }}
+      />
+    </Router>,
+  );
+  const roster = screen.getByRole("link", { name: /Roster/ });
+  const figure = roster.querySelector(".section-tab-count");
+  expect(figure?.textContent).toBe("8");
+  expect(roster.querySelector(".count-chip")).toBeNull();
+  expect(screen.getByRole("link", { name: /Schedules/ }).textContent).toContain("6");
+  expect(
+    screen.getByRole("link", { name: /Teams/ }).querySelector(".section-tab-count"),
+  ).toBeNull();
+});
+
+// THE READING NOTE GIVES WAY TO THE TABS: a sentence about how to read a
+// workspace takes no room a place would need, so it is drawn only where every
+// tab fits beside it — and a note the sheet draws at no width has nothing to
+// fit.
+describe("the reading note at the strip's end", () => {
+  const widths = [100, 100, 100];
+  test("is drawn where every tab and the note fit", () => {
+    // 3 tabs and 2 gaps are 320; a gap and a 200 note make 530.
+    expect(noteFits({ widths, space: 530, gap: 10, note: 200 })).toBe(true);
+  });
+  test("gives way before any tab would fold", () => {
+    expect(noteFits({ widths, space: 529, gap: 10, note: 200 })).toBe(false);
+  });
+  test("a note drawn at no width is not drawn", () => {
+    expect(noteFits({ widths, space: 2000, gap: 10, note: 0 })).toBe(false);
   });
 });

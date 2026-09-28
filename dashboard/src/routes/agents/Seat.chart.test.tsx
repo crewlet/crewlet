@@ -13,7 +13,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { SeatPeek, SeatScreen } from "./Seat.tsx";
+import { SeatScreen } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -102,12 +102,16 @@ const projection: OrgProjection = {
   },
 };
 
-function mount(handle: string, org: OrgProjection = projection) {
+function mount(
+  handle: string,
+  org: OrgProjection = projection,
+  answers: Record<string, unknown> = {},
+) {
   const store = new Store();
   store.applyOrg(org);
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () =>
-    Promise.resolve({ llm_history: [], next: "" });
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(answers[what] ?? { llm_history: [], next: "" });
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
@@ -173,24 +177,22 @@ test("no derived block is not a count of zero", async () => {
   expect(sub(t)).toBe("this engine did not report its hierarchy");
 });
 
-// AND THE RAIL AGREES WITH THE HEADER THREE INCHES ABOVE IT, which already read
-// "not reported by this engine" out of the same flag.
-test("the peek does not claim nobody reports to a seat the engine said nothing about", async () => {
-  const { derived: _drop, ...flat } = projection;
-  const store = new Store();
-  store.applyOrg(flat as OrgProjection);
-  const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () => Promise.resolve({});
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <ViewerProvider>
-        <Router>
-          <SeatPeek handle="ceo" />
-        </Router>
-      </ViewerProvider>
-    </ClientContext.Provider>,
-  );
-  await waitFor(() => expect(screen.getByText("Direct reports")).toBeTruthy());
-  expect(screen.queryByText(/Nobody reports to this seat/)).toBeNull();
-  expect(screen.getByText(/did not report its hierarchy/)).toBeTruthy();
+// THE TURN COUNT IS THE ENGINE'S, OVER A WINDOW IT NAMES. The tile was the
+// LENGTH of the phase history loaded below — a page of at most fifty from the
+// answering node's own log — so a busy seat read "50" and a quiet one described
+// one node of the fleet. It is `seat_activity`'s total now: every node's days.
+test("the turns tile is the week's total from every node, not the length of a page", async () => {
+  mount("ceo", projection, {
+    seat_activity: {
+      since: "2031-04-25",
+      until: "2031-05-01",
+      days: 7,
+      seats: [{ handle: "ceo", turns: 1234, failed: 3, per_day: [] }],
+      quantile_resolution: 0.06,
+    },
+  });
+  await waitFor(() => expect(screen.getAllByText("Turns · 7 days").length).toBeGreaterThan(0));
+  const t = tile("Turns · 7 days");
+  await waitFor(() => expect(value(t)).toBe((1234).toLocaleString()));
+  expect(sub(t)).toBe("3 failed, every node");
 });

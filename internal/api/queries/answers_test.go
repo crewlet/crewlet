@@ -163,13 +163,14 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// `token_series` is the spend with a time axis, which the
 		// breakdown has no dimension for — folded from the usage domain's
 		// company days, a source of its own rather than the fleet's turn
-		// detail.
+		// detail; `seat_activity` is every seat's turns over those same
+		// days, summed across nodes.
 		{"the usage domain alone", queries.Sources{Usage: db.Replicated()},
-			[]string{"token_series", "viewer"}},
+			[]string{"seat_activity", "token_series", "viewer"}},
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
 		}, []string{"agent", "event", "event_series", "events", "phases",
-			"token_series", "tokens", "trace", "turn", "turns", "viewer"}},
+			"seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
 			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)

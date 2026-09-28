@@ -376,6 +376,11 @@ func Register(r *Registry, s Sources) {
 		// reader widened the range is a seam across the one comparison the
 		// screen exists to make.
 		r.Register("token_series", s.tokenSeries)
+		// EVERY SEAT'S TURNS over a window of company days, from the same
+		// replicated rows: counts, the first-pass rate over reviewed turns,
+		// merged duration quantiles and a day-by-day series. A screen
+		// counting the rows of a list it loaded was counting the list.
+		r.Register("seat_activity", s.seatActivity)
 	}
 	if s.Coord != nil {
 		// OPERATOR-ONLY, like every other answer the Admin workspace

@@ -235,11 +235,12 @@ export function SectionTabs({
   const tabs = row.sections.filter((s) => s.tab !== false && !s.elsewhere);
   const current = tabs.find((s) => samePath(s.path, path));
   const strip = useRef<HTMLElement>(null);
-  const folded = useTabFit(
+  const fit = useTabFit(
     strip,
     tabs.map((s) => s.key),
     current?.key,
   );
+  const folded = fit.folded;
   if (tabs.length < 2 || !current) return null;
   const kept: Record<string, string> = {};
   for (const key of row.keep ?? []) {
@@ -267,7 +268,10 @@ export function SectionTabs({
           >
             <Glyph size="sm" aria-hidden="true" />
             <span>{s.label}</span>
-            {figure ? <span className="count-chip">{figure}</span> : null}
+            {/* A PLAIN FIGURE in the tab's own quiet ink, as every approved
+                artboard draws it: a pill here was a second control-shaped
+                thing inside each tab. */}
+            {figure ? <span className="section-tab-count t-num">{figure}</span> : null}
           </a>
         );
       })}
@@ -301,6 +305,18 @@ export function SectionTabs({
           }))}
         />
       </span>
+      {/* THE WORKSPACE'S READING NOTE comes after the tabs and gives way to
+          them: it is folded (out of the flow, still measured) whenever the
+          strip has no room for it beside every tab — see [noteFits]. */}
+      {row.note && (
+        <span
+          className="section-tabs-note"
+          data-section-note=""
+          {...(fit.note ? {} : { "data-folded": "", "aria-hidden": true })}
+        >
+          {row.note}
+        </span>
+      )}
     </nav>
   );
 }
@@ -345,15 +361,43 @@ export function foldTabs({
 }
 
 /**
- * The keys of the tabs that fold into "More", measured after layout and again
- * whenever the strip or anything in it changes size — see [SectionTabs].
+ * Whether the workspace's reading note has room at the strip's end BESIDE
+ * EVERY TAB.
+ *
+ * THE TABS COME FIRST. The note is a sentence about how to read the
+ * workspace; a tab is a place. So the note takes no room a tab would need: it
+ * is drawn only where every tab fits with it, and gives way before a single
+ * tab folds into "More". A note measured at no width is one the sheet is not
+ * drawing (below the shell breakpoint), and has nothing to fit.
+ */
+export function noteFits({
+  widths,
+  space,
+  gap,
+  note,
+}: {
+  widths: readonly number[];
+  space: number;
+  gap: number;
+  note: number;
+}): boolean {
+  if (note <= 0) return false;
+  const tabs = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
+  return tabs + gap + note <= space;
+}
+
+/**
+ * The keys of the tabs that fold into "More", and whether the reading note is
+ * drawn, measured after layout and again whenever the strip or anything in it
+ * changes size — see [SectionTabs].
  */
 function useTabFit(
   strip: RefObject<HTMLElement | null>,
   keys: readonly string[],
   current: string | undefined,
-): string[] {
+): { folded: string[]; note: boolean } {
   const [folded, setFolded] = useState<string[]>([]);
+  const [note, setNote] = useState(true);
   const signature = keys.join("\n");
   useLayoutEffect(() => {
     const node = strip.current;
@@ -378,6 +422,9 @@ function useTabFit(
         .map((i) => keys[i]!)
         .filter(Boolean);
       setFolded((was) => (was.join("\n") === next.join("\n") ? was : next));
+      setNote(
+        noteFits({ widths, space, gap, note: width(node.querySelector("[data-section-note]")) }),
+      );
     };
     measure();
     // THE STRIP AND EVERY ITEM IN IT: the strip for the window, each item for
@@ -385,7 +432,9 @@ function useTabFit(
     // arriving, a web font replacing its fallback, a density step.
     const watch = new ResizeObserver(measure);
     watch.observe(node);
-    for (const item of node.querySelectorAll("[data-section], [data-section-more]")) {
+    for (const item of node.querySelectorAll(
+      "[data-section], [data-section-more], [data-section-note]",
+    )) {
       watch.observe(item);
     }
     return () => watch.disconnect();
@@ -393,7 +442,7 @@ function useTabFit(
     // the same strip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strip, signature, current]);
-  return folded;
+  return { folded, note };
 }
 
 /**

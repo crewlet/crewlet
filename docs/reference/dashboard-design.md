@@ -1399,6 +1399,15 @@ or neither. And the column's track is the reader's dragged width CAPPED at what
 the sheet can give with the list at its floor (`--peek-reserve`, from
 `listReserve`), because a width dragged to 640 on a wide window outlives it.
 
+**Beside a canvas the peek rests at 330.** A list beside a peek keeps its floor
+and reflows; a chart is SHRUNK into whatever width the peek leaves it, so every
+pixel the rail takes is one the whole company is drawn smaller in. The org
+chart asks for the approved artboard's 330 (`usePeekWidth`, the way a screen
+asks for the window's height with `useFillScreen`), and the rail rests there
+until the reader drags it: a width they dragged is their preference on every
+screen, anywhere from 330 to 640. The threshold above is computed at the
+resting 420 for every screen.
+
 **A screen publishes what the chrome needs and renders none of it.** The labels
 the route cannot supply (`usePageLabels`), the coverage of the answer it drew
 from (`usePageCoverage`), a section's figure for its tab (`useSectionCounts` —
@@ -1998,6 +2007,113 @@ reason said once above the title.
 
 The peek (`peek=item:{KEY}`) is the same page in one 420px column: the task's
 identity as its head, the rail above the body, and no cost or record.
+
+### The org chart is the company running
+
+`#/agents` is the approved Org artboard: one card per seat, each under its
+primary manager — the engine's derived `manager`, the line escalation goes up —
+drawn on the design system's tree canvas with elbow connectors. The seats of a
+unit under the lead they report to sit in one dashed box labelled with the unit
+("Engineering · Core", or "Developer Relations" where the lead's own card
+already says "Product") and the key of the tracker project its work is filed
+under. A lead's own unit is not boxed round the seats beside the lead: the CEO
+and the CTO who share Executives are peers on a line, not a team. The chart is
+built by `lib/orgchart.ts` from the projection this node has APPLIED, never the
+builder's draft — a test holds that it imports none of the builder's model —
+so between a save and this node applying it the chart has not moved, and the
+"still applying revision …" note says so. An engine that reports no derived
+hierarchy leaves every seat a root and says why, rather than drawing a
+hierarchy the client made up. **The field runs to the sheet's edges**, dotted,
+under the tabs, as the artboard draws it — the screen's padding and the
+canvas's own frame are taken back for this one screen, because every pixel of
+them was a pixel of every card. **The chart opens fitted and centred**, and so
+does Fit to view: all of it, in the middle of the canvas. A person who reports
+to nobody and leads nobody is a root with no tree, and the canvas packs such a
+card beside the root it follows on the top row; placed after a founder whose
+tree already leans right, it pushed the top of the chart further right, so the
+chart read as sitting right of centre even with its box centred. Such roots go
+to whichever side of the tree centres the top row over the drawing
+(`balanceRoots`), a tie keeping the document's order.
+
+**A card says who, where and what, in that order**, in the artboard's 184 px:
+the badge (a circle for a person, a squircle for an agent) with the state ring
+and the NAME, which has the first line to itself; then the Agent/Human pill
+leading the unit path, where the unit is what gives way (beside the pill the
+name had some sixty pixels, and every "Agent …" seat read "Agent S…"); then
+the engine's state line ("Executing
+ENG-412", "3 workers on ENG-405", "Needs you · run parked", "Stopped · budget",
+"Idle · last turn 24m ago") after a dot in the state's hue. **Colour shows what
+a seat is doing — never who it is**, which the section tabs say at the end of
+their row on every Agents section, wherever the row has room for it beside
+every tab (it gives way to the tabs, so a phone does without it): the ring, the dot and the line are the only
+hue on a card, and no seat has a colour of its own. The legend at the chart's
+foot counts Working, Needs you, Stopped and Idle from the engine's `activity` —
+a seat with no row yet is counted nowhere, and a person never.
+
+**A card opens the seat beside the chart** (`peek=seat:{handle}`); Enter does
+the same, the arrows walk the tree, `[` and `]` step the seats in the order the
+tree reads — pressed on a card as well as in the peek, since a card's own keys
+would otherwise read them as type-ahead — and while the peek is open it follows
+the card that has focus. A step replaces the address rather than adding to the
+history, so Back closes the peek however many seats it walked through. **A new
+width is fitted again**: the canvas fits the chart once, and the peek then
+takes a share of it — so whenever the canvas's width changes (the peek opening
+or closing, the window resized) a chart still at the view it was last fitted to
+is fitted again, all of it and centred, as the approved chart draws it beside a
+peek. **But never shrunk past reading**: a view the chart chooses on its own —
+its first fit and every refit — is held at 85% where the fit would fall below
+it (the card's 12 px place and state lines then draw at 10 px), with the seat
+the peek is on revealed at that size, or the root the company hangs from where
+nobody is selected. Beside a peek the Nimbus chart is whole at 94% at 1440 and
+held at 91% at 1280, where a fit was 54%; only a Fit the reader presses draws
+it smaller. A view the reader moved — zoomed in to read the cards, say — stays
+theirs. Either way the card the peek is about is revealed (the least pan that
+shows it), and a reader stepping in the peek keeps their focus. **On a phone the chart is rows**: a chart of
+cards has no size a phone can read it at, so below the phone breakpoint the
+same tree is the design system's tree grid — every seat a row indented under
+its manager, with the badge, ring, name, kind, place and state line a card
+carries — headed by the legend; a row's name or Enter opens the seat. The page
+bar carries **Find a seat** (name, handle or unit; the found seat is focused on
+the canvas and opened — its list grows past the field so a seat's name is never
+squeezed out by its handle and unit), **Edit org**, and **Add seat**, which goes
+to the builder for an operator and is held with its reason for everybody else.
+On a phone Edit org folds into the bar's More menu, so Add seat stays in view.
+It is the same bar on every Agents section, Schedules included, where a found
+seat opens beside the list as it does on Teams.
+The section tabs carry the Roster, Teams and Schedules figures on every Agents
+section, as plain numbers in the tab's quiet ink — which is why Schedules no
+longer restates its count in the bar. The Agents sections open on their work,
+with no introduction above it.
+
+**The seat peek answers "who is this, and what is it doing".** A state card
+tinted by the state — the line, how long the turn has run, "Turn 2 · round 7 of
+25 · coding run in progress", where the turn number is the task's own count
+(`work_item_turns`) — then Reports to, Model (the phase chain from the public
+projection and the model serving the call in flight), one row per capped
+budget window labelled by its own period ("Budget today", "Budget this week")
+with a meter in the engine's state, or "No budget", Running on (the node and
+since when — operators only; every other reader reads "Shown to operators" in
+place of it and no read is sent), Open work (`work_workload`), where its tools come from, and its
+goal. It asks at most three questions. **Open profile** and **Message** are the
+rail's foot, pinned to its bottom edge; Message opens the New task sheet with
+the seat as assignee and `ask` set — on the project filed under the seat's own
+unit, or the nearest unit above it that has one — so the question is filed as
+work the seat owes an answer on and the answer lands in the Inbox — there is no
+person-to-seat chat.
+
+**Roster** (`#/agents/roster`) is every seat as a card, grouped by state, by
+unit or flat, and always in NAME order —
+never by a field a push moves. A seat the engine still reports and the chart no
+longer holds is its own group, "Removed from the company". **Workload** is who
+is carrying how much (`work_workload`). On the Roster the bar's **Find a seat**
+is the list's filter (`q=`: name, handle, goal or unit, and on Workload name,
+handle or unit) — one field, where every Agents section has it, rather than a
+second box in the roster's own toolbar. **Teams** (`#/agents/teams`) is the
+units nested as the document nests them — the seats above every unit first —
+each with its project key, kind, effective lead ("(inherited)" where it is),
+headcount, purpose, goals and seats; without the engine's derived block a unit
+declaring no lead reads "Lead not reported by this engine" rather than a blank.
+A unit's own page is `#/agents/teams/{unit}`.
 
 ### The attention queue
 
@@ -4212,6 +4328,7 @@ a tool arrives in it with the control that sends it. The controls
 | A checklist box · Watch / Unwatch | A task's page | `update_work_item{checklist}` / `{watch}` — gestures applied as they land, with no `if_match` |
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
 | Create task (the New task sheet) | The rail's head `+`, the Projects group's `+`, a work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}` — only what was set |
+| Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |

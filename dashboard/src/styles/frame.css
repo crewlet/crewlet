@@ -914,7 +914,8 @@ a.user-block-who:focus-visible {
 }
 
 .section-tab[data-folded],
-.section-tabs-more[data-folded] {
+.section-tabs-more[data-folded],
+.section-tabs-note[data-folded] {
   position: absolute;
   inset-block-start: 0;
   inset-inline-start: 0;
@@ -928,6 +929,19 @@ a.user-block-who:focus-visible {
   display: inline-flex;
   flex: none;
   align-items: center;
+}
+
+/* A workspace's reading note (`WorkspaceRow.note`), at the row's far end: a
+   sentence about every section, never one of them. It gives way to the tabs —
+   folded whenever the strip has no room for it beside every one of them
+   (`noteFits`), which on a phone is always. */
+.section-tabs-note {
+  flex: none;
+  align-self: center;
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
 }
 
 /* THE EDGE THAT HAS MORE PAST IT FADES. A row that scrolls with its bar hidden
@@ -977,6 +991,13 @@ a.user-block-who:focus-visible {
 
 .section-tab:hover {
   color: var(--color-text-primary);
+}
+
+/* A section's figure: the tertiary step whatever the tab's own ink, so the
+   current tab's name lifts and its number does not. */
+.section-tab-count {
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-regular);
 }
 
 .section-tab[aria-current="page"] {

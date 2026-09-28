@@ -17,7 +17,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { SeatPeek, SeatScreen } from "./Seat.tsx";
+import { SeatScreen } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -119,21 +119,4 @@ test("a report's goal is clamped prose on the card's own width", async () => {
   );
   const goal = await waitFor(() => screen.getByText(GOAL));
   expectClamped(goal, ".seat-card");
-});
-
-// THE RAIL IS THE NARROWER OF THE TWO, so the one-line cut bit harder there —
-// and the peek exists precisely to answer "is this the one I meant".
-test("the rail says the same thing, and it is the narrower of the two", async () => {
-  const { store, socket } = serving();
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <ViewerProvider>
-        <Router>
-          <SeatPeek handle="ceo" />
-        </Router>
-      </ViewerProvider>
-    </ClientContext.Provider>,
-  );
-  const goal = await waitFor(() => screen.getByText(GOAL));
-  expectClamped(goal, ".thread-entry");
 });

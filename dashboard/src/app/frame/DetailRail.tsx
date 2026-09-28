@@ -23,7 +23,10 @@
  *
  * # Width
  *
- * 420 px, dragged between 360 and 640, remembered per viewer. It is a column
+ * 420 px, dragged between 330 and 640, remembered per viewer — and 330 at rest
+ * beside a canvas, which a screen asks for (`peekWidth.ts`): a chart is shrunk
+ * into whatever the rail leaves it rather than reflowed. A width the reader
+ * DRAGGED is their preference and wins on every screen. It is a column
  * of the sheet while the window can hold everything in front of the list, the
  * peek and a list still wide enough to read beside it, and a drawer over the
  * screen below that. The shell decides which (`data-peek`), from
@@ -35,7 +38,7 @@
  * a narrower one's list away.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigator, useRoute } from "../router.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
 import { href } from "../router.tsx";
@@ -48,21 +51,29 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useKeymap } from "../keymap.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
-import { PEEK_MAX, PEEK_MIN, PEEK_WIDTH } from "../layout.ts";
+import { PEEK_MAX, PEEK_MIN } from "../layout.ts";
+import { PeekRestingWidth } from "./peekWidth.ts";
 
 const WIDTH_KEY = STORAGE_KEYS.peekWidth;
 const MIN = PEEK_MIN;
 const MAX = PEEK_MAX;
-const DEFAULT = PEEK_WIDTH;
 
-function storedWidth(): number {
+/**
+ * The width the reader dragged the rail to, or null where they never did.
+ *
+ * NULL RATHER THAN A DEFAULT: the default is the SCREEN's (`peekWidth.ts`),
+ * and a preference that answered with the frame's 420 when nothing was stored
+ * would read as a reader who chose 420 — on a canvas that asked for 330.
+ */
+function storedWidth(): number | null {
   try {
-    const raw = Number(localStorage.getItem(WIDTH_KEY));
+    const stored = localStorage.getItem(WIDTH_KEY);
+    const raw = stored === null ? NaN : Number(stored);
     if (Number.isFinite(raw) && raw >= MIN && raw <= MAX) return raw;
   } catch {
     // An unreadable preference is not a reason to render no rail.
   }
-  return DEFAULT;
+  return null;
 }
 
 /** The object the rail is open on, or null. */
@@ -169,7 +180,11 @@ export function DetailRail({
   query?: Record<string, string>;
 }) {
   const { close } = usePeekControls();
-  const [width, setWidth] = useState(storedWidth);
+  // THE READER'S WIDTH, where they dragged one, over the width the screen
+  // under the rail rests it at.
+  const resting = useContext(PeekRestingWidth);
+  const [dragged, setDragged] = useState(storedWidth);
+  const width = dragged ?? resting;
   const dragging = useRef(false);
   const rail = useRef<HTMLElement>(null);
 
@@ -212,15 +227,15 @@ export function DetailRail({
       // much wider than the pointer — the grip ran ahead of the hand.
       const right = rail.current?.getBoundingClientRect().right ?? window.innerWidth;
       const next = Math.min(MAX, Math.max(MIN, right - e.clientX));
-      setWidth(next);
+      setDragged(next);
     }
     function onUp(): void {
       dragging.current = false;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      setWidth((w) => {
+      setDragged((w) => {
         try {
-          localStorage.setItem(WIDTH_KEY, String(w));
+          if (w !== null) localStorage.setItem(WIDTH_KEY, String(w));
         } catch {
           // The drag still applies for this session.
         }

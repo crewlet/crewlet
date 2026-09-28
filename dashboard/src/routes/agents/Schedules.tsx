@@ -47,6 +47,7 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup, type SeatKind } from "~/lib/seats.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
@@ -57,6 +58,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
+import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 /** The ledger's three outcomes, and nothing else — see the note above.
  *
@@ -100,7 +102,17 @@ const OUTCOME_WHY: Record<string, string> = {
 /** Every outcome the ledger can record. */
 type LedgerOutcome = Exclude<ScheduleRunRow["outcome"], "">;
 
-/** Who a schedule wakes, in a cell: one seat by name, several by face and count. */
+/**
+ * Who a schedule wakes, in a cell: one seat by name, several by face and count.
+ *
+ * THE FACES ARE THE CHART'S. Each badge is drawn from the seat's badge name
+ * (`seatBadge`), as every other badge of a seat is, so "Agent SWE", "Agent
+ * Frontend SWE" and "Agent AI Systems Engineer" are SW, FS and AS here as they
+ * are on the chart and the roster — handed the whole name, the kit made AS, AI
+ * and AA of them, three badges nobody could match to a card. And at the kit's
+ * default step, the design's stack: at the extra-small one the 8px each badge
+ * is overlapped by cut every monogram's second letter away.
+ */
 export function Wakes({
   runners,
   who,
@@ -114,12 +126,11 @@ export function Wakes({
   return (
     <span className="row gap-1" title={names.join(", ")}>
       <AvatarStack
-        size="xs"
         max={3}
         decorative
         members={runners.map((h) => {
           const seat = who(h);
-          return { id: h, name: seat.name, kind: seat.kind === "human" ? "human" : "agent" };
+          return { id: h, ...seatBadge(seat.name, seat.kind) };
         })}
       />
       <span className="t-caption">{plural(runners.length, "seat")}</span>
@@ -417,7 +428,11 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // and a handle is an address rather than a label: drawn bare, this grid put
   // `agent-ai-systems-engineer` where the seat's name belongs, built the
   // badge's monogram out of it, and drew a person's seat as an agent's.
-  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
+  const index = useMemo(() => indexOrg(org), [org]);
+  const who = useMemo(() => seatLookup(index), [index]);
+  // THE SAME FIGURES ON EVERY AGENTS TAB, this one's included: a strip whose
+  // numbers came and went with the tab would read as counts that changed.
+  useAgentsCounts(index);
   const { open: openPeek } = usePeekControls();
   // `#/agents/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
   // Three segments because a schedule's identity is all three: two units may
@@ -519,14 +534,16 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
 
   return (
     <>
-      <PageActions>
-        {<Tag appearance="outline">{plural(schedules.length, "schedule")} defined</Tag>}
-      </PageActions>
-      <PageNote>
-        Role- and unit-scoped recurring work. Delivery is at-most-once, a missed tick is caught up,
-        and a run is capped on wall clock.
-      </PageNote>
-
+      {/* THE AGENTS PAGE BAR, as every Agents section carries it — Find a
+          seat (a found seat opens beside the list, as on Teams), Edit org and
+          Add seat. Without it the controls vanished from the bar the moment a
+          reader moved from the roster to this tab, and came back when they
+          moved away. */}
+      <AgentsHeader index={index} />
+      {/* NO COUNT IN THE BAR AND NO INTRODUCTION: the section's tab carries
+          the figure ("Schedules 6"), which the bar's "6 schedules defined"
+          restated a few pixels above it, and a working screen opens on its
+          work, as the others do. What a schedule guarantees is in the docs. */}
       {/* The flush Panel is gone: StatGroup draws that surface itself. */}
       <StatGroup columns={3}>
         <StatCard

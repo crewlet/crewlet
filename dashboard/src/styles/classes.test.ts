@@ -538,8 +538,38 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-canvas__controls",
+    why: "uilet's Canvas writes it on the zoom bar a TreeCanvas draws. styles/screens.css moves it to the bottom LEFT corner on the live org chart (`.oc-canvas`), where the approved chart puts it, because the legend takes the bottom right and the kit offers only the right-hand corners. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-canvas",
+    why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css dots its ground inside `.oc-canvas`, as the approved chart draws the field a reader pans; the kit paints the ground and nothing on it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-select__menu",
     why: "uilet's Select writes it on its listbox panel, which it portals out of the field. styles/screens.css raises the panel's height for My work's whose-day picker (`.whose-day-menu`, the Select's `menuClassName`), whose options are two lines each where the kit sizes the panel for six one-line rows — at 1440×900 it showed three people and cut a group heading in half. The kit's variable is declared on the panel itself, so only a rule on the panel can set it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-tree-grid__toggle",
+    why: "uilet's TreeGrid writes it on a row's expand chevron. styles/screens.css sets it on the first line of a row inside the phone's org chart outline (`.oc-outline`), whose rows are three lines — the kit centres it on the whole row, which put it beside the unit line under the badge rather than beside the seat's name. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-combobox__panel",
+    why: "uilet's Combobox writes it on its completion list. styles/screens.css lets the Agents page bar's Find a seat (`.agents-find`) list grow to its content, leftward from the field's end, because the kit spans it across the field and at a search field's width that left a seat's name no room. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-combobox__label",
+    why: "uilet's Combobox writes it on an option's name. styles/screens.css keeps it from shrinking inside Find a seat (`.agents-find`): the kit's hint never shrinks and its label does, so the name was squeezed to 0px beside a seat's handle and unit. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-listbox__hint",
+    why: "uilet's Listbox writes it on an option's hint. styles/screens.css lets it shrink and ellipsise inside Find a seat (`.agents-find`), so the hint rather than the seat's name is what gives way. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

@@ -123,6 +123,13 @@ export interface WorkspaceRow {
   keep?: string[];
   /** The whole workspace is operator-scoped: drawn with a lock, never hidden. */
   guarded?: boolean;
+  /**
+   * A sentence at the end of the section tabs that holds for every section —
+   * how to read what the workspace draws. It gives way to the tabs: drawn only
+   * where the strip has room for it beside every tab (`noteFits` in
+   * `header/PageHeader.tsx`), so never on a phone.
+   */
+  note?: string;
 }
 
 export const WORKSPACES: WorkspaceRow[] = [
@@ -269,6 +276,10 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "a",
     place: "workspace",
     renderer: "tabs",
+    // THE ONE HUE RULE, said where the colour is: every ring, dot and state
+    // line on these sections is what a seat is DOING, and no seat has a
+    // colour of its own.
+    note: "Colour shows what a seat is doing — never who it is",
     sections: [
       {
         key: "chart",

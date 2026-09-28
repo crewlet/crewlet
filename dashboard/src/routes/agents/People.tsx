@@ -1,5 +1,5 @@
 /**
- * Everyone in the company, and what each of them is doing.
+ * Agents › Roster: everyone in the company, and what each of them is doing.
  *
  * The list is grouped by RUN STATE by default rather than by unit, because the
  * question this screen is opened with is "who is working / who stopped", and a
@@ -10,16 +10,21 @@
  * replaces sorted on `sandbox.updated_at || agent.updated_at` — a field that
  * moves on every push — so rows physically re-ordered under the reader's
  * cursor several times a second while a turn ran.
+ *
+ * A SEAT THE ENGINE STILL REPORTS AND THE CHART NO LONGER HOLDS is its own
+ * group, "Removed from the company": a revision that drops a seat does not
+ * stop the turn it was on, and a roster that hid that seat would hide a turn
+ * still spending tokens. It has no page to link to, so its card is not a link.
  */
 
-import { useMemo, useRef } from "react";
-import { useSearchTarget } from "~/app/searchTarget.ts";
+import { useMemo } from "react";
+import { useNow } from "~/lib/clock.ts";
 import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Card, cx, EmptyState, EmptyValue, Input, Tag } from "@crewlethq/ui";
-import { UsersGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { Card, cx, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
+import { UsersGlyph } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` commits the option the arrows land on. Both strips here
 // drive a `useTab`, which pushes a history entry — and the view strip swaps the
@@ -28,14 +33,23 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { QueryState } from "~/components/common.tsx";
-import { activityOf, indexOrg, nameOfIn, unitDirectLabel, type Seat } from "~/lib/seats.ts";
+import {
+  activityOf,
+  handleLabel,
+  indexOrg,
+  nameOfIn,
+  stateLine,
+  unitDirectLabel,
+  type NameOf,
+  type Seat,
+} from "~/lib/seats.ts";
 import { loadFraction, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
-import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
+import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 const VIEWS = ["seats", "workload"] as const;
 
@@ -53,9 +67,22 @@ type Grouping = (typeof GROUPINGS)[number];
  * of. The bar is RELATIVE to the heaviest queue on screen, because there is no
  * absolute number that is "full".
  */
-function Workload({ seats }: { seats: Seat[] }) {
+function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
   const answer = useQuery("work_workload", undefined, { pollMs: 60_000 });
-  const rows = useMemo(() => loadRows(answer.data?.rows ?? [], seats), [answer.data?.rows, seats]);
+  // THE BAR'S "FIND A SEAT" NARROWS THIS VIEW TOO, by the fields a load row
+  // has: who it is and where they sit. The bar stays the same field whichever
+  // view is open, so it has to mean something on both.
+  const rows = useMemo(
+    () =>
+      loadRows(answer.data?.rows ?? [], seats).filter(
+        (load) =>
+          !needle ||
+          [load.seat?.name, load.handle, load.seat?.unit?.name].some((f) =>
+            f?.toLowerCase().includes(needle),
+          ),
+      ),
+    [answer.data?.rows, seats, needle],
+  );
   // THE HEAVIEST QUEUE ON SCREEN is the bar's own scale — computed once here
   // rather than per row, so every track on the table is drawn against the
   // same number.
@@ -67,10 +94,15 @@ function Workload({ seats }: { seats: Seat[] }) {
       empty={
         rows.length
           ? undefined
-          : {
-              title: "Nobody holds any work",
-              hint: "No open task on this node's copy of the tracker is assigned to anybody.",
-            }
+          : needle
+            ? {
+                title: "Nobody matching holds any work",
+                hint: "Find a seat matches a person's name, handle or unit.",
+              }
+            : {
+                title: "Nobody holds any work",
+                hint: "No open task on this node's copy of the tracker is assigned to anybody.",
+              }
       }
     >
       <Card padding="none">
@@ -166,9 +198,22 @@ const STATE_ORDER = [
   // and a seat a peer runs is idle or working like any other.
   { key: "offline", label: "No state from the engine yet" },
   { key: "human", label: "Human teammates" },
+  // THE ENGINE STILL REPORTS IT and the chart no longer holds it — see the
+  // file's doc.
+  { key: "removed", label: "Removed from the company" },
 ] as const;
 
-function bucketOf(seat: Seat, agent: AgentRow | undefined): string {
+/** One row of the roster: a seat of the chart, or a seat the chart dropped. */
+interface Row {
+  key: string;
+  name: string;
+  /** Null for a seat the engine still reports and the chart no longer holds. */
+  seat: Seat | null;
+  agent: AgentRow | undefined;
+}
+
+function bucketOf(seat: Seat | null, agent: AgentRow | undefined): string {
+  if (!seat) return "removed";
   // A KIND IS NOT A STATE, and this short-circuit is why a human teammate
   // could never be reported as waiting on anybody: every human seat was
   // filed under one label before anything about what it is doing was read.
@@ -193,9 +238,6 @@ function bucketOf(seat: Seat, agent: AgentRow | undefined): string {
 }
 
 export function People() {
-  // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
-  const searchBox = useRef<HTMLInputElement>(null);
-  useSearchTarget(searchBox);
   const agents = useAgents();
   const org = useOrg();
   const [view, setView] = useTab("view", VIEWS);
@@ -214,27 +256,28 @@ export function People() {
 
   const index = useMemo(() => indexOrg(org), [org]);
   const nameOf = useMemo(() => nameOfIn(index), [index]);
+  useAgentsCounts(index);
 
   // HOISTED OUT OF THE MEMO, because two things need to know whether a filter
   // is on: the filter itself, and every count on the screen that is now over
   // what matched rather than over the company.
   const needle = q.trim().toLowerCase();
 
-  const rows = useMemo(() => {
-    return (
-      index.seats
-        .filter(
-          (s) =>
-            !needle ||
-            s.name.toLowerCase().includes(needle) ||
-            s.handle.toLowerCase().includes(needle) ||
-            s.goal.toLowerCase().includes(needle) ||
-            s.unit?.name.toLowerCase().includes(needle),
-        )
-        .map((seat) => ({ seat, agent: agents.find((a) => a.role === seat.name) }))
-        // By NAME. Never by a field that a live push moves.
-        .sort((a, b) => a.seat.name.localeCompare(b.seat.name))
-    );
+  const rows = useMemo<Row[]>(() => {
+    const matches = (...fields: (string | undefined)[]) =>
+      !needle || fields.some((f) => f?.toLowerCase().includes(needle));
+    const inChart = new Set(index.seats.map((s) => s.name));
+    const byRole = new Map(agents.map((a) => [a.role, a]));
+    const out: Row[] = [
+      ...index.seats
+        .filter((s) => matches(s.name, s.handle, s.goal, s.unit?.name))
+        .map((seat) => ({ key: seat.key, name: seat.name, seat, agent: byRole.get(seat.name) })),
+      ...agents
+        .filter((a) => !inChart.has(a.role) && matches(a.role, a.handle))
+        .map((agent) => ({ key: `removed:${agent.role}`, name: agent.role, seat: null, agent })),
+    ];
+    // By NAME. Never by a field that a live push moves.
+    return out.sort((a, b) => a.name.localeCompare(b.name));
   }, [index.seats, agents, needle]);
 
   const groups = useMemo(() => {
@@ -242,7 +285,9 @@ export function People() {
     if (group === "unit") {
       const byUnit = new Map<string, typeof rows>();
       for (const row of rows) {
-        const key = row.seat.unit?.name ?? "No unit — org-wide";
+        const key = row.seat
+          ? (row.seat.unit?.name ?? "No unit — org-wide")
+          : "Removed from the company";
         byUnit.set(key, [...(byUnit.get(key) ?? []), row]);
       }
       return [...byUnit.entries()]
@@ -281,8 +326,6 @@ export function People() {
         ? unitDirectLabel(n)
         : plural(n, "seat");
 
-  const agentSeats = index.seats.filter((s) => s.kind === "agent").length;
-
   // WHAT `[` AND `]` WALK: the cards in the order they are on screen, which is
   // the GROUPS' order rather than `rows`' — a reader stepping from a stopped
   // seat expects the next stopped seat, not whoever follows it alphabetically
@@ -295,7 +338,9 @@ export function People() {
       () =>
         view === "seats"
           ? groups.flatMap((g) =>
-              g.rows.map(({ seat }) => ({ kind: "seat" as const, id: seat.handle || seat.name })),
+              g.rows.flatMap(({ seat }) =>
+                seat ? [{ kind: "seat" as const, id: seat.handle || seat.name }] : [],
+              ),
             )
           : [],
       [groups, view],
@@ -312,57 +357,30 @@ export function People() {
    * real link and ⌘-click, middle-click and the status bar all still name the
    * seat's own page, exactly as `rowPeekHandler` has it everywhere else.
    */
-  const card = ({ seat, agent }: (typeof rows)[number]) => (
-    <div
-      key={seat.key}
-      style={{ display: "contents" }}
-      // BY HANDLE, OR BY NAME WHERE THE ENGINE REPORTED NONE. The seat screen
-      // resolves both, which is what keeps a seat this engine derived no
-      // handle for reachable at all; `seatPath` is the same rule for a link.
-      onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle || seat.name }))}
-    >
-      <SeatCard seat={seat} agent={agent} nameOf={nameOf} />
-    </div>
-  );
+  const card = ({ key, seat, agent }: Row) =>
+    seat ? (
+      <div
+        key={key}
+        style={{ display: "contents" }}
+        // BY HANDLE, OR BY NAME WHERE THE ENGINE REPORTED NONE. The seat screen
+        // resolves both, which is what keeps a seat this engine derived no
+        // handle for reachable at all; `seatPath` is the same rule for a link.
+        onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle || seat.name }))}
+      >
+        <SeatCard seat={seat} agent={agent} nameOf={nameOf} />
+      </div>
+    ) : (
+      <RemovedCard key={key} agent={agent!} nameOf={nameOf} />
+    );
 
   return (
     <>
-      <PageActions>
-        {
-          <>
-            <Tag appearance="outline">{plural(agentSeats, "agent seat")}</Tag>
-            {index.seats.length - agentSeats > 0 && (
-              <Tag appearance="outline">{plural(index.seats.length - agentSeats, "human")}</Tag>
-            )}
-          </>
-        }
-      </PageActions>
-      <PageNote>
-        Every seat in the company, the ones this node runs and the ones its peers do. A seat that is
-        not held anywhere reads as “not running here”.
-      </PageNote>
+      {/* THE BAR'S "FIND A SEAT" IS THIS LIST'S FILTER (`q=`), the one field
+          every Agents section carries in the same place — see `header.tsx`.
+          It narrows both views: the seats, and who is carrying how much. */}
+      <AgentsHeader index={index} filter={{ value: q, onChange: setQ }} />
 
       <div className="toolbar">
-        {view === "seats" && (
-          <div style={{ maxWidth: 320, flex: 1 }}>
-            {/* `SearchTrigger` is the one that OPENS a palette; this box filters
-                the list under it, so the peer is `Input` with the glyph in its
-                leading slot. `onClear` is theirs and ours had none — the X only
-                appears once something is typed. */}
-            <Input
-              type="search"
-              width="full"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onClear={() => setQ("")}
-              clearLabel="Clear the seat filter"
-              leading={<SearchGlyph size="sm" />}
-              aria-label="Filter seats"
-              ref={searchBox}
-              placeholder="Filter by name, handle, goal or unit"
-            />
-          </div>
-        )}
         <span className="spacer" />
         {view === "seats" && (
           <Segmented<Grouping>
@@ -390,7 +408,7 @@ export function People() {
         />
       </div>
 
-      {view === "workload" && <Workload seats={index.seats} />}
+      {view === "workload" && <Workload seats={index.seats} needle={needle} />}
 
       {view === "seats" && !groups.length && (
         <EmptyState
@@ -398,7 +416,7 @@ export function People() {
           title={q ? `No seat matches “${q}”` : "This company has no seats"}
           description={
             q
-              ? "The filter matches a seat's name, handle, goal or unit."
+              ? "Find a seat matches a seat's name, handle, goal or unit."
               : "Roles are defined in the company configuration. Import one to spawn seats."
           }
         />
@@ -417,5 +435,28 @@ export function People() {
           ),
         )}
     </>
+  );
+}
+
+/**
+ * A seat the engine still reports and the chart no longer holds: its name,
+ * its handle and what it is doing. Not a link — there is no page for a seat
+ * the company does not have.
+ */
+function RemovedCard({ agent, nameOf }: { agent: AgentRow; nameOf: NameOf }) {
+  const now = useNow();
+  return (
+    <div className="seat-card" data-removed="">
+      <div className="row">
+        <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+          <strong className="truncate t-body">{agent.role}</strong>
+          {agent.handle && (
+            <span className="truncate t-caption mono">{handleLabel(agent.handle)}</span>
+          )}
+        </div>
+        <Tag appearance="outline">removed</Tag>
+      </div>
+      <div className="seat-line truncate">{stateLine(agent, { now, nameOf })}</div>
+    </div>
   );
 }

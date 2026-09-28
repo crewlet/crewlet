@@ -147,10 +147,13 @@ export function SeatCard({
     // handle for is addressed by NAME, and `#/agents/seats/` opens nothing.
     <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
       <div className="row">
+        {/* THE RING IS THE STATE, as on the chart's cards: one hue per seat,
+            and it is what the seat is doing. */}
         <SeatAvatar
           name={seat.name}
           size="lg"
           kind={seat.kind === "human" ? "human" : "agent"}
+          {...(tone ? { ring: tone } : {})}
           decorative
         />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>

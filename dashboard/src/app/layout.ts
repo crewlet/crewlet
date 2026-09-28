@@ -75,8 +75,27 @@ export const PHONE_BREAKPOINT = px(breakpoint.phone);
 
 /** The peek's resting width, and the range a reader may drag it through. */
 export const PEEK_WIDTH = 420;
-export const PEEK_MIN = 360;
 export const PEEK_MAX = 640;
+
+/**
+ * The peek's resting width beside a CANVAS — the approved org chart's 330.
+ *
+ * A list beside a peek keeps its floor and reads fine at 420; a chart does
+ * not have a floor, it has a SIZE, and every pixel the peek takes is a pixel
+ * the whole company is shrunk into. At 420 the Nimbus chart beside a peek was
+ * drawn at 71% on a 1440 window and 54% on a 1280 one, its state lines at
+ * seven pixels; at the artboard's 330, with the field running to the sheet's
+ * edges, it is drawn at 94% on 1440. A screen asks for it with
+ * `usePeekWidth` (`app/frame/peekWidth.ts`).
+ */
+export const CANVAS_PEEK_WIDTH = 330;
+
+/**
+ * The narrowest a reader may drag the peek: the narrowest any screen rests it
+ * at, so a width a canvas screen rests at is a width a reader can also choose
+ * — and one they chose there is kept rather than refused on the next load.
+ */
+export const PEEK_MIN = CANVAS_PEEK_WIDTH;
 
 /** The narrowest list a peek may stand beside: a key, a title, an assignee. */
 export const LIST_FLOOR = 444;

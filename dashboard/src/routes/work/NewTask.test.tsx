@@ -23,6 +23,8 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { indexOrg } from "~/lib/seats.ts";
+import { CHART_ORG } from "~/test/orgchart.ts";
 import type { WorkProjectDetail, WorkProjectRow } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -180,6 +182,7 @@ test("only what the person set is sent", () => {
     priority: "none",
     due: "",
     labels: [],
+    ask: "",
   });
   expect(bare).toEqual({ title: "Fix the race", project: "ENG" });
 
@@ -194,6 +197,7 @@ test("only what the person set is sent", () => {
     priority: "high",
     due: "2031-05-01",
     labels: ["api"],
+    ask: "swe",
   });
   expect(whole).toEqual({
     title: "Fix the race",
@@ -205,6 +209,7 @@ test("only what the person set is sent", () => {
     priority: "high",
     due: "2031-05-01",
     labels: ["api"],
+    ask: "swe",
   });
 });
 
@@ -287,6 +292,22 @@ test("the project is the door's, else the person's own, else the first", () => {
   expect(startingProject({ project: "GONE" }, "", listed)).toBe("ENG");
   // Before the list answers, the door's key is trusted as given.
   expect(startingProject({ project: "ENG" }, "", [])).toBe("ENG");
+});
+
+// A SEAT'S MESSAGE FILES ON THAT SEAT'S BOARD. The Agent CEO's ask opened on
+// ENG — the first project — while the CEO's unit files its work under LEAD.
+test("a door naming only a seat opens on the project of that seat's own unit", () => {
+  const index = indexOrg(CHART_ORG);
+  const filed = (key: string, unit: string): WorkProjectRow =>
+    ({ ...row(key, unit), unit: { name: unit, resolved: true } }) as WorkProjectRow;
+  const listed = [filed("ENG", "Core"), filed("LEAD", "Executives"), filed("PROD", "Product")];
+  expect(startingProject({ assignee: "ceo", ask: "ceo" }, "ENG", listed, index)).toBe("LEAD");
+  // The nearest unit ABOVE the seat's own, when its own files nothing.
+  expect(startingProject({ assignee: "devrel" }, "ENG", listed, index)).toBe("PROD");
+  // A seat above every unit, or none of whose units files work: the person's own.
+  expect(startingProject({ assignee: "jane" }, "PROD", listed, index)).toBe("PROD");
+  // The door's own project still wins.
+  expect(startingProject({ project: "ENG", assignee: "ceo" }, "", listed, index)).toBe("ENG");
 });
 
 // ONE RECORD CARRIES THE WHOLE TASK, the lane's status included — and
@@ -426,6 +447,7 @@ test("the hold names the first field in the form that is holding it", () => {
     priority: "",
     due: "",
     labels: [],
+    ask: "",
   };
   expect(blockedBy(draft)).toBeUndefined();
   expect(blockedBy({ ...draft, project: "" })?.field).toBe("project");

@@ -420,6 +420,423 @@
 
 /* ---- Org chart ---------------------------------------------------------- */
 
+/* THE LIVE CHART TAKES THE HEIGHT THE PAGE LEAVES (`useFillScreen`): the canvas
+   pans and zooms inside it, so a scroller round it would be a second scroll. */
+.oc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  height: 100%;
+  min-height: 0;
+}
+/* THE FIELD RUNS TO THE SHEET'S EDGES, under the tabs, as the approved chart
+   draws it: the kit's content padding is taken back for this one screen, as
+   the Inbox and the task page take it, and the canvas drops its own frame.
+   Inset by the padding and framed, the canvas lost forty pixels and a border
+   to a chart that is SHRUNK into whatever width it has — never reflowed — so
+   every pixel of that was a pixel of every card. What stands above the field
+   (the previous-revision note, the no-hierarchy callout) keeps the padding it
+   lost. */
+.app .crewlet-app-shell__content:has(> .oc[data-shape="canvas"]) {
+  padding: 0;
+  gap: 0;
+}
+.oc[data-shape="canvas"] {
+  gap: 0;
+}
+.oc[data-shape="canvas"] > :not(.oc-chart) {
+  margin: var(--spacing-3) var(--spacing-5) 0;
+}
+.oc-chart {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.oc-canvas {
+  flex: 1;
+  min-height: 0;
+  /* THE APPROVED CARD, 184px (11.5rem): three lines at the approved density.
+     The name has the first line to itself (the kind pill leads the second),
+     so "Agent Frontend SWE" is read whole; a name longer than the card is cut
+     with an ellipsis and read whole from its title and the peek's heading.
+     208px was tried to keep that word beside the pill; it did not — the card
+     read "Agent Front…" — and the 24px on each of four cards in a row was
+     zoom the whole chart lost beside the peek. */
+  --crewlet-tree-canvas-card-width: 11.5rem;
+}
+/* THE FIELD IS DOTTED, as the approved chart draws it: a surface that pans
+   says so before anybody drags it. The dot is the strong hairline's ink in
+   both themes, and it stays where it is while the cards move over it. Two
+   classes, so it outranks the kit's own ground whichever order the two
+   stylesheets are bundled in; a longhand, so the kit's ground colour stays. */
+.oc-canvas .crewlet-canvas {
+  background-image: radial-gradient(var(--color-border-strong) 1px, transparent 1.2px);
+  background-size: var(--spacing-5) var(--spacing-5);
+  /* No frame of its own: the field runs to the sheet's edges (see `.oc`). */
+  border: 0;
+  border-radius: 0;
+}
+/* THE ZOOM BAR AT THE BOTTOM LEFT, THE LEGEND AT THE BOTTOM RIGHT, as the
+   approved chart has them: the kit offers the right-hand corners only, and the
+   legend is the chart's own overlay. */
+.oc-canvas .crewlet-canvas__controls {
+  left: var(--spacing-3);
+  right: auto;
+}
+
+/* ONE CARD: the kit draws its frame; this is what it says. */
+.oc-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding: var(--spacing-3);
+  cursor: pointer;
+  outline: none;
+}
+.oc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.oc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-semibold);
+}
+.oc-place,
+.oc-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.oc-state {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+/* THE KIND LEADS THE PLACE LINE and never gives way; the unit does. */
+.oc-card .oc-place {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.oc-kind {
+  display: inline-flex;
+  flex: none;
+}
+.oc-place-text,
+.oc-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* THE STATE LINE IN THE STATE'S INK — the one hue a card carries. Idle and a
+   person stay in the tertiary ink: an idle seat is not a state to notice. */
+.oc-card[data-state="working"] .oc-state {
+  color: var(--color-feedback-info-ink);
+}
+.oc-card[data-state="needs"] .oc-state {
+  color: var(--color-feedback-warning-ink);
+}
+.oc-card[data-state="stopped"] .oc-state {
+  color: var(--color-feedback-danger-ink);
+}
+/* A UNIT'S PROJECT KEY, as the sidebar's project rows draw one. */
+.oc-key {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--spacing-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-background);
+  text-decoration: none;
+}
+a.oc-key:hover {
+  border-color: var(--color-border-hover);
+}
+.oc-legend {
+  position: absolute;
+  right: var(--spacing-3);
+  bottom: var(--spacing-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  pointer-events: none;
+}
+.oc-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  white-space: nowrap;
+}
+
+/* AT THE HEAD OF A PHONE'S OUTLINE there is no canvas to float over, so the
+   legend is a line of the page: on ONE line at the tighter gap — wrapped, its
+   fourth count dropped under the other three — and still free to wrap rather
+   than clip if a translation is longer. */
+.oc-legend[data-inline] {
+  position: static;
+  align-self: flex-start;
+  max-width: 100%;
+  gap: var(--spacing-1) var(--spacing-3);
+  padding: var(--spacing-1) var(--spacing-2);
+}
+
+/* ---- The chart on a phone: an outline of rows ---------------------------
+   The kit's tree grid draws the rows, their indent and the chevrons; this is
+   what a row says — a card's content laid along a line. */
+.oc-outline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  /* ONE COLUMN, so no minimum width to scroll sideways for: the kit keeps a
+     grid of several columns 45rem wide and scrolls it, which here cut every
+     row at the screen's edge. The seat's cell wraps into the width it has. */
+  --crewlet-tree-grid-min-width: 0;
+}
+.oc-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding-block: var(--spacing-1);
+}
+/* THE CHEVRON STANDS BESIDE THE NAME, on the badge's line. The kit centres it
+   on the whole row, and a row here is three lines — so it sat beside the unit
+   line, under the badge, pointing at nothing. It is the badge's height (both
+   `--size-control-sm` and the small badge are 26px), so the badge's own inset
+   puts the two on one line. */
+.oc-outline .crewlet-tree-grid__toggle {
+  align-self: flex-start;
+  margin-block-start: var(--spacing-1);
+}
+.oc-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.oc-row .oc-name {
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+.oc-row .oc-name:hover {
+  text-decoration: underline;
+}
+.oc-row[data-state="working"] .oc-state {
+  color: var(--color-feedback-info-ink);
+}
+.oc-row[data-state="needs"] .oc-state {
+  color: var(--color-feedback-warning-ink);
+}
+.oc-row[data-state="stopped"] .oc-state {
+  color: var(--color-feedback-danger-ink);
+}
+
+/* The page bar's seat finder: a search field's width, never the bar's. */
+.agents-find {
+  width: 12rem;
+}
+/* THE LIST IS AS WIDE AS WHAT IT SAYS, up to a limit, and grows LEFTWARD from
+   the field's right edge, which is where the bar's end is. The kit spans the
+   list across its field, and at a search field's width that left a seat's
+   name no room at all: the kit's hint never shrinks and its label does, so
+   every option read "@agent-ceo · Leadership · Exec…" with the NAME at 0px. */
+.agents-find .crewlet-combobox__panel {
+  left: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(20rem, calc(100vw - 2 * var(--spacing-4)));
+}
+/* The NAME keeps its width and the hint is what gives way. */
+.agents-find .crewlet-combobox__label {
+  flex: none;
+  max-width: 100%;
+}
+.agents-find .crewlet-listbox__hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ON A PHONE THE FIELD LEADS THE BAR, so the list grows rightward from its
+   left edge instead, inside the window. */
+@container page (width < 640px) {
+  .agents-find .crewlet-combobox__panel {
+    left: 0;
+    right: auto;
+  }
+}
+
+/* ---- Seat peek ---------------------------------------------------------- */
+
+/* AS TALL AS THE RAIL, so the actions can sit at its foot. */
+.seat-peek {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+  min-height: 100%;
+  padding-top: var(--spacing-3);
+}
+.seat-peek-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.seat-peek-who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.seat-peek-name {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+.seat-peek-sub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+/* THE STATE CARD, tinted by the state it states. */
+.seat-peek-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  /* A QUIET STATE IS STILL A CARD. The rail is the subtle surface, so the
+     card that was painted with it vanished for an idle seat or a person in
+     the light theme, leaving its line floating; the elevated step is the one
+     a card on a panel takes. */
+  background: var(--color-surface-elevated);
+}
+.seat-peek-state[data-state="working"] {
+  background: var(--color-feedback-info-soft);
+}
+.seat-peek-state[data-state="needs"] {
+  background: var(--color-feedback-warning-soft);
+}
+.seat-peek-state[data-state="stopped"] {
+  background: var(--color-feedback-danger-soft);
+}
+.seat-peek-line {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+}
+.seat-peek-state[data-state="working"] .seat-peek-line {
+  color: var(--color-feedback-info-ink);
+}
+.seat-peek-state[data-state="needs"] .seat-peek-line {
+  color: var(--color-feedback-warning-ink);
+}
+.seat-peek-state[data-state="stopped"] .seat-peek-line {
+  color: var(--color-feedback-danger-ink);
+}
+.seat-peek-facts {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.seat-peek-facts-grid {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  gap: var(--spacing-3) var(--spacing-3);
+  align-items: center;
+  margin: 0;
+  font-size: var(--font-size-compact);
+}
+.seat-peek-facts-grid .mono {
+  font-size: var(--font-size-xs);
+}
+.seat-peek-facts-grid dt {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.seat-peek-facts-grid dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.seat-peek-person,
+.seat-peek-node {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.seat-peek-serving {
+  display: block;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.seat-peek-budget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.seat-peek-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+/* The goal's label is the facts' own: sentence case, the tertiary step. */
+.seat-peek-goal h3 {
+  margin: 0 0 var(--spacing-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+}
+.seat-peek-goal p {
+  margin: 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+/* THE ACTIONS ARE THE RAIL'S FOOT, pinned to its bottom edge across its whole
+   width: pushed down by the free space when the seat says little, and held at
+   the bottom of the view while a long goal scrolls under it, so Open profile
+   and Message are always where the eye ends. The rail body's side and bottom
+   padding is taken back so the rule spans it. */
+.seat-peek-foot {
+  position: sticky;
+  bottom: calc(-1 * var(--spacing-6));
+  display: flex;
+  gap: var(--spacing-2);
+  margin: auto calc(-1 * var(--spacing-4)) calc(-1 * var(--spacing-6));
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+  background: var(--color-surface-subtle);
+}
+.seat-peek-foot > :first-child {
+  flex: 1;
+}
+
+/* ---- Teams -------------------------------------------------------------- */
+
 .org-tree {
   display: flex;
   flex-direction: column;
@@ -459,6 +876,34 @@
 /* A count is one phrase: broken across two lines it reads as two facts. */
 .org-unit-count {
   white-space: nowrap;
+}
+.org-unit-link {
+  color: inherit;
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+.org-unit-link:hover {
+  text-decoration: underline;
+}
+.org-unit-purpose {
+  margin: 0 0 var(--spacing-2);
+}
+.org-unit-goals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0 0 var(--spacing-2);
+  padding: 0;
+  list-style: none;
+}
+.org-unit-goals li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+}
+.org-unit-goals svg {
+  flex: none;
+  color: var(--color-text-tertiary);
 }
 .org-children {
   display: flex;
@@ -4916,17 +5361,20 @@ a.work-cal-chip {
 /* THE TRACK IS THE HEAVIEST QUEUE ON SCREEN, so the table reads as a
    comparison between people rather than against a ceiling nobody set. The
    heaviest row fills it and every other is a fraction of that. */
+/* A PILL, NOT A CIRCLE: `--radius-circle` is 50%, which on an 8px-high bar
+   350px wide is an ellipse — the track drew as a spindle and clipped its fill
+   into a lens. `--radius-pill` rounds the ends and leaves the length straight. */
 .wl-track {
   position: relative;
   height: 8px;
-  border-radius: var(--radius-circle);
+  border-radius: var(--radius-pill);
   background: var(--color-surface-inset);
   overflow: hidden;
 }
 .wl-bar {
   position: absolute;
   inset: 0 auto 0 0;
-  border-radius: var(--radius-circle);
+  border-radius: var(--radius-pill);
   /* A SEAT HOLDING NOTHING DRAWS NO BAR AT ALL — see the neutral note below
      — so this floor only ever applies to a real queue, where one open item
      against a heaviest of forty is still worth two pixels rather than none. */

@@ -25,6 +25,7 @@ import { screenFor } from "~/app/App.tsx";
 import { resolve } from "~/app/routes.ts";
 import { loadChunk } from "~/app/lazyScreen.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, storeToken } from "~/protocol/index.ts";
 import { company, Engine, InertWebSocket } from "./testkit.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
@@ -68,7 +69,9 @@ function mount(hash: string) {
   if (!route.resolved) throw new Error(`${hash} does not resolve`);
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>{screenFor(route)}</Router>
+      <ViewerProvider>
+        <Router>{screenFor(route)}</Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
 }

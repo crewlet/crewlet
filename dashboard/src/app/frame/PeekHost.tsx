@@ -87,11 +87,42 @@ export function usePeekNeighbours(refs: ObjectRef[], query?: Record<string, stri
   }, [key, queryKey, publish]);
 }
 
+/**
+ * The step `[` and `]` take from the object the peek is open on, through the
+ * order the list under it published — or undefined where there is nothing to
+ * step through: no list published an order, the object is not in it, or it is
+ * the only row.
+ *
+ * A STEP MOVES THE PEEK, it does not open another: `move` REPLACES the entry,
+ * so four objects walked through one open rail are one place the reader has
+ * been and Back leaves the list, as `DetailRail` states. It used `open`, which
+ * pushed an entry per step, so Back after walking five seats walked back
+ * through all five before it closed anything.
+ *
+ * EXPORTED FOR A LIST WHOSE OWN WIDGET TAKES THE KEYS. A tree hands focus to
+ * its items and reads every printable key as type-ahead, so a `[` pressed on
+ * an org chart's card never reached the rail's binding; the chart claims the
+ * two keys and steps through THIS, so there is one stepper and one order.
+ */
+export function usePeekStep(): ((delta: -1 | 1) => void) | undefined {
+  const object = usePeek();
+  const { move } = usePeekControls();
+  const refs = useContext(NeighbourContext)?.refs ?? [];
+  if (!object) return undefined;
+  const at = refs.findIndex((r) => refToken(r) === refToken(object));
+  if (at < 0 || refs.length < 2) return undefined;
+  return (delta: -1 | 1) => {
+    const next = refs[Math.max(0, Math.min(refs.length - 1, at + delta))];
+    if (next && refToken(next) !== refToken(object)) move(next);
+  };
+}
+
 export function PeekHost() {
   const object = usePeek();
-  const { open, close } = usePeekControls();
+  const { close } = usePeekControls();
   const host = useContext(NeighbourContext);
   const refs = host?.refs ?? [];
+  const step = usePeekStep();
 
   // A KIND WITH NO BODY CLOSES THE RAIL rather than opening it empty. A
   // `peek=` naming a kind this build cannot render is a hand-edited or
@@ -107,13 +138,6 @@ export function PeekHost() {
   // something else — a mention, a pasted `peek=` — is not in that list and
   // its page has no place in it to show.
   const query = at >= 0 ? host?.query : undefined;
-  const step =
-    at >= 0 && refs.length > 1
-      ? (delta: -1 | 1) => {
-          const next = refs[Math.max(0, Math.min(refs.length - 1, at + delta))];
-          if (next && refToken(next) !== refToken(object)) open(next);
-        }
-      : undefined;
 
   return (
     <DetailRail ref={object} onStep={step} query={query}>

@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
-import { OrgChart } from "~/routes/agents/Company.tsx";
+import { OrgChart } from "~/routes/agents/OrgChart.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { applyState } from "./AfterSaveStrip.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
 import { company, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
@@ -225,9 +226,11 @@ describe("the org chart", () => {
       Promise.resolve(null);
     return render(
       <ClientContext.Provider value={{ store, socket }}>
-        <Router>
-          <OrgChart />
-        </Router>
+        <ViewerProvider>
+          <Router>
+            <OrgChart />
+          </Router>
+        </ViewerProvider>
       </ClientContext.Provider>,
     );
   }
