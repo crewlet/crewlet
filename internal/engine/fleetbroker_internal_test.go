@@ -31,23 +31,26 @@ func (f *fakeMember) MetaGroup() (jetstream.MetaGroup, error) {
 	return f.group, f.groupOK
 }
 
-func (f *fakeMember) RemovePeer(_ context.Context, name string) error {
+func (f *fakeMember) RemovePeer(_ context.Context, peer string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.refuse != nil {
 		return f.refuse
 	}
-	kept := f.group.Peers[:0]
+	var kept []jetstream.MetaPeer
+	removed := ""
 	for _, p := range f.group.Peers {
-		if p.Name != name {
-			kept = append(kept, p)
+		if p.Peer == peer {
+			removed = p.Name
+			continue
 		}
+		kept = append(kept, p)
 	}
 	if len(kept) == len(f.group.Peers) {
-		// WHAT THE GROUP ITSELF ANSWERS a name it does not list.
+		// WHAT THE GROUP ITSELF ANSWERS a voter it does not count.
 		return jetstream.ErrNotAMetaPeer
 	}
-	f.removed = append(f.removed, name)
+	f.removed = append(f.removed, removed)
 	f.group.Peers = kept
 	return nil
 }
@@ -101,7 +104,8 @@ func member(id string, roles ...placement.NodeRole) placement.NodeProfile {
 func groupOf(names ...string) jetstream.MetaGroup {
 	g := jetstream.MetaGroup{Cluster: "acme", Leader: names[0]}
 	for _, n := range names {
-		g.Peers = append(g.Peers, jetstream.MetaPeer{Name: n, Leader: n == names[0], Current: true})
+		g.Peers = append(g.Peers, jetstream.MetaPeer{Name: n, Peer: jetstream.PeerIDOf(n),
+			Leader: n == names[0], Current: true})
 	}
 	return g
 }

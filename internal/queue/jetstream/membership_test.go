@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -108,37 +109,41 @@ func TestEachAnswerToARemovalIsReadByWhichAskItCouldBeAbout(t *testing.T) {
 }
 
 // A COMMITTED REMOVAL IS REPORTED ONLY ONCE THIS MEMBER'S OWN VIEW HAS DROPPED
-// THE SERVER, because the group a removal reports is read from that view next.
+// THE VOTER, because the group a removal reports is read from that view next.
 // A member drops a removed peer when it stores the change and the leader
 // answers once a quorum has — which need not include the member that carried
 // it — so no cluster can stage the lag on demand, and the wait is held here
 // against a view that lags by construction. A view that never catches up is
 // reported as a member behind its own group, never as a removal it has not
 // seen.
-func TestARemovalWaitsForThisMembersOwnViewToDropTheServer(t *testing.T) {
+func TestARemovalWaitsForThisMembersOwnViewToDropTheVoter(t *testing.T) {
 	t.Parallel()
+	gone := PeerIDOf("gone")
 	var reads atomic.Int32
 	lagging := func() (MetaGroup, error) {
-		g := MetaGroup{Cluster: "c", Peers: []MetaPeer{{Name: "a"}, {Name: "b"}}}
+		g := MetaGroup{Cluster: "c", Peers: []MetaPeer{
+			{Name: "a", Peer: PeerIDOf("a")}, {Name: "b", Peer: PeerIDOf("b")}}}
 		if reads.Add(1) <= 3 {
-			g.Peers = append(g.Peers, MetaPeer{Name: "gone"})
+			// NAMELESS, as a voter nobody has heard from since a restart
+			// is: the wait follows the id the removal named.
+			g.Peers = append(g.Peers, MetaPeer{Peer: gone})
 		}
 		return g, nil
 	}
-	if err := awaitApplied(t.Context(), lagging, "gone"); err != nil {
+	if err := awaitApplied(t.Context(), lagging, gone); err != nil {
 		t.Fatalf("a view that caught up answered %v", err)
 	}
 	if n := reads.Load(); n != 4 {
 		t.Fatalf("returned after %d reads of the view, want the first read that no "+
-			"longer counts the server (4)", n)
+			"longer counts the voter (4)", n)
 	}
 
 	behind := func() (MetaGroup, error) {
-		return MetaGroup{Peers: []MetaPeer{{Name: "gone"}}}, nil
+		return MetaGroup{Peers: []MetaPeer{{Peer: gone}}}, nil
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*appliedPoll)
 	defer cancel()
-	err := awaitApplied(ctx, behind, "gone")
+	err := awaitApplied(ctx, behind, gone)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "behind its own group") {
 		t.Fatalf("a view that never caught up answered %v", err)
 	}
@@ -146,8 +151,110 @@ func TestARemovalWaitsForThisMembersOwnViewToDropTheServer(t *testing.T) {
 	unreadable := errors.New("no view")
 	if err := awaitApplied(t.Context(), func() (MetaGroup, error) {
 		return MetaGroup{}, unreadable
-	}, "gone"); !errors.Is(err, unreadable) {
+	}, gone); !errors.Is(err, unreadable) {
 		t.Fatalf("an unreadable view answered %v", err)
+	}
+}
+
+// A PEER ID IS SPELLED AS NATS-SERVER SPELLS ONE, and a name hashes to one of
+// them — the check an operator's gesture naming a voter by its id is held to.
+// Whether the hash is nats-server's OWN is pinned against running servers in
+// the cluster suite, where an upgrade that changed it would fail.
+func TestAPeerIDIsSpelledAsTheServerSpellsOne(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"node-a", "crewlet-test-0", "", "a.b"} {
+		if id := PeerIDOf(name); !ValidPeerID(id) {
+			t.Errorf("PeerIDOf(%q) = %q, which is not spelled as a peer id", name, id)
+		}
+	}
+	if PeerIDOf("node-a") == PeerIDOf("node-b") {
+		t.Error("two names hash to one peer id")
+	}
+	for _, bad := range []string{"", "abc", "abcdefghi", "abcd-fgh", "abcdefg ", "node-a"} {
+		if ValidPeerID(bad) {
+			t.Errorf("%q reads as a peer id", bad)
+		}
+	}
+}
+
+// THE GROUP COUNTS THIS MEMBER ONLY WHILE IT DOES, AND NAMES NOBODY IT CANNOT.
+//
+// nats-server's report leaves the answering member out of the list whenever
+// the group has a leader, and goes on answering after the group has removed
+// it — so the member is a voter exactly while the peers beside it fall one
+// short of the group's size. Leaderless, the report lists it like any other.
+// And a peer whose name is the server's placeholder for a voter it has not
+// heard from is reported nameless, by its id, rather than as a node called
+// "Server name unknown at this time".
+func TestTheGroupCountsThisMemberOnlyWhileItDoes(t *testing.T) {
+	t.Parallel()
+	self, b, c := "node-a", "node-b", "node-c"
+	peer := func(name string, current bool) *server.PeerInfo {
+		return &server.PeerInfo{Name: name, Peer: PeerIDOf(name), Current: current}
+	}
+	unknownC := &server.PeerInfo{Peer: PeerIDOf(c), Offline: true,
+		Name: "Server name unknown at this time (peerID: " + PeerIDOf(c) + ")"}
+	for _, tc := range []struct {
+		name string
+		meta server.MetaClusterInfo
+		want []string // name@leader-mark per voter, sorted as reported
+		self bool
+	}{
+		{name: "a follower, counted",
+			meta: server.MetaClusterInfo{Leader: b, Peer: PeerIDOf(b), Size: 3,
+				Replicas: []*server.PeerInfo{peer(b, true), peer(c, true)}},
+			want: []string{"node-a", "node-b*", "node-c"}, self: true},
+		{name: "the leader, counted",
+			meta: server.MetaClusterInfo{Leader: self, Peer: PeerIDOf(self), Size: 3,
+				Replicas: []*server.PeerInfo{peer(b, true), peer(c, true)}},
+			want: []string{"node-a*", "node-b", "node-c"}, self: true},
+		{name: "removed while it still answers",
+			meta: server.MetaClusterInfo{Leader: b, Peer: PeerIDOf(b), Size: 2,
+				Replicas: []*server.PeerInfo{peer(b, true), peer(c, true)}},
+			want: []string{"node-b*", "node-c"}},
+		{name: "leaderless, listing itself",
+			meta: server.MetaClusterInfo{Size: 3,
+				Replicas: []*server.PeerInfo{peer(self, true), peer(b, false), peer(c, false)}},
+			want: []string{"node-a", "node-b", "node-c"}, self: true},
+		{name: "leaderless, removed",
+			meta: server.MetaClusterInfo{Size: 2,
+				Replicas: []*server.PeerInfo{peer(b, false), peer(c, false)}},
+			want: []string{"node-b", "node-c"}},
+		{name: "a voter nobody has heard from since a restart",
+			meta: server.MetaClusterInfo{Leader: b, Peer: PeerIDOf(b), Size: 3,
+				Replicas: []*server.PeerInfo{peer(b, true), unknownC}},
+			want: []string{"@" + PeerIDOf(c), "node-a", "node-b*"}, self: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			group := metaGroupOf(&tc.meta, self, PeerIDOf(self))
+			var got []string
+			var selfSeen bool
+			for _, p := range group.Peers {
+				label := p.Name
+				if label == "" {
+					label = "@" + p.Peer
+				}
+				if p.Leader {
+					label += "*"
+				}
+				got = append(got, label)
+				if p.Self {
+					selfSeen = true
+					if p.Peer != PeerIDOf(self) || !p.Current {
+						t.Errorf("this member is reported as %+v", p)
+					}
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("voters %v, want %v", got, tc.want)
+			}
+			if selfSeen != tc.self {
+				t.Errorf("this member reported as a voter: %v, want %v", selfSeen, tc.self)
+			}
+			if group.Counts(PeerIDOf(self)) != tc.self {
+				t.Errorf("Counts(self) = %v, want %v", !tc.self, tc.self)
+			}
+		})
 	}
 }
 

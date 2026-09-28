@@ -71,7 +71,7 @@ func BrokerRemoveWait() time.Duration { return jsprovision.Budget(true) + broker
 // [jetstream.ErrNoMetaGroup].
 type brokerMembership interface {
 	MetaGroup() (jetstream.MetaGroup, error)
-	RemovePeer(ctx context.Context, name string) error
+	RemovePeer(ctx context.Context, peer string) error
 }
 
 // BrokerFindingKind is one way the two records of the broker's membership
@@ -329,7 +329,7 @@ func (e *Engine) answerBroker(ctx context.Context, raw []byte) brokerReply {
 func (e *Engine) removeHere(ctx context.Context, node, by, from string) brokerReply {
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.Budget(true))
 	defer cancel()
-	if err := e.backends.broker.RemovePeer(removeCtx, node); err != nil {
+	if err := e.backends.broker.RemovePeer(removeCtx, jetstream.PeerIDOf(node)); err != nil {
 		log.WarnContext(ctx, "fleet_broker_remove_refused", "node", node, "by", by,
 			"asked_by", from, "error", err.Error())
 		return replyFor(e.id, err)

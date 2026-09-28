@@ -2,10 +2,12 @@ package jetstream
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -98,9 +100,9 @@ func (u systemUser) connect(ns *server.Server) (*nats.Conn, error) {
 var ErrNoMetaGroup = errors.New("jetstream: this broker is not a member of a " +
 	"clustered JetStream, so it has no metadata group")
 
-// ErrNotAMetaPeer is a removal naming a server the metadata group does not
-// list — never a member, or already removed.
-var ErrNotAMetaPeer = errors.New("jetstream: the metadata group lists no such server")
+// ErrNotAMetaPeer is a removal naming a voter the metadata group does not
+// count — never a member, or already removed.
+var ErrNotAMetaPeer = errors.New("jetstream: the metadata group counts no such voter")
 
 // ErrMembershipChanging is a removal refused because another membership change
 // is still being committed. The group takes one at a time; asking again once
@@ -117,14 +119,73 @@ var ErrNoMetaLeader = errors.New("jetstream: the metadata group has no leader " 
 	"to commit a membership change — it has lost its quorum, or has been " +
 	"electing a leader for longer than the removal waits")
 
+// ErrRemovingSelf is a member asked to carry its own removal. It could not see
+// the group drop it — its own view goes on counting it until the server turns
+// its JetStream off, which nats-server does the moment the change commits — so
+// the answer would be lost with the member that owed it. Another member
+// carries it.
+var ErrRemovingSelf = errors.New("jetstream: a member cannot carry its own " +
+	"removal from the metadata group — ask another member")
+
+// peerIDAlphabet and peerIDLength are how nats-server spells a raft peer id:
+// the first eight bytes of a SHA-256, each mapped onto these 62 symbols
+// (server/accounts.go digits and base, server/events.go getHash, and idLen in
+// server/raft.go).
+const (
+	peerIDAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	peerIDLength   = 8
+)
+
+// PeerIDOf is the raft peer id the metadata group counts the server of this
+// name by — derived from the name exactly as nats-server derives it, since a
+// server's raft node id is the hash of its own name.
+//
+// DERIVED RATHER THAN LOOKED UP, because the lookup fails exactly when it is
+// needed. A member learns another server's NAME only from that server itself
+// (server/events.go, processNewServer), so once the survivors of a member lost
+// for good have restarted — a rolling upgrade does it, and so do the restarts
+// a capacity seal takes — none of them can name the dead one: the group lists
+// it as "Server name unknown at this time", and nats-server resolves a removal
+// by name through that same lookup and answers that there is no such server,
+// while every election goes on counting it. Its id never leaves the group, and
+// the node id an operator knows the member by is enough to compute it.
+//
+// A derivation written down from another project is a claim until something
+// holds it: the membership suites pin it against running servers, and an
+// upgrade of nats-server that changed it fails there rather than here.
+func PeerIDOf(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	out := make([]byte, peerIDLength)
+	for i := range out {
+		out[i] = peerIDAlphabet[int(sum[i])%len(peerIDAlphabet)]
+	}
+	return string(out)
+}
+
+// ValidPeerID reports whether s is spelled as a raft peer id — the check an
+// operator's gesture naming a voter by its id is held to before anything asks
+// the group about it.
+func ValidPeerID(s string) bool {
+	if len(s) != peerIDLength {
+		return false
+	}
+	for i := range len(s) {
+		if !strings.ContainsRune(peerIDAlphabet, rune(s[i])) {
+			return false
+		}
+	}
+	return true
+}
+
 // MetaPeer is one voter of the metadata group, as this member's broker sees it.
 type MetaPeer struct {
-	// Name is the server's name, which is the engine's node id. A peer this
-	// broker has not heard from since it started carries the server's own
-	// placeholder ("Server name unknown at this time (peerID: …)"), which no
-	// node id can equal.
+	// Name is the server's name, which is the engine's node id — and EMPTY
+	// for a voter this member has not heard from since it started, whose
+	// name nats-server learns only from the server itself. Such a voter is
+	// still counted, and is named by Peer.
 	Name string `json:"name"`
-	// Peer is the raft peer id, stable for the life of the server's name.
+	// Peer is the raft peer id: what the group counts the voter by, and
+	// what a removal names ([PeerIDOf]).
 	Peer string `json:"peer"`
 	// Self is the member that answered.
 	Self bool `json:"self,omitempty"`
@@ -144,8 +205,15 @@ type MetaGroup struct {
 	Cluster string `json:"cluster"`
 	// Leader names the group's leader, empty while it has none.
 	Leader string `json:"leader,omitempty"`
-	// Peers are every voter, this member included, sorted by name.
+	// Peers are every voter, this member included while the group counts
+	// it, sorted by name and then by peer id — so a voter nobody can name
+	// sorts first.
 	Peers []MetaPeer `json:"peers"`
+}
+
+// Counts reports whether the group counts the voter with this peer id.
+func (g MetaGroup) Counts(peer string) bool {
+	return slices.ContainsFunc(g.Peers, func(p MetaPeer) bool { return p.Peer == peer })
 }
 
 // MetaGroup reads the metadata group as this member's broker sees it.
@@ -166,43 +234,83 @@ func (s *Server) MetaGroup() (MetaGroup, error) {
 	if jsz.Disabled || jsz.Meta == nil {
 		return MetaGroup{}, ErrNoMetaGroup
 	}
-	self := e.ns.Name()
-	group := MetaGroup{Cluster: jsz.Meta.Name, Leader: jsz.Meta.Leader}
-	group.Peers = append(group.Peers, MetaPeer{
-		Name: self, Peer: e.ns.Node(), Self: true, Leader: self == jsz.Meta.Leader,
-		Current: true,
-	})
-	for _, p := range jsz.Meta.Replicas {
-		if p == nil || p.Name == self {
+	return metaGroupOf(jsz.Meta, e.ns.Name(), e.ns.Node()), nil
+}
+
+// metaGroupOf is the metadata group as nats-server's monitoring reports it,
+// read into this package's terms.
+//
+// THIS MEMBER IS A VOTER ONLY WHILE THE GROUP COUNTS IT. The monitoring leaves
+// the answering server out of its own peer list whenever the group has a
+// leader, and a member removed from the group goes on answering until the
+// server turns its JetStream off — so a member that reported itself
+// unconditionally would claim a vote the group had already taken away. What
+// says whether it is still counted is the group's own size: the peers listed
+// beside it are every voter but itself, and fall short of the size by exactly
+// one while it is among them. Leaderless, the monitoring lists it like any
+// other peer, and it is read from the list.
+//
+// A NAME THAT DOES NOT HASH TO ITS PEER ID IS NOT A NAME: it is nats-server's
+// placeholder for a voter it has not heard from ("Server name unknown at this
+// time"), and it is dropped rather than passed on as though some node were
+// called that.
+//
+// A PURE FUNCTION OVER THE REPORT, because the two states it decides — a
+// member removed while it still answers, and a voter whose name nobody knows —
+// are ones a cluster reaches only through a removal or a restart, and a rule
+// exercised only through one of those is a rule nobody re-reads.
+func metaGroupOf(meta *server.MetaClusterInfo, selfName, selfPeer string) MetaGroup {
+	group := MetaGroup{Cluster: meta.Name, Leader: meta.Leader}
+	others := 0
+	listedSelf := false
+	for _, p := range meta.Replicas {
+		if p == nil {
 			continue
 		}
+		name := p.Name
+		if PeerIDOf(name) != p.Peer {
+			name = ""
+		}
+		self := p.Peer == selfPeer
+		if self {
+			listedSelf, name = true, selfName
+		} else {
+			others++
+		}
 		group.Peers = append(group.Peers, MetaPeer{
-			Name: p.Name, Peer: p.Peer, Leader: p.Name == jsz.Meta.Leader,
-			Current: p.Current, Offline: p.Offline, Active: p.Active,
+			Name: name, Peer: p.Peer, Self: self, Leader: meta.Peer != "" && p.Peer == meta.Peer,
+			Current: p.Current || self, Offline: p.Offline && !self, Active: p.Active,
+		})
+	}
+	if !listedSelf && meta.Leader != "" && others < meta.Size {
+		group.Peers = append(group.Peers, MetaPeer{
+			Name: selfName, Peer: selfPeer, Self: true, Leader: selfPeer == meta.Peer,
+			Current: true,
 		})
 	}
 	slices.SortFunc(group.Peers, func(a, b MetaPeer) int {
-		switch {
-		case a.Name < b.Name:
-			return -1
-		case a.Name > b.Name:
-			return 1
+		if c := strings.Compare(a.Name, b.Name); c != 0 {
+			return c
 		}
-		return 0
+		return strings.Compare(a.Peer, b.Peer)
 	})
-	return group, nil
+	return group
 }
 
 // removeResend is how long [Server.RemovePeer] waits on one ask before asking
 // again.
 //
-// THE RAFT HEARTBEAT, nats-server's one second (server/raft.go, hbInterval): a
-// request that reaches no leader is dropped rather than answered, and a newly
-// elected leader makes itself known on its first heartbeat, so asking once a
-// heartbeat reaches a new leader within one heartbeat of its election. Shorter
-// buys nothing but more "in flight" answers from a leader still committing an
-// earlier ask; longer adds that much to every removal made across an election.
-const removeResend = time.Second
+// THE RAFT HEARTBEAT, and [jsprovision.ReAsk] is where the tree states it —
+// nats-server's one second (server/raft.go, hbInterval), the shortest interval
+// over which the group's leadership can have changed: a request that reaches no
+// leader is dropped rather than answered, and a newly elected leader makes
+// itself known on its first heartbeat, so asking once a heartbeat reaches a new
+// leader within one heartbeat of its election. Shorter buys nothing but more
+// "in flight" answers from a leader still committing an earlier ask; longer
+// adds that much to every removal made across an election. Borrowed rather
+// than written again, because a removal is re-sent for exactly the reason a
+// provisioning request is, and two copies of one server constant drift.
+const removeResend = jsprovision.ReAsk
 
 // appliedPoll is how often [Server.RemovePeer] reads this member's own view of
 // the group while waiting for it to apply a committed removal.
@@ -212,16 +320,23 @@ const removeResend = time.Second
 // server's own monitoring per heartbeat of lag.
 const appliedPoll = removeResend / 10
 
-// RemovePeer removes a server from the metadata group, by its name, and
-// returns once the group has committed the change AND this member has applied
-// it — so the group this member reports next no longer counts the server.
+// RemovePeer removes a voter from the metadata group, by its raft peer id
+// ([PeerIDOf] of the server's name), and returns once the group has committed
+// the change AND this member has applied it — so the group this member reports
+// next no longer counts the voter.
+//
+// BY PEER ID, NEVER BY NAME. nats-server resolves a name through the names it
+// has heard, and a member whose survivors have restarted since it died is one
+// none of them has heard: asked by name, the group answers that it counts no
+// such server while every election goes on counting it — see [PeerIDOf].
 //
 // THROUGH THIS MEMBER'S SYSTEM ACCOUNT — the only account the request is
 // answered on — and answered by the group's leader, wherever that is: the
 // request is routed to every member and only the leader replies. What it does
-// not do is decide whether the server SHOULD go: a removed server that is still
-// running rejoins as a new voter when it restarts, and the caller decides
-// whether one that is running may be removed at all.
+// not do is decide whether the voter SHOULD go: a removed server that is still
+// running as a member rejoins as a voter when it restarts, and the caller
+// decides whether one that is running may be removed at all. It refuses only
+// ITSELF ([ErrRemovingSelf]), which it could never see removed.
 //
 // # Asked until a leader answers, on one inbox
 //
@@ -250,10 +365,10 @@ const appliedPoll = removeResend / 10
 //     proposal still being committed, so it is waited out — the success comes
 //     to the same inbox when it lands, and somebody else's change landing
 //     first only means this one is proposed after it;
-//   - "not a member" from the second ask on, for a server this member counted
+//   - "not a member" from the second ask on, for a voter this member counted
 //     before anything was asked, may be this call's own earlier ask already
 //     committed: it is a success once this member's own view no longer counts
-//     the server, and asked again until then. A server this member never
+//     the voter, and asked again until then. A voter this member never
 //     counted is not a member, whichever ask says so — the typo is never
 //     reported removed.
 //
@@ -262,17 +377,21 @@ const appliedPoll = removeResend / 10
 // replicated create is, committed by the same quorum — or by the caller's
 // context if that ends sooner. Either abandons the answer, not the change: once
 // the leader has proposed it, the group commits it without anybody listening.
-func (s *Server) RemovePeer(ctx context.Context, name string) error {
+func (s *Server) RemovePeer(ctx context.Context, peer string) error {
 	e := s.embedded
 	if e == nil || e.leaf || !e.clustered || !e.system.declared() {
 		return ErrNoMetaGroup
 	}
-	if name == "" {
-		return errors.New("jetstream: name the server to remove")
+	if !ValidPeerID(peer) {
+		return fmt.Errorf("jetstream: %q is not a raft peer id — name the voter to "+
+			"remove by the id the metadata group counts it by", peer)
+	}
+	if peer == e.ns.Node() {
+		return fmt.Errorf("%w: %s is this member (%s)", ErrRemovingSelf, peer, e.ns.Name())
 	}
 	ctx, cancel := context.WithTimeout(ctx, jsprovision.Budget(true))
 	defer cancel()
-	listed, err := counts(s.MetaGroup, name)
+	listed, err := counts(s.MetaGroup, peer)
 	if err != nil {
 		return err
 	}
@@ -281,13 +400,13 @@ func (s *Server) RemovePeer(ctx context.Context, name string) error {
 		return fmt.Errorf("jetstream: connect to this member's system account: %w", err)
 	}
 	defer nc.Close()
-	body, err := json.Marshal(server.JSApiMetaServerRemoveRequest{Server: name})
+	body, err := json.Marshal(server.JSApiMetaServerRemoveRequest{Peer: peer})
 	if err != nil {
 		return err
 	}
 	answers, err := nc.SubscribeSync(nc.NewInbox())
 	if err != nil {
-		return fmt.Errorf("jetstream: open the inbox the removal of %s is answered on: %w", name, err)
+		return fmt.Errorf("jetstream: open the inbox the removal of %s is answered on: %w", peer, err)
 	}
 	defer func() { _ = answers.Unsubscribe() }()
 
@@ -297,7 +416,7 @@ func (s *Server) RemovePeer(ctx context.Context, name string) error {
 	var pending error
 	for {
 		if err := nc.PublishRequest(server.JSApiRemoveServer, answers.Subject, body); err != nil {
-			return fmt.Errorf("jetstream: ask the metadata group to remove %s: %w", name, err)
+			return fmt.Errorf("jetstream: ask the metadata group to remove %s: %w", peer, err)
 		}
 		asks++
 		window, stop := context.WithTimeout(ctx, removeResend)
@@ -307,23 +426,23 @@ func (s *Server) RemovePeer(ctx context.Context, name string) error {
 				stop()
 				switch {
 				case ctx.Err() != nil:
-					return removalUnsettled(name, asks, pending, ctx.Err())
+					return removalUnsettled(peer, asks, pending, ctx.Err())
 				case window.Err() != nil:
 					// This ask's window is over: ask again.
 				default:
 					return fmt.Errorf("jetstream: wait for the answer to the removal "+
-						"of %s: %w", name, err)
+						"of %s: %w", peer, err)
 				}
 				break
 			}
-			settled, why := judgeRemoval(name, msg.Data, removalAsked{
+			settled, why := judgeRemoval(peer, msg.Data, removalAsked{
 				asks: asks, listed: listed,
-				counted: func() (bool, error) { return counts(s.MetaGroup, name) },
+				counted: func() (bool, error) { return counts(s.MetaGroup, peer) },
 			})
 			switch {
 			case settled && why == nil:
 				stop()
-				return awaitApplied(ctx, s.MetaGroup, name)
+				return awaitApplied(ctx, s.MetaGroup, peer)
 			case settled:
 				stop()
 				return why
@@ -339,10 +458,10 @@ type removalAsked struct {
 	// asks is how many times this call has asked, the answer's own ask
 	// included: from the second on, an answer may be about an earlier one.
 	asks int
-	// listed is whether this member counted the server before anything was
+	// listed is whether this member counted the voter before anything was
 	// asked.
 	listed bool
-	// counted reads whether this member counts the server now.
+	// counted reads whether this member counts the voter now.
 	counted func() (bool, error)
 }
 
@@ -356,16 +475,16 @@ type removalAsked struct {
 // leader, and a commit slower than the resend — are races no cluster stages on
 // demand, and a rule exercised only through one is a rule nobody re-reads. See
 // [Server.RemovePeer] for why each answer means what it does here.
-func judgeRemoval(name string, data []byte, asked removalAsked) (settled bool, why error) {
+func judgeRemoval(peer string, data []byte, asked removalAsked) (settled bool, why error) {
 	var resp server.JSApiMetaServerRemoveResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return true, fmt.Errorf("jetstream: the metadata group answered the removal of "+
-			"%s with something unreadable: %w", name, err)
+			"%s with something unreadable: %w", peer, err)
 	}
 	if apiErr := resp.Error; apiErr != nil {
 		switch server.ErrorIdentifier(apiErr.ErrCode) {
 		case server.JSClusterServerNotMemberErr:
-			notMember := fmt.Errorf("%w: %s", ErrNotAMetaPeer, name)
+			notMember := fmt.Errorf("%w: %s", ErrNotAMetaPeer, peer)
 			if asked.asks == 1 || !asked.listed {
 				return true, notMember
 			}
@@ -375,21 +494,21 @@ func judgeRemoval(name string, data []byte, asked removalAsked) (settled bool, w
 				return true, err
 			case !still:
 				// AN EARLIER ASK'S COMMIT, or somebody else's: either way
-				// the group no longer counts the server, which is what was
+				// the group no longer counts the voter, which is what was
 				// asked for.
 				return true, nil
 			}
 			return false, fmt.Errorf("%w, though this member still counts it", notMember)
 		case server.JSClusterServerMemberChangeInflightErr:
-			changing := fmt.Errorf("%w: %s was not removed", ErrMembershipChanging, name)
+			changing := fmt.Errorf("%w: %s was not removed", ErrMembershipChanging, peer)
 			return asked.asks == 1, changing
 		}
 		return true, fmt.Errorf("jetstream: the metadata group refused to remove %s: %s "+
-			"(code %d)", name, apiErr.Description, apiErr.ErrCode)
+			"(code %d)", peer, apiErr.Description, apiErr.ErrCode)
 	}
 	if !resp.Success {
 		return true, fmt.Errorf("jetstream: the metadata group answered the removal of %s "+
-			"without saying it succeeded", name)
+			"without saying it succeeded", peer)
 	}
 	return true, nil
 }
@@ -398,34 +517,29 @@ func judgeRemoval(name string, data []byte, asked removalAsked) (settled bool, w
 // which is a group with no leader, or the last answer that settled nothing.
 // Either way the removal may yet be committed, which is what the operator
 // has to be told before asking again.
-func removalUnsettled(name string, asks int, pending, cause error) error {
+func removalUnsettled(peer string, asks int, pending, cause error) error {
 	if pending == nil {
 		return fmt.Errorf("%w: nobody answered the removal of %s, asked %d times, "+
 			"within the time allowed; if the group has a leader again, the removal "+
 			"may still have been committed — read the metadata group before asking "+
-			"again: %w", ErrNoMetaLeader, name, asks, cause)
+			"again: %w", ErrNoMetaLeader, peer, asks, cause)
 	}
 	return fmt.Errorf("%w when the time allowed ran out — read the metadata group "+
 		"before asking again: %w", pending, cause)
 }
 
 // counts reports whether a view of the metadata group — this member's own, in
-// [Server.RemovePeer] — counts the named server.
-func counts(view func() (MetaGroup, error), name string) (bool, error) {
+// [Server.RemovePeer] — counts the voter with this peer id.
+func counts(view func() (MetaGroup, error), peer string) (bool, error) {
 	group, err := view()
 	if err != nil {
 		return false, err
 	}
-	for _, p := range group.Peers {
-		if p.Name == name {
-			return true, nil
-		}
-	}
-	return false, nil
+	return group.Counts(peer), nil
 }
 
 // awaitApplied waits for this member's own view of the group to stop counting a
-// server whose removal the group has committed.
+// voter whose removal the group has committed.
 //
 // A MEMBER DROPS A REMOVED PEER WHEN IT STORES THE CHANGE, before the commit
 // (server/raft.go, processAppendEntry), and the leader answers once a QUORUM
@@ -433,10 +547,10 @@ func counts(view func() (MetaGroup, error), name string) (bool, error) {
 // in a group of five, a follower outside the two that acknowledged first, or
 // one still catching up, has not stored it yet. Without this wait the group a
 // removal reports, read from the member that carried it, could still count the
-// server it just removed.
-func awaitApplied(ctx context.Context, view func() (MetaGroup, error), name string) error {
+// voter it just removed.
+func awaitApplied(ctx context.Context, view func() (MetaGroup, error), peer string) error {
 	for {
-		still, err := counts(view, name)
+		still, err := counts(view, peer)
 		if err != nil {
 			return err
 		}
@@ -447,7 +561,7 @@ func awaitApplied(ctx context.Context, view func() (MetaGroup, error), name stri
 		case <-ctx.Done():
 			return fmt.Errorf("jetstream: the metadata group committed the removal of "+
 				"%s, and this member had not applied it when the time allowed ran "+
-				"out — it is behind its own group: %w", name, ctx.Err())
+				"out — it is behind its own group: %w", peer, ctx.Err())
 		case <-time.After(appliedPoll):
 		}
 	}
