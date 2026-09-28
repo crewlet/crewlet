@@ -390,13 +390,6 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	}
 }
 
-// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
-//
-// A node's active revision is what its GET /config serves, what it boots on,
-// and what it offers the whole fleet at its next start whenever it is newer
-// than the pointer. One that is not the fleet's, left there after the node
-// applied the fleet's epoch, is a node serving a company the fleet is not
-// running, and republishing it one restart later over the one that is.
 // RE-ACTIVATING THE REVISION THIS NODE HOLDS MOVES ITS ACTIVATION INSTANT.
 //
 // Re-activation is the credential-rotation gesture, and the local row's
@@ -435,6 +428,13 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	}
 }
 
+// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
+//
+// A node's active revision is what its GET /config serves, what it boots on,
+// and what it offers the whole fleet at its next start whenever it is newer
+// than the pointer. One that is not the fleet's, left there after the node
+// applied the fleet's epoch, is a node serving a company the fleet is not
+// running, and republishing it one restart later over the one that is.
 func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 	t.Parallel()
 	activeID := func(t *testing.T, p *plane) string {

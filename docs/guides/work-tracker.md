@@ -26,16 +26,22 @@ earlier never overwrites one activated later — so a node restarting on a
 revision the fleet has since replaced, or applying an older one late during a
 rollout, leaves the newer names alone. Re-applying an activation that has
 already landed writes nothing, which is every restart of every node on a
-company nobody has edited; re-activating an unchanged revision (the
-credential-rotation gesture) is a new activation, and writes one record per
-project to say so. The instant is the activating node's clock, except that an
+company nobody has edited; when several nodes apply one activation at once,
+they contend per project and exactly one of them writes it. Re-activating an
+unchanged revision (the
+[credential-rotation gesture](../concepts/secret-store.md)) is a new
+activation, and records one quiet "org chart re-applied" change per project to
+say so. The instant is the activating node's clock, except that an
 activation is never published at an instant no later (to the millisecond)
 than the one it replaces: the activation pointer moves it to a millisecond
 after, so an activation made on a node whose clock runs behind the last
 activator's — or a node republishing an older `activated_at` at boot — is
 still applied to every project, where it used to be applied to none. Keep the
 fleet's clocks synchronised anyway: the rule orders activations against each
-other, and the stamps a chart carries are still read off real clocks.
+other, and the stamps a chart carries are still read off real clocks. A node
+that boots on a company file it has not imported yet applies no chart until
+the control plane activates that file, which happens before the node claims
+any seat.
 
 A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 `ENG-9` is next: the counter moves before the task lands, so a crash between
@@ -1375,8 +1381,8 @@ screens rather than one:
   narrowed from one bar — the window, then **Kind**, **By** and **Project**
   pickers whose options are what the pages loaded hold, with how many of each
   (said once: the counts are over the changes loaded) — and it says "Showing
-  the latest N" beside **Load older**. A config apply re-declaring the org
-  chart's projects is engine bookkeeping, not somebody's change: a run of them
+  the latest N" beside **Load older**. A config activation re-declaring the
+  org chart's projects is engine bookkeeping, not somebody's change: a run of them
   is one quiet line ("Org chart re-applied to 3 projects", by the engine), and
   the chart epoch they move is never printed.
   The window bounds what the engine is asked for and a page bounds what one ask

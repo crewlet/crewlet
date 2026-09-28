@@ -867,6 +867,8 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt ti
 				"detail", "the previous routing is still current")
 		}
 	}
+	// THE CHART, stamped with the activation this apply is for — see
+	// [Engine.applyChart].
 	e.applyChart(ctx, c, activatedAt)
 	e.applyContainers(ctx, c, activatedAt)
 }
@@ -1050,7 +1052,13 @@ func chartContainers(c *Company) []chartContainer {
 // did not land, and the next apply or the next boot retries them.
 func (e *Engine) applyChart(ctx context.Context, c *Company, activatedAt time.Time) {
 	writer := e.TrackerWriter()
-	if writer == nil || c == nil || c.Org == nil || activatedAt.IsZero() {
+	if writer == nil || c == nil || c.Org == nil {
+		return
+	}
+	if activatedAt.IsZero() {
+		log.DebugContext(ctx, "tracker_chart_not_activated",
+			"detail", "this company was not built from an activation, so its "+
+				"chart waits for the reconcile that activates it")
 		return
 	}
 	chart := chartProjects(c.Org)

@@ -81,7 +81,9 @@ const tickInterval = 25 * time.Millisecond
 // activation pointer's own instant — and a company booted with no activation
 // is not charted until an activation names it, so its projects and knowledge
 // spaces would never exist. Every node of one harness fleet boots with the
-// SAME instant, because they are running one activation.
+// SAME instant, because they are running one activation — and every RESTART
+// boots with it too: a value read off a clock per node or per boot would be
+// exactly the bug the chart's activation stamp exists to rule out.
 var harnessActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 
 // node is a running node: engine and API in one process, wired as

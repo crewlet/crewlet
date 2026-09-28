@@ -226,6 +226,39 @@ func TestDuplicateNamesBootFromTheStoreAndAreRefusedFromAFile(t *testing.T) {
 	}
 }
 
+// A NODE BOOTING FROM ITS STORE BOOTS ON THE REVISION'S OWN ACTIVATION.
+//
+// The engine stamps the org chart's projects with the instant the revision
+// was activated, and a restart must stamp the SAME instant or it republishes
+// every project for a chart nobody changed. That instant is the one the store
+// recorded with its active copy — never zero (which would apply no chart at
+// boot) and never the moment of this boot.
+func TestAStoredCompanyBootsWithTheInstantItWasActivated(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	activateStored(t, cfg, duplicateNamesRevision)
+
+	cs, closeStore, err := openConfigStore(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+	active, found, err := cs.configs.Active(t.Context())
+	closeStore()
+	if err != nil || !found {
+		t.Fatalf("read the active revision: found=%v err=%v", found, err)
+	}
+
+	_, activatedAt, err := companyFromStore(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("companyFromStore: %v", err)
+	}
+	if activatedAt.IsZero() || !activatedAt.Equal(active.ActivatedAt) {
+		t.Errorf("the node boots with activation %v; the store recorded %v — a "+
+			"restart would stamp the chart with something other than the "+
+			"activation it is re-applying", activatedAt, active.ActivatedAt)
+	}
+}
+
 // BOOTING IS APPLYING, AND THE REFUSAL NAMES THE REVISION AND THE WAY OUT.
 //
 // The node is not serving its API yet, so an offline import is the repair,

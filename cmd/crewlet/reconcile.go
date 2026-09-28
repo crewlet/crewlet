@@ -381,14 +381,15 @@ func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstr
 // is guess: it reads the revision the node's own database marks active, which
 // is what the reconciler is about to converge from anyway.
 //
+// It also answers WHEN the revision was activated — the instant this node's
+// store recorded with its active copy, which is the fleet pointer's own
+// instant for a revision the fleet activated. The engine stamps the org
+// chart's projects with it, so a restart re-applying the same activation is
+// recognised as one and writes nothing (see [engine.Options.ActivatedAt]).
+//
 // A nil company with a nil error is the UNCONFIGURED case — no file and no
 // revision — and it is a state, not a failure. The node serves its API so an
 // operator can push the first revision into it.
-//
-// It also returns WHEN the revision was activated, which the engine stamps
-// the company's chart with at boot ([engine.Options.ActivatedAt]): the
-// revision's own `activated_at`, which the reconciler keeps equal to the
-// activation pointer's instant for the revision the fleet is on.
 //
 // It opens the store, reads, and closes it again, rather than handing the open
 // handle on: the engine opens its own backends and owns their lifetime, and a
