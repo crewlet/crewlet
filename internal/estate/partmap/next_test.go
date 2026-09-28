@@ -521,8 +521,9 @@ func TestAReleaseRemovesOnlyTheLeaveItAnswers(t *testing.T) {
 // still being built and wanted; leaving where it is still being built and not
 // wanted, so its release fences anything it might still publish. A faulted,
 // draining or released copy is not one to adopt. And an established copy the
-// target does not want is let go like any server — only once the target
-// vouches for the partition, never in the tick that adopted it.
+// target does not want is let go like any server, only once the target
+// vouches for the partition: here the target does not vouch on the tick that
+// adopts it, so the copy is seen serving first, and does on the next.
 func TestWhatANodeHoldsIsAdopted(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
