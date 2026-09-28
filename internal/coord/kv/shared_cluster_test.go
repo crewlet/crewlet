@@ -106,6 +106,14 @@ func TestSharedContractOnACluster(t *testing.T) {
 // reads as "shed this seat now". Through the leader the same reads FAIL, which
 // the contract's third answer is for: a node that cannot reach its store
 // keeps what it holds and waits.
+//
+// THE CUT MEMBER LEADS NEITHER STREAM THE CASE READS. One that is a stream's
+// leader when it is cut goes on answering that stream's leader reads from its
+// own copy until it notices it has lost its peers — the bound the package doc
+// states under "Every single-key read is the leader's", measured at about ten
+// seconds. A case that let the placement decide which member it cut asserted,
+// on the runs where that member led the mailbox bucket, a guarantee the broker
+// does not give, and failed whenever its reads landed inside the window.
 func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
@@ -132,31 +140,43 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 		StatusFreshness: 10 * time.Minute,
 	}
 
-	// The lease bucket's leader, and a member that is not it — the one about
-	// to be cut, with a handle on it.
+	// The lease bucket's leader, and a member that leads neither the lease
+	// bucket nor the mailbox bucket — the one about to be cut, with a handle
+	// on it. Three members and two streams always leave one.
 	first, err := Open(ctx, client(0), cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	stream, err := first.js.Stream(ctx, first.leases.stream)
+	fleetFirst, err := OpenFleet(ctx, client(0), fleetCfg)
 	if err != nil {
-		t.Fatalf("the lease bucket's stream: %v", err)
+		t.Fatalf("OpenFleet: %v", err)
 	}
-	info, err := stream.Info(ctx)
-	if err != nil || info.Cluster == nil {
-		t.Fatalf("the lease bucket's placement: (%v, %v)", info, err)
+	leaderOf := func(stream string) string {
+		t.Helper()
+		handle, err := first.js.Stream(ctx, stream)
+		if err != nil {
+			t.Fatalf("stream %s: %v", stream, err)
+		}
+		info, err := handle.Info(ctx)
+		if err != nil || info.Cluster == nil || info.Cluster.Leader == "" {
+			t.Fatalf("stream %s's placement: (%v, %v)", stream, info, err)
+		}
+		return info.Cluster.Leader
 	}
+	leaseLeader := leaderOf(first.leases.stream)
+	mailboxLeader := leaderOf(bucketStream(fleetFirst.mailboxes))
 	leader, cut := -1, -1
 	for i, member := range c.Configs {
 		switch {
-		case member.ServerName == info.Cluster.Leader:
+		case member.ServerName == leaseLeader:
 			leader = i
-		case cut < 0:
+		case member.ServerName != mailboxLeader && cut < 0:
 			cut = i
 		}
 	}
 	if leader < 0 || cut < 0 {
-		t.Fatalf("the lease bucket is led by %q, which is none of the members", info.Cluster.Leader)
+		t.Fatalf("the lease bucket is led by %q and the mailbox bucket by %q, which leaves "+
+			"no member leading neither", leaseLeader, mailboxLeader)
 	}
 	onLeader, err := Open(ctx, client(leader), cfg)
 	if err != nil {

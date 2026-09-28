@@ -239,6 +239,23 @@
 // never "absent". A write needs that leader anyway, so a node that cannot read
 // its lease could not have renewed it either.
 //
+// THE ONE COPY THAT IS BEHIND AND STILL ANSWERS is a leader cut off from its
+// peers that has not yet noticed. The broker gives a stream leader no lease: a
+// member that led a stream when it was cut goes on answering that stream's
+// leader reads from its own copy until its metadata layer goes leaderless or
+// its group steps down on lost quorum — measured at about ten seconds after the
+// cut, nats-server's lostQuorumInterval — while the majority elects a leader
+// of its own and moves on. So through a member on the minority side of a
+// partition, a stream it led reads up to that far behind, and a record the
+// majority wrote reads as absent. Nothing written through that member lands (a
+// write needs its quorum), a tenure is fenced by its epoch, and a renew's or a
+// release's compare-and-set fails there; what such a read cannot be trusted
+// with is a decision that writes nothing. Closing the window takes a read that
+// proves a quorum — a barrier append per read, as the state log's linearizable
+// read is — which would make every heartbeat's read a write, so this package
+// does not: the window is the bound it gives, stated here so a caller deciding
+// on an absence knows it has one.
+//
 // The cost, measured on an in-process cluster: a leader read takes 40–220 µs
 // at the median where a direct get takes 25–135 µs — the hop to the leader
 // when the caller's member is not it — and 27,000 reads a second through one

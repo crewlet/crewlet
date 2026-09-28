@@ -77,6 +77,19 @@ election every member answers from its own store, and one that is behind names
 fewer keys than the quorum holds, so a listing during a bucket's leader
 election is **unavailable** — the third answer — rather than short.
 
+One copy that is behind still answers as the leader, and the bound on it is
+stated rather than removed. A member cut off from its peers while it leads a
+stream goes on answering that stream's leader reads from its own copy until it
+notices it has lost them — about **ten seconds**, the broker's lost-quorum
+interval — while the majority elects a leader of its own and moves on. So
+through a node on the minority side of a partition, a bucket its member led
+reads up to that far behind, and a record the majority wrote reads as absent.
+Nothing written through that node lands, since a write needs its quorum, and a
+lease is fenced by its epoch, so what the window can mislead is a decision that
+writes nothing. Closing it would take a read that proves a quorum — a barrier
+append per read, as the state log's linearizable read is — which would turn
+every lease heartbeat's read into a write.
+
 A **tombstone** the pass delivered is not taken as the key's answer either.
 The pass is served by whichever replica the broker placed its consumer on, so
 on a clustered bucket a key that was deleted and re-created before the listing
