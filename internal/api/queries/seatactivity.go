@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -116,6 +117,12 @@ type SeatActivityTotals struct {
 	FirstPass int64 `json:"first_pass"`
 	SentBack  int64 `json:"sent_back"`
 	Tokens    int64 `json:"tokens"`
+
+	// PerDay is every day of the previous window, oldest first, a quiet one
+	// included — so a profile draws the fortnight a week-on-week comparison
+	// is made over from the ONE answer that makes the comparison, rather
+	// than asking a second, overlapping one.
+	PerDay []SeatActivityDay `json:"per_day"`
 }
 
 // seatFold is one seat's rows being summed.
@@ -309,6 +316,14 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 				sf.row.AgentID = r.AgentID
 			}
 		}
+		d := sf.days[r.Day]
+		if d == nil {
+			d = &SeatActivityDay{Day: r.Day}
+			sf.days[r.Day] = d
+		}
+		d.Turns += r.Turns
+		d.Failed += r.Failed
+		d.Tokens += r.Tokens
 		if !inWindow(r.Day) {
 			sf.prev.Turns += r.Turns
 			sf.prev.Failed += r.Failed
@@ -329,14 +344,6 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 			at := r.LastEndedAt.UTC()
 			sf.row.LastTurnAt = &at
 		}
-		d := sf.days[r.Day]
-		if d == nil {
-			d = &SeatActivityDay{Day: r.Day}
-			sf.days[r.Day] = d
-		}
-		d.Turns += r.Turns
-		d.Failed += r.Failed
-		d.Tokens += r.Tokens
 	}
 
 	windows := f.window.Windows()
@@ -355,16 +362,10 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 			ms := d.Milliseconds()
 			row.P90Ms = &ms
 		}
-		row.PerDay = make([]SeatActivityDay, 0, len(windows))
-		for _, w := range windows {
-			if d := sf.days[w.Label]; d != nil {
-				row.PerDay = append(row.PerDay, *d)
-			} else {
-				row.PerDay = append(row.PerDay, SeatActivityDay{Day: w.Label})
-			}
-		}
+		row.PerDay = everyDay(windows, sf.days)
 		if f.previous {
 			prev := sf.prev
+			prev.PerDay = everyDay(f.window.Previous().Windows(), sf.days)
 			row.Previous = &prev
 		}
 		out = append(out, row)
@@ -372,5 +373,20 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 	slices.SortFunc(out, func(a, b SeatActivity) int {
 		return cmp.Or(cmp.Compare(a.Handle, b.Handle), cmp.Compare(a.AgentID, b.AgentID))
 	})
+	return out
+}
+
+// everyDay is one row per day of windows, oldest first, a day with no record
+// as zeros: "took no turns" is a measurement, and a gap in a chart's x-axis
+// is not.
+func everyDay(windows []period.Window, days map[string]*SeatActivityDay) []SeatActivityDay {
+	out := make([]SeatActivityDay, 0, len(windows))
+	for _, w := range windows {
+		if d := days[w.Label]; d != nil {
+			out = append(out, *d)
+		} else {
+			out = append(out, SeatActivityDay{Day: w.Label})
+		}
+	}
 	return out
 }

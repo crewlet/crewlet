@@ -87,6 +87,24 @@ var featureCases = []testCase{
 		h.requireFeature("a holder whose node restarted", false, coord.ErrFeatureUnknown)(h.features().SeatFeature(h.ctx, "ceo", coord.FeatureMCPStatus))
 	}},
 
+	{"an_incarnation_is_answered_for_by_its_own_presence", func(h *harness) {
+		// A request already addressed to the owner a lease named asks about
+		// THAT process: an upgraded one, an older one, and one whose node
+		// id's presence now belongs to its successor.
+		h.present("n1", "n1:a", withFeatures(coord.FeatureHeldRead))
+		h.present("n2", "n2:a", withFeatures())
+		h.present("n3", "n3:new", withFeatures(coord.FeatureHeldRead))
+		reader := h.features()
+		h.requireFeature("an upgraded owner", true, nil)(reader.OwnerFeature(h.ctx, "n1:a", coord.FeatureHeldRead))
+		h.requireFeature("an older owner", false, nil)(reader.OwnerFeature(h.ctx, "n2:a", coord.FeatureHeldRead))
+		h.requireFeature("an owner whose node restarted", false, coord.ErrFeatureUnknown)(
+			reader.OwnerFeature(h.ctx, "n3:old", coord.FeatureHeldRead))
+		store := NewFaulty(h.b)
+		store.Break(nil)
+		h.requireFeature("an owner read on a broken store", false, coord.ErrUnavailable)(
+			coord.FeatureReader{Leases: store}.OwnerFeature(h.ctx, "n1:a", coord.FeatureHeldRead))
+	}},
+
 	{"a_node_that_published_no_status_is_unknown", func(h *harness) {
 		h.present("n1", "n1:a", withFeatures(coord.FeatureMCPStatus))
 		h.present("n2", "n2:a", nil)

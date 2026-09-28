@@ -559,7 +559,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-combobox__panel",
-    why: "uilet's Combobox writes it on its completion list. styles/screens.css lets the Agents page bar's Find a seat (`.agents-find`) list grow to its content, leftward from the field's end, because the kit spans it across the field and at a search field's width that left a seat's name no room. Another rule about OUR composition of the package's component.",
+    why: "uilet's Combobox writes it on its completion list. styles/screens.css lets the Agents page bar's Find a seat (`.agents-find`) list grow to its content, leftward from the field's end, because the kit spans it across the field and at a search field's width that left a seat's name no room; and it lays the Assign task dialog's matches out in the dialog's flow (`.assign-seat-find`), because the kit's anchored panel, inside a dialog body that scrolls, was clipped to two and a half of eight rows. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -609,7 +609,12 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-card__header",
-    why: "uilet's Card writes it on a card's head. styles/screens.css lets Home's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. Another rule about OUR composition of the package's component.",
+    why: "uilet's Card writes it on a card's head. styles/screens.css lets Home's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. A seat's Current turn card (`.prof-turn`) wraps the same way, for its subtitle. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__subtitle",
+    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css moves it onto a line of its own on a phone inside a seat's Current turn card (`.prof-turn`), where the task the turn is on sat beside the title and cut it to 'Current tu…'. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -677,6 +682,11 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-tabs--pill",
     why: "uilet's Tabs writes it for its default variant. styles/screens.css bounds it at its container and makes it scroll, which the package already does for its underline row and not for this one: `.crewlet-tabs` is `display: inline-flex` and the pill variant is `width: fit-content`, and neither caps — a flex row of nowrap labels has a min-content width equal to the sum of them. Measured on the tracker at 390px, the view switcher stood 497px wide and took the document to 642, so the reader dragged the whole page to reach a tab past the edge. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-tabs",
+    why: "uilet's Tabs writes it on its row. styles/frame.css sizes the row inside ObjectTabs's measuring twin (`.object-tabs-twin-row .crewlet-tabs`) to its max-content width with no scroll, because the twin exists to be measured at every tab's natural width and the package's underline row is `width: 100%` and scrolls — a twin laid out that way reports the box's width, not the tabs'. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
 ];

@@ -138,6 +138,20 @@ const (
 	// SeatSteer is where one note is scattered. Every node serves it and
 	// only the node running the named turn answers.
 	SeatSteer = SteerPrefix + "note"
+
+	// HeldPrefix prefixes the subjects a question only a seat's HOLDER can
+	// answer truthfully crosses — a seat's memory and its conversation
+	// ledger, which every node keeps a copy of and only the holder keeps
+	// current (internal/learning/memread).
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a read is the ephemeral
+	// request and reply of [queue.EventQueue.Ask]. And NOT under
+	// MemoryPrefix, whose `>` is a stream's subject set: a request there
+	// would be captured and retained as a memory row.
+	HeldPrefix = "crewlet.held."
+	// HeldRead is where one such read is scattered. Every node serves it
+	// and only the incarnation the seat's lease names answers.
+	HeldRead = HeldPrefix + "read"
 )
 
 // AgentInbox returns the inbox subject for the seat with this handle.

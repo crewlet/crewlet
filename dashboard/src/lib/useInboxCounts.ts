@@ -37,7 +37,7 @@
 
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
-import { useViewer, type ViewerState } from "./viewer.ts";
+import { useViewer } from "./viewer.ts";
 
 /** The page the count is taken over — the engine's own bound on the read. */
 export const INBOX_PAGE = 50;
@@ -50,14 +50,12 @@ export interface InboxCounts {
   capped: boolean;
 }
 
-/** The one standing read, for the viewer the frame already holds. */
-function useInboxRead(viewer: Pick<ViewerState, "handle">): InboxCounts {
+/** The one question, for whoever's inbox it is. */
+function useInboxRead(handle: string, enabled: boolean): InboxCounts {
   const inbox = useQuery(
     "work_inbox",
-    viewer.handle
-      ? { handle: viewer.handle, limit: INBOX_PAGE, unread: true, primary_only: true }
-      : undefined,
-    { enabled: viewer.handle !== "", pollMs: 60_000 },
+    handle ? { handle, limit: INBOX_PAGE, unread: true, primary_only: true } : undefined,
+    { enabled: enabled && handle !== "", pollMs: 60_000 },
   );
   return useMemo(() => {
     const data = inbox.data;
@@ -74,7 +72,7 @@ const Reading = createContext<InboxCounts | null>(null);
  * second standing read of the one fact a tab has about who it is.
  */
 export function InboxCountsProvider({ children }: { children: ReactNode }) {
-  const counts = useInboxRead(useViewer());
+  const counts = useInboxRead(useViewer().handle, true);
   return createElement(Reading.Provider, { value: counts }, children);
 }
 
@@ -94,6 +92,26 @@ export function useInboxCounts(): InboxCounts {
     );
   }
   return counts;
+}
+
+/**
+ * The same count for SOMEBODY'S inbox: a person's profile says it for them.
+ *
+ * THE VIEWER'S OWN IS THE FRAME'S READING, never a second read of it — so the
+ * figure on your own profile and the badge in the sidebar are one answer and
+ * cannot name two numbers. Anybody else's (an operator reading a colleague's
+ * day) is the same question asked of their inbox, which the engine answers
+ * only for an operator; `enabled` is the caller's word that this reader may
+ * ask. It used to be the length of the person record's `unread` list, which
+ * is not a count at all: it holds the EXCEPTIONS below the read mark, notices
+ * marked unread again, so a person with fifty waiting read "Unread 0".
+ */
+export function useInboxCountsOf(handle: string, enabled: boolean): InboxCounts {
+  const viewer = useViewer();
+  const own = handle !== "" && handle === viewer.handle;
+  const frame = useInboxCounts();
+  const theirs = useInboxRead(handle, enabled && !own);
+  return own ? frame : theirs;
 }
 
 /** The figure as a badge writes it: a floor carries a "+". */

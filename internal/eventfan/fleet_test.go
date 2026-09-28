@@ -253,6 +253,79 @@ func TestATokenSortedPageRanksByTheMergedTotal(t *testing.T) {
 	}
 }
 
+// THE LAST PAGE CARRIES NO CURSOR. Every non-empty page used to carry one, so
+// the walk never said it had ended: a seat's profile offered "older" under
+// its last turn and wrote its count as a floor for ever. And a page that
+// merely FILLED was read as one with more behind it, so a history exactly a
+// page long still offered "older" onto nothing — each node's read now asks one
+// row past its page and says.
+//
+// Mutation: read a node's part as full when its page filled (the old
+// `len >= limit`), and the exactly-a-page cases get a cursor.
+func TestOnlyAPageWithMoreBehindItCarriesACursor(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+	at := time.Now().UTC().Add(-time.Hour)
+	phaseOn(t, a, "a1", "t1", at, 10, "m")
+	phaseOn(t, a, "a2", "t2", at.Add(time.Minute), 10, "m")
+	phaseOn(t, b, "b1", "t3", at.Add(2*time.Minute), 10, "m")
+
+	for name, fan := range map[string]*eventfan.Fleet{
+		"solo":   eventfan.Solo("node-a", a.log),
+		"fanned": fanFrom(a, "node-a", "node-b"),
+	} {
+		whole, _, err := fan.Turns(t.Context(), store.TurnQuery{Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(whole.Turns) == 0 || whole.Next != nil {
+			t.Errorf("%s: %d turns and cursor %v on a page holding every turn, want no cursor",
+				name, len(whole.Turns), whole.Next)
+		}
+		cut, _, err := fan.Turns(t.Context(), store.TurnQuery{Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cut.Turns) != 1 || cut.Next == nil {
+			t.Fatalf("%s: a page cut at one turn of several offered no cursor", name)
+		}
+		rest, _, err := fan.Turns(t.Context(), store.TurnQuery{Limit: 10, Before: *cut.Next})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rest.Turns) == 0 || rest.Next != nil {
+			t.Errorf("%s: the page after the cursor holds %d turns and cursor %v, want the rest and none",
+				name, len(rest.Turns), rest.Next)
+		}
+		// EXACTLY A PAGE IS NOT MORE THAN A PAGE. Older than node-b's turn,
+		// node-a holds exactly two and nobody holds anything else: a page of
+		// two FILLS, and a filled page was read as one with more behind it —
+		// a cursor onto an empty page.
+		exact, _, err := fan.Turns(t.Context(), store.TurnQuery{Limit: 2, Before: at.Add(2 * time.Minute)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(exact.Turns) != 2 || exact.Next != nil {
+			t.Errorf("%s: a page of exactly the two turns there are holds %d with cursor %v, want 2 and none",
+				name, len(exact.Turns), exact.Next)
+		}
+		// AND THE PHASE LISTINGS, which read their `more` the same way.
+		below := &store.Cursor{Time: at.Add(2 * time.Minute), ID: "b1"}
+		phases, _, err := fan.Phases(t.Context(), "", 2, below)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(phases.Rows) != 2 || phases.More {
+			t.Errorf("%s: a phase page of exactly the two there are holds %d with more=%v, want 2 and false",
+				name, len(phases.Rows), phases.More)
+		}
+		if shorter, _, err := fan.Phases(t.Context(), "", 1, below); err != nil || !shorter.More {
+			t.Errorf("%s: a phase page of one of two says more=%v (err %v), want true", name, shorter.More, err)
+		}
+	}
+}
+
 // A NODE ALONE ANSWERS COMPLETE, and never touches the broker.
 func TestASoloFleetIsItsOwnStoreAndComplete(t *testing.T) {
 	t.Parallel()

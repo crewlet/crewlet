@@ -193,7 +193,7 @@ export function ModelActivity() {
   // one turn in focus instead of seven competing for the page. That is still
   // where a row with no turn on it goes — see [openRow].
   const openSeat = useCallback(
-    (r: PhaseRecord) => nav.to(["agents", "seats", r.role], { tab: "model" }),
+    (r: PhaseRecord) => nav.to(["agents", "seats", r.role], { tab: "turns" }),
     [nav],
   );
 
@@ -208,7 +208,7 @@ export function ModelActivity() {
    *
    * A row with no turn id keeps the old destination. That is a live call the
    * engine published before the turn was recorded, and there is no turn to
-   * peek — the seat's model tab is the honest second-best, not an empty rail.
+   * peek — the seat's Turns tab is the honest second-best, not an empty rail.
    */
   const openRow = useCallback(
     (r: PhaseRecord, e: React.MouseEvent | React.KeyboardEvent) => {
@@ -234,7 +234,7 @@ export function ModelActivity() {
     (r: PhaseRecord) =>
       r.turnId
         ? href(["live", "turns", r.turnId])
-        : href(["agents", "seats", r.role], { tab: "model" }),
+        : href(["agents", "seats", r.role], { tab: "turns" }),
     [],
   );
 

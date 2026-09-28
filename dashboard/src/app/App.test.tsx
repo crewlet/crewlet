@@ -133,6 +133,29 @@ describe("routing", () => {
   // was one, and a hand-written one covers exactly the screens somebody
   // remembered to add to it — so a new destination that renders a blank ships
   // green, which is the one failure this test exists to catch.
+  // WHO IS WORKING IS HOME'S, as the Main artboard draws it — the sidebar's
+  // Agents badge carries the count everywhere else. Drawn in every bar it sat
+  // between a task's trail and its actions, and pushed a profile's controls
+  // past a phone's edge.
+  test("the working chip is in Home's page bar and in no other", () => {
+    for (const [hash, drawn] of [
+      ["#/", true],
+      ["#/work", false],
+      ["#/agents", false],
+      ["#/work/ENG", false],
+      ["#/agents/seats/agent-swe", false],
+    ] as const) {
+      location.hash = hash;
+      const { store, view } = mount();
+      act(() => {
+        store.applyAgents([{ id: "a1", role: "Agent SWE", activity: "working" }] as never);
+      });
+      const chip = view.container.querySelector(".page-bar .working-now");
+      expect(chip !== null, hash).toBe(drawn);
+      view.unmount();
+    }
+  }, 30_000);
+
   test("every destination renders a screen rather than a blank", () => {
     const visited = DESTINATIONS.map((item) => buildHash(item.path));
     // The two-level routes are the reason the list is derived: a hand-written
@@ -281,7 +304,7 @@ describe("routing", () => {
     );
     // Two segments is the FILTER, so no tool is addressed and the catalogue
     // stands alone.
-    expect(two.view.container.querySelector(".object-head")).toBeNull();
+    expect(two.view.container.querySelector(".prof-head")).toBeNull();
   });
 
   test("a seat that does not exist explains itself", () => {
@@ -488,15 +511,18 @@ describe("live state reaches the screen", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    expect(view.container.querySelector(".object-head")?.textContent).toContain("Rota Keeper");
+    expect(view.container.querySelector(".prof-head")?.textContent).toContain("Rota Keeper");
     expect(screen.queryByText(/No seat called/)).toBeNull();
     expect(screen.queryByText(/there is no such screen/)).toBeNull();
     // AND NOT THE ROSTER: the page is named for the person — ONCE. The last
     // crumb is the page's `h1`, and the object header under it names the
     // same seat at level two; two `h1`s reading the same words were two page
     // titles to a reader navigating by heading.
-    const titles = screen.getAllByRole("heading", { level: 1 });
-    expect(titles.map((h) => h.textContent)).toEqual(["Rota Keeper"]);
+    //
+    // BY ITS ACCESSIBLE NAME: the crumb wears the seat's badge, which is
+    // decorative and hidden from the name a reader hears.
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: "Rota Keeper" })).toBeTruthy();
   });
 
   test("a seat opened on a tab it does not have still has a page under it", () => {

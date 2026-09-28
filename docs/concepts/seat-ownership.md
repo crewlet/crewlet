@@ -232,6 +232,23 @@ more than one row: hydration runs inside seat acquisition, so an error refuses
 the seat, and a single duplicated episode would make a seat unplaceable across
 the whole fleet.
 
+**A read is answered by the holder.** Every node that ever held a seat keeps a
+copy of its memory, and only the node holding it now keeps that copy current.
+So a screen reading a seat's memory or its conversation ledger
+(`agent_memory`, `conversations`) is never answered from whichever node served
+the request: that node reads the seat's lease and answers from its own store if
+it is the holder and has the seat attached, asks the holding incarnation on an
+ephemeral scatter if a peer is, and answers empty — naming no holder — if no
+node holds the seat, because a copy of unknown age is not the seat's memory. A
+holder that is silent, or still hydrating the seat, is an `unavailable` answer
+rather than an empty one. So is a holder whose build cannot answer at all — the
+asker reads the holding incarnation's advertised
+[features](coordination.md#what-a-node-says-about-itself) first, and a node
+that does not advertise `held_read` is named as an older build at once rather
+than waited on for the whole two-second budget, on every poll, during a rolling
+upgrade. Every node answers for the seats it holds, including a node that
+serves no API. See `internal/learning/memread`.
+
 **Deletes are deliberately not replicated.** The learning lifecycle drops rows
 constantly, and carrying a tombstone for each would double the protocol to
 keep a table converged that already converges itself: a hydrated node may

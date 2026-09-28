@@ -23,9 +23,11 @@ var logger = logging.Get("eventfan")
 type listPart struct {
 	Rows []store.EventRecord `json:"rows"`
 
-	// Full says the node holds more rows past the last one here — its page
-	// filled, or its reply was cut to fit the transport. The merge cannot
-	// place anything older than this node's last row, so it stops there.
+	// Full says the node holds more rows past the last one here — its read
+	// found a row past its page (asked, never guessed from a page that
+	// filled: see the store's own reads), or its reply was cut to fit the
+	// transport. The merge cannot place anything older than this node's last
+	// row, so it stops there.
 	Full bool `json:"full"`
 }
 
@@ -43,6 +45,16 @@ func listPartOf(ctx context.Context, log *store.EventLog, q store.ListQuery) (li
 	if err != nil {
 		return listPart{}, err
 	}
+	// FULL WHEN THE PAGE FILLED — the one listing that still reads it that
+	// way, and deliberately. Its page is not one read: a related-agent page
+	// folds the traces' siblings into the direct matches and cuts the union
+	// at the size, so a row past the DIRECT page says nothing about whether
+	// the merged one ends. What the flag buys here is the merge's horizon,
+	// for which a filled page is the safe answer, and never a cursor: the
+	// event list's answer offers `next` on every non-empty page and ends at
+	// an empty one (`exhausted`), so no reader takes this as the end of the
+	// walk. The phase and turn listings, whose `more` IS their cursor, ask
+	// the store one row past the page instead.
 	return listPart{Rows: rows, Full: len(rows) >= q.Limit}, nil
 }
 
@@ -208,14 +220,15 @@ func (p turnsPart) keep(n int) any {
 }
 
 func turnsPartOf(ctx context.Context, log *store.EventLog, q store.TurnQuery) (turnsPart, error) {
-	parts, err := log.TurnPartials(ctx, q)
+	// FULL ONLY WHERE THE LOG SAID SO. A page that merely filled was read as
+	// one with more behind it, so a seat whose history is a multiple of the
+	// page got a cursor onto an empty page — the store asks one row past the
+	// page and says (see [store.EventLog.TurnPartials]).
+	parts, more, err := log.TurnPartials(ctx, q)
 	if err != nil {
 		return turnsPart{}, err
 	}
-	return turnsPart{
-		Turns: parts,
-		Full:  len(q.IDs) == 0 && len(parts) >= turnPage(q.Limit),
-	}, nil
+	return turnsPart{Turns: parts, Full: more}, nil
 }
 
 // turnPage is the page [store.EventLog.TurnPartials] actually cuts.

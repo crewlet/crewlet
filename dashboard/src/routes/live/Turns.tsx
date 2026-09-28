@@ -57,7 +57,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -67,7 +67,16 @@ import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { ModelActivity } from "../agents/Model.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { DateCell, DurationCell, NumberCell, SeatLabel, TokenCell } from "~/app/frame/cells.tsx";
+import {
+  DateCell,
+  DurationCell,
+  NumberCell,
+  SeatLabel,
+  TokenCell,
+  TurnWhatCell,
+  UnsettledCell,
+} from "~/app/frame/cells.tsx";
+import { MAX_TURN_DAYS, runningNow } from "~/lib/turns.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import type { TurnRow } from "~/protocol/index.ts";
 
@@ -89,9 +98,6 @@ const TURN_OFFER: Offer = {
   fallback: "7d",
   buckets: ["minute", "hour", "day"],
 };
-
-/** `store.MaxTurnDays` — the read refuses to look further back than this. */
-const MAX_DAYS = 30;
 
 /**
  * How many rows one answer carries.
@@ -163,7 +169,7 @@ function TurnLens({
  * fetch a week to draw six hours of it.
  */
 function windowDays(window: Window): number {
-  return Math.min(MAX_DAYS, Math.max(1, Math.ceil(spanOf(window) / RANGE_MS["1d"])));
+  return Math.min(MAX_TURN_DAYS, Math.max(1, Math.ceil(spanOf(window) / RANGE_MS["1d"])));
 }
 
 /**
@@ -209,6 +215,8 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
   const org = useOrg();
+  // THE PUSH, for what a turn still running is doing (`runningNow`).
+  const agents = useAgents();
   const { open: openPeek } = usePeekControls();
   // EVERY FILTER IS A FILTER, so it replaces the history entry: a reader
   // narrowing to one seat and then to the failures has walked one screen,
@@ -419,76 +427,80 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               key: "summary",
               header: "What it did",
               sortValue: (t) => t.summary ?? "",
-              cell: (t) => (
-                <span className="row gap-1">
-                  <span className="truncate">
-                    {t.summary || <span className="muted">no summary recorded</span>}
-                  </span>
-                  {t.work_item && (
-                    // THE KEY, not a link to it — see the row's own comment.
-                    // It still says which item this turn was about, and the
-                    // turn's page links to it from inside.
-                    <span
-                      className="mono t-caption item-key"
-                      title="the work item this turn was about"
-                    >
-                      {t.work_item.key || `${t.work_item.backend}:${t.work_item.id}`}
-                    </span>
-                  )}
-                </span>
-              ),
+              // THE KEY, not a link to it — see the row's own comment. It
+              // still says which item this turn was about, and the turn's page
+              // links to it from inside.
+              // A TURN STILL RUNNING says what it is doing and what it is on,
+              // from the push (`runningNow`): the store's row has neither yet.
+              cell: (t) => {
+                const live = runningNow(t, agents);
+                return (
+                  <TurnWhatCell
+                    summary={t.summary}
+                    item={t.work_item ?? live?.item}
+                    doing={live?.words}
+                  />
+                );
+              },
             },
             {
               key: "state",
               header: "",
               label: "State",
               shrink: true,
-              cell: (t) => (
-                <span className="row gap-1">
-                  {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger
+              // NOTHING AT ALL for a turn with no state to show, so a phone's
+              // card drops the line (`.grid-cell:empty`) rather than printing
+              // a bare "STATE" label on every settled turn.
+              cell: (t) =>
+                !(t.work_key && reruns.get(t.work_key)! > 1) &&
+                !t.parked &&
+                t.complete &&
+                !t.failed ? null : (
+                  <span className="row gap-1">
+                    {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger
                       that failed without reaching outside the engine and was
                       redelivered is several rows here — and two rows for one
                       message read as the company having done the work twice.
                       Counted over the rows this page holds, which is what the
                       tooltip says. */}
-                  {t.work_key && reruns.get(t.work_key)! > 1 && (
-                    <Tag
-                      appearance="outline"
-                      title={
-                        `one of ${reruns.get(t.work_key)} runs of the same trigger on this ` +
-                        `page — a turn that fails without acting is redelivered and runs again`
-                      }
-                    >
-                      re-run
-                    </Tag>
-                  )}
-                  {t.parked && (
-                    <Tag
-                      appearance="outline"
-                      title="waiting on a coding run it launched — it completes again when the run is collected"
-                    >
-                      parked
-                    </Tag>
-                  )}
-                  {!t.complete && !t.parked && (
-                    <Tag
-                      variant="info"
-                      title="no completion record — running, or it died mid-flight"
-                    >
-                      running
-                    </Tag>
-                  )}
-                  {/* A FAILURE IS THE DANGER TONE, the one every other failure
+                    {t.work_key && reruns.get(t.work_key)! > 1 && (
+                      <Tag
+                        appearance="outline"
+                        title={
+                          `one of ${reruns.get(t.work_key)} runs of the same trigger on this ` +
+                          `page — a turn that fails without acting is redelivered and runs again`
+                        }
+                      >
+                        re-run
+                      </Tag>
+                    )}
+                    {t.parked && (
+                      <Tag
+                        appearance="outline"
+                        title="waiting on a coding run it launched — it completes again when the run is collected"
+                      >
+                        parked
+                      </Tag>
+                    )}
+                    {!t.complete && !t.parked && (
+                      <Tag
+                        variant="info"
+                        title="no completion record — running, or it died mid-flight"
+                      >
+                        running
+                      </Tag>
+                    )}
+                    {/* A FAILURE IS THE DANGER TONE, the one every other failure
                       mark in the product wears. It was amber — the one state
                       that asks a person for a decision, which a failed turn
                       does not. */}
-                  {t.failed && (
-                    <Tag variant="danger" title="at least one event of this turn was a failure">
-                      failure
-                    </Tag>
-                  )}
-                </span>
-              ),
+                    {t.failed && (
+                      <Tag variant="danger" title="at least one event of this turn was a failure">
+                        failure
+                      </Tag>
+                    )}
+                  </span>
+                ),
             },
             {
               key: "iterations",
@@ -503,8 +515,8 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               label: "Iterations",
               shrink: true,
               align: "right",
-              sortValue: (t) => t.iterations,
-              cell: (t) => <NumberCell value={t.iterations} />,
+              sortValue: (t) => (t.complete ? t.iterations : null),
+              cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
             },
             {
               key: "phases",
@@ -519,8 +531,8 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               header: "Tokens",
               shrink: true,
               align: "right",
-              sortValue: (t) => t.total_tokens,
-              cell: (t) => <TokenCell value={t.total_tokens} />,
+              sortValue: (t) => (t.complete ? t.total_tokens : null),
+              cell: (t) => (t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />),
             },
             {
               key: "took",

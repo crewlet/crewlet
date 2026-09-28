@@ -396,21 +396,21 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		rows, err := log.Phases(ctx, p.Role, p.Limit, p.Before.cursor())
+		rows, more, err := log.Phases(ctx, p.Role, p.Limit, p.Before.cursor())
 		if err != nil {
 			return nil, err
 		}
-		return listPart{Rows: rows, Full: len(rows) >= phaseLimit(p.Limit)}, nil
+		return listPart{Rows: rows, Full: more}, nil
 	case QuestionSeatPhases:
 		var p phasesParams
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		rows, err := log.AgentPhases(ctx, p.AgentID, p.Role, p.Before.cursor())
+		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Role, p.Before.cursor())
 		if err != nil {
 			return nil, err
 		}
-		return listPart{Rows: rows, Full: len(rows) >= store.AgentPhaseLimit}, nil
+		return listPart{Rows: rows, Full: more}, nil
 	case QuestionPhaseTokens:
 		var p phaseTokenParams
 		if err := decode(&p); err != nil {

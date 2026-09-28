@@ -273,6 +273,20 @@ func (e *Episodes) Recent(ctx context.Context, handle string, limit int) ([]Epis
 	return collectEpisodes(rows)
 }
 
+// Count is how many episode ROWS a seat has — the set [Episodes.Recent] pages
+// through. A compacted row stands for a cluster of turns and counts once
+// here, as it is listed once; how many turns it stands for is its own
+// `Count`.
+func (e *Episodes) Count(ctx context.Context, handle string) (int, error) {
+	var n int
+	err := e.db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM episodes WHERE agent_handle = ?`, handle).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("learning: count episodes for %s: %w", handle, err)
+	}
+	return n, nil
+}
+
 // ForConversation returns a seat's episodes on one conversation, newest first
 // — "the previous turn on this same ticket".
 func (e *Episodes) ForConversation(ctx context.Context, handle, conversation string, limit int) ([]Episode, error) {

@@ -47,6 +47,7 @@ import { useQuery } from "./useQuery.ts";
 import { useOrg } from "./store-hooks.ts";
 import { apiToken } from "~/protocol/index.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
+import type { EngineHealth } from "~/contract/health.ts";
 import type {
   AgentRow,
   CompanyDocument,
@@ -617,36 +618,48 @@ export function leadsInLine(index: OrgIndex, lead: string, handle: string): bool
 }
 
 /**
+ * The round a live call is on, ONE-BASED: `round_num` is the engine's
+ * zero-based round in flight and `rounds_used` the rounds that have come
+ * back, so the round is whichever of `round_num + 1` and `rounds_used` is
+ * ahead — 0 for no call. Every "round x of y" the product draws — the
+ * stepper, the peek, a task card's strip — reads it here, because each that
+ * read `round_num` raw named a round one lower than the others.
+ */
+export function roundOf(call: LiveCall | null | undefined): number {
+  return call ? Math.max(call.rounds_used ?? 0, (call.round_num ?? -1) + 1) : 0;
+}
+
+/**
  * WHICH ROUND A LIVE CALL IS ON, as a reader reads it — and the one value that
  * is not a round at all.
  *
- * `round_num` is the engine's ZERO-BASED counter, so the number a person reads
- * is `round_num + 1`; a row printing the raw field named a round one lower than
- * the one the phase card beside it showed. And the field is `-1` before the
- * first model round has come back, which is not round zero and is not a missing
- * value: it is a turn that has started and is waiting. Drawn as a dash, two of
- * five working seats on the roster read "round —" with nothing saying why — the
- * one fact the sentinel carries.
+ * THE NUMBER IS [roundOf]'s, so the roster's card and the attention queue name
+ * the round the stepper, the peek and a task's strips name: this helper once
+ * decoded `round_num` itself, a second reading of one field beside the one the
+ * rest of the product shares. What it adds is the word for NO round yet —
+ * `round_num` is `-1` before the first model round has come back (and absent
+ * from an older engine), which is not round zero and not a missing value: it is
+ * a turn that has started and is waiting. Drawn as a dash, two of five working
+ * seats on the roster read "round —" with nothing saying why — the one fact the
+ * sentinel carries.
  *
  * A `hint` rather than a second word on screen, because the card has room for a
  * short label and not for a clause; the clause is what a reader gets on hover
  * and what assistive technology reads.
  */
-export function roundLabel(roundNum: number | null | undefined): {
+export function roundLabel(call: LiveCall | null | undefined): {
   text: string;
   hint: string;
 } {
-  // `< 0` RATHER THAN `=== -1`, and `== null` for a field an older engine may
-  // not send at all: both are "there is no round yet", and a build that met a
-  // second sentinel would otherwise print it.
-  if (roundNum == null || roundNum < 0) {
+  const round = roundOf(call);
+  if (round <= 0) {
     return {
       text: "starting",
       hint: "the turn has begun and its first model round has not come back",
     };
   }
   return {
-    text: `round ${roundNum + 1}`,
+    text: `round ${round}`,
     hint: "the model round this turn is on, counting from one",
   };
 }
@@ -706,6 +719,21 @@ export function seatReading(
 }
 
 /**
+ * What [useSeatSetup] answers. A type of its own so a screen that READ it once
+ * can hand it to every panel drawing it: `useQuery` shares no request between
+ * two callers, so a panel calling the hook again fetches the whole guarded
+ * document a second time.
+ */
+export interface SeatSetup {
+  seat: Seat | undefined;
+  settings: SeatSettings | null;
+  reading: SeatReading;
+  /** The raw answer, for a panel that states its own read: the document
+   *  (never beside a refusal), whether it is in flight, and the refusal. */
+  config: { doc: CompanyDocument | null; loading: boolean; error: string | null };
+}
+
+/**
  * The guarded half of one seat, for any screen that draws it: the company
  * document's entry for the seat and the four-state reading of it.
  *
@@ -719,14 +747,7 @@ export function seatReading(
  *
  * A reader with no credential is never asked for: see the query below.
  */
-export function useSeatSetup(handle: string): {
-  seat: Seat | undefined;
-  settings: SeatSettings | null;
-  reading: SeatReading;
-  /** The raw answer, for a panel that states its own read: the document
-   *  (never beside a refusal), whether it is in flight, and the refusal. */
-  config: { doc: CompanyDocument | null; loading: boolean; error: string | null };
-} {
+export function useSeatSetup(handle: string): SeatSetup {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = handle ? (index.byHandle.get(handle) ?? index.byName.get(handle)) : undefined;
@@ -1107,6 +1128,34 @@ export function ringOf(state: SeatState | undefined): SeatRing | undefined {
   }
 }
 
+/**
+ * Which node holds a seat's lease, as far as the PUBLIC health push can say.
+ *
+ * WHAT EVERY READER IS TOLD, operator or not, on the profile and in the peek
+ * alike. `/health` is unguarded and its push reaches an anonymous tab, so a
+ * node's own name and the seats it holds are already on every reader's
+ * screen: withholding "this node · node-2" in one place and printing it in
+ * the next was a rule nobody could state. What the push does NOT say is WHICH
+ * peer holds a seat this node does not — that is the operator-only `fleet`
+ * answer — so a seat held elsewhere is "another node", and an operator is
+ * shown the lease itself.
+ *
+ * IT WAS THE AGENT INSTANCE ID, which exists only while a turn runs — so an
+ * idle seat THIS node held read "not running on this node" on its own page.
+ * The engine calls a seat nobody holds `unplaced`.
+ */
+export function heldBy(
+  handle: string,
+  agent: AgentRow | undefined,
+  health: EngineHealth | null,
+): string {
+  if (agent?.stopped_reason === "unplaced") return "no node — not placed";
+  if (!health?.seats) return "not reported by this node";
+  if (health.seats.includes(handle))
+    return health.node ? `this node · ${health.node}` : "this node";
+  return "another node";
+}
+
 /** The kit tone a state's pill takes: its ring's, or neutral where it has none. */
 export function toneOf(state: SeatState | undefined): SeatRing | "neutral" {
   return ringOf(state) ?? "neutral";
@@ -1314,16 +1363,23 @@ export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
   return out;
 }
 
-/** The words a working seat's strip carries after its name. */
-function doingWords(row: AgentRow): string {
+/**
+ * The words a working seat's strip carries after its name: "executing · round
+ * 7 of 25", "3 workers running", "coding run". A task card's strip and the task
+ * page's live row both read it here — the page kept a private copy that read
+ * the zero-based `round_num` raw and called every phase but review
+ * "executing", so the two named different rounds, and different phases, of
+ * one turn.
+ */
+export function doingWords(row: AgentRow): string {
   if (row.turn?.stage === "parked") return "coding run";
   const workers = delegatedWorkers(row.live_call);
   if (workers > 0) return `${plural(workers, "worker")} running`;
   const phase = row.live_call?.phase ?? row.current_phase ?? "";
   const verb = (PHASE_DOING[phase]?.alone ?? "working").toLowerCase();
-  const round = row.live_call?.round_num;
+  const round = roundOf(row.live_call);
   const max = row.live_call?.max_rounds;
-  if (!round) return verb;
+  if (round <= 0) return verb;
   return max ? `${verb} · round ${round} of ${max}` : `${verb} · round ${round}`;
 }
 

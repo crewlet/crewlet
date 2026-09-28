@@ -1012,9 +1012,16 @@ describe("the frame's layout", () => {
     // FLOOR beside the controls; the grow factor hands the trail the rest.
     const crumbs = block(base, ".crumbs");
     expect(crumbs).toMatch(/flex:\s*1 100 0(?![.\d])/);
-    // AND IT STOPS BEFORE THE WAY BACK OUT IS GONE: 20ch is what the
-    // narrowest line can give, measured at 178.8px on a 310px viewport.
-    expect(crumbs).toMatch(/min-width:\s*20ch/);
+    // AND IT STOPS BEFORE THE WAY BACK OUT IS GONE: at the MEASURED floor
+    // (`--crumb-floor`, the ancestors and the last crumb's stub, written by
+    // `Breadcrumb`), never under 20ch — what the narrowest line can give,
+    // measured at 178.8px on a 310px viewport — and never past the whole bar,
+    // where a trail whose ancestry alone is wider has to scroll. A fixed 20ch
+    // let a seat's trail share a phone's line with its button and cut its
+    // unit crumb mid-letter.
+    expect(crumbs).toMatch(
+      /min-width:\s*min\(100%,\s*max\(20ch,\s*var\(--crumb-floor,\s*0px\)\)\)/,
+    );
     // PAST ITS FLOOR IT SCROLLS rather than clipping as a box, on the inline
     // axis only — `overflow-x: auto` alone computes the block axis to `auto`
     // too, which puts a vertical scrollport on a one-line box.

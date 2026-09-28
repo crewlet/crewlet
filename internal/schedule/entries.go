@@ -142,7 +142,13 @@ type Row struct {
 	// never reaches. Zero rather than an error because this is a display
 	// projection — one unparseable cron must not blank the other nineteen
 	// rows — and the reason is in [Row.Problem].
-	NextRun time.Time `json:"next_run"`
+	//
+	// ABSENT ON THE WIRE WHEN ZERO. A zero time.Time marshals as
+	// `0001-01-01T00:00:00Z`, which is an instant — two thousand years
+	// overdue — and every reader took it for one: the dashboard drew a
+	// disabled schedule, and one whose zone was renamed, as "due", and the
+	// [Row.Problem] beside it was never reached. No fire is no key.
+	NextRun time.Time `json:"next_run,omitzero"`
 
 	// Problem says why NextRun is empty when the reason is a defect rather
 	// than a choice: an unparseable cron, an unknown timezone. Empty for a

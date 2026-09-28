@@ -470,6 +470,33 @@ func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 	}
 }
 
+// AND THE WAKE THE SEAT IS DELIVERED NAMES IT TOO. The notice reads its key
+// off the applier's row; the wake is the record's own snapshot, which the
+// caller built before the write minted a key — so a seat woken by a create
+// was handed `item_key: ""`, its turn was charged to the task's uuid alone,
+// and every turn list drew that turn as `native:<uuid>`.
+func TestACreatesWakeCarriesTheKeyTheWriteMinted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := newTask("t-wake")
+	task.Assignee = "bob"
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-wake", task, &tracker.Notify{
+		Kind:     tracker.ChangeCreated,
+		Snapshot: tracker.Snapshot{Project: "ENG", Title: task.Title, Assignee: "bob"},
+	}); err != nil {
+		t.Fatalf("create t-wake: %v", err)
+	}
+	r.drain()
+	detail := r.task(t, "t-wake")
+	wake := r.lastWake()
+	if wake == nil {
+		t.Fatal("the create published no wake")
+	}
+	if wake.Snapshot.Key == "" || wake.Snapshot.Key != detail.Task.Key {
+		t.Fatalf("the wake names %q and the item is %q", wake.Snapshot.Key, detail.Task.Key)
+	}
+}
+
 // createOf is the history row id of the create that minted `key` — what the
 // notification rows of that change are filed under.
 func createOf(r *roundTrip, key string) string {

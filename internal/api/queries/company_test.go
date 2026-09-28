@@ -8,7 +8,6 @@ import (
 	"maps"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -584,69 +584,46 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 
 // --- agent memory ----------------------------------------------------------
 
-func TestAgentMemoryServesBothHalves(t *testing.T) {
-	t.Parallel()
-	// The diary is what a seat chose to remember; the episodes are what it
-	// did, summarised. A page showing one without the other reads as a
-	// seat with half a history.
-	db := openStore(t)
-	diary := learning.NewDiary(db)
-	episodes := learning.NewEpisodes(db)
-
-	if err := diary.Write(t.Context(), learning.DiaryEntry{
-		ID: "d-1", AgentID: "ceo", Kind: learning.DiaryLong,
-		Content:   "remember the release window",
-		CreatedAt: pinned,
-	}); err != nil {
-		t.Fatalf("diary: %v", err)
-	}
-	if _, err := episodes.Append(t.Context(), learning.Episode{
-		ID: "ep-1", Handle: "ceo", TaskSummary: "answered the on-call page",
-		StartedAt: pinned, EndedAt: pinned.Add(time.Minute),
-	}); err != nil {
-		t.Fatalf("episode: %v", err)
-	}
-
-	body := asMap(t, answer(t, queries.Sources{Diary: diary, Episodes: episodes},
-		"agent_memory", map[string]any{"id": "ceo"}))
-
-	if entries, _ := body["diary"].([]any); len(entries) != 1 {
-		t.Errorf("diary = %v, want the one entry", body["diary"])
-	}
-	if entries, _ := body["episodes"].([]any); len(entries) != 1 {
-		t.Errorf("episodes = %v, want the one episode", body["episodes"])
-	}
-}
-
-func TestAgentMemoryOfASeatWithNoneIsEmptyRatherThanAbsent(t *testing.T) {
-	t.Parallel()
-	// Both keys are always present. A screen that had to tell "no diary
-	// half in this answer" from "an empty diary" would be reading the
-	// shape of the response to decide what to draw.
-	db := openStore(t)
-	body := asMap(t, answer(t, queries.Sources{
-		Diary: learning.NewDiary(db), Episodes: learning.NewEpisodes(db),
-	}, "agent_memory", map[string]any{"id": "nobody"}))
-
-	for _, half := range []string{"diary", "episodes"} {
-		value, present := body[half]
-		if !present {
-			t.Errorf("the answer omits %q entirely", half)
-			continue
-		}
-		if entries, _ := value.([]any); len(entries) != 0 {
-			t.Errorf("%s = %v, want an empty list", half, value)
-		}
-	}
-}
+// The memory itself — its halves, its totals, its pages, who answers it — is
+// memread's, certified there. What this surface owns is that a question names
+// a seat and reaches the holder by the HANDLE its lease is found by.
 
 func TestAgentMemoryNeedsASeat(t *testing.T) {
 	t.Parallel()
-	db := openStore(t)
 	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Diary: learning.NewDiary(db)})
+	queries.Register(r, queries.Sources{Memory: &stubMemory{}})
 	if _, err := r.Answer(t.Context(), "agent_memory", nil, "operator"); err == nil {
 		t.Fatal("an agent_memory query with no id was answered")
+	}
+}
+
+// THE REST ROUTE CARRIES `{id}`, which a caller may fill with the seat's
+// derived agent id rather than its handle. A seat's lease — and so its holder —
+// is found by the HANDLE, so the id is resolved through the chart before the
+// read is routed; asked by the uuid, the lease lookup would find no seat and
+// answer an empty memory for a seat that has one.
+func TestAgentMemoryIsAskedOfTheHolderByHandle(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	role := organization.AgentSeatByHandle("cto")
+	agentID, ok := organization.AgentIDFor(role)
+	if !ok {
+		t.Fatal("the fixture has no cto seat")
+	}
+	for _, asked := range []string{"cto", agentID.String()} {
+		memory := &stubMemory{}
+		answer(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+			Memory:  memory,
+		}, "agent_memory", map[string]any{"id": asked, "limit": 1})
+		if memory.handle != "cto" || memory.limit != 1 {
+			t.Errorf("asked by %q, the holder was asked about %q at %d, want cto at 1",
+				asked, memory.handle, memory.limit)
+		}
 	}
 }
 
@@ -1363,18 +1340,21 @@ func declaredFields(t *testing.T, iface string) map[string]bool {
 func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	diary := learning.NewDiary(db)
-	episodes := learning.NewEpisodes(db)
-	skills := learning.NewSkills(db)
-	if err := diary.Write(t.Context(), learning.DiaryEntry{
-		ID: "d-1", AgentID: "ceo", Kind: learning.DiaryShort,
+	stores := &memread.Stores{
+		Diary: learning.NewDiary(db), Episodes: learning.NewEpisodes(db),
+		Skills: learning.NewSkills(db), Onboarding: learning.NewOnboarding(db),
+		AgentID: func(handle string) string { return "agent-" + handle },
+		Now:     func() time.Time { return pinned },
+	}
+	if err := stores.Diary.Write(t.Context(), learning.DiaryEntry{
+		ID: "d-1", AgentID: "agent-ceo", Kind: learning.DiaryShort,
 		Content:  "the release window moved to Thursday",
 		TTLUntil: pinned.Add(time.Hour), Source: "tool:reflect_and_persist",
 		TurnID: "turn-1", CreatedAt: pinned,
 	}); err != nil {
 		t.Fatalf("diary: %v", err)
 	}
-	if _, err := episodes.Append(t.Context(), learning.Episode{
+	if _, err := stores.Episodes.Append(t.Context(), learning.Episode{
 		ID: "ep-1", Handle: "ceo", TurnID: "turn-1",
 		TaskSummary: "answered the on-call page", PlanSummary: "read the alert, then paged",
 		ToolSequence: []string{"read_alert", "page"}, SkillsUsed: []string{"triage"},
@@ -1383,13 +1363,18 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("episode: %v", err)
 	}
-	if err := skills.Insert(t.Context(), learning.Skill{
+	if err := stores.Skills.Insert(t.Context(), learning.Skill{
 		ID: "sk-1", AgentHandle: "ceo", Name: "triage",
 		Description: "read the alert before paging", CreatedAt: pinned, UpdatedAt: pinned,
 	}); err != nil {
 		t.Fatalf("skill: %v", err)
 	}
-	counterparties := &stubCounterparties{profiles: []learning.Profile{
+	if err := stores.Onboarding.Mark(t.Context(), learning.Marker{
+		AgentID: "agent-ceo", ChainHash: "chain-1", Handle: "ceo",
+	}, pinned); err != nil {
+		t.Fatalf("onboarding: %v", err)
+	}
+	stores.Profiles = &stubProfiles{profiles: []learning.Profile{
 		{
 			Observer: "ceo", Subject: learning.Subject{Handle: "cto", Name: "Cy"},
 			Traits: map[string]any{"prefers": "async"}, InteractionCount: 3,
@@ -1406,11 +1391,12 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	}}
 
 	body := asMap(t, answer(t, queries.Sources{
-		Diary: diary, Episodes: episodes, Skills: skills, Counterparties: counterparties,
+		Memory: &memread.Reader{Owner: "node-a:1", Local: stores},
 	}, "agent_memory", map[string]any{"id": "ceo"}))
 
 	holdShape(t, "AgentMemory", []map[string]any{body}, false)
 	holdShape(t, "DiaryEntry", rowsOf(t, body["diary"]), false)
+	holdShape(t, "DiaryEntry", []map[string]any{asMap(t, body["latest_reflection"])}, false)
 	holdShape(t, "Episode", rowsOf(t, body["episodes"]), false)
 	holdShape(t, "SynthesizedSkill", rowsOf(t, body["skills"]), false)
 	profiles := rowsOf(t, body["counterparties"])
@@ -1422,6 +1408,15 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	}
 	holdShape(t, "CounterpartySubject", subjects, false)
 }
+
+// stubProfiles is what a seat learned about its colleagues, as fixtures.
+type stubProfiles struct{ profiles []learning.Profile }
+
+func (s *stubProfiles) List(_ context.Context, _ string, limit int) ([]learning.Profile, error) {
+	return s.profiles[:min(limit, len(s.profiles))], nil
+}
+
+func (s *stubProfiles) Count(context.Context, string) (int, error) { return len(s.profiles), nil }
 
 // brokenPlane is a config plane that answers nothing, for the case where the
 // fleet view has to survive one of its columns being unreadable.
@@ -2255,142 +2250,6 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 			t.Errorf("%v reports enabled: false with no block to say so, so "+
 				"the dashboard draws residue as Paused", entry["key"])
 		}
-	}
-}
-
-// A SKILL LISTING PAST THE PAGE LIMIT SAYS SO, and the count is the seat's
-// whole set rather than the page's length.
-//
-// The diary and the episodes ask their store for [queries.MemoryPageLimit] and
-// get a recency feed, where "the most recent fifty" IS the question. Skills
-// are a SET the seat loads from, so the page carries the size of the set it
-// came from — and it once carried nothing, which is the one shape this tree
-// does not allow a cut to have. The panel counts what it is given, so a seat
-// with more skills than the page holds reported exactly the page limit: a
-// number an operator has no reason to doubt and no way to check.
-func TestASkillListingPastThePageLimitReportsWhatItCut(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	skills := learning.NewSkills(db)
-	const held = queries.MemoryPageLimit + 7
-	for i := range held {
-		name := "skill-" + strconv.Itoa(i)
-		if err := skills.Insert(t.Context(), learning.Skill{
-			ID: name, AgentHandle: "ceo", Name: name,
-			Description: "drafted from repeated work",
-			CreatedAt:   pinned, UpdatedAt: pinned,
-		}); err != nil {
-			t.Fatalf("insert %s: %v", name, err)
-		}
-	}
-
-	body := asMap(t, answer(t, queries.Sources{Skills: skills},
-		"agent_memory", map[string]any{"id": "ceo"}))
-
-	rows, _ := body["skills"].([]any)
-	if len(rows) != queries.MemoryPageLimit {
-		t.Fatalf("the listing carries %d skill(s), want the page limit %d",
-			len(rows), queries.MemoryPageLimit)
-	}
-	total, present := body["skills_total"]
-	if !present {
-		t.Fatal("the answer omits skills_total, so a page of the set is " +
-			"indistinguishable from the whole of it")
-	}
-	if got, want := jsonInt(t, total), held; got != want {
-		t.Errorf("skills_total = %d, want %d — the count a screen renders is "+
-			"the seat's whole set, not the length of the page", got, want)
-	}
-}
-
-// AND THE PAGE IS TAKEN IN THE STORE rather than out of a fully materialized
-// library.
-//
-// The total and the page used to come from ONE unbounded listing that decoded
-// every row the seat owns — content, frontmatter and all — to show fifty of
-// them, so the answer stayed O(the whole catalogue) in I/O and allocations
-// however small the page was. The bound is [learning.ListOptions.Limit] now,
-// which the SQL honours, and the total is a COUNT beside it. Both halves are
-// asserted here because either one alone is satisfiable by the bug: a listing
-// that is bounded but counted off the page under-reports the set, and an
-// honest total over an unbounded read is exactly what this replaced.
-//
-// The zero Limit is asserted too. It is the unbounded setting every other
-// caller in the tree relies on — the prefetch's offer, the refiner's view of
-// what is live — so a bound that leaked into the default would silently
-// truncate all of them.
-func TestTheSkillPageIsBoundedInTheStore(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	skills := learning.NewSkills(db)
-	const held = queries.MemoryPageLimit + 7
-	for i := range held {
-		name := "skill-" + strconv.Itoa(i)
-		if err := skills.Insert(t.Context(), learning.Skill{
-			ID: name, AgentHandle: "ceo", Name: name,
-			Description: "drafted from repeated work",
-			Content:     strings.Repeat("a body a page never renders. ", 64),
-			CreatedAt:   pinned, UpdatedAt: pinned,
-		}); err != nil {
-			t.Fatalf("insert %s: %v", name, err)
-		}
-	}
-
-	page, err := skills.List(t.Context(), "ceo",
-		learning.ListOptions{Limit: queries.MemoryPageLimit})
-	if err != nil {
-		t.Fatalf("bounded listing: %v", err)
-	}
-	if len(page) != queries.MemoryPageLimit {
-		t.Errorf("a listing bounded to %d read %d row(s), so the answer pays "+
-			"for every skill the seat holds to render a page of them",
-			queries.MemoryPageLimit, len(page))
-	}
-	whole, err := skills.List(t.Context(), "ceo", learning.ListOptions{})
-	if err != nil {
-		t.Fatalf("unbounded listing: %v", err)
-	}
-	if len(whole) != held {
-		t.Errorf("the zero Limit read %d of %d skill(s): it is the unbounded "+
-			"setting every non-paging caller depends on", len(whole), held)
-	}
-
-	body := asMap(t, answer(t, queries.Sources{Skills: skills},
-		"agent_memory", map[string]any{"id": "ceo"}))
-	rows, _ := body["skills"].([]any)
-	if len(rows) != queries.MemoryPageLimit {
-		t.Errorf("the answer carries %d skill(s), want the page limit %d",
-			len(rows), queries.MemoryPageLimit)
-	}
-	if got := jsonInt(t, body["skills_total"]); got != held {
-		t.Errorf("skills_total = %d, want %d — the total is counted over the "+
-			"seat's set, never measured off the page", got, held)
-	}
-}
-
-// AND IT IS PRESENT WHEN NOTHING WAS CUT, so a client never has to tell an
-// absent key from a total of zero.
-func TestSkillsTotalIsAlwaysPresent(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	body := asMap(t, answer(t, queries.Sources{Skills: learning.NewSkills(db)},
-		"agent_memory", map[string]any{"id": "nobody"}))
-	if _, present := body["skills_total"]; !present {
-		t.Error("the answer omits skills_total for a seat with none")
-	}
-}
-
-// jsonInt reads a number that survived a JSON round trip as either shape.
-func jsonInt(t *testing.T, v any) int {
-	t.Helper()
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	default:
-		t.Fatalf("%v is not a number (%T)", v, v)
-		return 0
 	}
 }
 

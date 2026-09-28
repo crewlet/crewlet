@@ -575,3 +575,53 @@ func (f failingRole) Turns(ctx context.Context, q store.TurnQuery) (eventfan.Tur
 	}
 	return f.FleetHistory.Turns(ctx, q)
 }
+
+// A SEAT'S ROW NAMES THE SEAT, LIVE OR SEEDED, BY THE STORE'S OWN RULE.
+//
+// The event log narrows to one seat (`seat=`): the rows it pages in are
+// narrowed by the store's promoted `agent_id`, and the rows the socket pushes
+// have to be narrowed by the same value or the two halves of one list disagree
+// about which events a seat published. So the live envelope and the row a
+// restarted process seeds from the store both carry the seat, filled by
+// `store.ExtractTags` — one rule, read in both places.
+func TestALiveRowAndASeededRowNameTheSameSeat(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	ev := events.New(types.AgentPhaseCompleted{
+		RoleName: "Lead", Agent: "a-7", TurnID: "tn-1", Phase: types.PhaseExecute,
+		Model: "claude-sonnet-5",
+	}, events.TraceContext{})
+	ev.Source = "Lead"
+	ev.Timestamp = time.Now().UTC().Add(-time.Minute)
+
+	env, ok := observe.Envelope(ev)
+	if !ok {
+		t.Fatal("a phase completion did not render as a live envelope")
+	}
+	if env.AgentID != "a-7" {
+		t.Errorf("the live envelope names seat %q, want a-7", env.AgentID)
+	}
+	live := livestate.New()
+	live.Apply(&env)
+	pushed := live.RecentEvents(0)
+	if len(pushed) != 1 || pushed[0].AgentID != "a-7" {
+		t.Fatalf("the live feed row = %+v, want one naming a-7", pushed)
+	}
+
+	rec, ok := observe.Record(ev)
+	if !ok {
+		t.Fatal("a phase completion did not render as a store row")
+	}
+	if err := log.Append(t.Context(), rec); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	seeded := livestate.New()
+	if err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, seeded); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	rows := seeded.RecentEvents(0)
+	if len(rows) != 1 || rows[0].AgentID != pushed[0].AgentID {
+		t.Errorf("the seeded row = %+v, want it to name the seat the live one did", rows)
+	}
+}

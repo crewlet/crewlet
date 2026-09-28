@@ -50,7 +50,7 @@ import type { PageContainer, PageSummary } from "~/protocol/index.ts";
 // must resolve to the same `peek=` token, or the stepper walks past the page
 // the reader just opened and one of the three forgets the middle button.
 import { PageLink } from "./Pages.tsx";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText, renderInline } from "~/lib/markdown.ts";
 
 export function Knowledge() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
@@ -330,7 +330,7 @@ export function Knowledge() {
                     <ArrowRightGlyph size="sm" />
                   </div>
                   <span className="t-caption truncate">
-                    {seat.goal || "memory, episodes and skills"}
+                    {seat.goal ? renderInline(seat.goal, seat.key) : "memory, episodes and skills"}
                   </span>
                 </a>
               ))}

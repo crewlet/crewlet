@@ -16,6 +16,7 @@
 
 import { Card, DATA_COLOR_OTHER, StackedColumns } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
+import { companyDateLabel } from "~/lib/format.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { WorkFlowAnswer } from "~/protocol/index.ts";
 
@@ -35,7 +36,7 @@ export function CompletedChart({ flow }: { flow: QueryResult<WorkFlowAnswer> }) 
   // THE LABEL IS THE WINDOW'S OWN (`2026-09-22`), the company's date, drawn
   // as a date rather than re-derived from the instant on this browser's clock.
   const labels = new Map(
-    points.map((p, i) => [Date.parse(p.start), i === last ? "Today" : dayLabel(p.window)]),
+    points.map((p, i) => [Date.parse(p.start), i === last ? "Today" : companyDateLabel(p.window)]),
   );
   return (
     <Card className="home-card home-chart">
@@ -64,15 +65,4 @@ export function CompletedChart({ flow }: { flow: QueryResult<WorkFlowAnswer> }) 
       </QueryState>
     </Card>
   );
-}
-
-/** "Sep 9", from a company date label. */
-function dayLabel(window: string): string {
-  const at = Date.parse(`${window}T12:00:00Z`);
-  if (!Number.isFinite(at)) return window;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(at);
 }

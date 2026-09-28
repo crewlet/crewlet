@@ -1225,9 +1225,11 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // agent_phase_completed only. That is the durable record — the prompts, the
 // response, the tools, the tokens — while agent_turn_progress is stream-only
 // by design, so history here is exactly the calls that finished.
-func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor) ([]EventRecord, error) {
+//
+// more reports that the seat holds phases past this page — see [pastPage].
+func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor) (rows []EventRecord, more bool, err error) {
 	if agentID == "" && agentRole == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 	query := agentPhaseSQL
 	args := []any{EncodeTime(now().Add(-EventHistory))}
@@ -1246,8 +1248,13 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 		args = append(args, EncodeTime(before.Time), before.ID)
 	}
 	query += agentPhaseOrderSQL
-	args = append(args, AgentPhaseLimit)
-	return l.scanPayloads(ctx, query, args...)
+	args = append(args, AgentPhaseLimit+1)
+	rows, err = l.scanPayloads(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, more = pastPage(rows, AgentPhaseLimit)
+	return rows, more, nil
 }
 
 // seatClause narrows to a seat by whichever identifier the caller holds.
@@ -1295,7 +1302,8 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // one keystroke away.
 //
 // `role` narrows to one seat when a caller wants it; empty means the company.
-func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *Cursor) ([]EventRecord, error) {
+// more reports that records exist past this page — see [pastPage].
+func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *Cursor) (rows []EventRecord, more bool, err error) {
 	query := phasesSQL
 	args := []any{EncodeTime(now().Add(-EventHistory))}
 	if role != "" {
@@ -1310,8 +1318,33 @@ func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *C
 	if limit <= 0 || limit > MaxPhasePage {
 		limit = MaxPhasePage
 	}
-	args = append(args, limit)
-	return l.scanPayloads(ctx, query, args...)
+	args = append(args, limit+1)
+	rows, err = l.scanPayloads(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, more = pastPage(rows, limit)
+	return rows, more, nil
+}
+
+// pastPage cuts a read that asked for ONE ROW MORE than its page back to the
+// page, and reports whether that row existed: whether anything lies past the
+// page.
+//
+// ASKED, NEVER INFERRED FROM A FULL PAGE. "The page filled, so there may be
+// more" is a guess that is wrong exactly when the history is a multiple of the
+// page: a seat with fifty turns was offered "older" onto an empty page, and a
+// client counting what it had loaded could only write it as a floor ("50+"),
+// because no answer ever said the walk had ended. The extra row comes from the
+// same statement, so it is the same snapshot as the page — a second query
+// asking whether anything is older could see a row the page did not. Where a
+// row carries a payload it costs that one row's, a page's worth divided by the
+// page size, which is the price of an exact answer.
+func pastPage[T any](rows []T, limit int) ([]T, bool) {
+	if len(rows) > limit {
+		return rows[:limit], true
+	}
+	return rows, false
 }
 
 // MaxPhasePage bounds one page of company-wide phase records.

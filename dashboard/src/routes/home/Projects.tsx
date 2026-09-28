@@ -17,7 +17,7 @@ import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { plural } from "~/lib/format.ts";
+import { companyDateLabel, plural } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 
 /** How many projects the card draws before "All projects". */
@@ -126,7 +126,7 @@ function ProjectRow({ project, leadName }: { project: WorkProjectRow; leadName: 
                 kind={project.lead.kind === "human" ? "human" : "agent"}
               />
             )}
-            {project.target_date && <span>{targetLabel(project.target_date)}</span>}
+            {project.target_date && <span>{companyDateLabel(project.target_date)}</span>}
           </span>
         </span>
       </a>
@@ -143,15 +143,4 @@ export function censusLine(done: number, active: number, todo: number): string {
   ]
     .filter(Boolean)
     .join(" · ");
-}
-
-/** "Oct 3", from the company date the lead set. */
-function targetLabel(date: string): string {
-  const at = Date.parse(`${date}T12:00:00Z`);
-  if (!Number.isFinite(at)) return date;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(at);
 }

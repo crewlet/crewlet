@@ -626,7 +626,9 @@ describe("the board on the work screen", () => {
       turn_id: "t-1",
       work_key: key,
       phase: "execute",
-      round_num: 3,
+      // THE THIRD ROUND IN FLIGHT: `round_num` is zero-based.
+      round_num: 2,
+      rounds_used: 2,
       max_rounds: 20,
       work_item: { id: item.toLowerCase(), key: item, project: "ENG" },
     },

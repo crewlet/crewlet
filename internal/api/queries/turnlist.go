@@ -100,8 +100,9 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 		// because a client that built it from the last row's fields would
 		// be reimplementing the one thing that must not drift. It is the
 		// FLEET's, and so it can be present on an empty page: when a
-		// node's page filled before any turn above it could be shown,
-		// the cursor is where that node stopped rather than the end.
+		// node holding more than its page stopped before any turn above
+		// it could be shown, the cursor is where that node stopped rather
+		// than the end.
 		out["next"] = page.Next.UTC().Format(time.RFC3339Nano)
 	}
 	return out, nil

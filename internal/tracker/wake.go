@@ -198,6 +198,25 @@ func (n *Notify) filedTo(was, now Task) {
 	n.Fields = fields.done()
 }
 
+// keyed names, on a create's wake, the key the write minted.
+//
+// A CREATE'S CALLER BUILDS ITS WAKE BEFORE THE KEY EXISTS — the key is the
+// project's next counter value, taken by the write itself — so the snapshot
+// it hands in names none. [Snapshot.Key] is read as the task's addressable
+// name by everything the record wakes: the notice's `subject_key`, the woken
+// seat's `item_key` and the prompt's "Read **<key>**" line. The notice was
+// already repaired from the applier's own row, but the wake a seat is
+// delivered carried no key, so the turn it started was charged to a bare
+// uuid — a row every turn list drew as `native:<uuid>` — and its prompt had
+// no key to read the task by. Stamped here, at the one point both creates
+// (a task, a promoted sub-task) pass through with the key in hand.
+func (n *Notify) keyed(key string) {
+	if n == nil || key == "" {
+		return
+	}
+	n.Snapshot.Key = key
+}
+
 // answered is what this wake's answer tells the asker about the decision it
 // closed, or nil when it answers none.
 func (w Wake) answered() *AnsweredDecision {

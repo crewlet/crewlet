@@ -360,9 +360,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           // round one lower than the seat page it lands on, and "?" for the
           // opening frame — which is the case this row exists for: a first
           // model round that never came back.
-          detail: `${call.phase} · ${roundLabel(call.round_num).text} — no update since ${call.updated_at}.`,
+          detail: `${call.phase} · ${roundLabel(call).text} — no update since ${call.updated_at}.`,
+          // THE OVERVIEW, where the seat's current turn is drawn round by
+          // round — the profile's default tab, so the path alone opens it.
           path: ["agents", "seats", String(agent.handle ?? agent.id)],
-          query: { tab: "model" },
           at: call.updated_at,
           who: String(agent.handle ?? agent.role),
         });
@@ -381,8 +382,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         icon: "coins",
         title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
         detail: `${refusalWords(refusing)} Raise the seat's token_budget.${refusing.period}, or wait for ${refusing.window} to turn over at ${refusing.resets_at}.`,
+        // THE SETTINGS TAB, where the ceiling that refused is written beside
+        // each window's live meter.
         path: ["agents", "seats", String(agent.handle ?? agent.id)],
-        query: { tab: "cost" },
+        query: { tab: "settings" },
         at: refusing.refused_at,
       });
     }

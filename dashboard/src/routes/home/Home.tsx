@@ -32,6 +32,7 @@
 import { useMemo } from "react";
 import { SegmentedControl } from "@crewlethq/ui";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { useWorkingNow } from "~/app/Shell.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -67,6 +68,8 @@ const DECISIONS_POLL_MS = 30_000;
 const SLOW_POLL_MS = 60_000;
 
 export function Home() {
+  // WHO IS WORKING, at the head of this page and no other (`useWorkingNow`).
+  useWorkingNow();
   const now = useNow();
   const org = useOrg();
   const viewer = useViewer();

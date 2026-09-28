@@ -52,6 +52,7 @@ import {
 } from "~/lib/work.ts";
 import type {
   WorkChecklistRow,
+  WorkClaimTotal,
   WorkIncomplete,
   WorkStatusDef,
   WorkSummary,
@@ -1015,6 +1016,7 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
 export function TaskBlock({
   title,
   hint,
+  total,
   rows,
   now,
   chrome,
@@ -1022,6 +1024,13 @@ export function TaskBlock({
 }: {
   title: string;
   hint?: string;
+  /**
+   * The engine's count of the WHOLE claim (`WorkMyWork.totals`), which is what
+   * the header draws — never `rows.length`, which is the page: a block holds at
+   * most twenty rows of however many the claim has. Absent (an engine that
+   * counts none) draws no figure rather than the page's.
+   */
+  total: WorkClaimTotal | undefined;
   rows: WorkSummary[];
   now: number;
   chrome?: RowChrome;
@@ -1031,7 +1040,10 @@ export function TaskBlock({
   if (rows.length === 0) return null;
   return (
     <Card padding="none">
-      <Card.Header subtitle={hint} count={rows.length}>
+      <Card.Header
+        subtitle={hint}
+        count={total ? `${total.total.toLocaleString()}${total.capped ? "+" : ""}` : undefined}
+      >
         <Card.Title>{title}</Card.Title>
       </Card.Header>
       <RowList rows={rows} now={now} chrome={chrome} hrefOf={hrefOf} />

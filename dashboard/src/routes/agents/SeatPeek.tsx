@@ -19,8 +19,10 @@
  *
  *   * `work_workload` — the seat's open work, for every reader;
  *   * `fleet` — which node holds the seat and since when — OPERATOR-ONLY, so
- *     it is asked only of an operator, and every other reader is told the
- *     fact is withheld rather than being sent a refusal to draw;
+ *     it is asked only of an operator; every other reader is told what the
+ *     public health push says (`heldBy`: this node, by name, or another),
+ *     exactly as the profile's Setup card tells them, rather than being sent
+ *     a refusal to draw or told a fact already on their screen is withheld;
  *   * `work_item_turns` — which turn this is on its task ("Turn 2") — asked
  *     only while the seat is working on one.
  *
@@ -37,23 +39,23 @@
 
 import { useMemo } from "react";
 import { ButtonLink, Callout, EmptyState, EmptyValue, Meter, StatusDot, Tag } from "@crewlethq/ui";
-import { MessageSquareGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { useOpenNewTask } from "~/app/newTask.ts";
-import { WriteButton } from "~/components/WriteButton.tsx";
-import { useAct } from "~/lib/useAct.ts";
+import { MessageSeatButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
-import { useAgents, useOrg } from "~/lib/store-hooks.ts";
+import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
   activityOf,
   awaitingPerson,
   handleLabel,
+  heldBy,
   indexOrg,
   nameOfIn,
   ringOf,
+  roundOf,
   seatPath,
   stateLine,
   toneOf,
@@ -63,20 +65,9 @@ import { unitPath } from "~/lib/orgchart.ts";
 import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/types.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-
-/** How a budget window reads after "Budget": its span on the company clock. */
-export const PERIOD_WORDS: Readonly<Record<BudgetWindow["period"], string>> = {
-  day: "today",
-  week: "this week",
-  month: "this month",
-};
-
-/**
- * What a reader without an operator credential is told about the node — in
- * words on the row, beside its label, rather than a dash that only a screen
- * reader was told the meaning of.
- */
-export const NODE_WITHHELD = "Shown to operators";
+import { PERIOD_WORDS } from "~/lib/budget.ts";
+import { renderInline } from "~/lib/markdown.ts";
+import { companyCeilings } from "./seat/profile.ts";
 
 /** How many tool sources the peek names before "+n". */
 const TOOL_CHIPS = 3;
@@ -124,7 +115,11 @@ function turnFacts(
 ): string {
   const parts: string[] = [];
   if (ordinal) parts.push(`Turn ${ordinal}`);
-  const round = call?.round_num ?? 0;
+  // ONE-BASED, through the one reading every running-turn row shares
+  // (`lib/turnsteps.ts`): `round_num` is the ZERO-based round in flight, and
+  // read raw it named a round one lower than the stepper on the profile the
+  // peek opens.
+  const round = roundOf(call);
   if (round > 0) {
     parts.push(call?.max_rounds ? `round ${round} of ${call.max_rounds}` : `round ${round}`);
   }
@@ -173,9 +168,9 @@ function SeatPeekBody({
 }) {
   const now = useNow();
   const viewer = useViewer();
+  const org = useOrg();
+  const health = useEngineHealth();
   const sandboxes = useSandboxes();
-  const openNewTask = useOpenNewTask();
-  const message = useAct("create_work_item");
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
   const ring = human ? undefined : ringOf(state);
@@ -305,17 +300,23 @@ function SeatPeekBody({
             ) : (
               <>
                 <dt>Budget</dt>
-                <dd>No budget — nothing caps this seat's tokens</dd>
+                <dd>
+                  {/* THE COMPANY'S CEILINGS BIND EVERY SEAT, so a seat with
+                      none of its own is capped by those where there are any. */}
+                  {companyCeilings(org?.token_budget)
+                    ? `No seat budget — ${companyCeilings(org?.token_budget)}`
+                    : "No budget — nothing caps this seat's tokens"}
+                </dd>
               </>
             )}
 
             <dt>Running on</dt>
             <dd>
               {!viewer.operator ? (
-                // SAID, NOT DASHED: "Running on –" told a sighted reader
-                // nothing at all, and the sentence was the dash's accessible
-                // label alone. The label beside it makes the words a fact.
-                <span className="muted">{NODE_WITHHELD}</span>
+                // WHAT THE PUBLIC PUSH SAYS, as the profile says it: this
+                // node by name, or another — never which peer, which is the
+                // operator's fleet read.
+                <span className="muted">{heldBy(seat.handle, agent, health)}</span>
               ) : lease ? (
                 <span className="seat-peek-node">
                   <StatusDot tone="success" />
@@ -370,7 +371,8 @@ function SeatPeekBody({
       {seat.goal && (
         <section className="seat-peek-goal" aria-label="Goal">
           <h3>Goal</h3>
-          <p>{seat.goal}</p>
+          {/* PROMPT TEXT, which is markdown: a ``code`` span is one. */}
+          <p>{renderInline(seat.goal, "goal")}</p>
         </section>
       )}
 
@@ -378,15 +380,7 @@ function SeatPeekBody({
         <ButtonLink variant="primary" size="small" href={href(seatPath(seat))}>
           Open profile
         </ButtonLink>
-        <WriteButton
-          write={message}
-          size="small"
-          variant="secondary"
-          leadingIcon={<MessageSquareGlyph size="sm" />}
-          onPress={() => openNewTask({ assignee: seat.handle, ask: seat.handle })}
-        >
-          Message
-        </WriteButton>
+        <MessageSeatButton handle={seat.handle} />
       </footer>
     </div>
   );

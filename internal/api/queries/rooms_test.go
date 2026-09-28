@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -17,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
-	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -90,9 +88,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
 		Runs:     &fakeRuns{},
-		Diary:    &learning.Diary{},
-		Episodes: &learning.Episodes{},
-		Skills:   &learning.Skills{},
+		Memory:   &memread.Reader{},
 		Channels: fakeChannels{},
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
@@ -101,9 +97,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Pages:    emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
-		WorkSearch:     emptyWork{},
-		Conversations:  emptyConversations{},
-		Counterparties: emptyCounterparties{},
+		WorkSearch: emptyWork{},
 		// THE RETENTION DOCUMENT, which the Fleet screen's replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
@@ -210,24 +204,6 @@ func (emptyWork) Decisions(context.Context, tracker.DecisionsQuery, time.Time, *
 
 func (emptyWork) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
 	return tracker.SearchAnswer{}, nil
-}
-
-// emptyConversations and emptyCounterparties are the two per-seat stores with
-// nothing in them, on emptyWork's terms.
-type emptyConversations struct{}
-
-func (emptyConversations) Threads(context.Context, string, int) ([]ledgerstore.Thread, error) {
-	return nil, nil
-}
-
-func (emptyConversations) History(context.Context, string, string, int) ([]ledger.Session, error) {
-	return nil, nil
-}
-
-type emptyCounterparties struct{}
-
-func (emptyCounterparties) List(context.Context, string) ([]learning.Profile, error) {
-	return nil, nil
 }
 
 type emptyPages struct{}

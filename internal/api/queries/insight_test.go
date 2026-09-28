@@ -739,24 +739,44 @@ func TestTheTurnListsFailedFilterIsThreeValued(t *testing.T) {
 
 // THE CURSOR IS ECHOED, not left for a client to assemble — the rule the event
 // list already follows, because a client building it from the last row's
-// fields would be reimplementing the one thing that must not drift.
-func TestTheTurnListEchoesItsCursor(t *testing.T) {
+// fields would be reimplementing the one thing that must not drift. And it is
+// echoed ONLY while there is more: a cursor on the last page offered a reader
+// "older" onto an empty one and made a count of the rows loaded a floor that
+// never closed.
+func TestTheTurnListEchoesItsCursorWhileThereIsMore(t *testing.T) {
 	t.Parallel()
 	log := openStore(t).Events()
 	base := time.Now().UTC().Add(-time.Hour)
-	if err := log.Append(t.Context(), store.EventRecord{
-		ID: "t-1-p0", Type: "agent_phase_completed", Time: base,
-		Category: "lifecycle", Actor: "PM",
-		Tags: map[string]string{"turn_id": "t-1", "agent_role": "PM"},
-	}); err != nil {
-		t.Fatal(err)
+	for i, turn := range []string{"t-1", "t-2"} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: turn + "-p0", Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Minute),
+			Category: "lifecycle", Actor: "PM",
+			Tags: map[string]string{"turn_id": turn, "agent_role": "PM"},
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turns", nil))
-	if got["next"] == nil || got["next"] == "" {
-		t.Fatalf("next = %#v on a page with a turn on it", got["next"])
+	src := queries.Sources{Events: fleetOf(log)}
+	cut, _ := answer(t, src, "turns", map[string]any{"limit": 1}).(map[string]any)
+	rows, _ := cut["turns"].([]store.Turn)
+	if len(rows) != 1 || rows[0].TurnID != "t-2" {
+		t.Fatalf("a page of one holds %+v, want the newest turn", rows)
+	}
+	want := rows[0].StartedAt.UTC().Format(time.RFC3339Nano)
+	if cut["next"] != want {
+		t.Fatalf("next = %#v on a page cut at one of two turns, want the row's own start %q",
+			cut["next"], want)
 	}
 	// AND NOTHING TO RESUME FROM AT THE END, so a client walking the list
-	// stops rather than re-asking for the same page for ever.
+	// stops rather than asking for a page that holds nothing.
+	rest := asMap(t, answer(t, src, "turns", map[string]any{"before": want}))
+	if rest["next"] != nil {
+		t.Errorf("next = %#v on the page holding the last turn", rest["next"])
+	}
+	whole := asMap(t, answer(t, src, "turns", nil))
+	if whole["next"] != nil {
+		t.Errorf("next = %#v on a page holding every turn", whole["next"])
+	}
 	empty := asMap(t, answer(t, queries.Sources{Events: fleetOf(openStore(t).Events())}, "turns", nil))
 	if empty["next"] != nil {
 		t.Errorf("next = %#v on an empty page", empty["next"])

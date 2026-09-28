@@ -26,7 +26,8 @@ import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
 import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
-import { useClient, useEngineHealth, useEvents } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -103,6 +104,18 @@ export function Activity() {
   const [actor, setActor] = useParam("actor", "");
   const [q, setQ] = useParam("q", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
+  // ONE SEAT'S EVENTS, by its handle — what a profile's "Events" opens. The
+  // engine resolves the handle to the id its events carry, so the pages it
+  // answers are that seat's; the LIVE rows are narrowed here by the same id,
+  // off the agents push, which is the only place this tab learns it.
+  const [seat, setSeat] = useParam("seat", "");
+  const agents = useAgents();
+  const org = useOrg();
+  const seatId = seat ? agents.find((a) => a.handle === seat)?.agent_id : undefined;
+  const seatName = useMemo(
+    () => (seat ? (indexOrg(org).byHandle.get(seat)?.name ?? seat) : ""),
+    [org, seat],
+  );
   // NOT ALIGNED to the bucket. A chart rounds its edges up so the column in
   // progress is drawn and the query changes once per column; a LIST's newest
   // row is the newest row, and rounding up would ask the store for rows that
@@ -161,11 +174,16 @@ export function Activity() {
     setExhausted(false);
     setPageError(null);
     setFetched(false);
-  }, [category, actor, windowKey]);
+  }, [category, actor, seat, windowKey]);
 
   const rows = useMemo(() => {
     const seen = new Set<string>();
-    const all = [...liveEvents, ...older].filter((e) => {
+    // A LIVE ROW IS ANY SEAT'S until the id says otherwise. The paged rows
+    // are already the seat's — the engine filtered them — but the socket
+    // pushes everything, and a seat this tab has no id for yet has no live
+    // row that can be shown as its own: none is, rather than every one.
+    const live = seat ? liveEvents.filter((e) => !!seatId && e.agent_id === seatId) : liveEvents;
+    const all = [...live, ...older].filter((e) => {
       if (seen.has(e.id)) return false;
       seen.add(e.id);
       return true;
@@ -200,7 +218,7 @@ export function Activity() {
         )
         .sort(newestFirst)
     );
-  }, [liveEvents, older, category, actor, q, onlyFailed, since, until]);
+  }, [liveEvents, older, category, actor, seat, seatId, q, onlyFailed, since, until]);
 
   // THE AXIS IS THE ENGINE'S. This tab holds at most the last 400 events and
   // the store's window it never holds, so a histogram folded here would be
@@ -217,6 +235,7 @@ export function Activity() {
     bucket,
     ...(category ? { category } : {}),
     ...(actor ? { actor } : {}),
+    ...(seat ? { seat } : {}),
   });
 
   const loadOlder = useCallback(async () => {
@@ -229,6 +248,7 @@ export function Activity() {
       const params: Record<string, unknown> = { limit: PAGE, since, until };
       if (category) params.category = category;
       if (actor) params.actor = actor;
+      if (seat) params.seat = seat;
       if (cursor) {
         params.before_time = cursor.before_time;
         params.before_id = cursor.before_id;
@@ -251,7 +271,7 @@ export function Activity() {
     } finally {
       setPaging(false);
     }
-  }, [socket, cursor, rows, category, actor, since, until]);
+  }, [socket, cursor, rows, category, actor, seat, since, until]);
 
   // THE FIRST PAGE OF THE WINDOW, once per window. `loadOlder` is a
   // dependency and changes with every render that changes `rows`, so the
@@ -263,7 +283,7 @@ export function Activity() {
     void loadOlder();
   }, [fetched, loadOlder]);
 
-  const filtered = !!(category || actor || q || onlyFailed);
+  const filtered = !!(category || actor || seat || q || onlyFailed);
 
   return (
     <>
@@ -278,6 +298,7 @@ export function Activity() {
             onClick={() => {
               setCategory("");
               setActor("");
+              setSeat("");
               setQ("");
               setOnlyFailed("");
             }}
@@ -366,6 +387,23 @@ export function Activity() {
         <FilterChip pressed={!!onlyFailed} onPressedChange={(on) => setOnlyFailed(on ? "1" : "")}>
           Failures only
         </FilterChip>
+        {/* THE SEAT, as a chip that says whose log this is and takes itself
+            off — the filter arrives from a link, so it has no box to clear. */}
+        {seat && (
+          <FilterChip
+            pressed
+            onPressedChange={(on) => !on && setSeat("")}
+            aria-label={`Only ${seatName}'s events — remove`}
+          >
+            {/* ONE ROW, the name and its ×: the chip's label is an inline
+                box, and the glyph, a block, broke under the name inside a
+                26px pill. */}
+            <span className="chip-removable">
+              {seatName}
+              <XGlyph size="xs" aria-hidden="true" />
+            </span>
+          </FilterChip>
+        )}
         <span className="spacer" />
       </div>
 

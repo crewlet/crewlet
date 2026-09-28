@@ -481,3 +481,35 @@ func TestAnUnkeyedObservationDoesNotDisarmTheNextRedelivery(t *testing.T) {
 			"between them moved the guard off the last real key")
 	}
 }
+
+// A LISTING IS PAGED IN ITS STATEMENT, newest first, and a page it was not
+// asked for is the ceiling. Every row carries a whole trait bag, so a caller
+// drawing one name read the ceiling's worth of bags when the page was cut
+// after the read.
+func TestAListingReadsThePageItIsAskedFor(t *testing.T) {
+	t.Parallel()
+	c := counterparties(t)
+	base := time.Date(2031, 4, 1, 9, 0, 0, 0, time.UTC)
+	for i, handle := range []string{"ada", "bo", "cy"} {
+		mustRecord(t, c, learning.Observation{
+			Observer: "swe", Subject: learning.Subject{Handle: handle},
+			Traits: map[string]any{"tone": "terse"}, At: base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	one, err := c.List(t.Context(), "swe", 1)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(one) != 1 || one[0].Subject.Handle != "cy" {
+		t.Fatalf("a page of one is %+v, want only the most recently updated (cy)", one)
+	}
+	for _, unasked := range []int{0, -1, learning.MaxProfilesListed + 1} {
+		all, err := c.List(t.Context(), "swe", unasked)
+		if err != nil {
+			t.Fatalf("List(%d): %v", unasked, err)
+		}
+		if len(all) != 3 {
+			t.Errorf("List(%d) = %d profiles, want the ceiling's page: all 3", unasked, len(all))
+		}
+	}
+}

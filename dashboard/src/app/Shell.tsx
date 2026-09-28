@@ -95,7 +95,7 @@ export interface PageContext {
   setLabels: (labels: Labels) => void;
   setCoverage: (coverage: CoverageFacts | null) => void;
   setCounts: (counts: Record<string, string>) => void;
-  setWorkingIn: (project: string) => void;
+  setShowWorking: (show: boolean) => void;
   setMenu: (entries: PageMenuEntry[]) => void;
 }
 
@@ -103,7 +103,7 @@ const noop: PageContext = {
   setLabels: () => {},
   setCoverage: () => {},
   setCounts: () => {},
-  setWorkingIn: () => {},
+  setShowWorking: () => {},
   setMenu: () => {},
 };
 
@@ -193,21 +193,22 @@ export function useSectionCounts(counts: Record<string, string>): void {
 }
 
 /**
- * Narrow the header's "who is working" to one project's work.
+ * Draw "who is working" in the page bar — Home's, and nobody else's.
  *
- * A PROJECT'S PAGE ASKS WHO IS ON ITS WORK, not who is working anywhere: the
- * faces at the head of `#/work/ENG` are the seats whose running turn is
- * charged to a task in ENG (`live_call.work_item.project`), which is the
- * question a lead opening their board is asking. Everywhere else the header
- * keeps the company's. Cleared when the screen goes, for the reason
- * [usePageLabels] gives: the frame outlives it.
+ * ONE PAGE ASKS FOR IT, the way the approved Main artboard draws it: the
+ * company's pulse belongs at the head of the page a reader opens to see how
+ * the company is. Everywhere else the sidebar's Agents badge already carries
+ * the count, and the chip drawn in every bar was a second copy of it — on a
+ * task page or a profile it sat between the trail and the page's own actions,
+ * and at a phone's width it pushed them past the edge. Cleared when the screen
+ * goes, for the reason [usePageLabels] gives: the frame outlives it.
  */
-export function useWorkingScope(project: string): void {
-  const { setWorkingIn } = usePageContext();
+export function useWorkingNow(): void {
+  const { setShowWorking } = usePageContext();
   useEffect(() => {
-    setWorkingIn(project);
-    return () => setWorkingIn("");
-  }, [project, setWorkingIn]);
+    setShowWorking(true);
+    return () => setShowWorking(false);
+  }, [setShowWorking]);
 }
 
 /**
@@ -320,7 +321,7 @@ function Frame({ children }: { children: ReactNode }) {
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
   const [counts, setCounts] = useState<Record<string, string>>({});
-  const [workingIn, setWorkingIn] = useState("");
+  const [showWorking, setShowWorking] = useState(false);
   const [menu, setMenu] = useState<PageMenuEntry[]>([]);
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
@@ -399,7 +400,7 @@ function Frame({ children }: { children: ReactNode }) {
   }, [path, where, named, workspace]);
 
   const page: PageContext = useMemo(
-    () => ({ setLabels, setCoverage, setCounts, setWorkingIn, setMenu }),
+    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu }),
     [],
   );
 
@@ -458,7 +459,7 @@ function Frame({ children }: { children: ReactNode }) {
               counts={counts}
               title={where}
               workspace={workspace}
-              workingIn={workingIn}
+              working={showWorking}
               menu={menu}
             >
               <StateBar degraded={degraded} coverage={coverage} />

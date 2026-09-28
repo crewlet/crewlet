@@ -37,6 +37,20 @@ export function spendDays(w: Window): number {
 }
 
 /**
+ * The rows of a breakdown of WHERE TOKENS WENT: the buckets that spent some.
+ *
+ * A bucket with calls and no tokens is not somewhere tokens went — the engine
+ * answers one for calls that failed before any model came back, which recorded
+ * no model and no usage, and names it as it names every dimension an event did
+ * not carry. Listed, it was a bar of nothing named "unknown · 0 · 7 calls"
+ * under BY MODEL, as if a model called that had answered seven times. Those
+ * calls are the turns' failures, and the turn list says so.
+ */
+export function spentOnly<T extends { total_tokens: number }>(rows: readonly T[]): T[] {
+  return rows.filter((row) => row.total_tokens > 0);
+}
+
+/**
  * A phase band's colour: its data hue, from `BANDS`.
  *
  * The ENGINE folds every phase into one of four bands (`tokens.PhaseBand`) and

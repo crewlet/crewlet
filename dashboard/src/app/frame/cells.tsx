@@ -58,17 +58,82 @@ import { Mark } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 import type { SeatKind } from "~/lib/seats.ts";
+import { workItemLabel } from "~/lib/turns.ts";
+import type { WorkItemRef } from "~/protocol/index.ts";
 
-/** An identifier — a key, a handle, an id. Monospaced, and usually a link. */
-export function KeyCell({ value, path }: { value: string; path?: string[] }) {
+/**
+ * An identifier — a key, a handle, an id. Monospaced, and usually a link.
+ *
+ * ONE LINE, cut with its whole value on the title. An identifier is one token
+ * and carries no space to break at, so a long one — a conversation key is
+ * `work:task:` and a uuid — wrapped at whatever character the column ran out
+ * on, stood the row two lines tall and printed a key nobody could search for.
+ *
+ * `text` is what the row PRINTS where that is shorter than the value — a
+ * conversation key with its uuid cut to a head (`conversationLabel`) — and the
+ * value itself is still the title, so nothing is lost to the cut.
+ */
+export function KeyCell({ value, path, text }: { value: string; path?: string[]; text?: string }) {
   if (!value) return <EmptyValue label="Not set" />;
   return path ? (
-    <a className="mono t-link" href={href(path)}>
-      {value}
+    <a className="mono t-link key-cell" href={href(path)} title={value}>
+      {text ?? value}
     </a>
   ) : (
-    <span className="mono">{value}</span>
+    <span className="mono key-cell" title={value}>
+      {text ?? value}
+    </span>
   );
+}
+
+/**
+ * What a turn did, and the work item it was on: the "What it did" cell of
+ * every list of turns.
+ *
+ * THE SUMMARY IS WHAT KEEPS ITS WIDTH. The key beside it is one token and must
+ * not wrap, but it is capped (`.turn-what-key`) rather than never shrinking:
+ * an uncapped key took the whole cell whenever it was long, and on a phone's
+ * stacked row the summary beside it was laid out one letter per line — a
+ * single row 31,000px tall. Each half is cut on one line with its whole text
+ * on its title.
+ */
+export function TurnWhatCell({
+  summary,
+  item,
+  doing,
+}: {
+  summary?: string | undefined;
+  item?: WorkItemRef | null | undefined;
+  /** What the turn is doing now, for one still running (`runningNow`): said
+   *  where a settled turn's summary goes, since a running turn has none yet. */
+  doing?: string | undefined;
+}) {
+  const label = item ? workItemLabel(item) : null;
+  return (
+    <span className="turn-what">
+      {/* A CLAMP, ONE LINE WIDE, rather than a nowrap cut: it is the same
+          ellipsis on a table row, and it lets a phone's stacked card give the
+          summary a second line (`frame.css`) without a second rule. */}
+      <span className="turn-what-summary clamp" title={summary || doing || undefined}>
+        {summary || (doing ? doing : <span className="muted">no summary recorded</span>)}
+      </span>
+      {label && (
+        <span className="mono t-caption item-key turn-what-key" title={label.title}>
+          {label.text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A turn's figure that a turn still running does not have yet — its iteration
+ * count, its tokens, how long it took. Each is written as the turn completes,
+ * and a list that drew the row's zeros said a running turn had run no rounds
+ * and spent nothing.
+ */
+export function UnsettledCell() {
+  return <EmptyValue label="Not settled — the turn has not ended" />;
 }
 
 /**

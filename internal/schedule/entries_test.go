@@ -1,6 +1,7 @@
 package schedule_test
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 	"time"
@@ -184,6 +185,47 @@ func TestDescribeSaysWhyARowHasNoNextRun(t *testing.T) {
 	// projection, not a validation pass.
 	if fine := byName["fine"]; fine.NextRun.IsZero() {
 		t.Error("a healthy row lost its next run because a sibling was broken")
+	}
+}
+
+// A ROW THAT CANNOT FIRE CARRIES NO NEXT RUN ON THE WIRE — not the zero
+// instant. `0001-01-01T00:00:00Z` is a time every reader parses, two thousand
+// years in the past, so a screen asking "when does this fire next" read it as
+// overdue: a disabled schedule and one whose zone was renamed both said "due",
+// and the problem beside them was never drawn.
+func TestARowWithNoNextRunSendsNoInstant(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Acme", Roles: []*org.Role{{
+		Name: "Ops", DeclaredHandle: "ops",
+		Schedules: []org.Schedule{
+			{Name: "bad-zone", Cron: "0 9 * * *", Task: "t", Timezone: "Mars/Olympus"},
+			{Name: "off", Cron: "0 9 * * *", Task: "t", Enabled: org.Off()},
+			{Name: "fine", Cron: "0 9 * * *", Task: "t"},
+		},
+	}}}
+	rows := schedule.Describe(o, schedule.DescribeOptions{
+		Now: time.Date(2026, time.June, 8, 0, 0, 0, 0, time.UTC),
+	})
+	for _, row := range rows {
+		raw, err := json.Marshal(row)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", row.Name, err)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(raw, &wire); err != nil {
+			t.Fatalf("unmarshal %s: %v", row.Name, err)
+		}
+		next, present := wire["next_run"]
+		switch row.Name {
+		case "fine":
+			if next != "2026-06-08T09:00:00Z" {
+				t.Errorf("a row that fires sent next_run %v, want its next fire", next)
+			}
+		default:
+			if present {
+				t.Errorf("%s cannot fire and sent next_run %v — no fire is no key", row.Name, next)
+			}
+		}
 	}
 }
 

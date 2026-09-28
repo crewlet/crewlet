@@ -1269,6 +1269,10 @@ func (failingConversations) Threads(context.Context, string, int) ([]ledgerstore
 	return nil, errors.New("store down")
 }
 
+func (failingConversations) ThreadCount(context.Context, string) (int, error) {
+	return 0, errors.New("store down")
+}
+
 func (failingConversations) Purge(context.Context, time.Time) (int64, error) {
 	return 0, errors.New("store down")
 }

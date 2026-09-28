@@ -11,16 +11,18 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { AppShell } from "@crewlethq/ui";
 
 import {
   Breadcrumb,
   CopyLink,
+  PageHeader,
   SectionTabs,
   StarPage,
   WorkingNow,
-  foldTabs,
   noteFits,
 } from "./PageHeader.tsx";
+import { foldTabs } from "../frame/tabFit.ts";
 import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -143,6 +145,76 @@ describe("the breadcrumb", () => {
     expect(trail().getAttribute("tabindex")).toBe("0");
   });
 
+  // THE FLOOR IS THE WAY BACK OUT: where the last crumb starts, so a trail that
+  // cannot show its ancestry beside the controls breaks the bar's line rather
+  // than sharing it at 20ch and cutting "Engineering · Co" mid-letter.
+  test("the trail's floor is where its last crumb starts, measured from its own start", async () => {
+    widths(400, 400);
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const left = this.classList.contains("crumbs")
+        ? 12
+        : this.classList.contains("crumb-here")
+          ? 262
+          : 0;
+      return {
+        width: 0,
+        height: 20,
+        top: 0,
+        left,
+        right: left,
+        bottom: 20,
+        x: left,
+        y: 0,
+      } as DOMRect;
+    };
+    try {
+      render(<Breadcrumb crumbs={crumbs} />);
+      await waitFor(() => expect(trail().style.getPropertyValue("--crumb-floor")).toBe("250px"));
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = rect;
+    }
+  });
+
+  // BUT NEVER WIDER THAN THE ROOM BESIDE THE DRAWER TOGGLE: a floor past it put
+  // the trail on a line under the toggle, and the bar stood three lines tall.
+  test("the floor is capped at the room the drawer toggle leaves on the bar's line", async () => {
+    widths(366, 366);
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const left = this.classList.contains("crumbs")
+        ? 12
+        : this.classList.contains("crumb-here")
+          ? 362
+          : 0;
+      const width = this.classList.contains("toggle") ? 30 : 0;
+      return {
+        width,
+        height: 20,
+        top: 0,
+        left,
+        right: left + width,
+        bottom: 20,
+        x: left,
+        y: 0,
+      } as DOMRect;
+    };
+    try {
+      render(
+        <div className="bar">
+          <button type="button" className="toggle">
+            menu
+          </button>
+          <Breadcrumb crumbs={crumbs} />
+        </div>,
+      );
+      // 350 wanted; 366 of bar less the 30 toggle leaves 336.
+      await waitFor(() => expect(trail().style.getPropertyValue("--crumb-floor")).toBe("336px"));
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = rect;
+    }
+  });
+
   // EACH LABEL IS ITS OWN BOX, the one `.crumb-text` ellipsises: text straight
   // inside the flex part is an anonymous flex item no ellipsis reaches.
   test("every crumb's words sit in the box that ellipsises, the page's h1 included", () => {
@@ -156,57 +228,77 @@ describe("the breadcrumb", () => {
   });
 });
 
-// ON A PROJECT'S PAGE THE HEADER COUNTS THE SEATS ON ITS WORK — the task each
-// running turn is charged to — and elsewhere every seat working anywhere. A
-// seat on OPS work is not "on ENG" because the reader is looking at ENG.
+// WHO IS WORKING IS HOME'S, the way the Main artboard draws it: the sidebar's
+// Agents badge carries the count on every other page, and the chip drawn in
+// every bar sat between a task's trail and its actions and pushed a profile's
+// controls past a phone's edge.
 describe("who is working", () => {
-  function mount(project: string) {
+  function mount(working: boolean | undefined) {
     const store = new Store();
     store.applyAgents([
       {
         id: "a1",
-        role: "SWE",
+        role: "Agent SWE",
         activity: "working",
         live_call: { work_item: { key: "ENG-1", project: "ENG" } },
       },
-      {
-        id: "a2",
-        role: "SRE",
-        activity: "working",
-        live_call: { work_item: { key: "OPS-2", project: "OPS" } },
-      },
-      // BETWEEN CALLS the turn still carries its task, and still counts.
-      {
-        id: "a3",
-        role: "PM",
-        activity: "working",
-        turn: { work_item: { key: "ENG-7", project: "ENG" } },
-      },
+      { id: "a2", role: "SRE", activity: "working" },
       { id: "a4", role: "CTO", activity: "idle" },
     ] as never);
     const socket = new LiveSocket(store);
     return render(
       <Router>
         <ClientContext.Provider value={{ store, socket }}>
-          <WorkingNow project={project} />
+          <AppShell
+            topbar={
+              <PageHeader
+                crumbs={[]}
+                row={undefined}
+                counts={{}}
+                title="Somewhere"
+                workspace="home"
+                {...(working === undefined ? {} : { working })}
+              />
+            }
+          />
         </ClientContext.Provider>
       </Router>,
     );
   }
 
-  test("a project's page counts the seats on that project's work alone", () => {
-    const { container } = mount("ENG");
-    expect(container.querySelector(".working-now")?.textContent).toContain("2 agents on ENG");
+  test("a page that asks for it counts every working seat", () => {
+    const { container } = mount(true);
+    expect(container.querySelector(".working-now")?.textContent).toContain("2 agents working");
   });
 
-  test("every other page counts every working seat", () => {
-    const { container } = mount("");
-    expect(container.querySelector(".working-now")?.textContent).toContain("3 agents working");
+  test("every other page draws no chip at all", () => {
+    expect(mount(undefined).container.querySelector(".working-now")).toBeNull();
+    cleanup();
+    expect(mount(false).container.querySelector(".working-now")).toBeNull();
   });
 
-  test("a project nobody is working on draws nothing", () => {
-    const { container } = mount("LEAD");
+  test("nobody working draws nothing, even where it is asked for", () => {
+    const store = new Store();
+    store.applyAgents([{ id: "a4", role: "CTO", activity: "idle" }] as never);
+    const { container } = render(
+      <Router>
+        <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+          <WorkingNow />
+        </ClientContext.Provider>
+      </Router>,
+    );
     expect(container.querySelector(".working-now")).toBeNull();
+  });
+
+  // THE SEAT'S OWN INITIALS, the ones its crumb and its profile draw: handed
+  // the role as written, "Agent SWE" was AS here and SW everywhere else.
+  test("a working seat wears the badge it wears everywhere else", () => {
+    const { container } = mount(true);
+    const faces = [...container.querySelectorAll(".working-now .crewlet-avatar")].map(
+      (a) => a.textContent,
+    );
+    expect(faces).toContain("SW");
+    expect(faces).not.toContain("AS");
   });
 });
 

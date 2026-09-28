@@ -538,10 +538,53 @@ describe("the screens", () => {
       },
     ],
     [
-      "the profile",
-      "#/agents/seats/ceo?tab=cost",
+      // WHERE ITS TOKENS GO: the week's rollup, by phase and by model.
+      "the profile's turns",
+      "#/agents/seats/ceo?tab=turns",
       <SeatScreen handle="ceo" />,
-      { tokens: rollup() },
+      { tokens: rollup(), turns: { turns: [], next: null } },
+    ],
+    [
+      // THE WEEK'S TILE, from the usage domain's own row.
+      "the profile",
+      "#/agents/seats/ceo",
+      <SeatScreen handle="ceo" />,
+      {
+        seat_activity: {
+          since: "2026-09-07",
+          until: "2026-09-13",
+          days: 7,
+          seats: [
+            {
+              handle: "ceo",
+              in_chart: true,
+              turns: 3,
+              failed: 0,
+              reviewed: 0,
+              first_pass: 0,
+              sent_back: 0,
+              tokens: TOKENS,
+              per_day: [],
+              ...PRICED,
+            },
+          ],
+          quantile_resolution: 0.06,
+        },
+        agent_memory: {
+          id: "ceo",
+          diary: [],
+          diary_total: 0,
+          episodes: [],
+          episodes_total: 0,
+          skills: [],
+          skills_total: 0,
+          counterparties: [],
+          counterparties_total: 0,
+          latest_reflection: null,
+          onboarded_at: "",
+          held_by: "node-1",
+        },
+      },
     ],
     [
       "the trace",

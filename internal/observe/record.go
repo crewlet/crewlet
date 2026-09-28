@@ -120,6 +120,7 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	raw := encode(ev)
 	return livestate.Envelope{
 		ID:   ev.ID.String(),
 		Type: ev.Type,
@@ -137,7 +138,11 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
 		Topic:        topics.Event(ev.Type),
-		Payload:      payloadOf(ev),
+		Payload:      payloadOf(raw),
+		// THE STORE'S RULE, not a second reading of the payload: the row a
+		// restarted process seeds from the store carries the column this
+		// fills, and the two halves of one feed must name one seat alike.
+		AgentID: store.ExtractTags(raw)["agent_id"],
 	}, true
 }
 
@@ -151,8 +156,7 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 // of the fields a tag names, and deep-decoding a phase completion's whole
 // prompt and tool log to fill a handful of tags was that cost paid on every
 // LLM call.
-func payloadOf(ev *events.Event) map[string]any {
-	raw := encode(ev)
+func payloadOf(raw []byte) map[string]any {
 	if raw == nil {
 		return nil
 	}
@@ -186,6 +190,7 @@ func FeedRow(rec store.EventRecord) livestate.FeedRow {
 		Source:    rec.Source, Actor: rec.Actor, Summary: rec.Summary,
 		Category: rec.Category, TraceID: rec.TraceID, SpanID: rec.SpanID,
 		ParentSpanID: rec.ParentSpanID, Topic: topic,
-		Failed: rec.Failed,
+		Failed:  rec.Failed,
+		AgentID: rec.Tags["agent_id"],
 	}
 }

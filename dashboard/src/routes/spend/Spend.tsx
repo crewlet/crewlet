@@ -73,6 +73,7 @@ import {
   ghostHeights,
   phaseColor,
   spendDays,
+  spentOnly,
   unbandedTokens,
 } from "~/lib/spend.ts";
 import { useTimeRange, windowLabel } from "~/lib/range.ts";
@@ -315,7 +316,7 @@ export function Spend() {
 
   const phase = useMemo(
     () =>
-      (tokens?.by_phase ?? [])
+      spentOnly(tokens?.by_phase ?? [])
         .map((p) => ({
           id: p.phase,
           label: p.phase,
@@ -330,8 +331,7 @@ export function Spend() {
 
   const models = useMemo(
     () =>
-      (tokens?.by_model ?? [])
-        .slice()
+      spentOnly(tokens?.by_model ?? [])
         .sort((a, b) => b.total_tokens - a.total_tokens)
         .map((m, i) => ({
           id: m.model,

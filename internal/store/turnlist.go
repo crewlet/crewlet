@@ -336,7 +336,7 @@ const (
 
 // Turns lists one row per turn, newest first.
 func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
-	parts, err := l.TurnPartials(ctx, q)
+	parts, _, err := l.TurnPartials(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -507,7 +507,10 @@ func laterOf(a, b *time.Time) *time.Time {
 // it. The ROW-level filters — the seat and the work key — still apply,
 // because they narrow which records are folded, and a node answering a share
 // without them would fold rows the selecting node did not.
-func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial, error) {
+//
+// more reports that this log holds turns past the page — see [pastPage]. A
+// share is never a page and is never more: it answers every turn it names.
+func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []TurnPartial, more bool, err error) {
 	days := q.SinceDays
 	switch {
 	case days <= 0:
@@ -523,13 +526,15 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial
 		limit = MaxTurnPage
 	}
 	if !q.Sort.Valid() {
-		return nil, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+		return nil, false, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
 	}
 	shares := len(q.IDs) > 0
+	// ONE ROW PAST THE PAGE, so the page can say whether it is the last.
+	probe := limit + 1
 	if shares {
 		// EVERY TURN NAMED, whatever the page size: the caller chose the
 		// turns and is asking for all of them.
-		limit = len(q.IDs)
+		limit, probe = len(q.IDs), len(q.IDs)
 	}
 
 	// THE FLOOR IS THE HISTORY WINDOW as well as the caller's, for the
@@ -567,7 +572,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial
 	if len(having) > 0 {
 		havingSQL = " HAVING " + strings.Join(having, " AND ")
 	}
-	args = append(args, limit)
+	args = append(args, probe)
 
 	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
 	// and only a phase record carries one. Every turn's group also holds
@@ -612,7 +617,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial
 				turnCompleted},
 			args)...)
 	if err != nil {
-		return nil, fmt.Errorf("store: list turns: %w", err)
+		return nil, false, fmt.Errorf("store: list turns: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -636,7 +641,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial
 			&cacheR, &cacheW, &models,
 			&ended1, &parked1, &duration, &summary, &item, &trigger); err != nil {
 
-			return nil, fmt.Errorf("store: scan a turn: %w", err)
+			return nil, false, fmt.Errorf("store: scan a turn: %w", err)
 		}
 		p.WorkKey = workKey.String
 		p.AgentID, p.AgentRole = agentID.String, role.String
@@ -656,9 +661,10 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list turns: %w", err)
+		return nil, false, fmt.Errorf("store: list turns: %w", err)
 	}
-	return out, nil
+	out, more = pastPage(out, limit)
+	return out, more, nil
 }
 
 // instantOf decodes a nullable stored instant.

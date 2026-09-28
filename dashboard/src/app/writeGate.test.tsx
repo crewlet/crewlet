@@ -109,12 +109,6 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "held on somebody else's day but for a lead's own reorder",
     suite: "routes/me/MyWork.test.tsx",
   },
-  "routes/agents/SeatPeek.tsx": {
-    why:
-      "a seat peek's Message, which opens the New task sheet asking that seat — held " +
-      "with its reason for a reader who cannot file",
-    suite: "routes/agents/SeatPeek.test.tsx",
-  },
   "app/palette/answer.ts": {
     why:
       "the palette's answer from the company's knowledge, asked only for a reader " +
@@ -150,6 +144,12 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
     props: { container: "project:ENG", type: "board", params: { priority: "high,urgent" } },
     name: /^View$/,
   },
+  MessageSeatButton: { props: { handle: "swe" }, name: /^Message$/ },
+  AssignToSeatButton: { props: { handle: "swe", name: "SWE" }, name: /^Assign task$/ },
+  PauseSeatButton: {
+    props: { handle: "swe", name: "SWE", paused: false, working: true },
+    name: /^Pause$/,
+  },
 };
 
 /** The tool each control makes its change through, so a reader the engine does not serve it is refused. */
@@ -162,6 +162,9 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   AnswerRunButton: "answer_run",
   ReplyAskButton: "comment_on_work_item",
   SaveViewButton: "save_work_view",
+  MessageSeatButton: "create_work_item",
+  AssignToSeatButton: "update_work_item",
+  PauseSeatButton: "pause_seat",
 };
 
 const EVERY_TOOL = Object.values(TOOLS);

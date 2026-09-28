@@ -183,6 +183,27 @@ export function fmtDateCompact(ts: string | null | undefined, now: number): stri
   });
 }
 
+/**
+ * "Sep 9", from a COMPANY DATE LABEL (`2026-09-09`) — a day the engine cut on
+ * the company's clock, drawn as that date rather than re-derived from an
+ * instant on this browser's: read at noon UTC and formatted in UTC, so no
+ * reader's zone moves it to the day before. The label as it came where it is
+ * not a date.
+ *
+ * ONE COPY. Home's completed chart, its projects' target dates and a seat's
+ * turns-per-day chart each wrote this privately, which is how three charts
+ * come to label one day three ways.
+ */
+export function companyDateLabel(date: string): string {
+  const at = Date.parse(`${date}T12:00:00Z`);
+  if (!Number.isFinite(at)) return date;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(at);
+}
+
 /** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
 function calendarYear(at: Date): string {
   return at.toLocaleDateString("en-US", { year: "numeric", timeZone: zone() });
@@ -354,10 +375,15 @@ export function fmtCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
   const abs = Math.abs(n);
   if (abs < 10_000) return n.toLocaleString();
-  if (abs < 1_000_000) return `${(n / 1000).toFixed(abs < 100_000 ? 1 : 0)}k`;
-  if (abs < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (abs < 1_000_000) return `${whole((n / 1000).toFixed(abs < 100_000 ? 1 : 0))}k`;
+  if (abs < 1_000_000_000) return `${whole((n / 1_000_000).toFixed(1))}M`;
+  return `${whole((n / 1_000_000_000).toFixed(2))}B`;
 }
+
+/** A shortened figure that is whole at its precision says so: `60M`, not
+ *  `60.0M`. The `.0` was a digit carrying nothing, on the ceilings a founder
+ *  writes as round numbers above all ("60.0M/day and 900.0M/month"). */
+const whole = (fixed: string) => fixed.replace(/\.0+$/, "");
 
 /** Always the exact figure, grouped. For a cell a reader is comparing. */
 export function fmtExact(n: number | null | undefined): string {
@@ -417,6 +443,25 @@ export function splitConversationKey(key: string): { source: string; local: stri
   const idx = (key ?? "").indexOf(":");
   if (idx < 0) return { source: "", local: key ?? "" };
   return { source: key.slice(0, idx), local: key.slice(idx + 1) };
+}
+
+/** A uuid anywhere inside an identifier. */
+const UUID_IN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * A conversation key as a row prints it: every uuid inside it cut to its first
+ * eight characters — `work:task:4d631f6d` — and everything else as it is, so
+ * `work:ENG-32` and `slack:C9:1718.001` are untouched.
+ *
+ * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a native task
+ * nobody gave a key is `work:task:` and a uuid — 46 unbreakable characters that
+ * no row has room for, so a list of them read `work:task…` five times over.
+ * The head of a uuid is how this product names one everywhere a row is narrow
+ * (`workItemLabel`'s "task 4d631f6d"); the whole key belongs on the title, and
+ * every caller puts it there.
+ */
+export function conversationLabel(key: string): string {
+  return (key ?? "").replace(UUID_IN, (id) => id.slice(0, 8));
 }
 
 /**

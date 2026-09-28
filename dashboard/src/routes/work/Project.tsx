@@ -44,7 +44,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { href, useRoute } from "~/app/router.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
-import { usePageCoverage, usePageLabels, usePageMenu, useWorkingScope } from "~/app/Shell.tsx";
+import { usePageCoverage, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { PageActions, PageLenses } from "~/app/frame/PageActions.tsx";
 import { EditProjectButton } from "~/components/writes.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
@@ -132,8 +132,6 @@ export function Project({ projectKey }: { projectKey: string }) {
   // page never showed.
   usePageLabels(detail?.name ? { [projectKey]: detail.name } : {});
   usePageCoverage(detail);
-  // THE FACES AT THE HEAD ARE THE SEATS ON THIS PROJECT'S WORK.
-  useWorkingScope(projectKey);
   // EDIT PROJECT, AS THE BAR'S "MORE" OFFERS IT ON A PHONE: the same dialog
   // the inline button opens, disabled with the same sentence when this reader
   // cannot make the change.

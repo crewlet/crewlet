@@ -28,7 +28,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -47,7 +46,6 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
@@ -1614,17 +1612,16 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that
 			// is no longer running.
-			Company:  func() *config.Company { return companyConfig(e) },
-			Coord:    e.Backends().Coord,
-			Plane:    e.Backends().Fleet,
-			Runs:     sqlledger.New(e.Backends().Store.SQL()),
-			Diary:    learning.NewDiary(e.Backends().Store),
-			Episodes: learning.NewEpisodes(e.Backends().Store),
-			// The skills a seat drafted for ITSELF. They were written,
-			// versioned and loadable by the agent, and reachable by no
-			// screen — so the operator paying for the learning loop
-			// could not see what it had produced.
-			Skills: learning.NewSkills(e.Backends().Store),
+			Company: func() *config.Company { return companyConfig(e) },
+			Coord:   e.Backends().Coord,
+			Plane:   e.Backends().Fleet,
+			Runs:    sqlledger.New(e.Backends().Store.SQL()),
+			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
+			// the node HOLDING the seat. The ENGINE's reader, because
+			// the answerer it registered on every node is the other
+			// half of the same protocol, and a node serving no API may
+			// be the one holding the seat.
+			Memory: memoryReads(e),
 			// The fleet's agent-to-agent authorization record. The
 			// FLEET's, not this node's: a channel is opened by whichever
 			// node owns the requester's seat, so a per-node read would
@@ -1718,14 +1715,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// The accessor already returns an untyped nil in that
 			// case, which is what the registration check needs.
 			WorkSearch: nativeWorkSearch(e),
-			// The seat's own thread ledger, and its counterparty
-			// profiles. Both are per-node stores, both have been
-			// written since their subsystems landed, and neither
-			// reached a screen: the conversations panel drew an
-			// empty list for every seat and the memory answer
-			// carried a `counterparties` key that was always `[]`.
-			Conversations:  ledgerstore.NewConversations(e.Backends().Store),
-			Counterparties: learning.NewCounterparties(e.Backends().Store),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -2899,6 +2888,16 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 		report, _ := e.RetentionReport(ctx)
 		return report
 	}
+}
+
+// memoryReads is the engine's memory reader as the read surface's seam, or nil
+// when the engine has none — a typed nil in the interface would register
+// `agent_memory` and `conversations` over a reader that cannot answer.
+func memoryReads(e *engine.Engine) queries.SeatMemory {
+	if r := e.MemoryReads(); r != nil {
+		return r
+	}
+	return nil
 }
 
 // nativeWorkSearch is this node's ranked item search, as the read surface

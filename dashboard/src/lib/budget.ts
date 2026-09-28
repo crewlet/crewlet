@@ -21,6 +21,14 @@ export const PERIOD_ADJECTIVE: Readonly<Record<BudgetWindow["period"], string>> 
   month: "monthly",
 };
 
+/** How a window reads after a figure's label — "Budget this week", "Tokens ·
+ *  today": its span on the company clock. */
+export const PERIOD_WORDS: Readonly<Record<BudgetWindow["period"], string>> = {
+  day: "today",
+  week: "this week",
+  month: "this month",
+};
+
 /**
  * The window in `state` a scope waits on longest: the one that turns over
  * LAST, the longer period where two turn over together.

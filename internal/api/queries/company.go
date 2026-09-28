@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -739,9 +738,9 @@ func seatSecrets(company *config.Company, kind string) int {
 
 func boolPtr(v bool) *bool { return &v }
 
-// agentIDOf resolves a seat handle to the derived agent id the diary is keyed
-// by, passing anything else through — a caller that already holds an id is
-// unaffected.
+// agentIDOf resolves a seat handle to the derived agent id the phase history
+// is keyed by, passing anything else through — a caller that already holds an
+// id is unaffected.
 func (s Sources) agentIDOf(handle string) string {
 	if handle == "" || s.Company == nil {
 		return handle
@@ -764,180 +763,39 @@ func (s Sources) agentIDOf(handle string) string {
 	return handle
 }
 
-// agentMemory answers a seat's memory: its diary and its episodes.
+// seatHandleOf is the HANDLE a memory question names, which is what a seat's
+// lease — and so its holder — is found by. A caller holding the derived agent
+// id rather than the handle (the REST route's `{id}`) is resolved through the
+// chart; anything else is taken as a handle, so a seat that has left the chart
+// is still asked about by the name it had.
+func (s Sources) seatHandleOf(id string) string {
+	organization := s.organization()
+	if organization == nil || organization.AgentSeatByHandle(id) != nil {
+		return id
+	}
+	for role := range organization.AllRoles() {
+		if agentID, ok := organization.AgentIDFor(role); ok && agentID.String() == id {
+			return role.Handle()
+		}
+	}
+	return id
+}
+
+// agentMemory answers a seat's memory: its diary, its episodes, the skills it
+// drafted, what it learned about the people it works with, and whether it
+// onboarded — each with its total — ANSWERED BY THE SEAT'S HOLDER, which the
+// answer names (`held_by`). See [Sources.Memory] for why.
 //
-// Both halves, because they answer different questions. The diary is what this
-// seat chose to remember; the episodes are what it did, summarised. A page
-// showing one without the other reads as a seat with half a history.
+// `limit` pages every collection (at most [memread.PageLimit]); a profile's
+// summary asks for one, since the totals and the latest reflection travel
+// whatever the page.
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
-	id := p.String("id")
+	id := strings.TrimSpace(p.String("id"))
 	if id == "" {
 		return nil, fmt.Errorf("%w: agent_memory needs an id", ErrBadParams)
 	}
-	// EVERY key is present on every answer, as an empty list rather than an
-	// absent one. A client cannot tell "this seat has learned nothing" from
-	// "this node does not keep that half" if the key simply is not there, and
-	// both are ordinary states.
-	out := map[string]any{
-		"id":             id,
-		"diary":          []map[string]any{},
-		"episodes":       []map[string]any{},
-		"skills":         []map[string]any{},
-		"skills_total":   0,
-		"counterparties": []map[string]any{},
-		"onboarded_at":   "",
-	}
-	now := s.clock()
-	if s.Diary != nil {
-		// RESOLVED, not passed through. The diary is keyed by the derived
-		// AGENT ID and the dashboard's one identifier for a seat is its
-		// handle, so handing the handle straight to the diary asked it
-		// about a seat it has no rows for — and answered an empty memory
-		// rather than the seat's, which reads identically to a seat that
-		// has not learned anything yet.
-		entries, err := s.Diary.Recent(ctx, s.agentIDOf(id), now, MemoryPageLimit)
-		if err != nil {
-			return nil, err
-		}
-		rows := make([]map[string]any, 0, len(entries))
-		for _, e := range entries {
-			rows = append(rows, diaryRow(e))
-		}
-		out["diary"] = rows
-	}
-	if s.Episodes != nil {
-		// Episodes are keyed by HANDLE and the diary by agent id. The
-		// dashboard has one identifier for a seat, so both are asked with
-		// it and the one that does not recognise it answers nothing —
-		// which is correct rather than an error, and is what a seat with
-		// no episodes yet looks like anyway.
-		episodes, err := s.Episodes.Recent(ctx, id, MemoryPageLimit)
-		if err != nil {
-			return nil, err
-		}
-		rows := make([]map[string]any, 0, len(episodes))
-		for _, e := range episodes {
-			rows = append(rows, episodeRow(e))
-		}
-		out["episodes"] = rows
-	}
-	if s.Skills != nil {
-		// The half that had no query at all. A seat drafts these from its
-		// own repeated work, versions them, and loads them mid-turn — and
-		// until now the operator paying for that could not see one.
-		// The zero ListOptions is the operator's view as much as the
-		// agent's: archived hidden, stale shown — a stale skill still
-		// works and still revives on use, so hiding it would misreport
-		// what the seat can actually load.
-		//
-		// ONE options value feeds both reads below, deliberately: the count
-		// and the listing have to describe the same set, and two literals
-		// here is how a later edit to one of them starts reporting a total
-		// over rows the page could never contain.
-		opts := learning.ListOptions{}
-		// THE TOTAL, ALWAYS, and that is the difference between a page and
-		// a lie — but it comes from a COUNT rather than from the length of
-		// what was read. Taking the whole library apart to show fifty of it
-		// cost the seat's entire catalogue in I/O and allocations on every
-		// open of the panel, and a skill row carries its content and its
-		// frontmatter, so that is a real read of every body the seat has
-		// ever drafted. The store bounds all three collections now: the
-		// diary and the episodes ask for a recency feed, and the skills ask
-		// for a page with the count beside it.
-		//
-		// The count is what keeps the page honest. The panel that renders
-		// the listing counts the rows it was given, so a seat past the cap
-		// would otherwise report exactly [MemoryPageLimit] skills — a
-		// number an operator has no reason to doubt and no way to check.
-		// Every other cut in this tree says so: a config diff answers
-		// `changes_total` beside the listing it bounded, a trace answers
-		// `truncated`, a ledger line appends "+N more".
-		total, err := s.Skills.Count(ctx, id, opts)
-		if err != nil {
-			return nil, err
-		}
-		opts.Limit = MemoryPageLimit
-		skills, err := s.Skills.List(ctx, id, opts)
-		if err != nil {
-			return nil, err
-		}
-		out["skills_total"] = total
-		rows := make([]map[string]any, 0, len(skills))
-		for _, sk := range skills {
-			rows = append(rows, skillRow(sk))
-		}
-		out["skills"] = rows
-	}
-	// THE THIRD MEMORY, and the one that is about somebody ELSE. The diary
-	// is what a seat learned about the work and the episodes are what it
-	// learned about doing it; a counterparty profile is what it learned
-	// about a colleague — how often they interact, what it believes about
-	// them, and when it last checked. The key has been on this answer since
-	// the answer existed, always as an empty list, because nothing read the
-	// store behind it.
-	//
-	// KEYED ON THE HANDLE, which is what `observer_handle` holds — unlike
-	// the diary, whose key is the derived agent id. Both are asked with the
-	// dashboard's one identifier and the one that does not recognise it
-	// answers nothing.
-	profiles, err := s.counterpartiesFor(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	rows := make([]map[string]any, 0, len(profiles))
-	for _, profile := range profiles {
-		rows = append(rows, counterpartyRow(profile))
-	}
-	out["counterparties"] = rows
-	return out, nil
+	return s.Memory.Memory(ctx, s.seatHandleOf(id), p.Int("limit", 0))
 }
-
-// counterpartyRow is one profile as a screen reads it.
-//
-// THE TWO INSTANTS ARE BOTH CARRIED, because they measure different cadences
-// and the difference is the interesting one: `last_updated_at` moves on every
-// interaction and `last_corroborated_at` only when the traits actually
-// changed, so a colleague seen daily whose profile has not moved in months is
-// one this seat has stopped learning about. Carrying one of them would make
-// that state invisible — which is the same state the Plan phase's prefetch
-// demotes on, so a screen showing one number would disagree with the prompt.
-func counterpartyRow(p learning.Profile) map[string]any {
-	subject := map[string]any{"name": p.Subject.Name}
-	if p.Subject.Handle != "" {
-		subject["handle"] = p.Subject.Handle
-	}
-	if p.Subject.ExternalID != "" {
-		subject["external_id"] = p.Subject.ExternalID
-		subject["platform"] = p.Subject.Platform
-	}
-	traits := p.Traits
-	if traits == nil {
-		// AN EMPTY MAP, never null: a profile whose traits failed to
-		// decode and one that has none read identically to a client
-		// that has to guard the field either way.
-		traits = map[string]any{}
-	}
-	return map[string]any{
-		"subject":              subject,
-		"resolved":             p.Subject.Resolved(),
-		"traits":               traits,
-		"interactions":         p.InteractionCount,
-		"first_seen_at":        p.FirstSeenAt,
-		"last_updated_at":      p.LastUpdatedAt,
-		"last_corroborated_at": p.LastCorroboratedAt,
-	}
-}
-
-// MemoryPageLimit bounds each collection of a seat's memory page.
-//
-// FIFTY, and every collection asks its own store for that many rather than
-// reading everything and cutting: the diary and the episodes get a recency
-// feed, where "the most recent fifty" IS the question, and the skills get an
-// ordered listing bounded by [learning.ListOptions.Limit]. The skills are a
-// SET the seat loads from rather than a feed, so a page of one says how large
-// the set was — which is why `skills_total` travels beside them, and why it
-// is counted rather than measured off the page.
-const MemoryPageLimit = 50
 
 // countOrNil renders an outcome count, or null when nothing was counted.
 func countOrNil(counts map[string]int, kind string) any {

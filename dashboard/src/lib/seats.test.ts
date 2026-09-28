@@ -24,6 +24,9 @@ import {
   indexOrg,
   labelOf,
   leadsInLine,
+  liveOnItems,
+  roundLabel,
+  roundOf,
   stoppedLine,
   llmChain,
   mcpEnvOf,
@@ -41,7 +44,13 @@ import {
   unitTally,
   UNIT_TOTAL_HINT,
 } from "./seats.ts";
-import type { CompanyDocument, DerivedSeat, OrgProjection } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  CompanyDocument,
+  DerivedSeat,
+  LiveCall,
+  OrgProjection,
+} from "~/protocol/index.ts";
 import {
   type Lang,
   type Node,
@@ -865,4 +874,44 @@ describe("a unit's headcount", () => {
   test("the total's hint names what it counted", () => {
     expect(UNIT_TOTAL_HINT).toContain("everything under it");
   });
+});
+
+// A TASK CARD'S STRIP NAMES THE ROUND THE STEPPER NAMES. It read the engine's
+// zero-based `round_num` raw — "round 6 of 25" on a card beside "round 7 of
+// 25" on the seat's own profile — and read the first round, 0, as no round.
+test("a working seat's strip on a task counts its round from one", () => {
+  const working = (round_num: number, rounds_used: number): AgentRow =>
+    ({
+      role: "SWE",
+      handle: "swe",
+      activity: "working",
+      live_call: {
+        phase: "execute",
+        round_num,
+        rounds_used,
+        max_rounds: 25,
+        work_item: { backend: "native", id: "i", key: "ENG-412", project: "ENG" },
+      },
+    }) as unknown as AgentRow;
+  expect(liveOnItems([working(6, 6)]).get("ENG-412")?.doing).toMatch(/round 7 of 25$/);
+  expect(liveOnItems([working(0, 0)]).get("ENG-412")?.doing).toMatch(/round 1 of 25$/);
+});
+
+// ONE READING OF THE ROUND, on the roster's card and in the attention queue
+// too. `roundLabel` decoded `round_num` itself — a second reading beside the
+// one the stepper, the peek and a task's strips share — so a call whose
+// counters disagreed was "starting" on the card and "round 3" on the profile.
+test("the roster's round label names the round the rest of the product names", () => {
+  const calls = [
+    { round_num: -1, rounds_used: 0 },
+    { round_num: 0, rounds_used: 0 },
+    { round_num: 6, rounds_used: 6 },
+    { round_num: -1, rounds_used: 3 },
+  ] as LiveCall[];
+  for (const call of calls) {
+    const round = roundOf(call);
+    expect(roundLabel(call).text).toBe(round > 0 ? `round ${round}` : "starting");
+  }
+  expect(roundLabel({ round_num: -1, rounds_used: 3 } as LiveCall).text).toBe("round 3");
+  expect(roundLabel(null).text).toBe("starting");
 });

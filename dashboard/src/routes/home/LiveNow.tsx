@@ -15,7 +15,8 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtElapsed } from "~/lib/format.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { delegatedWorkers, indexOrg, stateLine, type OrgIndex } from "~/lib/seats.ts";
+import { indexOrg, stateLine, type OrgIndex } from "~/lib/seats.ts";
+import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 
 /** How many working seats the card lists before "Open live view". */
@@ -69,43 +70,16 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
   );
 }
 
-/** The three phases a turn walks, in order. */
-const PHASES = ["context", "execute", "review"] as const;
-
 function LiveRow({ row, index, now }: { row: AgentRow; index: OrgIndex; now: number }) {
   const handle = row.handle ?? "";
   const seat = index.byHandle.get(handle) ?? null;
   const name = seat?.name ?? row.role;
   const call = row.live_call;
-  const parked = row.turn?.stage === "parked";
-  const phase = parked ? "execute" : (call?.phase ?? row.current_phase ?? "context");
-  const current = phase === "review" ? "review" : phase === "execute" ? "execute" : "context";
   const started = Date.parse(row.turn?.started_at ?? call?.started_at ?? "");
   const turnId = row.turn?.turn_id ?? call?.turn_id ?? "";
-  const workers = delegatedWorkers(call);
-  const round = call ? Math.max(call.rounds_used, (call.round_num ?? -1) + 1) : 0;
-  const executeLabel =
-    current !== "execute"
-      ? "Execute"
-      : parked
-        ? "Execute · coding run"
-        : workers > 0
-          ? "Execute · workers"
-          : round > 0
-            ? `Execute · round ${round}${call?.max_rounds ? ` of ${call.max_rounds}` : ""}`
-            : "Execute";
-  const steps = PHASES.map((id) => ({
-    id,
-    label:
-      id === "context"
-        ? phase === "onboarding"
-          ? "Onboarding"
-          : "Context"
-        : id === "execute"
-          ? executeLabel
-          : "Review",
-  }));
-  const last = lastCall(row);
+  // THE ONE DERIVATION every running-turn row shares — see lib/turnsteps.ts.
+  const { steps, current } = turnSteps(row);
+  const last = lastCallLine(row);
   const body = (
     <>
       <SeatAvatar name={name} kind="agent" ring="info" size="sm" />
@@ -133,39 +107,4 @@ function LiveRow({ row, index, now }: { row: AgentRow; index: OrgIndex; now: num
       )}
     </li>
   );
-}
-
-/**
- * The call the seat is making now, or the last one it made this phase:
- * `sandbox.run go test ./...` — the tool's name and its arguments' values, as
- * one line the card cuts at its edge.
- */
-function lastCall(row: AgentRow): string {
-  const call = row.live_call;
-  if (!call) return "";
-  if (call.running_call)
-    return `${call.running_call.name} ${argWords(call.running_call.arguments)}`.trim();
-  const done = call.tool_executions?.at(-1);
-  if (!done) return "";
-  const name = done.name ?? done.tool ?? "";
-  return `${name} ${argWords(done.arguments ?? done.args)}`.trim();
-}
-
-/** A call's arguments as their values, space-separated — what a person reads
- *  a call by — or the raw text where they are not an object. */
-function argWords(args: unknown): string {
-  let value = args;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return value as string;
-    }
-  }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return Object.values(value as Record<string, unknown>)
-      .map((v) => (typeof v === "string" ? v : JSON.stringify(v)))
-      .join(" ");
-  }
-  return value == null ? "" : JSON.stringify(value);
 }

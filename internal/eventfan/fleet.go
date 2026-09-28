@@ -75,7 +75,10 @@ func Solo(self string, local *store.EventLog) *Fleet {
 type Listing struct {
 	Rows []store.EventRecord
 
-	// More says rows exist past this page. See [MergeListing].
+	// More says rows exist past this page. See [MergeListing]. EXACT for the
+	// phase listings, whose reads ask one row past the page; for the event
+	// list it is "a node's page filled", which its answer never reads as a
+	// cursor — see listPartOf.
 	More bool
 }
 
@@ -430,8 +433,8 @@ func (f *Fleet) Phases(ctx context.Context, role string, limit int, before *stor
 	p := phasesParams{Role: role, Limit: limit, Before: cursorOf(before)}
 	g, err := gather(ctx, f, QuestionPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, err := f.Local.Phases(ctx, role, limit, before)
-			return listPart{Rows: rows, Full: len(rows) >= limit}, err
+			rows, more, err := f.Local.Phases(ctx, role, limit, before)
+			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
 		return Listing{}, Coverage{}, err
@@ -457,8 +460,8 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 	p := phasesParams{AgentID: agentID, Role: role, Before: cursorOf(before)}
 	g, err := gather(ctx, f, QuestionSeatPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, err := f.Local.AgentPhases(ctx, agentID, role, before)
-			return listPart{Rows: rows, Full: len(rows) >= store.AgentPhaseLimit}, err
+			rows, more, err := f.Local.AgentPhases(ctx, agentID, role, before)
+			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
 		return Listing{}, Coverage{}, err
@@ -576,12 +579,18 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	for _, p := range partials {
 		page.Turns = append(page.Turns, p.Turn())
 	}
-	if !byTokens {
+	// A CURSOR ONLY WHERE THERE IS MORE. Every non-empty page used to carry
+	// one, so the last page of a seat's forty-seven turns offered "older"
+	// and a reader who asked got an empty page — and a client counting what
+	// it had loaded could only ever write it as a floor ("47+"), because the
+	// answer never said the walk had ended, which is what a nil `Next` is
+	// documented to say.
+	if !byTokens && more {
 		switch {
 		case len(page.Turns) > 0:
 			at := page.Turns[len(page.Turns)-1].StartedAt
 			page.Next = &at
-		case more && horizon != nil:
+		case horizon != nil:
 			// NOTHING BETWEEN THE CURSOR AND THE HORIZON, and more past
 			// it: resume from the horizon rather than report an end.
 			page.Next = horizon

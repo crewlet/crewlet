@@ -141,7 +141,7 @@ export function SeatCard({
   const call = agent?.live_call;
   // Decoded ONCE, by the helper the attention queue also reads: the number on
   // this card and the sentence in that row are the same reading of one field.
-  const round = call ? roundLabel(call.round_num) : null;
+  const round = call ? roundLabel(call) : null;
   return (
     // `seatPath`, not a handle spelled out again: a seat the engine reported no
     // handle for is addressed by NAME, and `#/agents/seats/` opens nothing.

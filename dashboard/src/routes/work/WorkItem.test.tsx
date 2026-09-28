@@ -931,7 +931,8 @@ test("the live row appears only for a turn on this item", async () => {
       stage: "phases",
       work_item: { backend: "native", id: key === "ENG-42" ? "t-1" : "t-9", key, project: "ENG" },
     },
-    live_call: { turn_id: "run-9", phase: "execute", round_num: 7, max_rounds: 25 },
+    // THE SEVENTH ROUND IN FLIGHT: `round_num` is zero-based.
+    live_call: { turn_id: "run-9", phase: "execute", round_num: 6, rounds_used: 6, max_rounds: 25 },
   });
   expect(liveOn([on("ENG-9")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
   expect(liveOn([on("ENG-42", "stopped")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
@@ -964,6 +965,71 @@ test("the live row appears only for a turn on this item", async () => {
   await settle();
   expect(screen.queryByRole("link", { name: /is on turn/ })).toBeNull();
   expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
+});
+
+// THE LIVE ROW NAMES THE ROUND AND THE PHASE THE SEAT'S PROFILE NAMES. It kept
+// a private reading of the live call that took the zero-based `round_num` raw
+// — no round at all during the first, one lower than the stepper and the peek
+// after it — and called every phase but review "executing". It reads the task
+// card's strip's words (`doingWords`), so a turn is described once.
+test("the live row counts rounds from one and names the phase running", async () => {
+  const working = (live_call: Record<string, unknown>) => ({
+    handle: "swe",
+    activity: "working",
+    turn: {
+      turn_id: "run-9",
+      started_at: "2031-04-16T11:57:00Z",
+      stage: "phases",
+      work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
+    },
+    live_call: { turn_id: "run-9", max_rounds: 25, ...live_call },
+  });
+  const liveText = async (live_call: Record<string, unknown>) => {
+    cleanup();
+    mount(<WorkItemPage id="ENG-42" />, { agents: [working(live_call)] });
+    await settle();
+    return screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+  };
+  // The first round, in flight before any has come back.
+  expect(await liveText({ phase: "execute", round_num: 0, rounds_used: 0 })).toContain(
+    "executing · round 1 of 25",
+  );
+  expect(await liveText({ phase: "execute", round_num: 6, rounds_used: 6 })).toContain(
+    "executing · round 7 of 25",
+  );
+  // Reading context is not executing.
+  const reading = await liveText({ phase: "context", round_num: -1 });
+  expect(reading).toContain("reading context");
+  expect(reading).not.toContain("executing");
+});
+
+// HOW LONG IT HAS RUN IS THE PROFILE CARD'S CLOCK: seconds under a minute.
+// The list's short age read a sub-minute turn as "for 0m" while the seat's own
+// card said "0s" of the same turn.
+test("the live row says a sub-minute turn's seconds, as the profile does", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    agents: [
+      {
+        handle: "swe",
+        activity: "working",
+        turn: {
+          turn_id: "run-9",
+          started_at: new Date(NOW - 30_000).toISOString(),
+          stage: "phases",
+          work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
+        },
+        live_call: { turn_id: "run-9", phase: "execute", round_num: 1, max_rounds: 24 },
+      },
+    ] as never,
+  });
+  await settle();
+  // THE PAGE'S CLOCK re-reads (the mocked) `Date.now` when the tab is shown.
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const live = screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+  expect(live).toContain("for 30s");
+  expect(live).not.toContain("0m");
 });
 
 // OLDER COMMENTS ARE REACHABLE. The detail returns the newest page of a thread

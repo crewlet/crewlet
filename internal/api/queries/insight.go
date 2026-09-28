@@ -11,7 +11,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -204,8 +203,10 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
 	// tiebreak depends on. It is offered only when the fleet holds MORE — a
-	// page that filled, or one the merge cut at the newest point a node's
-	// page stopped at — since a cursor past the end would page forever.
+	// node whose read found a row past its page, or a page the merge cut at
+	// the newest point such a node stopped at — since a cursor past the end
+	// would page forever, and one on a page that merely filled pages onto
+	// nothing.
 	next := map[string]string{}
 	if listing.More && len(records) > 0 {
 		last := records[len(records)-1]
@@ -537,70 +538,6 @@ func (s Sources) organization() *org.Organization {
 		return nil
 	}
 	return organization
-}
-
-// --- memory projections -------------------------------------------------- //
-//
-// The learning types are DOMAIN types and carry no json tags, deliberately:
-// tagging them would put a wire contract on a struct whose fields exist for the
-// recall path, and would ship every row's embedding vector — up to a hundred
-// float32 arrays per request — to a screen that has no use for one.
-//
-// So the wire shape is built here, at the boundary, which is where a wire shape
-// belongs. It was NOT built here before, and the result was a memory tab whose
-// every block read "None yet" and whose every episode row showed `NaN s`: Go
-// marshalled the field names, the client read the documented ones, and nothing
-// failed.
-
-func diaryRow(e learning.DiaryEntry) map[string]any {
-	return map[string]any{
-		"id":         e.ID,
-		"content":    e.Content,
-		"retention":  string(e.Kind),
-		"source":     e.Source,
-		"turn_id":    e.TurnID,
-		"created_at": isoOrEmpty(e.CreatedAt),
-		"ttl_until":  isoOrEmpty(e.TTLUntil),
-		// How often a memory has actually been recalled — the difference
-		// between one that keeps proving useful and one written once and
-		// never read.
-		"retrievals": e.RetrievalCount,
-	}
-}
-
-func episodeRow(e learning.Episode) map[string]any {
-	return map[string]any{
-		"id":               e.ID,
-		"turn_id":          e.TurnID,
-		"agent_handle":     e.Handle,
-		"task_summary":     e.TaskSummary,
-		"plan_summary":     e.PlanSummary,
-		"review_outcome":   e.ReviewOutcome,
-		"tool_sequence":    e.ToolSequence,
-		"skills_used":      e.SkillsUsed,
-		"conversation_key": e.ConversationKey,
-		"work_key":         e.WorkKey,
-		"created_at":       isoOrEmpty(e.StartedAt),
-		"ended_at":         isoOrEmpty(e.EndedAt),
-		// Milliseconds, because that is what the client formats. A
-		// time.Duration marshals as an integer count of NANOSECONDS, which
-		// renders as a plausible and wildly wrong number.
-		"duration_ms": e.Duration.Milliseconds(),
-		"compacted":   e.Kind != learning.KindRaw,
-		"count":       e.Count,
-	}
-}
-
-func skillRow(sk learning.Skill) map[string]any {
-	return map[string]any{
-		"id":         sk.ID,
-		"key":        sk.Name,
-		"title":      sk.Name,
-		"summary":    sk.Description,
-		"version":    sk.Version,
-		"updated_at": isoOrEmpty(sk.UpdatedAt),
-		"uses":       sk.UseCount,
-	}
 }
 
 // searcher resolves the knowledge backend for this call.

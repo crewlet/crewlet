@@ -23,6 +23,7 @@ import {
   walk,
 } from "../test/source.ts";
 import { ACTIONS } from "~/contract/actions.ts";
+import { AGENT_TABS } from "~/routes/agents/seat/profile.ts";
 import { WORKSPACES } from "./nav.ts";
 import { resolves } from "./routes.ts";
 
@@ -777,4 +778,83 @@ describe("every read names its question", () => {
   ])("the rule leaves %s alone", (_name, source) => {
     expect(namedCalls(source, "tsx").calls).toEqual([]);
   });
+});
+
+/**
+ * A LINK TO A SEAT NAMES A TAB THE PROFILE HAS.
+ *
+ * `tab=` is a string off a URL, and a profile resolves one it does not have to
+ * Overview rather than to a blank page (`useTab`) — which is exactly why a
+ * stale one is invisible: the Model activity screen and the attention queue
+ * went on sending readers to `tab=model` and `tab=cost` for a whole rewrite,
+ * and every one of those links quietly opened the wrong tab.
+ *
+ * Both spellings a seat link is written in are read: `href`/`nav.to` over a
+ * literal `["agents", "seats", …]` path with a literal query, and a row's
+ * `{ path: ["agents", "seats", …], query: { tab } }`.
+ */
+function seatTabLinks(text: string, lang: Lang): { tab: string; at: number }[] {
+  const out: { tab: string; at: number }[] = [];
+  const toSeats = (node: Node | undefined): boolean => {
+    if (node?.type !== "ArrayExpression") return false;
+    const [a, b] = node.elements as Node[];
+    return stringValue(a) === "agents" && stringValue(b) === "seats";
+  };
+  const tabOf = (node: Node | undefined): void => {
+    if (node?.type !== "ObjectExpression") return;
+    for (const prop of node.properties as Node[]) {
+      if (prop.type !== "Property") continue;
+      const key = prop.key as Node;
+      const name = key.type === "Identifier" ? String(key.name) : stringValue(key);
+      const value = stringValue(prop.value as Node);
+      if (name === "tab" && value !== null) out.push({ tab: value, at: prop.start });
+    }
+  };
+  walk(parse(text, lang), (n) => {
+    if (n.type === "CallExpression") {
+      const callee = n.callee as Node;
+      const named =
+        (callee.type === "Identifier" && callee.name === "href") || memberName(callee) === "to";
+      const [first, second] = n.arguments as Node[];
+      if (named && toSeats(first)) tabOf(second);
+    }
+    if (n.type === "ObjectExpression") {
+      const props = (n.properties as Node[]).filter((p) => p.type === "Property");
+      const field = (name: string) =>
+        props.find((p) => {
+          const key = p.key as Node;
+          return (key.type === "Identifier" ? String(key.name) : stringValue(key)) === name;
+        })?.value as Node | undefined;
+      if (toSeats(field("path"))) tabOf(field("query"));
+    }
+  });
+  return out;
+}
+
+test("every link to a seat names a tab its profile has", () => {
+  const tabs = new Set<string>(AGENT_TABS);
+  const stale: string[] = [];
+  let links = 0;
+  for (const mod of modules()) {
+    if (mod.lang === "dts") continue;
+    const line = lineOf(mod.text);
+    for (const link of seatTabLinks(mod.text, mod.lang)) {
+      links++;
+      if (!tabs.has(link.tab)) stale.push(`${mod.path}:${line(link.at)} — tab=${link.tab}`);
+    }
+  }
+  expect(stale, "these links open a tab no seat has, which lands on Overview").toEqual([]);
+  // NOT VACUOUS: seats are linked to on a named tab somewhere.
+  expect(links).toBeGreaterThan(0);
+});
+
+test("the seat-tab reading sees both link spellings", () => {
+  const read = (text: string) => seatTabLinks(text, "tsx").map((l) => l.tab);
+  expect(read('href(["agents", "seats", h], { tab: "memory" });')).toEqual(["memory"]);
+  expect(read('nav.to(["agents", "seats", r.role], { tab: "model" });')).toEqual(["model"]);
+  expect(read('const row = { path: ["agents", "seats", h], query: { tab: "cost" } };')).toEqual([
+    "cost",
+  ]);
+  // Another object's tab is not a seat's.
+  expect(read('href(["work", key], { tab: "turns" });')).toEqual([]);
 });

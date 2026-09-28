@@ -31,6 +31,7 @@ import {
   plural,
   relTime,
   splitConversationKey,
+  conversationLabel,
   tsKey,
   fmtElapsed,
 } from "./format.ts";
@@ -137,6 +138,17 @@ describe("numbers", () => {
     expect(fmtCount(1_240_000)).toBe("1.2M");
   });
 
+  // A WHOLE FIGURE CARRIES NO ZERO FRACTION: a founder writes a ceiling as a
+  // round number, and "60.0M/day and 900.0M/month" was a digit that said
+  // nothing on every read of it.
+  test("a shortened figure that is whole drops its zero fraction", () => {
+    expect(fmtCount(60_000_000)).toBe("60M");
+    expect(fmtCount(900_000_000)).toBe("900M");
+    expect(fmtCount(3_000_000_000)).toBe("3B");
+    expect(fmtCount(20_000)).toBe("20k");
+    expect(fmtCount(1_500_000_000)).toBe("1.50B");
+  });
+
   test("an absent number is an em dash rather than a zero", () => {
     // Zero is a measurement. "Nobody looked" is not.
     expect(fmtCount(null)).toBe(EMPTY_VALUE);
@@ -168,6 +180,17 @@ describe("text", () => {
     });
     expect(splitConversationKey("github:acme/api#42").local).toBe("acme/api#42");
     expect(splitConversationKey("bare")).toEqual({ source: "", local: "bare" });
+  });
+
+  // A ROW PRINTS A UUID'S HEAD — the way every narrow row names one — and
+  // nothing else in a key changes, so `work:ENG-32` stays whole.
+  test("a conversation key's uuids are cut to their heads, and nothing else is", () => {
+    expect(conversationLabel("work:task:4d631f6d-5107-46f0-8043-a1f9d7a74abc")).toBe(
+      "work:task:4d631f6d",
+    );
+    expect(conversationLabel("work:ENG-32")).toBe("work:ENG-32");
+    expect(conversationLabel("slack:C9:1718.001")).toBe("slack:C9:1718.001");
+    expect(conversationLabel("")).toBe("");
   });
 
   test("an engine identifier becomes a label", () => {

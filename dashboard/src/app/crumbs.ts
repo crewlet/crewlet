@@ -46,7 +46,25 @@ export interface Crumb {
    * showing the raw key has nothing to add, and would say it twice.
    */
   tag?: string;
+  /**
+   * A seat's badge before its name, the way every row and card draws a seat —
+   * the kind is its outline. Only on the seat's own crumb.
+   */
+  seat?: { name: string; kind: "agent" | "human" };
 }
+
+/**
+ * The label keys a seat's page publishes besides its name: the unit the seat
+ * sits in — its NAME, which is the Teams address, and its path as a reader
+ * names it ("Engineering · Core") — and whether it is an agent or a person.
+ *
+ * NO ROUTE SEGMENT CAN SPELL THEM: each starts with a NUL, which a path
+ * segment never carries once decoded, so a seat's unit can never title a
+ * crumb on another screen whose segment happens to read the same.
+ */
+export const seatUnitKey = (handle: string) => `\u0000unit:${handle}`;
+export const seatPlaceKey = (handle: string) => `\u0000place:${handle}`;
+export const seatKindKey = (handle: string) => `\u0000kind:${handle}`;
 
 /** A title for the browser tab, derived from the same trail. */
 export function titleOf(crumbs: Crumb[]): string {
@@ -137,8 +155,22 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     }
     case "org-edit":
       return [root(row, true), { label: section("edit")?.label ?? "Edit org" }];
-    case "seat":
-      return [root(row, true), named(labels, where.handle)];
+    case "seat": {
+      // WHERE THE SEAT SITS, as a way to its unit — "Agents › Engineering ·
+      // Core › SWE" — once the page has said; a seat above every unit, or one
+      // the page has not resolved yet, goes straight from the workspace.
+      const unit = labels[seatUnitKey(where.handle)];
+      const place = labels[seatPlaceKey(where.handle)];
+      const kind = labels[seatKindKey(where.handle)];
+      const seat = named(labels, where.handle);
+      const object: Crumb =
+        !seat.mono && (kind === "agent" || kind === "human")
+          ? { ...seat, seat: { name: seat.label, kind: kind as "agent" | "human" } }
+          : seat;
+      return unit
+        ? [root(row, true), { label: place || unit, path: ["agents", "teams", unit] }, object]
+        : [root(row, true), object];
+    }
     case "turns":
       return sectionPage("turns");
     case "turn":

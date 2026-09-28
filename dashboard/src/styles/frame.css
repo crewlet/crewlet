@@ -613,9 +613,10 @@ a.user-block-who:focus-visible {
    lines by their UNSHRUNK size, so a wrap over a trail at its content width
    breaks as soon as a long title and the controls exceed the bar, with free
    space left on the first line. The trail's basis is therefore 0 (`.crumbs`),
-   clamped by its 20ch floor: the line holds the floor plus the controls, the
-   break comes only when even the floor cannot sit beside them, and the grow
-   factor hands the trail everything the line has left. A threshold measured
+   clamped by its floor — the way back out, measured: the line holds the
+   floor plus the controls, the break comes only when even the floor cannot
+   sit beside them, and the grow factor hands the trail everything the line
+   has left. A threshold measured
    on the busiest bar forced the controls onto their own line on every screen
    under it, a sparse one included. */
 .app .page-bar {
@@ -636,22 +637,30 @@ a.user-block-who:focus-visible {
    (`.crewlet-card__subtitle` takes the same factor so a title never gives way
    first).
 
-   AND IT STOPS AT 20ch, which is the correction to the obvious `min-width: 0`:
-   at zero the trail gives way until the way back out is gone, and the way back
-   out is the one thing on this bar the reader cannot reconstruct from
-   anywhere else. Past its floor the trail SCROLLS rather than clipping as a
-   box: the ancestors never shrink (see below), so once they alone are wider
-   than the trail there is nothing left to ellipsise and a clip lands wherever
-   the pixels ran out. A thumb, a trackpad or a shift-wheel reaches a
-   scroller, and the tab stop in `Breadcrumb` is what reaches it from a
-   keyboard. The scrollbar is not drawn: on a 52px bar it would sit on the
-   baseline the trail is written on. */
+   AND ITS FLOOR IS THE WAY BACK OUT, which is the correction to the obvious
+   `min-width: 0`: at zero the trail gives way until the way back out is gone,
+   and the way back out is the one thing on this bar the reader cannot
+   reconstruct from anywhere else. The floor is MEASURED (`--crumb-floor`,
+   written by `Breadcrumb`): the ancestors at their width and the last crumb's
+   stub — at least 20ch, and at most the room beside the drawer toggle (which
+   `Breadcrumb` caps it at) or the whole bar. A fixed 20ch alone let a
+   seat's trail share a phone's line with its one button and cut
+   "Engineering · Co" mid-letter under it; measured, a trail that cannot show
+   its ancestry beside the controls breaks the line instead.
+
+   Past the whole bar the trail SCROLLS rather than clipping as a box: the
+   ancestors never shrink (see below), so once they alone are wider than the
+   bar there is nothing left to ellipsise and a clip lands wherever the pixels
+   ran out. A thumb, a trackpad or a shift-wheel reaches a scroller, and the
+   tab stop in `Breadcrumb` is what reaches it from a keyboard. The scrollbar
+   is not drawn: on a 52px bar it would sit on the baseline the trail is
+   written on. */
 .crumbs {
   display: flex;
   align-items: center;
   gap: 2px;
   flex: 1 100 0;
-  min-width: 20ch;
+  min-width: min(100%, max(20ch, var(--crumb-floor, 0px)));
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
@@ -705,7 +714,8 @@ a.user-block-who:focus-visible {
   color: var(--color-text-primary);
 }
 
-.crumb-glyph {
+.crumb-glyph,
+.crumb-seat {
   flex: none;
 }
 
@@ -756,7 +766,7 @@ a.user-block-who:focus-visible {
    grow is what keeps the controls in the right-hand corner, and it would push
    the lenses there too — against the controls, away from the name they are
    about. So the trail sizes to its content and still gives way first
-   (`flex-shrink: 100`, down to its 20ch floor), capped at 60% of the bar so a
+   (`flex-shrink: 100`, down to its floor), capped at 60% of the bar so a
    long name ellipsises beside its lenses rather than pushing them onto a line
    of their own; the lens group grows, holding its tabs at its start. */
 .page-lenses {
@@ -892,6 +902,61 @@ a.user-block-who:focus-visible {
     display: inline-flex;
     flex: none;
   }
+}
+
+/* ---- An object's tabs (`ObjectTabs` in app/frame/ObjectTabs.tsx) ----------
+   The kit's underline row, drawn with the tabs that FIT, then "More" for the
+   rest. The rule under the row is the wrapper's, painted on its last pixel
+   row — the same row the kit strip's own border sits on — so it runs on under
+   "More" and to the edge. The gap is the kit strip's own (`spacing-2`),
+   because the fold's arithmetic counts one gap between the last tab drawn and
+   "More". */
+.object-tabs {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: var(--spacing-2);
+  min-width: 0;
+  box-shadow: inset 0 -1px 0 var(--color-border-default);
+}
+
+/* THE ROW IS AS WIDE AS THE TABS IT DRAWS, and never scrolls: what does not
+   fit has already left it for the menu. */
+.object-tabs > .object-tabs-strip {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.object-tabs-more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+/* THE TWIN: an empty box that clips, holding a row of every tab at its own
+   width. Laid out, so it can be measured; clipped, so a row wider than a
+   phone cannot widen the page; invisible and inert, so nothing reaches it. */
+.object-tabs-twin {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.object-tabs-twin-row {
+  display: flex;
+  gap: var(--spacing-2);
+  width: max-content;
+}
+
+.object-tabs-twin-row .crewlet-tabs {
+  width: max-content;
+  overflow: visible;
 }
 
 /* ---- The section tabs ----------------------------------------------------
@@ -2193,6 +2258,23 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     overflow: visible;
     text-overflow: clip;
     overflow-wrap: anywhere;
+  }
+
+  /* A TURN'S "WHAT IT DID" (`TurnWhatCell`) TAKES TWO LINES AND ITS KEY A
+     THIRD. Beside the key the summary kept about eighteen characters of the
+     card's value column — "Reviewed the open wo…" on every row, so every row
+     read the same. Here the summary has the column's width for two lines and
+     the key sits under it; the whole summary is still the cell's title. */
+  .grid-cell .turn-what {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .grid-cell .turn-what-summary {
+    --clamp-lines: 2;
+  }
+  .grid-cell .turn-what-key {
+    max-width: 100%;
   }
 
   /* ---- THE COMPACT ROW (`phoneRows="compact"`) ---------------------------

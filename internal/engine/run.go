@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -481,6 +482,12 @@ type Engine struct {
 	// withdraws the node as their answerer. See steer.go.
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
+
+	// memoryReads answers a seat's memory from the node holding it, and
+	// stopMemoryServe withdraws this node as one of its answerers. See
+	// memoryread.go.
+	memoryReads     *memread.Reader
+	stopMemoryServe queue.Unsubscribe
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
@@ -971,21 +978,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// through this. A nil syncer is the honest shape for a node with no
 	// broker or no store: there is nowhere to carry memory to, and
 	// prepareSeat then skips the step rather than pretending it happened.
-	if e.memory, err = memsync.New(backends.Store, backends.Conn(),
-		func(handle string) string {
-			c := e.Company()
-			if c == nil {
-				// Unconfigured: no seat has an identity yet, and
-				// nothing has memory to carry.
-				return ""
-			}
-			role := c.Org.AgentSeatByHandle(handle)
-			id, ok := c.Org.AgentIDFor(role)
-			if !ok {
-				return ""
-			}
-			return id.String()
-		}); err != nil {
+	//
+	// Unconfigured, no seat has an identity yet and nothing has memory to
+	// carry: [Engine.agentIDOf] answers "" then.
+	if e.memory, err = memsync.New(backends.Store, backends.Conn(), e.agentIDOf); err != nil {
 		return nil, fmt.Errorf("engine: seat memory: %w", err)
 	}
 	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
@@ -1001,6 +997,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.watchdog.Watch("seat-host", n.Host())
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
+	// THIS NODE ANSWERS FOR THE MEMORY OF THE SEATS IT HOLDS, in every mode
+	// and whether or not it serves the API — see memoryread.go. After the
+	// node, whose incarnation a seat's lease names.
+	if err = e.armMemoryReads(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve seats' memory: %w", err)
+	}
 
 	// EVERYTHING BELOW THIS LINE PUBLISHES, and a maintenance-mode node
 	// starts none of it: the seat host and its mailboxes, every duty, the
@@ -1457,6 +1459,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// With it, and for the same reason: a note answered `accepted` by a
 	// node that is tearing down is a note no round will read.
 	e.stopSteer(ctx)
+	// And a seat's memory, read from the store backends.Close is about to
+	// close.
+	e.stopMemoryReads(ctx)
 	if e.node != nil {
 		e.node.Stop(ctx)
 	}

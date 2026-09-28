@@ -193,6 +193,42 @@ samp,
   white-space: nowrap;
 }
 
+/* AN IDENTIFIER IN A CELL IS ONE LINE (`KeyCell`), cut with its value on the
+   title rather than broken at whichever character the column ran out on. */
+.key-cell {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A TURN'S "WHAT IT DID" (`TurnWhatCell`): the summary keeps the width and the
+   key beside it keeps at most a bit under half of it. The key's `flex: none`
+   above is right beside a notice's prose, where a key is `ENG-22`; in a turn
+   list it can be a whole external identity, and uncapped it took the cell and
+   laid the summary out a letter per line on a phone's stacked row. */
+.turn-what {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.turn-what-summary {
+  --clamp-lines: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* ITS OWN WIDTH, UP TO THE CAP, and never less: a key shrinking in proportion
+   to its neighbour gave up all but its first letter ("E…") beside a long
+   summary, which is the one part of the row a reader searches by. */
+.turn-what-key {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 pre {
   margin: 0;
 }
@@ -373,6 +409,17 @@ a.seat-chip,
 }
 .t-link:hover {
   color: var(--color-text-primary);
+}
+/* A BUTTON IN THE LINK REGISTER — an action that changes this page (a
+   disclosure, a jump to another section) drawn as the card links beside it
+   are. The browser's button chrome is what goes, never the element: a
+   `button` is what a keyboard and a screen reader know to press. */
+button.t-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: start;
 }
 /* THE one micro-label register. It is declared once and never overridden;
    the system this replaces declared it once and then overrode it in six

@@ -6,7 +6,8 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { NODE_WITHHELD, PERIOD_WORDS, SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
+import { SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
+import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -72,7 +73,10 @@ const SWE: AgentRow = {
     turn_id: "turn-2",
     phase: "execute",
     model: "claude-sonnet-5",
-    round_num: 7,
+    // THE ENGINE'S TWO COUNTERS: the round in flight, zero-based, and the
+    // rounds that have come back, one-based — the seventh round is running.
+    round_num: 6,
+    rounds_used: 6,
     max_rounds: 25,
     work_item: { key: "ENG-412" },
     in_progress: true,
@@ -87,10 +91,16 @@ async function mount(
     projection = org(),
     agents = [SWE],
     handle = "swe",
-  }: { projection?: OrgProjection; agents?: AgentRow[]; handle?: string } = {},
+    health = { status: "healthy" },
+  }: {
+    projection?: OrgProjection;
+    agents?: AgentRow[];
+    handle?: string;
+    health?: Record<string, unknown>;
+  } = {},
 ) {
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(health as never);
   store.applyOrg(projection);
   store.applyAgents(agents);
   const socket = new LiveSocket(store);
@@ -139,20 +149,29 @@ const OPERATOR = {
   acts: ["create_work_item"],
 };
 
-// AN ANONYMOUS READER IS TOLD WHAT IS WITHHELD, AND ASKED FOR NOTHING IT
-// WOULD BE REFUSED. `fleet` is operator-only; a read sent anyway would come
-// back refused and draw a refusal where a sentence belongs.
-test("an anonymous reader sees the node withheld and sends no guarded read", async () => {
-  const { asked } = await mount(ANONYMOUS);
-  // IN WORDS ON THE ROW, where a sighted reader reads them: the dash that
-  // stood here carried the sentence only as its accessible label.
+// AN ANONYMOUS READER IS TOLD WHAT THE PUBLIC PUSH SAYS, AND ASKED FOR
+// NOTHING IT WOULD BE REFUSED. `fleet` is operator-only; a read sent anyway
+// would come back refused and draw a refusal where a sentence belongs. But
+// `/health` is public, so the node's own name and the seats it holds are
+// already on this reader's screen — and the profile's Setup card says them.
+// The peek said "Shown to operators" over the same fact.
+test("an anonymous reader sees what the health push says of the node, and sends no guarded read", async () => {
+  const { asked } = await mount(ANONYMOUS, {
+    health: { status: "healthy", node: "node-1", seats: ["swe"] },
+  });
+  // IN WORDS ON THE ROW, where a sighted reader reads them.
   const running = screen.getByText("Running on").nextElementSibling;
-  expect(running?.textContent).toBe(NODE_WITHHELD);
-  expect(running?.textContent).toBe("Shown to operators");
+  expect(running?.textContent).toBe("this node · node-1");
   expect(asked).not.toContain("fleet");
   expect(asked).not.toContain("config");
   // THE CHAIN IS PUBLIC, so it is drawn for everybody.
   expect(screen.getByText("anthropic-main")).toBeTruthy();
+});
+
+// NEVER WHICH PEER: that is the fleet read's, and the push does not say it.
+test("an anonymous reader is told a seat another node holds is another node's", async () => {
+  await mount(ANONYMOUS, { health: { status: "healthy", node: "node-1", seats: ["cto"] } });
+  expect(screen.getByText("Running on").nextElementSibling?.textContent).toBe("another node");
 });
 
 test("an operator sees the node that holds the seat and since when", async () => {
@@ -192,7 +211,17 @@ test("each capped window is labelled with its own period", async () => {
 
 test("a seat nothing caps says so", async () => {
   await mount(ANONYMOUS, { agents: [{ ...SWE, budget: null } as AgentRow] });
-  expect(screen.getByText(/No budget/)).toBeTruthy();
+  expect(screen.getByText("No budget — nothing caps this seat's tokens")).toBeTruthy();
+});
+
+// THE COMPANY'S CEILINGS BIND EVERY SEAT: a seat with none of its own under a
+// company that caps a window is not one "nothing caps".
+test("a seat with no budget of its own under a capped company names the company's ceiling", async () => {
+  const projection = org();
+  projection.token_budget = { day: 60_000_000 };
+  await mount(ANONYMOUS, { projection, agents: [{ ...SWE, budget: null } as AgentRow] });
+  expect(screen.getByText("No seat budget — the company's 60M/day applies")).toBeTruthy();
+  expect(screen.queryByText(/nothing caps/)).toBeNull();
 });
 
 // MESSAGE IS NEVER HIDDEN: it is held with the reason for every reader who

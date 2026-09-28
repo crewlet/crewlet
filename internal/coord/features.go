@@ -71,6 +71,17 @@ const (
 	// advertise it, because the note names a turn, and which node runs that
 	// turn is not known until one answers.
 	FeatureSteer Feature = "steer"
+
+	// FeatureHeldRead — the node answers a read of a seat's memory and
+	// conversation ledger addressed to it on the held-read scatter
+	// (internal/learning/memread), for the seats it holds. An older build
+	// serves no such subject, so a read of a seat it holds would wait out
+	// the whole read budget for an answer that can never come, on every
+	// poll, and then report a holder that "did not answer". Asked of the
+	// HOLDER alone ([FeatureReader.OwnerFeature]): the read is addressed to
+	// the incarnation a seat's lease names, and no other node's build has
+	// any bearing on whether it is answered.
+	FeatureHeldRead Feature = "held_read"
 )
 
 // Features is every feature THIS build honours, which is exactly what a node
@@ -80,7 +91,9 @@ const (
 // is a claim a peer acts on — a gesture it gates is accepted the moment every
 // node carries the name — so a name listed ahead of its implementation is a
 // fleet told it can do something it cannot.
-var Features = []Feature{FeatureMCPStatus, FeatureAnswerRunByTurn, FeatureSeatPause, FeatureSteer}
+var Features = []Feature{
+	FeatureMCPStatus, FeatureAnswerRunByTurn, FeatureSeatPause, FeatureSteer, FeatureHeldRead,
+}
 
 // Valid reports whether this build knows the feature.
 func (f Feature) Valid() bool { return slices.Contains(Features, f) }
@@ -120,12 +133,31 @@ func (r FeatureReader) SeatFeature(ctx context.Context, handle string, feature F
 	if lease == nil {
 		return r.AllLiveHave(ctx, feature)
 	}
+	ok, err := r.OwnerFeature(ctx, lease.Owner, feature)
+	if err != nil {
+		return false, fmt.Errorf("seat %q: %w", handle, err)
+	}
+	return ok, nil
+}
+
+// OwnerFeature reports whether one INCARNATION honours a feature — the
+// question for a request addressed to the process a lease named, which the
+// caller has already read and must not read again: a second read of the seat's
+// lease could name a different holder than the one the request goes to, and
+// the answer would be about the wrong process.
+//
+// By OWNER, for the reason [FeatureReader.SeatFeature] gives: an incarnation
+// that has since restarted is a different process, and the presence its node
+// id now carries says nothing about the old one's build. An owner with no
+// presence lease is UNKNOWN — it is draining, or its heartbeat lapsed — never
+// "lacking": nothing says what that process can do.
+func (r FeatureReader) OwnerFeature(ctx context.Context, owner string, feature Feature) (bool, error) {
 	nodes, err := r.Leases.ListLive(ctx, ClassNode)
 	if err != nil {
 		return false, fmt.Errorf("coord: read the fleet's presence: %w", err)
 	}
 	for _, node := range nodes {
-		if node.Owner != lease.Owner {
+		if node.Owner != owner {
 			continue
 		}
 		status, ok := StatusFromMeta(node.Meta)
@@ -135,8 +167,8 @@ func (r FeatureReader) SeatFeature(ctx context.Context, handle string, feature F
 		}
 		return slices.Contains(status.Features, feature), nil
 	}
-	return false, fmt.Errorf("%w: seat %q is held by %s, which has no presence lease "+
-		"(it is draining or its heartbeat lapsed)", ErrFeatureUnknown, handle, lease.Owner)
+	return false, fmt.Errorf("%w: %s has no presence lease (it is draining or its heartbeat "+
+		"lapsed)", ErrFeatureUnknown, owner)
 }
 
 // AllLiveHave reports whether EVERY live node honours a feature — the question

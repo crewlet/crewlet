@@ -62,6 +62,11 @@ export interface FeedRow {
   parent_span_id: string;
   topic: string;
   failed: boolean;
+  /** The seat the event concerns, by the id every node derives for it — the
+   *  store's own `agent_id`, on the live row and the seeded one alike, so the
+   *  event log narrows its live rows to one seat (`seat=`) exactly as the
+   *  engine narrows the rows it pages in. Absent for an event about no seat. */
+  agent_id?: string;
 }
 
 /**
@@ -1259,9 +1264,11 @@ export interface ScheduleRow {
   catchup: boolean;
   /** The seats a fire actually reaches, resolved from the scope and target. */
   runners: string[];
-  /** Zero-valued when there is no next fire: disabled, an expression that
-   *  cannot be parsed, or a date the calendar never reaches. */
-  next_run: string;
+  /** ABSENT when there is no next fire: disabled, an expression that cannot
+   *  be parsed, or a date the calendar never reaches. The engine used to send
+   *  Go's zero instant here, which parses as a time two thousand years ago —
+   *  so every "when next" read it as overdue. */
+  next_run?: string;
   /** Why `next_run` is empty when the reason is a DEFECT rather than a choice
    *  — an unparseable cron, an unknown timezone. Empty for a healthy row and
    *  for a merely disabled one, so a blank cell is never the only symptom. */
@@ -1709,10 +1716,13 @@ export interface ConversationRow {
 
 export interface ConversationsAnswer {
   handle: string;
+  /** A page of the threads the seat holds entries in, newest activity
+   *  first — of `conversations_total`. */
   conversations: ConversationRow[];
+  conversations_total: number;
   entries: ConversationEntry[];
-  /** False when this node holds no conversation ledger at all. */
-  available: boolean;
+  /** The node holding the seat, which answered, or `none`. */
+  held_by: string;
 }
 
 /** One open or closed agent-to-agent channel. */
@@ -3851,9 +3861,10 @@ export interface TurnWorkItem {
 
 export interface TurnsAnswer {
   turns: TurnRow[];
-  /** The cursor to resume from, on the turn's START. The fleet's, so it can be
-   *  present on an empty page: where a node's page stopped, with nothing above
-   *  it left to show. */
+  /** The cursor to resume from, on the turn's START, and `null` on the last
+   *  page — present only while more turns lie past this one. The fleet's, so
+   *  it can be present on an empty page: where a node's page stopped, with
+   *  nothing above it left to show. */
   next: string | null;
   /** Which nodes the page was merged from. */
   coverage?: Coverage;
@@ -4048,6 +4059,9 @@ export interface SeatActivityTotals {
   first_pass: number;
   sent_back: number;
   tokens: number;
+  /** Every day of the previous window, oldest first — so the fortnight a
+   *  week-on-week figure is made over comes from the same answer. */
+  per_day: SeatActivityDay[];
 }
 
 /**

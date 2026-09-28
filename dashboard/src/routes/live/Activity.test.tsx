@@ -14,7 +14,7 @@
  * one axis query, however long the tab stays open.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Activity, dayKey } from "./Activity.tsx";
@@ -258,4 +258,70 @@ test("the key a heading groups on is the string it draws", () => {
   } finally {
     setZone("");
   }
+});
+
+// ONE SEAT'S EVENTS, which is where a profile's "Events" lands. The engine
+// narrows every page and the axis by the handle; the LIVE rows arrive on the
+// socket for every seat, so the log narrows those itself — by the id the
+// engine stamps on each row, never by the actor's display name.
+test("a seat's log asks for that seat and shows only its live rows", async () => {
+  location.hash = "#/live/events?seat=swe";
+  const asked: { what: string; params: Record<string, unknown> }[] = [];
+  const store = new Store();
+  store.applyOrg({
+    roles: [
+      { name: "SWE", handle: "swe" },
+      { name: "CTO", handle: "cto" },
+    ],
+  });
+  store.applyAgents([
+    { role: "SWE", handle: "swe", agent_id: "a-swe" },
+    { role: "CTO", handle: "cto", agent_id: "a-cto" },
+  ]);
+  const live = (id: string, agentId: string, summary: string) => ({
+    id,
+    type: "task_created",
+    category: "task",
+    source: "engine",
+    actor: "engine",
+    summary,
+    timestamp: new Date(Date.now() - 1_000).toISOString(),
+    trace_id: "",
+    span_id: "",
+    parent_span_id: "",
+    topic: "",
+    failed: false,
+    agent_id: agentId,
+  });
+  store.applyEvent(live("l-1", "a-swe", "swe opened a task"));
+  store.applyEvent(live("l-2", "a-cto", "cto opened a task"));
+  const socket = new LiveSocket(store);
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what: string, params: Record<string, unknown> = {}) => {
+    asked.push({ what, params });
+    if (what === "events") return Promise.resolve({ events: [], next: null, exhausted: true });
+    return Promise.resolve({ bucket: "hour", bars: [], total: 0, failed: 0, by_category: {} });
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Activity />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(asked.find((a) => a.what === "events")?.params.seat).toBe("swe");
+  expect(asked.find((a) => a.what === "event_series")?.params.seat).toBe("swe");
+  expect(screen.getByText("swe opened a task")).toBeTruthy();
+  expect(screen.queryByText("cto opened a task")).toBeNull();
+  // THE FILTER SAYS WHOSE LOG THIS IS, by name, and takes itself off.
+  fireEvent.click(screen.getByRole("button", { name: /Only SWE's events/ }));
+  expect(location.hash).not.toContain("seat=");
+  expect(screen.getByText("cto opened a task")).toBeTruthy();
+  location.hash = "#/";
 });

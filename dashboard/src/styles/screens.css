@@ -358,6 +358,15 @@
   flex: none;
 }
 
+/* A FILTER CHIP THAT TAKES ITSELF OFF (the event log's seat): its name and
+   its × on one row. The kit's chip label is an inline box, and a glyph is a
+   block, so the × broke under the name inside a 26px pill. */
+.chip-removable {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
 /* ---- Live's watched conditions ------------------------------------------ */
 
 .live-watch {
@@ -687,6 +696,18 @@ a.oc-key:hover {
   }
 }
 
+/* THE ASSIGN DIALOG'S MATCHES ARE THE DIALOG'S CONTENT (`AssignToSeatDialog`
+   in components/writes.tsx): laid out in the flow under the field, as tall
+   as the eight a search returns, and the dialog grows to hold them — the
+   kit's anchored panel, inside a dialog body that scrolls, was clipped to two
+   and a half rows behind the footer and over the field below it. */
+.assign-seat-find .crewlet-combobox__panel {
+  position: static;
+  max-height: none;
+  margin-top: var(--spacing-1);
+  box-shadow: none;
+}
+
 /* ---- Seat peek ---------------------------------------------------------- */
 
 /* AS TALL AS THE RAIL, so the actions can sit at its foot. */
@@ -833,6 +854,552 @@ a.oc-key:hover {
 }
 .seat-peek-foot > :first-child {
   flex: 1;
+}
+
+/* ---- A seat's profile --------------------------------------------------- */
+
+/* THE APPROVED AGENT ARTBOARD: a head flush with the sheet — the badge, the
+   name, the kind and state, the line that places the seat, and the tab strip
+   sitting on the head's own rule — and the tab's panel under it at the
+   artboard's 28px inset. The sheet's own padding is taken back, the same way
+   the task page and the Inbox take it, so the rule runs edge to edge. */
+.app .crewlet-app-shell__content:has(> .prof-frame) {
+  padding: 0;
+  gap: 0;
+}
+.prof-frame {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.prof-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: 22px 28px 0;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.prof-id {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.prof-who {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.prof-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) 10px;
+  min-width: 0;
+}
+.prof-name {
+  margin: 0;
+  font-size: 24px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.prof-line {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+.prof-line-link {
+  color: var(--color-text-secondary);
+}
+.prof-line-link:hover {
+  color: var(--color-text-primary);
+}
+/* THE STRIP SITS ON THE HEAD'S RULE: the selected tab's underline replaces
+   the hairline under it rather than floating a pixel above it. */
+.prof-tabs {
+  margin-bottom: -1px;
+}
+.prof-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+  padding: 20px 28px 32px;
+}
+.prof-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+/* The Overview: a column of the seat's week and work, and a 340px side of who
+   it is — the artboard's two columns. */
+.prof-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 20px;
+  align-items: start;
+}
+.prof-main,
+.prof-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.prof-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
+.prof-pair > * {
+  min-width: 0;
+}
+.prof-card,
+.prof-turn {
+  min-width: 0;
+}
+.prof-note {
+  margin: 0;
+  padding: 0 var(--spacing-4) var(--spacing-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* The current turn: its line, its steps and figures, and the phase's calls. */
+.prof-turn-about .work-key {
+  color: var(--color-text-secondary);
+}
+.prof-turn-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-3);
+  padding: 0 var(--spacing-4) 14px;
+}
+.prof-turn-figures {
+  margin-inline-start: auto;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.prof-turn-ask {
+  margin: 0;
+  padding: 0 var(--spacing-4) var(--spacing-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-feedback-warning-ink);
+}
+.prof-turn-last {
+  margin: 0;
+  padding: 0 var(--spacing-4) 14px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+/* A TILE'S SUB-LINE THAT MUST STAY ONE: a KPI row is as tall as its tallest
+   tile, so a second line in one stood all four taller than the artboard's.
+   Its whole sentence is the element's title. */
+.prof-tile-sub {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* FOUR TRACKS, THE ARTBOARD'S: the wall clock, the tool, what it was asked,
+   and how long it took — the last sized by its content so a "running 2m 41s"
+   never pushes the arguments out of their own column.
+   THE TOOL'S TRACK IS THE LIST'S, NOT EACH ROW'S: the rows are a SUBGRID of
+   the list, so the column is as wide as the longest name the phase called —
+   up to 22ch, which holds the longest builtin (`list_mcp_server_tools`, 21) —
+   and every row's arguments start on one line. A fixed 130px cut
+   `comment_on_work_item`, the tool every escalation calls, to "comment_on_work_i…". */
+.prof-feed {
+  display: grid;
+  /* THE FIRST TRACK CARRIES THE ROW'S OWN INSET as well as the clock: a
+     subgrid item's padding comes out of the first and last tracks it spans
+     (`styles/subgrid.test.ts`), and the last is `auto`, which gives it back. */
+  grid-template-columns: calc(var(--spacing-4) + 62px) fit-content(22ch) minmax(0, 1fr) auto;
+  column-gap: var(--spacing-3);
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border-default);
+}
+.prof-feed-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  gap: var(--spacing-3);
+  min-height: 30px;
+  padding: 0 var(--spacing-4);
+}
+.prof-feed-row[data-running] {
+  background: var(--color-feedback-info-soft);
+}
+.prof-feed-at {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.prof-feed-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+}
+.prof-feed-words {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.prof-feed-took {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.prof-feed-row[data-running] .prof-feed-took {
+  color: var(--color-feedback-info-ink);
+}
+.prof-feed-took[data-failed] {
+  color: var(--color-feedback-danger-ink);
+}
+
+/* A row of a card's list: the assigned work, the direct reports. */
+.prof-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.prof-rows > li + li {
+  border-top: 1px solid var(--color-border-default);
+}
+a.prof-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 var(--spacing-4);
+  color: inherit;
+}
+a.prof-row:hover {
+  background: var(--color-surface-hover);
+}
+/* THE KEY IS A COLUMN, as the Work tab's rows keep it: at its own width the
+   titles beside ENG-6 and ENG-15 started seven pixels apart. The work list's
+   own key track (74px) holds a key of four letters and four digits; a longer
+   one is cut with the whole key on its title. */
+.prof-row-key {
+  width: 74px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.prof-row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+}
+.prof-day {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.prof-day-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+.prof-reports {
+  padding: var(--spacing-4);
+}
+.prof-report-name {
+  flex: 1;
+  min-width: 0;
+}
+.prof-row-due {
+  flex: none;
+  min-width: 52px;
+  text-align: right;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* TODAY'S COLUMN IN THE ACCENT, as Home's chart draws it: one series, and the
+   last column is always today. */
+.prof-chart-body {
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
+}
+.prof-chart .crewlet-stacked-columns__slot:last-child .crewlet-stacked-columns__segment {
+  background: var(--color-brand-accent);
+}
+
+/* The side: About, Setup, Memory, Schedules. */
+.prof-about {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: 0 var(--spacing-4) var(--spacing-4);
+}
+.prof-about-goal {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+.prof-about-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+/* THE ARTBOARD'S MEASURE, until the reader asks for all of it: the goal to
+   three lines and each responsibility to two (`About` in seat/Overview.tsx). */
+.prof-about-goal > .clamp {
+  --clamp-lines: 3;
+}
+.prof-about-list .clamp {
+  --clamp-lines: 2;
+}
+.prof-about-more {
+  align-self: flex-start;
+}
+
+/* A CARD HEAD WHOSE SUBTITLE GOES UNDER ITS TITLE — a chart's key ("Last 14
+   days · 2 failed" under "Turns per day"), as the approved artboards stack
+   it. The subtitle takes a line of its own after the title and the card's
+   actions, so beside a link it keeps the whole width rather than the gap
+   between them, which on a phone cut both the title and it. */
+.card-head-stacked {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.card-head-stacked > .crewlet-card__subtitle {
+  order: 9;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.prof-facts {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  gap: var(--spacing-3);
+  align-items: baseline;
+  margin: 0;
+  padding: 0 var(--spacing-4) var(--spacing-4);
+  font-size: var(--font-size-sm);
+}
+.prof-facts dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.prof-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.prof-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+.prof-chain {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.prof-chain-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.prof-memory {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: 0 var(--spacing-4) var(--spacing-4);
+}
+.prof-memory-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-5);
+  margin: 0;
+}
+/* THE FIGURE OVER ITS NOUN, which is how the artboard reads the three: the
+   `dt` follows the number in the reading order a screen reader takes too. */
+.prof-memory-totals > div {
+  display: flex;
+  flex-direction: column-reverse;
+}
+.prof-memory-totals dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.prof-memory-totals dd {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.prof-reflection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-inset);
+}
+.prof-reflection figcaption {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.prof-reflection blockquote {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+.prof-sched {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0 var(--spacing-4) var(--spacing-4);
+  list-style: none;
+}
+.prof-sched li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.prof-sched-glyph {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.prof-sched-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+}
+.prof-sched-when {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* The Turns tab's spend, by phase beside by model. */
+.prof-spend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--spacing-5);
+  padding: var(--spacing-4);
+}
+.prof-spend h4 {
+  margin: 0 0 var(--spacing-2);
+}
+.prof-section-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+.prof-lede {
+  margin: 0;
+  max-width: 60ch;
+}
+.prof-meters {
+  margin-top: var(--spacing-4);
+  padding-top: var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* THE SIDE FOLLOWS THE MAIN COLUMN once both no longer fit: the main
+   column's floor is the four tiles' — a display figure and its label each —
+   at about 150px, 600 with its gaps, plus the 340px side and the 20px
+   between them and the 56px of inset: 1016. Below it the side's cards sit
+   under the week, two abreast while two still fit. The pair under the turn
+   stacks a step earlier, at the width where the chart's fourteen columns
+   would fall under the artboard's 16px each. */
+@container page (width < 1180px) {
+  .prof-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@container page (width < 1016px) {
+  .prof-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .prof-side {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    align-items: start;
+  }
+}
+@container page (width < 640px) {
+  .prof-head {
+    padding: var(--spacing-4) var(--spacing-4) 0;
+    gap: var(--spacing-3);
+  }
+  .prof-body {
+    padding: var(--spacing-4) var(--spacing-4) var(--spacing-6);
+  }
+  .prof-name {
+    font-size: 20px;
+  }
+  /* The call's words take the line under its name on a phone: two 62px and
+     130px tracks beside them left the arguments a few characters. */
+  .prof-feed {
+    display: block;
+  }
+  .prof-feed-row {
+    grid-template-columns: 56px minmax(0, 1fr) auto;
+    padding-block: var(--spacing-1);
+  }
+  .prof-feed-words {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+  /* THE TITLE KEEPS ITS WORDS: "Current turn" and Watch live hold the first
+     line and the task the turn is on takes the line under them, where it
+     sat beside them and cut the title to "Current tu…". */
+  .prof-turn .crewlet-card__header {
+    flex-wrap: wrap;
+    row-gap: var(--spacing-1);
+  }
+  .prof-turn .crewlet-card__subtitle {
+    order: 9;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
 }
 
 /* ---- Teams -------------------------------------------------------------- */
@@ -1299,6 +1866,33 @@ a.oc-key:hover {
   .split {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* A SEAT'S THREADS BESIDE THE ONE OPEN (`Conversations` in the profile's
+   Memory tab). Drawn whole, the list was 1,700px and the detail beside it sat
+   at the grid row's top — so a thread chosen near the list's end opened a
+   screen above the row that was pressed, with its highlight the only sign
+   anything happened. Beside each other, the list is BOUNDED to the scroller's
+   view (the viewport less the page bar, and a gap above and below) and scrolls
+   inside itself, and the detail STICKS under the scroller's top, below
+   whatever band already sticks there (`--sticky-top`). Stacked, neither
+   applies: the detail is revealed by scrolling to it instead (`revealDetail`),
+   because a sticky box as tall as a phone's screen would cover the list. */
+@media (width >= 640px) {
+  .thread-split .thread-list {
+    max-height: calc(100dvh - var(--page-bar-h) - var(--sticky-top) - 8rem);
+    min-height: 12rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .thread-split .thread-detail-card {
+    position: sticky;
+    top: calc(var(--sticky-top) + var(--spacing-4));
+  }
+}
+/* A heading scrolled to on a phone lands clear of the scroller's top edge. */
+.thread-detail-card h4 {
+  scroll-margin-top: calc(var(--sticky-top) + var(--spacing-4));
 }
 
 .thread-entry {

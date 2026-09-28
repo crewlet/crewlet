@@ -730,6 +730,9 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 
 	subject := TaskSubject(task.ID)
 	scope := ScopeSet{Subject: true, Container: task.Project}
+	// THE KEY THIS WRITE MINTED goes on the wake it publishes: the caller
+	// built the wake from a task that had none yet (see [Notify.keyed]).
+	notify.keyed(task.Key)
 	result, err := w.publish(ctx, statelog.Request{
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),

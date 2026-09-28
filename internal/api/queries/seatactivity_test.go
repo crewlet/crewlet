@@ -217,6 +217,29 @@ func TestSeatActivityCarriesThePreviousWindowsTotals(t *testing.T) {
 	if p := lead.Previous; p == nil || p.Turns != 5 || p.Failed != 1 || p.Reviewed != 1 || p.Tokens != 16 {
 		t.Errorf("previous = %+v, want 5 turns, 1 failed, 1 reviewed, 16 tokens", lead.Previous)
 	}
+	// AND ITS DAYS, every one of the previous window's seven, oldest first —
+	// so the fortnight a week-on-week figure is made over is one answer. The
+	// window's own days stay the window's: the 24th is in `per_day`, never in
+	// the previous one's.
+	if p := lead.Previous; p != nil {
+		if len(p.PerDay) != 7 || p.PerDay[0].Day != "2026-09-12" || p.PerDay[6].Day != "2026-09-18" {
+			t.Fatalf("previous per_day = %+v, want the seven days 12th..18th", p.PerDay)
+		}
+		if p.PerDay[0].Turns != 3 || p.PerDay[6].Turns != 2 || p.PerDay[6].Failed != 1 {
+			t.Errorf("previous per_day = %+v, want 3 turns on the 12th and 2 (1 failed) on the 18th",
+				p.PerDay)
+		}
+		for _, d := range p.PerDay {
+			if d.Day == "2026-09-24" || d.Turns == 100 {
+				t.Errorf("a day outside the previous window reached it: %+v", d)
+			}
+		}
+	}
+	for _, d := range lead.PerDay {
+		if d.Day < "2026-09-19" {
+			t.Errorf("the window's per_day carries a previous day: %+v", d)
+		}
+	}
 	if plain := activityOf(t, f, map[string]any{"days": 7}); seatRow(t, plain, "lead").Previous != nil {
 		t.Error("previous totals came back unasked")
 	}

@@ -34,6 +34,13 @@ type Envelope struct {
 	Topic        string         `json:"topic"`
 	Payload      map[string]any `json:"payload,omitempty"`
 
+	// AgentID is the seat the event concerns, by the id every node derives
+	// for it — the store's promoted `agent_id`, read by the ONE rule that
+	// fills that column (store.ExtractTags), so a screen narrowing its live
+	// rows to one seat (`seat=`) narrows them exactly as the store narrows
+	// the rows it pages in. Empty for an event about no seat.
+	AgentID string `json:"agent_id,omitempty"`
+
 	// Failed says whether the work this event reports failed.
 	//
 	// It carries the SAME derivation FeedRow gets, from the same function,
@@ -65,6 +72,8 @@ type FeedRow struct {
 	ParentSpanID string `json:"parent_span_id"`
 	Topic        string `json:"topic"`
 	Failed       bool   `json:"failed"`
+	// AgentID is the seat the event concerns — see [Envelope.AgentID].
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // WebhookTopic is the topic a webhook delivery's envelope and feed row name.

@@ -62,11 +62,12 @@ import {
   fmtDateCompact,
   fmtDateTime,
   fmtDuration,
+  fmtElapsed,
   fmtMinute,
   humanize,
 } from "~/lib/format.ts";
 import { reasonAbout } from "~/lib/reasons.ts";
-import { activityOf, ringOf, shortAge, type OrgIndex } from "~/lib/seats.ts";
+import { activityOf, doingWords, ringOf, type OrgIndex } from "~/lib/seats.ts";
 import {
   changeClauses,
   changeMark,
@@ -83,7 +84,7 @@ import type {
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
 import { ACTIVITY_TABS, timeline, type ActivityTab, type Entry, type Source } from "./timeline.ts";
-import { usePaged } from "./usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 
 /** How often the newest page of each history is asked again: nothing pushes them. */
 const ACTIVITY_POLL_MS = 30_000;
@@ -144,6 +145,7 @@ export function Activity({
       ),
     pickRecords,
     recordId,
+    nextCursor,
   );
   const commentsAsked = { item: item.key, limit: COMMENTS_PAGE };
   const comments = usePaged(
@@ -156,6 +158,7 @@ export function Activity({
       ),
     pickComments,
     commentId,
+    nextCursor,
   );
   const turnsAsked = { id: item.key, limit: TURNS_PAGE };
   const turns = usePaged(
@@ -168,6 +171,7 @@ export function Activity({
       ),
     pickTurns,
     turnId,
+    nextCursor,
   );
   const paged = { changes, comments, turns };
 
@@ -317,6 +321,8 @@ export function Activity({
   );
 }
 
+/** Where each of the tracker's histories says its page before is. */
+const nextCursor = (a: { next_cursor?: string }) => a.next_cursor ?? "";
 const pickRecords = (a: { records: WorkActivityRecord[] }) => a.records ?? [];
 const recordId = (r: WorkActivityRecord) => r.id;
 const pickComments = (a: { comments: WorkComment[] }) => a.comments ?? [];
@@ -730,9 +736,12 @@ function LiveRow({
   const handle = row.handle ?? "";
   const name = chrome.seatName?.(handle) ?? handle;
   const turn = row.turn?.turn_id ?? row.live_call?.turn_id ?? "";
-  const doing = liveDoing(row);
-  const since = row.turn?.started_at ?? row.live_call?.started_at;
-  const age = since ? shortAge(since, now) : "";
+  const doing = doingWords(row);
+  const since = Date.parse(row.turn?.started_at ?? row.live_call?.started_at ?? "");
+  // THE PROFILE CARD'S CLOCK (`fmtElapsed`), seconds under a minute: the
+  // list's `shortAge` reads a sub-minute turn as "for 0m" where the seat's
+  // own card said "0s" of the same turn.
+  const age = Number.isFinite(since) ? fmtElapsed(now - since) : "";
   return (
     <li className="task-entry" data-kind="live">
       <span className="task-entry-avatar">
@@ -753,17 +762,6 @@ function LiveRow({
       </a>
     </li>
   );
-}
-
-/** What a working seat is doing, in the words a live strip uses. */
-function liveDoing(row: AgentRow): string {
-  if (row.turn?.stage === "parked") return "coding run in progress";
-  const phase = row.live_call?.phase ?? row.current_phase ?? "";
-  const verb = phase === "review" ? "reviewing" : phase ? "executing" : "working";
-  const round = row.live_call?.round_num;
-  const max = row.live_call?.max_rounds;
-  if (!round) return verb;
-  return max ? `${verb} · round ${round} of ${max}` : `${verb} · round ${round}`;
 }
 
 /** Who one announced change reached, asked when the reader opens it. */

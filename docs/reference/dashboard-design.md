@@ -727,13 +727,13 @@ a screen, and every workspace and section the code declares is below.
 | `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
 | `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(operator)* | `view=visualization\|table` · `chart=` · `unit=` · `seat=` |
-| `#/agents/seats/{handle}` | **Seat** — agent or human. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|conversations\|memory\|cost\|access\|schedules`; human: overview · work · access · `conversation=` |
+| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/live` | **Live › Now running** — what the company is doing at this moment | `window=15m\|1h\|6h` |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — every turn, round by round; one turn | |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable | |
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
-| `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
+| `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `q=` · `failed=` |
 | `#/knowledge` | **Knowledge** — live search over the backend, and the containers | `q=` |
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
 | `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change | |
@@ -1342,12 +1342,13 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now, the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
-| `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
+| `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
+| `ObjectTabs` + `tabFit` | an object's own tabs as the kit's underline row, drawing the tabs that FIT and folding the rest into a "More" menu at its end — the tab the reader is on always drawn — by the same arithmetic (`foldTabs`) the section strip folds with; the widths are read off a hidden, inert twin of the row |
 | `DetailRail` | the peek's chrome — resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
@@ -1507,9 +1508,10 @@ must not also open the grid row behind the field.
 
 ### The page bar wraps by what it holds
 
-The bar holds the trail, who is working now (on a project's page, the seats
-whose running turn is charged to that project's work — "2 agents on ENG" —
-rather than the company's), the star and Copy link — which is what the
+The bar holds the trail, who is working now (on Home's bar only, as the Main
+artboard draws it — the sidebar's Agents badge carries the same count on every
+other page, and a chip in every bar sat between a task's trail and its actions
+and pushed a profile's controls past a phone's edge), the star and Copy link — which is what the
 approved artboards label **Share**: sharing a page here IS its address, since
 anyone the link reaches reads it under their own token — and LAST
 the screen's own controls (portalled in by `PageActions`), so a screen's
@@ -1536,15 +1538,25 @@ the lenses, then four controls — about 105 px of chrome over the work.
 **A wrapping flex container assigns lines BEFORE it shrinks**, so a trail at its
 content width broke the line as soon as a long title and the controls exceeded
 the bar, with free space left on the first line. The trail's flex BASIS is
-therefore 0, clamped by its 20ch floor: a line holds the floor plus the
-controls, the break comes only when even the floor cannot sit beside them, and
-the grow factor hands the trail everything the line has left. A threshold
-measured on the busiest bar would push the controls onto their own line on
-every screen under it, a sparse one included.
+therefore 0, clamped by its FLOOR: a line holds the floor plus the controls,
+the break comes only when even the floor cannot sit beside them, and the grow
+factor hands the trail everything the line has left. A threshold measured on
+the busiest bar would push the controls onto their own line on every screen
+under it, a sparse one included.
+
+**The floor is the way back out, measured.** It is where the last crumb starts
+— every ancestor at its own width — plus the few characters the last crumb
+keeps as a stub, never under 20ch and never past the room the bar's first line
+has beside the drawer toggle (below the shell breakpoint), or the trail would
+drop under the toggle and leave it a line of its own. A fixed 20ch
+alone let a seat's trail share a phone's line with its one button at two
+hundred pixels, and "Agents › Engineering · Co" was cut mid-letter under
+Message with the seat's own crumb out of sight; measured, a trail that cannot
+show its ancestry beside the controls takes a line of its own.
 
 - **The trail is what gives way**, and past its floor it SCROLLS rather than
-  clipping as a box: the ancestors do not shrink, so once they alone are too
-  wide there is nothing left to ellipsise. The scrollbar is not drawn — on a
+  clipping as a box: the ancestors do not shrink, so once they alone are wider
+  than the whole bar there is nothing left to ellipsise. The scrollbar is not drawn — on a
   52 px bar it would sit on the baseline the trail is drawn on — and while it
   overflows the trail is a tab stop, which is how a keyboard reaches what is
   past its edge. Only then: a trail that fits has nowhere for the arrow keys
@@ -1576,7 +1588,12 @@ every screen under it, a sparse one included.
   the last place that fits; a tab only ever leaves from the end, so the order
   never changes with the width. The widths are measured, and measured again
   whenever the strip or a tab changes size (a figure arriving, the web font
-  loading, the density preference).
+  loading, the density preference). **An object's own tabs fold the same
+  way** (`ObjectTabs`, a seat's Overview … Settings): the kit's underline row
+  scrolls with its scrollbar hidden, and on a phone a seat's Settings began
+  five pixels past the strip's end with nothing to say it was there. The
+  object strip measures a twin of the kit's row — hidden, inert, clipped —
+  since the kit draws a row whole, and hands the widths to the same fold.
 - **The star is on every page that is one.** A workspace's own page is already
   a sidebar row, so the star there cannot keep it — but it is drawn,
   unavailable and saying "Already in the sidebar", rather than left out: left
@@ -1979,6 +1996,10 @@ this task — joined on the item the engine charges it to, and only while the
 seat is `working` — the foot of the timeline is the live row in the working
 state's own ground ("SWE is on turn 3 · executing · round 7 of 25 · for 2m",
 with a pulse that is static under reduced motion) linking to the live trace.
+The words after the turn are the task card's strip's own, from one derivation
+— the round counted from one, as the stepper counts it, and the phase named
+("reading context", "reviewing", "3 workers running", "coding run") — so the
+card, the row and the seat's profile never name different rounds of one turn.
 The composer is last: a comment, a reply, or **Ask…** — a question put to one
 seat, optionally with two to six options, the one recommended and whether the
 answer is the decision or an input to it.
@@ -2091,10 +2112,13 @@ tinted by the state — the line, how long the turn has run, "Turn 2 · round 7 
 (`work_item_turns`) — then Reports to, Model (the phase chain from the public
 projection and the model serving the call in flight), one row per capped
 budget window labelled by its own period ("Budget today", "Budget this week")
-with a meter in the engine's state, or "No budget", Running on (the node and
-since when — operators only; every other reader reads "Shown to operators" in
-place of it and no read is sent), Open work (`work_workload`), where its tools come from, and its
-goal. It asks at most three questions. **Open profile** and **Message** are the
+with a meter in the engine's state, or "No seat budget — the company's applies"
+where only the company's ceilings bind it ("No budget" where nothing does),
+Running on (the node that holds the lease and since when for an operator;
+every other reader reads what the public health push says — this node by name,
+or "another node" — which is what the profile's Setup card says too, and no
+guarded read is sent), Open work (`work_workload`), where its tools come from,
+and its goal, drawn as the inline markdown it is written in. It asks at most three questions. **Open profile** and **Message** are the
 rail's foot, pinned to its bottom edge; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
 unit, or the nearest unit above it that has one — so the question is filed as
@@ -2114,6 +2138,132 @@ each with its project key, kind, effective lead ("(inherited)" where it is),
 headcount, purpose, goals and seats; without the engine's derived block a unit
 declaring no lead reads "Lead not reported by this engine" rather than a blank.
 A unit's own page is `#/agents/teams/{unit}`.
+
+### A seat's profile
+
+`#/agents/seats/{handle}` is the approved Agent artboard: a head flush with the
+sheet — the seat's badge (a squircle for an agent, a circle for a person) with
+its state ring, the name, an **Agent** or **Person** pill and, for an agent, the
+state in the engine's word ("Working", "Needs you", "Paused", "Stopped ·
+budget", "Not placed", "Idle"); under it the line that places the seat
+(handle · unit path · reports to its manager) — and the tab strip on the
+head's own rule. The trail reads **Agents › Engineering · Core › SWE**: the
+unit is a way to its team, and the seat's crumb wears its badge.
+
+**The kind decides the tabs.** An agent has Overview, Work, Turns, Memory,
+Schedules and Settings; a person has Overview, Work and Settings. Turns, Memory
+and Schedules are properties of a RUNTIME, and the engine never spawns a
+person — so a person's profile asks nothing a runtime answers: no activity, no
+memory, no turn list, no phase history. A `tab=` naming a tab the seat has not
+got — a bookmark, or a link made before the tabs were renamed (`model`,
+`cost`, `access`, `threads`) — lands on Overview, and `app/source.test.ts`
+holds every link to a seat to a tab its profile has. The Work tab counts the
+seat's open work — the engine's `total_hint`, the same answer the Overview's
+card and the Work tab read.
+
+**Three actions, in the page bar, each a write control held with its reason**
+for a reader who cannot make it:
+
+- **Message** opens the New task sheet with the seat as assignee and `ask` set:
+  the question is filed as work the seat owes an answer on, and the answer
+  lands in the asker's Inbox. There is no person-to-seat chat.
+- **Assign task** finds an existing task by search and hands it over against
+  the version a read of it returned (`update_work_item{assignee, if_match}`),
+  so a task somebody moved in between is refused rather than taken from
+  whoever holds it now — or files a new one for the seat. The matches list the
+  tasks that CAN move first; the seat's own come last, drawn but disabled and
+  marked "already theirs", so a term most of whose matches the seat already
+  holds still offers eight it could be handed.
+- **Pause** (agents only) asks why, and whether to **also stop the current
+  turn**: without it the turn the seat is on finishes first, and only a ticked
+  box sends `stop_running` (see [pausing a
+  seat](../concepts/agent-runtime.md#pausing-a-seat)). A paused seat's profile
+  says who paused it, when and why, and offers **Resume**.
+
+"Events" (the [event log](#the-routes) narrowed to this seat, `seat=`) and
+"Edit in org" (the builder opened on the seat) are the bar's More menu. Events
+is offered on an **agent's** profile only: `seat=` narrows the log to the
+events a seat published under the id every node derives for it, and a person
+publishes none — the engine never runs a human seat. On a phone the bar keeps
+**one** action in view — Message, or Resume on a paused seat — and folds the
+rest into the same More menu, each disabled there with the sentence its inline
+control is held with. A notice above the tabs carries what stops the seat or
+waits on somebody, in the state's own tone: its last error, a pause, another
+stop, or a coding run parked on a question — answerable from the notice.
+
+**The Overview is the seat's week and its charter.** Four figures, all ONE
+answer (`seat_activity` with `previous`, every node's usage rows summed): turns
+over seven company days with the change against the week before, the
+engine's first-pass rate over the turns it REVIEWED (a week nobody reviewed has
+no rate, never 0%) with how many reviews sent work back, the median turn with
+its p90, and tokens — the seat's capped window nearest its ceiling, over that
+window's ceiling ("of 3M budget"), or the seven days' tokens where the seat
+has no ceiling of its own — "company cap 60M/day +1" (and "no seat cap" on hover) where the
+company's own budget caps a window, because that ceiling binds every seat (one
+line in the tile, the whole sentence on hover). A shortened token count carries
+no zero fraction: `60M`, never `60.0M`. The **current turn** card shows where the turn is — Context, Execute
+("round 7 of 25", against the cap the phase was granted), Review; there is no
+delivery step, because whether a turn reached anybody is decided as it
+closes — the turn's number on its task and the task's title (read by the
+turn's own key, never looked up in the card beside it), its elapsed time and
+tokens so far, and the phase's calls, each with the engine's own start time and
+duration, the running one last. A call reads as words, never JSON: the tool's
+name whole in a column as wide as the longest name the phase called, then the
+argument that says what it is about bare (`ENG-38`, the query, the command)
+and every other argument by its name (`assignee me · open`). Between turns it is the seat's state in one line and its
+last turn. Beside it are the seat's open work (the five most urgent, and "All
+n") and its turns per company day over the fortnight the delta spans, today in
+the accent. The side column is **About** (the goal to three lines and the first
+three responsibilities to two each, as inline markdown, and "Show all" where
+that cut anything — a charter is the seat's prompt text and is never
+summarised), **Setup**
+(the model chain and tool grants from the public chart; the sandbox,
+placement and workers from the company document, said as unread rather than
+empty for a reader without an operator token; the node holding the seat now —
+the fleet's lease for an operator, and for anybody else what the public health
+push says, this node by name or "another node", which the seat's peek says
+too; and Edit), **Memory** (the holder's counted totals and its newest
+reflection) and **Schedules**. A person's Overview is **Their day** — or
+**Your day**, with the way to your Inbox and My work, on your own — with the
+unread notices waiting on them (the inbox's own count, the sidebar badge's
+reading on your own day, "50+" past a page), their priorities — the engine's
+count of what on the list is still open, the figure My work and their Work tab
+read, never the stored list's length, which still names a task they finished
+until their next reorder — and who set them, and pinned views, for the person
+and an operator, and withheld with that sentence for anybody else; their open
+work; and About.
+
+**Turns** is the seat's own turns (`turns{seat}`, every node, over the thirty
+days the event store keeps, a page of fifty at a time with "Load older turns"
+following the engine's cursor, and a count of what is loaded — "50+" while an
+older page exists), with **Running now** leading the tab so a turn in flight is
+on screen as it opens, and the settled transcripts after the list under their
+own heading, **Transcripts · newest first**. A row for a turn still running says what the seat is doing
+and what it is on, from the push ("running — executing · round 2 of 24",
+ENG-32), and draws its iterations and tokens as not settled rather than as
+zeros — `#/live/turns` does the same. On a phone a row's summary takes two
+lines with its item under it, and a settled turn has no State line at all. And
+**Where its tokens go**, its week by phase and by model — the buckets that spent
+some, since calls that failed before a model answered recorded none and were a
+bar of nothing named "unknown" — with the way to all of its activity on Live. **Memory** is read from the node HOLDING the seat, whose
+copy is the one kept current, and says which node answered: the diary, the
+episodes (each outcome in the reviewer's own tone — `failed` is red here as on
+a turn), the skills it taught itself and who it has worked with (when last,
+relative, as every list on the profile says it), each header
+the holder's total ("Latest 50 of 142" where the list is a page of it), and the
+**Conversations** it holds a ledger in (`conversation=` opens one) — each
+thread's KEY on a line of its own, since it is the thread's only identity, with
+its turns and when it last moved under it, and a native task's uuid cut to its
+head (`work:task:4d631f6d`) with the whole key on the row's title. Choosing a
+thread shows it: beside the list (a wide column) the list scrolls inside a
+viewport-high box and the thread's turns stick under the page's top; stacked
+on a phone, the turns are scrolled to and their heading takes focus. Each
+turn's trigger reads as plain words, its markdown stripped. A seat no
+node holds says why it shows nothing. **Settings** is the company document's
+half — identity and contacts, the model and budget with each capped window's
+live meter, and a seat's tool credentials by server and **variable name only**:
+no value the engine sent for a credential reaches the page, not the reference,
+not the mask. Every value there is changed in the org editor ("Edit in org").
 
 ### The attention queue
 
@@ -2749,7 +2899,7 @@ of which is what makes them worth having at all:
   rendering live, and they are admitted without the scroll check.
 
 - **The live half of a screen does not wait on the stored half.** The seat's
-  Model activity tab wrapped its turns in the query-state component, which
+  Turns tab (then called Model activity) wrapped its turns in the query-state component, which
   renders nothing while a query is in flight and a banner *instead of* its
   children when one fails. So a turn happening right now was invisible until
   the event store answered, and invisible for good whenever that query
@@ -5196,7 +5346,7 @@ to.
     pre-compressed and no proxy is needed for it
     ([API endpoints](api-endpoints.md#wiring)).
 19. **Tokens, never money.** Every spend figure the dashboard draws is a token
-    count — on Spend, on a seat's Cost tab, on a task's cost, on a turn's
+    count — on Spend, on a seat's profile, on a task's cost, on a turn's
     phases and in the landing screen's pulse. The engine records a price where
     one is reported, and only a subscription coding CLI reports one, so a
     currency figure covers the minority of calls that quote it while the token
@@ -5214,7 +5364,7 @@ to.
     SOURCE, where `src/money.test.tsx` parses every shipped module — comments
     excluded, so a note explaining the rule can name what it forbids; the
     SCREENS, where the same suite renders the landing screen, Spend, a task, a
-    seat's Cost tab and a turn over wire fixtures that carry a price everywhere
+    seat's Overview and Turns tabs and a turn over wire fixtures that carry a price everywhere
     the engine puts one, and reads text and attributes back for any trace of
     it; and the BUNDLE, where `TestTheDashboardRendersNoPrice` scans every
     module the engine serves, lazy chunks and `protocol.js` included, because

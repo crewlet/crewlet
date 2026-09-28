@@ -388,7 +388,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// row and the record are written by different processes' worth of code.
 	var launch string
 	waitFor(t, "the resumed phase's record to name its launch", func() bool {
-		rows, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil)
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil)
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}

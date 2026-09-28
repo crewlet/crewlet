@@ -163,6 +163,24 @@ export const ACTIONS = {
     refreshes: ["sandbox_runs", "decisions"],
     scope: "person",
   },
+  pause_seat: {
+    // A SEAT'S PROFILE PAUSES IT: its mail waits, its schedules are skipped,
+    // and the turn it is on finishes first unless `stop_running` asks for it
+    // to end at its next round. The pause is a coordination record rather
+    // than a log a question reads, so it raises no floor; the seat's state
+    // moves on the agents push, which every node sends when its watch lands.
+    args: ["handle", "reason", "stop_running"],
+    domain: null,
+    refreshes: [],
+    scope: "person",
+  },
+  resume_seat: {
+    // AND RESUMES IT: the mail that waited is delivered first, in order.
+    args: ["handle"],
+    domain: null,
+    refreshes: [],
+    scope: "person",
+  },
   write_page: {
     // "SAVE AS A PAGE" in the Inbox's composer: what the person wrote becomes
     // a new page in the knowledge base, which is then attached to the item

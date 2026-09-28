@@ -77,8 +77,9 @@ func union(groups ...[]store.EventRecord) []store.EventRecord {
 // shorter than the page — whose unsent rows sit above the size cut; the
 // obvious k-way merge would page past them for good.
 //
-// more reports that rows exist past this page — a page filled, or the merged
-// page was cut at limit — which is what tells a caller to offer "older".
+// more reports that rows exist past this page — a node said it holds more
+// than it sent, or the merged page was cut at limit — which is what tells a
+// caller to offer "older".
 func MergeListing(parts []listPart, limit int) (rows []store.EventRecord, more bool) {
 	groups := make([][]store.EventRecord, 0, len(parts))
 	var horizon *store.EventRecord

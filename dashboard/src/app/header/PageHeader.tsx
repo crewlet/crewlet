@@ -6,11 +6,12 @@
  *
  * The first row is the kit's top bar — the drawer toggle below the shell
  * breakpoint, the breadcrumb, an object page's lenses beside it (`PageLenses`),
- * and what this page can do: who is working right
- * now, the star and the link, and LAST the screen's own controls (portalled
- * in through `PageActions`) — because a screen's primary action ("New task")
- * belongs at the bar's end, where the approved designs put it and where the
- * eye finishes the row; the frame's quiet controls come before it. The second row is the workspace's SECTIONS, drawn
+ * and what this page can do: who is working right now (Home's bar only), the
+ * star and the link, and LAST the screen's own controls (portalled in through
+ * `PageActions`) — because a screen's primary action ("New task") belongs at
+ * the bar's end, where the approved designs put it and where the eye finishes
+ * the row; the frame's quiet controls come before it. The second row is the
+ * workspace's SECTIONS, drawn
  * as tabs, on a section's own page only: on an object page the crumbs are the
  * way back out, and a strip of tabs over a task page would say the task is a
  * fourth kind of list.
@@ -40,6 +41,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -68,10 +70,12 @@ import { resolves } from "../routes.ts";
 import { sectionOf, type Section, type WorkspaceRow } from "../nav.ts";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "../frame/PageActions.tsx";
 import { glyphFor } from "~/ui/glyph.tsx";
+import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
+import { foldTabs } from "../frame/tabFit.ts";
 
 /** How many working seats the header draws before "+n". */
 const WORKING_FACES = 4;
@@ -94,7 +98,7 @@ export function PageHeader({
   counts,
   title,
   workspace,
-  workingIn = "",
+  working = false,
   menu = [],
   children,
 }: {
@@ -106,8 +110,8 @@ export function PageHeader({
   /** The page's own name, for the star. */
   title: string;
   workspace: string;
-  /** The project the page is about, whose working seats the header draws. */
-  workingIn?: string;
+  /** Whether this page draws who is working — Home's only (`useWorkingNow`). */
+  working?: boolean;
   /** The screen's secondary actions, folded into "More" on a phone. */
   menu?: readonly PageMenuEntry[];
   /** What sits under the rows: the state bar. */
@@ -130,7 +134,7 @@ export function PageHeader({
               only when the frame already knows there are controls could never
               be found by the screen that has them. The gap is the bar's own,
               so a screen's controls sit as far apart as the frame's. */}
-          <WorkingNow project={workingIn} />
+          {working && <WorkingNow />}
           {/* THE FRAME'S OWN QUIET PAIR, drawn inline on a wide bar and folded
               into "More" on a phone (see `PageMore`), where the bar keeps one
               action in view. */}
@@ -155,22 +159,16 @@ export function PageHeader({
 
 /**
  * Who is working right now: their faces, and how many — the company's pulse,
- * on every page, one click from what they are running.
+ * one click from what they are running. Drawn on Home only (`useWorkingNow`):
+ * everywhere else the sidebar's Agents badge carries the same count.
  *
  * THE ENGINE'S WORD, off the agents push. Nothing is drawn while nobody is
- * working: a header reading "0 agents working" on every page is a line a
- * reader learns to skip, and then skips on the day it says something.
+ * working: a header reading "0 agents working" is a line a reader learns to
+ * skip, and then skips on the day it says something.
  */
-export function WorkingNow({ project }: { project: string }) {
+export function WorkingNow() {
   const agents = useAgents();
-  // ON A PROJECT'S PAGE, THE SEATS ON ITS WORK — the item the engine charges
-  // each running turn to, never a guess from what the seat is called.
-  const working = agents.filter(
-    (a) =>
-      a.activity === "working" &&
-      (!project ||
-        (a.live_call?.work_item?.project || a.turn?.work_item?.project || "") === project),
-  );
+  const working = agents.filter((a) => a.activity === "working");
   if (working.length === 0) return null;
   return (
     <a className="working-now" href={href(["live"])}>
@@ -178,16 +176,16 @@ export function WorkingNow({ project }: { project: string }) {
         size="xs"
         max={WORKING_FACES}
         decorative
+        // THE SEAT'S OWN BADGE, the initials its crumb and its profile draw
+        // (`seatBadge`): handed the role as written, "Agent SWE" was `AS`
+        // here beside `SW` everywhere else the seat is drawn.
         members={working.map((a) => ({
           id: a.id,
-          name: a.role,
-          kind: "agent" as const,
+          ...seatBadge(a.role, "agent"),
           ring: "info" as const,
         }))}
       />
-      <span>
-        {plural(working.length, "agent")} {project ? `on ${project}` : "working"}
-      </span>
+      <span>{plural(working.length, "agent")} working</span>
     </a>
   );
 }
@@ -319,45 +317,6 @@ export function SectionTabs({
       )}
     </nav>
   );
-}
-
-/**
- * Which tabs fold into "More", from their widths — the arithmetic, apart from
- * the DOM it is measured in, so it can be held to its rules directly.
- *
- * `widths` are the tabs' own, in order; `space` is the strip's inner width,
- * `gap` the space between two items and `more` the "More" trigger's width.
- * Returns the INDEXES that fold. Everything fits → none. Otherwise the strip
- * keeps the tab the reader is on (`current`) and, before it, as long a run of
- * the others FROM THE START as fits beside it and the trigger — a run, never a
- * pick of whichever narrower tabs would squeeze in further along, because a
- * strip whose order changes with its width is one a reader cannot learn.
- */
-export function foldTabs({
-  widths,
-  current,
-  space,
-  gap,
-  more,
-}: {
-  widths: readonly number[];
-  current: number;
-  space: number;
-  gap: number;
-  more: number;
-}): number[] {
-  const all = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
-  if (all <= space) return [];
-  let used = more + (current >= 0 ? (widths[current] ?? 0) + gap : 0);
-  const kept = new Set<number>(current >= 0 ? [current] : []);
-  for (let i = 0; i < widths.length; i++) {
-    if (i === current) continue;
-    const next = used + (widths[i] ?? 0) + gap;
-    if (next > space) break;
-    used = next;
-    kept.add(i);
-  }
-  return widths.map((_, i) => i).filter((i) => !kept.has(i));
 }
 
 /**
@@ -553,16 +512,28 @@ const FIGURE_WORDS: Record<string, string> = {
  * `text-overflow` does not reach: the last crumb was clipped mid-word at the
  * edge with no ellipsis at all. A span is a real flex item, blockified, which
  * is the box an ellipsis applies to.
+ *
+ * ITS FLOOR IS THE WAY BACK OUT (`--crumb-floor`, [useCrumbFloor]): the
+ * ancestors at their width and the last crumb at its stub. The bar breaks a
+ * line when the trail's floor cannot sit beside the controls, and a floor of
+ * 20ch alone let a seat's trail share a phone's line with its one button at
+ * two hundred pixels — "Agents › Engineering · Co" cut mid-letter under
+ * Message, the seat's own crumb scrolled out of sight. Measured, the floor is
+ * what the trail must show, so a trail that cannot show it beside the
+ * controls takes a line of its own, and it scrolls only when its ancestry
+ * alone is wider than the whole bar.
  */
 export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
   const trail = useRef<HTMLElement>(null);
   const overflows = useOverflows(trail, crumbs);
+  const floor = useCrumbFloor(trail, crumbs);
   return (
     <nav
       ref={trail}
       className="crumbs"
       aria-label="Breadcrumb"
       tabIndex={overflows ? 0 : undefined}
+      style={floor > 0 ? ({ "--crumb-floor": `${floor}px` } as CSSProperties) : undefined}
     >
       {crumbs.map((crumb, i) => {
         const last = i === crumbs.length - 1;
@@ -572,6 +543,15 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
           <>
             {Glyph && <Glyph size="sm" className="crumb-glyph" aria-hidden="true" />}
             {crumb.tag && <span className="project-key mono crumb-tag">{crumb.tag}</span>}
+            {crumb.seat && (
+              <SeatAvatar
+                name={crumb.seat.name}
+                kind={crumb.seat.kind}
+                size="xs"
+                decorative
+                className="crumb-seat"
+              />
+            )}
             <span className="crumb-text">{crumb.label}</span>
           </>
         );
@@ -599,6 +579,71 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
       })}
     </nav>
   );
+}
+
+/**
+ * The narrowest the trail can be and still show the way back out: where the
+ * last crumb's name starts, measured from the trail's own start, plus the stub
+ * that part keeps (its `min-width`) — or 0 before anything is laid out.
+ *
+ * NEVER MORE THAN THE ROOM BESIDE WHAT LEADS THE BAR. Below the shell
+ * breakpoint the kit's drawer toggle opens the bar's first line, and a floor
+ * wider than what the toggle leaves pushed the trail under it — a line holding
+ * the toggle alone, then the trail, then the controls. Capped at that room, a
+ * trail whose ancestry is wider still scrolls beside the toggle, as it always
+ * has past its floor.
+ *
+ * STABLE UNDER ITS OWN EFFECT. The ancestors never shrink (`frame.css`), so
+ * where the last part starts does not depend on how wide the trail is drawn,
+ * and neither the bar's width nor the toggle's does either — so the floor it
+ * sets cannot move what it was measured from. Measured again whenever a crumb
+ * or the bar changes size: a screen publishing its object's name, a font
+ * finishing loading, the window.
+ */
+function useCrumbFloor(el: RefObject<HTMLElement | null>, content: unknown): number {
+  const [floor, setFloor] = useState(0);
+  useLayoutEffect(() => {
+    const node = el.current;
+    if (!node) return;
+    const bar = node.parentElement;
+    const measure = () => {
+      const last = node.querySelector(
+        ".crumb-part:last-child > .crumb-here, .crumb-part:last-child > .crumb-link",
+      );
+      if (!last) return setFloor(0);
+      const start = node.getBoundingClientRect().left - node.scrollLeft;
+      const offset = last.getBoundingClientRect().left - start;
+      const stub = parseFloat(getComputedStyle(last).minWidth) || 0;
+      const wanted = Math.max(0, Math.ceil(offset + stub));
+      setFloor(bar ? Math.min(wanted, roomBeside(bar, node)) : wanted);
+    };
+    measure();
+    const watch = new ResizeObserver(measure);
+    for (const part of node.querySelectorAll(".crumb-part")) watch.observe(part);
+    if (bar) watch.observe(bar);
+    return () => watch.disconnect();
+  }, [el, content]);
+  return floor;
+}
+
+/**
+ * How wide `item` can be on its bar's first line: the bar's content box less
+ * everything drawn before it (the drawer toggle, below the shell breakpoint)
+ * and the gap after each. A bar not laid out yet has no room to report, and
+ * caps nothing.
+ */
+function roomBeside(bar: HTMLElement, item: HTMLElement): number {
+  const style = getComputedStyle(bar);
+  const content =
+    bar.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+  if (content <= 0) return Infinity;
+  const gap = parseFloat(style.columnGap) || 0;
+  let before = 0;
+  for (let sib = item.previousElementSibling; sib; sib = sib.previousElementSibling) {
+    const width = sib.getBoundingClientRect().width;
+    if (width > 0) before += width + gap;
+  }
+  return Math.max(0, Math.floor(content - before));
 }
 
 /**

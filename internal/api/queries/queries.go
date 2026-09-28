@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -344,6 +345,11 @@ func unavailableIfTransient(err error) error {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if errors.Is(err, coord.ErrUnavailable) {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	// A SEAT'S HOLDER THAT COULD NOT ANSWER YET — its lease unreadable, its
+	// node silent, or the seat still arriving on it — clears by waiting.
+	if errors.Is(err, memread.ErrUnavailable) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return err

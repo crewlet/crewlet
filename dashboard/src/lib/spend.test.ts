@@ -9,6 +9,7 @@ import {
   ghostHeights,
   phaseColor,
   spendDays,
+  spentOnly,
   unbandedTokens,
 } from "./spend.ts";
 import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
@@ -200,5 +201,20 @@ describe("the ghost", () => {
     });
     expect(ghostHeights(prior)).toEqual([5, 7]);
     expect(ghostHeights(null)).toEqual([]);
+  });
+});
+
+// A BREAKDOWN OF WHERE TOKENS WENT lists what spent some: the calls that failed
+// before a model answered recorded none, and a bar of nothing named "unknown"
+// read as a model that had answered them.
+describe("a breakdown of where tokens went", () => {
+  it("keeps every bucket that spent, in its order, and drops the ones that spent nothing", () => {
+    const rows = [
+      { model: "stub-sonnet", total_tokens: 1_900_000, calls: 111 },
+      { model: "unknown", total_tokens: 0, calls: 7 },
+      { model: "stub-haiku", total_tokens: 12, calls: 1 },
+    ];
+    expect(spentOnly(rows).map((r) => r.model)).toEqual(["stub-sonnet", "stub-haiku"]);
+    expect(spentOnly([])).toEqual([]);
   });
 });

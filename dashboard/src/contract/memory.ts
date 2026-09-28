@@ -109,18 +109,33 @@ export interface CounterpartyProfile {
 }
 
 export interface AgentMemory {
+  /** The handle the answer is about. */
   id: string;
+  /** The newest LIVE entries, newest first — a page of `diary_total`. */
   diary: DiaryEntry[];
+  diary_total: number;
+  /** The newest episode rows — a page of `episodes_total`. */
   episodes: Episode[];
+  episodes_total: number;
   skills: SynthesizedSkill[];
   /** How many the seat HAS, which is not how many `skills` carries: the
    *  listing is cut at the page limit, and this is what says so. ALWAYS
-   *  PRESENT — the answer seeds it, so it is `0` for a seat that has learned
-   *  nothing rather than absent. Read off `skills.length` instead, it is the
-   *  page size, which silently under-reports exactly the seat this count
-   *  exists for. */
+   *  PRESENT — `0` for a seat that has learned nothing rather than absent.
+   *  Read off `skills.length` instead, it is the page size, which silently
+   *  under-reports exactly the seat this count exists for. The same holds
+   *  for every `…_total` here. */
   skills_total: number;
+  /** Most recently updated first — a page of `counterparties_total`. */
   counterparties: CounterpartyProfile[];
-  /** When the seat was onboarded, or "" when the engine holds no instant. */
+  counterparties_total: number;
+  /** The newest live diary entry, whatever page was asked for — what a
+   *  profile's summary shows as the latest reflection — or null when the
+   *  diary holds none. */
+  latest_reflection: DiaryEntry | null;
+  /** When the seat first finished onboarding, or "" when it has not. */
   onboarded_at: string;
+  /** Who answered: the node holding the seat, whose copy is the one kept
+   *  current — or `none` for a seat no node holds, whose answer is empty
+   *  because no copy anywhere is current. */
+  held_by: string;
 }

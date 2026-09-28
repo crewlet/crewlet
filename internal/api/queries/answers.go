@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -102,14 +101,15 @@ type Sources struct {
 	// has fired" are told apart by the answer's own shape.
 	Runs ScheduleRuns
 
-	// Diary, Episodes and Skills are a seat's memory. Skills is the half
-	// that had no query at all: learning.Skills.List exists and is tested,
-	// and nothing served it, so a seat's synthesized skills were written,
-	// versioned, loadable by the agent itself — and invisible to the
-	// operator whose tokens paid for them.
-	Diary    *learning.Diary
-	Episodes *learning.Episodes
-	Skills   *learning.Skills
+	// Memory is a seat's memory — its diary, episodes, the skills it drafted
+	// and what it learned about the people it works with — and its
+	// conversation ledger, each ANSWERED BY THE NODE HOLDING THE SEAT
+	// (internal/learning/memread). Every node keeps a copy of every seat it
+	// ever ran and only the holder keeps it current, so a read of whichever
+	// node served the request described the seat as of the last time that
+	// node ran it. Nil leaves `agent_memory` and `conversations`
+	// unregistered.
+	Memory SeatMemory
 
 	// Channels is the fleet's agent-to-agent authorization record. A
 	// consumer-defined interface rather than the whole coord.Fleet: this
@@ -221,18 +221,6 @@ type Sources struct {
 	// Nil leaves `work_search` unregistered, which is what a screen needs
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
-
-	// Conversations is the seat's own thread ledger — what it has said on
-	// a surface this engine does not own, and the record that stops it
-	// replying twice in one thread. Typed on the client since the client
-	// had types and registered nowhere, so the panel that reads it drew an
-	// empty list for every seat in every company.
-	Conversations Conversations
-
-	// Counterparties is what the learning loop remembers about WHO a seat
-	// has worked with — the one memory object that is about somebody else,
-	// and the one the memory answer never carried.
-	Counterparties Counterparties
 
 	// PublicBase is where third-party apps reach this deployment, RESOLVED,
 	// or nil when this process cannot say.
@@ -535,15 +523,13 @@ func Register(r *Registry, s Sources) {
 		r.Register("page_activity", s.pageActivity)
 		r.Register("page_revision", s.pageRevision)
 	}
-	if s.Diary != nil || s.Episodes != nil || s.Skills != nil ||
-		s.Counterparties != nil {
-
-		// FOUR HALVES NOW. Each is gated inside the answer rather than
-		// here, so a node holding one of them answers with that one and
-		// empty lists for the rest — which is what a client needs to
-		// tell "this seat has learned nothing" from "this node does not
-		// keep that half".
+	if s.Memory != nil {
+		// ANSWERED BY THE HOLDER, and saying which node that was — see
+		// [Sources.Memory].
 		r.Register("agent_memory", s.agentMemory)
+		// SCOPED, like every other per-seat question — see
+		// [Sources.viewerParty].
+		r.Register("conversations", s.conversations)
 	}
 	if s.Channels != nil {
 		r.Register("a2a_channels", s.a2aChannels)
@@ -555,11 +541,6 @@ func Register(r *Registry, s Sources) {
 		// reading the same company had only `q=` — an escaped LIKE over
 		// the excerpt, gated to a span of days.
 		r.Register("work_search", s.workSearch)
-	}
-	if s.Conversations != nil {
-		// SCOPED, like every other per-seat question — see
-		// [Sources.viewerParty].
-		r.Register("conversations", s.conversations)
 	}
 	if s.Config != nil {
 		// OPERATOR-ONLY, all three. Reading the config document exposes
@@ -682,9 +663,10 @@ func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) 
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
-	// tiebreak depends on. Offered only when the fleet holds MORE — a page
-	// that filled, or one the merge cut at the newest point a node's page
-	// stopped at — since a cursor past the end would page for ever.
+	// tiebreak depends on. Offered only when the fleet holds MORE — a node
+	// whose read found a row past its page, or a page the merge cut at the
+	// newest point such a node stopped at — since a cursor past the end would
+	// page for ever, and one on a page that merely filled pages onto nothing.
 	next := ""
 	if listing.More {
 		last := records[len(records)-1]
