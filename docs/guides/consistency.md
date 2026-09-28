@@ -107,25 +107,33 @@ asked for one and got another can tell.
 ### The org chart, and what its `linearizable` reads cost
 
 The chart is a state-log domain like the tracker and the knowledge base, so
-every level above means the same thing about it — but two of its reads are
-worth naming, because they are the only two the engine issues at
-`linearizable` on its own account:
+every level above means the same thing about it — but who reads it at which
+level, and what that costs, is worth naming:
 
-- **An import's read-back.** After a config revision's structure lands, the
-  import reads the chart to confirm what it actually holds. A weaker level
-  would let it confirm against a copy that does not include the write it just
-  made, and report a revision as applied when the node cannot see it.
-- **`GET /chart?level=linearizable`.** A person about to reorganise a company
-  is the one caller who genuinely needs to know that what they are looking at
-  includes every change committed anywhere in the fleet — because the batch
-  they are about to submit is refused *whole* against exactly that state.
+- **Every read through `/chart` is `linearizable`** — the whole chart, one
+  unit, one seat, the history and import ledger, and `/company/export`. It is
+  the operator surface, whose level is not settable: a `read_level` on the
+  request is overruled rather than refused (a staleness bound beside it is
+  refused, having nothing to bound), and the answer's `level` says what it was
+  actually read at. A person about to reorganise a company is the one
+  caller who genuinely needs to know that what they are looking at includes
+  every change committed anywhere in the fleet — because the batch they are
+  about to submit is refused *whole* against exactly that state. Each of these
+  **appends a barrier and waits through it**, and counts against
+  `LinearizableReadsPerDay` like every other.
+- **The engine's own imports read back at `stale` with a floor.** After the
+  boot seed or a staged chart has published its records, the node reads its
+  chart at `stale` with `min_position` set to where the last of them landed.
+  Those positions are this node's own writes, so waiting for its own applier to
+  pass them is all the read-back needs to confirm what the chart holds before
+  the next epoch reads it — no barrier on the log, nothing against the
+  budget. A read-back that runs out of time is logged and the boot carries on;
+  the periodic rebuild converges within 30 seconds.
 
-Both **append a barrier and wait through it**, and both count against
-`LinearizableReadsPerDay` like every other. Everything else that reads the
-chart — a turn's roster, an escalation walk, the organization screen — reads
-at the surface's own default, because a chart that is one record behind still
-answers "who leads this team" correctly in all but the seconds after a
-reorganisation.
+Everything else that reads the chart — a turn's roster, an escalation walk, the
+organization screen — reads at the surface's own default, because a chart that
+is one record behind still answers "who leads this team" correctly in all but
+the seconds after a reorganisation.
 
 **A chart read carries its position, and refuses rather than degrading.** The
 whole structure comes back in one answer, because every derivation over a
