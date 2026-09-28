@@ -166,4 +166,19 @@
 // could not be read, a lease listing that failed, a company that could not be
 // resolved. Whatever runs [Next] changes nothing on a tick whose inputs it could
 // not read (ADR-0005), and so never releases or removes on one.
+//
+// # The maintainer, and what it writes under layout 0
+//
+// [Maintainer] is what runs [Next]: once a tick, while its node holds the
+// map's duty (`worker:estate-map`), reading the live estate leases, the stored
+// map and the company, and writing the answer back by compare-and-set — the
+// object map's maintainer over this record. Before it writes a FIRST map it
+// has the layout's logs created ([Provisioner]), because a node named to join
+// a partition opens its logs, and a map naming holders of logs nobody created
+// would name joins that cannot start.
+//
+// Under layout 0 — the single-file layout, and the only one this build runs —
+// it writes NOTHING: there is no map, [Next] creates none for layout 0, and a
+// tick reads its three inputs and leaves the store as it found it. The duty's
+// own lease is the only record its holder keeps.
 package partmap
