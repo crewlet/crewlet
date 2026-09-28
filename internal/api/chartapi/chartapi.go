@@ -31,7 +31,11 @@
 // those and this surface renders its refusal as the table's own ([refuseGrant]).
 // A reader gets the runtime split too: the stripped posture is the default and
 // the runtime half takes the grant that reads the company document, because
-// the names of a company's credentials are a map of what to attack.
+// the names of a company's credentials are a map of what to attack. And even
+// then its CREDENTIALS are masked, with a seat's address beside them, exactly
+// as GET /config masks the settings document ([chart.MaskRuntime]): holding
+// the grant that reads the configuration is not holding the credentials in
+// it, and the mask a read serves is the one a write restores from the row.
 //
 // # And structure is neither
 //

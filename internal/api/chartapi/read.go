@@ -1,6 +1,7 @@
 package chartapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -10,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -259,6 +262,14 @@ func retryAfter(err error) int {
 }
 
 // viewOfUnit renders one unit at the posture this request gets.
+//
+// THE RUNTIME HALF IS MASKED, whoever may read it: every credential in it shows
+// only as a whole `${VAR}` reference, and anything else as the mask — the rule
+// GET /config applies to the settings document, found by the same tags
+// ([chart.MaskRuntime]). The writer seals every literal before a row holds it,
+// so what a mask hides here is a composite of references or a row written
+// before that rule; what matters is that no read of this surface is where a
+// credential leaves, and that the mask it serves is one a write restores.
 func viewOfUnit(u chart.Unit, runtime bool) unitView {
 	out := unitView{
 		Key: u.Key, Name: u.Name, Type: u.Type, Purpose: u.Purpose,
@@ -267,23 +278,39 @@ func viewOfUnit(u chart.Unit, runtime bool) unitView {
 		FormerKeys: u.FormerKeys,
 	}
 	if runtime && len(u.Runtime) > 0 {
-		out.Runtime = u.Runtime
+		out.Runtime = maskedRuntime(chart.KindUnit, u.Runtime)
 	}
 	return out
 }
 
 // viewOfSeat renders one seat at the posture this request gets.
+//
+// ITS ADDRESS IS MASKED LIKE A CREDENTIAL, because the chart seals it like one:
+// a sealed address is served as its reference and anything else as the mask,
+// which a write hands back and the writer restores. See [viewOfUnit] for the
+// runtime half.
 func viewOfSeat(seat chart.Seat, runtime bool) seatView {
 	out := seatView{
 		Handle: seat.Handle, Kind: string(seat.Kind), Unit: seat.UnitKey,
-		Name: seat.Name, Email: seat.Email, Goal: seat.Goal,
+		Name: seat.Name, Email: secrets.Mask(seat.Email), Goal: seat.Goal,
 		Project: seat.Project, Space: seat.Space,
 		FormerHandles: seat.FormerHandles,
 	}
 	if runtime && len(seat.Runtime) > 0 {
-		out.Runtime = seat.Runtime
+		out.Runtime = maskedRuntime(chart.KindSeat, seat.Runtime)
 	}
 	return out
+}
+
+// maskedRuntime is one object's runtime half as this surface serves it, or
+// nothing — never the half as stored — where it does not decode: a half that
+// cannot be walked cannot be said to hold no credential.
+func maskedRuntime(kind chart.ObjectKind, runtime json.RawMessage) any {
+	masked := chart.MaskRuntime(org.RuntimeShape{}, kind, runtime)
+	if len(masked) == 0 {
+		return nil
+	}
+	return masked
 }
 
 // answerOf renders what a read reports about itself.

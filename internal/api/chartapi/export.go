@@ -21,6 +21,16 @@ import (
 // So it takes the grant that reads the company document, always, and there is
 // no stripped posture here to get wrong.
 //
+// # Whole, and its credentials still masked
+//
+// Every credential in the runtime half, and a seat's address, is served as
+// GET /config serves the settings' — a whole `${VAR}` as itself and anything
+// else as the mask ([chart.MaskRuntime]). The writer seals every literal, so a
+// sealed credential exports as the reference it is stored under and round-
+// trips unchanged; a mask sent back to this deployment is restored from the
+// row it patches, and one sent to a deployment that holds no such row is
+// refused naming the field rather than stored as the marker.
+//
 // # What it deliberately does not carry
 //
 // The company's SETTINGS. They are a stored revision with their own route,

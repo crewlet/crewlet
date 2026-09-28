@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -503,6 +504,53 @@ func TestTheRuntimeHalfIsServedToACallerThatMayReadIt(t *testing.T) {
 	}
 	if !strings.Contains(string(mustMarshal(t, body)), "mcp_env") {
 		t.Error("the runtime half was withheld from a caller that may read it")
+	}
+}
+
+// EVERY READ OF THE RUNTIME HALF MASKS ITS CREDENTIALS, AND SO DOES THE ADDRESS.
+//
+// Holding the grant that reads the half is not holding its credentials: the
+// half is served the way GET /config serves the settings document — a whole
+// `${VAR}` reference shown, because it names a credential and is what an
+// operator edits, and anything else masked, a composite of references
+// included. The writer seals every literal before a row holds one, so the
+// literals here are a row written before that rule; the point is that no read
+// of this surface — the chart, one seat, the export — is where a credential
+// leaves, and that what it serves instead is the mask a write restores.
+func TestEveryReadOfTheRuntimeHalfMasksItsCredentials(t *testing.T) {
+	t.Parallel()
+	held := chart.Chart{
+		Units: []chart.Unit{{Key: "engineering", Name: "Engineering",
+			Runtime: json.RawMessage(`{"mcp_env":{"gitlab":{"GITLAB_TOKEN":"glpat-LITERAL"}}}`)}},
+		Seats: []chart.Seat{{Handle: "sre", Name: "SRE", UnitKey: "engineering",
+			Email: "sre-LITERAL@example.com",
+			Runtime: json.RawMessage(`{"mcp_env":{"datadog":{` +
+				`"DD_APP_KEY":"dd-LITERAL","DD_SITE":"${DD_SITE}",` +
+				`"Authorization":"Bearer ${DD_TOKEN}"}},` +
+				`"slack":{"bot_token":"xoxb-LITERAL"},` +
+				`"mattermost":{"username":"sre-bot"}}`)}},
+	}
+	r := serve(t, &reader{chart: held, seat: chart.SeatDetail{Seat: held.Seats[0]}},
+		leadOf(iam.GrantStateRead, iam.GrantConfigRead), leads())
+	for _, path := range []string{"/chart?runtime=true", "/chart/seats/sre?runtime=true",
+		"/chart/seats?runtime=true", "/chart/units?runtime=true", "/company/export"} {
+		served := string(mustMarshal(t, getJSON(t, r.mux, path, http.StatusOK)))
+		if strings.Contains(served, "LITERAL") {
+			t.Errorf("%s served a credential: %s", path, served)
+		}
+		// THE CONTROL: the read still serves the half — a whole reference
+		// as itself, a field that holds no credential as written, and the
+		// mask where a credential was — so it is a masking, not a stripping.
+		if path != "/chart/units?runtime=true" {
+			for _, want := range []string{`"${DD_SITE}"`, `"sre-bot"`,
+				`"DD_APP_KEY":"` + redact.FieldMask + `"`,
+				`"Authorization":"` + redact.FieldMask + `"`,
+				`"email":"` + redact.FieldMask + `"`} {
+				if !strings.Contains(served, want) {
+					t.Errorf("%s does not serve %s: %s", path, want, served)
+				}
+			}
+		}
 	}
 }
 
