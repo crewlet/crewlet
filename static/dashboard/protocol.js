@@ -184,7 +184,7 @@ var Store = class {
 		}
 		if (ev.type === "sandbox_run_usage" && ev.payload) {
 			if (!this.state.runs.some((r) => r.id === ev.id)) {
-				this.state.runs = [ev, ...this.state.runs].slice(0, 50);
+				this.state.runs = [ev, ...this.state.runs].slice(0, 400);
 				this.emit("runs");
 			}
 		}

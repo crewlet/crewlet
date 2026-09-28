@@ -222,6 +222,38 @@ describe("coding runs' usage", () => {
     expect(store.state.runs).toHaveLength(MAX_RUNS);
     expect(store.state.runs[0]?.id).toBe(`u${MAX_RUNS + 9}`);
   });
+
+  test("every run of a turn whose phases are still held is held too", () => {
+    // A turn card and a seat's turns sum a turn's runs from this buffer until
+    // its row settles, so a run dropped while its turn's phases are still
+    // buffered is a turn shown short of what it spent. The heaviest shape a
+    // company whose seats code puts on the wire: every iteration relaunches,
+    // four runs back to back, then the execute they resumed into and its
+    // review — two phase records, since a suspended execute publishes none.
+    const store = new Store();
+    const iterations = MAX_PHASES; // twice what the phase buffer holds
+    for (let i = 0; i < iterations; i++) {
+      const turn = `t${i}`;
+      for (let r = 0; r < 4; r++) {
+        store.applyEvent({
+          ...usageEvent(`u${i}-${r}`),
+          payload: { turn_id: turn, launch_id: `l${i}-${r}`, total_tokens: 10 },
+        } as EventEnvelope);
+      }
+      for (const phase of ["execute", "review"]) {
+        store.applyEvent({
+          ...feedRow(`p${i}-${phase}`, { type: "agent_phase_completed", category: "llm" }),
+          payload: { turn_id: turn, phase, iteration: 0, role: "PM" },
+        } as EventEnvelope);
+      }
+    }
+    const heldTurns = new Set(store.state.phases.map((p) => p.payload?.turn_id));
+    expect(heldTurns.size).toBe(MAX_PHASES / 2);
+    for (const turn of heldTurns) {
+      const runs = store.state.runs.filter((r) => r.payload?.turn_id === turn);
+      expect(runs, `the runs of ${String(turn)}`).toHaveLength(4);
+    }
+  });
 });
 
 describe("connection state", () => {

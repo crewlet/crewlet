@@ -77,13 +77,20 @@ export const MAX_PHASES = 200;
  * How many coding runs' usage envelopes the socket keeps, payload and all.
  *
  * The same drop-oldest, company-wide bound as [MAX_PHASES] and for the same
- * reason — these only supplement a screen's query answer — at a quarter of it:
- * a run is one record per detached coding job, and a turn that collects more
- * than one is a turn that ran jobs back to back, so a quarter of the phases
- * the buffer holds is still above the runs those phases can have launched,
- * while each record is a few hundred bytes rather than a phase's prompts.
+ * reason — these only supplement a screen's query answer — and sized from it,
+ * because what it must hold is every run of the turns whose phases that buffer
+ * still holds: a turn card and a seat's turns sum a turn's runs from here
+ * until its row settles. A turn's iteration that launches coding runs puts TWO
+ * phase records on the wire, the execute its last run resumed into and the
+ * review (a suspended execute publishes none), and ONE usage record per run —
+ * and the runs of one iteration are as many as its executor launched back to
+ * back. So runs are at least half the phases in a company whose seats mostly
+ * code, and more wherever a turn relaunches; at TWICE the phases this keeps
+ * every run of every buffered turn up to four runs an iteration, company-wide.
+ * The cost is nothing a phase buffer would notice: a record is a few hundred
+ * bytes, where one phase carries its prompts and tool results.
  */
-export const MAX_RUNS = 50;
+export const MAX_RUNS = 2 * MAX_PHASES;
 
 export interface StoreState {
   agents: AgentRow[];
