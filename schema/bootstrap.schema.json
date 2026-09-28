@@ -65,14 +65,6 @@
           ],
           "type": "string"
         },
-        "bootstrap": {
-          "description": "Whether the first person may be created with a one-time code (default open).",
-          "enum": [
-            "open",
-            "closed"
-          ],
-          "type": "string"
-        },
         "local": {
           "$ref": "#/$defs/APILocal"
         },

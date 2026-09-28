@@ -759,8 +759,6 @@ api:
   auth:
     backend: local      # local | none. Unset derives from whether the
                         #   `local` block below is present
-    bootstrap: open     # open (default) | closed — whether POST
-                        #   /auth/bootstrap may create the first person
     max_grants:         # THE CEILING. Required once port is set
       [state:read, audit:read, config:read, secrets:read,
        work:write, knowledge:write, config:write, secrets:write,
@@ -788,8 +786,8 @@ api:
       accept_insecure: false   # acknowledge an insecure posture off loopback
       min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
                                #   Enforced wherever a person sets a password
-                               #   — the founding and every redemption — and
-                               #   what /auth/config tells a form to refuse
+                               #   — every invitation's redemption — and what
+                               #   /auth/config tells a form to refuse
     tokens:             # the DEPLOYMENT's machine credentials. At least one
                         #   is required once port is set, on every backend
       - id: founder     # acts under the login token:founder — lowercase
@@ -797,8 +795,11 @@ api:
                         #   by colons (ci-pipeline, ci:release), at most 58
                         #   characters so the login stays within 64
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
-        grants: [state:read, config:read, config:write, secrets:read,
-                 secrets:write, work:write, knowledge:write, fleet:operate]
+        grants: [state:read, audit:read, config:read, secrets:read,
+                 work:write, knowledge:write, config:write, secrets:write,
+                 fleet:operate, people:manage, sandbox:run]
+                        # what it may do, and the most an invitation it
+                        #   issues may confer — the first person's included
         colleague: none        # none (default) | read | write
         audit_every_use: false # true writes a row per request, not per hour
 
@@ -863,9 +864,11 @@ hash of its own resolved ceiling on its presence lease, and `/health` and the
 fleet view report a mixed one.
 
 **At least one `api.auth.tokens` entry is required**, on every backend. A fresh
-deployment's identity estate is empty, so a Tier A token is what creates the
-first person; on a running one it is the way back in when an administrator has
-locked themselves out. Each entry states its own
+deployment's identity estate is empty, so a Tier A token is what invites the
+first person (`crewlet iam invite`) — and an invitation confers only what its
+issuer holds, so the token that invites them has to hold every grant they are
+to carry, `people:manage` included. On a running deployment it is the way back
+in when an administrator has locked themselves out. Each entry states its own
 `grants` — required and non-empty, because a credential's blast radius belongs
 where it is pinned — and its value must be at least 26 characters, checked on
 what the `${VAR}` resolves to.
@@ -889,9 +892,9 @@ which says how to reach a person rather than which credential they hold. See
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 **Leave `people:manage` out of the ceiling and nobody can ever hold it.** The
-first person a fresh estate enrols receives every grant the ceiling permits and
-may confer only what they hold, so a ceiling without it is a deployment in
-which nobody can invite, bind, suspend or remove anybody.
+first person carries what the invitation that enrolled them conferred, cut to
+the ceiling, and may confer only what they hold, so a ceiling without it is a
+deployment in which no person can invite, bind, suspend or remove anybody.
 
 The event store (LLM observability) is a table in that same file, created by
 the engine's own migrations on first start — there is nothing to configure

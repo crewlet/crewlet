@@ -308,6 +308,14 @@ func TestEveryRetiredAuthKeyIsANamedRefusal(t *testing.T) {
 				"      issuer: https://idp.example.com\n",
 			"`backend: local`",
 		},
+		{
+			// `closed` described the posture every deployment now
+			// runs, and `open` has no route left to serve — both are
+			// told where the first person comes from instead.
+			"api.auth.bootstrap",
+			"api:\n  auth:\n    bootstrap: closed\n",
+			"crewlet iam invite",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

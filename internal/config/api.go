@@ -301,32 +301,6 @@ var AuthBackends = []AuthBackend{AuthBackendLocal, AuthBackendNone}
 // Valid reports whether a backend off the wire is one this build knows.
 func (b AuthBackend) Valid() bool { return slices.Contains(AuthBackends, b) }
 
-// BootstrapAccess is whether the first person can be created by presenting a
-// one-time code at `POST /auth/bootstrap`.
-//
-// Named for the ACCESS rather than for a posture, because `Posture` is already
-// a closed set in the control plane answering a different question, and two
-// closed sets under one word is how a later change reads the wrong one.
-type BootstrapAccess string
-
-const (
-	// BootstrapAccessOpen serves the route while this fleet's rows hold
-	// nobody with a credential. It is the default, and it is what the
-	// quickstart walks through.
-	BootstrapAccessOpen BootstrapAccess = "open"
-
-	// BootstrapAccessClosed shuts the route outright. The first person is
-	// then created under a Tier A token, which is the right posture for a
-	// deployment on a network where a claim race is reachable.
-	BootstrapAccessClosed BootstrapAccess = "closed"
-)
-
-// BootstrapAccesses is the closed set.
-var BootstrapAccesses = []BootstrapAccess{BootstrapAccessOpen, BootstrapAccessClosed}
-
-// Valid reports whether a value off the wire is one this build knows.
-func (b BootstrapAccess) Valid() bool { return slices.Contains(BootstrapAccesses, b) }
-
 // APIAuth is how anyone — a person, a machine, this deployment's own operator
 // — proves who they are to the HTTP surface.
 //
@@ -358,16 +332,20 @@ func (b BootstrapAccess) Valid() bool { return slices.Contains(BootstrapAccesses
 // they are with a password and a second factor held here, or the deployment
 // has no people at all.
 //
-// All three are refused by name if they appear — see retiredBootstrapFields.
+// `bootstrap` opened a second way in for the first person — a one-time code a
+// node wrote beside its store — beside the one every serving node already
+// requires. The Tier A token below IS the credential a company has before it
+// has anybody, so the first person is invited under it exactly as everybody
+// after them is, and the founder route, its race between two codes and its
+// setting went.
+//
+// All four are refused by name if they appear — see retiredBootstrapFields.
 type APIAuth struct {
 	// Backend is how PEOPLE sign in. Empty derives from whether the
 	// `local` block is present: `local` if it is, and `none` if not —
 	// which is the honest reading of a file that says nothing about
 	// people, and never a password backend somebody did not ask for.
 	Backend AuthBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=local|none" desc:"How people sign in. Empty derives from whether local is present."`
-
-	// Bootstrap is whether `POST /auth/bootstrap` is served. Default open.
-	Bootstrap BootstrapAccess `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty" js:"enum=open|closed" desc:"Whether the first person may be created with a one-time code (default open)."`
 
 	// MaxGrants is THE CEILING: the most authority this deployment will
 	// let a company's own directory confer. REQUIRED once the API is
@@ -392,10 +370,10 @@ type APIAuth struct {
 	// which is why each node publishes a hash of its own resolved ceiling
 	// on its presence lease.
 	//
-	// REQUIRED RATHER THAN DEFAULTED TO ALL TEN, because a default that
+	// REQUIRED RATHER THAN DEFAULTED TO ALL ELEVEN, because a default that
 	// grants everything is a ceiling that does nothing, and one that
-	// grants a subset silently locks out whatever it left out. Ten lines
-	// in a config diff is what a reviewer needs to see.
+	// grants a subset silently locks out whatever it left out. Eleven
+	// lines in a config diff is what a reviewer needs to see.
 	MaxGrants []iam.Grant `yaml:"max_grants,omitempty" json:"max_grants,omitempty" desc:"The most authority the directory may confer. Required once the API is served."`
 
 	// Session bounds how long a proof of identity lasts.
@@ -431,14 +409,6 @@ func (a APIAuth) Resolved() AuthBackend {
 		return AuthBackendLocal
 	}
 	return AuthBackendNone
-}
-
-// BootstrapAccess is the posture with the default applied.
-func (a APIAuth) BootstrapAccess() BootstrapAccess {
-	if a.Bootstrap == "" {
-		return BootstrapAccessOpen
-	}
-	return a.Bootstrap
 }
 
 // Ceiling is the resolved ceiling as a set, for the per-request intersection.
@@ -802,11 +772,6 @@ func (a *APIAuth) validate(path Path, api API) error {
 			"%q (want %s or %s)", a.Backend, AuthBackendLocal,
 			AuthBackendNone)
 	}
-	if a.Bootstrap != "" && !a.Bootstrap.Valid() {
-		p.add(at(path, "bootstrap"), ErrUnknownValue,
-			"%q (want %s or %s)", a.Bootstrap, BootstrapAccessOpen,
-			BootstrapAccessClosed)
-	}
 
 	p.wrap(a.validateCeiling(path, api))
 	p.wrap(a.Session.validate(at(path, "session")))
@@ -971,15 +936,15 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 	//   - on `none`, it is the only credential that exists at all.
 	//
 	// And on every one of them, a fresh deployment's identity estate is
-	// EMPTY: somebody has to be able to create the first person, and with
-	// `bootstrap: closed` the token is the only thing that can.
+	// EMPTY: somebody has to invite the first person, and the token is
+	// the only credential that exists to do it with.
 	if api.Serving() && len(a.Tokens) == 0 {
 		p.add(at(path, "tokens"), ErrMissing,
 			"at least one token is required once `api.port` is set, on every "+
 				"backend. The identity estate of a fresh deployment is empty, "+
-				"so this is what creates the first person; and on a running one "+
-				"it is the way back in when an administrator has locked "+
-				"themselves out. Generate one with "+
+				"so this is what invites the first person (`crewlet iam "+
+				"invite`); and on a running one it is the way back in when an "+
+				"administrator has locked themselves out. Generate one with "+
 				"`crewlet secrets keygen` and point `token:` at a ${VAR}")
 	}
 	return p.err()
