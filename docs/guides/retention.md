@@ -795,8 +795,7 @@ their clocks were. The record names *positions* the publisher resolved once —
 "every change below this one, every session record below that one" — and one
 instant, also read once, against which the same record collects the rows that
 are **over** rather than old: sessions that ended or passed their absolute
-deadline; invitations and bootstrap codes that expired unredeemed **or were
-redeemed**; and credentials — passwords, second factors, machine tokens — that
+deadline; invitations that expired unredeemed **or were redeemed**; and credentials — passwords, second factors, machine tokens — that
 were **revoked or passed their own expiry**. Each is kept for a week (168
 hours) after it stopped being presentable, so the sessions and credentials
 screens can still say what ended and why; after that the trail row, kept for
@@ -832,21 +831,39 @@ happened" and is measured against an audit obligation. It is swept like every
 other domain's — per node, by the maintenance sweep — because each node owns
 its own copy of it.
 
+### A removed person's values stay on the identity log until the trim
+
+A removal erases every sealed value of the person's from every node's rows in
+the transaction that removes them — their name, their address and any second
+factor's seed, from their own rows, from an invitation addressed to them and
+from the trail rows that outlive them (see [Identity and
+Access](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows)).
+What it cannot rewrite is the **log**: the records that wrote those values stay
+on `CREWLET_IAM_LOG`, sealed under the fleet keyring, until the trim passes
+them — never before `min_age`, and later for as long as any of the six terms
+holds the identity log. Every backup taken meanwhile carries them in its stream
+snapshot.
+
+So the trim is part of an erasure, and a blocked one is an erasure that has not
+finished: `trim_blocked` on the identity log is also the answer to "is that
+person's name still on disk". The remedy is the term's own — a backup that
+never left the host, a pin nobody released — and never a shorter `min_age` for
+its own sake, which only moves when a record *may* go.
+
 ### The identity duties
 
-Four things keep the identity estate honest, and three of them are fleet
+Three things keep the identity estate honest, and two of them are fleet
 singletons, each on its own lease so that a flap on one costs that one an
-interval rather than all of them. Each of the three runs once as soon as a node
-claims it — so a restored node names a duplicate the moment it is back rather
-than an hour later — and then on its interval.
+interval rather than both. Each of the two runs once as soon as a node claims
+it — so a restored node names a duplicate the moment it is back rather than an
+hour later — and then on its interval.
 
 | Duty | Interval | What it does |
 |---|---|---|
 | `iam_sweep` | 1 hour | Resolves `api.auth.audit.changes` (400 days) and `api.auth.audit.sessions` (90 days) to positions and publishes one sweep record for each bucket that is **due** — one holding something at least a day past its horizon. The day of slack is what bounds the log: a bucket is swept at most about once a day, so the sweep adds at most 64 records a day however often it runs. |
-| `iam_key_shred` | 15 minutes | Destroys the key of anybody removed whose key outlived the removal, and every key nobody owns once it is an hour old. |
 | `iam_claims` | 1 hour | Logs every duplicated claim and every orphaned reservation at WARN, every tick it stands, naming each holder by id. A login or a seat is logged as it is; an address by its kind alone, never by its keyed blind, which would be a stable pseudonym for it in every system your logs are shipped to. |
 
-The fourth is the operation ledger's sweep, which runs in the ordinary
+The third is the operation ledger's sweep, which runs in the ordinary
 maintenance tick on every node.
 
 A node arms these only if it runs the `workers` role: every node applies the
@@ -855,49 +872,6 @@ rather than running loops its roles would refuse on every tick.
 `identity_duty_seconds` on [`GET /health`](../reference/api-endpoints.md#the-health-envelope)
 names the ones a node armed and each interval — the only way to tell a duty
 that is running and finding nothing from one that was never armed.
-
-**The key duty exists because a removal is a key deletion.** The removal's rows
-commit first and the person's key is destroyed after, on every node that applies
-it — so a coordination store that blinks at that instant leaves a row that says
-*removed* and a key that still exists. Until the key goes, the person's name and
-address can still be opened wherever their ciphertext is — the log, every
-donated snapshot — and every backup taken meanwhile carries the key too. Fifteen
-minutes is the maintenance sweep's own interval: a pending key exists only
-because a write failed, so the useful retry is "soon after the store is back",
-and every minute is a minute somebody off-boarded is still readable.
-`crewlet iam check` names each one as `removal_key_live` while it waits.
-
-**It also destroys a key nobody owns.** An enrolment mints a person's key before
-it claims their address, and an invitation mints its own before it publishes —
-so an enrolment or an invitation refused on its address leaves a key for
-somebody who never existed, and an invitation the sweep collects leaves its key
-behind. Nothing else would ever name those keys, and what they sealed — wherever
-it landed — would stay readable for the life of the deployment, with every
-backup carrying the key to it. The duty destroys one only once it is **an hour
-old** — the gestures that mint a key finish within one request, so an hour is
-long past any of them — and only on a node whose rows have **applied everything
-the identity log held** when it asked, because on a node that has not, somebody
-whose enrolment has not been applied owns nothing there either, and destroying
-their key would be an irreversible shred of a person nobody removed. *Applied*
-is the word that matters: a node holding a record it cannot apply yet — a newer
-build's during a rollout, or one signed under a keyring key it was not restarted
-with during a key rotation — has consumed the log past that record while its
-rows lack it, and it judges no unowned key until it can apply it. Such a node,
-and one that is simply behind, says so (`iam_keys_unjudged`) and leaves them for
-a pass that can; a removal's key does not wait for that, because a removal is
-definitive wherever it has been applied. `crewlet iam check` names each unowned
-key past the hour as `key_unowned`.
-
-**An hour counts from the last gesture that used a key, not the first.** A
-retried redemption names the same person — the id is derived from the
-invitation — so it re-uses the key its first attempt minted, however long ago.
-Every mint re-dates the key it finds instead of replacing it (the secret store
-refuses to create a key over one that exists), and the duty destroys a key only
-at the version its census judged: a key a retry re-dated between the census and
-the delete is spared, logged as `iam_keys_spared`, and judged again next pass.
-A re-date never writes back a key a removal destroyed — it finds nothing there,
-and the mint creates a fresh key, under which the removed person's values stay
-sealed.
 
 **The claim report never repairs.** The broker cannot put two people on one
 address, one login or one seat, but a restore or a reanchor can, and the

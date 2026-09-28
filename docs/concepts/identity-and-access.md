@@ -111,8 +111,8 @@ although a person's address already finds them. The login is the name an
 unbound person's work is recorded under, and a person enrolled by address
 alone was recorded as `anonymous` beside every change they made. So every
 path that creates a person names one: an administrator types it
-(`crewlet iam create -login jane.doe -email jane@example.com`), the first
-operator types it at the bootstrap, and an invitation's form arrives with one
+(`crewlet iam create -login jane.doe -email jane@example.com`), and an
+invitation's form — the first person's included — arrives with one
 **proposed from the address** — `jane.doe@example.com` proposes `jane.doe`,
 and `jane@example.com` proposes `jane.example`, borrowing the domain's first
 label because a login without a dot is not a login. The person keeps it or
@@ -257,52 +257,45 @@ allowed: nobody escalates by narrowing, and an administrator who cannot hold
 It holds on every record that hands a grant out: an edit of somebody's row,
 **an enrolment** — which is a grant change from nothing to what it carries —
 and **an invitation**, whose grants are decided once, by whoever issues it.
-Two enrolments are not the writer's to authorise, because the node's own
-writer performs them and holds only `fleet:operate` and `people:manage`; each
-names the authority it rests on instead, and the record checks it in the same
-snapshot the grants land from:
+One enrolment is not the writer's to authorise, because the node's own writer
+performs it and holds only `fleet:operate` and `people:manage`; it names the
+authority it rests on instead, and the record checks it in the same snapshot
+the grants land from:
 
 | Enrolment | Its authority | What the record refuses |
 |---|---|---|
 | Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before the first claim is taken |
-| Redeeming an invitation | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a grant or a reach the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or bound to somebody else — and a link already spent or aged out |
-| The first person | The one-time code, **taken** on the company's one bootstrap subject | A code that is not on the log, is withdrawn, aged out or ended — any founding while another code's is in progress — and any enrolment once somebody else exists |
+| Redeeming an invitation — the company's first person's included | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a grant or a reach the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or bound to somebody else — and a link already spent or aged out |
 
 An enrolment is a sequence — the seat when it binds one, the address, then the
 login, then the person — and the authority in that table is checked **twice**:
-once before the first claim, and again in the person record's own snapshot,
-which is the one that counts.
-For an invitation the early check is a read. For the first person it is a
-**write** — the founding *takes* the exemption on one subject, below — because
-two founders who each pass a read both land. The early check is what keeps a
-refusal the estate could already establish from leaving anything behind: met
-only at the last step, a code a day old was refused *after* the founder's
-address and login were claimed, and the reservation that attempt left held the
-founder's own address against the fresh code that would have let them in. What
-can still land between the two checks of an invitation is a race — somebody
-else enrolling, a link withdrawn a moment ago — and its residue is the ordinary
-orphaned reservation the claim report names.
+once before the first claim, as a read, and again in the person record's own
+snapshot, which is the one that counts. The early check is what keeps a refusal
+the estate could already establish from leaving anything behind: met only at
+the last step, a link that had aged out would be refused *after* the address
+and login were claimed, and the reservation that attempt left would hold the
+person's own address against the next invitation to it. What can still land
+between the two checks is a race — somebody else enrolling, a link withdrawn a
+moment ago — and its residue is the ordinary orphaned reservation the claim
+report names.
 
 **Every enrolment's person is derived, and none of them rewrites somebody who
-exists.** A redemption's person comes from its invitation, the founder from the
-code, and an administrator's create from the operation's key — the one an
-`unknown` answer hands back to retry under — so the retry of any of them names
-the person its first attempt claimed for, and finishes it. The person record is
-arbitrated rather than a create, because the claims before it leave a
-reservation a create would refuse, so it reads the person in its own snapshot
-and so does every claim of the sequence: one who is already enrolled is refused
-in the terms of the authority the enrolment named — a link already used, a code
-that has created its founder, a key that already names somebody else — unless
-it is the administrator's very create being retried. A key reused for another
-address, or a second redemption of a link, therefore never hands an existing
-person a second address or rewrites their credentials.
+exists.** A redemption's person comes from its invitation, and an
+administrator's create from the operation's key — the one an `unknown` answer
+hands back to retry under — so the retry of either names the person its first
+attempt claimed for, and finishes it. The person record is arbitrated rather
+than a create, because the claims before it leave a reservation a create would
+refuse, so it reads the person in its own snapshot and so does every claim of
+the sequence: one who is already enrolled is refused in the terms of the
+authority the enrolment named — a link already used, a key that already names
+somebody else — unless it is the administrator's very create being retried. A
+key reused for another address, or a second redemption of a link, therefore
+never hands an existing person a second address or rewrites their credentials.
 
-"Somebody else exists" is **one predicate** everywhere it is asked — the
-record above, the route's open flag, the boot path's decision to mint a code,
-the re-issue and the mint itself: a person or a machine that is enrolled and
-not removed. A reservation is nobody, and a **suspended** person is somebody:
-the company has started, and the way back in for it is an administrator or a
-Tier A token, never a second founder carrying the whole ceiling.
+Whether **anybody exists yet** is one predicate — a person or a machine that is
+enrolled and not removed; a reservation is nobody, and a suspended person is
+somebody — and it is asked in two places, both about the first person: `GET
+/health`'s `identity`, and the line a node logs at boot while the answer is no.
 
 **`POST /iam/invalidate-all` takes both `fleet:operate` and `people:manage`.**
 It is the restore runbook's last step, run by whoever runs the deployment, and
@@ -416,145 +409,51 @@ anonymous: the absence of an answer is not evidence of absence.
 
 ## How the first person exists
 
-A fresh deployment's identity estate is **empty**. There is nobody to invite
-the first operator, and the Tier A token that could create one is a machine
-credential rather than a person — so without a way in, a company's only durable
-credential is a token in a config file, which is the one you least want it to
-be.
+A fresh deployment's identity estate is **empty**, and the one credential it
+has is a **Tier A token** — `api.auth.tokens`, which configuration requires on
+every node that serves the API for exactly this reason. A Tier A token is an
+operator: it carries every grant the node's `max_grants` ceiling permits,
+`people:manage` included. So the first person is **invited, like everybody
+after them**, by whoever holds that token:
 
-So a node that finds an empty estate mints a **one-time code** —
-`cwl_boot_<expiry, unix seconds>_<64 hex>`, thirty-two random bytes behind the
-instant it stops working — writes it beside its store at `0600`, and publishes
-the SHA-256 of the whole value on the identity log. Nothing ever serves the
-code: the log line carries its **path**, and so does the answer to a re-issue —
-and so does `GET /health`, which answers `identity: unclaimed` with this node's
-`bootstrap_code_path` until somebody is enrolled, because it is the one surface
-an install with nobody in it can reach. Reading it means having access to the
-host, which is the only credential a company genuinely has before it has any.
-
-```mermaid
-sequenceDiagram
-    participant Node as Node that wrote the code
-    participant Log as Identity log
-    participant Any as Any node
-    participant Person
-    Node->>Node: empty estate → mint a code
-    Node->>Node: write 0600 beside the store
-    Node->>Log: publish SHA-256
-    Person->>Node: read the file on the host
-    Person->>Any: POST /auth/bootstrap {code, login, email, password}
-    Any->>Log: is this digest live?
-    Any->>Log: take the exemption (the one bootstrap subject)
-    Any->>Log: end every earlier, unfinished founding
-    Any->>Log: claim the address, then the login
-    Any->>Log: enrol the person (whole ceiling)
-    Any->>Any: remove its own code file
-    Any-->>Person: session cookie
+```sh
+export CREWLET_API_TOKEN=...   # the value of one of api.auth.tokens
+crewlet iam invite founder@example.com \
+  -grants state:read,audit:read,config:read,secrets:read,work:write,knowledge:write,config:write,secrets:write,fleet:operate,people:manage,sandbox:run \
+  -colleague write
 ```
 
-What about that sequence is load-bearing:
+The command prints a link, shown once. The person opens it — the dashboard's
+invitation screen — chooses a login (one is proposed from the address) and a
+password, and redeems it exactly as the next section describes. Nothing about
+the first redemption is special:
 
-- **The log is the check, so any node redeems any node's code.** A presented
-  code is hashed and looked up on the identity log, and what the log says is
-  the answer — live, redeemed, aged out, withdrawn, or nothing. A fleet behind a
-  load balancer puts the founder's request on whichever node it likes; the file
-  is read only to recognise a code the *serving* node wrote whose hash never
-  reached the log.
-- **Exactly one founder, arbitrated on one subject.** A mint, a take and a
-  withdrawal are records on the bootstrap's one subject, so an operator reads a
-  code's whole life in order. Several codes can be live at once — every node
-  that boots on an empty estate offers its own, and a founder may be typing any
-  of them — but only one can be **taken**: a founding's first write takes the
-  exemption on that subject, naming its code and the person it creates, and
-  every take contends there. Two founders redeeming two codes at once — which a
-  fleet makes easy — used to both land, because an enrolment is a sequence and
-  two people's records never share a subject; now the loser is refused before
-  it has claimed a thing.
-- **The file goes only after the person is on the log.** The enrolment is what
-  every *other* node reads to know the company has started; a file deleted
-  first would leave a company with nobody in it and a node with no code to
-  offer.
-- **The first person receives every grant the ceiling permits.** This is the
-  one stated exemption in the authority model, and it is taken at the moment
-  nobody holds a credential — the alternative is a first operator who cannot
-  grant themselves what they need in order to grant anybody anything. The
-  enrolment **names the code** as its authority, and the person record lands
-  only while that code's take is this founding's, current, and nobody else is
-  enrolled. A second caller arriving while a founding is part-way through is
-  answered `409 bootstrap_in_progress`, carrying `until` — when that founding
-  lapses — and naming `crewlet iam bootstrap-code`, which ends it at once; one
-  arriving after it finished is answered `409 bootstrap_closed`. Neither is
-  counted as a failed attempt: both are states of the company, reached only by
-  presenting a code that works.
+- **An invitation confers only what its writer holds**, and a Tier A token holds
+  whatever the ceiling permits — so the first person can be given every grant,
+  and the operator issuing the link decides which. Give the first person
+  `people:manage`, or nobody after them can be invited except through the token
+  again; `crewlet iam check` names a company in that state as
+  `no_people_manage_holder`.
+- **The node says the company is waiting for it.** `GET /health` answers
+  `identity: unclaimed` while nobody is enrolled (`ready` once anybody is, and
+  `unknown` where this node cannot read the estate — never folded into
+  `unclaimed`), and a node that boots on an empty estate logs `iam_unclaimed`
+  naming the command above. Neither ever moves `status`.
+- **After that, the token is the way back in, not the way people arrive.** Once
+  somebody holds `people:manage`, invitations come from them; the token stays
+  the break-glass credential for the day nobody who can invite is reachable.
 
-**A code lasts 24 hours**, and running out costs one command rather than a
-support ticket. A code that aged out, was withdrawn by a re-issue, or was
-written by a node whose mint never reached the log is answered `410
-bootstrap_code_stale`, naming the remedy — never `409 bootstrap_closed`, which
-is permanent and would send a founder away from a company still waiting for
-them, and never the uniform sign-in refusal, which would send them looking for a
-typo in a code that was right. A code's record is swept off the log a week
-after it stops working, and the code **spells its own expiry** for that reason:
-one whose own time has passed is stale on every node whether or not its record
-survives — before, a swept code was the uniform refusal everywhere but on the
-node still holding its file. It is specific without being an oracle: that
-answer is reachable only by presenting a code whose digest is on the log or in
-the serving node's own file, which a stranger guessing cannot do, or one whose
-spelled expiry has passed, which is answered alike whether or not such a code
-was ever minted — and the digest covers the expiry, so a real code's cannot be
-moved. It is counted against the source like every failed attempt. The remedy
-is either of:
+There used to be a second way — a one-time code a node minted onto its own
+disk when it found an empty estate — and it is gone. It bought a first person
+who needed no configured token, on a deployment where configuration requires
+one anyway, and it cost a code file on every node, a log subject that
+arbitrated between two people redeeming two codes at once, and a superuser
+claim sitting on disk until somebody enrolled. The token is already the root
+of trust, and an invitation is already the path everybody else takes.
+`api.auth.bootstrap`, which configured it, is refused by name and points
+here.
 
-- **A restart of the node that holds the file.** At boot a node checks its file
-  against the log. A code the log still honours is kept — live, because
-  somebody may be about to type it, or taken by a founding that has not
-  finished, because it is the code that finishes it; anything else — aged out,
-  withdrawn, never published, an empty file — is replaced by a fresh one and
-  the new path logged. Only the node holding a file can see it, so each node
-  replaces its own, and a boot never withdraws a code another node wrote.
-- **`crewlet iam bootstrap-code`**, which withdraws every live code, ends a
-  founding in progress, and mints one on whichever node serves the command —
-  and names that **node** as well as the path, because on a fleet that is not
-  something the caller chose. It is **one gesture decided where its new code
-  lands**: that record is published only from a snapshot in which no other
-  code is live or taken, and anything that arrived meanwhile — a node booting,
-  a second operator re-issuing — is ended and the mint tried again, so where it
-  lands it is the one code that works. (It gives up with `409 stale`, having
-  minted nothing, if codes keep arriving for sixteen rounds; running it again
-  is the remedy.) The withdrawals go first: a crash between them and the mint
-  leaves no way in, which running it again fixes, where the other order would
-  leave two.
-
-**A stopped attempt never holds the founder's names.** A dead code is refused
-at the take, before anything is claimed. **The founder is derived from the
-code** (a uuid7 at the instant the log minted it), so an attempt that stopped
-halfway — a login somebody had already claimed, a record whose answer never
-came — is finished by presenting the same code again, rather than blocked by the address
-its own first attempt claimed. And once that code has died, the fresh one a
-restart or a re-issue hands out derives a *different* person, which the old
-attempt's reservation would refuse as "that address belongs to somebody" —
-so the founding that takes a code first **ends every earlier attempt**: a
-removal of that attempt's person, on the one subject its own person record
-would land on. Exactly one of the two lands. Either the earlier attempt
-finished first and the company has started, or it is removed, its address and
-login released, and anything it had still to publish dropped. Earlier attempts
-are found through the codes they took and — once a code's row has been swept,
-a week after it stopped working — by the shape of the person id itself, which
-carries a mark only a founding's derived id has.
-
-It **closes for good** the moment anybody is enrolled, whatever the
-configuration says, because what it creates is an operator carrying the whole
-ceiling. `api.auth.bootstrap: closed` shuts it from the start, which is right
-for a deployment restored from a backup where the answer is "ask somebody who
-already has an account" — and there the re-issue route is not served at all
-(`404`), because that deployment never bootstraps this way, where a company
-that has started answers `409 bootstrap_closed`. Either way the route, its open
-flag on `GET /auth/config`, the boot offer and the re-issue ask **one** gate,
-so none of them can offer a code the others would refuse — and a node whose company has started
-removes any code file it still holds at its next boot, so an established fleet
-keeps no superuser claim on any host.
-
-## Everybody after the first arrives by invitation
+## Everybody arrives by invitation
 
 An invitation is a **claim on an address by somebody who does not have a person
 yet**, so it arbitrates where an address does — which is what makes an invite
@@ -644,9 +543,9 @@ land. An invitation an administrator lost is re-issued with one more call
 rather than recovered; the one answer that carries a link again is a **retry of
 the issue itself** under the same key, because the id is derived from the key
 and the secret from the id, both under the company's own key. And the address it
-was for is sealed under the invitation's own key, minted for it and shredded
-when it is collected, so an address somebody typed and never sent leaves no
-cleartext anywhere.
+was for is sealed under the fleet keyring and bound to the invitation, so an
+address somebody typed and never sent leaves no cleartext anywhere — and the
+sweep that collects the invitation takes the sealed copy with it.
 
 An invitation issued before links carried a secret has no verifier and is
 **redeemable by nobody**: admitting it on its id would admit exactly what the
@@ -778,7 +677,7 @@ would be a credential every operator with a backup holds.
 | Credential | What is stored | Why that and not something else |
 |---|---|---|
 | Password | argon2id, 64 MiB, t=3, p=1, as a PHC string | A person chose it, so the space it came from is small enough to grind — and memory is the cost a GPU cannot buy its way around |
-| Second factor | The TOTP shared secret, sealed under the **person's own key** and bound to the person, the credential it was enrolled as and the field — see [below](#what-is-in-the-clear-and-what-is-not) | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
+| Second factor | The TOTP shared secret, sealed under the **fleet keyring** and bound to the person, the credential it was enrolled as and the field — see [below](#what-is-in-the-clear-and-what-is-not) | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
 | Recovery code | SHA-256 | Minted here from `crypto/rand`, so there is no dictionary to grind and no memory cost to buy |
 | Machine token | SHA-256 over the prefix, the credential id and the secret — everything but the log position the value carries, which is a hint about *when* to look and proves nothing | The same, plus: this is presented on *every* request a pipeline makes, and a hundred milliseconds of argon2id on each is a different kind of outage |
 
@@ -803,8 +702,8 @@ only property that buys entropy from a human at no cost to them.
 
 Twelve is the engine's floor and a deployment may raise it with
 `api.auth.local.min_password_length`; nothing lowers it. The raised floor is
-the one every password is held to — the founder's at `POST /auth/bootstrap` and
-every redemption's — and the one `GET /auth/config` and an invitation's view
+the one every password is held to — every redemption's and every change of a
+password — and the one `GET /auth/config` and an invitation's view
 report, so a form refuses exactly what the route would. It used to be validated
 and reported as twelve whatever it said, and enforced by nothing.
 
@@ -861,12 +760,13 @@ after.
 `api.auth.local.totp: required` means **nobody acts on a password alone**. A
 person who holds a second factor is asked for it at every password sign-in and
 step-up, as they always were. A person who holds **none** — freshly invited,
-the founder, somebody an administrator reset — has nothing else to present, so
+the company's first person among them, somebody an administrator reset — has
+nothing else to present, so
 refusing their sign-in would lock them out of the one gesture that satisfies
 the rule. Instead the sign-in succeeds into a session that may do **nothing but
 enrol one**:
 
-- `POST /auth/login`, `POST /auth/bootstrap`, `POST /auth/invite/{id}` and a
+- `POST /auth/login`, `POST /auth/invite/{id}` and a
   password `POST /auth/step-up` that proved a password and no second factor
   answer `200` with `"status": "second_factor_enrolment_required"` and the
   cookie of that session. `GET /auth/session` says the same.
@@ -1070,12 +970,11 @@ what shows it is the
 audit trail's per-client, per-minute failure tally, which counts how many
 different names one client tried.
 
-A credential that **names nobody** — an invitation link, a founder's one-time
-code — meets no curve at all: there is no subject to pair with its address,
-and each is 256 bits from `crypto/rand`, so a curve on the address alone would
-only have been a way for one stranger to hold every invitation and founding
-from that address shut. Every refusal of one is still a failed attempt in the
-tally.
+A credential that **names nobody** — an invitation link — meets no curve at
+all: there is no subject to pair with its address, and its secret is 256 bits
+from `crypto/rand`, so a curve on the address alone would only have been a way
+for one stranger to hold every invitation from that address shut. Every
+refusal of one is still a failed attempt in the tally.
 
 An attempt still being checked counts as a failure against its pair until it
 resolves, so a burst of concurrent guesses at one account is served one after
@@ -1378,7 +1277,7 @@ access log. Its sign-in surface is three screens outside the frame:
 | Screen | What it does |
 |---|---|
 | `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Where `/auth/config` names no local sign-in it offers only **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere — the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
-| `#/invite/<id>.<secret>` | [The invitation link](#everybody-after-the-first-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose — which signs them in |
+| `#/invite/<id>.<secret>` | [The invitation link](#everybody-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose — which signs them in |
 | `#/enrol?next=` | Where a session that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else) goes first: the seed from `POST /auth/totp` (the key and its `otpauth://` address), the first code, and the recovery codes shown once |
 
 What the rest of the dashboard does with the session follows the three answers
@@ -1447,8 +1346,8 @@ because each is a row in a domain that **lags independently**.
 
 **`reauth_at` is the session's own proof plus `step_up`**, and
 `sensitive_reauth_at` the same proof plus `step_up_sensitive`. Every session a
-sign-in opens — a password and its second factor, a redeemed invitation, the
-bootstrap code, a step-up — records the
+sign-in opens — a password and its second factor, a redeemed invitation, a
+step-up — records the
 instant it was proved on its row, and the guard composes both deadlines from
 that and this node's two windows at decision time — which of them a gesture
 asks for is [the authority table's](#some-gestures-ask-how-recently-you-proved-who-you-are). Proof is a
@@ -1584,7 +1483,7 @@ or because a client must reach it to obtain a credential at all.
 | `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
 | `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
-| `/auth/config`, `/auth/login`, `/auth/bootstrap`, `/auth/invite/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link is the credential. Exact paths plus the one prefix, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
+| `/auth/config`, `/auth/login`, `/auth/invite/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link is the credential. Exact paths plus the one prefix, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
 | `/auth/logout` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered it `503` before it ran, and a person left a shared machine still signed in. It verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges it. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
 
 Everything else needs one, **reads included**. `allow_anonymous_read` used to
@@ -1660,8 +1559,8 @@ sandbox box presents the signed token in its path, and refusing either would
 take every integration off the air.
 
 **The sign-in routes are judged, although no credential guards them.** A login
-cannot require a login, so `POST /auth/login`, `/auth/bootstrap` and
-`/auth/invite/{id}` are exempt from the *guard* — and from nothing else. They
+cannot require a login, so `POST /auth/login` and `/auth/invite/{id}` are
+exempt from the *guard* — and from nothing else. They
 are routes a browser posts to, and each one ends with that browser holding a
 session: a form on somebody else's page that could post an attacker's password
 to the sign-in or redeem an attacker's invitation would leave the victim signed
@@ -1830,7 +1729,7 @@ proof its verb asks for, and there are three answers:
 | Window | Sized by | Asked by |
 |---|---|---|
 | none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures — and every identity-directory write the row below does not name: enrolling, inviting or removing somebody, the bootstrap code, minting or revoking a machine token, and ending somebody else's sessions |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures — and every identity-directory write the row below does not name: enrolling, inviting or removing somebody, minting or revoking a machine token, and ending somebody else's sessions |
 | `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; changing what somebody already enrolled may do or how they prove who they are — an edit of their row, a second-factor reset, revoking a password, a second factor or the recovery codes, and enrolling or replacing your own second factor or regenerating your recovery codes; and ending every session in the company |
 
 The two windows are the design's: every identity-directory write asks the
@@ -1927,7 +1826,7 @@ Identity has **two trails**, and they answer different questions.
 
 | Event | Published by | How often |
 |---|---|---|
-| `iam_session_started` | The sign-in surface, on a password, app-code, invitation, bootstrap-code or token sign-in | Once per session |
+| `iam_session_started` | The sign-in surface, on a password, app-code, invitation or token sign-in | Once per session |
 | `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are: the person, the new session and the one it replaced, the second factor presented and the client — and never which surface it was for, because a step-up proves the session for every surface until `reauth_at`, and the request that prompted it is refused before it and never reaches it, so the only source would be the client's word | Once per step-up |
 | `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), or the request guard noticing a deadline (`idle`, `absolute`) or a token's exchanged session whose value changed or whose entry was removed (`credential_changed`) | Once per ending, from the fact that ended it: a deadline or a changed credential once per session per node, when the cookie is next presented, and only for a session no record had already ended — a revoked person's other browser presenting its cookie the next day is not announced again as `absolute`, and a token's session past its deadline by the time it is presented after a rotation is announced by the deadline |
 | `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
@@ -1947,7 +1846,7 @@ Anybody who can reach the API can fail to sign in as often as they like, for
 free, with no credential to revoke and no identity on the row. A row per
 attempt would hand the size of every node's event store — and of every backup
 and snapshot taken from it — to whoever is making the attempts. So a failed
-sign-in, a refused second factor, a wrong bootstrap code or a stale one (`410 bootstrap_code_stale`), an
+sign-in, a refused second factor, an
 invitation link that answers `410` (nobody
 issued it, it was redeemed or aged out, or its address is already enrolled —
 the id in the link is the credential, so a source walking ids is guessing at
@@ -2057,7 +1956,6 @@ claim arbitrates on.**
 | A seat binding | `crewlet.iam.log.seat.<seat handle>` | create-only, expectation zero |
 | A session | `crewlet.iam.log.session.<lineage>` | create-only, expectation zero |
 | A person's own content | `crewlet.iam.log.person.<id>` | conditional on the row's version |
-| The first-person bootstrap | `crewlet.iam.log.bootstrap` | one object for the whole company: every code's mint, take and withdrawal, so exactly one founding can take the exemption |
 | Ending every session at once | `crewlet.iam.log.invalidation` | one object for the whole company |
 
 Two administrators enrolling one address publish to the same subject at the
@@ -2072,18 +1970,15 @@ named state rather than a person holding an address somebody else also holds.
 Nothing collects it on a clock, because its claims still hold their subjects on
 the log and a deleted row would leave an address arbitrated to nobody the
 directory can name. `crewlet iam check` reports one older than an hour as
-`claim_orphaned`, and removing its id releases what it holds. The one
-reservation something else does end is a **founding's**: it holds the founder's
-own address and login, so the next founding removes it before it claims them —
-see [How the first person exists](#how-the-first-person-exists).
+`claim_orphaned`, and removing its id releases what it holds.
 
 That half-finished row is a **reservation**: it holds the address, login or
 seat its claims took, and it has no kind, no stage and no
 credential, so it may do nothing. Every reader reports it as one rather than as
 a person — `GET /iam/people` lists it with `"reserved": true`, a sign-in or a
-Tier A token binding through its login finds nobody who can act, a session naming it finds no person, and the
-first-person bootstrap does not count it as somebody enrolled. It is never a
-reason for a 503.
+Tier A token binding through its login finds nobody who can act, a session naming it finds no person, and
+`/health` does not count it as somebody enrolled. It is never a reason for a
+503.
 
 > **If you are reading the schema and reaching for a unique index as a
 > backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
@@ -2099,30 +1994,33 @@ reason for a 503.
 
 ### What is in the clear, and what is not
 
-A person's **name** and **email address** are sealed under that person's own
-data encryption key, with their id as additional authenticated data, *before*
-the record is published. They are ciphertext on the broker, in every node's
-database, in every snapshot and in every backup — and destroying the key is
-what removing a person actually does. The row and the id outlive it, because
-the audit trail names them.
+A person's **name** and **email address** are sealed under the **fleet
+keyring** — the Tier A `secrets.keys` every node already holds — *before* the
+record is published, with the person's id and which of their values it is as
+additional authenticated data. They are ciphertext on the broker, in every
+node's database, in every snapshot and in every backup, and a value moved to
+another person's row, or to another column of the same row, does not open.
 
 Sealing happens at the **writer** rather than on each node, which is what keeps
 the fleet's byte-for-byte identity claim meaningful: every node writes the same
-ciphertext.
+ciphertext, and the applier never opens anything.
 
-An authenticator app's **seed** is sealed under the same key. It is the one
+An authenticator app's **seed** is sealed the same way. It is the one
 credential this estate keeps as a secret rather than a verifier — TOTP is
 symmetric, so an engine holding only a digest could check nothing — and the
 enrolment seals it before the write is formed, so the person's document, their
 credential row and the trail entry all carry ciphertext. Its associated data is
-the person, **the credential it was enrolled as**, and the field: every seed a
-person ever enrolled is sealed under their one key, so without the credential a
-replaced seed sitting in an old backup could be pasted over the current one and
-would open. It is opened only to check a code, at a sign-in and a step-up. A
-seed that does not open is never a match: one that is not this credential's is
-refused like a wrong code (and logged, `api_totp_seed_unopenable`, naming the
-person and the credential), a key a removal destroyed is refused too, and a key
-store this node cannot reach is `503` with a `Retry-After`, never a wrong code.
+the person, **the credential it was enrolled as**, and the field: without the
+credential a replaced seed sitting in an old backup could be pasted over the
+current one and would open. It is opened only to check a code, at a sign-in and
+a step-up. A seed that does not open is never a match — one that is not this
+credential's, or one sealed under a key this node's ring no longer holds — and
+it is refused like a wrong code and logged (`api_totp_seed_unopenable`, naming
+the person and the credential), because it is a row somebody has to repair and
+no retry of the code could change it.
+
+An invitation's address is sealed under the same keyring, bound to the
+**invitation** rather than to a person, because there is no person yet.
 
 **A seed enrolled before seeds were sealed was stored in the clear**, and it is
 in the identity log, every snapshot and every backup taken since. Such a seed no
@@ -2136,6 +2034,16 @@ A **login** is in the clear, and the asymmetry is deliberate — a login is a
 name the company chose, printed beside every change an operator reads. Blinding
 a value the dashboard renders on every row would cost you the ability to read
 your own audit trail for nothing.
+
+**Rotating the keyring moves these values too.** `crewlet secrets rekey`
+re-seals the secret store's rows in place; these rows are derived from the log,
+so a node that rewrote its own would disagree with its peers — the rekey
+therefore publishes one record per person holding a value under an old key,
+which every node applies, and reports how many it moved. It counts the
+addresses of **outstanding invitations** under an old key as well and leaves
+them: only a re-issue could carry one again, so the old key stays on the ring
+until each is redeemed or lapses — at most a week. See [the secret store's
+rotation runbook](secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost).
 
 An address is looked up by its **blind**: a keyed hash, so a node holding the
 key can compute it from an address and nobody else can go the other way.
@@ -2154,14 +2062,13 @@ value refuses every address write by name instead, until the key comes back
 with the coordination store it lived in, from the backup that holds it.
 Rotating it is a migration, not a setting.
 
-### The eight tables
+### The seven tables
 
 | Table | What it holds |
 |---|---|
 | `iam_people` | One person or machine, and the three claims denormalised onto their row so a duplicate can be *reported* |
 | `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, the recovery codes' digests, and an app code's sealed seed. Never a secret that could be presented to anything |
 | `iam_invites` | An address spoken for by somebody who has no person yet, and the grants redeeming it confers |
-| `iam_bootstrap_codes` | How a company with nobody in it acquires its first administrator |
 | `iam_sessions` | One row per session **lineage**. A re-issue is not a row — the deadline it moves is inside the cookie's own signature — so this grows with sign-ins, not with requests |
 | `iam_revocation_epochs` | One person's **revocation epoch**, in its own table because every request compares against it |
 | `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session and machine token in the company at once |
@@ -2261,127 +2168,91 @@ divided into 64 partitions by a hash of the person's id, so one horizon's worth
 of deletions is 64 bounded transactions rather than one unbounded one. The
 publisher is the `iam_sweep` duty, hourly, and it publishes only for a bucket
 holding something at least a day past its horizon, which bounds it at 64
-records a day. The same record collects sessions, invitations, bootstrap
-codes and credentials a week after they stopped being presentable — whether
+records a day. The same record collects sessions, invitations and credentials
+a week after they stopped being presentable — whether
 they lapsed, were redeemed or were revoked — and a credential leaves the
 person's own row as well as the credentials listing, so the next change to
 their credentials cannot bring it back. See
 [Retention](../guides/retention.md#the-identity-duties).
 
-### Removing somebody destroys a key, not a row
+### Removing somebody erases what is theirs from every node's rows
 
-Deleting a person's row removes them from every node's current database and
-from nothing else. The backups still hold them, the donated snapshots still
-hold them, and the log — which is the only copy of what no node has applied
-yet — holds the record that wrote them, byte for byte, for as long as
-retention says. A removal that only deleted rows would be a promise the estate
-cannot keep.
+A removal deletes the person's row, their credentials, their sessions and their
+revocation epoch, and leaves a **tombstone** — who removed them, when, and what
+they held — which is what every later question about them reads. Two kinds of
+row outlive them on purpose, and the removal **erases** its sealed values from
+both in the same transaction:
 
-So each person's name and address are sealed under a key that is **theirs
-alone**, kept in the company's sealed secret store, and removing them
-**destroys that key**. Every copy of the ciphertext that is not also a copy of
-the key becomes unreadable at once — the log's records, every node's rows and
-everything a node serves, every snapshot a node has donated or will donate (a
-donation is a copy of the replicated estate, which the key never enters), and
-every `crewlet backup` taken after the removal — and nothing has to be found or
-rewritten.
+- an **invitation** that was addressed to them keeps its row until the sweep
+  collects it, so an operator can still see who invited whom — without its
+  sealed address;
+- the **authentication trail** keeps a row per record that changed them,
+  because a history whose authors evaporate is not an audit trail — and each
+  row carried the record that wrote it, whose payload held their name, their
+  address and any seed they enrolled. Every sealed value in it is cleared; the
+  ids, the logins, the actors, the operations and the instants stay.
 
-**A backup taken before the removal is the copy it does not reach.** The key
-lives in the secret store, which is a coordination bucket, and a backup's
-coordination snapshot carries every bucket — this one included, sealed under
-the keyring exactly as every other credential in it is. So an artefact taken
-before the removal holds the person's sealed name and address *and* the key
-that opens them, side by side: whoever holds the artefact and the keyring —
-which you, the operator, hold by design — can still read both, and
-[restoring it](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)
-brings the person back whole. Nothing the removal does can reach a file that
-already sits somewhere else, so the erasure finishes in each such backup only
-when it is deleted or ages out: on the
-[tiered schedule](../guides/backup.md#where-to-put-it-and-how-often), a
-fortnight after the removal. When an erasure has to be complete — a request
-you must answer, not a leaver you are tidying up after — delete or expire every
-backup taken before the removal rather than waiting for the rotation. Two more
-copies behave the same way:
+After the removal applies, **no row on any node holds a value of theirs that
+opens** under any keyring, and every snapshot a node donates from then on is a
+copy of those rows. Every node erases the same bytes, so the fleet's
+byte-for-byte identity claim holds across it.
 
+**What a removal cannot reach, and when each copy goes.** Everything below is
+sealed under the fleet keyring, so it is readable only by whoever holds the
+keyring and the copy — which you, the operator, do by design:
+
+- **The identity log.** The records that wrote their name, address and seed
+  stay on `CREWLET_IAM_LOG` until the [trim](../guides/retention.md#a-removed-persons-values-stay-on-the-identity-log-until-the-trim)
+  passes them: never before `min_age` (a week by default), and later while a
+  trim term holds the log. A node that retained one of those records — a newer
+  build's, or one signed under a keyring key it was not restarted with — keeps
+  its copy in its deferred table until it applies it.
+- **Backups.** A `crewlet backup` carries the stream as well as the rows, so a
+  backup taken before the removal holds the person whole, and one taken after
+  it still holds the log's records for as long as the log did when it was
+  taken. The erasure finishes in each only when it is deleted or ages out: on
+  the [tiered schedule](../guides/backup.md#where-to-put-it-and-how-often), a
+  fortnight after it was taken. [Restoring
+  one](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all) taken
+  before the removal brings the person back whole.
 - **A raw copy of `stream.store_dir`** — the cold runbook's copy, or a
-  filesystem or volume snapshot. The broker purges the key by marking it
-  deleted in its own files rather than overwriting it, so the key's sealed
-  bytes can stay on disk until the broker rewrites the file that holds them,
-  and a raw copy can carry them *even when it was taken after the removal*.
-  `crewlet backup` does not have this problem: its stream snapshot holds the
-  messages a stream still has, and never one it purged.
+  filesystem or volume snapshot — holds the log as it was, and the broker
+  reclaims a trimmed record's bytes only when it rewrites the file holding
+  them, so a raw copy can carry them *even when it was taken after the trim*.
 - **An external NATS cluster's own backups**, on a node that dials one
-  (`stream.type: nats`). The bucket is that cluster's, so the key is in
-  whatever copy of it the cluster's operator took before the removal, on that
-  cluster's retention rather than yours.
+  (`stream.type: nats`): the log is that cluster's stream, on that cluster's
+  retention rather than yours.
 
-The id survives on purpose, and the row does not. A removal deletes the
-person's row, their sessions, their credentials and their revocation epoch, and
-leaves a **tombstone** — who removed them, when, and what they held — which is
-what every later question about them reads. The authentication trail keeps
-naming the id, because a history whose authors evaporate is not an audit
-trail: "who suspended this person, and when" has to keep answering after they
-have gone.
+So when an erasure has to be complete — a request you must answer, not a leaver
+you are tidying up after — remove the person, let `min_age` pass with the
+identity log's trim unblocked (`crewlet retention status` names any term
+holding it), and then delete or expire every backup and raw copy taken before
+the trim passed the records. There was once a
+per-person key a removal destroyed, which made every copy unreadable at the
+instant of the removal; it cost a key per person in the secret store, a duty
+that retried and collected keys, and a sign-in that could fail on a
+coordination read, and it is gone.
 
 **The login is not sealed, and it outlives the removal in the clear.** A
 login is printed beside everything its holder does, so it is deliberately a
-plain value rather than a sealed one, and destroying the key does nothing to
-it. It stays on the removal record in the identity log — and so in every
-backup and donated snapshot for as long as retention keeps the log — in the
-tombstone's `iam_removed.claims_json`, and in the audit rows that recorded an
-unbound person's changes under it. The login an invitation or the first-person
-form **proposes** is derived from the address (`jane.doe@example.com` proposes
-`jane.doe`, and `jane@example.com` proposes `jane.example`), so a removed
-person's address is, more often than not, still partly readable from their
-login. If an erasure request has to reach the login too, the only way is not
-to have put personal data in it: give such a person a login that names
-nothing about them, and do not accept the proposed one.
+plain value rather than a sealed one, and the erasure leaves it where it is:
+on the removal record in the identity log — and so in every backup and donated
+snapshot for as long as retention keeps the log — in the tombstone's
+`iam_removed.claims_json`, and in the trail rows that recorded an unbound
+person's changes under it. The login an invitation's form **proposes** is
+derived from the address (`jane.doe@example.com` proposes `jane.doe`, and
+`jane@example.com` proposes `jane.example`), so a removed person's address is,
+more often than not, still partly readable from their login. If an erasure
+request has to reach the login too, the only way is not to have put personal
+data in it: give such a person a login that names nothing about them, and do
+not accept the proposed one.
 
-Two consequences worth knowing before you see them:
-
-- **A removal is durable before the key is destroyed.** The rows commit first;
-  the key goes afterwards. The other order would destroy a key for a removal
-  that then rolled back, and nothing could put it back. If the key deletion
-  fails — a coordination outage — the person is removed everywhere and their
-  key lives on, which is a state a duty finds and retries: `iam_key_shred`
-  looks every fifteen minutes and destroys each key a removal left behind,
-  and `crewlet iam check` names every one still waiting as
-  `removal_key_live`. The duty needs no keyring — finding a key and deleting
-  it both work on a node that can decrypt nothing.
-- **A key is minted before anything owns it.** An enrolment mints the
-  person's key and seals their address under it before it claims the
-  address, and an invitation mints its own before it publishes itself — so
-  two administrators adding one joiner leave the loser a key for somebody
-  who never existed, and an invitation the sweep collects leaves its key
-  behind. The same duty destroys a key **nobody owns** — no person, no
-  reservation, no invitation, no removal — once it is an hour old and only
-  on a node whose rows have **applied** the whole identity log, because on
-  a node that has not, somebody whose enrolment has not been applied there
-  owns nothing either. Applied is not the same as *consumed*: a node holding
-  a record it cannot apply — a newer build's during a rollout, or one signed
-  under a keyring key it was not restarted with during a key rotation —
-  moves past it and keeps it aside, and until it can apply it that node
-  judges no key at all. `crewlet iam check` names each one past the hour as
-  `key_unowned`.
-  A refused enrolment does not destroy its own key: the id it was handed may
-  be a live person's, and only a pass that has proved nobody owns it may.
-  And a key being **re-used** is never destroyed under the gesture using it.
-  A redemption's retry names the same person — the id is derived from the
-  invitation — and so the same key its first attempt minted, an hour or a
-  week ago. A mint therefore never replaces a key: it creates one where
-  there is none, which the secret store itself refuses over an existing key,
-  and otherwise re-dates the one it finds, so the hour counts from the last
-  gesture that used it. The duty destroys only the version of a key it
-  judged, so a key re-dated between its census and its delete is spared and
-  judged again on the next pass — and a re-date never brings back a key a
-  removal destroyed; the mint makes a fresh one instead.
-- **A value that will not decrypt is not the same as an outage.** The one
-  place a removed person is still read is a node that has not applied the
-  removal yet, while their key — destroyed by the node that applied it first —
-  is already gone; that value is rendered as *removed*. A decryption failure
-  for any other reason is a keyring or a key store this node cannot use, and
-  is rendered as *sealed*. Rendering the second as the first would tell you
-  somebody had been off-boarded who had not.
+**A value that will not open is not a removed person.** A removal deletes the
+row, so a node that has not applied it yet still shows the person — opened, as
+before — and one that has shows nobody. A value that does not open is a key
+this node's keyring does not hold: dropped from the ring before `crewlet
+secrets rekey` moved the values off it, or a restore under a different keyring.
+It is rendered as *sealed*, and putting the key back on the ring ends it.
 
 ### A stalled identity log does not stop your agents
 
@@ -2409,8 +2280,8 @@ directory over a signed request-and-reply of its own, adoption had to strip the
 estate out of every snapshot it installed, and the trim had to know which
 peers declined which log. None of that protected anything, because a
 satellite's host holds the fleet keyring — which it needs to verify every
-record on every log — and the keyring opens the company's secret store, every
-person's key in it included. See
+record on every log — and the keyring opens the company's secret store and
+every person's sealed values alike. See
 [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds).
 
 ### Sizing `stream.iam_log_max_bytes`

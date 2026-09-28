@@ -183,7 +183,7 @@ A person who signs in is a row already, and binding it is the one command
 above. Somebody who has **not joined yet** can be bound as they do: an
 invitation that names the seat (`crewlet iam invite <address> -seat
 sarah-chen`) binds the person it creates to it when they redeem the link — see
-[An invitation may bind a seat](identity-and-access.md#everybody-after-the-first-arrives-by-invitation).
+[An invitation may bind a seat](identity-and-access.md#everybody-arrives-by-invitation).
 Every row carries a **login** — the name an unbound person acts and is
 recorded under — which is why an enrolment names one whatever path creates
 it, and why an invitation's form proposes one from the address. A **Tier A token** acts under the login `token:<id>`, so it acts as a

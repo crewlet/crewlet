@@ -233,15 +233,16 @@ moment its applier has the change.
 Be clear about what that puts on the host, and why it is not a new
 exposure:
 
-- **Names and addresses are sealed** under each person's own key, and a
+- **Names and addresses are sealed** under the fleet keyring, and a
   password, a recovery code or a machine token is stored only as a
   verifier. Logins, grants, seat bindings and session rows are in the
   clear.
 - **The host already holds the fleet keyring**, which the node cannot run
   without — it verifies every record on every log with it and opens the
   company document with it. The same keyring opens the company's
-  [secret store](../concepts/secret-store.md), every vendor credential and
-  every person's key in it. A satellite's host could decrypt every company
+  [secret store](../concepts/secret-store.md), every vendor credential in
+  it, and every person's sealed name and address. A satellite's host could
+  decrypt every company
   secret before it held a copy of the directory, and keeping the
   directory off it never took the directory out of that host's reach.
 

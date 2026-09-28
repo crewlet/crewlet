@@ -115,15 +115,13 @@ So the chart makes its own trade, and states it rather than inheriting one:
   lower-cased with any plus tag dropped, the fold the
   identity directory blinds a person's address under. A seat's `name` is a
   field of the chart like any other, in every node's rows, in every snapshot
-  and on the log itself. Neither is where a *person* lives: the place a
-  person's name and address live under a key that can be deleted is the
-  [identity directory](identity-and-access.md). Removing somebody there
-  destroys that key, which makes every copy of them that does not also hold
-  the key unreadable at once — the only erasure a write-ahead log can actually
-  offer. A backup taken before the removal does hold it, because this store's
-  bucket is in every backup, so that backup goes on opening their name and
-  address for whoever holds it and the keyring until it is deleted
-  ([what a removal reaches](identity-and-access.md#removing-somebody-destroys-a-key-not-a-row)).
+  and on the log itself. Neither is where a *person* lives: that is the
+  [identity directory](identity-and-access.md), which seals their name and
+  address under the keyring and, when they are removed, erases every sealed
+  value of theirs from every node's rows. Its log keeps the records that wrote
+  them until the trim passes them, and a backup keeps what it held when it was
+  taken, until it is deleted
+  ([what a removal reaches](identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows)).
   A leaver's seat still names them until the seat's own `name` is cleared.
 - **A value nothing names any more is collected.** Clearing an address,
   replacing a credential with your own `${VAR}`, or removing a seat leaves its
@@ -184,16 +182,19 @@ secrets:
 
 ### The engine's own keys share the bucket, and never the namespace
 
-The same bucket holds key material the **engine** keeps for itself: each
-person's data key (deleting it is what removing somebody does) and the identity
-directory's blind-index key, which every stored address is matched under. They live here because this is the one
-store a delete reaches on every node at once — and they are **not your
-secrets**:
+The same bucket holds key material the **engine** keeps for itself: the
+identity directory's blind-index key, which every stored address is matched
+under. It lives here because every node must derive under the same key and this
+is the one store every node reads — and it is **not your secret**:
 
 | Name | What it is |
 |---|---|
-| `iam/person/<id>/dek` | One person's data key — their name and address are sealed under it |
 | `iam/blind-index-key` | The key an address is blinded under in the identity directory |
+
+A person's own values — their name, their address, a second factor's seed —
+are not keyed here at all: they are sealed under the keyring itself, in the
+identity estate's rows (see [Identity and
+Access](identity-and-access.md#what-is-in-the-clear-and-what-is-not)).
 
 The namespace has one owner, the identity directory (`iam/`); an owner is
 reserved before it writes its first key, so no engine key is ever briefly an
@@ -209,12 +210,13 @@ And every operator surface refuses them by name, whatever the caller holds:
 they open anything. The listing does not name them; it **counts** them, per
 keyring key, as `engine_keys`, because a rotation has to move them too — and a
 **rekey** does, reporting them as a count (`engine_keys_moved`) beside the
-names of yours. A dry run counts the ones still under an old key, so an
-operator is never told "nothing to move" while every person's key is still
-sealed under the key they are about to retire.
+names of yours. The listing counts the identity estate's sealed values per key
+the same way (`identity_values`), and the rekey moves those too (see
+[Rotating the keyring](#rotating-the-keyring-with-nothing-in-flight-lost)). A
+dry run counts both still under an old key, so an operator is never told
+"nothing to move" while the address index's key or every person's name is
+still sealed under the key they are about to retire.
 
-To act on one, use the gesture it belongs to: `crewlet iam remove` destroys a
-person's key, and `crewlet iam revoke` ends their sessions.
 The blind-index key is never minted over one that was deleted — it comes back
 with the coordination store it lived in, from the backup that holds it
 ([Backups § Restoring](../guides/backup.md#restoring)).
@@ -232,7 +234,7 @@ crewlet secrets set SLACK_BOT_TOKEN_CEO          # reads stdin
 crewlet secrets list                             # names + metadata, never values
 crewlet secrets unset STALE_TOKEN
 crewlet secrets get TOKEN -reveal                # break-glass; logged
-crewlet secrets rekey                            # after a keyring rotation
+crewlet secrets rekey                            # after a keyring rotation: every row, every person's values
 ```
 
 ### The keyring is not optional, and it does three jobs
@@ -282,15 +284,25 @@ That makes the rotation a runbook with no window in it:
    tokens name the new key; outstanding ones still name the old one, which is
    still on the ring.
 4. **Run `crewlet secrets rekey`** to re-seal the stored values under the new
-   active key.
+   active key — through a running node, because it moves the identity
+   estate's too: every person's name, address and second factor is sealed
+   under the keyring in rows derived from the identity log, which only a
+   record can change, so the node publishes one per person still under an old
+   key and reports how many (`identity` in the answer; `null` from a node
+   that runs no identity estate). An **outstanding invitation's** address is
+   counted and left — only a re-issue could carry it again — so the rekey says
+   how many are still under an old key.
 5. **Drop** the old key once the longest token lifetime has passed, every
-   state log has trimmed past the records signed under it, *and* the absolute
-   session lifetime (`api.auth.session.absolute`) has elapsed since step 3.
+   state log has trimmed past the records signed under it, the absolute
+   session lifetime (`api.auth.session.absolute`) has elapsed since step 3,
+   *and* `crewlet secrets rekey -dry-run` reports no outstanding invitation
+   under it — each is redeemed or lapses within a week of being issued.
    From that moment a token, a record or a cookie signed under it is refused,
    which is the point. Dropping it while a log still holds such records leaves
    those records unappliable on a node replaying from the floor, which reports
    itself as retained records rather than as data loss — add the key back and
-   they apply.
+   they apply. The same holds for a person's value a rekey did not move: it
+   renders as *sealed* until the key is back on the ring.
 
    **Dropping it early is what signs people out.** A session cookie names the
    key it was signed under, so every browser still holding one minted before
@@ -509,8 +521,8 @@ activate`](../reference/cli.md#crewlet-config-activate).
 ## Operational notes
 
 - **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. `sandbox_env_unresolved` warns (names only) when a sandbox launch references something nothing answers, and the sandbox credential check refuses to launch a coding agent on an empty credential.
-- **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a coordination backup opens everything the bucket held when it was taken — including the data key of every person removed since, whose name and address that same backup still carries. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before it is gone ([what a removal reaches](identity-and-access.md#removing-somebody-destroys-a-key-not-a-row)).
-- **Key rotation.** Add the new key to `secrets.keys` **on every node**, set `active_key_id`, then run **both** `crewlet config rekey` and `crewlet secrets rekey` before dropping the old key. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a removed person's key in particular stays destroyed rather than being written back as the value the pass read before the removal.
+- **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a backup opens everything it held when it was taken — the bucket's values, and the identity estate's sealed names and addresses in its rows and its log, those of every person removed since included. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before the identity log's trim passed their records is gone ([what a removal reaches](identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows)).
+- **Key rotation.** Add the new key to `secrets.keys` **on every node**, set `active_key_id`, then run **both** `crewlet config rekey` and `crewlet secrets rekey` before dropping the old key. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a credential an operator deleted in particular stays deleted rather than being written back as the value the pass read before. The same command moves every person's sealed values in the identity estate, one record per person, and a run that cannot confirm one says so and is run again.
 - **The `_secrets` bucket is created on demand** by the first node to open coordination, and it is durable: on the embedded topology it lives under `stream.store_dir` like every other bucket, so a restart does not lose it. Back that directory up alongside the keyring.
 - **Rows left in a node's own `secret_values` table** — written before this change, or while its engine was stopped — are migrated onto the fleet at that node's next start and removed locally. The pass copies before it deletes and never overwrites a name the fleet already holds, because the fleet's copy is by definition the newer write. A failure leaves the local rows in place and logs `secret_migration_incomplete`; the node keeps serving from them and retries at the next start.
 

@@ -431,8 +431,7 @@ carries, so everybody signing in again once lets them straight back:
 - **Somebody removed or suspended since is enrolled and active again**, with
   the password and second factor they held when the artefact
   was taken. A removal comes back whole — their row, their credentials, and
-  the key their name and address are sealed under, because the coordination
-  snapshot carries the secret store's bucket as it stood.
+  their name and address, sealed under the keyring exactly as they were.
 - **A credential withdrawn since is back.** A password or a second factor
   revoked, a second factor reset and recovery codes
   regenerated since are all as they were when the artefact was taken — so a
@@ -448,20 +447,21 @@ log stop at the moment the artefact was taken, exactly like the rows they
 describe. So re-apply each one from a record kept **outside** the estate — your
 own off-boarding and access-change records, or the engine's logs if you ship
 them off the host — with `crewlet iam remove`, `suspend`, `grant`, `unbind`,
-`unlink`, `revoke-credential` and `reset-mfa`. Removals first: a removed person
-is the one the restore handed everything back to.
+`revoke-credential` and `reset-mfa`. Removals first: a removed person is the
+one the restore handed everything back to.
 
-Then read `crewlet iam check`: a restore under a different keyring reports
-every person as *sealed under a key this deployment does not have* rather than
-as somebody with no name. Somebody removed **before** the artefact was taken
-stays removed: the artefact holds their tombstone and their ciphertext and not
-the key the removal destroyed — and if that key's deletion had not landed when
-the copy was made, `removal_key_live` names it and the key duty destroys it.
-Somebody removed after it was taken is the first case above, and the reason a
-backup is what an erasure has to outlast: until every backup taken before a
-removal is deleted, the person it removed can be read — and restored — from
-it. See
-[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row).
+Then read `crewlet iam people`: a restore under a different keyring shows every
+person as *sealed under a key this node's keyring does not hold* rather than as
+somebody with no name, and putting that key back on the ring ends it. Somebody
+removed **before** the artefact was taken stays removed: its rows hold their
+tombstone and none of their values — though its stream snapshot still holds
+the identity log's records that wrote them, if the trim had not passed them
+when the artefact was taken, and the restored log trims them on its ordinary
+schedule. Somebody removed after it was taken is the first case above, and the
+reason a backup is what an erasure has to outlast: until every backup taken
+before the trim passed a removed person's records is deleted, the person can be
+read — and restored — from it by whoever holds the keyring. See
+[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
 
 ## What not to do
 

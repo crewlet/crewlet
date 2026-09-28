@@ -72,8 +72,8 @@ A few things worth knowing when deploying Crewlet:
   address hold every sign-in from it at `429`, so one password tried across
   many names from one address is bounded by the password floor, the argon2id
   cost and the verify cap instead, and shown in the audit trail's per-client
-  failure tally; an invitation link and a founder code meet no curve at all,
-  their 256 bits being what bounds a walk. No curve
+  failure tally; an invitation link meets no curve at all, its secret's 256
+  bits being what bounds a walk. No curve
   stands in front of a bearer — a Tier A token, a machine token or a session
   cookie: a bearer names nobody until it is compared, so a curve there could
   only be keyed on the address, and one was a way for any stranger at an
@@ -98,13 +98,13 @@ A few things worth knowing when deploying Crewlet:
   from `crypto/rand`, so there is no dictionary to grind and the memory cost
   would buy nothing while adding a hundred milliseconds to every request a CI
   job makes.
-- **A second factor's seed is sealed, under the person's own key.** TOTP is
+- **A second factor's seed is sealed, under the fleet keyring.** TOTP is
   symmetric, so the seed is the one credential the identity estate has to keep
   as a secret rather than a verifier — and that estate is replicated to every
   node, snapshotted, backed up and donated to joining peers. The seed is sealed
   when it is enrolled, bound to the person *and* the credential it was enrolled
-  as, and opened only to check a code; removing the person destroys the key it
-  is sealed under. **Builds before this change stored it in the clear**, so a
+  as, and opened only to check a code; removing the person erases it from every
+  node's rows, as it does their name and address. **Builds before this change stored it in the clear**, so a
   deployment running one holds every enrolled seed in its identity log, its
   snapshots and every backup taken since. Treat those seeds as disclosed: a
   seed stored in the clear no longer verifies (the node logs
@@ -228,46 +228,42 @@ A few things worth knowing when deploying Crewlet:
   Treat those values as disclosed and rotate them: writing the seat again seals
   the new value, and re-sealing the old one would leave the copies already
   written readable.
-- **Removing a person destroys their key, not only their row.** Each person's
-  name and address are sealed under a data key that is theirs alone, and
-  removing them destroys it — so those values become unreadable at once
-  wherever the key is not also kept: the identity log, every snapshot a node
-  donates (the key never enters one), everything a node serves, and every
-  `crewlet backup` taken after the removal. **A backup taken *before* the
-  removal is not reached.** The key lives in the coordination store's secrets
-  bucket, and a backup's coordination snapshot carries that bucket, sealed
-  under the keyring — so the artefact holds the person's sealed name and
-  address and the key that opens them side by side. Whoever holds it and the
-  keyring can still read both, and restoring it brings the person back whole.
-  The erasure finishes there only when that backup is deleted or ages out — a
-  fortnight on the
+- **Removing a person erases their values from every node's rows — and not
+  from the identity log or a backup until those let go of them.** A person's
+  name, address and second-factor seed are sealed under the fleet keyring,
+  bound to them, before any record carrying them is published. Removing them
+  deletes their rows and clears every sealed value of theirs from the rows that
+  outlive them — an invitation addressed to them, the audit trail's rows —
+  on every node, in the transaction that removes them. What it cannot rewrite:
+  **the identity log** keeps the records that wrote those values, sealed, until
+  the retention trim passes them (never before `min_age`, a week by default,
+  and later while a trim term holds the log); **every backup** holds what it
+  held when it was taken — the rows before the removal, the log's records
+  after it — until it is deleted or ages out (a fortnight on the
   [tiered schedule](docs/guides/backup.md#where-to-put-it-and-how-often) the
-  backup guide suggests — so when an erasure has to be complete, delete or
-  expire every backup taken before it. A raw copy of `stream.store_dir` — the
-  cold runbook's copy, a filesystem snapshot — is no better, even one taken
-  after the removal: the broker purges the key by marking it deleted in its
-  own files rather than overwriting it, so its sealed bytes can stay on disk
-  until the broker rewrites the file that holds them. On a node that dials an
-  external NATS cluster the bucket is that cluster's, so the key is in that
-  cluster's own backups, on that cluster's retention. What outlives the
-  removal is deliberate: their id, the tombstone (who removed them, when, and
-  which claims they held — an address as its blind, never its value), and the
-  audit trail's rows naming them, because a history whose authors evaporate is
-  not an audit trail. **Their login outlives it too, in the clear**, and
-  nothing destroys it: it is on the removal record in the identity log (so in
-  every backup and donated snapshot), in the tombstone's
-  `iam_removed.claims_json`, and in the audit rows that record an unbound
-  person's changes under it. A login is deliberately not sealed — it is
-  printed beside everything its holder does — and the one the sign-up form
+  backup guide suggests), and restoring one taken before the removal brings
+  the person back whole; a **raw copy of `stream.store_dir`** — the cold
+  runbook's copy, a filesystem snapshot — can carry trimmed records until the
+  broker rewrites the file holding them; and on a node that dials an external
+  NATS cluster, **that cluster's own backups** hold the log on that cluster's
+  retention. Every one of those copies is sealed under the keyring, so it is
+  readable by whoever holds the copy *and* the keyring — which the operator
+  does by design. When an erasure has to be complete, remove the person, let
+  the identity log's trim pass the removal, and delete or expire every backup
+  and raw copy taken before that. What outlives the removal on purpose: their
+  id, the tombstone (who removed them, when, and which claims they held — an
+  address as its blind, never its value), and the audit trail's rows naming
+  them, because a history whose authors evaporate is not an audit trail.
+  **Their login outlives it too, in the clear**: it is on the removal record in
+  the identity log (so in every backup and donated snapshot), in the
+  tombstone's `iam_removed.claims_json`, and in the audit rows that record an
+  unbound person's changes under it. A login is deliberately not sealed — it is
+  printed beside everything its holder does — and the one an invitation's form
   proposes is derived from the address (`jane.doe@example.com` proposes
   `jane.doe`), so after a removal the address's local part is usually still
   readable. If a person's login has to be erasable, do not derive it from a
-  personal address: give them one that names nothing about them. The rows
-  commit before the key is destroyed; a key deletion that fails — a
-  coordination outage — is retried by the identity key duty, and
-  `crewlet iam check` (`GET /iam/check`) names every removed person whose key
-  still lives as `removal_key_live` until it is gone. See
-  [Removing somebody destroys a key, not a row](docs/concepts/identity-and-access.md#removing-somebody-destroys-a-key-not-a-row).
+  personal address: give them one that names nothing about them. See
+  [Removing somebody erases what is theirs from every node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
 - **Personal data in configuration revisions written before this release.**
   Every node keeps its own copy of every company-config revision it has ever
   met, in an append-only table that nothing deleted from and that is in every

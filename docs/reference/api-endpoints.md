@@ -187,11 +187,10 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
 | `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
 | `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
-| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.local.totp` is `required` and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/bootstrap`, `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
-| `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, whether the first-operator route is still open, and `min_password_length` — the deployment's own `api.auth.local.min_password_length`, never below the engine's twelve, which is exactly the floor the founding and every redemption enforce. **Unguarded**, and it carries **no user list and no count of people** |
-| `POST` | `/auth/bootstrap` | **The first person.** Redeems a one-time code a node wrote to a file beside its store, 0600, and creates an operator carrying the whole `max_grants` ceiling — the one stated exemption in the authority model. The code is checked **on the identity log**, so any node redeems a code any node wrote. The founding first **takes** the exemption on the company's one bootstrap subject, so exactly one founder can land: a second code presented while another founding is part-way through is `409 bootstrap_in_progress` carrying `until`, when that one lapses, and a caller arriving after the first finished is `409 bootstrap_closed`. The founding that takes a code ends every earlier, unfinished one first, so an attempt that stopped halfway never holds the founder's address or login against a fresh code. A code that is real and no longer works — past its **24 hours**, withdrawn by a re-issue, or written by this node and never published — is `410 bootstrap_code_stale`, whose remedy is `crewlet iam bootstrap-code` (or a restart of the node that wrote it); a code nobody holds is the uniform `401`. A code **spells its own expiry** — `cwl_boot_<unix seconds>_<64 hex>`, and the digest the log holds is over the whole value — so one past it is `410` on every node, including after its record is swept a week later, when it used to be the uniform `401` everywhere but on the node still holding its file. **Unguarded**, and closed for good the moment anybody is enrolled |
+| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.local.totp` is `required` and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
+| `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, and `min_password_length` — the deployment's own `api.auth.local.min_password_length`, never below the engine's twelve, which is exactly the floor every redemption enforces. **Unguarded**, and it carries **no user list and no count of people** |
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it, the password floor, the `seat` it binds (`{handle, name}` as the chart calls it now — absent for an invitation that binds none), and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt in the audit trail's tally**: walking ids or secrets is guessing at a link, which the tally shows. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference |
-| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants, reach and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. An invitation that binds a seat claims it **first** and binds the person to it: a seat removed, made an agent's or bound to somebody else since the issue is `410` before anything is written, and one a colleague's bind races is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: the person a redemption creates is derived from the invitation, so every attempt names one person and a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. `POST /auth/bootstrap` takes `{code, login, email, name, password}`, accepts the code while the log holds it live or taken by its own founding that has not finished (never withdrawn, ended or past its 24 hours), derives the founder from the code the same way, and answers its enrolment the same way — except that a code that died between the form and the post is `410 bootstrap_code_stale` rather than `409`, because one command replaces it |
+| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants, reach and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. An invitation that binds a seat claims it **first** and binds the person to it: a seat removed, made an agent's or bound to somebody else since the issue is `410` before anything is written, and one a colleague's bind races is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: the person a redemption creates is derived from the invitation, so every attempt names one person and a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. The company's **first person** redeems exactly this way: a Tier A token issues their invitation — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
 | `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage, grants and colleague level, and the two instants your proof of identity stops counting — `reauth_at` for an ordinary [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture and `sensitive_reauth_at` for a sensitive one — with `step_up_due` and `sensitive_step_up_due` saying whether the next one of each will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
 | `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request, and so does **putting a new value under the same id**: the cookie is bound to the value it was exchanged with, so rotating a leaked token's value ends every session the old value opened — each announced once as `iam_session_ended` with `credential_changed`, as a removed entry's is, since no record states either. `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too. A refused bearer here is answered exactly as on every guarded route: `401`, counted in the audit trail's failure tally, and never slowed or refused on its address — see [A bearer is its own protection](#a-bearer-is-its-own-protection) |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline |
@@ -302,7 +301,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > refused for theirs, and neither are the server-to-server edges (`/webhooks/*`,
 > `/otlp/*`, `/mcp/*`), which a server reaches with a credential of its own.
 > The sign-in routes are judged like every other write although no credential
-> guards them — `POST /auth/login`, `/auth/bootstrap` and `/auth/invite/{id}`
+> guards them — `POST /auth/login` and `/auth/invite/{id}`
 > — because a sign-in posted from somebody else's
 > page is how an attacker leaves a victim's browser signed in as somebody the
 > attacker controls. See
@@ -347,9 +346,6 @@ already have:
 | `throttled` | `429` with a `Retry-After`: the seconds until this attempt is admitted. Keyed on the subject **as typed** from the caller's source — never on the source alone, and never on what it resolved to — a name nobody holds climbs the curve exactly as a real one does, so a stranger learns only that they failed recently from where they are, which they already knew. Keyed on the resolved person it would be an oracle — "this account exists and I can slow it down" — which is why the one curve that is, a second factor's, is reached only past the password |
 | `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens. It is also the `403` a session that may only enrol a second factor meets at `POST /auth/totp` once its person holds one — enrolled since, from another session: a password alone never enrols over a factor, and the remedy is to sign in again with it |
 | `second_factor_enrolment_required` | A `status` on a successful sign-in, and a `403` from every guarded route but three for the session it opened — reached only by somebody who proved the password, so it says nothing to a stranger. The deployment requires a second factor and this person holds none: the session may read `GET /auth/session`, enrol one at `POST /auth/totp` and re-confirm the password at `POST /auth/step-up`, and sign out at `POST /auth/logout`, which no guard stands in front of — and enrolling replaces it with a whole one. Its own code rather than `step_up_required`, because no fresher password changes the answer |
-| `bootstrap_closed` | Says this company has started, which whoever can reach an unstarted one would find out by trying |
-| `bootstrap_code_stale` | Reachable only by presenting a code whose digest is on the identity log, or in the serving node's own file — so only by somebody holding a real one — or one whose **own** spelled expiry has passed, which is answered alike whoever minted it and so says nothing a stranger could not read off their own request. Says it aged out, was withdrawn or never reached the log, and names `crewlet iam bootstrap-code`, because the alternative answers were both wrong: `sign_in_refused` sent a founder hunting for a typo in a code that was right, and `bootstrap_closed` told them a company still waiting for them had started. Counted in the failure tally like every failed attempt |
-| `bootstrap_in_progress` | `409`, reachable only by presenting a code the log holds live — so only by somebody holding a real one. Says another code's founding is part-way through, and when it lapses (`until`), because only one founder can land: the code presented works the moment that one finishes or lapses, and `crewlet iam bootstrap-code` ends it at once. Neither `bootstrap_closed` (nobody is in the company) nor `bootstrap_code_stale` (this code is fine). Not counted as a failed attempt, for `bootstrap_closed`'s reason |
 | `invite_spent` | Read by somebody holding the link, which is already evidence it was issued to them. One code for redeemed, withdrawn and expired — and for a secret that is not the link's, answered in the same bytes as an id nobody issued — because the remedy is the same and telling them apart would say "already used" to somebody whose link merely aged out, or say which ids exist to somebody guessing secrets |
 
 ### A failure costs a wait, never a lockout
@@ -397,8 +393,8 @@ against many names from one address meets no curve; it is bounded by the
 address's one turn at the node's verify cap — one name per verification,
 however many it sends at once — by the password floor and blocklist, and by
 the pad, and it is shown by the audit trail's per-client failure tally. A
-credential that names nobody — an invitation link or a founder's code — meets
-no curve at all, and every refusal of one is still counted in the tally.
+credential that names nobody — an invitation link — meets no curve at all, and
+every refusal of one is still counted in the tally.
 
 The window is fifteen minutes, and **each node keeps its own curve**: nothing
 about it is written to the coordination store, so a sign-in never waits on a
@@ -508,7 +504,7 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` and `/chart*` (a lead editing their own unit included), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, the deployment's own controls — `POST /budgets/reset`, `POST /backup` and every `POST /work/retention*` — and every `/iam` write the row below does not name: `POST /iam/people`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `POST /iam/bootstrap-code`, `POST /iam/credentials`, revoking a machine token through `DELETE /iam/credentials/{id}`, and ending somebody else's sessions |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` and `/chart*` (a lead editing their own unit included), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, the deployment's own controls — `POST /budgets/reset`, `POST /backup` and every `POST /work/retention*` — and every `/iam` write the row below does not name: `POST /iam/people`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `POST /iam/credentials`, revoking a machine token through `DELETE /iam/credentials/{id}`, and ending somebody else's sessions |
 | `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a value (`GET /secrets/{name}?reveal=true`); changing what an enrolled person may do or how they prove who they are — `PATCH /iam/people/{id}`, `POST /iam/people/{id}/mfa/reset`, `DELETE /iam/credentials/{id}` naming a password, a second factor or the recovery codes, and your own `POST /auth/totp` and `POST /auth/totp/recovery`; and `POST /iam/invalidate-all` |
 | none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) and the import ledger a client polls (`GET /chart/imports*`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; and every work and knowledge verb — the tools, `/operator/mcp` and the human write surface |
 
@@ -930,14 +926,13 @@ list and nothing ever will be.
 | `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only, refused before anything is written. An id naming a password, a second factor or the recovery codes also asks a proof inside `step_up_sensitive` |
 | `POST /iam/invalidate-all` | `fleet:operate` **and** `people:manage` — the deployment's grant and the directory's, both, as the record layer holds too. Ends every session **and every machine token** |
 | `GET /iam/check` | `people:manage` or `audit:read` |
-| `POST /iam/bootstrap-code` | `people:manage`; `409 bootstrap_closed` once anybody is enrolled, and **absent** (`404 not_found`) where `api.auth.bootstrap` is closed |
 | `GET /iam/audit` | `audit:read` |
 
 **Every write here asks for a recent proof**, and which window is the
 design's; see
 [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are).
-Enrolling, inviting and removing somebody, the bootstrap code, and minting or
-revoking a machine token ask `step_up` (an hour by default). Changing what an
+Enrolling, inviting and removing somebody, and minting or revoking a machine
+token ask `step_up` (an hour by default). Changing what an
 enrolled person may do or how they prove it asks `step_up_sensitive` (fifteen
 minutes): `PATCH /iam/people/{id}` whatever it carries, a second-factor reset,
 and a revocation through `DELETE /iam/credentials/{id}` that names a password,
@@ -1144,32 +1139,6 @@ bound to: a seat the chart does not hold and an agent's seat are `400`, and one
 somebody holds is `409` naming them. The invitation records the seat's
 identity, so a rename before the redemption binds the same seat.
 
-`POST /iam/bootstrap-code` answers the **file path** and never the value,
-together with the **node** that wrote it — on a fleet the file is on whichever
-node served the request, and a path without a host is a file nobody can find.
-The code is written `0600` beside the store, and reading it needs shell on that
-host — which is the point. Re-issuing withdraws every live code and ends a
-founding in progress **in the one gesture its new code is minted in**: the
-mint is published only from a snapshot in which no other code is live or
-taken, and whatever arrived meanwhile is ended and the mint tried again — so
-where it lands, it is the one code that works, and it lasts 24 hours. A node
-that boots onto the still-empty estate afterwards offers its own code, as
-every boot does. A re-issue that could not read the outstanding codes, or
-could not land or confirm a withdrawal or the new code's record, is `503` with
-a `Retry-After`; one that kept finding new codes for sixteen rounds is `409
-stale`, having minted nothing, which the same request again resolves; one that
-could not write the file on the host is `500`, because waiting does not fix a
-filesystem.
-
-It is refused — `409 bootstrap_closed` — by the same gate the redemption asks,
-once anybody is enrolled. Where `api.auth.bootstrap` is closed the route is
-**absent** — `404 not_found`, with a detail saying so — because that
-deployment never bootstraps this way, which is a different fact from a company
-that has started. It used to ask whether an active administrator existed
-instead, so a company whose only person was suspended was handed a code the
-redemption would never honour; the way back in there is an administrator, or a
-Tier A token holding `people:manage`.
-
 `POST /iam/invitations` on a node with no `api.external_url` is `500
 no_external_url`: there is no address a link could point at, and only the
 node's own configuration file can supply one.
@@ -1183,15 +1152,14 @@ ciphertext.
 
 `?q=` narrows on the **login and the seat**, which are the only two identity
 values this estate holds in the clear. A search over names would have to open
-every person in the company to compare one, which is a fan-out of
-coordination reads per keystroke.
+every person in the company to compare one, on every keystroke.
 
-A removal deletes the person's row, so the one row that can still be listed
-with its key destroyed is on a node that has not applied the removal yet; it
-renders as `removed`, and ciphertext this deployment's keyring cannot open
-renders as `sealed`. They are different
-states with different remedies — one is finished, the other is a keyring
-somebody still has — and neither is an outage.
+A removal deletes the person's row, so a removed person is simply not listed —
+on a node that has not applied the removal yet they are listed as they were.
+Ciphertext this node's keyring cannot open — a key dropped from the ring before
+`crewlet secrets rekey` moved the values off it, or a restore under a different
+keyring — renders as `sealed`: a state the right keyring ends, and never an
+outage.
 
 #### `GET /iam/check` walks the whole directory
 
@@ -1204,29 +1172,16 @@ somebody still has — and neither is an outage.
   ],
   "position": "CREWLET_IAM_LOG@0:1840",
   "people_with_people_manage": 2,
-  "bindings_unchecked": 0,
-  "keys_unchecked": 0
+  "bindings_unchecked": 0
 }
 ```
 
 `kind` is one of `no_people_manage_holder` (listed first: nobody left who can
 administer the company except through a Tier A token),
 `person_without_credential`, `binding_dangling`,
-`grant_clamped_by_ceiling`, `claim_duplicated`, `claim_orphaned`,
-`removal_key_live` and `key_unowned`. The last two read the company's secret
-store and are left out on a node without one; the table in
-[`crewlet iam check`](cli.md#crewlet-iam-check) says what each one means and
+`grant_clamped_by_ceiling`, `claim_duplicated` and `claim_orphaned`; the table
+in [`crewlet iam check`](cli.md#crewlet-iam-check) says what each one means and
 what to do.
-
-`keys_unchecked` counts the keys no row on this node owns that it **could not
-judge**, because its rows have not applied the whole identity log — it is
-behind, or it holds a record it cannot apply yet (a newer build's, or one
-signed under a keyring key it was not restarted with), which moves its
-checkpoint without writing the record's rows: somebody whose enrolment has not
-been applied here owns nothing here either, so such a node names no
-`key_unowned` and counts instead, and a report from it does not read as a clean
-one. A key with no recorded write time is counted here too, having no provable
-age.
 
 `binding_dangling` is decided by the **request path's own seat table**, so it
 names exactly the people a request would refuse or hold off for want of their
@@ -1548,20 +1503,19 @@ for none (see
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source`, and `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source`; `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values` — the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
 | `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`). The author is the caller the guard resolved and never anything the request names; the answer carries `updated_by`, `updated_by_kind` and `operator_id` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
-| `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — answering the names of yours it moved and `engine_keys_moved`, a count of the engine's. `?key_id=` is refused with `409` when it names a different key |
+| `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — and every person's sealed values in the identity estate, one record per person, answering the names of yours it moved, `engine_keys_moved`, a count of the engine's, and `identity` — `{"people": n, "values": n}`, or `null` on a node that runs no identity estate. An outstanding invitation's address is not moved (only a re-issue could carry it again) and is counted by the listing instead. A person whose record nobody could confirm, or whose value would not open, is `500 rekey_incomplete` carrying what did move — run it again, which moves only what is still under an old key. `?key_id=` is refused with `409` when it names a different key |
 
-**The engine's own keys are not addressable here.** A person's data key and
-the identity directory's blind-index key share the bucket under path-shaped
-names (`iam/person/<id>/dek`, `iam/blind-index-key`). Every route that takes a name
-answers one of those `403 reserved_name` before anything else — a reveal, an
-overwrite and a delete alike, whatever the caller holds — because a reveal
-would copy a person's key out ahead of the removal that shreds it and a delete
-would be a removal nobody recorded. See
+**The engine's own keys are not addressable here.** The identity directory's
+blind-index key shares the bucket under a path-shaped name
+(`iam/blind-index-key`). Every route that takes a name answers one `403
+reserved_name` before anything else — a reveal, an overwrite and a delete
+alike, whatever the caller holds — because a delete or an overwrite would
+orphan every address in the directory. See
 [the secret store](../concepts/secret-store.md#the-engines-own-keys-share-the-bucket-and-never-the-namespace).
 
 **The name is an environment-variable name, and a write that is not one is
@@ -2622,22 +2576,21 @@ that needs the rest of the envelope asks the `stream` query for it.
   "posture": "serve",
   "applied_epoch": 41,
   "seats": ["ceo", "cto"],
-  "identity_duty_seconds": {"iam_sweep": 3600, "iam_claims": 3600, "iam_key_shred": 900},
+  "identity_duty_seconds": {"iam_sweep": 3600, "iam_claims": 3600},
   "unproven_seconds": {"eng": 312.5},
   "identity": "ready"
 }
 ```
 
-Before anybody is in the company, the same body names where this node's
-founder code is:
+Before anybody is in the company, the same body says so, and the remedy is an
+invitation issued under a Tier A token (see [How the first person
+exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 
 ```json
 {
   "status": "ok",
   "node": "core-1",
-  "identity": "unclaimed",
-  "bootstrap_code_path": "/var/lib/crewlet/bootstrap-code",
-  "bootstrap_code_expires_at": "2026-04-02T11:58:03Z"
+  "identity": "unclaimed"
 }
 ```
 
@@ -2654,13 +2607,11 @@ founder code is:
 | `in_flight` | Turns running on this node. Always present, and a `0` is a real zero: every process that serves the API runs the engine beside it. |
 | `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
-| `identity_duty_seconds` | Each [identity duty](../guides/retention.md#the-identity-duties) **this node** armed, mapped to the interval it runs at, in seconds, whenever it holds that duty's lease. `{}` on a node that armed none — one running no `workers` role, since every one of them is a worker singleton, or one that started with no active company. A duty that was never armed looks from every other vantage point exactly like one quietly finding nothing to do, so this is where you read that the key duty is running at all (it needs the company's secret store). Which node holds each lease right now is the coordination store's answer, not this node's. |
+| `identity_duty_seconds` | Each [identity duty](../guides/retention.md#the-identity-duties) **this node** armed, mapped to the interval it runs at, in seconds, whenever it holds that duty's lease. `{}` on a node that armed none — one running no `workers` role, since every one of them is a worker singleton, or one that started with no active company. A duty that was never armed looks from every other vantage point exactly like one quietly finding nothing to do, so this is where you read that the retention sweep and the claim report are running at all. Which node holds each lease right now is the coordination store's answer, not this node's. |
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
-| `identity` | Whether this company has its **first person**: `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh install waiting for its founder to redeem the [one-time code](../concepts/identity-and-access.md#how-the-first-person-exists) — and `unknown` where this node cannot read its identity estate, which is never reported as `unclaimed`, because a dashboard told nobody is in would offer a founder route to a company that may have started. **Absent** on a node that serves no sign-in surface: one that started with no active company holds no identity rows at all, and `unclaimed` from it would be false. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
-| `bootstrap_code_path` | **This node's** founder code file, present only while `identity` is `unclaimed` and the file holds a code the log still honours — live, or taken by a founding that has not finished. The path and never the value: reading it needs shell on this host. On a fleet every node that booted onto the empty estate offers its own, and each names only its own; a code that has died is not named, since it is not a way in (a restart of this node or `crewlet iam bootstrap-code` replaces it). |
-| `bootstrap_code_expires_at` | When the code in `bootstrap_code_path` stops working, RFC 3339 in UTC. Present exactly when the path is. |
+| `identity` | Whether this company has its **first person**: `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh install waiting for [its first invitation](../concepts/identity-and-access.md#how-the-first-person-exists), issued under a Tier A token — and `unknown` where this node cannot read its identity estate, which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to invite a first person into a company that may have started. **Absent** on a node that serves no sign-in surface: one that started with no active company holds no identity rows at all, and `unclaimed` from it would be false. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
 
 Per-socket facts, such as how many envelopes *this* connection dropped or
