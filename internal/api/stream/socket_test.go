@@ -60,16 +60,26 @@ func newSocketWith(t *testing.T, authOpts func(*config.APIAuth), query stream.Qu
 				iam.GrantAuditRead}
 		}
 	}
+	// THE DEPLOYMENT HAS AN ADDRESS, as every served one must, so a case
+	// about the handshake's Origin has something to be judged against. A
+	// dial from Go sends no Origin at all, which is how a non-browser
+	// client reaches this path and what every other case here does.
+	b.API.ExternalURL = fixtureOrigin
 	guard := auth.New(&b)
 	svc := buildService(t, opts)
 
-	srv := httptest.NewServer(stream.Handler(guard, svc, query))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, query))
 	t.Cleanup(srv.Close)
 	return &socketFixture{
 		server: srv, svc: svc,
 		url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream",
 	}
 }
+
+// fixtureOrigin is where every fixture's deployment says a browser reaches it:
+// NOT the test server's own address, which is the point — a deployment behind a
+// proxy is reached at a public address its listener never sees as `Host`.
+const fixtureOrigin = "https://crewlet.example.com"
 
 // fixtureToken is what every fixture's default credential is, and what an
 // empty argument to [socketFixture.dial] presents.
@@ -275,6 +285,85 @@ func TestAnUnauthenticatedSocketIsRefused(t *testing.T) {
 	}
 	if got := next(t, conn); got["kind"] != stream.KindSnapshot {
 		t.Errorf("first frame = %v", got["kind"])
+	}
+}
+
+// dialFrom opens a socket the way a BROWSER does: carrying the page's Origin.
+func (f *socketFixture) dialFrom(t *testing.T, origin string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	conn, res, err := websocket.Dial(t.Context(), f.url+"?token="+url.QueryEscape(fixtureToken),
+		&websocket.DialOptions{HTTPHeader: http.Header{"Origin": []string{origin}}})
+	if err == nil {
+		t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	}
+	return conn, res, err
+}
+
+// THE HANDSHAKE'S ORIGIN IS JUDGED BY THE WRITES' RULE.
+//
+// The socket used to leave it to its WebSocket library, which compares
+// `Origin` with the request's own `Host`. The fixture's deployment is reached
+// at an address that is not the test server's — exactly a deployment behind a
+// proxy that rewrites `Host` to its upstream's — and its second hostname is
+// named in `api.auth.allowed_origins`: both were refused at the handshake
+// while every write from them was served.
+func TestTheHandshakeAdmitsEveryAddressTheDeploymentIsReachedAt(t *testing.T) {
+	t.Parallel()
+	f := newSocket(t, func(a *config.APIAuth) {
+		a.AllowedOrigins = []string{"https://ops.example.com"}
+	}, nil)
+	for _, origin := range []string{fixtureOrigin, "https://ops.example.com"} {
+		conn, _, err := f.dialFrom(t, origin)
+		if err != nil {
+			t.Errorf("a handshake from %s was refused: %v", origin, err)
+			continue
+		}
+		if got := next(t, conn); got["kind"] != stream.KindSnapshot {
+			t.Errorf("from %s: first frame = %v, want the snapshot", origin, got["kind"])
+		}
+	}
+}
+
+// AND A PAGE ON ANOTHER SITE IS STILL REFUSED, which is the control and the
+// reason the check exists: a browser attaches the session cookie to a
+// cross-site page's handshake exactly as it does to its form post, and the
+// socket streams the company's state to whoever opened it.
+func TestAHandshakeFromAnotherSiteIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newSocket(t, nil, nil)
+	conn, res, err := f.dialFrom(t, "https://evil.example.com")
+	if err == nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		t.Fatal("a handshake from another site opened a socket")
+	}
+	if res == nil || res.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %v, want 403 csrf_origin", res)
+	}
+}
+
+// A PLAIN GET IS NOT A HANDSHAKE, so its Origin is not judged: the dashboard
+// re-asks this path over fetch to read a refused handshake's status, a
+// same-origin GET sends no Origin, and it carries the cookie. Judged, the
+// cookie-with-no-Origin arm would answer 403 and the page would report a
+// withdrawn surface to somebody whose engine was merely restarting.
+func TestThePlainReAskIsNotJudgedForItsOrigin(t *testing.T) {
+	t.Parallel()
+	f := newSocket(t, nil, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		f.server.URL+"/ws/stream", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+fixtureToken)
+	req.Header.Set("Origin", "https://evil.example.com")
+	res, err := f.server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUpgradeRequired {
+		t.Errorf("status = %d, want 426: a GET that asks for no upgrade "+
+			"opens nothing, so there is nothing for its Origin to decide", res.StatusCode)
 	}
 }
 
@@ -525,11 +614,12 @@ func TestAWatchNeedsAnOperator(t *testing.T) {
 
 func TestABadFrameTokenDoesNotDowngradeAnAuthenticatedSocket(t *testing.T) {
 	t.Parallel()
-	// The frame token UPGRADES one query; it must never demote the socket
-	// that is already authenticated. A garbled or expired token on one
-	// frame would otherwise silently answer an operator's question as
-	// anonymous — and an operator-only query would come back unauthorized
-	// on a socket that had every right to ask it.
+	// A FRAME CARRIES NO CREDENTIAL any more (see the note above
+	// [stream.Handler]), and a client built when it did still sends one.
+	// Every question is asked as the principal the handshake resolved, so
+	// a garbled token on one frame must change nothing: read, it would
+	// answer an operator's question as somebody else, or refuse one the
+	// socket had every right to ask.
 	seen := make(chan string, 1)
 	f := newSocket(t, func(a *config.APIAuth) {
 		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}

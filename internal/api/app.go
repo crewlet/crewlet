@@ -630,7 +630,7 @@ func New(opts Options) (*App, error) {
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
-	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer))
 	// The OPERATOR MCP surface: the same tracker and knowledge tools a
 	// seat holds, offered to a person's own assistant. Under its own
 	// always-guarded prefix rather than under /mcp/, which is exempt

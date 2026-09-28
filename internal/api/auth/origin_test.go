@@ -127,6 +127,46 @@ func TestACookieWithNoOriginIsRefused(t *testing.T) {
 	}
 }
 
+// THE HANDSHAKE RULE JUDGES A GET, which the middleware never does: the live
+// socket's handshake is a GET that opens a stream of the company's state, and a
+// browser attaches the session cookie to a cross-site page's handshake. Each of
+// the three arms, with the permitted address as the control.
+func TestRefuseCrossSiteJudgesAHandshakeWhateverItsMethod(t *testing.T) {
+	t.Parallel()
+	c := csrfFixture(t)
+	for _, tc := range []struct {
+		name   string
+		origin string
+		cookie bool
+		refuse bool
+	}{
+		{"another site", "https://evil.example.com", false, true},
+		{"a cookie and no Origin", "", true, true},
+		{"a bearer client and no Origin", "", false, false},
+		{"the deployment's own address, with a cookie", "https://crewlet.example.com", true, false},
+		{"an allowance", "https://ops.example.com", false, false},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/ws/stream", nil)
+		if tc.origin != "" {
+			req.Header.Set("Origin", tc.origin)
+		}
+		if tc.cookie {
+			req.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: "a-session"})
+		}
+		rec := httptest.NewRecorder()
+		refused := c.RefuseCrossSite(rec, req)
+		if refused != tc.refuse {
+			t.Errorf("%s: refused = %v, want %v", tc.name, refused, tc.refuse)
+		}
+		if refused && rec.Code != http.StatusForbidden {
+			t.Errorf("%s: a refusal answered %d, want 403", tc.name, rec.Code)
+		}
+		if !refused && rec.Code != http.StatusOK {
+			t.Errorf("%s: an admitted handshake had an answer written (%d)", tc.name, rec.Code)
+		}
+	}
+}
+
 // A READ CHANGES NOTHING, so it is never refused for its origin. Refusing one
 // would break every cross-origin dashboard the CORS allowance exists to serve,
 // to prevent a request that alters nothing.

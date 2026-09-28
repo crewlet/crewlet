@@ -216,7 +216,7 @@ type request struct {
 // REST route beside it served them. The guard resolves both shapes, the
 // middleware has already run it for this path, and the handler reads the
 // result from the context like every other surface does.
-func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
+func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r, refusal := resolved(guard, w, r)
 		// THE RESOLVED REQUEST'S CONTEXT IS THIS HANDLER'S OWN, carrying
@@ -289,11 +289,19 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 		who := &asking{principal: principal}
 		check := checkerFor(guard, r)
 
+		// THE HANDSHAKE'S ORIGIN IS JUDGED BY THE WRITES' RULE, and only
+		// a handshake's: see [auth.CSRF.RefuseCrossSite] for why the
+		// library's own check is switched off below, and why the plain
+		// GET the dashboard re-asks this path with is not judged.
+		if upgrading(r) && origins.RefuseCrossSite(w, r) {
+			return
+		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			// The dashboard is served by this same process, so the
-			// socket is same-origin. Anything else is a page the
-			// operator did not open.
-			OriginPatterns: nil,
+			// JUDGED ABOVE, against api.external_url and every
+			// api.auth.allowed_origins entry. The library's own check
+			// compares Origin with this request's Host header, which a
+			// second hostname and a Host-rewriting proxy both fail.
+			InsecureSkipVerify: true,
 		})
 		if err != nil {
 			log.Debug("stream_accept_failed", "error", err)
@@ -302,6 +310,28 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 		//nolint:contextcheck // the resolved request's; see where it is resolved
 		serveSocket(r.Context(), conn, svc, query, budgetKey, who, check)
 	})
+}
+
+// CrossSite judges a handshake's `Origin` and answers the refusal itself. The
+// engine hands in the same [auth.CSRF] every write is judged by, so the socket
+// and the routes beside it cannot disagree about where this deployment is
+// reached.
+type CrossSite interface {
+	RefuseCrossSite(w http.ResponseWriter, r *http.Request) bool
+}
+
+// upgrading reports whether a request asks to become a WebSocket, which is
+// what a browser's handshake carries and the dashboard's plain re-ask of this
+// path does not.
+func upgrading(r *http.Request) bool {
+	for _, value := range r.Header.Values("Upgrade") {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "websocket") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // resolved is the request carrying the guard's answer, and the guard's

@@ -156,18 +156,45 @@ func (c *CSRF) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		switch origin := r.Header.Get("Origin"); {
-		case origin == "":
-			if c.cookieAuthenticated(r) {
-				c.refuse(w, r, "a cookie-authenticated request carried no Origin")
-				return
-			}
-		case !c.Permits(origin):
-			c.refuse(w, r, "Origin "+origin+" is not an address this deployment is reached at")
+		if c.RefuseCrossSite(w, r) {
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RefuseCrossSite judges one request's `Origin` by the rule above, whatever
+// its method, and answers the refusal itself when it fails. It reports whether
+// it refused.
+//
+// EXPORTED FOR THE LIVE SOCKET, which is the one GET that must be judged: a
+// WebSocket handshake is a GET, so [CSRF.Middleware] passes it as a read, yet
+// the socket it opens streams the company's state to whoever opened it — and a
+// browser attaches the session cookie to a cross-site page's handshake exactly
+// as it does to a cross-site form post. The socket used to leave the judgement
+// to its WebSocket library, which compares `Origin` against the request's own
+// `Host` header: a second hostname named in `api.auth.allowed_origins` was
+// refused there while every write from it was served, and so was every browser
+// behind a proxy that rewrites `Host` to its upstream's, which nginx does
+// unless told otherwise. One rule, asked in one place, is what keeps the
+// socket and the writes beside it agreeing about where this deployment is.
+//
+// The caller asks it only of a request that IS a handshake: a browser sends
+// `Origin` on every WebSocket upgrade, but not on the same-origin GET the
+// dashboard re-asks the socket path with to read a refused handshake's status,
+// and that GET carries the cookie.
+func (c *CSRF) RefuseCrossSite(w http.ResponseWriter, r *http.Request) bool {
+	switch origin := r.Header.Get("Origin"); {
+	case origin == "":
+		if c.cookieAuthenticated(r) {
+			c.refuse(w, r, "a cookie-authenticated request carried no Origin")
+			return true
+		}
+	case !c.Permits(origin):
+		c.refuse(w, r, "Origin "+origin+" is not an address this deployment is reached at")
+		return true
+	}
+	return false
 }
 
 // cookieAuthenticated reports whether this request's credential is one the

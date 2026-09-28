@@ -182,7 +182,7 @@ func newWatchSocketOver(t *testing.T, chart authz.Chart, holders iam.Holders,
 	guard := auth.New(&b).BindSeats(auth.SeatBindings{
 		Directory: watchBindings(bound), Chart: watchSeats(bound)})
 	svc := buildService(t, stream.Options{Chart: chart, Holders: holders})
-	srv := httptest.NewServer(stream.Handler(guard, svc, nil))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))
 	t.Cleanup(srv.Close)
 	return &watchFixture{svc: svc,
 		url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}
