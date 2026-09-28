@@ -43,7 +43,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/backup"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -1510,8 +1509,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// of its own: until this one there was nowhere to hire, move, rename or
 	// edit anybody after a node's first chart was seeded from the company
 	// file at boot, and /config refuses a body carrying one BY NAME.
+	nodeChart := liveChart{reader: e.Chart, writer: e.ChartWriter}
 	chartSurface, err := chartapi.New(chartapi.Options{
-		Reader: e.Chart(),
+		// READ PER REQUEST, never captured: see [liveChart] for the typed
+		// nil a node with no active company used to hand over here.
+		Reader: nodeChart,
 		// WHO HOLDS A SEAT, or nil where this node cannot tell — see
 		// [seatHeld] for why the absence is the third value here.
 		Held: seatHeld(e),
@@ -1523,10 +1525,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// so does the credential it acted through, which is the only
 		// thing telling a write made through somebody's token from one
 		// they made themselves.
-		Authority: func(actor string, kind chart.AuthorKind,
-			grants []iam.Grant, provenance chart.Provenance) chartapi.Writer {
-			return e.ChartWriter().As(actor, kind, grants, provenance)
-		},
+		Authority: nodeChart.authority,
 		// WHO IS ASKING, THREE-VALUED, straight from what the guard
 		// resolved. It used to be a blunt translation beside the
 		// guard — a recognised token became a machine principal
