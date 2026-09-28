@@ -126,10 +126,25 @@ type DomainPosition struct {
 // trim asks "what has every node applied", and it asks it about every domain
 // at once.
 type NodePositions struct {
-	NodeID        string                    `json:"node_id"`
-	At            time.Time                 `json:"at"`
-	EngineVersion string                    `json:"engine_version,omitempty"`
-	Domains       map[string]DomainPosition `json:"domains"`
+	NodeID        string    `json:"node_id"`
+	At            time.Time `json:"at"`
+	EngineVersion string    `json:"engine_version,omitempty"`
+
+	// Layout is the number of the layout this node's logs are in — which
+	// is what makes the keys below name ONE log each.
+	//
+	// A log's key does not carry its layout ([statelog.LogID.String]):
+	// layout 1's `tracker@tracker.007` and a repartitioned layout 2's are
+	// one string, so a row keyed by it says which log it means only with
+	// the layout beside it. Read through [PositionsIn], which empties a
+	// row of another layout. OMITTED AT ZERO, so a layout-0 row is the one
+	// every build before the field wrote, byte for byte.
+	Layout int `json:"layout,omitempty"`
+
+	// Domains is this node's position on each log it runs, keyed by the
+	// log's key — under layout 0 the domain's own name, which is the key
+	// this map has always had.
+	Domains map[string]DomainPosition `json:"domains"`
 
 	// SnapshotBytes is the size of the artefact those per-domain snapshot
 	// positions came from.
@@ -149,6 +164,25 @@ type NodePositions struct {
 	// is silent about whether that is a disk that filled, a node that is
 	// lagging, or a loop that has simply not run yet.
 	SnapshotSkip string `json:"snapshot_skip,omitempty"`
+}
+
+// PositionsIn is the register as a reader running layout reads it: every row,
+// and in a row of ANOTHER layout no position at all.
+//
+// THE ONE PLACE THE LAYOUT IS READ, and every read of the register passes
+// through it, so no reader keyed by a log's key can take a position of
+// another layout's log spelled the same way for its own. The row itself
+// stays: its node is still a node — counted, present, a participant — and
+// only its positions are about logs this reader does not run.
+func PositionsIn(rows []NodePositions, layout int) []NodePositions {
+	out := make([]NodePositions, len(rows))
+	for i, row := range rows {
+		if row.Layout != layout {
+			row.Domains = nil
+		}
+		out[i] = row
+	}
+	return out
 }
 
 // PositionRegister is the fleet's record of where every node stands.
@@ -228,6 +262,10 @@ func (p NodePositions) Validate() error {
 			"unattributed row is read as some other node's progress, and the "+
 			"trim takes a minimum across them (%d domain(s) offered)",
 			len(p.Domains))
+	}
+	if p.Layout < 0 {
+		return fmt.Errorf("coord: node %s reports layout %d, and a layout number "+
+			"counts repartitions from 0", p.NodeID, p.Layout)
 	}
 	for name, d := range p.Domains {
 		if name == "" {
