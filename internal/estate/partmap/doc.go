@@ -181,4 +181,16 @@
 // it writes NOTHING: there is no map, [Next] creates none for layout 0, and a
 // tick reads its three inputs and leaves the store as it found it. The duty's
 // own lease is the only record its holder keeps.
+//
+// # The view
+//
+// [View] is what every other reader holds: the map WATCHED — a change reaches
+// a node when it lands, since routers route by it and a node joins a
+// partition because it names it — and confirmed by a read every [ViewConfirm],
+// beside a watched listing of the estate leases (coord.LeaseView). It answers
+// which layout the fleet runs and who serves a partition, three-valued, and
+// under layout 0 it answers that the one partition is served by every live
+// estate lease that serves it. Routing may use it at any age; anything that
+// decides asks [View.Fresh], which is false once either half was last
+// confirmed more than statelog.FloorCacheStale ago.
 package partmap
