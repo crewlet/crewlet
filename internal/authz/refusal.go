@@ -55,8 +55,8 @@ func RefusalDetail(reason Reason, grants []iam.Grant) httpjson.Detail {
 // one that names the window.
 //
 // WHAT A CLIENT NEEDS TO REPLAY THE REQUEST AND NOTHING ELSE. The remedy is
-// the caller's own — confirm who they are (`POST /auth/step-up`, or the
-// identity provider's re-authentication) and send the same request again — so
+// the caller's own — confirm who they are (`POST /auth/step-up`) and send the
+// same request again — so
 // the answer names which proof is missing rather than a grant nobody is
 // missing. It deliberately does not carry the deadline the proof passed: that
 // is the session's own `reauth_at`, which `GET /auth/session` already serves,

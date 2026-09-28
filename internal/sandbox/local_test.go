@@ -1180,7 +1180,6 @@ func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
 	for name, value := range map[string]string{
 		"CREWLET_SECRET_KEY_2026_01": "keyring-material-not-for-the-runtime",
 		"CREWLET_OPS_TOKEN":          "tier-a-token-not-for-the-runtime",
-		"OIDC_CLIENT_SECRET":         "client-secret-not-for-the-runtime",
 		"OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer%20otlp-not-for-the-runtime",
 		"ANTHROPIC_API_KEY":          "sk-ant-not-for-the-runtime",
 	} {

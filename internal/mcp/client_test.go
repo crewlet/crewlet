@@ -302,10 +302,10 @@ func TestPaginationEdgeCases(t *testing.T) {
 // ENGINE'S ENVIRONMENT.
 //
 // It was handed the engine's whole environment: the keyring every session
-// cookie and state-log record is signed under, every Tier A token value and
-// the identity provider's client secret reached every tool server the company
-// declared — a process pulled off a package registry that logs its environment
-// on a crash and forwards it to its own children. What a child needs to run
+// cookie and state-log record is signed under and every Tier A token value
+// reached every tool server the company declared — a process pulled off a
+// package registry that logs its environment on a crash and forwards it to its
+// own children. What a child needs to run
 // (PATH, and the engine user's HOME, where `npx` and `uvx` keep their caches)
 // still arrives, and what the server's config declares still wins.
 func TestAStdioChildSeesNoneOfTheEnginesSecrets(t *testing.T) {
@@ -314,12 +314,11 @@ func TestAStdioChildSeesNoneOfTheEnginesSecrets(t *testing.T) {
 	// about a map.
 	engineSecrets := map[string]string{
 		// The shapes Tier A resolves its `${VAR}` references from: keyring
-		// material, a Tier A token's value, the provider's client secret —
-		// the collector credential the engine reads directly, an operator's
-		// provisioning token and a vendor key exported on the host.
+		// material and a Tier A token's value — the collector credential the
+		// engine reads directly, an operator's provisioning token and a
+		// vendor key exported on the host.
 		"CREWLET_SECRET_KEY_2026_01": "keyring-material-not-for-a-tool-server",
 		"CREWLET_OPS_TOKEN":          "tier-a-token-not-for-a-tool-server",
-		"OIDC_CLIENT_SECRET":         "client-secret-not-for-a-tool-server",
 		"OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer%20otlp-not-for-a-tool-server",
 		"GITLAB_ADMIN_TOKEN":         "glpat-admin-not-for-a-tool-server",
 		"ANTHROPIC_API_KEY":          "sk-ant-not-for-a-tool-server",

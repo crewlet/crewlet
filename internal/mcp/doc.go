@@ -32,8 +32,8 @@
 //     undeclared conventional variables and narrowing the set would break
 //     them — and it handed every tool server the company declared the
 //     engine's keyring (which signs every session cookie and state-log
-//     record), every Tier A token value and the identity provider's client
-//     secret: to a process pulled off a package registry that logs its
+//     record) and every Tier A token value: to a process pulled off a
+//     package registry that logs its
 //     environment on a crash, forwards it to its own children and reports
 //     it in telemetry. A server that needs anything else says so in `env:`,
 //     where a `${VAR}` passes the host's value on by name. IT IS NOT

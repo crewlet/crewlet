@@ -70,8 +70,8 @@ func newStdioTransport(spec Spec, log *slog.Logger) (sdk.Transport, *childProces
 // the declared variables layered over it, on the reasoning that servers read
 // undeclared conventional variables and narrowing the set would break them.
 // What that handed every tool server was the engine's keyring (which signs
-// every session cookie and every state-log record), every Tier A token value
-// and the identity provider's client secret — to a process the company pulled
+// every session cookie and every state-log record) and every Tier A token
+// value — to a process the company pulled
 // off a package registry, which logs its environment on a crash, forwards it
 // to its own children and reports it in telemetry. So a child gets exactly
 // what [hostbox] gives every child the engine starts — where to find binaries,

@@ -491,6 +491,17 @@ var retiredBootstrapFields = map[string]string{
 		"itself. A deliberately public reader is now a named entry under " +
 		"`api.auth.tokens` holding read grants and nothing else, which is " +
 		"listable, revocable without a restart, and present in the audit log",
+	"APIAuth.oidc": "`api.auth.oidc` is retired, and so is `backend: oidc`: " +
+		"this engine no longer signs anybody in through an identity " +
+		"provider. People sign in with a password and a second factor the " +
+		"engine holds (`backend: local`, with a `local:` block stating " +
+		"whether that second factor is required), or the deployment has no " +
+		"people and its `api.auth.tokens` are the only credentials " +
+		"(`backend: none`). Delete the `oidc:` block and its `backend: oidc` " +
+		"line, and the client secret's environment variable with them. An " +
+		"identity estate that linked provider accounts is reset rather than " +
+		"migrated, and its people are enrolled again with an invitation " +
+		"(`crewlet iam invite`)",
 	"APIAuth.disabled": "`api.auth.disabled` is retired. It authenticated the " +
 		"EMPTY credential into full operator authority, with no check on the " +
 		"bind address anywhere, which made one unset environment variable a " +
@@ -519,9 +530,9 @@ var retiredBootstrapFields = map[string]string{
 var retiredCompanyFields = map[string]string{
 	"Integrations.public_base_url": "`integrations.public_base_url` is retired " +
 		"and REPLACED by `api.external_url` in Tier A — one address for the " +
-		"session cookie, the origin every write is checked against, the OIDC " +
-		"redirect URI and every vendor webhook. It moved tiers rather than " +
-		"names: the cookie and the redirect are decided before a company " +
+		"session cookie, the origin every write is checked against and every " +
+		"vendor webhook. It moved tiers rather than names: the cookie and the " +
+		"origin check are decided before a company " +
 		"document is loaded, and they are part of what authenticates the " +
 		"request that would load one. Write the same value under `api:` in " +
 		"your Tier A file, as a literal rather than a ${VAR}",

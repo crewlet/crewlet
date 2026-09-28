@@ -42,11 +42,12 @@ const (
 
 	// SecondFactorOptional is: a person may enrol one and is not made to.
 	//
-	// IT IS A REAL CHOICE rather than a lesser one. A company where the
-	// only credential anybody holds is an identity provider's has nothing
-	// for this to require — the second factor is the provider's, and
-	// demanding one here would be asking for a factor on top of a factor
-	// the engine cannot see.
+	// IT IS A REAL CHOICE where nobody else can reach the password: a
+	// deployment a browser reaches on loopback — a laptop, a development
+	// box — has no network for a password alone to cross. Anywhere else
+	// internal/config refuses it unless `accept_insecure` says so out
+	// loud, because there it is a password alone signing somebody in over
+	// the network.
 	SecondFactorOptional SecondFactor = "optional"
 )
 

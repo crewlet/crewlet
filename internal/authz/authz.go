@@ -109,8 +109,7 @@
 // half, a structural write and the settings document all ask for the same
 // grant, and the one split this package has (a removal also asking
 // `fleet:operate`) is about an irreversible gesture, not about bounding it.
-// The grant is conferred like host access, and `internal/config` warns when an
-// identity provider's group mapping confers it.
+// The grant is conferred like host access.
 package authz
 
 import (

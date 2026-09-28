@@ -3,7 +3,6 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -53,7 +52,7 @@ type API struct {
 	// # One fact, one field
 	//
 	// It replaced `api.external_url` outright rather than
-	// sitting beside it, because four separate things need the same
+	// sitting beside it, because three separate things need the same
 	// answer and two fields is two answers:
 	//
 	//   - the session cookie's `Secure` flag and its `__Host-` prefix,
@@ -63,7 +62,6 @@ type API struct {
 	//     is nothing else to derive them from;
 	//   - the origin a non-GET request and a socket handshake are checked
 	//     against;
-	//   - the OIDC redirect URI, which nothing in a request may influence;
 	//   - the base every vendor webhook and every pasted manifest is
 	//     built on, which is the job the retired field had.
 	//
@@ -72,7 +70,7 @@ type API struct {
 	// The old field was Tier B, so it was a `${VAR}` a node resolved at
 	// the surface that used it — and a node that could not resolve it
 	// built a manifest from the literal seven characters. The cookie and
-	// the redirect URI cannot work that way: they are decided before a
+	// the origin check cannot work that way: they are decided before a
 	// company document is loaded, and they are part of what authenticates
 	// the request that would go on to load one. A value the authentication
 	// path depends on belongs in the tier that holds the keyring.
@@ -166,8 +164,8 @@ func (a *API) validateExternalURL(path Path) error {
 			p.add(at(path, "external_url"), ErrMissing,
 				"required once `api.port` is set: it decides the session "+
 					"cookie's Secure flag and __Host- prefix, the origin every "+
-					"write is checked against, the OIDC redirect URI and the "+
-					"base every webhook URL is built on. The engine sits behind "+
+					"write is checked against and the base every webhook URL is "+
+					"built on. The engine sits behind "+
 					"a TLS-terminating proxy and cannot read any of that off the "+
 					"request. Write it as scheme://host[:port], e.g. "+
 					"https://crewlet.example.com or http://localhost:%d",
@@ -178,7 +176,7 @@ func (a *API) validateExternalURL(path Path) error {
 	if !hasHTTPScheme(raw) {
 		p.add(at(path, "external_url"), ErrShape,
 			"%q must start with http:// or https://: a browser Origin, a "+
-				"cookie's Secure flag and a redirect URI are all decided by the "+
+				"cookie's Secure flag and every webhook URL are all decided by the "+
 				"scheme, so a value without one decides them wrongly rather "+
 				"than failing", raw)
 		return p.err()
@@ -291,10 +289,6 @@ const (
 	// held by this engine.
 	AuthBackendLocal AuthBackend = "local"
 
-	// AuthBackendOIDC is an identity provider. The engine holds no
-	// password and never creates a person the directory does not have.
-	AuthBackendOIDC AuthBackend = "oidc"
-
 	// AuthBackendNone is a deployment with no people at all: the Tier A
 	// tokens are the only credentials, which is the posture a laptop and
 	// a CI fixture run in.
@@ -302,7 +296,7 @@ const (
 )
 
 // AuthBackends is the closed set.
-var AuthBackends = []AuthBackend{AuthBackendLocal, AuthBackendOIDC, AuthBackendNone}
+var AuthBackends = []AuthBackend{AuthBackendLocal, AuthBackendNone}
 
 // Valid reports whether a backend off the wire is one this build knows.
 func (b AuthBackend) Valid() bool { return slices.Contains(AuthBackends, b) }
@@ -359,14 +353,18 @@ func (b BootstrapAccess) Valid() bool { return slices.Contains(BootstrapAccesses
 // and this is about who can open a socket to this process, where the bind
 // is.
 //
-// Both are refused by name if they appear — see retiredBootstrapFields.
+// `oidc` signed people in through an identity provider, and sign-in through a
+// third party is not something this engine does any more: a person proves who
+// they are with a password and a second factor held here, or the deployment
+// has no people at all.
+//
+// All three are refused by name if they appear — see retiredBootstrapFields.
 type APIAuth struct {
-	// Backend is how PEOPLE sign in. Empty derives from which block is
-	// present: `oidc` if oidc is configured, `local` if local is, and
-	// `none` if neither — which is the honest reading of a file that says
-	// nothing about people, and never a password backend somebody did not
-	// ask for.
-	Backend AuthBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=local|oidc|none" desc:"How people sign in. Empty derives from which of local/oidc is present."`
+	// Backend is how PEOPLE sign in. Empty derives from whether the
+	// `local` block is present: `local` if it is, and `none` if not —
+	// which is the honest reading of a file that says nothing about
+	// people, and never a password backend somebody did not ask for.
+	Backend AuthBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=local|none" desc:"How people sign in. Empty derives from whether local is present."`
 
 	// Bootstrap is whether `POST /auth/bootstrap` is served. Default open.
 	Bootstrap BootstrapAccess `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty" js:"enum=open|closed" desc:"Whether the first person may be created with a one-time code (default open)."`
@@ -379,11 +377,10 @@ type APIAuth struct {
 	//
 	// Because the declarations are made in a tier this one does not
 	// trust. A person's grants live in the replicated store and are
-	// written by whoever holds people.manage; an OIDC group mapping is
-	// written by whoever administers the identity provider. Without a
-	// bound, a directory write or a group rename confers ANY capability
-	// it names — including the secret store — and the operator who owns
-	// the machines never said it could. Tier A states the bound and never
+	// written by whoever holds people.manage. Without a bound, a
+	// directory write confers ANY capability it names — including the
+	// secret store — and the operator who owns the machines never said
+	// it could. Tier A states the bound and never
 	// reads Tier B, which is the same direction every other Tier A
 	// posture runs in.
 	//
@@ -412,9 +409,6 @@ type APIAuth struct {
 	// tell an absent block from one whose every field is empty.
 	Local *APILocal `yaml:"local,omitempty" json:"local,omitempty"`
 
-	// OIDC configures the identity-provider backend, on the same terms.
-	OIDC *APIOIDC `yaml:"oidc,omitempty" json:"oidc,omitempty"`
-
 	// Tokens are this deployment's own machine credentials: break-glass,
 	// the operator CLI, a CI pipeline. At least one is REQUIRED once the
 	// API is served — see [APIAuth.validate].
@@ -433,14 +427,10 @@ func (a APIAuth) Resolved() AuthBackend {
 	if a.Backend != "" {
 		return a.Backend
 	}
-	switch {
-	case a.OIDC != nil:
-		return AuthBackendOIDC
-	case a.Local != nil:
+	if a.Local != nil {
 		return AuthBackendLocal
-	default:
-		return AuthBackendNone
 	}
+	return AuthBackendNone
 }
 
 // BootstrapAccess is the posture with the default applied.
@@ -750,193 +740,6 @@ func (l *APILocal) validate(path Path, api API) error {
 	return p.err()
 }
 
-// APIOIDC is the identity-provider backend.
-//
-// EVERY FIELD IS TIER A, INCLUDING THE CLIENT SECRET, and that is the root of
-// trust doing its job rather than an oversight. A principal who could point
-// `issuer` at a provider they control could sign in as anybody — so the tier
-// that holds the keys to the secret store is the tier that names who may issue
-// an identity. The cost is real and is stated: rotating the client secret is an
-// environment change and a restart, exactly as rotating the keyring is.
-type APIOIDC struct {
-	// Issuer is the provider's issuer URL, which is also where discovery
-	// is read from. HTTPS ONLY: the discovery document names the JWKS
-	// endpoint, so anyone who can rewrite it can mint identities.
-	Issuer string `yaml:"issuer,omitempty" json:"issuer,omitempty" desc:"The provider's issuer URL. HTTPS only."`
-
-	// ClientID is this deployment's registered client.
-	ClientID string `yaml:"client_id,omitempty" json:"client_id,omitempty" desc:"This deployment's registered client id."`
-
-	// ClientSecret is the client secret, or a ${VAR} reference to it. An
-	// environment variable and never a store secret: Tier A holds the
-	// keys to the store and therefore cannot read out of it.
-	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty" desc:"Client secret, or a ${VAR} reference. Never a store secret: Tier A cannot read the store."`
-
-	// Scopes are what the authorization request asks for. `openid` is
-	// mandatory and is added if it is missing rather than refused, because
-	// a list that forgets it is a list nobody meant to break.
-	//
-	// UNSET TAKES THE ENGINE'S OWN SET — openid, profile, email and
-	// offline_access — which is the one that keeps a refresh token for the
-	// deactivation probe. A list written here REPLACES it, whole.
-	Scopes []string `yaml:"scopes,omitempty" json:"scopes,omitempty" desc:"Requested scopes. Unset asks for openid, profile, email and offline_access; a list replaces that set, and openid is always included."`
-
-	// GroupsClaim is the id-token claim carrying the caller's groups.
-	// Empty means this deployment maps no groups, which is a real posture:
-	// every person's authority is then what the directory row says — and
-	// no claim is read at all. ONE NAME AND NEVER A LIST OF ALIASES:
-	// providers disagree about it, and trying several would be a guess
-	// about which claim carries authority. Required once GroupGrants maps
-	// anything, since a mapping with no claim to read never applies.
-	GroupsClaim string `yaml:"groups_claim,omitempty" json:"groups_claim,omitempty" desc:"The id-token claim carrying groups. Empty maps no groups; required once group_grants maps any."`
-
-	// RequireACR is an authentication-context class the id token must
-	// carry — the way a provider is asked for a second factor it, rather
-	// than this engine, enforced.
-	RequireACR string `yaml:"require_acr,omitempty" json:"require_acr,omitempty" desc:"An acr value the id token must carry. Empty requires none."`
-
-	// DeactivationProbeRaw is how often the maintenance duty exchanges
-	// each live session's refresh token to ask whether the provider still
-	// recognises its holder. Default 1h.
-	//
-	// IT IS THE ONLY THING THAT NOTICES A DEACTIVATION. An identity
-	// provider tells this engine nothing when somebody is disabled: the
-	// session it already minted goes on working until its own deadline,
-	// which is up to a month. So the probe IS the offboarding horizon for
-	// an OIDC company, and its cost is one token exchange per live session
-	// per interval — tens of requests an hour for a company of fifty.
-	DeactivationProbeRaw string `yaml:"deactivation_probe,omitempty" json:"deactivation_probe,omitempty" desc:"How often a live session is revalidated at the provider (default 1h, 5m..24h)."`
-
-	// GroupGrants maps a group name from the groups claim onto grants.
-	// Every grant is still clamped by [APIAuth.MaxGrants].
-	GroupGrants map[string][]iam.Grant `yaml:"group_grants,omitempty" json:"group_grants,omitempty" desc:"Grants conferred by membership of a directory group."`
-}
-
-// GrantsFor is what membership of these groups confers, as one set.
-//
-// A UNION OVER THE GROUPS somebody is in, because a person is in several and
-// the alternative — first match wins — would make what they carry depend on
-// the order a provider happened to list them in.
-//
-// A GROUP THIS MAP DOES NOT NAME CONFERS NOTHING, which is the fail-closed
-// direction and the only sane one: a directory holds every group in the
-// organisation and this map holds the ones an operator decided about.
-//
-// It is NOT the ceiling. Everything here is still intersected with
-// [APIAuth.MaxGrants] per node per request, so a mapping an operator widens at
-// the provider cannot exceed what this deployment allows.
-func (o APIOIDC) GrantsFor(groups []string) []iam.Grant {
-	if len(o.GroupGrants) == 0 || len(groups) == 0 {
-		return nil
-	}
-	var out []iam.Grant
-	for _, group := range groups {
-		for _, grant := range o.GroupGrants[group] {
-			if !slices.Contains(out, grant) {
-				out = append(out, grant)
-			}
-		}
-	}
-	return out
-}
-
-// OIDC defaults and bounds.
-const (
-	DefaultDeactivationProbe = time.Hour
-	DeactivationProbeFloor   = 5 * time.Minute
-	DeactivationProbeCeiling = 24 * time.Hour
-)
-
-// ScopeOpenID is the scope the protocol is named after, and the one this
-// engine adds rather than refuses when a list omits it.
-const ScopeOpenID = "openid"
-
-// ScopeOfflineAccess is what a refresh token is asked for with, and therefore
-// what the deactivation probe needs to exist at all.
-const ScopeOfflineAccess = "offline_access"
-
-// RequestedScopes are the scopes with `openid` guaranteed present, or nil when
-// the list is unset — which asks for the engine's own set rather than for
-// `openid` alone, and is why nil and an empty answer are not the same thing
-// here.
-func (o *APIOIDC) RequestedScopes() []string {
-	if o == nil || len(o.Scopes) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(o.Scopes)+1)
-	if !slices.Contains(o.Scopes, ScopeOpenID) {
-		out = append(out, ScopeOpenID)
-	}
-	return append(out, o.Scopes...)
-}
-
-// DeactivationProbe is the revalidation interval, with the default applied.
-func (o *APIOIDC) DeactivationProbe() time.Duration {
-	if o == nil {
-		return DefaultDeactivationProbe
-	}
-	return durationOr(o.DeactivationProbeRaw, DefaultDeactivationProbe)
-}
-
-func (o *APIOIDC) validate(path Path, ceiling []iam.Grant) error {
-	var p problems
-	issuer := strings.TrimSpace(o.Issuer)
-	switch {
-	case issuer == "":
-		p.add(at(path, "issuer"), ErrMissing,
-			"required: it is the provider this deployment believes, and it is "+
-				"where the signing keys are discovered")
-	case !strings.HasPrefix(issuer, "https://"):
-		p.add(at(path, "issuer"), ErrShape,
-			"%q must be https://: the discovery document read from here names "+
-				"the key set every id token is verified against, so anyone who "+
-				"can rewrite it in flight can sign in as anybody", issuer)
-	}
-	if strings.TrimSpace(o.ClientID) == "" {
-		p.add(at(path, "client_id"), ErrMissing,
-			"required: the provider has no other way to know which deployment "+
-				"is asking")
-	}
-	if strings.TrimSpace(o.ClientSecret) == "" {
-		p.add(at(path, "client_secret"), ErrMissing,
-			"required: the token exchange is authenticated with it. Write it as "+
-				"a ${VAR} reference — an environment variable, never a store "+
-				"secret, because Tier A holds the keys to the store and cannot "+
-				"read out of it")
-	}
-	checkDurationRange(&p, at(path, "deactivation_probe"), o.DeactivationProbeRaw,
-		DeactivationProbeFloor, DeactivationProbeCeiling,
-		"below five minutes every live session is exchanged at the provider more "+
-			"often than a person clicks, and past a day the probe is slower than "+
-			"the shortest session it is meant to end")
-	// A MAPPING WITH NO CLAIM TO READ confers nothing, ever: the groups a
-	// sign-in presents are read out of the claim `groups_claim` names and
-	// out of no other, so a deployment that maps groups and names none has
-	// an authority table that looks configured and never applies.
-	if len(o.GroupGrants) > 0 && strings.TrimSpace(o.GroupsClaim) == "" {
-		p.add(at(path, "groups_claim"), ErrMissing,
-			"required once group_grants maps anything: it is the id-token "+
-				"claim the groups are read from, and with none named no "+
-				"mapping ever confers a grant")
-	}
-	for group, grants := range o.GroupGrants {
-		gp := at(at(path, "group_grants"), group)
-		if strings.TrimSpace(group) == "" {
-			p.add(at(path, "group_grants"), ErrMissing,
-				"a mapping with no group name matches nothing")
-		}
-		if len(grants) == 0 {
-			p.add(gp, ErrMissing,
-				"a group mapped to no grants confers nothing: remove it, or "+
-					"name what membership is worth")
-		}
-		p.wrap(checkGrants(gp, grants, ceiling,
-			"a group mapping confers authority written at the identity "+
-				"provider rather than here"))
-	}
-	return p.err()
-}
-
 // APIToken is one of the DEPLOYMENT's own machine credentials.
 //
 // Not a person and never a stand-in for one: a Tier A token is what
@@ -996,8 +799,8 @@ func (a *APIAuth) validate(path Path, api API) error {
 
 	if a.Backend != "" && !a.Backend.Valid() {
 		p.add(at(path, "backend"), ErrUnknownValue,
-			"%q (want %s, %s or %s)", a.Backend, AuthBackendLocal,
-			AuthBackendOIDC, AuthBackendNone)
+			"%q (want %s or %s)", a.Backend, AuthBackendLocal,
+			AuthBackendNone)
 	}
 	if a.Bootstrap != "" && !a.Bootstrap.Valid() {
 		p.add(at(path, "bootstrap"), ErrUnknownValue,
@@ -1024,9 +827,8 @@ func (a *APIAuth) validateCeiling(path Path, api API) error {
 		if api.Serving() {
 			p.add(at(path, "max_grants"), ErrMissing,
 				"required once `api.port` is set: it is the bound on what this "+
-					"company's own directory — and an identity provider's group "+
-					"mapping — may confer on anybody, and the tier that holds "+
-					"the keyring is the tier that states it. There is no "+
+					"company's own directory may confer on anybody, and the tier "+
+					"that holds the keyring is the tier that states it. There is no "+
 					"default, because one granting everything is a ceiling that "+
 					"does nothing and one granting a subset silently locks out "+
 					"whatever it left out. The full set is %v", iam.AllGrants)
@@ -1056,7 +858,7 @@ func (a *APIAuth) validateBackendBlocks(path Path, api API) error {
 
 	// A BLOCK NO BACKEND READS IS REFUSED rather than ignored, because
 	// ignoring it is how a deployment runs with `backend: none` while its
-	// file carries a fully configured identity provider and everybody
+	// file carries a fully configured password policy and everybody
 	// believes sign-in is set up.
 	if a.Local != nil && resolved != AuthBackendLocal {
 		p.add(at(path, "local"), ErrConflict,
@@ -1064,15 +866,7 @@ func (a *APIAuth) validateBackendBlocks(path Path, api API) error {
 				"configures nothing and looks configured. Remove it, or write "+
 				"`backend: %s`", resolved, AuthBackendLocal)
 	}
-	if a.OIDC != nil && resolved != AuthBackendOIDC {
-		p.add(at(path, "oidc"), ErrConflict,
-			"`backend: %s` reads nothing under `oidc`, so this block "+
-				"configures nothing and looks configured. Remove it, or write "+
-				"`backend: %s`", resolved, AuthBackendOIDC)
-	}
-
-	switch resolved {
-	case AuthBackendLocal:
+	if resolved == AuthBackendLocal {
 		if a.Local == nil {
 			// NOT DEFAULTED, because the one setting this block
 			// exists for has no safe default: `totp` decides
@@ -1083,18 +877,9 @@ func (a *APIAuth) validateBackendBlocks(path Path, api API) error {
 				"`backend: %s` needs a `local:` block, because the one thing "+
 					"it has to state — whether a second factor is required — "+
 					"has no safe default", AuthBackendLocal)
-			break
+		} else {
+			p.wrap(a.Local.validate(at(path, "local"), api))
 		}
-		p.wrap(a.Local.validate(at(path, "local"), api))
-	case AuthBackendOIDC:
-		if a.OIDC == nil {
-			p.add(at(path, "oidc"), ErrMissing,
-				"`backend: %s` needs an `oidc:` block naming the issuer, the "+
-					"client and its secret: none of them can be derived",
-				AuthBackendOIDC)
-			break
-		}
-		p.wrap(a.OIDC.validate(at(path, "oidc"), a.MaxGrants))
 	}
 	return p.err()
 }
@@ -1176,16 +961,13 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 		}
 	}
 
-	// A DEPLOYMENT WITH NO TIER A TOKEN IS A FAULT, on every backend, and
-	// it is a fault rather than a warning because each backend leaves a
-	// different way to be locked out of your own company and all three are
-	// permanent:
+	// A DEPLOYMENT WITH NO TIER A TOKEN IS A FAULT, on both backends, and
+	// it is a fault rather than a warning because each leaves a different
+	// way to be locked out of your own company and both are permanent:
 	//
 	//   - on `local`, an administrator who is throttled, who lost their
 	//     second factor, or whose password is refused has nothing else to
 	//     present;
-	//   - on `oidc`, an identity provider outage is a total outage — the
-	//     engine holds no password for anybody by design;
 	//   - on `none`, it is the only credential that exists at all.
 	//
 	// And on every one of them, a fresh deployment's identity estate is
@@ -1196,8 +978,8 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 			"at least one token is required once `api.port` is set, on every "+
 				"backend. The identity estate of a fresh deployment is empty, "+
 				"so this is what creates the first person; and on a running one "+
-				"it is the way back in when the identity provider is down or an "+
-				"administrator has locked themselves out. Generate one with "+
+				"it is the way back in when an administrator has locked "+
+				"themselves out. Generate one with "+
 				"`crewlet secrets keygen` and point `token:` at a ${VAR}")
 	}
 	return p.err()
@@ -1205,11 +987,6 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 
 // checkGrants refuses a grant this build does not know and one the ceiling
 // withholds.
-//
-// ONE FUNCTION FOR THE TOKEN LIST AND THE GROUP MAPPINGS, because they are the
-// same rule read twice: both declare authority, both are clamped by
-// [APIAuth.MaxGrants], and written separately the two messages drifted into
-// saying different things about one ceiling.
 //
 // AN ABSENT CEILING CLAMPS NOTHING HERE. Its own required-once-served rule has
 // already been reported by then, and re-reporting every grant as "outside the
@@ -1296,40 +1073,13 @@ func checkOrigin(path Path, origin string) error {
 	return p.err()
 }
 
-// groupGrantConsequence is every grant an identity provider's group mapping is
-// warned about, and what adding somebody to that group then hands them — and
-// only those: the rest are authority a company can reasonably leave to a
-// directory's own teams.
-//
-// THE GRANTS THAT REACH PAST THE COMPANY'S OWN WORK, each with its consequence
-// in the sentence an operator reads, because what the provider's administrator
-// would then be deciding differs: the two that read and write the company's
-// credentials; `people:manage`, which is authority over who holds everything
-// else — invite, suspend, re-grant, remove; and `config:write`, which is HOST
-// ACCESS — the configuration it writes runs commands on every engine host (an
-// `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in:
-// self` sandbox), so whatever a process there can read, the keyring included,
-// is the holder's. A map rather than a condition, so a grant added here
-// arrives with the sentence that says why.
-var groupGrantConsequence = map[iam.Grant]string{
-	iam.GrantSecretRead:  "hands them this company's credentials",
-	iam.GrantSecretWrite: "hands them this company's credentials",
-	iam.GrantPeopleManage: "makes them able to invite, suspend, re-grant and " +
-		"remove every person here",
-	iam.GrantConfigWrite: "hands them host access: the configuration " +
-		"config:write writes runs commands on every engine host, so they " +
-		"can run anything there and read whatever a process there can, the " +
-		"keyring included",
-}
-
 // warnings are the API postures that are VALID and worth reading before this
 // deployment runs on them.
 //
 // NONE OF THESE CAN BE A REFUSAL, and each says why in its own sentence. What
 // they share is that the configuration works exactly as written and the
-// consequence is somewhere else: at an identity provider somebody else
-// administers, or in a horizon nothing reaches until it has already been
-// crossed.
+// consequence is somewhere else: on the network between a browser and this
+// node, or in a front end the engine cannot tell apart from its callers.
 func (a API) warnings() []Warning {
 	var out []Warning
 	if !a.Serving() {
@@ -1391,55 +1141,5 @@ func (a API) warnings() []Warning {
 				"front end passes each client's own address through as the peer"))
 	}
 
-	if oidc := auth.OIDC; oidc != nil && auth.Resolved() == AuthBackendOIDC {
-		// WITHOUT A REFRESH TOKEN NOTHING NOTICES A DEACTIVATION. An
-		// identity provider tells this engine nothing when somebody is
-		// disabled: the session it already minted goes on working until
-		// its own absolute deadline, which is up to a month. The
-		// deactivation probe is the only thing that ends it early, and
-		// the probe is a refresh-token exchange — so a scopes list
-		// without `offline_access` silently has no offboarding horizon
-		// at all.
-		//
-		// ONLY A LIST SOMEBODY WROTE: an unset list asks for the engine's
-		// own set, which carries `offline_access`, and warning about it
-		// told every default deployment that it had no probe.
-		if len(oidc.Scopes) > 0 && !slices.Contains(oidc.Scopes, ScopeOfflineAccess) {
-			out = append(out, advisory(field("api.auth.oidc.scopes"),
-				"`"+ScopeOfflineAccess+"` is not requested, so this deployment "+
-					"holds no refresh token and the deactivation probe has "+
-					"nothing to exchange. A person disabled at the provider "+
-					"keeps their session until its absolute deadline — up to "+
-					a.Auth.Session.Absolute().String()+" — and only a "+
-					"revocation here ends it sooner"))
-		}
-		// A GROUP MAPPING IS AUTHORITY WRITTEN SOMEWHERE ELSE. Adding
-		// somebody to a directory group is an ordinary act performed by
-		// whoever administers the identity provider, and nobody here
-		// reviews it — so a mapping that confers a grant reaching past the
-		// company's own work ([groupGrantConsequence]: the secret store,
-		// every person, or host access) hands that reach to a membership
-		// change. Each gets its own sentence, because what the provider's
-		// administrator would then be deciding differs.
-		//
-		// IN THE GROUPS' OWN ORDER, sorted, and never the map's: ranging
-		// over the map printed these in a different order on every run of
-		// `crewlet validate`, so two runs over one unchanged file differed
-		// and a CI step diffing the output reported a change nobody made.
-		for _, group := range slices.Sorted(maps.Keys(oidc.GroupGrants)) {
-			for _, g := range oidc.GroupGrants[group] {
-				consequence, warned := groupGrantConsequence[g]
-				if !warned {
-					continue
-				}
-				out = append(out, advisory(
-					at(at(field("api.auth.oidc.group_grants"), group), string(g)),
-					"membership of `"+group+"` confers "+string(g)+
-						", so adding somebody to that group at the identity "+
-						"provider "+consequence+" — an act nobody here "+
-						"reviews. Declare it on the person's own record instead"))
-			}
-		}
-	}
 	return out
 }

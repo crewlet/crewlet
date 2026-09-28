@@ -14,8 +14,8 @@ import (
 //
 // The node's own writer is handed to the identity duties, the sign-in surface
 // and every request that acts as the deployment, and they call it at once: the
-// sweep publisher and the deactivation probe tick on their own goroutines, and
-// a sign-in arrives on a request's. That writer used to keep ONE high-water mark
+// sweep publisher ticks on its own goroutine while an administrator's close
+// and a sign-in each arrive on a request's. That writer used to keep ONE high-water mark
 // and advance it from every one of them, which the race detector names as a
 // data race on the first two concurrent publishes — and which, where it did not
 // race, made one gesture's position the session wait of an unrelated one.

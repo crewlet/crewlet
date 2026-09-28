@@ -125,8 +125,7 @@ const (
 	// part that runs code" was weighed and declined: it would be the whole
 	// of this grant's practical reach under a second name, and a ceiling
 	// that withheld it would withhold every settings edit with it. It is
-	// conferred the way shell on those hosts is, and internal/config warns
-	// when an identity provider's group mapping confers it.
+	// conferred the way shell on those hosts is.
 	//
 	// /setup gets NO GRANT OF ITS OWN, deliberately. It performs no write
 	// of its own — a credential goes through the store /secrets serves

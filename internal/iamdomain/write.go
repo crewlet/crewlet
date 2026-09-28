@@ -403,8 +403,8 @@ var ErrRefused = errors.New("iamdomain: this party may not author that record")
 // That was wrong in both directions and wrong loudly in one. An automation
 // holding the company's own grant could enrol itself a colleague, which is
 // the escalation this estate exists to close; and the NODE's own writer —
-// which authors the bootstrap enrolment, the invite redemption, the sweeps
-// and the deactivation probe — holds [iam.GrantFleetOperate] and never
+// which authors the bootstrap enrolment, the invite redemption and the
+// sweeps — holds [iam.GrantFleetOperate] and never
 // config:write, so every one of those paths was refused. Nothing noticed,
 // because the surface that exercises them builds a stub writer.
 func (w *Writer) mayAdminister(op OpKind) error {

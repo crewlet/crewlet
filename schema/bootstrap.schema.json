@@ -58,10 +58,9 @@
           "$ref": "#/$defs/APIAudit"
         },
         "backend": {
-          "description": "How people sign in. Empty derives from which of local/oidc is present.",
+          "description": "How people sign in. Empty derives from whether local is present.",
           "enum": [
             "local",
-            "oidc",
             "none"
           ],
           "type": "string"
@@ -83,9 +82,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "oidc": {
-          "$ref": "#/$defs/APIOIDC"
         },
         "session": {
           "$ref": "#/$defs/APISession"
@@ -120,53 +116,6 @@
             "optional"
           ],
           "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "APIOIDC": {
-      "additionalProperties": false,
-      "properties": {
-        "client_id": {
-          "description": "This deployment's registered client id.",
-          "type": "string"
-        },
-        "client_secret": {
-          "description": "Client secret, or a ${VAR} reference. Never a store secret: Tier A cannot read the store.",
-          "type": "string"
-        },
-        "deactivation_probe": {
-          "description": "How often a live session is revalidated at the provider (default 1h, 5m..24h).",
-          "type": "string"
-        },
-        "group_grants": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "description": "Grants conferred by membership of a directory group.",
-          "type": "object"
-        },
-        "groups_claim": {
-          "description": "The id-token claim carrying groups. Empty maps no groups; required once group_grants maps any.",
-          "type": "string"
-        },
-        "issuer": {
-          "description": "The provider's issuer URL. HTTPS only.",
-          "type": "string"
-        },
-        "require_acr": {
-          "description": "An acr value the id token must carry. Empty requires none.",
-          "type": "string"
-        },
-        "scopes": {
-          "description": "Requested scopes. Unset asks for openid, profile, email and offline_access; a list replaces that set, and openid is always included.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
         }
       },
       "type": "object"
