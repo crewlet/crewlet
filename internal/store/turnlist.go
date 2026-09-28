@@ -133,6 +133,11 @@ type Turn struct {
 	// what is going wrong wants both.
 	Failed bool `json:"failed"`
 
+	// InputTokens, OutputTokens and TotalTokens are everything the turn
+	// spent: its phases' own model calls, its workers', and what the
+	// detached coding runs it collected spent in their boxes, each launch
+	// once — the figure the Tokens view counts for the same turn (see
+	// [EventLog.addRunTokens]).
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
@@ -355,5 +360,84 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: list turns: %w", err)
 	}
+	if err := l.addRunTokens(ctx, out, floor); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// runTokensSQL is what the detached coding runs of a page of turns spent in
+// their boxes: per turn, the sum over its LAUNCHES of what each reported.
+//
+// ONCE PER LAUNCH, because a resume retried after its phase completed
+// publishes that phase again with the same run on it, and a launch is spent
+// once — the rule tokens.Aggregate applies to the Tokens view (settleRuns). A
+// launch's figures are the same on every record carrying it, so the MAX over
+// them is that figure; a negative one is a bad payload rather than a refund,
+// and counts nothing, as it does there.
+//
+// OUT OF THE PAYLOAD, for the reason the phase-token read gives: the run's
+// usage is set on a minority of phases, and a column for it would be NULL on
+// almost every row. The read is bounded by the PAGE — at most MaxTurnPage
+// turn ids, each an index seek on crewlet_events_turn_idx — so json_extract
+// runs over those turns' phase records and never over the window.
+const runTokensSQL = `
+SELECT turn_id, SUM(run_in), SUM(run_out) FROM (
+	SELECT turn_id,
+	       MAX(CASE WHEN COALESCE(json_extract(payload, '$.run_input_tokens'), 0) > 0
+	                THEN json_extract(payload, '$.run_input_tokens') ELSE 0 END) AS run_in,
+	       MAX(CASE WHEN COALESCE(json_extract(payload, '$.run_output_tokens'), 0) > 0
+	                THEN json_extract(payload, '$.run_output_tokens') ELSE 0 END) AS run_out
+	  FROM crewlet_events
+	 WHERE event_type = ? AND event_time >= ? AND turn_id IN (%s)
+	   AND COALESCE(json_extract(payload, '$.launch_id'), '') != ''
+	 GROUP BY turn_id, json_extract(payload, '$.launch_id')
+) GROUP BY turn_id`
+
+// addRunTokens adds to each listed turn what the detached coding runs it
+// collected spent, each launch once ([runTokensSQL]).
+//
+// THE TURN'S FIGURE HOLDS ITS RUNS because every other surface's does: the
+// Tokens view counts a run in the turn that collected it, and a turns list
+// that left it out stated a second total for the same turn — five thousand
+// tokens on one screen and a hundred on the next. A run's usage rides the
+// payload of the phase that collected it, BESIDE that phase's own counts, so
+// the column sums above never saw it.
+func (l *EventLog) addRunTokens(ctx context.Context, turns []Turn, floor time.Time) error {
+	if len(turns) == 0 {
+		return nil
+	}
+	index := make(map[string]int, len(turns))
+	args := make([]any, 0, len(turns)+2)
+	args = append(args, phaseCompleted, EncodeTime(floor))
+	for i, t := range turns {
+		index[t.TurnID] = i
+		args = append(args, t.TurnID)
+	}
+	holders := strings.TrimSuffix(strings.Repeat("?,", len(turns)), ",")
+	rows, err := l.db.sql.QueryContext(ctx, fmt.Sprintf(runTokensSQL, holders), args...)
+	if err != nil {
+		return fmt.Errorf("store: list turns: read their coding runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			turn       string
+			in, outTok sql.NullInt64
+		)
+		if err := rows.Scan(&turn, &in, &outTok); err != nil {
+			return fmt.Errorf("store: list turns: scan a turn's coding runs: %w", err)
+		}
+		i, ok := index[turn]
+		if !ok {
+			continue
+		}
+		turns[i].InputTokens += int(in.Int64)
+		turns[i].OutputTokens += int(outTok.Int64)
+		turns[i].TotalTokens += int(in.Int64 + outTok.Int64)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: list turns: read their coding runs: %w", err)
+	}
+	return nil
 }
