@@ -432,9 +432,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				// [Writer.UpdateTask]'s reason: filed under a
 				// container the task is not in, a deferral on its real
 				// project would not hold the purge back.
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is in "+
-					"project %s, not %s — resolve it again and name the "+
-					"project it is in", id, current.Project, project)
+				return statelog.Decision{}, notInProject(id, current.Project, project)
 			}
 			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS PURGE,
 			// checked against the rows it decides on: a dependent, a

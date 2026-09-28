@@ -248,6 +248,8 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 				// that half-finished must be able to complete, and the
 				// task is in the state the caller asked for.
 				return statelog.Decision{}, nil
+			case current.Project != project:
+				return statelog.Decision{}, notInProject(id, current.Project, project)
 			}
 			decision, err := w.decide(stamp, subject, OpTombstone, ChangeRemoved, scope,
 				opID, TaskPatch{Removed: &removal}, notify, at)
@@ -294,6 +296,8 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 				// own rule: a re-run must be able to finish.
 				*live = true
 				return statelog.Decision{}, nil
+			case current.Project != project:
+				return statelog.Decision{}, notInProject(id, current.Project, project)
 			}
 			*live = false
 			decision, err := w.decide(stamp, subject, OpRestore, ChangeRestored, scope,

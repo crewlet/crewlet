@@ -526,9 +526,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// would hold back a write that never touches it. A bulk
 				// edit names one project for every task in it, which is
 				// where a task from elsewhere arrives.
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is in "+
-					"project %s, not %s — resolve it again and name the "+
-					"project it is in", id, current.Project, project)
+				return statelog.Decision{}, notInProject(id, current.Project, project)
 			}
 			if ifMatch != 0 && current.Version != ifMatch {
 				return statelog.Decision{}, fmt.Errorf("%w: task %s is at "+
@@ -836,6 +834,20 @@ func (w *Writer) chargeHandOff(current Task, patch TaskPatch) (TaskPatch, error)
 	default:
 		return patch, nil
 	}
+}
+
+// notInProject refuses a write to a task that named a project the task is not
+// in — an edit, a removal, a restore or a purge.
+//
+// THE SCOPE NAMES THE PROJECT THE CALLER SAID: the record is filed and probed
+// under it, so a deferral on the task's real project would not hold it back,
+// and one on the named project would hold back a record that never touches
+// it. A subtree's descendants are named by a read outside the snapshot, so a
+// removal or a restore of one moved since is refused here, and the walk stops
+// where a re-run resolves it again.
+func notInProject(id, filed, named string) error {
+	return fmt.Errorf("tracker: task %s is in project %s, not %s — resolve it "+
+		"again and name the project it is in", id, filed, named)
 }
 
 // MoveTasks repositions tasks in a project's manual order.
