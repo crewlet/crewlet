@@ -1,16 +1,20 @@
 package store_test
 
 import (
+	"context"
+	"database/sql"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -141,79 +145,85 @@ func bothEstates(text string, node, replicated map[string]bool) bool {
 	return sawNode && sawReplicated
 }
 
-// createTable finds the tables an estate's DDL declares, and dropTable the
-// ones a later migration takes away again.
-var (
-	createTable = regexp.MustCompile(`(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)`)
-	dropTable   = regexp.MustCompile(`(?im)^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([a-z_][a-z0-9_]*)`)
-)
-
-// tablesIn is every table one estate's embedded schema LEAVES BEHIND.
+// tablesIn is every table one estate's embedded schema LEAVES BEHIND, read
+// from a database that schema has just been applied to.
 //
-// THE DROPS COUNT, and reading only the creates is the bug that hid behind
-// this being append-only: a table that moves estate is created in the new one
-// and dropped in the old, and a derivation blind to the drop reports it in
-// both — which fails the one-estate rule below for exactly the change that
-// satisfies it, and silently makes every statement naming that table look like
-// a boundary crossing. The files are walked in migration order, so a create
-// after a drop is a table that came back.
+// FROM THE DATABASE, NOT FROM THE DDL'S TEXT. The derivation was a regular
+// expression over the migrations, and it read a COMMENT as a table:
+// replicated/0014 explains itself with "a CREATE TABLE plus an applier", and
+// every gate built on this saw a replicated table called `plus`. A phantom
+// table is a boundary a statement can cross by naming a word, and a missing
+// one — a table built by a statement the pattern did not anticipate — is a
+// write no gate watches. sqlite_master is what the migrations actually built,
+// after every drop and every rebuild, which is also why no ordering rule over
+// creates and drops has to be restated here.
 func tablesIn(t *testing.T, estate store.Estate) map[string]bool {
 	t.Helper()
-	dir := filepath.Join(sourcetree.Root(t), "internal", "store", "schema", string(estate))
-	out := map[string]bool{}
-	for _, name := range store.SchemaVersions(estate) {
-		body, err := os.ReadFile(filepath.Join(dir, name))
+	tables, err := estateTables(estate)
+	if err != nil {
+		t.Fatalf("derive the %s estate's tables: %v", estate, err)
+	}
+	return maps.Clone(tables)
+}
+
+// estateTables applies each estate's schema ONCE per test binary: every gate
+// in this package asks, several of them in parallel, and the answer is a
+// property of the binary.
+var estateTables = func() func(store.Estate) (map[string]bool, error) {
+	var mu sync.Mutex
+	done := map[store.Estate]map[string]bool{}
+	return func(estate store.Estate) (map[string]bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if tables, ok := done[estate]; ok {
+			return tables, nil
+		}
+		dir, err := os.MkdirTemp("", "estate-tables-*")
 		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
+			return nil, err
 		}
-		// DROPS FIRST WITHIN ONE FILE would be wrong for a migration
-		// that drops and recreates, so each file is applied in the
-		// order its statements appear.
-		for _, m := range ddlStatements(string(body)) {
-			if m.drop {
-				delete(out, m.table)
-				continue
+		defer func() { _ = os.RemoveAll(dir) }()
+		db, err := store.OpenEstate(context.Background(), estate,
+			filepath.Join(dir, string(estate)+".db"), store.Options{})
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = db.Close() }()
+		tables := map[string]bool{}
+		err = db.Read(context.Background(), func(tx *sql.Tx) error {
+			rows, err := tx.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+			if err != nil {
+				return err
 			}
-			out[m.table] = true
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					return err
+				}
+				tables[strings.ToLower(name)] = true
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			return nil, err
 		}
+		// schema_migrations is created by the migrator rather than by a
+		// file, and exists in BOTH estates — so it is neither estate's and
+		// naming it is never a crossing. The database engine's own
+		// bookkeeping is nobody's either: SQLite's `sqlite_` tables, and
+		// the sequence table Turso keeps behind an AUTOINCREMENT column,
+		// which no statement of ours names.
+		for name := range tables {
+			if name == "schema_migrations" || strings.HasPrefix(name, "sqlite_") ||
+				strings.HasPrefix(name, "__turso_internal_") {
+				delete(tables, name)
+			}
+		}
+		done[estate] = tables
+		return tables, nil
 	}
-	// schema_migrations is created by the migrator rather than by a file,
-	// and exists in BOTH estates — so it is neither estate's and naming it
-	// is never a crossing.
-	delete(out, "schema_migrations")
-	return out
-}
-
-// ddlStatement is one CREATE TABLE or DROP TABLE, in the order it appears.
-type ddlStatement struct {
-	table string
-	drop  bool
-}
-
-// ddlStatements walks one migration's creates and drops in source order.
-//
-// SOURCE ORDER, not creates-then-drops: a migration that drops a table and
-// recreates it in a new shape is a table the estate still has, and the reverse
-// reading loses it.
-func ddlStatements(body string) []ddlStatement {
-	type at struct {
-		pos int
-		st  ddlStatement
-	}
-	var all []at
-	for _, m := range createTable.FindAllStringSubmatchIndex(body, -1) {
-		all = append(all, at{m[0], ddlStatement{table: strings.ToLower(body[m[2]:m[3]])}})
-	}
-	for _, m := range dropTable.FindAllStringSubmatchIndex(body, -1) {
-		all = append(all, at{m[0], ddlStatement{table: strings.ToLower(body[m[2]:m[3]]), drop: true}})
-	}
-	slices.SortFunc(all, func(a, b at) int { return a.pos - b.pos })
-	out := make([]ddlStatement, 0, len(all))
-	for _, a := range all {
-		out = append(out, a.st)
-	}
-	return out
-}
+}()
 
 // walkGoFiles parses every non-test .go file under dir.
 func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
