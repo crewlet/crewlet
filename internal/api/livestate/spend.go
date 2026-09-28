@@ -48,11 +48,13 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
 		CostUSD:      fraction(payload, "cost_usd"),
-		// The detached coding run the phase collected, if it did — see
-		// tokens.Record, which counts one launch once.
+		// The detached coding run the phase collected, if it did, and what
+		// ran it — see tokens.Record, which counts one launch once and
+		// under its coding agent.
 		LaunchID:        str(payload, "launch_id"),
 		RunInputTokens:  num(payload, "run_input_tokens"),
 		RunOutputTokens: num(payload, "run_output_tokens"),
+		CodingAgent:     str(payload, "coding_agent"),
 	}})
 	s.pruneSpend(env.Timestamp)
 	return true

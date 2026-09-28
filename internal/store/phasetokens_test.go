@@ -84,6 +84,7 @@ func TestACollectedRunsTokensReachTheQueriedRollupOnce(t *testing.T) {
 			"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
 			"cost_usd": 0.5, "launch_id": "launch-1",
 			"run_input_tokens": 5000, "run_output_tokens": 700,
+			"backend": "sandbox", "coding_agent": "claude-code",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -106,15 +107,21 @@ func TestACollectedRunsTokensReachTheQueriedRollupOnce(t *testing.T) {
 		t.Fatalf("phase tokens: %v", err)
 	}
 	for _, r := range got {
-		if r.LaunchID != "launch-1" || r.RunInputTokens != 5000 || r.RunOutputTokens != 700 {
-			t.Fatalf("record %s carries launch %q and run tokens %d/%d, want the payload's",
-				r.EventID, r.LaunchID, r.RunInputTokens, r.RunOutputTokens)
+		if r.LaunchID != "launch-1" || r.RunInputTokens != 5000 || r.RunOutputTokens != 700 ||
+			r.CodingAgent != "claude-code" {
+			t.Fatalf("record %s carries launch %q, run tokens %d/%d and agent %q, want "+
+				"the payload's", r.EventID, r.LaunchID, r.RunInputTokens, r.RunOutputTokens,
+				r.CodingAgent)
 		}
 	}
 	rollup := tokens.Aggregate(got, tokens.Options{})
 	if want := 2*120 + 5700; rollup.Totals.TotalTokens != want {
 		t.Errorf("total = %d, want %d: the run is missing from the queried rollup, or "+
 			"counted once per stored phase", rollup.Totals.TotalTokens, want)
+	}
+	if !hasModel(rollup, "claude-code", 5700) {
+		t.Errorf("by_model = %+v, want the run's 5,700 under the coding agent that ran it",
+			rollup.ByModel)
 	}
 }
 
@@ -202,4 +209,15 @@ func TestAnInvertedWindowCoversNothingRatherThanEverything(t *testing.T) {
 	if !since.Equal(until) {
 		t.Errorf("window = %s..%s, want an empty one at the later edge", since, until)
 	}
+}
+
+// hasModel reports whether a rollup's model breakdown holds model at total
+// tokens.
+func hasModel(r tokens.Rollup, model string, total int) bool {
+	for _, m := range r.ByModel {
+		if m.Model == model {
+			return m.TotalTokens == total
+		}
+	}
+	return false
 }

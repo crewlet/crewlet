@@ -181,6 +181,15 @@ func TestACollectedRunsTokensReachTheLiveRollupOnce(t *testing.T) {
 	if got.Totals.CostUSD != 0.5 {
 		t.Errorf("price = %v, want the run's $0.50 once", got.Totals.CostUSD)
 	}
+	// UNDER THE CODING AGENT THAT RAN IT, not the executor's model.
+	for _, m := range got.ByModel {
+		if want := map[string]int{"claude-code": 5700, "claude-sonnet-5": 240}[m.Model]; m.TotalTokens != want {
+			t.Errorf("by_model %s = %d tokens, want %d", m.Model, m.TotalTokens, want)
+		}
+	}
+	if len(got.ByModel) != 2 {
+		t.Errorf("by_model = %+v, want the executor's model and the coding agent", got.ByModel)
+	}
 }
 
 func TestRecordsInsideTheWindowAreKept(t *testing.T) {

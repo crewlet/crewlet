@@ -3511,6 +3511,12 @@ Notes:
   it — on the earliest of them, so the live window, a queried one and the
   series all put it in the same place. A run that parked on a question is
   counted on the phase its answer resumes, which is the first one there is.
+  In **`by_model`** — and in the series grouped by `model` — a run is its
+  own row, under the **coding agent** that ran it (`claude-code`, `codex`,
+  …): the phase names the model the engine's own `execute` loop ran on,
+  and the run's box reports none. The phase's own calls stay under that
+  model, and a run counts as a call of its own, so the model rows' `calls`
+  add up to the totals'.
 
 ### `GET /tokens/series`
 

@@ -53,6 +53,71 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 	}
 }
 
+// A DETACHED CODING RUN'S SPEND IS ITS CODING AGENT'S, NOT THE EXECUTOR'S MODEL.
+//
+// The resumed phase names the model the engine's own Execute loop ran on, and
+// its run's tokens and price used to be counted under it: a seat whose
+// executor is a small native model, launching a coding CLI that spends five
+// million tokens in its box, showed the native model spending them. The model
+// breakdown — the table and the chart grouped by model alike — now counts the
+// phase's own calls under its model and the run under its coding agent, while
+// every other dimension still holds both.
+func TestARunsSpendIsItsCodingAgentsInTheModelBreakdown(t *testing.T) {
+	t.Parallel()
+	collected := rec("SWE", "execute", "haiku", "t1", "2026-06-14T12:00:05Z", 100, 20)
+	collected.LaunchID, collected.CodingAgent = "launch-1", "claude-code"
+	collected.RunInputTokens, collected.RunOutputTokens, collected.CostUSD = 5000, 700, 0.5
+	// A record from before a phase carried its run's tokens: the price alone,
+	// which is the run's too.
+	priced := rec("SWE", "execute", "haiku", "t2", "2026-06-14T12:10:05Z", 10, 2)
+	priced.CodingAgent, priced.CostUSD = "codex", 0.25
+	review := rec("SWE", "review", "haiku", "t1", "2026-06-14T12:00:09Z", 40, 10)
+	records := []tokens.Record{collected, priced, review}
+
+	got := tokens.Aggregate(records, tokens.Options{})
+	models := map[string]tokens.Bucket{}
+	for _, m := range got.ByModel {
+		models[m.Model] = m.Bucket
+	}
+	if b := models["haiku"]; b.TotalTokens != 120+12+50 || b.CostUSD != 0 || b.Calls != 3 {
+		t.Errorf("haiku = %+v, want only the phases' own calls (182 tokens, 3 calls, "+
+			"no price)", b)
+	}
+	if b := models["claude-code"]; b.TotalTokens != 5700 || b.InputTokens != 5000 ||
+		b.CostUSD != 0.5 || b.Calls != 1 {
+		t.Errorf("claude-code = %+v, want the run's 5,700 tokens and $0.50 in one call", b)
+	}
+	if b := models["codex"]; b.TotalTokens != 0 || b.CostUSD != 0.25 || b.PricedCalls != 1 {
+		t.Errorf("codex = %+v, want the older record's price under the agent that ran it", b)
+	}
+	// EVERY OTHER DIMENSION HOLDS BOTH HALVES, and the calls add up.
+	if want := 120 + 12 + 50 + 5700; got.Totals.TotalTokens != want || got.Totals.Calls != 5 {
+		t.Errorf("totals = %+v, want %d tokens over five calls", got.Totals, want)
+	}
+	if b := got.ByPhase[0]; b.Phase != "execute" || b.TotalTokens != 120+12+5700 {
+		t.Errorf("by_phase = %+v, want the runs on the execute phase", got.ByPhase)
+	}
+	calls := 0
+	for _, m := range got.ByModel {
+		calls += m.Calls
+	}
+	if calls != got.Totals.Calls {
+		t.Errorf("the model rows count %d calls and the totals %d", calls, got.Totals.Calls)
+	}
+
+	// AND THE CHART GROUPED BY MODEL SAYS THE SAME.
+	series := tokens.Bucketed(records, tokens.SeriesOptions{
+		Since: since, Until: until, Interval: tokens.IntervalHour, Group: tokens.GroupModel,
+	})
+	bands := map[string]int{}
+	for _, row := range series.ByGroup {
+		bands[row.Group] = row.TotalTokens
+	}
+	if bands["haiku"] != 182 || bands["claude-code"] != 5700 {
+		t.Errorf("the series by model = %v, want haiku 182 and claude-code 5700", bands)
+	}
+}
+
 // A DETACHED CODING RUN'S TOKENS ARE IN THE ROLLUP, AND ONCE.
 //
 // The run's box spends tokens the engine's own meter never sees; they reached
@@ -69,6 +134,7 @@ func TestARunsTokensAreCountedOnceWhicheverPhasesCarryIt(t *testing.T) {
 		r := rec("SWE", "execute", "sonnet", "t1", at, 100, 20)
 		r.EventID = id
 		r.LaunchID, r.RunInputTokens, r.RunOutputTokens, r.CostUSD = "launch-1", 5000, 700, 0.5
+		r.CodingAgent = "claude-code"
 		return r
 	}
 	first := collected("first", "2026-06-14T12:00:05Z")
