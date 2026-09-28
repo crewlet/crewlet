@@ -64,6 +64,7 @@ type TrackerWriter interface {
 		[]string, []string, error)
 	PutFile(ctx context.Context, opID string, put tracker.FilePut) (tracker.WriteResult, error)
 	RemoveFile(ctx context.Context, opID, project, path string, ifMatch uint64) (tracker.WriteResult, error)
+	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
 }
 
 // WorkSearcher is the tracker's ranked search.
@@ -314,7 +315,6 @@ var opWorkSearch = define("tracker.search", opRead, "", false,
 
 // ---- the tracker's writes ------------------------------------------------ //
 
-// writerFor is the tracker writer acting as the request's actor.
 // A PROJECT'S FILES, as rows: the listing, one file with its manifest, and
 // the two writes. The BYTES never cross here — a stateless node uploads and
 // downloads chunks through its own object client, straight to the data nodes
@@ -371,6 +371,26 @@ var opRemoveFile = define("tracker.remove_file", opIdempotentWrite, trackerStrea
 		return w.RemoveFile(ctx, a.OpID, a.Project, a.Path, a.IfMatch)
 	})
 
+type recordTurnArgs struct {
+	OpID string
+	Turn tracker.TurnRecord
+}
+
+// A TURN'S SPEND, recorded by the node that ran the turn — which on a node
+// without `data` is a node with no applier, so it crosses like any other
+// write. It carries its operation id, so an unanswered one is asked again of
+// the next node: the applier adds a turn's spend only for a new operation, and
+// a repeat under the same id counts nothing twice.
+var opRecordTurn = define("tracker.record_turn", opIdempotentWrite, trackerStream, true,
+	func(ctx context.Context, b Backend, actor *Actor, a recordTurnArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.RecordTurn(ctx, a.OpID, a.Turn)
+	})
+
+// writerFor is the tracker writer acting as the request's actor.
 func writerFor(b Backend, actor *Actor) (TrackerWriter, error) {
 	if b.Writer == nil {
 		return nil, errNoHalf

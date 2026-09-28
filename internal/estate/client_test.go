@@ -3,6 +3,7 @@ package estate
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ type fakeNode struct {
 	actors    []Actor
 	opIDs     []string
 	patches   []tracker.TaskPatch
+	turns     []tracker.TurnRecord
 	queries   []knowledge.Query
 	units     tracker.Units
 	notReady  bool
@@ -67,6 +69,16 @@ func (f *fakeNode) CreateTask(_ context.Context, opID string, task tracker.Task,
 	out := tracker.WriteResult{Key: task.Project + "-1"}
 	out.Position = f.written
 	return out, nil
+}
+
+func (f *fakeNode) RecordTurn(_ context.Context, opID string,
+	turn tracker.TurnRecord) (tracker.WriteResult, error) {
+	f.note("record_turn")
+	f.mu.Lock()
+	f.opIDs = append(f.opIDs, opID)
+	f.turns = append(f.turns, turn)
+	f.mu.Unlock()
+	return tracker.WriteResult{}, nil
 }
 
 func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
@@ -509,5 +521,46 @@ func TestNoDataNodeSaysSo(t *testing.T) {
 	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
 	if !errors.Is(err, ErrNoDataNode) {
 		t.Fatalf("err = %v, want ErrNoDataNode", err)
+	}
+}
+
+// A TURN'S SPEND CROSSES, AS THE SEAT, AND AN UNANSWERED ONE IS ASKED AGAIN
+// UNDER THE SAME OPERATION.
+//
+// A node without `data` has no applier, so the spend of a turn its seat ran
+// reaches the task only through a data node. It carries its operation id,
+// which is what makes a repeat on the next node safe: the applier adds a
+// turn's spend only for an operation it has not applied.
+func TestATurnsSpendCrossesAndRepeatsUnderItsOperation(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	_, first := f.first(t)
+	first.silent = true
+	turn := tracker.TurnRecord{
+		Task: "task-1", Seat: "swe", TurnID: "run-1", Outcome: "delivered",
+		Phases: []string{"execute"},
+		Spend: tracker.TurnSpend{Turns: 1, Rounds: 2, Input: 900, Output: 100,
+			CacheRead: 400, WallMs: 3100},
+	}
+	if _, err := f.client.WriterAs(Actor{Handle: "swe", Kind: tracker.AuthorAgent}).
+		RecordTurn(t.Context(), "op-turn", turn); err != nil {
+		t.Fatalf("record the turn: %v", err)
+	}
+	var second *fakeNode
+	for _, node := range f.nodes {
+		if node != first {
+			second = node
+		}
+	}
+	second.mu.Lock()
+	defer second.mu.Unlock()
+	if !slices.Equal(second.opIDs, []string{"op-turn"}) {
+		t.Fatalf("the next node was asked under %v, want the same operation", second.opIDs)
+	}
+	if len(second.turns) != 1 || !reflect.DeepEqual(second.turns[0], turn) {
+		t.Fatalf("the turn arrived as %+v, want %+v", second.turns, turn)
+	}
+	if got := second.actors[len(second.actors)-1]; got.Handle != "swe" {
+		t.Fatalf("the spend was written as %q, want the seat", got.Handle)
 	}
 }

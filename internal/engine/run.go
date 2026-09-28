@@ -1857,6 +1857,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// events already put the seat into `working`, and returning without this
 	// leaves it there until the seat happens to take another turn.
 	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
+	// AND WHAT IT COST, onto the task it was spent on — on both paths, for
+	// the same reason: a turn whose phase broke still spent what it spent.
+	e.recordTaskSpend(ctx, tel, r.Spend(), res)
 	// AND, if a colleague asked for this turn, the answer they are waiting
 	// for. Here because this is the one frame holding both the result and
 	// the trigger; after the completion event because the reply wakes

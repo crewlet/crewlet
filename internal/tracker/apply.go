@@ -109,7 +109,14 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	// The deletion gate reads the subject's own marker. A purge is the one
 	// operation that removes rows, and its marker is what makes the
 	// removal permanent rather than a race a redelivery can undo.
-	if ObjectKind(rec.Subject.Kind) == KindTask {
+	//
+	// A TURN IS A RECORD ABOUT A TASK TOO — its subject's id is the task's —
+	// and it is the one a purge races most often: a seat's turn on a task
+	// records its spend when the turn ENDS, which is after whatever the
+	// turn did, a purge included. Ungated, a turn landing after its task's
+	// purge would reach an apply with no row to add to, which is a
+	// malformed record there and stops the log on every node.
+	if kind := ObjectKind(rec.Subject.Kind); kind == KindTask || kind == KindTurn {
 		var author sql.NullString
 		err := tx.QueryRowContext(ctx,
 			`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,
@@ -255,15 +262,7 @@ func (c applyContext) skewMs() int64 {
 // happen — the create is below this position — so it is a writer's bug rather
 // than a race, and continuing would leave a total nobody can reconcile.
 func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
-	var turn struct {
-		Task    string    `json:"task"`
-		Seat    string    `json:"seat"`
-		TurnID  string    `json:"turn_id"`
-		Trigger string    `json:"trigger"`
-		Outcome string    `json:"outcome"`
-		Phases  []string  `json:"phases"`
-		Spend   TurnSpend `json:"spend"`
-	}
+	var turn TurnRecord
 	if err := decodePayload(c.record.Mutation, &turn); err != nil {
 		return 0, fmt.Errorf("tracker: decode the turn at %s: %w", c.position, err)
 	}

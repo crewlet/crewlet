@@ -161,6 +161,12 @@ type Turn struct {
 	Task  string
 	Reply string
 
+	// WorkItem is the tracker task this turn is SPENT on — the task whose
+	// change woke it — or empty for a turn no task woke. It travels for the
+	// reason the four above do: a detached run's resumed half costs the same
+	// task, and only the row can tell it which.
+	WorkItem string
+
 	// Calls is what this run has called so far, which a derived operation
 	// id reads its repeat count from — see [CallLog].
 	//

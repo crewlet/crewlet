@@ -935,20 +935,117 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	})
 }
 
-// RecordTurn adds a turn's spend to a task.
+// RecordTurn adds one turn's spend to the task it worked on.
 //
 // THE ONE ADDITIVE WRITE: it carries no expectation and races nobody, because
 // a turn records something that already happened. Its idempotency is its own
-// row's insert rather than an arbitration.
-func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
-	payload any) (WriteResult, error) {
-
-	if project == "" {
-		return WriteResult{}, fmt.Errorf("tracker: a turn on task %s names "+
-			"no project — a turn's path is its task's, so one without a project "+
-			"files under a container the task is not in", taskID)
+// row's insert rather than an arbitration — the applier adds the spend only
+// when the turn row keyed on opID is new — so a caller retrying under the SAME
+// operation id can never count a turn twice, and one minting a fresh id for
+// the same turn would.
+//
+// # The project is read, not given
+//
+// A turn's path is its task's, and a task's project is a mutable column: the
+// turn itself may have moved the task, and the wake that started it named the
+// project it was in then. So the project is read from the rows before the
+// request is built — the request's scope has to be stated before the decide —
+// and the decide checks it still holds, the way [Writer.UpdateTask] checks the
+// project a caller named. A task moved between the two is read again, a
+// bounded number of times.
+//
+// # What it refuses
+//
+// A task this node has no row for, and a task that was purged: the applier
+// adds the spend to the task's row, and a turn naming a row that is not there
+// is a malformed record that stops the log. A REMOVED task takes its spend —
+// a turn that ends by removing its task still cost what it cost, and a
+// restore brings the task back with it.
+func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (WriteResult, error) {
+	switch {
+	case opID == "":
+		return WriteResult{}, fmt.Errorf("tracker: a turn's spend names no " +
+			"operation — the operation id is what stops a retry counting the " +
+			"turn twice")
+	case turn.Task == "":
+		return WriteResult{}, fmt.Errorf("tracker: a turn's spend names no task")
+	case w.db == nil:
+		return WriteResult{}, fmt.Errorf("tracker: this writer holds no " +
+			"replicated estate to read the task's project from; a turn's " +
+			"spend is recorded through a writer that does")
 	}
-	subject := TurnSubject(taskID)
+	var (
+		result WriteResult
+		err    error
+	)
+	for range turnProjectAttempts {
+		var project string
+		if project, err = w.projectForTurn(ctx, turn.Task); err != nil {
+			return WriteResult{}, err
+		}
+		result, err = w.recordTurnIn(ctx, opID, project, turn)
+		if !errors.Is(err, errTaskMoved) {
+			return result, err
+		}
+	}
+	return result, err
+}
+
+// turnProjectAttempts is how many times [Writer.RecordTurn] reads a task's
+// project again after it moved between the read and the decide.
+//
+// THREE: a move is a person's or a seat's deliberate gesture, so two in the
+// window between one read and one snapshot is already a coincidence, and a
+// third is a task being moved faster than a turn can end.
+const turnProjectAttempts = 3
+
+// errTaskMoved is a task that left the project its turn's scope named between
+// the read that named it and the decide.
+var errTaskMoved = errors.New("tracker: the task moved project under this write")
+
+// projectForTurn reads a task's project for [Writer.RecordTurn], refusing a
+// task this node does not hold and saying whether it was purged — which, unlike
+// [Writer.taskProject]'s "not on this node", no retry will ever change.
+func (w *Writer) projectForTurn(ctx context.Context, id string) (string, error) {
+	var project string
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		task, held, err := readTask(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !held {
+			return missingTask(ctx, tx, id)
+		}
+		project = task.Project
+		return nil
+	})
+	return project, err
+}
+
+// missingTask is the refusal of a task this node holds no row for: [ErrNoTask]
+// when a purge destroyed it, which is final, and [statelog.ErrUnavailable]
+// when this node has not applied its create, which a node that has will not
+// refuse.
+func missingTask(ctx context.Context, tx *sql.Tx, id string) error {
+	var purged int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM tracker_deletions WHERE task_id = ?`, id).Scan(&purged)
+	switch {
+	case err == nil:
+		return fmt.Errorf("%w: task %s was purged, and nothing it cost can "+
+			"be recorded against it", ErrNoTask, id)
+	case !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("tracker: read the deletion marker of %s: %w", id, err)
+	}
+	return fmt.Errorf("tracker: task %s is not on this node: %w", id,
+		statelog.ErrUnavailable)
+}
+
+// recordTurnIn is one attempt of [Writer.RecordTurn], scoped to project.
+func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
+	turn TurnRecord) (WriteResult, error) {
+
+	subject := TurnSubject(turn.Task)
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
@@ -956,8 +1053,22 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
 		Pattern: statelog.PatternAdditive,
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return w.decide(stamp, subject, OpTurn, "", scope, opID, payload, nil, at)
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// THE ROW THE SPEND LANDS ON, from the snapshot the decision
+			// is made in — see [Applier.applyTurn], which stops the log
+			// on a turn naming a row that is not there.
+			current, held, err := readTask(ctx, tx, turn.Task)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if !held {
+				return statelog.Decision{}, missingTask(ctx, tx, turn.Task)
+			}
+			if current.Project != project {
+				return statelog.Decision{}, fmt.Errorf("%w: task %s is in "+
+					"%s, not %s", errTaskMoved, turn.Task, current.Project, project)
+			}
+			return w.decide(stamp, subject, OpTurn, "", scope, opID, turn, nil, at)
 		},
 	})
 }

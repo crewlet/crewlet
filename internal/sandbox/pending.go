@@ -438,6 +438,13 @@ type PendingRun struct {
 	DelegationDepth int      `json:"delegation_depth"`
 	DelegationChain []string `json:"delegation_chain"`
 
+	// WorkItem is the tracker task the launching turn is spent on, empty
+	// for a turn no task woke. The resumed half records its spend against
+	// it, and has no trigger to derive it from. ABSENT ON A ROW AN OLDER
+	// BUILD PARKED, which reads as a turn no task woke: its resumed half
+	// then costs no task, which is the one answer that invents nothing.
+	WorkItem string `json:"work_item,omitempty"`
+
 	// ExecuteState is the SUSPENDED Execute conversation: the serialized
 	// messages, including the assistant turn with the dangling tool call,
 	// plus the surface bookkeeping needed to re-enter the loop where it

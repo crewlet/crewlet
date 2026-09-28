@@ -1396,6 +1396,11 @@ type trackerWriter interface {
 	builtin.WorkMerger
 	builtin.WorkMover
 	builtin.FileWriter
+
+	// RecordTurn is the one write the ENGINE makes as a seat rather than a
+	// tool: a turn's spend onto the task it was spent on. On both halves
+	// for the reason every tool's write is — see [Engine.recordTaskSpend].
+	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
 }
 
 // trackerSeams are the tracker halves a seat's tools are handed: this node's

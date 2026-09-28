@@ -1059,6 +1059,8 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
 	res.InputTokens += done.Result.InputTokens
 	res.OutputTokens += done.Result.OutputTokens
+	res.CacheRead += done.Result.CacheRead
+	res.CacheWrite += done.Result.CacheWrite
 	// Accumulated for the same reason the token counts are: an EXTENDED
 	// phase runs the loop again and the second invocation counts only its
 	// own rounds, so a phase that answered nothing twice under two

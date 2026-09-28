@@ -222,6 +222,8 @@ func priorRounds(state execstate.State) toolloop.Result {
 		RoundsUsed:   state.RoundsUsed,
 		InputTokens:  state.InputTokens,
 		OutputTokens: state.OutputTokens,
+		CacheRead:    state.CacheRead,
+		CacheWrite:   state.CacheWrite,
 	}
 	for _, exec := range state.ToolExecutions {
 		name, _ := exec["name"].(string)
@@ -293,6 +295,8 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		Round:           round,
 		InputTokens:     res.InputTokens,
 		OutputTokens:    res.OutputTokens,
+		CacheRead:       res.CacheRead,
+		CacheWrite:      res.CacheWrite,
 		ToolExecutions:  toolExecutions(res.Executions),
 		// The rounds themselves, so the resumed phase continues the count
 		// instead of restarting it — and so they reach the store at all.

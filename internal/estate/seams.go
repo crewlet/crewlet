@@ -218,6 +218,14 @@ func (w WorkWriter) RemoveFile(ctx context.Context, opID, project, path string,
 	return out, err
 }
 
+// RecordTurn records one turn's spend on the task it worked on.
+func (w WorkWriter) RecordTurn(ctx context.Context, opID string,
+	turn tracker.TurnRecord) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.c, opRecordTurn, &w.actor, recordTurnArgs{OpID: opID, Turn: turn})
+	w.settled(out.Result)
+	return out, err
+}
+
 // Pages is the knowledge base, read and written.
 type Pages struct{ c *Client }
 

@@ -158,11 +158,35 @@ func (s *resumeSpy) failWith(err error) {
 	s.err = err
 }
 
+// spendSpy records every collected run the coordinator offered as spent.
+type spendSpy struct {
+	mu      sync.Mutex
+	offered []spentRun
+}
+
+type spentRun struct {
+	run    PendingRun
+	result Result
+}
+
+func (s *spendSpy) RunSpent(_ context.Context, run PendingRun, result Result) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.offered = append(s.offered, spentRun{run: run, result: result})
+}
+
+func (s *spendSpy) runs() []spentRun {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]spentRun(nil), s.offered...)
+}
+
 type coordRig struct {
 	*waiterRig
 	coordinator *Coordinator
 	resumer     *resumeSpy
 	accountant  *ledgerSpy
+	spent       *spendSpy
 
 	mu      sync.Mutex
 	stopped []string
@@ -183,10 +207,11 @@ func newCoordRig(t *testing.T) *coordRig {
 		waiterRig:  base,
 		resumer:    &resumeSpy{},
 		accountant: &ledgerSpy{},
+		spent:      &spendSpy{},
 	}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
 		Queue: base.queue, Pending: base.pending, Manager: base.manager,
-		Resume: rig.resumer, Account: rig.accountant,
+		Resume: rig.resumer, Account: rig.accountant, Spent: rig.spent,
 		Stopped: func(_ context.Context, handle, turnID string) {
 			rig.mu.Lock()
 			defer rig.mu.Unlock()
@@ -2102,6 +2127,68 @@ func TestARetriedResumeChargesTheRunOnce(t *testing.T) {
 	}
 	if got := rig.accountant.total(); got != 1000 {
 		t.Fatalf("charged %d tokens over four deliveries of one run, want its 1000 once", got)
+	}
+}
+
+// EVERY COLLECT OFFERS THE RUN'S SPEND TO THE TASK IT WAS SPENT ON — the
+// retries included, naming the same launch, and a run that parks on a question
+// as well as one that resumes.
+//
+// The task's record is made idempotent by the launch's identity rather than by
+// the row's charge flag, so behind that flag a write whose first attempt never
+// answered would be lost to a record saying the CHARGE landed. And a run that
+// parks is resumed by a person's answer, which collects nothing: offered
+// anywhere later than the collect, what a run that asked a question spent
+// would never reach the task at all.
+func TestEveryCollectOffersTheRunsSpendNamingItsLaunch(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	launch := rig.get("t1").LaunchID
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+	offered := rig.spent.runs()
+	if len(offered) != 2 {
+		t.Fatalf("two collects of one run offered its spend %d times, want "+
+			"each of them to", len(offered))
+	}
+	for i, o := range offered {
+		if o.run.TurnID != "t1" || o.run.LaunchID != launch {
+			t.Fatalf("collect %d offered %s/%s, want the launch it collected "+
+				"(t1/%s) so the record reproduces its operation", i+1,
+				o.run.TurnID, o.run.LaunchID, launch)
+		}
+		if o.result.InputTokens != 900 || o.result.OutputTokens != 100 {
+			t.Fatalf("collect %d offered %d/%d tokens, want the run's 900/100",
+				i+1, o.result.InputTokens, o.result.OutputTokens)
+		}
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d, want the run's 1000 once whatever the spend record did", got)
+	}
+
+	// A RUN THAT ASKS A QUESTION is offered too.
+	asking := newCoordRig(t)
+	asking.launch("t2")
+	asking.runner.Finish(Result{NeedsInput: true, Question: "which branch?",
+		AskTo: "requester", InputTokens: 300})
+	payload, ev = asking.completion("t2")
+	if err := asking.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := asking.get("t2").Status; got != StatusAwaiting {
+		t.Fatalf("status = %q, want the run parked on its question", got)
+	}
+	if offered := asking.spent.runs(); len(offered) != 1 || offered[0].result.InputTokens != 300 {
+		t.Fatalf("a run that parked offered %+v, want its 300 tokens once", offered)
 	}
 }
 

@@ -114,6 +114,24 @@ type Accountant interface {
 	Charge(ctx context.Context, agentID, handle string, tokens int) (refused bool, err error)
 }
 
+// Spender records a collected run's tokens on the work its turn is spent on —
+// the tracker task, when a task woke the turn that launched it
+// ([PendingRun.WorkItem]).
+//
+// A SEPARATE SEAM FROM [Accountant], because the two keep different promises.
+// The charge moves a counter the caps are measured against, so the row's own
+// flag makes it once per launch and a charge the counter never answered is
+// deliberately not offered again ([PendingRun.Charged]). This is a record the
+// implementation makes idempotent by the launch's identity, so it is offered
+// on EVERY collect, a retry's included: behind that flag, a write whose first
+// attempt never answered would be lost to a record saying the CHARGE landed.
+//
+// Nothing is returned, because nothing here could act on it: the run is
+// collected either way, and a spend record never decides a run's fate.
+type Spender interface {
+	RunSpent(ctx context.Context, run PendingRun, result Result)
+}
+
 // CoordinatorOptions configures a [Coordinator].
 type CoordinatorOptions struct {
 	Queue   Publisher
@@ -133,6 +151,10 @@ type CoordinatorOptions struct {
 
 	// Account post-charges collected tokens. Nil skips accounting.
 	Account Accountant
+
+	// Spent records a collected run's tokens on the work its turn is spent
+	// on — see [Spender]. Nil records nothing.
+	Spent Spender
 
 	// Ended is called once for every run this node finishes with, whatever
 	// finished it: collected, failed, torn down or reaped.
@@ -252,6 +274,7 @@ type Coordinator struct {
 	manager *Manager
 	resume  Resumer
 	account Accountant
+	spent   Spender
 	ended   func(runID string)
 	stopped func(ctx context.Context, handle, turnID string)
 	now     func() time.Time
@@ -338,8 +361,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
-		resume: opts.Resume, account: opts.Account, ended: opts.Ended,
-		stopped:  opts.Stopped,
+		resume: opts.Resume, account: opts.Account, spent: opts.Spent,
+		ended: opts.Ended, stopped: opts.Stopped,
 		now:      opts.Now,
 		runs:     map[string]seatRuns{},
 		attempts: map[answerKey]map[string]answerBudget{},
@@ -560,6 +583,14 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 			"the coding job finished but its box could not be read back, so its "+
 				"result is lost; the work it pushed, if any, is on its branch")
 		return nil
+	}
+
+	// WHAT THE RUN SPENT, on the task its turn is spent on — whichever way
+	// the run goes on from here. A run that parks on a question is resumed
+	// by a person's answer, which collects nothing, so recorded any later
+	// than this its tokens would reach the task only when it did not ask.
+	if c.spent != nil {
+		c.spent.RunSpent(ctx, run, result)
 	}
 
 	// Carried on the claimed row from here, so that handing the claim back

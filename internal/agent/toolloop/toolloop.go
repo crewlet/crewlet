@@ -223,6 +223,8 @@ type Progress struct {
 	narration    []Narration
 	inputTokens  int
 	outputTokens int
+	cacheRead    int
+	cacheWrite   int
 	roundsUsed   int
 	model        string
 }
@@ -239,6 +241,8 @@ func (p *Progress) Snapshot() Result {
 		Text:         assistantText(p.messages),
 		InputTokens:  p.inputTokens,
 		OutputTokens: p.outputTokens,
+		CacheRead:    p.cacheRead,
+		CacheWrite:   p.cacheWrite,
 		Executions:   append([]Execution(nil), p.executions...),
 		Narration:    append([]Narration(nil), p.narration...),
 		RoundsUsed:   p.roundsUsed,
@@ -247,14 +251,32 @@ func (p *Progress) Snapshot() Result {
 	}
 }
 
-func (p *Progress) record(msgs []llm.Message, execs []Execution, narr []Narration, in, out, rounds int, model string) {
+func (p *Progress) record(msgs []llm.Message, execs []Execution, narr []Narration,
+	billed tokens, rounds int, model string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = append([]llm.Message(nil), msgs...)
 	p.executions = append([]Execution(nil), execs...)
 	p.narration = append([]Narration(nil), narr...)
-	p.inputTokens, p.outputTokens = in, out
+	p.inputTokens, p.outputTokens = billed.in, billed.out
+	p.cacheRead, p.cacheWrite = billed.cacheRead, billed.cacheWrite
 	p.roundsUsed, p.model = rounds, model
+}
+
+// tokens is what a loop's completions billed so far.
+type tokens struct{ in, out, cacheRead, cacheWrite int }
+
+// add folds one completion's usage in.
+//
+// The CACHE COUNTS ARE A BREAKDOWN of the input, never an addition to it:
+// every provider reports its full prompt count as InputTokens whatever was
+// read from a cache (see [llm.Completion]), so adding these to the input would
+// bill a cached prefix twice.
+func (t *tokens) add(c *llm.Completion) {
+	t.in += c.InputTokens
+	t.out += c.OutputTokens
+	t.cacheRead += c.CacheRead
+	t.cacheWrite += c.CacheWrite
 }
 
 // Result is one loop invocation's outcome.
@@ -262,9 +284,18 @@ type Result struct {
 	Text         string
 	InputTokens  int
 	OutputTokens int
-	Executions   []Execution
-	RoundsUsed   int
-	Model        string
+
+	// CacheRead and CacheWrite break InputTokens down: how much of the
+	// prompt this loop's completions read from a provider's cache, and how
+	// much they wrote to it. A BREAKDOWN, never an addition — see
+	// [llm.Completion] — carried so what a turn cost can be reported as its
+	// provider billed it rather than as if nothing were cached.
+	CacheRead  int
+	CacheWrite int
+
+	Executions []Execution
+	RoundsUsed int
+	Model      string
 
 	// Narration is per-round what Text is in aggregate. Both are published:
 	// Text is what every existing consumer and every already-stored event
@@ -446,7 +477,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	msgs := append([]llm.Message(nil), cfg.Messages...)
 	var execs []Execution
 	var narration []Narration
-	var inTokens, outTokens int
+	var billed tokens
 	var model string
 	// served distinguishes the model a COMPLETION named from the configured
 	// placeholder a streamed round shows before one exists.
@@ -462,13 +493,15 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	var partial *Partial
 	publish := func(rounds int) {
 		if cfg.Progress != nil {
-			cfg.Progress.record(msgs, execs, narration, inTokens, outTokens, rounds, model)
+			cfg.Progress.record(msgs, execs, narration, billed, rounds, model)
 		}
 		if cfg.OnProgress != nil {
 			cfg.OnProgress(Result{
 				Text:         assistantText(msgs),
-				InputTokens:  inTokens,
-				OutputTokens: outTokens,
+				InputTokens:  billed.in,
+				OutputTokens: billed.out,
+				CacheRead:    billed.cacheRead,
+				CacheWrite:   billed.cacheWrite,
 				Executions:   append([]Execution(nil), execs...),
 				Narration:    append([]Narration(nil), narration...),
 				Partial:      partial.clone(),
@@ -610,8 +643,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		if model == "" {
 			model = cfg.Provider.Model()
 		}
-		inTokens += completion.InputTokens
-		outTokens += completion.OutputTokens
+		billed.add(completion)
 
 		// Charge BEFORE running the tools this round asked for. A round
 		// whose spend is refused must not also have fired its side
@@ -739,8 +771,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		if suspended {
 			return &Result{
 				Text:              assistantText(msgs),
-				InputTokens:       inTokens,
-				OutputTokens:      outTokens,
+				InputTokens:       billed.in,
+				OutputTokens:      billed.out,
+				CacheRead:         billed.cacheRead,
+				CacheWrite:        billed.cacheWrite,
 				Executions:        execs,
 				Narration:         narration,
 				RoundsUsed:        roundsUsed,
@@ -762,8 +796,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	exhausted := roundsUsed == cfg.MaxRounds && lastAskedForTools(msgs)
 	return &Result{
 		Text:            assistantText(msgs),
-		InputTokens:     inTokens,
-		OutputTokens:    outTokens,
+		InputTokens:     billed.in,
+		OutputTokens:    billed.out,
+		CacheRead:       billed.cacheRead,
+		CacheWrite:      billed.cacheWrite,
 		Executions:      execs,
 		Narration:       narration,
 		RoundsUsed:      roundsUsed,

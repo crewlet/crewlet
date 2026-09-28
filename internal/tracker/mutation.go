@@ -1328,6 +1328,34 @@ type TurnSpend struct {
 // Tokens is the derived eighth counter, so nothing else adds the two halves.
 func (s TurnSpend) Tokens() int { return s.Input + s.Output }
 
+// TurnRecord is one turn's spend on one task, as a [KindTurn] record carries
+// it — see [Writer.RecordTurn].
+//
+// ONE TYPE FOR THE WRITER AND THE APPLIER, whose field names are the wire: the
+// applier used to decode an anonymous struct while the writer took `any`, so
+// nothing but a matching spelling in two files kept a turn's spend from
+// decoding as zero.
+type TurnRecord struct {
+	// Task is the task's id — the subject the record is filed under.
+	Task string `json:"task"`
+
+	// Seat is the handle whose turn it was, and TurnID that execution's
+	// run id: the same values every event the turn published carries, so
+	// the row joins the turn it describes.
+	Seat   string `json:"seat"`
+	TurnID string `json:"turn_id"`
+
+	// Trigger is what woke the turn and Outcome how it ended — the
+	// executor's own last word, or the engine's where a guard ended it.
+	Trigger string `json:"trigger"`
+	Outcome string `json:"outcome"`
+
+	// Phases are the phases the turn ran, in order.
+	Phases []string `json:"phases"`
+
+	Spend TurnSpend `json:"spend"`
+}
+
 // EncodeBarrier renders a read index's barrier as a record this domain's
 // applier decodes.
 //

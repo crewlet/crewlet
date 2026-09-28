@@ -76,6 +76,17 @@ type turnTelemetry struct {
 	// skills is the synthesized-skill ids offered to this turn's prompt.
 	// Set after the prefetch, which is the only thing that knows them.
 	skills []string
+
+	// workItem is the tracker task this turn is spent on — the task whose
+	// change woke it, see [workItemOf] — and empty for every other turn.
+	// It travels onto a detached run's row, so the resumed half of the
+	// turn is spent on the same task.
+	workItem string
+
+	// resumedRound is the round a resumed turn re-entered, zero for a turn
+	// that started at round one. Its rounds up to that one were already
+	// counted by the half that parked — see [Engine.recordTaskSpend].
+	resumedRound int
 }
 
 // newRunID mints the identity of ONE EXECUTION of a turn.
@@ -147,6 +158,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		t.trigger = types.DescribeTrigger(ev)
 		break
 	}
+	t.workItem = workItemOf(req.Events)
 	return t
 }
 
@@ -208,6 +220,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// this frame, so both have to reach the row from here.
 			Task:  task,
 			Reply: reply.String(),
+			// And the task this turn is spent on, for the same reason
+			// again: the resumed half's spend belongs to it.
+			WorkItem: t.workItem,
 		},
 	}
 }
@@ -494,6 +509,11 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	if in.Trigger != nil {
 		t.trigger = types.DescribeTrigger(in.Trigger)
 	}
+	// THE TASK THE TURN IS SPENT ON, off the row, and the round it parked
+	// in — the resumed half sees no trigger to derive the first from, and
+	// its rounds up to the second were already counted by the half that
+	// parked.
+	t.workItem, t.resumedRound = in.Run.WorkItem, in.State.Round
 	// Re-derived from the org when the row predates a rename, so a resumed
 	// turn is still attributed to a seat that exists.
 	if role, agentID := seatIdentity(company, in.Run.AgentHandle); role != "" {

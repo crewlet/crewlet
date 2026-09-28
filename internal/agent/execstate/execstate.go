@@ -93,6 +93,13 @@ type State struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 
+	// CacheRead and CacheWrite are the part of InputTokens the provider's
+	// prompt cache served and stored, for the same reason. ADDITIVE, so a
+	// row parked before they existed reads as nothing cached rather than
+	// failing to decode.
+	CacheRead  int `json:"cache_read,omitempty"`
+	CacheWrite int `json:"cache_write,omitempty"`
+
 	// ToolExecutions is what the pre-suspend rounds actually ran. The
 	// resumed phase's ledger entry is built from these plus its own, which
 	// is what stops a resumed turn re-firing a delivery that already went.

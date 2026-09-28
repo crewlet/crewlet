@@ -531,9 +531,20 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) {
 	var body []byte
 	var entered int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, status_entered_at FROM tracker_tasks WHERE id = ?`,
-		id).Scan(&body, &entered)
+	var spend Spend
+	// THE SPEND IS THE COLUMNS', never the document's. The document is
+	// what the task's own records wrote, and no task record carries spend:
+	// the applier adds each turn's to the columns, in the transaction that
+	// inserts the turn ([Applier.applyTurn]). Read off the document, every
+	// task reported the zero its create wrote, however much work it had
+	// cost.
+	err := tx.QueryRowContext(ctx, `
+		SELECT document, status_entered_at,
+		       spend_turns, spend_rounds, spend_input, spend_output,
+		       spend_cache_read, spend_cache_write, spend_wall_ms, spend_tokens
+		FROM tracker_tasks WHERE id = ?`, id).Scan(&body, &entered,
+		&spend.Turns, &spend.Rounds, &spend.Input, &spend.Output,
+		&spend.CacheRead, &spend.CacheWrite, &spend.WallMs, &spend.Tokens)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Task{}, fmt.Errorf("%w: %s", ErrNoTask, id)
@@ -550,6 +561,7 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	if entered != 0 {
 		task.StatusEnteredAt = store.DecodeTime(entered)
 	}
+	task.Spend = spend
 	return task, nil
 }
 

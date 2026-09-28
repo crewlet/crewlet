@@ -601,6 +601,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// keeps it, because the same box is still working.
 	working = res.Suspended
 	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
+	e.recordTaskSpend(ctx, tel, r.Spend(), res)
 	if err != nil {
 		if reason, abandon := turn.Abandon(res, err); abandon {
 			// The same decision the dispatcher makes on the other path
@@ -1016,6 +1017,9 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// anybody is waiting: it sees neither its trigger nor this frame,
 		// and the row is the only place this can reach it from.
 		Reply: t.Reply,
+		// And the task the turn is spent on, so the resumed half's
+		// spend lands where the first half's did.
+		WorkItem: t.WorkItem,
 	}
 }
 
@@ -1286,6 +1290,9 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
+		// What a collected run spent, on the task its turn is spent on —
+		// see [runSpender].
+		Spent: runSpender{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever

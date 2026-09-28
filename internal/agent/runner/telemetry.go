@@ -166,6 +166,13 @@ type Spend struct {
 	InputTokens  int
 	OutputTokens int
 
+	// CacheRead and CacheWrite break InputTokens down by what the
+	// provider's prompt cache served and stored — see [toolloop.Result].
+	// Same scope as the two above: the turn's own phases, never its
+	// workers or its judge.
+	CacheRead  int
+	CacheWrite int
+
 	// Response is the last phase's text — what the turn produced, for the
 	// single-phase summary a dashboard shows before anyone expands it.
 	Response string
@@ -271,6 +278,8 @@ func (s *Spend) record(rec phaseRecord) {
 	}
 	s.InputTokens += rec.Result.InputTokens
 	s.OutputTokens += rec.Result.OutputTokens
+	s.CacheRead += rec.Result.CacheRead
+	s.CacheWrite += rec.Result.CacheWrite
 	if rec.Result.Text != "" {
 		s.Response = rec.Result.Text
 	}

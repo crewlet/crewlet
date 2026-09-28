@@ -238,6 +238,44 @@ what makes "what did this cost" a question about a piece of work rather than
 about a seat's month, and it is the number a founder actually wants when a
 task has been reopened four times.
 
+The counters are **turns**, **rounds**, **input and output tokens** — with the
+share of the input the provider's prompt cache served (`cache_read`) and stored
+(`cache_write`) — and **wall-clock**. The token total is the `spend` a query
+sorts and filters on (`sort=spend`, `spend=gt:50000`) and a totals row sums.
+
+**The task a turn is spent on is the one that woke it.** A turn the tracker
+started about a task — it was assigned to the seat, mentioned it, asked it
+something, unblocked it, commented on it — is spent on that task. A turn
+anything else started is spent on none, however many tasks its tools touch
+along the way: a chat message's turn that files three follow-ups was not spent
+on any of them, and splitting its cost by the calls a model chose to make would
+make the counter a record of the model's choices rather than of the work. Its
+cost is still the seat's, on every other spend surface. A wake about a
+person's priority list is not about a task either, although it names the one
+that reached the top.
+
+**Counted once, whichever node runs the turn.** A seat on a node without the
+`data` role records its spend through a data node like every other write. A
+turn that detached a [coding run](../concepts/code-sandbox.md) records in two
+halves — the one that parked and the one that resumed, possibly on another
+node — and they sum to one turn: only the first counts the turn, and the
+second counts the rounds it ran past the one it re-entered. What the coding
+agent spent **inside** its box is on the task too, recorded when the run is
+collected — including a run that stops to ask a question, whose answer resumes
+the turn without collecting anything — and it adds tokens only: no turn, no
+round, and no wall-clock, because a task's wall-clock is the time the engine's
+own turns on it ran, which is what a turn's duration means everywhere else.
+Every one of these writes carries an operation id derived from what it records
+— the execution, or the launch a collect read — so a retry, a redelivered
+completion or a completion collected again after a failed resume can never
+count anything twice.
+
+**Recording never fails the turn.** A spend that could not be written is
+logged as `turn_spend_unrecorded` (or `turn_spend_unknown` when the write's
+outcome is not known) and the turn stands. A turn that ends after its task was
+purged records nothing: the purge destroyed the counters it would have added
+to.
+
 ## The catalogue
 
 Two declarations, and they are the company's own vocabulary: what a task may
