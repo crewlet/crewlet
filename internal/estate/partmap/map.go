@@ -219,9 +219,10 @@ func (m Map) drawFor(p statelog.PartitionID) placement.Draw {
 
 // Target is the nodes p SHOULD be held by, primary first: the up set of p's
 // group in the map's draw, drawn without the nodes an operator moved p off
-// — so a move keeps the partition's copies and its spread across failure
-// domains rather than leaving it one short. Nil for a partition the layout
-// does not have.
+// — so a move rebuilds the copy on the member p's ranking offers next, spread
+// across failure domains as far as the members allow, rather than leaving p
+// one short ([Move] refuses a move with no member to rebuild on). Nil for a
+// partition the layout does not have.
 //
 // It hashes every member on each call; [Map.targets] computes every
 // partition's at once.

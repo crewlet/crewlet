@@ -30,10 +30,13 @@ var (
 	// in any state: there is no copy there to move.
 	ErrNotAHolder = errors.New("estate/partmap: the node does not hold the partition")
 
-	// ErrNowhereToMove is a move that would leave the partition with no
-	// member to be placed on: its copy would have nowhere to be rebuilt.
-	ErrNowhereToMove = errors.New("estate/partmap: moving the partition off the node " +
-		"would leave it no member to be placed on")
+	// ErrNowhereToMove is a move with no member to rebuild the copy on:
+	// every member the partition could be placed on without the node
+	// already holds a copy of it, so taken, the move would DROP the copy —
+	// the partition one copy short for as long as the move stood — rather
+	// than move it.
+	ErrNowhereToMove = errors.New("estate/partmap: there is no member to rebuild " +
+		"the partition's copy on")
 )
 
 // refused is a membership refusal as this map answers it.
@@ -44,6 +47,13 @@ func refused(err error) error { return fmt.Errorf("estate/partmap: %w", err) }
 // others while it keeps serving, and then released — each partition under the
 // same two conditions as any leave. The shares are balanced again. Taking out a
 // member already out answers the record it was given.
+//
+// On a fleet with no member to spare — as many members as copies — there is
+// nowhere to rebuild, and every partition keeps one copy fewer once the member
+// is let go. That is what taking a member out of such a fleet means, and it is
+// membership's rule for both maps (ADR-0008): it is how a fleet shrinks. A
+// [Move], whose whole meaning is that the copy is rebuilt, refuses the same
+// drop.
 //
 // NO EPOCH MOVES: the epoch counts the holder table, and a gesture changes only
 // the targets — the maintainer's next tick moves the holders toward them.
@@ -125,9 +135,13 @@ func Release(state MapState) MapState {
 // gesture's who and why kept.
 //
 // It refuses a partition the layout does not have, a node that does not hold
-// the partition in any state, and a move that would leave the partition no
-// member to be placed on. Like the membership gestures it changes the targets
-// alone, and moves no epoch.
+// the partition in any state, and a move with NO MEMBER TO REBUILD THE COPY ON
+// — where the partition's target without the node would be smaller than with
+// it, as on a fleet with exactly as many members as copies. That move would
+// drop a copy rather than move it, which is what taking a member out or
+// lowering the company's copies does, and a gesture that says it moves a copy
+// must not be the way to do either. Like the membership gestures it changes
+// the targets alone, and moves no epoch.
 func Move(state MapState, p statelog.PartitionID, node, by, reason string, now time.Time) (MapState, error) {
 	if state.Map.Generation == uuid.Nil {
 		return state, ErrNoMap
@@ -150,8 +164,10 @@ func Move(state MapState, p statelog.PartitionID, node, by, reason string, now t
 		next.Map.Moves[p.String()] = map[string]membership.Gesture{}
 	}
 	next.Map.Moves[p.String()][node] = membership.Gesture{By: by, Reason: reason, At: now.UTC()}
-	if len(next.Map.Target(p)) == 0 {
-		return state, fmt.Errorf("%w: %s off %q", ErrNowhereToMove, p, node)
+	if moved, copies := next.Map.drawFor(p).Size(), state.Map.Size(); moved < copies {
+		return state, fmt.Errorf("%w: %s off %q: it keeps %d copies, and without %q only %d "+
+			"members can hold one — add a data node first, or lower estate.replicas if the "+
+			"company means to keep fewer", ErrNowhereToMove, p, node, copies, node, moved)
 	}
 	return next, nil
 }

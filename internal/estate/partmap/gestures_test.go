@@ -3,6 +3,7 @@ package partmap
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,6 +182,35 @@ func TestAMoveThatCannotBeDoneIsRefused(t *testing.T) {
 	}
 	if _, err := Move(next, p, "data-01", "op", "", base); !errors.Is(err, ErrNowhereToMove) {
 		t.Fatalf("moving %s off its last member: %v", p, err)
+	}
+}
+
+// A MOVE THAT WOULD DROP A COPY RATHER THAN MOVE IT IS REFUSED. On a fleet with
+// no member to spare — three data nodes at three copies, the default shape —
+// every member already holds every partition, so moving one off a node has
+// nowhere to rebuild the copy: taken, the partition would keep one copy fewer
+// for as long as the move stood, which is not what a move is. The refusal
+// says what to do instead, and the record is left as it was.
+func TestAMoveThatWouldDropACopyIsRefused(t *testing.T) {
+	t.Parallel()
+	s := settled(t, smallLayout, 3, nodeIDs(3)...)
+	_, p := s.targetedAt(s.state.Map.targets()[0]...)
+	_, err := Move(s.state, p, "data-00", "op", "hot disk", base)
+	if !errors.Is(err, ErrNowhereToMove) {
+		t.Fatalf("moving %s off one of the three members holding its three copies: %v, "+
+			"want ErrNowhereToMove (target %v)", p, err, s.state.Map.Target(p))
+	}
+	for _, want := range []string{p.String(), "data-00", "estate.replicas"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %q", err, want)
+		}
+	}
+
+	// A fourth member is somewhere to rebuild it.
+	s.add("data-03", 1, nil)
+	s.settle(200)
+	if _, err := Move(s.state, p, s.state.Map.Target(p)[0], "op", "hot disk", base); err != nil {
+		t.Fatalf("moving %s with a member to spare: %v", p, err)
 	}
 }
 
