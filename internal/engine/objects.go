@@ -78,7 +78,7 @@ type objectStore struct {
 	stopServe queue.Unsubscribe
 
 	// lease is this data node's membership, nil on a node without data.
-	lease *objectsLease
+	lease *memberLease
 
 	// stopCache ends the map refresh; cacheDone closes when it has.
 	stopCache context.CancelFunc

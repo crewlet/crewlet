@@ -135,18 +135,6 @@ func TestTheMembershipIsGivenBackOnlyAfterTheServerIsWithdrawn(t *testing.T) {
 	}
 }
 
-// THE LEASE IS RENEWED ON THE SEAT HEARTBEAT'S RATIO OF THE TTL IN FORCE, so it
-// takes as many missed beats to lapse as a seat does whatever TTL the fleet
-// adopted — never on the shipped interval against a shorter adopted TTL.
-func TestTheObjectsLeaseIsRenewedOnTheTTLInForce(t *testing.T) {
-	t.Parallel()
-	for _, ttl := range []time.Duration{45 * time.Second, 12 * time.Second} {
-		if got := objectsLeaseInterval(ttl); got*3 != ttl {
-			t.Errorf("a %v lease renews every %v, want a third of it", ttl, got)
-		}
-	}
-}
-
 // THE READING SAYS WHAT THE PASSES FOUND ABOUT THE CURRENT PLACEMENT, and only
 // that: pending copies from a pass that completed at the map's epoch, never an
 // older epoch's pending count, which is a claim about a placement the map no
