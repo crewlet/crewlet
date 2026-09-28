@@ -213,7 +213,11 @@
 // mailboxes, the two placement maps, the positions, the follows, the secrets) go
 // through ONE read: `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only
 // the stream leader answers ([leaderReader], [getLatest]). NONE is the bucket
-// handle's own Get, and none may be.
+// handle's own Get, and none may be. The one WATCH a caller acts on — the
+// estate map's, whose consumer the broker places on whichever replica it picks
+// — keeps the same rule: it hands over the leader's answer first and forwards
+// only what is newer ([FleetStore.WatchEstateMap]), so a replica that is
+// behind can delay the next version and never hand over an older one.
 //
 // That Get is a DIRECT get, and a direct get is answered by whichever replica
 // the broker picks — the one on the caller's own member first — from its own

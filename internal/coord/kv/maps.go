@@ -136,25 +136,53 @@ func (f *FleetStore) UpdateEstateMap(ctx context.Context, value []byte, version 
 // WatchEstateMap delivers every stored version of the estate map from the
 // current one on ([coord.EstateMaps]).
 //
-// A KV WATCH OF THE ONE KEY: the client's ordered consumer delivers the key's
-// last value and then every later write in stream order. The bucket keeps
-// one version of the key, so a write that replaced another before the
-// consumer was sent it leaves nothing to send — the skip the contract
-// allows, and the reason it does. The end-of-initial-values marker the
-// client sends is its own guess and carries nothing, so it is dropped.
+// THE CURRENT VERSION IS THE LEADER'S, never the watch's. The watch is the
+// client's ordered consumer over the one key, and the broker places that
+// consumer — one replica, in memory — on a member it picks at random from the
+// stream's peers (nats-server's createGroupForConsumer), which may be a
+// follower behind the quorum: a node that had just read version V through the
+// leader, or written it, would open the watch and be handed V-1 first, and a
+// router or a joiner would act on a map the fleet had already replaced. That
+// is the same copy behind the same quorum that kv.go's "Every single-key read
+// is the leader's" rules out for every read by key, and the watch keeps the
+// rule the same way the gates' view does (gate.go): the leader answers where
+// the map IS, and the watch only says where it goes next. So the map is read
+// from the leader first and handed over, and a version the watch then offers
+// is forwarded only if it is NEWER than every version already accounted for
+// ([forwardEstateMap]) — a copy that is behind can delay the next version,
+// never hand over an older one.
 //
-// A REMOVAL ENDS THE WATCH. Nothing in the engine removes the map, so a delete
-// or purge is an operator's hand on the bucket, and a watch that went on
-// delivering nothing after it would leave its reader routing by a map that no
-// longer exists; closed, the reader re-opens and reads, and the read answers
-// that there is none. The removal as the CURRENT value of a watch just opened
-// is simply the absence of a map, and is not delivered.
+// Read BEFORE the watch opens, and nothing is missed between: the consumer
+// starts at its replica's last version of the key and delivers every later
+// one, so whatever was written after the leader answered is still to come —
+// unless a later write replaced it first, the skip the contract allows. The
+// bucket keeps one version of the key, so a write that replaced another
+// before the consumer was sent it leaves nothing to send, which is the reason
+// the contract allows it.
+//
+// A REMOVAL ENDS THE WATCH once a map has been handed over. Nothing in the
+// engine removes the map, so a delete or purge is an operator's hand on the
+// bucket, and a watch that went on delivering nothing after it would leave its
+// reader routing by a map that no longer exists; closed, the reader re-opens
+// and reads, and the read answers that there is none. A removal before any map
+// was handed over is simply the absence of a map, and is not delivered.
 //
 // THE FORWARDER OWNS THE WATCHER: it stops it on every way out, and then
 // drains it, because the client's delivery goroutine blocks handing an entry
 // to a full 256-entry buffer while it holds the watcher's lock, and only
 // reaches the close that ends it once somebody takes that entry.
 func (f *FleetStore) WatchEstateMap(ctx context.Context) (<-chan coord.EstateMapRecord, error) {
+	read, err := newLeaderReader(f.js, f.estate)
+	if err != nil {
+		return nil, unavailable("read "+estateMapWhat, err)
+	}
+	current, err := read.last(ctx, mapKey)
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		current = nil
+	case err != nil:
+		return nil, unavailable("read "+estateMapWhat, err)
+	}
 	w, err := f.estate.Watch(ctx, mapKey)
 	if err != nil {
 		return nil, unavailable("watch "+estateMapWhat, err)
@@ -167,39 +195,69 @@ func (f *FleetStore) WatchEstateMap(ctx context.Context) (<-chan coord.EstateMap
 			for range w.Updates() {
 			}
 		}()
-		initial := true
-		for {
-			var entry jetstream.KeyValueEntry
-			select {
-			case <-ctx.Done():
-				return
-			case e, ok := <-w.Updates():
-				if !ok {
-					return
-				}
-				entry = e
-			}
-			if entry == nil {
-				initial = false
-				continue
-			}
-			if entry.Operation() != jetstream.KeyValuePut {
-				if initial {
-					continue
-				}
-				log.WarnContext(ctx, "coord_kv_estate_map_removed",
-					"bucket", f.estate.Bucket(), "revision", entry.Revision(),
-					"detail", "the estate map was removed from its bucket, which nothing in the "+
-						"engine does; every watch of it ends, and a node reading it finds none")
-				return
-			}
-			rec := coord.EstateMapRecord{Value: entry.Value(), Version: entry.Revision()}
-			select {
-			case out <- rec:
-			case <-ctx.Done():
-				return
-			}
-		}
+		forwardEstateMap(ctx, current, w.Updates(), out, f.estate.Bucket())
 	}()
 	return out, nil
+}
+
+// forwardEstateMap hands current over — the leader's newest message of the
+// key, nil when it has none — and then every version updates offers that is
+// newer than every version accounted for, until ctx ends, updates closes or
+// the map is removed after one was handed over.
+//
+// A VERSION NO NEWER THAN ONE ACCOUNTED FOR IS A COPY BEHIND, and is dropped:
+// a version handed over, and the leader's message itself even when that is a
+// removal, since the leader said the map is past it. Nothing else is judged
+// here — the revision is the stream's sequence, so newer is larger.
+func forwardEstateMap(ctx context.Context, current jetstream.KeyValueEntry,
+	updates <-chan jetstream.KeyValueEntry, out chan<- coord.EstateMapRecord, bucket string) {
+
+	var floor uint64
+	handed := false
+	send := func(entry jetstream.KeyValueEntry) bool {
+		select {
+		case out <- coord.EstateMapRecord{Value: entry.Value(), Version: entry.Revision()}:
+			handed = true
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	if current != nil {
+		floor = current.Revision()
+		if current.Operation() == jetstream.KeyValuePut && !send(current) {
+			return
+		}
+	}
+	for {
+		var entry jetstream.KeyValueEntry
+		select {
+		case <-ctx.Done():
+			return
+		case e, ok := <-updates:
+			if !ok {
+				return
+			}
+			entry = e
+		}
+		// The end-of-initial-values marker is the client's own guess and
+		// carries nothing.
+		if entry == nil || entry.Revision() <= floor {
+			continue
+		}
+		floor = entry.Revision()
+		if entry.Operation() != jetstream.KeyValuePut {
+			if !handed {
+				continue
+			}
+			log.WarnContext(ctx, "coord_kv_estate_map_removed",
+				"bucket", bucket, "revision", entry.Revision(),
+				"detail", "the estate map was removed from its bucket, which nothing in the "+
+					"engine does; every watch of it ends, and a node reading it finds none")
+			return
+		}
+		if !send(entry) {
+			return
+		}
+	}
 }

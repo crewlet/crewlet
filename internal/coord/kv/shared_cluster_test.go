@@ -290,3 +290,112 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 		t.Errorf("the refusal is %v, want it to carry coord.ErrUnavailable", err)
 	}
 }
+
+// AN ESTATE MAP WATCH OPENED THROUGH A MEMBER HOLDING NO COPY STARTS AT THE MAP
+// THE LEADER HOLDS. Every node watches the estate map, and most of a fleet's
+// nodes hold no copy of its bucket, so a watch's consumer lands on whichever
+// replica the broker picks for it; the first thing the watch hands over must
+// still be the version just written, never one the replica had not replaced
+// yet. Written through the stream's leader and watched at once through each
+// member holding no copy.
+//
+// WHAT THIS CASE DOES NOT CATCH is the lag itself: measured, the in-process
+// replicas apply a write before a consumer can be created on them, and a watch
+// that skipped the leader read passed it every time. The lag is staged
+// deterministically on the forwarding instead
+// (TestAWatchOnACopyBehindTheLeaderNeverHandsOverAnOlderMap); what this case
+// holds is the leader read the forwarding starts from, on the real topology,
+// through members that can answer nothing from a copy of their own.
+func TestAnEstateMapWatchThroughAMemberWithNoCopyStartsAtTheLeadersMap(t *testing.T) {
+	t.Parallel()
+	c := jetstreamtest.StartCluster(t, 5, js.Config{})
+	ctx := t.Context()
+	cfg := FleetConfig{
+		BucketPrefix: "watch", Clustered: true, Replicas: 3,
+		RateWindow: time.Minute, ClaimTTL: 10 * time.Minute,
+		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
+		FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
+		StatusFreshness: 10 * time.Minute,
+	}
+	open := func(i int) *FleetStore {
+		t.Helper()
+		nc, err := c.Servers[i].Conn()
+		if err != nil {
+			t.Fatalf("member %d: connect: %v", i, err)
+		}
+		t.Cleanup(nc.Close)
+		client, err := jsapi.Embedded().Client(nc)
+		if err != nil {
+			t.Fatalf("member %d: client: %v", i, err)
+		}
+		store, err := OpenFleet(ctx, client, cfg)
+		if err != nil {
+			t.Fatalf("member %d: OpenFleet: %v", i, err)
+		}
+		return store
+	}
+	first := open(0)
+	handle, err := first.js.Stream(ctx, bucketStream(first.estate))
+	if err != nil {
+		t.Fatalf("the estate bucket's stream: %v", err)
+	}
+	info, err := handle.Info(ctx)
+	if err != nil || info.Cluster == nil || info.Cluster.Leader == "" {
+		t.Fatalf("the estate bucket's placement: (%v, %v)", info, err)
+	}
+	holders := []string{info.Cluster.Leader}
+	for _, peer := range info.Cluster.Replicas {
+		holders = append(holders, peer.Name)
+	}
+	var writer *FleetStore
+	var watchers []*FleetStore
+	for i, member := range c.Configs {
+		switch {
+		case member.ServerName == info.Cluster.Leader:
+			writer = open(i)
+		case !slices.Contains(holders, member.ServerName):
+			watchers = append(watchers, open(i))
+		}
+	}
+	// THE PREMISE: handles on members holding no copy, or this case
+	// certifies the easy position.
+	if writer == nil || len(watchers) != len(c.Configs)-cfg.Replicas {
+		t.Fatalf("the estate bucket is held by %v, leaving %d member(s) with no copy, want %d",
+			holders, len(watchers), len(c.Configs)-cfg.Replicas)
+	}
+
+	rec, ok, err := writer.CreateEstateMap(ctx, []byte(`{"epoch":0}`))
+	if err != nil || !ok {
+		t.Fatalf("CreateEstateMap = (%v, %v)", ok, err)
+	}
+	version := rec.Version
+	for i := 1; i <= 5; i++ {
+		value := fmt.Sprintf(`{"epoch":%d}`, i)
+		rec, ok, err := writer.UpdateEstateMap(ctx, []byte(value), version)
+		if err != nil || !ok {
+			t.Fatalf("UpdateEstateMap %d = (%v, %v)", i, ok, err)
+		}
+		version = rec.Version
+		for w, store := range watchers {
+			watchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			ch, err := store.WatchEstateMap(watchCtx)
+			if err != nil {
+				cancel()
+				t.Fatalf("watch %d through member with no copy %d: %v", i, w, err)
+			}
+			select {
+			case got, open := <-ch:
+				if !open || got.Version != version || string(got.Value) != value {
+					cancel()
+					t.Fatalf("a watch opened through a member with no copy just after version "+
+						"%d was written began at %s at %d (open %v)", version, got.Value,
+						got.Version, open)
+				}
+			case <-watchCtx.Done():
+				cancel()
+				t.Fatalf("watch %d through member with no copy %d delivered nothing", i, w)
+			}
+			cancel()
+		}
+	}
+}

@@ -3,8 +3,11 @@ package kv
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -87,3 +90,80 @@ func TestARemovedEstateMapEndsTheWatch(t *testing.T) {
 }
 
 var _ coord.EstateMaps = (*FleetStore)(nil)
+
+// A WATCH ON A COPY BEHIND THE LEADER NEVER HANDS OVER AN OLDER MAP. The
+// broker places a watch's consumer on whichever replica it picks, and that
+// replica may not yet have the version the leader holds — so a node that had
+// just read or written version V would be handed V-1 first and act on a map
+// the fleet had replaced. The map is read from the leader and handed over
+// first, and what the watch offers after it is forwarded only when it is newer
+// than everything already accounted for: the leader's map, or a removal the
+// leader says the map is past.
+//
+// Staged on the forwarding itself, because the lag cannot be staged on a
+// broker: which replica serves the consumer is the broker's random pick, and a
+// case that waited for it to pick a lagging one would prove nothing on the
+// runs where it did not.
+func TestAWatchOnACopyBehindTheLeaderNeverHandsOverAnOlderMap(t *testing.T) {
+	t.Parallel()
+	put := func(v uint64) jetstream.KeyValueEntry {
+		return leaderEntry{bucket: "estate", key: mapKey, value: fmt.Appendf(nil, "v%d", v),
+			revision: v, op: jetstream.KeyValuePut}
+	}
+	del := func(v uint64) jetstream.KeyValueEntry {
+		return leaderEntry{bucket: "estate", key: mapKey, revision: v, op: jetstream.KeyValueDelete}
+	}
+	for name, c := range map[string]struct {
+		current jetstream.KeyValueEntry // the leader's newest message, nil for none
+		offered []jetstream.KeyValueEntry
+		want    []uint64
+	}{
+		"the replica is behind the leader's map": {
+			current: put(5),
+			offered: []jetstream.KeyValueEntry{put(4), nil, put(5), put(6)},
+			want:    []uint64{5, 6},
+		},
+		"the leader has no map": {
+			offered: []jetstream.KeyValueEntry{nil, put(3)},
+			want:    []uint64{3},
+		},
+		"the leader's newest is a removal the replica has not seen": {
+			current: del(7),
+			offered: []jetstream.KeyValueEntry{put(6), nil, put(8)},
+			want:    []uint64{8},
+		},
+		"a removal after a map was handed over ends the watch": {
+			current: put(1),
+			offered: []jetstream.KeyValueEntry{del(2), put(3)},
+			want:    []uint64{1},
+		},
+		"a removal before any map was handed over is its absence": {
+			offered: []jetstream.KeyValueEntry{del(2), put(3)},
+			want:    []uint64{3},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			updates := make(chan jetstream.KeyValueEntry, len(c.offered))
+			for _, e := range c.offered {
+				updates <- e
+			}
+			close(updates)
+			out := make(chan coord.EstateMapRecord)
+			go func() {
+				defer close(out)
+				forwardEstateMap(t.Context(), c.current, updates, out, "estate")
+			}()
+			var got []uint64
+			for rec := range out {
+				if want := fmt.Sprintf("v%d", rec.Version); string(rec.Value) != want {
+					t.Fatalf("version %d handed over as %q, want %q", rec.Version, rec.Value, want)
+				}
+				got = append(got, rec.Version)
+			}
+			if !slices.Equal(got, c.want) {
+				t.Fatalf("the watch handed over %v, want %v", got, c.want)
+			}
+		})
+	}
+}

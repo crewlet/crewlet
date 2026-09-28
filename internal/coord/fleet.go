@@ -1239,10 +1239,11 @@ type EstateMaps interface {
 	UpdateEstateMap(ctx context.Context, value []byte, version uint64) (EstateMapRecord, bool, error)
 
 	// WatchEstateMap delivers the map as it changes, until ctx ends: the
-	// current version first — on a fleet with no map, nothing until the
-	// first one is written — and then later versions IN THE ORDER THEY
-	// WERE WRITTEN, never an older one after a newer, and always, in the
-	// end, the newest.
+	// current version first — the version a read made at the same moment
+	// would answer, never an older one some copy of the store still holds;
+	// on a fleet with no map, nothing until the first one is written — and
+	// then later versions IN THE ORDER THEY WERE WRITTEN, never an older one
+	// after a newer, and always, in the end, the newest.
 	//
 	// IT MAY SKIP A VERSION superseded before it was handed over. The
 	// store keeps one version of its one key, so a version replaced while
