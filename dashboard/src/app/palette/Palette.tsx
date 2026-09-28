@@ -95,6 +95,7 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { requestToken } from "~/protocol/index.ts";
 import type { ActResult } from "~/protocol/act.ts";
 import type { SearchOutcome, WorkProjectRow } from "~/protocol/index.ts";
+import { SEARCH_MODES, modeLabel, servedNote } from "~/lib/search.ts";
 import { PriorityMark, StatusMark } from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Mark } from "~/ui/glyph.tsx";
@@ -159,13 +160,10 @@ function noticeClass(notice: Notice): string {
 export function CommandPalette({
   onClose,
   onShowKeys,
-  scope: initialScope = "all",
 }: {
   onClose: () => void;
   /** Open the key legend; the palette closes on the way, as for every row. */
   onShowKeys: () => void;
-  /** The scope it opens on — Home's "New task" opens on Actions. */
-  scope?: ScopeId;
 }) {
   const nav = useNavigator();
   const route = useRoute();
@@ -177,7 +175,7 @@ export function CommandPalette({
   const tools = useTools();
   const index = useMemo(() => indexOrg(org), [org]);
 
-  const [scope, setScope] = useState<ScopeId>(initialScope);
+  const [scope, setScope] = useState<ScopeId>("all");
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState<Pick | null>(null);
   const [pickQuery, setPickQuery] = useState("");
@@ -1008,15 +1006,18 @@ function modeWord(...answers: (SearchOutcome | null | undefined)[]): {
   for (const a of answers) {
     if (a && a.served_mode && a.served_mode !== a.mode) {
       return {
-        word: a.served_mode === "keyword" ? "Keyword search" : "Meaning search",
-        title: `Asked for ${a.mode}, served ${a.served_mode}${a.degraded ? ` — ${a.degraded.replace(/_/g, " ")}` : ""}`,
+        word: `${modeLabel(a.served_mode)} search`,
+        // THE SEARCH SCREENS' OWN SENTENCE ([servedNote]), so the pill and
+        // the note above a ranking say one thing in one vocabulary — "Asked
+        // for Hybrid, served Meaning" — never the wire's `semantic`.
+        title: servedNote(a) ?? `Served ${modeLabel(a.served_mode)}`,
         degraded: true,
       };
     }
   }
   return {
-    word: "Hybrid search",
-    title: "Words and meaning, fused — the engine's default",
+    word: `${modeLabel("hybrid")} search`,
+    title: SEARCH_MODES[0]!.hint,
     degraded: false,
   };
 }

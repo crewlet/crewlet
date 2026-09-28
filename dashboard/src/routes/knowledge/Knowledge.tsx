@@ -50,6 +50,7 @@ import type { PageContainer, PageSummary } from "~/protocol/index.ts";
 // must resolve to the same `peek=` token, or the stepper walks past the page
 // the reader just opened and one of the three forgets the middle button.
 import { PageLink } from "./Pages.tsx";
+import { plainText } from "~/lib/markdown.ts";
 
 export function Knowledge() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
@@ -272,7 +273,9 @@ export function Knowledge() {
                       <span className="t-caption">updated {fmtDateTime(hit.updated_at)}</span>
                     )}
                   </div>
-                  {hit.snippet && <p className="hit-snippet">{hit.snippet}</p>}
+                  {/* A CUT OF A MARKDOWN PAGE, drawn as the prose it
+                      renders to rather than with its marks in it. */}
+                  {hit.snippet && <p className="hit-snippet">{plainText(hit.snippet)}</p>}
                 </div>
               ))}
             </div>

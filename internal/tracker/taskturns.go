@@ -128,13 +128,13 @@ func (r *Reader) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 
 	idOrKey = strings.TrimSpace(idOrKey)
 	if idOrKey == "" {
-		return TaskTurns{}, invalid("tracker: name a task by id or by key")
+		return TaskTurns{}, invalid("name a task by id or by key")
 	}
 	below := int64(math.MaxInt64)
 	if cursor = strings.TrimSpace(cursor); cursor != "" {
 		at, err := strconv.ParseInt(cursor, 10, 64)
 		if err != nil || at <= 0 {
-			return TaskTurns{}, invalid("tracker: %q is not a turn cursor — pass "+
+			return TaskTurns{}, invalid("%q is not a turn cursor — pass "+
 				"a page's own next_cursor back unchanged", cursor)
 		}
 		below = at

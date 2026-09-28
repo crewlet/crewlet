@@ -31,12 +31,14 @@ import {
   CornerDownLeftGlyph,
   MessageSquareGlyph,
   UserPlusGlyph,
+  PencilGlyph,
   PlusGlyph,
 } from "@crewlethq/icons/glyphs";
-import { RefusalNote, WriteButton } from "./WriteButton.tsx";
+import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg } from "~/lib/seats.ts";
+import { targetLabel } from "~/lib/work.ts";
 
 /**
  * Hand a task to somebody — or to nobody — with a line saying why.
@@ -126,9 +128,10 @@ function AssignDialog({
     [index],
   );
   const name = index.byHandle.get(who)?.name ?? who;
-  const unchanged = who === assignee;
+  const blocked = who === assignee ? "Choose somebody other than who holds it now." : undefined;
   const submit = async () => {
-    if (unchanged) return;
+    // THE BUTTON'S OWN GATE, because the dialog is a form Enter submits.
+    if (!pressable(write, blocked)) return;
     const result = await write.run(
       {
         item,
@@ -162,7 +165,7 @@ function AssignDialog({
             variant="primary"
             showRefusal={false}
             onPress={() => void submit()}
-            blocked={unchanged ? "Choose somebody other than who holds it now." : undefined}
+            blocked={blocked}
           >
             {who === NOBODY ? "Unassign" : "Assign"}
           </WriteButton>
@@ -252,6 +255,171 @@ export function PinButton({ view, name, pinned }: { view: string; name: string; 
 }
 
 /**
+ * "Edit project": the lead's target date, set or cleared.
+ *
+ * A COMPANY WRITE (`contract/actions.ts` scope `company`): a project's
+ * settings are what every seat's tracker reads, so it is offered on the
+ * project's own page and nowhere else. WHO MAY is the engine's rule, not this
+ * control's — the project's lead, or a person acting as themselves — and a
+ * refusal says so in the engine's sentence.
+ *
+ * ONE FIELD, because it is the one project setting that is a person's
+ * judgement rather than the company configuration's: a project's name,
+ * purpose, unit and lead come from the org chart and are edited there. An
+ * empty date CLEARS the target, which the tool reads as `null`; the button is
+ * blocked while the date is the one already set, so a press always changes
+ * something.
+ *
+ * THE PROJECT IS CALLED BY ITS NAME, in the dialog's title and in the toast
+ * that confirms it — the key is what a person types, the name is what the
+ * page they pressed this on is headed with — and the day is written the way
+ * the Target fact on that page writes it ([targetLabel]), not as the wire's
+ * `2026-10-30`.
+ */
+export function EditProjectButton({
+  project,
+  name,
+  target,
+  open: held,
+  onOpenChange,
+}: {
+  project: string;
+  /** The project's name, as its page is headed; the key when it has none. */
+  name?: string;
+  target?: string;
+  /**
+   * Whether the dialog is open, for a page that also opens it from somewhere
+   * other than this button — the page bar's "More" on a phone, where the
+   * button itself is folded away. Left out, the button holds it.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const write = useAct("write_project");
+  const [own, setOwn] = useState(false);
+  const open = held ?? own;
+  const setOpen = (next: boolean) => {
+    setOwn(next);
+    onOpenChange?.(next);
+  };
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="secondary"
+        leadingIcon={<PencilGlyph />}
+        showRefusal={false}
+        onPress={() => setOpen(true)}
+      >
+        Edit project
+      </WriteButton>
+      {open && (
+        <EditProjectDialog
+          project={project}
+          name={name || project}
+          target={target ?? ""}
+          write={write}
+          onClose={() => {
+            write.dismiss();
+            setOpen(false);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function EditProjectDialog({
+  project,
+  name,
+  target,
+  write,
+  onClose,
+}: {
+  project: string;
+  name: string;
+  target: string;
+  write: ReturnType<typeof useAct<"write_project">>;
+  onClose: () => void;
+}) {
+  const [day, setDay] = useState(target);
+  const blocked = day === target ? "Choose a different date, or clear the one set." : undefined;
+  const submit = async () => {
+    // THE BUTTON'S OWN GATE: the dialog is a form whose one date field
+    // submits it on Enter, and a second Enter while the first answer was out
+    // wrote the same day again.
+    if (!pressable(write, blocked)) return;
+    const result = await write.run(
+      { project, target_date: day || null },
+      {
+        done: day ? `Set ${name}'s target to ${targetLabel(day)}` : `Cleared ${name}'s target date`,
+      },
+    );
+    if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
+  };
+  return (
+    <Modal
+      open
+      size="sm"
+      title={`Edit ${name}`}
+      subtitle={name === project ? undefined : project}
+      icon={<PencilGlyph />}
+      onClose={onClose}
+      onSubmit={() => void submit()}
+      dismissable={!write.busy}
+      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            write={write}
+            variant="primary"
+            showRefusal={false}
+            onPress={() => void submit()}
+            blocked={blocked}
+          >
+            Save
+          </WriteButton>
+        </>
+      }
+    >
+      <div className="col gap-3">
+        <FormField
+          label="Target date"
+          optional
+          htmlFor="project-target"
+          helper="The day the project is meant to be finished, on the company's clock. Empty clears it."
+        >
+          <div className="row gap-2">
+            <Input
+              id="project-target"
+              type="date"
+              value={day}
+              onChange={(event) => setDay(event.target.value)}
+            />
+            {day && (
+              <Button
+                size="small"
+                variant="ghost"
+                // WHAT IT CLEARS, for a reader who reaches it by name.
+                aria-label="Clear target date"
+                onClick={() => setDay("")}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+        </FormField>
+        <RefusalNote write={write} />
+      </div>
+    </Modal>
+  );
+}
+
+/**
  * "+ View": the query on screen, saved under a name on the container it is
  * about.
  *
@@ -329,9 +497,12 @@ function SaveViewDialog({
   const [name, setName] = useState("");
   const [mine, setMine] = useState(false);
   const as = write.access.can ? write.access.as : "";
+  const blocked = name.trim() ? undefined : "Give the view a name first.";
   const submit = async () => {
+    // THE BUTTON'S OWN GATE, because the dialog is a form its one field
+    // submits on Enter: a second Enter saved a second view.
+    if (!pressable(write, blocked)) return;
     const title = name.trim();
-    if (!title) return;
     const result = await write.run(
       { container, name: title, type, params, ...(mine && as ? { owner: as } : {}) },
       { done: `Saved the view ${title}` },
@@ -360,7 +531,7 @@ function SaveViewDialog({
             variant="primary"
             showRefusal={false}
             onPress={() => void submit()}
-            blocked={name.trim() ? undefined : "Give the view a name first."}
+            blocked={blocked}
           >
             Save view
           </WriteButton>
@@ -488,9 +659,12 @@ export function ReplyAskButton({
     write.dismiss();
     setOpen(false);
   };
+  const blocked = text.trim() ? undefined : "Write the reply first.";
   const submit = async () => {
+    // THE BUTTON'S OWN GATE, for the dialog's submit: a reply is a comment,
+    // and a second one is not the first sent again.
+    if (!pressable(write, blocked)) return;
     const body = text.trim();
-    if (!body) return;
     const result = await write.run(
       { item, answers: comment, body },
       { done: `Replied to ${asker} on ${item}` },
@@ -531,7 +705,7 @@ export function ReplyAskButton({
                 variant="primary"
                 showRefusal={false}
                 onPress={() => void submit()}
-                blocked={text.trim() ? undefined : "Write the reply first."}
+                blocked={blocked}
               >
                 Send reply
               </WriteButton>
@@ -624,9 +798,11 @@ function AnswerRunDialog({
   onClose: () => void;
 }) {
   const [answer, setAnswer] = useState("");
+  const blocked = answer.trim() ? undefined : "Write the answer first.";
   const submit = async () => {
+    // THE BUTTON'S OWN GATE, for the dialog's submit.
+    if (!pressable(write, blocked)) return;
     const text = answer.trim();
-    if (!text) return;
     const result = await write.run(
       { turn_id: turnId, answer: text },
       { done: `Answered ${seat}'s coding run` },
@@ -652,7 +828,7 @@ function AnswerRunDialog({
             variant="primary"
             showRefusal={false}
             onPress={() => void submit()}
-            blocked={answer.trim() ? undefined : "Write the answer first."}
+            blocked={blocked}
           >
             Send answer
           </WriteButton>

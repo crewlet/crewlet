@@ -1510,18 +1510,18 @@ func (n *Notify) Validate() error {
 		return nil
 	}
 	if !n.Kind.Valid() {
-		return invalid("tracker: %q is not a change kind this build writes — "+
+		return invalid("%q is not a change kind this build writes — "+
 			"every kind has exactly one writer, so an unknown one is a wake "+
 			"nothing renders a card for", n.Kind)
 	}
 	if len(n.Fields) > MaxDeltas {
-		return invalid("tracker: a notification carries %d deltas and a card "+
+		return invalid("a notification carries %d deltas and a card "+
 			"shows %d — the cap is on the DISPLAY, and a writer that hit it "+
 			"should be trimming what it shows rather than what it recorded",
 			len(n.Fields), MaxDeltas)
 	}
 	if len(n.Excerpt) > MaxExcerpt {
-		return invalid("tracker: a notification excerpt is %d bytes against a "+
+		return invalid("a notification excerpt is %d bytes against a "+
 			"%d cap", len(n.Excerpt), MaxExcerpt)
 	}
 	if err := n.Answered.check(); err != nil {
@@ -1568,7 +1568,7 @@ func (n *Notify) checkSnapshot() error {
 		{"mentions", len(n.Mentions), MaxMentions},
 	} {
 		if c.size > c.max {
-			return invalid("tracker: a notification names %d %s and the "+
+			return invalid("a notification names %d %s and the "+
 				"maximum is %d — a routing snapshot is copied onto the log, "+
 				"replicated to every node and held for the stream's whole "+
 				"retention window, so an unbounded one is bytes the fleet "+

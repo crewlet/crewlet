@@ -252,9 +252,6 @@ var (
 
 	// ErrConflict reports a write that lost its race too many times.
 	ErrConflict = errors.New("pages: the page kept changing under this write")
-
-	// ErrReserved reports a container the engine holds for itself.
-	ErrReserved = errors.New("pages: that container is reserved")
 )
 
 // Actor is who is making a write, on [tracker.Writer]'s terms — except that it

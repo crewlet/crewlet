@@ -90,6 +90,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "gesture with no button, so the reason it cannot act is one line above the lanes",
     suite: "routes/work/shapes/Board.test.tsx",
   },
+  "routes/work/NewTask.tsx": {
+    why:
+      "the New task sheet's Create — one create_work_item carrying the whole task — " +
+      "disabled with its reason for a reader who cannot file",
+    suite: "routes/work/NewTask.test.tsx",
+  },
   "routes/work/shapes/cells.tsx": {
     why:
       "a list or table row's status, priority and assignee set in place — pickers " +
@@ -108,6 +114,7 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
 const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegExp }>> = {
   AssignButton: { props: { item: "ENG-1", version: 3, assignee: "" }, name: /^Assign$/ },
   RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/ },
+  EditProjectButton: { props: { project: "ENG", target: "2026-12-18" }, name: /^Edit project$/ },
   PinButton: { props: { view: "v1", name: "Triage", pinned: false }, name: /^Pin$/ },
   AnswerAskButtons: {
     props: {
@@ -136,6 +143,7 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
 const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   AssignButton: "update_work_item",
   RestoreButton: "restore_work_item",
+  EditProjectButton: "write_project",
   PinButton: "set_pins",
   AnswerAskButtons: "comment_on_work_item",
   AnswerRunButton: "answer_run",

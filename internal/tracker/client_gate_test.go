@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -260,6 +261,35 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	for key := range unlisted {
 		if !slices.Contains(tracker.GroupKeys(), key) {
 			t.Errorf("this gate excuses group_by=%q, which the grammar no longer takes", key)
+		}
+	}
+}
+
+// THE SHEET BOUNDS A TASK'S TEXT WHERE THE ENGINE DOES.
+//
+// The New task sheet refuses a title or a description past the engine's cap
+// before the press — the field is marked and says by how much — because the
+// engine refuses such a value rather than cutting it, and a refusal that
+// arrives after the press lands on no field at all. That only works while the
+// two figures agree: a dashboard cap above the engine's lets through a title
+// the engine refuses, and one below it refuses a title the engine would file.
+func TestTheDashboardBoundsATasksTextAtTheEnginesCaps(t *testing.T) {
+	t.Parallel()
+	for name, engine := range map[string]int{
+		"TASK_TITLE_MAX_BYTES": tracker.MaxTitle,
+		"TASK_BODY_MAX_BYTES":  tracker.MaxBody,
+	} {
+		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := strconv.Atoi(raw)
+		if err != nil {
+			t.Fatalf("%s is %q, which is not an integer: %v", name, raw, err)
+		}
+		if client != engine {
+			t.Errorf("the dashboard bounds %s at %d bytes and the engine at %d — "+
+				"change it in contract/work.ts to the engine's figure", name, client, engine)
 		}
 	}
 }

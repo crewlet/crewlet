@@ -5,7 +5,8 @@
  * # Two rows, one banner
  *
  * The first row is the kit's top bar — the drawer toggle below the shell
- * breakpoint, the breadcrumb, and what this page can do: who is working right
+ * breakpoint, the breadcrumb, an object page's lenses beside it (`PageLenses`),
+ * and what this page can do: who is working right
  * now, the star and the link, and LAST the screen's own controls (portalled
  * in through `PageActions`) — because a screen's primary action ("New task")
  * belongs at the bar's end, where the approved designs put it and where the
@@ -42,11 +43,21 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { AppShell, AvatarStack, Button, SidebarNav, cx } from "@crewlethq/ui";
+import {
+  AppShell,
+  AvatarStack,
+  Button,
+  Menu,
+  SidebarNav,
+  cx,
+  useToast,
+  type MenuEntry,
+} from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
   ChevronRightGlyph,
   CopyGlyph,
+  EllipsisGlyph,
   KeyGlyph,
   StarGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -54,7 +65,7 @@ import { href, samePath, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
 import { sectionOf, type Section, type WorkspaceRow } from "../nav.ts";
-import { PAGE_ACTIONS_SLOT } from "../frame/PageActions.tsx";
+import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "../frame/PageActions.tsx";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
@@ -63,6 +74,18 @@ import { plural } from "~/lib/format.ts";
 /** How many working seats the header draws before "+n". */
 const WORKING_FACES = 4;
 
+/** One action a screen folds into the page bar's "More" menu on a phone. */
+export interface PageMenuEntry {
+  key: string;
+  label: string;
+  onSelect: () => void;
+  disabled?: boolean;
+  /** Why it is disabled, or what the label alone does not say. */
+  description?: string;
+  /** The glyph the inline control wears, so the menu reads the same. */
+  icon?: ReactNode;
+}
+
 export function PageHeader({
   crumbs,
   row,
@@ -70,6 +93,7 @@ export function PageHeader({
   title,
   workspace,
   workingIn = "",
+  menu = [],
   children,
 }: {
   crumbs: Crumb[];
@@ -82,6 +106,8 @@ export function PageHeader({
   workspace: string;
   /** The project the page is about, whose working seats the header draws. */
   workingIn?: string;
+  /** The screen's secondary actions, folded into "More" on a phone. */
+  menu?: readonly PageMenuEntry[];
   /** What sits under the rows: the state bar. */
   children?: ReactNode;
 }) {
@@ -92,6 +118,10 @@ export function PageHeader({
     <div className="page-head">
       <AppShell.Topbar className="page-bar">
         <Breadcrumb crumbs={crumbs} />
+        {/* AN OBJECT'S LENSES, beside the name they are lenses on — see
+            `PageLenses`. Empty on every other page, where it takes no room
+            (`.page-lenses:empty`). */}
+        <div className="page-lenses" id={PAGE_LENSES_SLOT} />
         <div className="page-controls" ref={controls} {...edges}>
           {/* THE SLOT IS ALWAYS RENDERED, whether or not a screen has
               controls: a portal needs a node to land in, and one that appears
@@ -99,8 +129,17 @@ export function PageHeader({
               be found by the screen that has them. The gap is the bar's own,
               so a screen's controls sit as far apart as the frame's. */}
           <WorkingNow project={workingIn} />
-          <StarPage path={route.path} label={title} workspace={workspace} />
-          <CopyLink />
+          {/* THE FRAME'S OWN QUIET PAIR, drawn inline on a wide bar and folded
+              into "More" on a phone (see `PageMore`), where the bar keeps one
+              action in view. */}
+          <span className="page-frame-actions">
+            <StarPage path={route.path} label={title} workspace={workspace} />
+            <CopyLink />
+          </span>
+          {/* BEFORE THE SLOT IN THE DOCUMENT, so the screen's controls stay the
+              bar's last element on a wide bar (where this is not drawn); on a
+              phone the slot leads the line (`order: -1`) and this ends it. */}
+          <PageMore path={route.path} label={title} workspace={workspace} entries={menu} />
           <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
         </div>
       </AppShell.Topbar>
@@ -428,27 +467,10 @@ function useOverflows(el: RefObject<HTMLElement | null>, content: unknown): bool
 export function CopyLink({ label = "Copy link" }: { label?: string }) {
   const [said, setSaid] = useState("");
   const copy = useCallback(() => {
-    const url = location.href;
-    const done = (word: string) => {
+    void copyPageLink().then((word) => {
       setSaid(word);
       window.setTimeout(() => setSaid(""), 1_600);
-    };
-    // The clipboard is refused outright on an insecure origin and by
-    // permission policy, and a control that silently did nothing would read
-    // as a broken button rather than as a browser that said no. BOTH REFUSALS
-    // ARE SAID: permission policy rejects the write, but an insecure origin —
-    // this engine serves plain HTTP on `api.port` unless something terminates
-    // TLS in front of it — has no `navigator.clipboard` at all, and an
-    // optional call on it skipped the whole chain, so the ordinary deployment
-    // was exactly the one where the button did nothing and said nothing.
-    if (!navigator.clipboard) {
-      done("Blocked");
-      return;
-    }
-    navigator.clipboard.writeText(url).then(
-      () => done("Copied"),
-      () => done("Blocked"),
-    );
+    });
   }, []);
   // NOT `Copyable`, which is the right part for an identifier: it DRAWS the
   // value it copies, and what this copies is the page's whole URL. A page bar
@@ -533,5 +555,113 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
           the star is an unnamed button for as long as it is not refusing. */}
       {said || undefined}
     </Button>
+  );
+}
+
+/**
+ * Copy this page's whole address, and say what the browser did with it.
+ *
+ * The clipboard is refused outright on an insecure origin and by permission
+ * policy, and a control that silently did nothing would read as a broken
+ * button rather than as a browser that said no. BOTH REFUSALS ARE SAID:
+ * permission policy rejects the write, but an insecure origin — this engine
+ * serves plain HTTP on `api.port` unless something terminates TLS in front of
+ * it — has no `navigator.clipboard` at all, and an optional call on it skipped
+ * the whole chain, so the ordinary deployment was exactly the one where the
+ * button did nothing and said nothing.
+ */
+export async function copyPageLink(): Promise<"Copied" | "Blocked"> {
+  if (!navigator.clipboard) return "Blocked";
+  try {
+    await navigator.clipboard.writeText(location.href);
+    return "Copied";
+  } catch {
+    return "Blocked";
+  }
+}
+
+/**
+ * "More": the page bar's secondary actions, in one menu, on a phone.
+ *
+ * DRAWN ONLY UNDER THE PHONE'S WIDTH (`.page-more`), where the frame's star
+ * and Copy link — and whatever a screen folds with [usePageMenu] — leave the
+ * bar for this one control, so the screen's primary action stays in view
+ * beside it and an object's lenses and its actions share a line. On a wider
+ * bar every one of them is drawn inline and this is not drawn at all, so no
+ * action is ever in two places a reader can see at once.
+ *
+ * What a press did is said in a toast, because the menu closes on it: the
+ * inline controls say "Copied" or "50 is the limit" on themselves, and a menu
+ * item has no self left to say it on.
+ */
+export function PageMore({
+  path,
+  label,
+  workspace,
+  entries,
+}: Omit<Star, "at"> & { entries: readonly PageMenuEntry[] }) {
+  const stars = useStarred();
+  const toggle = useToggleStar();
+  const toast = useToast();
+  const kept = starredIn(stars, path);
+  const items: MenuEntry[] = entries.map((e) => ({
+    key: e.key,
+    label: e.label,
+    icon: e.icon,
+    onSelect: e.onSelect,
+    disabled: e.disabled,
+    description: e.description,
+  }));
+  if (items.length > 0) items.push({ kind: "separator", key: "frame" });
+  // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one,
+  // unavailable and saying why on a workspace's own page.
+  if (resolves(path)) {
+    items.push(
+      path.length < 2
+        ? {
+            key: "star",
+            label: "Keep in Starred",
+            disabled: true,
+            description: "Already in the sidebar",
+            onSelect: () => {},
+          }
+        : {
+            key: "star",
+            label: kept ? "Remove from Starred" : "Keep in Starred",
+            icon: <StarGlyph filled={kept} size="sm" />,
+            onSelect: () => {
+              if (toggle({ path, label, workspace }) === "full") {
+                toast.show({ variant: "warning", title: `${MaxStars} is the limit` });
+              }
+            },
+          },
+    );
+  }
+  items.push({
+    key: "copy-link",
+    label: "Copy link",
+    icon: <CopyGlyph size="sm" />,
+    onSelect: () => {
+      void copyPageLink().then((word) =>
+        word === "Copied"
+          ? toast.ok("Copied the link to this page")
+          : toast.show({
+              variant: "warning",
+              title: "The browser refused the clipboard",
+              message: "Copy the address from the address bar instead.",
+            }),
+      );
+    },
+  });
+  return (
+    <span className="page-more">
+      <Menu
+        label="More on this page"
+        icon={<EllipsisGlyph size="sm" />}
+        triggerVariant="ghost"
+        align="end"
+        items={items}
+      />
+    </span>
   );
 }

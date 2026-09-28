@@ -258,11 +258,11 @@ func (d Decision) Validate() error {
 	}
 	switch n := len(d.Options); {
 	case n < MinDecisionOptions:
-		return invalid("tracker: a decision has %d option(s) and needs at "+
+		return invalid("a decision has %d option(s) and needs at "+
 			"least %d — a single option is an approval, which is the "+
 			"options yes and no", n, MinDecisionOptions)
 	case n > MaxDecisionOptions:
-		return invalid("tracker: a decision has %d options and the maximum is "+
+		return invalid("a decision has %d options and the maximum is "+
 			"%d — a person cannot weigh more side by side; narrow them, or "+
 			"ask about the shortlist first", n, MaxDecisionOptions)
 	}
@@ -270,12 +270,12 @@ func (d Decision) Validate() error {
 	for i, option := range d.Options {
 		field := fmt.Sprintf("decision.options[%d]", i)
 		if !optionIDPattern.MatchString(option.ID) {
-			return invalid("tracker: %s.id is %q and must be 1 to 32 of "+
+			return invalid("%s.id is %q and must be 1 to 32 of "+
 				"a-z, 0-9, `_` and `-` — it is typed back in `choice`",
 				field, option.ID)
 		}
 		if seen[option.ID] {
-			return invalid("tracker: %s.id %q names two options — an answer "+
+			return invalid("%s.id %q names two options — an answer "+
 				"naming it would choose both", field, option.ID)
 		}
 		seen[option.ID] = true
@@ -287,7 +287,7 @@ func (d Decision) Validate() error {
 		}
 	}
 	if d.Recommended != "" && !seen[d.Recommended] {
-		return invalid("tracker: decision.recommended is %q, which is not one "+
+		return invalid("decision.recommended is %q, which is not one "+
 			"of its options (%s)", d.Recommended,
 			strings.Join(d.OptionIDs(), ", "))
 	}
@@ -295,7 +295,7 @@ func (d Decision) Validate() error {
 		return err
 	}
 	if len(d.Evidence) > MaxDecisionEvidence {
-		return invalid("tracker: a decision cites %d pieces of evidence and the "+
+		return invalid("a decision cites %d pieces of evidence and the "+
 			"maximum is %d — put the rest on a page and cite the page",
 			len(d.Evidence), MaxDecisionEvidence)
 	}
@@ -305,13 +305,13 @@ func (d Decision) Validate() error {
 		}
 	}
 	if !d.Role.Valid() {
-		return invalid("tracker: decision.role is %q and must be %q (the "+
+		return invalid("decision.role is %q and must be %q (the "+
 			"answer is the decision) or %q (the answer is an input to it)",
 			d.Role, RoleApprover, RoleContributor)
 	}
 	if d.Inform != nil {
 		if !d.Inform.Surface.Valid() {
-			return invalid("tracker: decision.inform.surface is %q and must be "+
+			return invalid("decision.inform.surface is %q and must be "+
 				"%q or %q", d.Inform.Surface, InformMattermost, InformSlack)
 		}
 		if err := checkText("decision.inform.channel", d.Inform.Channel,
@@ -324,7 +324,7 @@ func (d Decision) Validate() error {
 
 func (e Evidence) validate(field string) error {
 	if !e.Kind.Valid() {
-		return invalid("tracker: %s.kind is %q and must be one of task, page, "+
+		return invalid("%s.kind is %q and must be one of task, page, "+
 			"turn, run or url", field, e.Kind)
 	}
 	if err := checkText(field+".ref", e.Ref, MaxEvidenceRef, true); err != nil {
@@ -342,7 +342,7 @@ func (e Evidence) validate(field string) error {
 	// a record an agent wrote.
 	parsed, err := url.Parse(e.Ref)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return invalid("tracker: %s.ref is %q and a url must be an absolute "+
+		return invalid("%s.ref is %q and a url must be an absolute "+
 			"https:// address", field, e.Ref)
 	}
 	return nil
@@ -353,9 +353,9 @@ func (e Evidence) validate(field string) error {
 func checkText(field, value string, limit int, required bool) error {
 	switch {
 	case required && strings.TrimSpace(value) == "":
-		return invalid("tracker: %s is empty", field)
+		return invalid("%s is empty", field)
 	case len(value) > limit:
-		return invalid("tracker: %s is %d bytes and the maximum is %d — it is "+
+		return invalid("%s is %d bytes and the maximum is %d — it is "+
 			"refused rather than cut", field, len(value), limit)
 	}
 	return nil
@@ -404,7 +404,7 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 			id, err := lookup.TaskID(ctx, evidence.Ref)
 			switch {
 			case errors.Is(err, ErrNoTask):
-				return Decision{}, invalid("tracker: %s.ref names the work "+
+				return Decision{}, invalid("%s.ref names the work "+
 					"item %q, which does not exist", field, evidence.Ref)
 			case err != nil:
 				return Decision{}, fmt.Errorf("tracker: resolve %s.ref %q: %w",
@@ -418,7 +418,7 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 				return Decision{}, fmt.Errorf("tracker: check %s.ref %q: %w",
 					field, evidence.Ref, err)
 			case !exists:
-				return Decision{}, invalid("tracker: %s.ref names the page "+
+				return Decision{}, invalid("%s.ref names the page "+
 					"%q, which does not exist", field, evidence.Ref)
 			}
 			out.Evidence[i].Ref = id
@@ -433,7 +433,7 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 func checkCommentShape(task string, c *Comment) error {
 	if c.Decision != nil {
 		if c.Ask == "" {
-			return invalid("tracker: comment %s on task %s carries a decision "+
+			return invalid("comment %s on task %s carries a decision "+
 				"and asks nobody — a decision is a question put to somebody, "+
 				"so it needs `ask`", c.ID, task)
 		}
@@ -447,7 +447,7 @@ func checkCommentShape(task string, c *Comment) error {
 		// or as a human seat — has no turn to hold, so an inform they
 		// asked for is a line on a card that nothing would ever keep.
 		if c.Decision.Inform != nil && c.AuthorKind != AuthorAgent {
-			return invalid("tracker: comment %s on task %s asks the engine to "+
+			return invalid("comment %s on task %s asks the engine to "+
 				"report the outcome in %s, and only an agent seat's ask may — "+
 				"a %s author has no turn the engine can hold to it; post it "+
 				"yourself once it is decided", c.ID, task,
@@ -455,7 +455,7 @@ func checkCommentShape(task string, c *Comment) error {
 		}
 	}
 	if c.Choice != "" && (c.Answers == nil || *c.Answers == "") {
-		return invalid("tracker: comment %s on task %s makes the choice %q and "+
+		return invalid("comment %s on task %s makes the choice %q and "+
 			"answers nothing — a choice is an answer to a decision, so it "+
 			"needs `answers`", c.ID, task, c.Choice)
 	}
@@ -479,12 +479,12 @@ func checkChoice(task, ask string, decision *Decision, choice string) error {
 		return nil
 	}
 	if decision == nil {
-		return invalid("tracker: the ask %s on task %s carries no decision, "+
+		return invalid("the ask %s on task %s carries no decision, "+
 			"so there is nothing for the choice %q to name — answer it in the "+
 			"body", ask, task, choice)
 	}
 	if _, ok := decision.Option(choice); !ok {
-		return invalid("tracker: the choice %q is not an option of the "+
+		return invalid("the choice %q is not an option of the "+
 			"decision in %s on task %s — it offers %s", choice, ask, task,
 			strings.Join(decision.OptionIDs(), ", "))
 	}

@@ -461,6 +461,10 @@ func Register(r *Registry, s Sources) {
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.
 		r.Register("work_views", s.workViews)
+		// AND EVERY VIEW A PERSON CAN SEE, across the containers: the
+		// inventory and the sidebar's pins are about a person's views,
+		// not one container's tabs. See [Sources.workSavedViews].
+		r.Register("work_saved_views", s.workSavedViews)
 		// A SEPARATE QUESTION from `work_items` for the reason
 		// `work_views` is: a home screen draws the project list once
 		// and its rows' tasks on every navigation, and the counts here

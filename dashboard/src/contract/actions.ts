@@ -43,7 +43,23 @@ export const ACTIONS = {
     //
     // AND THE TASK PAGE'S "+ SUB-TASK": a title filed under the task it is
     // on (`parent`), in that task's project.
-    args: ["title", "body", "project", "assignee", "ask", "parent"],
+    //
+    // AND THE NEW TASK SHEET (`routes/work/NewTask.tsx`), which files the
+    // whole of a task in one record: its type, the status it starts in (a
+    // board lane's "+" names its own), its priority, due date and labels.
+    args: [
+      "title",
+      "body",
+      "project",
+      "assignee",
+      "ask",
+      "parent",
+      "type",
+      "status",
+      "priority",
+      "due",
+      "labels",
+    ],
     domain: "tracker",
     refreshes: ["work_search"],
     scope: "person",
@@ -94,6 +110,16 @@ export const ACTIONS = {
     domain: "tracker",
     refreshes: ["work_search"],
     scope: "person",
+  },
+  write_project: {
+    // "EDIT PROJECT" on a project's page: the lead's target date. A project's
+    // settings are what every seat's tracker reads, so this is a COMPANY
+    // write, offered only on the project's own page — and the engine decides
+    // who may make it (the project's lead, or a person acting as themselves).
+    args: ["project", "target_date"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "company",
   },
   set_pins: {
     args: ["views", "favorites"],

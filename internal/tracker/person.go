@@ -326,22 +326,22 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	gesture.Views = gesture.Views.mapped(strings.TrimSpace)
 	switch {
 	case gesture.Views.Empty() && gesture.Favorites.Empty():
-		return WriteResult{}, invalid("tracker: this pin gesture for %s names "+
+		return WriteResult{}, invalid("this pin gesture for %s names "+
 			"nothing to pin, unpin, star or unstar", handle)
 	case gesture.Views.both(), gesture.Favorites.both():
-		return WriteResult{}, invalid("tracker: this pin gesture for %s states "+
+		return WriteResult{}, invalid("this pin gesture for %s states "+
 			"a whole set and a change to it at once — a caller states one or "+
 			"the other, because whichever won would discard the other", handle)
 	}
 	for _, view := range gesture.Views.values() {
 		if strings.TrimSpace(view) == "" {
-			return WriteResult{}, invalid("tracker: a pinned view of %s names "+
+			return WriteResult{}, invalid("a pinned view of %s names "+
 				"no view, and a pin with no view points at nothing", handle)
 		}
 	}
 	for _, favorite := range gesture.Favorites.values() {
 		if favorite.Kind == "" || favorite.ID == "" {
-			return WriteResult{}, invalid("tracker: a favourite of %s names "+
+			return WriteResult{}, invalid("a favourite of %s names "+
 				"kind %q and id %q, and a star with neither points at nothing",
 				handle, favorite.Kind, favorite.ID)
 		}
@@ -353,11 +353,11 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 		favorites := gesture.Favorites.apply(post.Favorites)
 		switch {
 		case len(views) > MaxPinnedViews:
-			return invalid("tracker: %s would pin %d views and the maximum "+
+			return invalid("%s would pin %d views and the maximum "+
 				"is %d — a strip where everything is first has no first; "+
 				"unpin one first", handle, len(views), MaxPinnedViews)
 		case len(favorites) > MaxFavorites:
-			return invalid("tracker: %s would star %d things and the maximum "+
+			return invalid("%s would star %d things and the maximum "+
 				"is %d; unstar one first", handle, len(favorites), MaxFavorites)
 		}
 		post.PinnedViews, post.Favorites = views, favorites
@@ -417,14 +417,14 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	own := w.Record() == handle
 	switch {
 	case !own && !authority.Lead && !authority.Person:
-		return WriteResult{}, fmt.Errorf("tracker: %s is a seat, is not %s and "+
-			"does not lead them, so it cannot set what %s does next — an agent "+
+		return WriteResult{}, forbidden("%s is a seat, is not %s and does not "+
+			"lead them, so it cannot set what %s does next — an agent "+
 			"re-ordering a colleague's list is a hand-off in disguise, and it "+
 			"bypasses the guarded take and the reassignment budget. A lead, a "+
-			"human or an operator may: %w",
-			w.Actor, handle, handle, ErrForbidden)
+			"human or an operator may",
+			w.Actor, handle, handle)
 	case len(priorities) > MaxPriorities:
-		return WriteResult{}, invalid("tracker: %s's priority list carries "+
+		return WriteResult{}, invalid("%s's priority list carries "+
 			"%d items and the maximum is %d — a list longer than that is not "+
 			"an order, it is the backlog again", handle, len(priorities),
 			MaxPriorities)
@@ -535,27 +535,27 @@ func (w *Writer) ownRecord(handle, what string) error {
 	if w.Record() == handle {
 		return nil
 	}
-	return fmt.Errorf("tracker: %s cannot write %s's %s — it is written on "+
-		"behalf of the person whose it is, and somebody else's hand in it is "+
-		"the one thing it must never allow: %w",
-		w.Record(), handle, what, ErrForbidden)
+	return forbidden("%s cannot write %s's %s — it is written on behalf of "+
+		"the person whose it is, and somebody else's hand in it is the one "+
+		"thing it must never allow",
+		w.Record(), handle, what)
 }
 
 // checkInboxGesture refuses a gesture no record could honour, before anything
 // is read.
 func checkInboxGesture(g InboxGesture, now time.Time) error {
 	if g.Empty() {
-		return invalid("tracker: this inbox gesture marks nothing — name " +
+		return invalid("this inbox gesture marks nothing — name " +
 			"notices to read, unread, snooze or unsnooze, a position to read " +
 			"through, or the primary reasons")
 	}
 	seen := map[string]string{}
 	name := func(id, list string) error {
 		if strings.TrimSpace(id) == "" {
-			return invalid("tracker: a %s mark names no record", list)
+			return invalid("a %s mark names no record", list)
 		}
 		if prior, twice := seen[id]; twice {
-			return invalid("tracker: record %s is named by both %s and %s in "+
+			return invalid("record %s is named by both %s and %s in "+
 				"one gesture, and nothing could say which it meant", id, prior,
 				list)
 		}
@@ -584,11 +584,11 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 		}
 		switch {
 		case !snooze.Until.After(now):
-			return invalid("tracker: record %s is snoozed until %s, which has "+
+			return invalid("record %s is snoozed until %s, which has "+
 				"already come — a snooze names an instant in the future",
 				snooze.RecordID, snooze.Until.Format(time.RFC3339))
 		case snooze.Until.After(horizon):
-			return invalid("tracker: record %s is snoozed until %s, which is "+
+			return invalid("record %s is snoozed until %s, which is "+
 				"more than %s away — a snooze that far out is a delete that "+
 				"does not say so", snooze.RecordID,
 				snooze.Until.Format(time.RFC3339), MaxSnoozeAhead)
@@ -604,11 +604,11 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 	}
 	if at := g.ReadThrough; at != nil {
 		if err := at.Valid(); err != nil {
-			return invalid("tracker: %s is not a position to read through: %v",
+			return invalid("%s is not a position to read through: %v",
 				at, err)
 		}
 		if stream := (Domain{}).Stream().Name; at.Stream != stream {
-			return invalid("tracker: %s is a position on %s, and an inbox is "+
+			return invalid("%s is a position on %s, and an inbox is "+
 				"read through a position on %s — the one `work_inbox` answers",
 				at, at.Stream, stream)
 		}
@@ -616,7 +616,7 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 	if g.PrimaryReasons != nil {
 		for _, reason := range *g.PrimaryReasons {
 			if !slices.Contains(Reasons, reason) {
-				return invalid("tracker: %q is not a wake reason", reason)
+				return invalid("%q is not a wake reason", reason)
 			}
 		}
 	}
@@ -650,7 +650,7 @@ func inboxPositions(ctx context.Context, tx *sql.Tx,
 			`SELECT log_seq FROM tracker_history WHERE id = ?`, id).
 			Scan(&packed); {
 		case errors.Is(err, sql.ErrNoRows):
-			return nil, invalid("tracker: record %s is not a change this "+
+			return nil, invalid("record %s is not a change this "+
 				"company recorded — a mark names the `record_id` a "+
 				"`work_inbox` notice carries", id)
 		case err != nil:
@@ -843,7 +843,7 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 	apply func(*sql.Tx, *Person, time.Time) (*Notify, error)) (WriteResult, error) {
 
 	if strings.TrimSpace(handle) == "" {
-		return WriteResult{}, invalid("tracker: a person write names nobody")
+		return WriteResult{}, invalid("a person write names nobody")
 	}
 	subject := PersonSubject(handle)
 	// THE PERSON FAMILY, which is what a person subject resolves to

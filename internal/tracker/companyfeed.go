@@ -89,11 +89,11 @@ func ParseFeedCursor(raw string) (FeedCursor, error) {
 	at, seq, ok := strings.Cut(raw, ":")
 	micros, err := strconv.ParseInt(at, 10, 64)
 	if !ok || err != nil {
-		return FeedCursor{}, invalid("tracker: %q is not a feed cursor", raw)
+		return FeedCursor{}, invalid("%q is not a feed cursor", raw)
 	}
 	position, err := strconv.ParseUint(seq, 10, 64)
 	if err != nil {
-		return FeedCursor{}, invalid("tracker: %q is not a feed cursor", raw)
+		return FeedCursor{}, invalid("%q is not a feed cursor", raw)
 	}
 	return FeedCursor{At: store.DecodeTime(micros), Seq: position}, nil
 }
@@ -209,7 +209,7 @@ func (r *Reader) CompanyFeed(ctx context.Context, q FeedQuery) (FeedPage, error)
 			"— a surface resolves an absent read_level to its own default " +
 			"before it reads")
 	case q.Limit < 1 || q.Limit > MaxFeedPage:
-		return FeedPage{}, invalid("tracker: a feed page is 1 to %d rows, not %d",
+		return FeedPage{}, invalid("a feed page is 1 to %d rows, not %d",
 			MaxFeedPage, q.Limit)
 	}
 	kinds := q.Kinds
@@ -218,7 +218,7 @@ func (r *Reader) CompanyFeed(ctx context.Context, q FeedQuery) (FeedPage, error)
 	}
 	for _, kind := range kinds {
 		if !kind.Valid() {
-			return FeedPage{}, invalid("tracker: %q is not a feed kind; the "+
+			return FeedPage{}, invalid("%q is not a feed kind; the "+
 				"tracker answers %v", kind, FeedKinds)
 		}
 	}

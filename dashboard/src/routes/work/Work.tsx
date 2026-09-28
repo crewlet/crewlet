@@ -34,6 +34,8 @@
  * on, by filing the duplicate.
  */
 
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { ItemsView, NoWorkYet } from "./ItemsView.tsx";
@@ -73,6 +75,12 @@ export function Work() {
 
   return (
     <>
+      {/* THE PAGE BAR ENDS WITH NEW TASK, as the approved Board draws it: the
+          one sheet, filed where the person's own work lands unless they
+          choose a project in it. */}
+      <PageActions>
+        <NewTaskButton />
+      </PageActions>
       <div className="work-main">
         {/* THE EMPTY STATE REPLACES THE LIST rather than following it. Drawn
             under it, a company with no projects read two sentences about one

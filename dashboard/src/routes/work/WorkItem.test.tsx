@@ -1195,6 +1195,89 @@ test("a comment is posted on the task", async () => {
   ]);
 });
 
+/**
+ * Holds every write until `release` answers them all `applied` — the window a
+ * second Enter lands in.
+ */
+function holdWrites(): { release: () => void } {
+  const waiting: ((r: Response) => void)[] = [];
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+    const body = JSON.parse((init as RequestInit).body as string) as {
+      args: Record<string, unknown>;
+    };
+    posted.push({ tool, args: body.args });
+    return new Promise<Response>((resolve) => waiting.push(resolve));
+  });
+  return {
+    release: () => {
+      for (const answer of waiting.splice(0)) {
+        answer(
+          new Response(
+            JSON.stringify({
+              outcome: "applied",
+              position: "CREWLET_TRACKER_LOG@1:99",
+              receipt: {},
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+    },
+  };
+}
+
+// EVERY WAY INTO A PRESS TAKES THE BUTTON'S OWN GATE. A one-line form files on
+// Enter and a comment sends on ⌘Enter, neither touching the button that
+// refuses a press while one is out — so a second key before the first answer
+// filed the sub-task twice and posted the comment twice, each under a new
+// request id the engine rightly took for a second change.
+test("a second Enter while the first is out files one sub-task and one comment", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const writes = holdWrites();
+  fireEvent.click(screen.getByRole("button", { name: "Add a sub-task" }));
+  const line = screen.getByRole("textbox", { name: "New sub-task of ENG-42" });
+  fireEvent.change(line, { target: { value: "e2e: a slow switch port" } });
+  fireEvent.submit(line.closest("form")!);
+  await settle();
+  fireEvent.submit(line.closest("form")!);
+  await settle();
+  const comment = screen.getByRole("combobox", { name: "Comment on ENG-42" });
+  fireEvent.change(comment, { target: { value: "Holding the port reproduces it." } });
+  fireEvent.keyDown(comment, { key: "Enter", ctrlKey: true });
+  await settle();
+  fireEvent.keyDown(comment, { key: "Enter", ctrlKey: true });
+  await settle();
+  expect(posted.map((p) => p.tool)).toEqual(["create_work_item", "comment_on_work_item"]);
+  await act(async () => writes.release());
+  await settle();
+});
+
+// A CONDITIONAL EDIT WHILE A PRESS IS OUT IS NOT SENT: it carries the version
+// the first press is about to move, so the engine could only refuse it — and
+// the page then drew the person's own first press as somebody else's change.
+test("a second Enter on the title sends one rename and reports no conflict", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const writes = holdWrites();
+  fireEvent.click(screen.getByRole("button", { name: "Edit the title" }));
+  const title = screen.getByRole("textbox", { name: "Title of ENG-42" });
+  fireEvent.change(title, { target: { value: "Switch ports flap under load" } });
+  fireEvent.submit(title.closest("form")!);
+  await settle();
+  fireEvent.submit(title.closest("form")!);
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: "ENG-42", if_match: 7, title: "Switch ports flap under load" },
+    },
+  ]);
+  await act(async () => writes.release());
+  await settle();
+});
+
 // ---------------------------------------------------------------------------
 // The two frames of one task
 // ---------------------------------------------------------------------------

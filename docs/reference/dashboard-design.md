@@ -533,11 +533,84 @@ what it knows and what it spent, and the machine last.
 | **Settings** | `#/settings` | a key mark when no operator credential is presented |
 
 Under the workspaces: **Projects** (every project with its key chip and its
-open work — the engine's maintained `task_counts`, waiting plus started),
+open work — the engine's maintained `task_counts`, waiting plus started — and a
+`+` that files a new task in the project the reader is in),
 **Pinned** (the views this reader pinned, asked for WITH the viewer — a pin is a
-person's, and the shared strip has none — each with the total it selects), and
+person's, and the shared strip has none — and across EVERY container
+(`work_saved_views`), so a view pinned from a project board is here with the
+project's key as its lead; each with the total it selects, counted in the
+view's own container; a
+pinned row RUNS the view, `#/work?view=<key>` or its project's list for a view
+saved on a project, rather than opening the inventory page about it — and the
+total beside it is that list's own: the engine counts a pinned view with every
+task filtered on its own, as every surface that runs a view asks for it, never
+in the grammar's tree mode, where an open epic's finished subtasks rode along), and
 **Starred** (drawn only when there is one). At the foot, Settings, the
-**health card** and the **user block**.
+**health card** and the **user block**. The head carries the company's lockup
+and, at the end of the same line, the chrome's one create: `+` New task.
+
+**Every "New task" is one sheet.** The rail's head `+`, the Projects group's
+`+`, a work screen's page-bar New task (Home, Work, a project) and a board
+lane's `+` all open the frame's single New task sheet
+(`dashboard/src/routes/work/NewTask.tsx`, mounted by the shell out of the Work
+chunk), each door telling it only what it knows. The two rail doors file into
+the project the route is in — its page, or the project a task key names —
+asked of the route's own resolver, so `#/work/views` and a task opened by its
+uuid are in no project and their `+` reads "New task in a project". A board
+lane's `+` files INTO its lane (`app/newTask.ts`'s `presetForLane`): it
+presets exactly the value that puts a task there — the lane's status, type,
+priority, project, holder or label, and a status-group lane the group's first
+status — and is drawn only where the sheet can hold that value as one. A due
+band other than "No due date" is a span of days and a unit is the project's own
+team, so those lanes take no `+`; nor do the lanes of work that ended
+undelivered — Cancelled, Closed and the closed status group — because the
+sheet could hold that status and nobody files new work as already abandoned
+(Done keeps its `+`: work finished before anybody tracked it is recorded as
+done). The Unassigned lane's `+` chooses nobody,
+which the project routes as its own unassigned work — to its default assignee
+where it names one and the chart still holds that seat, else triage — and
+the field says which before the press. An applied create that came
+back with a caveat — the engine's `warnings` — says it in its toast rather
+than a plain "Filed". The sheet files project, title,
+description, type, status, assignee, priority, due and labels as ONE
+`create_work_item`, sending only the fields the person set (an unset one is the
+engine's default, never the sheet's guess of it); the type, status words and
+labels are the chosen project's own, and the assignee completes against the
+chart with the engine's `colleague` match offered first — as the **best match**,
+its row's hint as short as every other's (`@handle · best match`), because the
+kit's hint does not shrink and its label does: the tier written into the hint
+drew the seat's name as "Age…", or not at all. Why it matched is in the row's
+accessible name and, once that seat is taken, on the field's help line ("The
+engine's match for “front”: part of the name matches"). The field's clear
+control is the kit's own, inside the field as a search box draws it, so the
+completion list — anchored to the field's box — spans everything it hangs
+from; beside the field it was a column the list did not cover, and the help
+line's last words showed next to the open list. Words typed in the
+Assignee field are not a seat until one is taken from the list: while they are
+unchosen the field says so, Create is held with "Choose who “…” is from the
+Assignee list, or clear it", and Enter opens the list on them — a name left
+typed is never silently dropped from the create, nor sent as a handle. Left
+empty, the field says where the task lands — the project's default assignee
+(which the engine applies inside the create), else triage for its lead. Every
+field's help line is its control's description, so a screen reader hears it
+with the field. `applied` opens the new task by the
+key the engine minted; `pending` closes with the not-yet-applied toast; a
+refusal stays in the sheet in the engine's own sentence, which names the
+argument it refused (drawn as a value, not in backticks). What the engine would
+refuse is said on the field BEFORE the press: the title and the description are
+counted in the engine's unit — UTF-8 bytes, against `tracker.MaxTitle` (256) and
+`MaxBody` (32 KiB), held by `contract/work.ts` — counting down in the last fifth
+and marked invalid past the cap, saying by how much. Create is then held, and
+the reason is written in the sheet's foot beside it, because the kit reads a
+held button's reason to a screen reader only; Enter while held takes focus to
+the field that is holding it. Enter in any single-line field is the press, and
+the sheet says so itself: the kit's sheet is a form, and a browser submits a
+form of several fields on Enter only by pressing its submit button, which a
+write control is not — so Enter did nothing there, held or not. A description
+takes its newline, and Enter that a completion list took chooses from it. The
+same place says, while nothing holds the
+press, who the task is filed as ("Filed as Jane Founder") — and the head is the
+title alone, as the kit's sheet head (the page bar's height) is sized for.
 
 **Settings is never hidden.** A section that vanishes without a credential is
 indistinguishable from one that does not exist, so an operator on a fresh
@@ -644,8 +717,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/projects` | **Projects** — the directory: every project, its lead, its target date and its four counts. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
-| `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
-| `#/work/{KEY}` | **Project** | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
+| `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
+| `#/work/{KEY}` | **Project** | `lens=items\|about\|history` · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/agents` | **Agents › Org chart** — the hierarchy every seat works inside | `unit=` · `seat=` |
 | `#/agents/roster` | **Roster** — every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
@@ -692,9 +765,18 @@ refusal under a trail naming a page that does not exist.
 
 **Three of those surfaces are the engine answering a question it has always
 been able to answer.** Search is the ranking a seat gets from `search_work_items` —
-BM25 over the engine's own index — which the operator reading the same company
-had no access to at all; the board's `q=` is an escaped substring over an
-excerpt and answers something else. The item's **Woke** tab is who one change
+by the words (Keyword, BM25 over the engine's own index), by what they mean
+(Meaning, the wire's `semantic`), or both fused (Hybrid, the default) — which
+the operator reading the same company had no access to at all; the board's `q=`
+is an escaped substring over an excerpt and answers something else. The mode is
+`mode=` in the address, and an answer served in a different mode than asked
+(`served_mode`, from the engine's own `degraded` value — a company with no
+embeddings provider asking Hybrid is served Keyword) says so above the hits.
+The phrase field never gives way to the modes beside it: the form wraps by what
+it holds, so on a phone the field takes a line of its own and the modes and
+Search the next. A hit's snippet is a cut of a markdown body and is drawn as
+the prose it renders to, without its `**` and `#` (the knowledge search's
+snippets too). The item's **Woke** tab is who one change
 actually reached and under which of eighteen reasons, which is the fact no
 commercial tracker records: all of them can say you were notified and none can
 say why. And a seat's **Conversations** tab is its own thread ledger — the only
@@ -713,7 +795,9 @@ range at all.
 There is now **one key and one control**. The value is a duration from a closed
 set — `15m` `1h` `6h` `1d` `7d` `30d` `90d` — or `today`, or an explicit
 interval written as ISO 8601's own `<from>/<to>`, so a custom window is still
-one value a reader can copy out of the address bar.
+one value a reader can copy out of the address bar. The custom window's Apply
+is its form's submit button, so Enter in either box applies it — as a plain
+button it left Enter doing nothing, for the reason the New task sheet gives.
 
 **`today` is the company's day so far**, cut at the first instant of the date on
 the company's clock (`org.timezone`, the calendar `internal/period` keeps) —
@@ -1196,7 +1280,7 @@ selected one reads zero and the rail is a dead end.
 | `peek={kind}:{id}` | section | the detail rail is open on that object |
 | `tab=` | section | the object page's tab |
 | `view=` | section | a list container's view |
-| `lens=` | section | which whole reading of an object is drawn — a project's items, overview and history, the Configuration screen's active, history and diff |
+| `lens=` | section | which whole reading of an object is drawn — a project's items, about and history, the Configuration screen's active, history and diff |
 | `sort=` `cols=` | filter | the grid's order and its visible columns |
 | `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page — and `cols.<shape>=` alone on the work screen, whose one grid has a column set per shape while both share its `sort=` |
 
@@ -1419,10 +1503,24 @@ approved artboards label **Share**: sharing a page here IS its address, since
 anyone the link reaches reads it under their own token — and LAST
 the screen's own controls (portalled in by `PageActions`), so a screen's
 primary action ("New task") ends the row where the approved designs put it.
-On a phone, where the controls take a line of their own that scrolls from its
-start, the screen's controls lead that line instead, so the action a screen
-most wants pressed is never the one past the edge. On a busy screen they do
-not all fit on one line.
+An OBJECT page's lenses (a project's Items, About and History) are portalled
+into a second slot straight after the trail (`PageLenses`): that slot is no
+flex item at all while it is empty, and when it holds lenses it is the lens
+group that takes the line's slack — the trail sizes to its content, capped at
+60% of the bar so a long name ellipsises beside its lenses rather than pushing
+them onto a line of their own.
+On a phone the bar keeps ONE action in view — the screen's primary one, which
+leads the line — and folds the rest into **More** (⋯) at the line's end: the
+frame's star and Copy link, and whatever a screen marks as secondary and
+publishes to the frame with `usePageMenu` (a project's **Edit project**, which
+opens the same dialog its inline button does). The menu is drawn only at that
+width, so no action is ever in two places a reader can see at once, and what a
+press did (copied, refused, at the star cap) is said in a toast, because the
+menu closes on it. A task's own "More for ENG-42" folds into it too, rather
+than standing as a second ellipsis beside the frame's. What is left of the
+controls shares a line with the trail or the lenses when it fits: laid out
+inline, a project's bar stood three rows tall on a 390 px screen — the trail,
+the lenses, then four controls — about 105 px of chrome over the work.
 
 **A wrapping flex container assigns lines BEFORE it shrinks**, so a trail at its
 content width broke the line as soon as a long title and the controls exceeded
@@ -1450,7 +1548,9 @@ every screen under it, a sparse one included.
   factor above zero pushes "Copy link" onto a second row by a fraction of a
   pixel. A `max-width` is the valve that keeps a group wider than the whole bar
   wrapping rather than running past the edge.
-- **On a phone's width the controls take a line of their own and scroll** — a
+- **On a phone's width the controls are one line that scrolls** — sharing the
+  trail's or the lenses' line when they fit, by the same rule the wide bar
+  keeps, and a line of their own when they do not — a
   container query on the header, because what overflows is the header and a
   viewport query cannot see a sidebar or a peek. Rows of controls stacked under
   the trail would push the screen a third of the way down a phone. The edge
@@ -3319,8 +3419,11 @@ is one of the rules on this page applied to a tracker.
   the container's own tab, the views THIS reader pinned (★) plus whichever one
   is running, **+ View** — the query on screen saved under a name, shared or
   kept to the person who saved it, with the shape as its type and without its
-  paging or a calendar's month — and `All views →`. That it is drawn even when nothing was
-  saved is [the sparse state](#the-sparse-state)'s rule, not this one.
+  paging or a calendar's month — and the inventory, as one glyph named **All
+  saved views** (a real link) rather than the words, because written out it was
+  the item that pushed the search box and the menus onto a second line at
+  1280px. That the strip is drawn even when nothing was saved is [the sparse
+  state](#the-sparse-state)'s rule, not this one.
 - **The second row is how the answer is cut, and it is the last row above the
   work.** The chips open it, ending in **+ Filter** — what narrows the answer
   is what a reader reads first, and the control that adds a narrowing sits
@@ -3695,8 +3798,9 @@ is one of the rules on this page applied to a tracker.
 - **The bars are ours and the rows are the engine's, and the screen says
   which.** The event log asks the engine for its histogram; this question has
   no such read, so the axis is bucketed from the pages the screen is holding —
-  and the caption says the bars cover the changes LOADED, the facets say the
-  same about their counts, and the histogram takes that scope as a REQUIRED
+  and the caption says the bars cover the changes LOADED, the bar says the
+  same about its pickers' counts — once, rather than under each of three
+  facet rails, which the one compact bar Work narrows from replaced — and the histogram takes that scope as a REQUIRED
   prop, so the sentence a screen reader hears cannot drift from the one on the
   card. A client-side count dressed as the engine's is the one thing this
   product never does.
@@ -3711,14 +3815,30 @@ is one of the rules on this page applied to a tracker.
   because the rule is conditional and a hook may not be: called with nothing,
   the publish writes null over whatever the enclosing screen published, which
   is the same clobber under a quieter name.
+- **A project opens on its work.** The Items lens is the list at the top of
+  the page, as the approved Board draws a project: no header about the
+  container above the work, and no row of lenses either — the lenses sit on the
+  page bar beside the name they are lenses on (`Work › ENG Core · Items | About
+  | History`, `PageLenses`), controlling the region below by id. A row of their
+  own cost the first screenful a line the Board does not spend. What the container IS — who leads it, its unit,
+  its target, its census, its vocabulary and its latest changes — is the
+  **About** lens; a finding on the project's own record (a unit the chart lost)
+  is drawn over every lens, because it is a fact about the work below. The
+  page bar ends with **Edit project** — the lead's target date, a company write
+  (`write_project{target_date}`) whose authority the engine decides, titled
+  with the project's NAME and confirmed with the day as the Target fact writes
+  it ("Set Core's target to 30 Oct 2026", never the wire's ISO form) — and
+  **New task**, filed into this project. A project that declares no purpose
+  says so in a sentence for a person ("No purpose is set for it — add one to
+  Core in the company configuration…"), not a configuration key in backticks.
 - **A lens keeps its filters.** The three lenses over a project — Items,
-  Overview, History — are three readings of ONE container, not three screens,
+  About, History — are three readings of ONE container, not three screens,
   so switching keeps the narrowing AND the arrangement: `lens=` is written
   through the frame's section move, which copies the whole current query and
   sets one key. A lens that built a fresh query would make History a one-way
   trip, with the way back being every chip re-added by hand — and it would fail
   silently, because each lens renders perfectly on its own. Only Items carries
-  a count, from the project's own maintained census: Overview is a description
+  a count, from the project's own maintained census: About is a description
   rather than a collection, and History is PAGED, so a count of the page it
   loaded would read as a count of the lens.
 - **The charts answer the questions the numbers cannot.** A census bar says
@@ -3727,16 +3847,20 @@ is one of the rules on this page applied to a tracker.
   ceiling, because a queue of thirty is heavy in one company and a quiet week
   in another. All of them wear STATUS tones rather than the categorical hues,
   so one fact is never two colours on one screen.
-- **A progress meter is an AMOUNT, and its whole is stated.** The project
-  census fills with what is DONE against everything ever filed: closed work is
-  a muted segment beside the fill, because it left the question rather than
-  answering it, and open work is the untinted track. Drawn as a SHARE — each of
-  the three sized against their own sum — a project holding one open item drew
-  a full solid bar and read as finished, which is the state every project of a
-  young company is in. The legend names what FILLS the bar and nothing else: a
-  swatch for the remainder would be a colour that is not on it. The one meter is
-  drawn by `dashboard/src/routes/work/census.tsx`, in the project's header and
-  in the directory's Progress column, so the two cannot disagree about one row.
+- **A progress meter is the SPLIT of the work, and its whole is stated.** The
+  project census is the kit's `SegmentedMeter` over the maintained
+  `task_counts`: done (the success tone) and active (the info tone — `in_review`
+  is working) as parts, and what is still to do as the quiet remainder, against
+  the whole `todo + active + done` — so the parts ARE the census and the bar's
+  accessible name reads them ("3 done, 2 active, 6 to do of 11"). Closed work is
+  not in the whole: it left the question rather than answering it, and has its
+  own column. It was an AMOUNT of done over everything filed before that, which
+  drew waiting and started work as one blank — and a SHARE before that, which
+  drew a project holding one open item as finished. The legend names the three
+  parts in the meter's own tokens. The one meter is drawn by
+  `dashboard/src/routes/work/census.tsx`, in the About lens's header, the peek
+  and the directory's Progress column (beside the lead's Target date), so they
+  cannot disagree about one row.
 
 ---
 
@@ -3879,9 +4003,14 @@ refuses.
 
 Every control that changes the company is drawn for every reader. Where your
 browser cannot make the change it is **disabled, and says why** — the kit
-button's `disabledReason`, which keeps it focusable and hoverable so the
-sentence reaches exactly the reader who needs it. The five reasons, in the
-order you clear them:
+button's `disabledReason`, which keeps it focusable and reads the sentence to
+a screen reader as the button's description. The kit draws that sentence for
+nobody else, so the same words are the button's `title` while it is held — a
+pointer resting on it sees why — and a screen reader, which reads a described
+button's description rather than its title, hears it once. A form whose
+primary action is held also writes the reason on the page beside it (the New
+task sheet's foot), because neither reaches a touch screen. The five reasons,
+in the order you clear them:
 
 | You are | The control says |
 |---|---|
@@ -3890,6 +4019,20 @@ order you clear them:
 | Anonymous | Set an API token to act — every change is recorded under your name. |
 | An unbound token | This token is not bound to a person — set contact.crewlet_operator_id on your seat to act as yourself. |
 | A person the engine does not make this change for | This engine does not make this change for you. |
+
+**One press at a time, by every way in.** A write control refuses a press
+while its last one is still out, and so does every other way into the same
+press — a dialog is a form Enter submits without touching the button, a reply
+field sends on ⌘Enter, a one-line form (a sub-task, a title) files on Enter —
+because each reaches the same gate (`pressable` in `components/WriteButton.tsx`).
+They used to go straight to the write, and a second Enter before the first
+answer came back filed a second sub-task or posted the comment twice, under a
+new request id the engine rightly took for a second change. On a task page a
+change conditional on the version you were looking at is not sent at all while
+another is out: it carries the version the first is about to move, so the
+engine could only refuse it, and the page would then have reported your own
+first change as somebody else's. A checklist tick or a follow, which carry no
+version, still go.
 
 A change is **never queued**: a write sent when the connection came back would
 be one you walked away from believing it had happened, onto a company that may
@@ -3937,7 +4080,12 @@ object it is drawn for, so one notice's refusal never appears under another's.
 **The refusal is in the dashboard's words**, except where the engine's own
 sentence names the argument that was wrong (`invalid`) or the rule that
 forbade it (`forbidden`): every other tool sentence is written for a model
-reading a tool result. `contract/errors.ts` `ACT_ERRORS` holds one sentence per
+reading a tool result. Those two carry the writer's sentence alone — the
+tracker's refusals hold their words apart from the `tracker:` a Go error opens
+with (`tracker.Sentence`), so a person reads "create_work_item refused that: a
+decision has 0 option(s) …" rather than the package's name in front of it, and
+a forbidden one no longer ends by repeating the sentinel's own "not this
+actor's to write". `contract/errors.ts` `ACT_ERRORS` holds one sentence per
 code and is held against the engine's codes both ways
 (`TestTheDashboardKnowsExactlyTheActRefusals`). A conditional edit that lost
 the race reads "Changed by somebody else since you opened it." — somebody
@@ -3965,6 +4113,8 @@ a tool arrives in it with the control that sends it. The controls
 | Status · Priority · Labels · Due · Start · Estimate · a custom field · the title · the description | A task's page, from the value itself | `update_work_item` (`if_match` on the version you are looking at) |
 | A checklist box · Watch / Unwatch | A task's page | `update_work_item{checklist}` / `{watch}` — gestures applied as they land, with no `if_match` |
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
+| Create task (the New task sheet) | The rail's head `+`, the Projects group's `+`, a work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}` — only what was set |
+| Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
 | Pin / Unpin | A saved view's page | `set_pins` |

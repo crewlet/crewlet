@@ -4057,6 +4057,8 @@ export interface QueryMap {
   work_comments: WorkCommentsAnswer;
   work_item_turns: WorkItemTurnsAnswer;
   work_views: WorkViewsAnswer;
+  /** Every saved view a viewer can see, across every container. */
+  work_saved_views: WorkViewsAnswer;
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;
   work_workload: WorkloadAnswer;

@@ -88,16 +88,63 @@ var ErrInvalid = errors.New("tracker: invalid")
 // exists, and the useful move is to read it.
 var ErrAlreadyAnswered = errors.New("tracker: that question is already answered")
 
-// invalidError carries [ErrInvalid] beside a refusal's own sentence.
-type invalidError struct{ err error }
+// refusal is a write this package refuses on what was asked or on who asked
+// it: the writer's own SENTENCE, and the sentinel that classes it beside that
+// sentence's own %w chain.
+//
+// THE SENTENCE IS HELD WITHOUT THE PACKAGE PREFIX, and [refusal.Error] adds
+// it, so the Go error reads exactly as every error here does
+// ("tracker: …") while [Sentence] has the words a PERSON is shown. Both
+// classes built here — [ErrInvalid] and [ErrForbidden] — are the two a
+// person's write surface prints as they stand, because only their sentences
+// name what to change or whom to ask; "tracker:" in front of that sentence is
+// a word about where the error came from, for a log, and a person filing a
+// task was shown "create_work_item refused that: tracker: …". The forbidden
+// class used to be built with fmt.Errorf wrapping the sentinel, which also
+// appended the sentinel's own words — ": tracker: not this actor's to write"
+// — after a sentence that had already said whose it was.
+type refusal struct {
+	mark error
+	err  error
+}
 
-func (e *invalidError) Error() string   { return e.err.Error() }
-func (e *invalidError) Unwrap() []error { return []error{ErrInvalid, e.err} }
+func (e *refusal) Error() string    { return "tracker: " + e.err.Error() }
+func (e *refusal) Unwrap() []error  { return []error{e.mark, e.err} }
+func (e *refusal) sentence() string { return e.err.Error() }
 
-// invalid is fmt.Errorf for a content refusal: the same sentence, and the same
-// %w chain, marked [ErrInvalid].
+// sentenced is a refusal this package wrote, whatever its type: [refusal]
+// itself, and the typed refusals a caller several steps away has to take
+// apart ([TagClash], [TagsFull]). Each holds its sentence without the prefix
+// its Error adds.
+type sentenced interface {
+	error
+	sentence() string
+}
+
+// invalid is fmt.Errorf for a content refusal: the sentence — written WITHOUT
+// the package prefix, which [refusal.Error] adds — and its %w chain, marked
+// [ErrInvalid].
 func invalid(format string, args ...any) error {
-	return &invalidError{err: fmt.Errorf(format, args...)}
+	return &refusal{mark: ErrInvalid, err: fmt.Errorf(format, args...)}
+}
+
+// forbidden is [invalid] for a write that is not this actor's to make, marked
+// [ErrForbidden]. The sentence names who may.
+func forbidden(format string, args ...any) error {
+	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...)}
+}
+
+// Sentence is a refusal this package wrote, as a person reads it: the
+// writer's own sentence, without the package prefix a Go error carries. Any
+// other error — one this package did not write as a refusal, or a refusal a
+// caller wrapped in context of its own — is its whole message, because context
+// is never dropped to tidy a prefix away.
+func Sentence(err error) string {
+	var r sentenced
+	if errors.As(err, &r) && r.Error() == err.Error() {
+		return r.sentence()
+	}
+	return err.Error()
 }
 
 // NoIfMatch omits an update's version precondition, which MERGES the patch
@@ -553,9 +600,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 
 	switch {
 	case id == "":
-		return WriteResult{}, invalid("tracker: an update names no task")
+		return WriteResult{}, invalid("an update names no task")
 	case project == "":
-		return WriteResult{}, invalid("tracker: an update on task %s "+
+		return WriteResult{}, invalid("an update on task %s "+
 			"names no project — the caller resolved a key to reach this task "+
 			"and therefore holds one", id)
 	}
@@ -566,7 +613,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	if patch.Comment != nil {
 		commentBody = &patch.Comment.Body
 	}
-	if err := checkTextCaps(id, patch.Title, patch.Body, commentBody); err != nil {
+	if err := checkTextCaps(patch.Title, patch.Body, commentBody); err != nil {
 		return WriteResult{}, err
 	}
 	if patch.Comment != nil {
@@ -639,7 +686,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// or relation of it can change — which is what makes a
 				// removal an entirely local decision with no walk
 				// behind it.
-				return statelog.Decision{}, invalid("tracker: task %s was "+
+				return statelog.Decision{}, invalid("task %s was "+
 					"removed by %s at %s; restore it first",
 					id, current.Removed.By, current.Removed.At.Format(time.RFC3339))
 			}
@@ -652,7 +699,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// would hold back a write that never touches it. A bulk
 				// edit names one project for every task in it, which is
 				// where a task from elsewhere arrives.
-				return statelog.Decision{}, invalid("tracker: task %s is in "+
+				return statelog.Decision{}, invalid("task %s is in "+
 					"project %s, not %s — resolve it again and name the "+
 					"project it is in", id, current.Project, project)
 			}
@@ -848,7 +895,7 @@ func settleComment(ctx context.Context, tx *sql.Tx, task string, comment *Commen
 			}
 		}
 		if !sameDecision(stored.Decision, comment.Decision) {
-			return false, invalid("tracker: comment %s on task %s already exists, and "+
+			return false, invalid("comment %s on task %s already exists, and "+
 				"a decision is set only when the question is asked and never "+
 				"changed after — an answer names an option by id, and options "+
 				"edited under it would make that answer mean something else; "+
@@ -887,27 +934,28 @@ func settleAskWatch(current Task, patch TaskPatch, asked string) TaskPatch {
 	if patch.Muted != nil {
 		muted = *patch.Muted
 	}
-	if next, ok := followAsk(watchers, muted, asked); ok {
+	if next, ok := followAuto(watchers, muted, asked); ok {
 		patch.Watchers = &next
 	}
 	return patch
 }
 
-// followAsk is a watcher set with the person asked added, and false when it
-// does not change.
+// followAuto is a watcher set with somebody the write made a party to the
+// task added — the person a question is put to, or the default assignee a
+// create is filed to — and false when it does not change.
 //
 // THREE CASES LEAVE IT ALONE. Already watching. MUTED — the mute is what says
 // somebody CHOSE not to follow this item, and a question put to them is
 // delivered under `asked` whether or not they follow it; re-watching them
 // would undo the one gesture they made about it. And AT THE CAP, where the
-// watch is skipped rather than the question refused — [WatchIntent.Auto]'s
-// rule, since the asker did not ask for a watch at all.
-func followAsk(watchers, muted []string, asked string) ([]string, bool) {
-	if asked == "" || slices.Contains(watchers, asked) ||
-		slices.Contains(muted, asked) || len(watchers) >= MaxWatchers {
+// watch is skipped rather than the write refused — [WatchIntent.Auto]'s rule,
+// since the writer did not ask for a watch at all.
+func followAuto(watchers, muted []string, handle string) ([]string, bool) {
+	if handle == "" || slices.Contains(watchers, handle) ||
+		slices.Contains(muted, handle) || len(watchers) >= MaxWatchers {
 		return watchers, false
 	}
-	return append(slices.Clone(watchers), asked), true
+	return append(slices.Clone(watchers), handle), true
 }
 
 // markOnly reports a patch whose one change is the cross-project move's mark.
@@ -955,11 +1003,11 @@ func settlePromote(current Task, patch TaskPatch) (TaskPatch, string, error) {
 		// A WHOLE SET OR ANOTHER GESTURE ([TaskPatch.Checklist]) beside the
 		// mark is refused rather than resolved in some order: each is a
 		// complete statement of what the checklists become.
-		return patch, "", invalid("tracker: this patch carries both a "+
+		return patch, "", invalid("this patch carries both a "+
 			"promotion of item %s and another change to the checklists — a "+
 			"caller states one or the other", intent.Item)
 	case intent.Item == "" || intent.Subtask == "":
-		return patch, "", invalid("tracker: a promotion mark names item %q "+
+		return patch, "", invalid("a promotion mark names item %q "+
 			"and subtask %q, and needs both", intent.Item, intent.Subtask)
 	}
 	patch.Promote = nil
@@ -973,7 +1021,7 @@ func settlePromote(current Task, patch TaskPatch) (TaskPatch, string, error) {
 		if *to == intent.Subtask {
 			return patch, "", nil
 		}
-		return patch, "", invalid("tracker: checklist item %s of task %s "+
+		return patch, "", invalid("checklist item %s of task %s "+
 			"already became task %s, so it cannot also become %s",
 			intent.Item, current.ID, *to, intent.Subtask)
 	}
@@ -1009,13 +1057,13 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 		// than resolved in some order: one of them is a gesture about
 		// one person and the other is the whole set, and whichever won
 		// would silently discard the other.
-		return patch, invalid("tracker: this patch carries both a watch "+
+		return patch, invalid("this patch carries both a watch "+
 			"gesture for %s and a whole watcher set — a caller states one or "+
 			"the other", patch.Watch.Handle)
 	}
 	handle := patch.Watch.Handle
 	if handle == "" {
-		return patch, invalid("tracker: a watch gesture names no handle")
+		return patch, invalid("a watch gesture names no handle")
 	}
 	watchers := without(current.Watchers, []string{handle})
 	muted := without(current.Muted, []string{handle})
@@ -1053,7 +1101,7 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 			patch.Watch = nil
 			return patch, nil
 		}
-		return patch, invalid("tracker: task %s already has %d watchers and "+
+		return patch, invalid("task %s already has %d watchers and "+
 			"the maximum is %d — an item this many people follow is an "+
 			"announcement, and a comment on it wakes all of them",
 			current.ID, len(current.Watchers), MaxWatchers)
@@ -1127,23 +1175,23 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 
 	switch {
 	case project == "":
-		return WriteResult{}, invalid("tracker: a move names no project")
+		return WriteResult{}, invalid("a move names no project")
 	case len(placements) == 0:
-		return WriteResult{}, invalid("tracker: a move places no task")
+		return WriteResult{}, invalid("a move places no task")
 	case len(placements) > MaxBulkTasks+RankRespreadInline:
 		// THE CALLER'S OWN MOVES PLUS A RE-SPREAD'S WORTH OF
 		// NEIGHBOURS. The scope is the project CONTAINER rather than an
 		// enumeration precisely so the placement list is not bounded by
 		// the term cap: one drag can legitimately rewrite hundreds of
 		// neighbouring keys, and a covering term costs one path.
-		return WriteResult{}, invalid("tracker: a move carries %d "+
+		return WriteResult{}, invalid("a move carries %d "+
 			"placements and one record carries at most %d — %d moves plus "+
 			"a re-spread's %d neighbours", len(placements),
 			MaxBulkTasks+RankRespreadInline, MaxBulkTasks, RankRespreadInline)
 	}
 	for _, placement := range placements {
 		if !placement.Rank.Valid() {
-			return WriteResult{}, invalid("tracker: %q is not a well-formed "+
+			return WriteResult{}, invalid("%q is not a well-formed "+
 				"rank key", placement.Rank)
 		}
 	}
@@ -1205,7 +1253,7 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	// one; a view chooses its own. Accepting one where it means nothing
 	// would let a caller file a person's record under a project.
 	if container != "" && !subject.Kind.HomedInAProject() {
-		return WriteResult{}, invalid("tracker: a %s names container %q, "+
+		return WriteResult{}, invalid("a %s names container %q, "+
 			"and its own path is derived from its subject — a container here "+
 			"would file its deferral where no probe for it looks",
 			subject.Kind, container)
@@ -1367,23 +1415,23 @@ var errTurnTaskMoved = errors.New("tracker: the task moved project while its tur
 func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (WriteResult, error) {
 	switch {
 	case opID == "":
-		return WriteResult{}, invalid("tracker: a turn on task %s names no "+
+		return WriteResult{}, invalid("a turn on task %s names no "+
 			"operation id — the id is the turn row's own, and it is what "+
 			"makes a segment recorded twice count once", turn.Task)
 	case turn.Task == "":
-		return WriteResult{}, invalid("tracker: a turn names no task")
+		return WriteResult{}, invalid("a turn names no task")
 	case len(turn.Summary) > MaxTurnSummary, len(turn.Review) > MaxTurnSummary:
 		// REFUSED, NOT CUT: the caller is the engine, which cuts its own
 		// prose to the bound before it writes, so an overlong one here is
 		// a writer that skipped the cut — and every node would store it.
-		return WriteResult{}, invalid("tracker: a turn on task %s carries a "+
+		return WriteResult{}, invalid("a turn on task %s carries a "+
 			"summary of %d bytes and a review of %d; each is at most %d",
 			turn.Task, len(turn.Summary), len(turn.Review), MaxTurnSummary)
 	case len(turn.Tools) > MaxTurnTools:
-		return WriteResult{}, invalid("tracker: a turn on task %s names %d "+
+		return WriteResult{}, invalid("a turn on task %s names %d "+
 			"tools; at most %d", turn.Task, len(turn.Tools), MaxTurnTools)
 	case w.db == nil:
-		return WriteResult{}, invalid("tracker: this writer holds no " +
+		return WriteResult{}, invalid("this writer holds no " +
 			"replicated estate, and a turn's scope is its task's project, " +
 			"which only the task's own row can say")
 	}
@@ -1449,7 +1497,7 @@ func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
 	case err != nil:
 		return fmt.Errorf("tracker: read the deletion marker of task %s: %w", id, err)
 	case purged > 0:
-		return invalid("tracker: task %s was purged, and a turn cannot be "+
+		return invalid("task %s was purged, and a turn cannot be "+
 			"charged to rows that no longer exist — the spend is still on the "+
 			"seat's own counters", id)
 	}
@@ -1493,26 +1541,26 @@ func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify
 	switch {
 	case !subject.Kind.RecordsHistory():
 		if kind != "" {
-			return invalid("tracker: a %s record names change kind %q, and "+
+			return invalid("a %s record names change kind %q, and "+
 				"an apply of it writes no history row for that kind to "+
 				"describe — see ObjectKind.RecordsHistory", subject.Kind, kind)
 		}
 		if notify != nil {
-			return invalid("tracker: a %s record carries a notification, "+
+			return invalid("a %s record carries a notification, "+
 				"and an apply of it writes no history row a wake could be "+
 				"derived from", subject.Kind)
 		}
 		return nil
 	case kind == "":
-		return invalid("tracker: a %s %s record names no change kind — its "+
+		return invalid("a %s %s record names no change kind — its "+
 			"apply writes a history row, and the kind is what every feed "+
 			"filter, report window and repair scan selects on", subject.Kind, op)
 	case !kind.Valid():
-		return invalid("tracker: %q is not a change kind this build writes "+
+		return invalid("%q is not a change kind this build writes "+
 			"— every kind has exactly one writer, so an unknown one is a "+
 			"history row no filter can name", kind)
 	case notify != nil && notify.Kind != kind:
-		return invalid("tracker: this %s record says it is a %q and its "+
+		return invalid("this %s record says it is a %q and its "+
 			"notification says %q — one fact with two carriers is one fact "+
 			"that can disagree with itself, and a reader would see the feed "+
 			"and the card name different things", subject.Kind, kind, notify.Kind)
@@ -1546,7 +1594,7 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 		return statelog.Decision{}, err
 	}
 	if scope.Subject && scope.Container == "" && subject.Kind.RequiresAProject() {
-		return statelog.Decision{}, invalid("tracker: a %s record for %s "+
+		return statelog.Decision{}, invalid("a %s record for %s "+
 			"states no container, and there is no %s outside a project — an "+
 			"empty one resolves to the workspace and files its deferral where "+
 			"no project-scoped probe looks", op, subject, subject.Kind)
@@ -1591,7 +1639,7 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 		// REFUSED NAMING THE SIZE, never cut to fit: a record silently
 		// trimmed is a row that cannot be rebuilt from it, which is the
 		// one property the whole record format exists to have.
-		return statelog.Decision{}, invalid("tracker: the %s record for %s "+
+		return statelog.Decision{}, invalid("the %s record for %s "+
 			"is %d bytes and the design maximum is %d — a record is refused "+
 			"rather than trimmed, because a trimmed one cannot rebuild its row",
 			op, subject, len(encoded), MaxCommitBytes)

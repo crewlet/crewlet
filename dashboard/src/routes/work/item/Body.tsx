@@ -33,7 +33,7 @@ import { CheckGlyph, PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Assignee, StatusMark, type RowChrome } from "~/components/work.tsx";
-import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
+import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { plural } from "~/lib/format.ts";
@@ -370,9 +370,12 @@ function AddSubtaskLink({ onAdd }: { onAdd: () => void }): ReactNode {
 function AddSubtask({ parent, onDone }: { parent: WorkItem; onDone: () => void }) {
   const write = useAct("create_work_item");
   const [title, setTitle] = useState("");
+  const blocked = title.trim() ? undefined : "Give the sub-task a title.";
   const submit = async () => {
+    // THE BUTTON'S OWN GATE, because the line is a form Enter submits: a
+    // second Enter while the first answer was out filed the sub-task twice.
+    if (!pressable(write, blocked)) return;
     const name = title.trim();
-    if (!name) return;
     const result = await write.run(
       { title: name, project: parent.project, parent: parent.id },
       { done: `Filed “${name}” under ${parent.key}` },
@@ -408,7 +411,7 @@ function AddSubtask({ parent, onDone }: { parent: WorkItem; onDone: () => void }
         size="small"
         variant="primary"
         showRefusal={false}
-        blocked={title.trim() ? undefined : "Give the sub-task a title."}
+        blocked={blocked}
         onPress={() => void submit()}
       >
         Add

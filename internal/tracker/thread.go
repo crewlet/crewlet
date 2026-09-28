@@ -366,15 +366,15 @@ func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, er
 func (a openAsk) answerableBy(author, self string) error {
 	switch {
 	case a.asked == "":
-		return invalid("tracker: comment %s on task %s asked nobody a "+
+		return invalid("comment %s on task %s asked nobody a "+
 			"question, so it cannot be answered — `answers` names an open ask",
 			a.id, a.task)
 	case author != "" && a.asked != author:
-		return fmt.Errorf("tracker: comment %s on task %s asked %s rather "+
-			"than %s, and answering it would close somebody else's question: %w",
-			a.id, a.task, a.asked, author, ErrForbidden)
+		return forbidden("comment %s on task %s asked %s rather than %s, and "+
+			"answering it would close somebody else's question",
+			a.id, a.task, a.asked, author)
 	case a.removed:
-		return invalid("tracker: comment %s on task %s was removed",
+		return invalid("comment %s on task %s was removed",
 			a.id, a.task)
 	case self != "" && a.answeredBy == self:
 		return nil

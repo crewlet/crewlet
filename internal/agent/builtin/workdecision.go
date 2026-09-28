@@ -169,8 +169,8 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 	})
 	switch {
 	case errors.Is(err, tracker.ErrInvalid):
-		return nil, refusalOf(failed(fmt.Sprintf("%s was refused: %v. Nothing "+
-			"was posted.", tool, err)))
+		return nil, refusalOf(failed(fmt.Sprintf("%s was refused: %s. Nothing "+
+			"was posted.", tool, tracker.Sentence(err))))
 	case err != nil:
 		return nil, refusalOf(readFailure(tool, err))
 	}

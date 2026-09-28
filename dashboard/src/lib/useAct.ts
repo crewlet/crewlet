@@ -113,6 +113,18 @@ interface Press<T extends ActionTool> {
   label: PressLabel;
 }
 
+/**
+ * The caveats an applied write's own answer carries (`warnings`), as sentences
+ * — and none for an answer that carries none, or carries them in a shape this
+ * build does not read.
+ */
+export function receiptWarnings(receipt: unknown): string[] {
+  const warnings = (receipt as { warnings?: unknown } | null)?.warnings;
+  return Array.isArray(warnings)
+    ? warnings.filter((w): w is string => typeof w === "string" && w.trim() !== "")
+    : [];
+}
+
 /** One change a screen can make, as the signed-in person. */
 export function useAct<T extends ActionTool>(tool: T): Act<T> {
   const access = useWriteAccess(tool);
@@ -158,9 +170,25 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
       }
       if (press.label.quiet && result.kind !== "refused") return result;
       switch (result.kind) {
-        case "applied":
-          toast.ok(press.label.done);
+        case "applied": {
+          // A CHANGE THAT LANDED WITH A CAVEAT SAYS IT. The engine answers
+          // `warnings` beside an applied write when it did something other
+          // than the obvious — a create filed to triage because the
+          // project's default assignee left the chart — and a plain "done"
+          // over it tells the person the opposite of what happened.
+          const warned = receiptWarnings(result.receipt);
+          if (warned.length > 0) {
+            toast.show({
+              variant: "warning",
+              title: press.label.done,
+              message: warned.join(" "),
+              duration: 0,
+            });
+          } else {
+            toast.ok(press.label.done);
+          }
           break;
+        }
         case "pending":
           toast.show({ variant: "info", title: press.label.done, message: PENDING_SENTENCE });
           break;

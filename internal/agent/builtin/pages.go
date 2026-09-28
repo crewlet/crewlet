@@ -849,9 +849,10 @@ func pageUnknown(name string, result statelog.Result, next string) string {
 func pageWriteFailure(name string, err error) tools.Result {
 	switch {
 	case errors.Is(err, pages.ErrInvalid):
-		return refused(tools.RefusalInvalid, fmt.Sprintf("%s refused that: %v", name, err))
-	case errors.Is(err, pages.ErrReserved):
-		return refused(tools.RefusalForbidden, fmt.Sprintf("%s refused that: %v", name, err))
+		// THE WRITER'S SENTENCE ALONE, for the reason writeFailure gives:
+		// a person's surface prints this class as it stands.
+		return refused(tools.RefusalInvalid, fmt.Sprintf("%s refused that: %s",
+			name, pages.Sentence(err)))
 	case errors.Is(err, pages.ErrTitleTaken):
 		return refused(tools.RefusalExists, fmt.Sprintf("%v\n\nThat page already "+
 			"exists — read it with get_page and edit it with save_page rather "+

@@ -56,6 +56,33 @@ test("a control that cannot act stays focusable, says why, and does nothing", ()
   expect(document.body.textContent).toContain(WRITE_REASONS.anonymous);
 });
 
+test("a held control shows a pointer its reason, and a screen reader hears it once", () => {
+  render(
+    <WriteButton write={write()} onPress={() => {}} blocked="Choose a view first.">
+      Pin
+    </WriteButton>,
+  );
+  const button = screen.getByRole("button", { name: "Pin" });
+  // THE KIT HIDES THE REASON FROM THE EYE; the title is what a hover shows.
+  expect(button.getAttribute("title")).toBe("Choose a view first.");
+  // Its description is the kit's hidden sentence, and only that: a title
+  // that became the description too would be the same words read twice.
+  const described = (button.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent);
+  expect(described).toEqual(["Choose a view first."]);
+});
+
+test("a control that can act carries no reason as its title", () => {
+  render(
+    <WriteButton write={write()} onPress={() => {}}>
+      Pin
+    </WriteButton>,
+  );
+  expect(screen.getByRole("button", { name: "Pin" }).hasAttribute("title")).toBe(false);
+});
+
 test("a press in flight does not press again", () => {
   const onPress = vi.fn();
   render(
@@ -95,4 +122,24 @@ test("a refusal the request caused offers no retry: the same request would be re
   );
   expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
+});
+
+test("an argument the engine names in backticks is drawn as a value, not punctuation", () => {
+  render(
+    <WriteButton
+      write={write({
+        refusal: {
+          sentence: "`title` is 600 bytes and a task's title holds at most 256.",
+          hint: "",
+          retryable: false,
+        },
+      })}
+      onPress={() => {}}
+    >
+      Pin
+    </WriteButton>,
+  );
+  const alert = screen.getByRole("alert");
+  expect(alert.textContent).not.toContain("`");
+  expect(alert.querySelector("code")?.textContent).toBe("title");
 });

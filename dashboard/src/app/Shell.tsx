@@ -38,7 +38,9 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -50,12 +52,12 @@ import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./palette/Palette.tsx";
-import { PaletteOpener } from "./palette/opener.ts";
-import type { ScopeId } from "./palette/hits.ts";
-import { PaletteBoundary } from "./boundaries.tsx";
+import { LayerBoundary } from "./boundaries.tsx";
+import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
+import { lazyScreen } from "./lazyScreen.ts";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
-import { PageHeader, SectionColumn } from "./header/PageHeader.tsx";
+import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHeader.tsx";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
 import { peekable } from "./frame/peeks.tsx";
@@ -92,6 +94,7 @@ export interface PageContext {
   setCoverage: (coverage: CoverageFacts | null) => void;
   setCounts: (counts: Record<string, string>) => void;
   setWorkingIn: (project: string) => void;
+  setMenu: (entries: PageMenuEntry[]) => void;
 }
 
 const noop: PageContext = {
@@ -99,6 +102,7 @@ const noop: PageContext = {
   setCoverage: () => {},
   setCounts: () => {},
   setWorkingIn: () => {},
+  setMenu: () => {},
 };
 
 const PageContextValue = createContext<PageContext>(noop);
@@ -205,6 +209,47 @@ export function useWorkingScope(project: string): void {
 }
 
 /**
+ * Put a screen's SECONDARY actions in the page bar's "More" menu on a phone.
+ *
+ * ON A PHONE'S WIDTH THE BAR KEEPS ONE ACTION IN VIEW — the screen's primary
+ * one — and folds the rest into one menu at its end: the frame's own star and
+ * Copy link, and whatever a screen publishes here. A screen drawing a
+ * secondary control inline (Edit project) marks it `page-action-folds` so the
+ * bar hides it at that width, and publishes the same action here so it is
+ * still one press away. Laid out whole, a project's bar stood three rows tall
+ * on a 390px screen — the trail, the lenses, then four controls — about 105px
+ * of chrome above the work.
+ *
+ * A HOOK, where the controls themselves are a portal: a menu's items are
+ * values the kit's `Menu` lays out, not elements a screen could render into
+ * it. Every press goes through the entry the screen published LAST, so a
+ * callback that closes over newer state is the one that runs; what is laid
+ * out is re-published only when a label, a description or a disabled state
+ * moves. Cleared when the screen goes, for the reason [usePageLabels] gives.
+ */
+export function usePageMenu(entries: readonly PageMenuEntry[]): void {
+  const { setMenu } = usePageContext();
+  const latest = useRef(entries);
+  useLayoutEffect(() => {
+    latest.current = entries;
+  });
+  const key = JSON.stringify(
+    entries.map((e) => [e.key, e.label, e.disabled ?? false, e.description ?? ""]),
+  );
+  useEffect(() => {
+    setMenu(
+      latest.current.map((entry) => ({
+        ...entry,
+        onSelect: () => latest.current.find((e) => e.key === entry.key)?.onSelect(),
+      })),
+    );
+    return () => setMenu([]);
+    // The dependency is the CONTENT, for the reason `usePageLabels` gives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, setMenu]);
+}
+
+/**
  * What the frame reads ONCE for every surface in it: who this browser is,
  * and how much is waiting on them.
  *
@@ -247,22 +292,27 @@ function Frame({ children }: { children: ReactNode }) {
   // and re-renders with it.
   const prefs = useViewerPrefs();
 
-  // OPEN, AND ON WHICH SCOPE: ⌘K opens it on All, and a screen that asks
-  // for it through `useOpenPalette` names the scope it wants.
-  const [palette, setPalette] = useState<ScopeId | null>(null);
-  const paletteOpen = palette !== null;
-  const setPaletteOpen = useCallback((open: boolean) => setPalette(open ? "all" : null), []);
+  // OPEN OR NOT: ⌘K opens it on All, and so does every other way in.
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // A SCREEN THAT ASKED FOR THE HEIGHT INSTEAD OF THE SCROLL — see
   // `app/fill.tsx` for why this is a request and not a selector. The kit's
   // `fill` is what honours it: the scroller stops scrolling and the content
   // column takes the height that is left.
   const [filling, setFilling] = useState(false);
   const [tokenOpen, setTokenOpen] = useState(false);
+  // THE NEW TASK SHEET, and what the door it was opened from knows. The frame
+  // holds it for the reason it holds the palette: four doors — the sidebar's
+  // head, the Projects group, a screen's page bar, a board lane — open ONE
+  // sheet, and a route change does not close it (the reader may have followed
+  // a link to check a name while filing).
+  const [newTask, setNewTask] = useState<NewTaskPreset | null>(null);
+  const openNewTask = useCallback((preset: NewTaskPreset = {}) => setNewTask(preset), []);
 
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
   const [counts, setCounts] = useState<Record<string, string>>({});
   const [workingIn, setWorkingIn] = useState("");
+  const [menu, setMenu] = useState<PageMenuEntry[]>([]);
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the state bar.
@@ -340,12 +390,11 @@ function Frame({ children }: { children: ReactNode }) {
   }, [path, where, named, workspace]);
 
   const page: PageContext = useMemo(
-    () => ({ setLabels, setCoverage, setCounts, setWorkingIn }),
+    () => ({ setLabels, setCoverage, setCounts, setWorkingIn, setMenu }),
     [],
   );
 
   const openToken = useCallback(() => setTokenOpen(true), []);
-  const openPaletteOn = useCallback((scope: ScopeId = "all") => setPalette(scope), []);
   const degraded = degradationOf({
     authRejected,
     connected,
@@ -364,85 +413,96 @@ function Frame({ children }: { children: ReactNode }) {
 
   const screen = (
     <FillRequest.Provider value={setFilling}>
-      <PaletteOpener.Provider value={openPaletteOn}>
-        <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
-      </PaletteOpener.Provider>
+      <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
     </FillRequest.Provider>
   );
 
   return (
     // THE STEPPER'S ORDER, published by whichever list the reader is on, so
     // `[` and `]` walk the rows they are actually looking at. See `PeekHost`.
-    <PeekNeighbours>
-      <AppShell
-        className="app"
-        // THE SHEET GAINS ITS PEEK COLUMN ONLY WHILE A PEEK IS OPEN — an
-        // empty column would take its width from every screen that never
-        // opens one — and only where the frame has room for it; see
-        // `.app[data-peek]` in frame.css. The reserve is what the column's
-        // track leaves the list, so a dragged width cannot take it back.
-        data-peek={peekShape}
-        style={
-          peekShape === "column"
-            ? ({ "--peek-reserve": `${listReserve(frame)}px` } as CSSProperties)
-            : undefined
-        }
-        mainId={SCREEN_SCROLL_ID}
-        fill={filling}
-        navigationKey={route.hash}
-        toggleLabel="Navigation"
-        sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />}
-        topbar={
-          <PageHeader
-            crumbs={crumbs}
-            row={row}
-            counts={counts}
-            title={where}
-            workspace={workspace}
-            workingIn={workingIn}
-          >
-            <StateBar degraded={degraded} coverage={coverage} />
-          </PageHeader>
-        }
-        footer={<PeekHost />}
-      >
-        {row?.renderer === "column" ? (
-          <div className="section-frame">
-            <SectionColumn
+    <NewTaskOpener.Provider value={openNewTask}>
+      <PeekNeighbours>
+        <AppShell
+          className="app"
+          // THE SHEET GAINS ITS PEEK COLUMN ONLY WHILE A PEEK IS OPEN — an
+          // empty column would take its width from every screen that never
+          // opens one — and only where the frame has room for it; see
+          // `.app[data-peek]` in frame.css. The reserve is what the column's
+          // track leaves the list, so a dragged width cannot take it back.
+          data-peek={peekShape}
+          style={
+            peekShape === "column"
+              ? ({ "--peek-reserve": `${listReserve(frame)}px` } as CSSProperties)
+              : undefined
+          }
+          mainId={SCREEN_SCROLL_ID}
+          fill={filling}
+          navigationKey={route.hash}
+          toggleLabel="Navigation"
+          sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />}
+          topbar={
+            <PageHeader
+              crumbs={crumbs}
               row={row}
-              path={route.path}
-              operator={viewer.operator}
-              figures={figures}
-            />
-            <div className="section-body">{screen}</div>
-          </div>
-        ) : (
-          screen
-        )}
-      </AppShell>
+              counts={counts}
+              title={where}
+              workspace={workspace}
+              workingIn={workingIn}
+              menu={menu}
+            >
+              <StateBar degraded={degraded} coverage={coverage} />
+            </PageHeader>
+          }
+          footer={<PeekHost />}
+        >
+          {row?.renderer === "column" ? (
+            <div className="section-frame">
+              <SectionColumn
+                row={row}
+                path={route.path}
+                operator={viewer.operator}
+                figures={figures}
+              />
+              <div className="section-body">{screen}</div>
+            </div>
+          ) : (
+            screen
+          )}
+        </AppShell>
 
-      {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
+        {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
           open, so a palette that threw is a dialog saying so — closed the
           way the palette closes — and the next ⌘K is a fresh palette. */}
-      {palette !== null && (
-        <PaletteBoundary onClose={() => setPaletteOpen(false)}>
-          <CommandPalette
-            scope={palette}
-            onClose={() => setPaletteOpen(false)}
-            onShowKeys={() => setLegendOpen(true)}
+        {paletteOpen && (
+          <LayerBoundary title="Search" onClose={() => setPaletteOpen(false)}>
+            <CommandPalette
+              onClose={() => setPaletteOpen(false)}
+              onShowKeys={() => setLegendOpen(true)}
+            />
+          </LayerBoundary>
+        )}
+        {/* THE SHEET'S CODE IS THE WORK WORKSPACE'S CHUNK — it is a Work form,
+          and the frame's own entry stays the frame — so it is mounted only
+          while open, through the same loader every screen uses. */}
+        {newTask !== null && (
+          <LayerBoundary title="New task" onClose={() => setNewTask(null)}>
+            <NewTaskSheet preset={newTask} onClose={() => setNewTask(null)} />
+          </LayerBoundary>
+        )}
+        {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
+        {tokenOpen && (
+          <TokenDialog
+            onClose={() => setTokenOpen(false)}
+            onSaved={(token) => {
+              socket.setToken(token);
+              socket.reconnect();
+            }}
           />
-        </PaletteBoundary>
-      )}
-      {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
-      {tokenOpen && (
-        <TokenDialog
-          onClose={() => setTokenOpen(false)}
-          onSaved={(token) => {
-            socket.setToken(token);
-            socket.reconnect();
-          }}
-        />
-      )}
-    </PeekNeighbours>
+        )}
+      </PeekNeighbours>
+    </NewTaskOpener.Provider>
   );
 }
+
+/** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
+const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);

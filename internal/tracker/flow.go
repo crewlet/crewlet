@@ -161,10 +161,10 @@ func (r *Reader) Flow(ctx context.Context, q FlowQuery, now time.Time,
 			"level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
 	case q.Bucket != period.Day && q.Bucket != period.Week:
-		return FlowAnswer{}, invalid("tracker: a flow bucket is %q or %q, not %q",
+		return FlowAnswer{}, invalid("a flow bucket is %q or %q, not %q",
 			period.Day, period.Week, q.Bucket)
 	case q.Points < 1 || q.Points > MaxFlowPoints:
-		return FlowAnswer{}, invalid("tracker: a flow series is 1 to %d points, "+
+		return FlowAnswer{}, invalid("a flow series is 1 to %d points, "+
 			"not %d", MaxFlowPoints, q.Points)
 	}
 	if loc == nil {
@@ -277,7 +277,7 @@ func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 	for i := range windows {
 		windows[i] = last.Shift(i - (q.Points - 1))
 		if windows[i].Label == "" {
-			return invalid("tracker: a %d-%s series ending %s reaches past the "+
+			return invalid("a %d-%s series ending %s reaches past the "+
 				"calendar a label can spell", q.Points, q.Bucket, last.Label)
 		}
 	}

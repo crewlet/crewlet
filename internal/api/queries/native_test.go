@@ -39,6 +39,7 @@ type stubWork struct {
 	answer        tracker.Answer
 	detail        tracker.TaskDetail
 	views         tracker.ViewQuery
+	every         tracker.EveryViewQuery
 	listing       tracker.ViewListing
 	personQuery   tracker.PersonQuery
 	person        tracker.PersonState
@@ -111,6 +112,11 @@ func (s *stubWork) MyWork(_ context.Context, q tracker.MyWorkQuery,
 	s.myWorkQuery = q
 	s.myWorkNow, s.myWorkZone = now, loc
 	return s.myWork, s.err
+}
+
+func (s *stubWork) EveryView(_ context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error) {
+	s.every = q
+	return s.listing, s.err
 }
 
 func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
@@ -1089,6 +1095,8 @@ var sessionQuestions = []sessionQuestion{
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskFresh.Level }, nil},
 	{"work_views", "tracker", map[string]any{"container": "workspace"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }, nil},
+	{"work_saved_views", "tracker", map[string]any{},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.every.Level }, nil},
 	{"work_catalogue", "tracker", map[string]any{},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.catalogueQuery.Level }, nil},
 	{"work_person", "tracker", map[string]any{"handle": "ana"},
@@ -1507,5 +1515,33 @@ func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
 	want := []tracker.AuthorKind{tracker.AuthorOperator, tracker.AuthorHuman}
 	if got := w.activityQuery.ActorKinds; !slices.Equal(got, want) {
 		t.Errorf("the reader was asked for %v, want %v", got, want)
+	}
+}
+
+// EVERY SAVED VIEW, ACROSS THE CONTAINERS, takes the strip's rules: whose pins
+// is the viewer's question, and a count needs somebody to have pins — so it
+// reaches the reader with the company's clock for a named viewer and is
+// refused by name without one.
+func TestEverySavedViewIsAskedForAViewerAndCountedOnlyForOne(t *testing.T) {
+	t.Parallel()
+	w := &stubWork{}
+	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_saved_views",
+		map[string]any{"viewer": "ada-okonkwo", "counts": "true"}); err != nil {
+		t.Fatalf("every view, counted, for a named viewer: %v", err)
+	}
+	if !w.every.Viewer.Named() || !w.every.Counts || w.every.Now.IsZero() ||
+		w.every.Zone == nil {
+		t.Errorf("the reader was asked %+v — want the viewer, counts on, an "+
+			"instant and the company's clock", w.every)
+	}
+
+	w = &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_saved_views",
+		map[string]any{"counts": "true"}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("counts with nobody named answered %v, want a bad-params "+
+			"refusal naming viewer=", err)
+	}
+	if w.every.Counts {
+		t.Error("the refused counts reached the reader")
 	}
 }

@@ -51,7 +51,8 @@ export interface ItemEdits {
   busy: boolean;
   /**
    * Change the task. `conditional` false sends no `if_match` — for a gesture
-   * the engine resolves as it lands (a checklist tick).
+   * the engine resolves as it lands (a checklist tick). A conditional change
+   * made while a press is out sends nothing and resolves with null.
    */
   edit: (patch: ItemPatch, done: string, conditional?: boolean) => Promise<ActResult | null>;
   write: Act<"update_work_item">;
@@ -87,6 +88,14 @@ export function ItemEditsProvider({
   const [lost, setLost] = useState(false);
   const edit = useCallback(
     async (patch: ItemPatch, done: string, conditional = true) => {
+      // A CONDITIONAL EDIT WHILE A PRESS IS OUT IS NOT SENT: it carries the
+      // version on screen, which the press already out is about to move, so
+      // the engine could only refuse it — and the page would then report the
+      // person's own first press as somebody else's change. The title and a
+      // date are forms Enter submits, and a second Enter did exactly that. A
+      // gesture sent without a version (a tick, a watch) composes with one in
+      // flight and still goes.
+      if (conditional && write.busy) return null;
       setLost(false);
       const result = await write.run(
         { item, ...(conditional ? { if_match: version } : {}), ...patch },

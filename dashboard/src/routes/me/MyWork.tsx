@@ -231,9 +231,21 @@ export function MyWork({ section }: { section: MeSection }) {
   // A count that moved with the filters would answer "how much is on this
   // person" with "how much is on screen", which is what the other six tabs'
   // own bounded blocks would then disagree with.
+  //
+  // AND EVERY TASK ON ITS OWN, as the list counts them (`subtasks=separate`,
+  // `lib/work.ts`). In the grammar's default a root this person holds brings
+  // its whole subtree along unfiltered, so the strip counted sub-tasks held
+  // by somebody else — and finished ones — that the list under it never drew.
   const assigned = useQuery(
     "work_items",
-    whose ? { container: "workspace", assignee: whose, status_group: ASSIGNED_SCOPE } : undefined,
+    whose
+      ? {
+          container: "workspace",
+          assignee: whose,
+          status_group: ASSIGNED_SCOPE,
+          subtasks: "separate",
+        }
+      : undefined,
     { enabled: whose !== "", pollMs: 30_000 },
   );
 

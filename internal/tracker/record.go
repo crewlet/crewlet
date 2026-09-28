@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"time"
@@ -177,27 +178,63 @@ const (
 // budget: a record's own encoded size, and one tool answer's. And pure over
 // values, for the reason coerce.go gives for the same shape — a rule that can
 // only be exercised through a database is a rule nobody re-reads.
-func checkTextCaps(id string, title, body, comment *string) error {
+func checkTextCaps(title, body, comment *string) error {
 	for _, c := range []struct {
-		field string
+		field TextField
 		value *string
 		limit int
 	}{
-		{"title", title, MaxTitle},
-		{"body", body, MaxBody},
-		{"comment body", comment, MaxCommentBody},
+		{TextTitle, title, MaxTitle},
+		{TextBody, body, MaxBody},
+		{TextComment, comment, MaxCommentBody},
 	} {
 		if c.value == nil || len(*c.value) <= c.limit {
 			continue
 		}
-		return invalid("tracker: the %s on task %s is %d bytes and the "+
-			"maximum is %d — it is refused rather than cut, because a value "+
-			"silently truncated is one somebody will look for later; shorten "+
-			"it, or put the long form on a page and link it here",
-			c.field, id, len(*c.value), c.limit)
+		return &TextCapError{Field: c.field, Size: len(*c.value), Limit: c.limit}
 	}
 	return nil
 }
+
+// TextField names which of a task's own texts a [TextCapError] is about.
+type TextField string
+
+// The three texts [checkTextCaps] bounds, named as a refusal names them.
+const (
+	TextTitle   TextField = "title"
+	TextBody    TextField = "body"
+	TextComment TextField = "comment body"
+)
+
+// TextCapError is a task's own text past the cap its field declares, refused
+// rather than cut. It is [ErrInvalid] — the same request can never land and a
+// shorter one can.
+//
+// TYPED, because the caller has to NAME THE FIELD to a reader who is not
+// reading Go: a person filing from the dashboard is shown the tool's sentence,
+// and a sentence built from this error's own words said "the title on task
+// 68c5…" about a task that was never created — the create's id is minted
+// before the write and refused with it, so it named nothing anybody could
+// look up. The field, the size and the cap are what a caller can act on, and
+// [builtin]'s refusal composes its sentence from exactly those.
+//
+// AND IT NAMES NO TASK for the same reason: on a create there is none, and on
+// an update the caller named the item it was editing in the call this answers.
+type TextCapError struct {
+	Field TextField
+	// Size is what was sent and Limit the most the field holds, in bytes.
+	Size, Limit int
+}
+
+func (e *TextCapError) Error() string {
+	return fmt.Sprintf("tracker: the %s is %d bytes and the maximum is %d — it "+
+		"is refused rather than cut, because a value silently truncated is one "+
+		"somebody will look for later; shorten it, or put the long form on a "+
+		"page and link it here", e.Field, e.Size, e.Limit)
+}
+
+// Unwrap marks the refusal as one about CONTENT; see [ErrInvalid].
+func (e *TextCapError) Unwrap() error { return ErrInvalid }
 
 // Spend is a task's running totals, for ever.
 //

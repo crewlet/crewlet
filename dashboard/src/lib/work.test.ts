@@ -32,6 +32,7 @@ import {
   dayKey,
   defaultView,
   describeChange,
+  foldChartReapplies,
   endNote,
   LANDING_SHAPE,
   SCOPE_GROUPS,
@@ -484,7 +485,16 @@ test("a people delta reads as the seat's name where the chart knew it", () => {
   // EVERY FIELD WHOSE VALUE IS PEOPLE, for the reason the task-id loop above
   // gives: one added to the engine's set and missed here is a column of
   // handles nobody asked for.
-  for (const field of ["assignee", "reporter", "watchers", "muted", "collaborators"]) {
+  for (const field of [
+    "assignee",
+    "reporter",
+    "watchers",
+    "muted",
+    "collaborators",
+    // WHO SET SOMEBODY'S PRIORITIES — a person record's delta, and it printed
+    // "jane-founder" in a log naming every other person.
+    "priorities_set_by",
+  ]) {
     expect(
       describeHistory(change({ fields: { [field]: { from: "", to: "ada" } } }), ctx),
     ).toContain("Ada Lovelace");
@@ -1226,6 +1236,14 @@ test("a count over a windowed question says which window it counted", () => {
   expect(countedLabel(6, windowed)).toBe("6 items due in this window");
 });
 
+// A COUNT NAMES THE SCOPE IT COUNTED, so the bar's "25 in Recent" and a
+// project's "Items 19" (its open tasks) are two different figures by their
+// words rather than two numbers both called "items".
+test("a count on a scoped screen names its scope", () => {
+  expect(countedLabel(25, {}, "Recent")).toBe("25 in Recent");
+  expect(countedLabel(1, {}, "Open")).toBe("1 in Open");
+});
+
 // A LIST THAT ENDED AND A LIST THAT WAS CUT OFF END THE SAME WAY without this:
 // rows, then page ground. `totalHint` is silent once everything matching is on
 // screen and a cursor is invisible, so the reader of a hundred rows cannot tell
@@ -1690,4 +1708,49 @@ test("a status is coloured by its group, and review is work moving", () => {
   // And no status the tracker ships is drawn in the NEEDS-YOU hue.
   expect(Object.values(STATUS_TONE)).not.toContain("caution");
   expect(Object.keys(STATUS_TONE)).toHaveLength(STATUSES.length);
+});
+
+// THE CHART EPOCH IS NEVER A CLAUSE A PERSON READS: beside a real change it is
+// dropped, and alone it is the chart being re-applied.
+test("a project's chart epoch is bookkeeping, never printed", () => {
+  const epoch = { chart_epoch: { from: "1790538626", to: "1790538628" } };
+  const project = { kind: "project_updated", subject_kind: "project", subject_id: "ENG" };
+  expect(describeChange(record({ ...project, fields: epoch }), {})).toBe("Org chart re-applied");
+  const mixed = describeChange(
+    record({ ...project, fields: { ...epoch, name: { from: "Core", to: "Platform" } } }),
+    {},
+  );
+  expect(mixed).not.toMatch(/epoch|1790538626/i);
+  expect(mixed).toContain("Platform");
+  // AND ONLY CONSECUTIVE ONES FOLD.
+  const lines = foldChartReapplies([
+    record({ ...project, id: "a", project: "ENG", fields: epoch }),
+    record({ ...project, id: "b", project: "PROD", fields: epoch }),
+    record({ id: "c", fields: { status: { from: "todo", to: "done" } } }),
+    record({ ...project, id: "d", project: "ENG", fields: epoch }),
+  ]);
+  expect(lines.map((l) => (l.kind === "reapply" ? l.projects.join("+") : "record"))).toEqual([
+    "ENG+PROD",
+    "record",
+    "ENG",
+  ]);
+});
+
+// A SAVED VIEW'S RECORD IS ITS STORAGE — container, rank, a params blob — and
+// the log said "Params: – → blocked=true, Rank: – → a1". What a person did was
+// save a view under a name, or change one.
+test("a saved view's change is named by the view, not by its storage", () => {
+  const saved = record({
+    kind: "view_saved",
+    fields: {
+      name: { from: "", to: "Blocked, org-wide" },
+      params: { from: "", to: "blocked=true" },
+      rank: { from: "", to: "a1" },
+    },
+  });
+  expect(describeChange(saved, {})).toBe("Saved the view “Blocked, org-wide”");
+  const renamed = record({ kind: "view_saved", fields: { name: { from: "A", to: "B" } } });
+  expect(describeChange(renamed, {})).toBe("Renamed the view “A” to “B”");
+  const changed = record({ kind: "view_saved", fields: { params: { from: "a", to: "b" } } });
+  expect(describeChange(changed, {})).toBe("Changed a saved view");
 });

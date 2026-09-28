@@ -104,6 +104,7 @@ type WorkReader interface {
 	TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 		fresh statelog.Freshness) (tracker.TaskTurns, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
+	EveryView(ctx context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
@@ -488,6 +489,55 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		// the company's own clock, which every relative date in it is
 		// cut on — the pair `work_items` parses with.
 		Counts: counts, Now: s.clock(), Zone: s.zone(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"views": listing.Views, "read_level": listing.Level,
+		"log_seq": listing.LogSeq, "applied_through": listing.AppliedThrough,
+		"complete": listing.Complete,
+	}
+	if listing.LogLag != nil {
+		out["log_lag"] = *listing.LogLag
+	}
+	if listing.Incomplete != nil {
+		out["incomplete"] = listing.Incomplete
+	}
+	return out, nil
+}
+
+// workSavedViews answers every saved view a viewer can see, in EVERY
+// container, each row carrying the container it lives in.
+//
+// A SIBLING OF [Sources.workViews] rather than a `container=` it accepts: a
+// strip is one container's tabs and this is one PERSON's views — the
+// inventory of what somebody saved and the sidebar's pinned group. Both used
+// to ask the workspace strip, so a view saved on a project board appeared in
+// neither and could be pinned from nowhere. `viewer=` and `counts=true` take
+// [Sources.workViews]' rules, for its reasons: whose pins is a personal
+// question, and only a viewer has pins to count.
+func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	viewer, err := s.viewerPins(ctx, strings.TrimSpace(p.String("viewer")))
+	if err != nil {
+		return nil, err
+	}
+	counts := p.Bool("counts", false)
+	if counts && !viewer.Named() {
+		return nil, fmt.Errorf("%w: counts=true needs viewer= — the counts "+
+			"are of the views PINNED for somebody, and nobody named has none",
+			ErrBadParams)
+	}
+	listing, err := s.Work.EveryView(ctx, tracker.EveryViewQuery{
+		Viewer: viewer,
+		Units:  s.chartUnits(),
+		Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
+		Counts:      counts, Now: s.clock(), Zone: s.zone(),
 	})
 	if err != nil {
 		return nil, err

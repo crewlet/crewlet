@@ -32,13 +32,14 @@ import { useMemo, type ReactNode } from "react";
 import {
   AppShell,
   BrandLockup,
+  IconButton,
   Kbd,
   SearchTrigger,
   SidebarNav,
   StatusDot,
   useAppShell,
 } from "@crewlethq/ui";
-import { KeyGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph, PinGlyph, PlusGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import { WORKSPACES, workspaceOf, type WorkspaceRow } from "~/app/nav.ts";
 import { glyphFor } from "~/ui/glyph.tsx";
@@ -46,7 +47,9 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { unfinished } from "~/lib/work.ts";
+import { unfinished, viewRun } from "~/lib/work.ts";
+import { routeProject } from "../palette/hits.ts";
+import { useOpenNewTask } from "../newTask.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
@@ -79,6 +82,7 @@ export function Sidebar({
   useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
   const org = useOrg();
   const agents = useAgents();
+  const openNewTask = useOpenNewTask();
   const health = useEngineHealth();
   const { connected, authRejected } = useConnection();
   const inbox = useInboxCounts();
@@ -138,21 +142,37 @@ export function Sidebar({
   return (
     <AppShell.Rail
       header={
-        <BrandLockup
-          // THE COMPANY IS THE TITLE, beside the product's mark — the lockup
-          // the approved design draws ("Nimbus", no second line). The kit's
-          // own default puts the product's name first and the company under
-          // it, reasoning that a home link named by the product reads the same
-          // on every deployment; on this screen the company is the subject,
-          // one browser is one company, and the product is in the mark and the
-          // tab. "Crewlet" stands in only while no company has been sent.
-          name={org?.name || "Crewlet"}
-          href={href(["home"])}
-          // A LITERAL PATH under the dashboard's own `base`, which the dev
-          // server serves itself — written out so `protocol/proxy.test.ts`
-          // can read it and hold it against the proxy table.
-          mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
-        />
+        <div className="side-head">
+          <BrandLockup
+            // THE COMPANY IS THE TITLE, beside the product's mark — the lockup
+            // the approved design draws ("Nimbus", no second line). The kit's
+            // own default puts the product's name first and the company under
+            // it, reasoning that a home link named by the product reads the same
+            // on every deployment; on this screen the company is the subject,
+            // one browser is one company, and the product is in the mark and the
+            // tab. "Crewlet" stands in only while no company has been sent.
+            name={org?.name || "Crewlet"}
+            href={href(["home"])}
+            // A LITERAL PATH under the dashboard's own `base`, which the dev
+            // server serves itself — written out so `protocol/proxy.test.ts`
+            // can read it and hold it against the proxy table.
+            mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
+          />
+          {/* THE ONE CREATE THE CHROME CARRIES, beside the company's name as
+              the approved design draws it: filing work is the thing a person
+              does from anywhere, so its door is on every screen. It files
+              into the project on screen when there is one — the sheet says
+              where before anything is sent. NOT GATED HERE: the sheet's own
+              Create is the write control, and it says why a reader who
+              cannot file cannot. */}
+          <IconButton
+            size="sm"
+            variant="ghost"
+            label="New task"
+            icon={<PlusGlyph size="sm" />}
+            onClick={() => openNewTask({ project: routeProject(route.path) || undefined })}
+          />
+        </div>
       }
       footer={
         <>
@@ -216,7 +236,11 @@ export function Sidebar({
           <ProjectsSection path={route.path} />
         </RailBoundary>
         <RailBoundary label="Pinned" resetKey={at}>
-          <PinnedSection path={route.path} viewer={viewer.handle} />
+          <PinnedSection
+            path={route.path}
+            viewKey={route.query.get("view") ?? ""}
+            viewer={viewer.handle}
+          />
         </RailBoundary>
         <RailBoundary label="Starred" resetKey={at}>
           <StarredSection path={route.path} />
@@ -237,6 +261,8 @@ interface NavRowProps {
   glyph?: ReactNode;
   lead?: string;
   path: string[];
+  /** The address's query, for a row that is a question rather than a place. */
+  query?: Record<string, string>;
   current: boolean;
   badge?: { value: number | string; label: string };
   count?: { value: number | string; label: string; mark?: ReactNode };
@@ -249,7 +275,7 @@ interface NavRowProps {
  * `preload`), so the chunk is usually in by the time the click lands — the
  * pointer's hover and the keyboard's focus are both the reader deciding.
  */
-function NavRow({ label, icon, glyph, lead, path, current, badge, count }: NavRowProps) {
+function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }: NavRowProps) {
   const Glyph = icon ? glyphFor(icon) : undefined;
   const warm = () => preload(path);
   return (
@@ -257,7 +283,7 @@ function NavRow({ label, icon, glyph, lead, path, current, badge, count }: NavRo
       label={label}
       icon={glyph ?? (Glyph ? <Glyph size="sm" /> : undefined)}
       lead={lead}
-      href={href(path)}
+      href={href(path, query)}
       current={current}
       badge={badge}
       count={count}
@@ -281,13 +307,29 @@ function NavRow({ label, icon, glyph, lead, path, current, badge, count }: NavRo
  */
 function ProjectsSection({ path }: { path: string[] }) {
   const projects = useQuery("work_projects", { limit: PROJECTS_PAGE }, { pollMs: 120_000 });
+  const openNewTask = useOpenNewTask();
   const rows = projects.data?.projects ?? [];
   if (rows.length === 0) return null;
   // THE PROJECT A READER IS INSIDE is the one marked — its page, or an item
-  // filed in it, whose key names the project.
-  const inside = path[0] === "work" ? (path[1] ?? "").replace(/-\d+$/, "") : "";
+  // filed in it, whose key names the project — and the one this group's `+`
+  // files into. THE ROUTE'S OWN RESOLVER, the one the rail's head `+` asks:
+  // the path's second segment with a number stripped read every other Work
+  // page as a project, so on `#/work/views` this `+` offered "New task in
+  // views" and opened the sheet on a project called `views`, and on a task
+  // opened by its uuid it named the uuid.
+  const inside = routeProject(path);
   return (
-    <SidebarNav.Group label="Projects">
+    <SidebarNav.Group
+      label="Projects"
+      // A TASK IN A PROJECT — the one the reader is inside, preselected, or
+      // the sheet's own choice when they are in none. Not "New project": a
+      // project is minted by the company configuration, never by hand.
+      action={{
+        label: inside ? `New task in ${inside}` : "New task in a project",
+        icon: <PlusGlyph size="sm" />,
+        onClick: () => openNewTask(inside ? { project: inside } : {}),
+      }}
+    >
       {rows.map((p) => (
         <NavRow
           key={p.key}
@@ -310,29 +352,49 @@ function ProjectsSection({ path }: { path: string[] }) {
  * ASKED WITH THE VIEWER, which is the whole of the fix this row owes: a pin is
  * a person's, and the strip asked for without one has no pins in it — so the
  * section this replaced asked the shared strip and never drew a pinned row.
+ *
+ * AND ACROSS EVERY CONTAINER (`work_saved_views`), never the workspace strip: a
+ * view pinned from a project board lives in that project, and read from the
+ * workspace strip it was in nobody's sidebar. A project's view carries the
+ * project's key as its lead, and runs on that project's list.
  * `counts=true` makes the engine run each pinned view's own count in the same
  * read; a view that no longer compiles carries a refusal instead, and draws no
  * figure rather than a wrong one.
  */
-function PinnedSection({ path, viewer }: { path: string[]; viewer: string }) {
-  const views = useQuery(
-    "work_views",
-    viewer ? { container: "workspace", viewer, counts: true } : undefined,
-    { enabled: viewer !== "", pollMs: 120_000 },
-  );
+function PinnedSection({
+  path,
+  viewKey,
+  viewer,
+}: {
+  path: string[];
+  /** The `view=` the reader is on, which is what marks a pinned row current. */
+  viewKey: string;
+  viewer: string;
+}) {
+  const views = useQuery("work_saved_views", viewer ? { viewer, counts: true } : undefined, {
+    enabled: viewer !== "",
+    pollMs: 120_000,
+  });
   const pinned = (views.data?.views ?? []).filter((v) => v.pinned && v.id);
   if (pinned.length === 0) return null;
   return (
     <SidebarNav.Group label="Pinned">
       {pinned.map((v) => {
-        const at = ["work", "views", v.id as string];
+        // A PIN RUNS THE VIEW. It opened the view's inventory page, which
+        // describes the view and offers a button to run it — so the row a
+        // reader pinned to get to their work one click away was two clicks
+        // away, through a page about the pin. The inventory is still
+        // `#/work/views`, one tab over.
+        const run = viewRun(v);
         return (
           <NavRow
             key={v.id}
             label={v.name}
             glyph={<PinGlyph size="sm" />}
-            path={at}
-            current={samePath(path, at)}
+            lead={v.container.kind === "project" ? v.container.id : undefined}
+            path={run.path}
+            query={run.query}
+            current={samePath(path, run.path) && viewKey === v.key}
             count={
               v.count === undefined
                 ? undefined

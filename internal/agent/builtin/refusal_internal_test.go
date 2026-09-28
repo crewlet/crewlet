@@ -57,6 +57,9 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// never lands.
 		{"refused on content", fmt.Errorf("tracker: field estimate is exact "+
 			"to two places: %w", tracker.ErrInvalid), tools.RefusalInvalid},
+		{"text past its cap", fmt.Errorf("x: %w", &tracker.TextCapError{
+			Field: tracker.TextTitle, Size: 600, Limit: tracker.MaxTitle}),
+			tools.RefusalInvalid},
 		// A TAG THAT CANNOT BE DECLARED is what the call asked for, and its
 		// sentence names the tag and the way past it.
 		{"a clashing tag", fmt.Errorf("x: %w", &tracker.TagClash{Project: "OPS",
@@ -66,8 +69,8 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 			Slug: "api"}), tools.RefusalInvalid},
 		// A GESTURE STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN may have
 		// written part of what it asked for, so it is never a refusal of
-		// what was asked: it is the node's class and not the request's —
-		// see [unknownOutcome].
+		// what was asked: it is the class an interrupted call answers,
+		// the node's and not the request's — see [unknownOutcome].
 		{"a step whose outcome is unknown", fmt.Errorf("x: %w",
 			tracker.ErrStepUnresolved), tools.RefusalUnavailable},
 		{"a step this node cannot vouch for", fmt.Errorf("x: %w",
@@ -108,6 +111,64 @@ func TestAReusedOperationIsTheCallersToChange(t *testing.T) {
 	}
 }
 
+// A CONTENT REFUSAL READS FOR THE PERSON WHO IS SHOWN IT. The invalid class is
+// the one a person's surface prints as the tool wrote it (`contract/errors.ts`
+// — "the sentence names the argument"), so it must not carry the node-failure
+// wording written for a model, nor anything the person never typed. A title
+// filed from the dashboard at 600 bytes came back as "create_work_item did not
+// land (tracker: the title on task 68c5… is 600 bytes …). The change was NOT
+// made — do not report it as done." — a tool name, a Go error prefix, the id
+// of a task that was never created, and an instruction meant for a model.
+func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		err   error
+		names []string
+	}{
+		{"a title", &tracker.TextCapError{Field: tracker.TextTitle, Size: 600,
+			Limit: tracker.MaxTitle}, []string{"`title`", "600", "256", "title"}},
+		{"a description", &tracker.TextCapError{Field: tracker.TextBody,
+			Size: tracker.MaxBody + 1, Limit: tracker.MaxBody},
+			[]string{"`body`", "description", fmt.Sprint(tracker.MaxBody)}},
+		{"a comment", &tracker.TextCapError{Field: tracker.TextComment,
+			Size: tracker.MaxCommentBody + 9, Limit: tracker.MaxCommentBody},
+			[]string{"`body`", "comment", fmt.Sprint(tracker.MaxCommentBody + 9)}},
+		{"any other content refusal", tracker.Decision{Question: "Which?"}.Validate(),
+			[]string{"a decision has 0 option(s)"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := writeFailure(Actor{}, CreateWorkItemTool, c.err)
+			if got.Refusal != tools.RefusalInvalid {
+				t.Fatalf("classed %q, want invalid", got.Refusal)
+			}
+			for _, want := range c.names {
+				if !strings.Contains(got.Output, want) {
+					t.Errorf("the sentence does not say %q: %s", want, got.Output)
+				}
+			}
+			// NEITHER THE NODE-FAILURE WORDING NOR THE GO PREFIX: the
+			// class is printed to a person as it stands, and "tracker:" is
+			// a word for a log about where the error came from.
+			for _, never := range []string{"did not land", "do not report it as done",
+				"tracker:"} {
+				if strings.Contains(got.Output, never) {
+					t.Errorf("a content refusal a person reads carries %q: %s",
+						never, got.Output)
+				}
+			}
+		})
+	}
+	// THE TEXT CAP IS COMPOSED FROM ITS FIELDS, never the writer's Go error.
+	got := writeFailure(Actor{}, CreateWorkItemTool, &tracker.TextCapError{
+		Field: tracker.TextTitle, Size: 600, Limit: tracker.MaxTitle})
+	for _, never := range []string{"tracker:", CreateWorkItemTool} {
+		if strings.Contains(got.Output, never) {
+			t.Errorf("the text-cap sentence carries %q: %s", never, got.Output)
+		}
+	}
+}
+
 // THE KNOWLEDGE BASE'S WRITER CLASSES ITS OWN REFUSALS, so here the unmarked
 // remainder is this node's failure rather than the caller's.
 func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
@@ -117,7 +178,6 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 		want tools.Refusal
 	}{
 		{fmt.Errorf("x: %w", pages.ErrInvalid), tools.RefusalInvalid},
-		{fmt.Errorf("x: %w", pages.ErrReserved), tools.RefusalForbidden},
 		{fmt.Errorf("x: %w", pages.ErrTitleTaken), tools.RefusalExists},
 		{fmt.Errorf("x: %w", pages.ErrStaleVersion), tools.RefusalStaleVersion},
 		{fmt.Errorf("x: %w", pages.ErrConflict), tools.RefusalConflict},

@@ -69,7 +69,7 @@ import {
   type CardWaiting,
   type RowChrome,
 } from "~/components/work.tsx";
-import { SaveViewButton } from "~/components/writes.tsx";
+import { PinButton, SaveViewButton } from "~/components/writes.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
 import { TimelineView } from "./shapes/Timeline.tsx";
@@ -81,6 +81,7 @@ import { FilterChips } from "./toolbar/FilterChips.tsx";
 import {
   AllViewsLink,
   ArrangeControls,
+  SCOPE_OPTIONS,
   ScopeControl,
   ShapeTabs,
   SubstringBox,
@@ -90,6 +91,7 @@ import { FEED_PAGE, PurgeBand } from "./feed.tsx";
 import { usePagedItems } from "./usePagedItems.ts";
 import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import { useOpenNewTask } from "~/app/newTask.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -241,6 +243,7 @@ export function ItemsView({
   const index = useMemo(() => indexOrg(org), [org]);
   const viewer = useViewer();
   const agents = useAgents();
+  const openNewTask = useOpenNewTask();
   // ONE CLOCK for the screen, ticking on its own: a relative time computed
   // from Date.now() at render is frozen until something else re-renders, so
   // "2 minutes ago" stays that for an hour on a screen nobody touches.
@@ -762,6 +765,8 @@ export function ItemsView({
       ...(next ? {} : { group_by2: null }),
     });
   };
+  // THE SAVED VIEW RUNNING, if one is — what the strip's pin acts on.
+  const running = saved.find((v) => v.key === chosenView && v.id);
   // WHERE THE BOARD NAMES ITS LANES OUT OF VIEW: a slot at the bar's end the
   // board portals its pager into, so naming them costs the lanes no row.
   const [laneSlot, setLaneSlot] = useState<HTMLElement | null>(null);
@@ -788,6 +793,17 @@ export function ItemsView({
               containerLabel={project ? "All in this project" : "All work"}
               onView={(key) => applyView(key, saved, setViewKey)}
             />
+            {/* THE VIEW RUNNING, PINNED OR UNPINNED FROM WHERE IT RUNS: a pin
+                is offered wherever a view is listed, and a project's strip is
+                the only list a view saved on that project was ever in. */}
+            {running?.id && (
+              <PinButton
+                key={running.id}
+                view={running.id}
+                name={running.name}
+                pinned={Boolean(running.pinned)}
+              />
+            )}
             <SaveViewButton
               container={container}
               type={shape}
@@ -872,7 +888,11 @@ export function ItemsView({
             <Coverage answer={data} />
             {!loading && !error && (
               <span>
-                {countedLabel(shown.length, params)}{" "}
+                {countedLabel(
+                  shown.length,
+                  params,
+                  SCOPE_OPTIONS.find((o) => o.value === scope)?.label,
+                )}{" "}
                 {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
               </span>
             )}
@@ -939,6 +959,17 @@ export function ItemsView({
                 weekly={scope === "recent"}
                 laneSlot={laneSlot}
                 cardOmit={cardOmit}
+                // A LANE'S `+` FILES INTO THAT LANE: the one sheet, told what
+                // puts a task in the lane (the board decides which lanes take
+                // one, from [presetForLane]) and the project this list is
+                // scoped to — and, on a person's own list, that it is theirs.
+                onAdd={(lane) =>
+                  openNewTask({
+                    ...(project ? { project } : {}),
+                    ...(host?.assignee ? { assignee: host.assignee } : {}),
+                    ...lane,
+                  })
+                }
               />
             )}
             {/* ONE BRANCH FOR BOTH GRID SHAPES. The list and the table are one

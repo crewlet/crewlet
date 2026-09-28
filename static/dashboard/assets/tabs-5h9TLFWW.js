@@ -1,1 +1,0 @@
-import{xn as e}from"./media-4p13e2Du.js";import{$t as t}from"./index-fLpHLaNS.js";function n(n,r,i=`section`){let a=r[0],[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};

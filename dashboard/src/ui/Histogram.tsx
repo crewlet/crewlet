@@ -204,7 +204,16 @@ const STEP_MS: Record<"minute" | "hour" | "day", number> = {
 const MAX_TICKS = 5;
 
 /**
- * Which bars get a label: the first, the last, and an even spread between.
+ * Which bars get a label: the first, the last, and an EVEN STRIDE between.
+ *
+ * ONE WHOLE STRIDE, never a rounded fraction. Rounding `i * (n - 1) / 4`
+ * spread five labels over a seven-day window as Sep 22, 24, 25, 27, 28 — gaps
+ * of two, one, two and one days, which reads as days missing from the data.
+ * So the stride is the smallest whole number of bars that keeps the labels at
+ * or under [MAX_TICKS], preferring one that lands exactly on the last bar
+ * (seven days: every other day, four labels); where none does, the stride
+ * holds between the interior labels and a label that would crowd the last one
+ * — nearer than half a stride — gives way to it.
  *
  * EVENLY OVER THE BARS rather than on the calendar. `lib/timeline.ts` rules its
  * axis on weeks because a roadmap's columns are days and a reader navigates it
@@ -219,9 +228,23 @@ const MAX_TICKS = 5;
  */
 export function ticksFor(bars: number): number[] {
   if (bars <= 0) return [];
-  const count = Math.min(MAX_TICKS, bars);
-  if (count === 1) return [0];
-  return Array.from({ length: count }, (_, i) => Math.round((i * (bars - 1)) / (count - 1)));
+  if (bars <= MAX_TICKS) return Array.from({ length: bars }, (_, i) => i);
+  const span = bars - 1;
+  const least = Math.ceil(span / (MAX_TICKS - 1));
+  // AN EXACT STRIDE WHERE ONE IS NEAR: up to half again the least one, so a
+  // prime span does not fall back to its two ends alone.
+  let stride = least;
+  for (let s = least; s <= Math.ceil(least * 1.5); s++) {
+    if (span % s === 0) {
+      stride = s;
+      break;
+    }
+  }
+  const out: number[] = [];
+  for (let at = 0; at < span; at += stride) out.push(at);
+  if (span - out[out.length - 1]! < stride / 2) out.pop();
+  out.push(span);
+  return out;
 }
 
 /**

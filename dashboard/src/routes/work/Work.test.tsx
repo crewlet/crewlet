@@ -1639,7 +1639,7 @@ test("the strip and its way into the inventory survive a company that saved noth
     expect(screen.getByRole("button", { name: "All work", pressed: true })).toBeTruthy(),
   );
   // A REAL ANCHOR, middle-clickable like every other way out of a screen.
-  const more = screen.getByText("All views →");
+  const more = screen.getByRole("link", { name: "All saved views" });
   expect(more.tagName).toBe("A");
   expect(more.getAttribute("href")).toBe("#/work/views");
   // AND NO COUNT ON THE CONTAINER TAB. The engine's total is over the FILTER

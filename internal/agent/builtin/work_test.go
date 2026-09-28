@@ -60,6 +60,11 @@ type fakeTracker struct {
 	// composed.
 	createAnswer *tracker.WriteResult
 
+	// defaultAssignee is who a create naming nobody is reported filed to,
+	// standing in for the project's default the real tracker settles on
+	// inside the create's own snapshot.
+	defaultAssignee string
+
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
 	searched  []string
@@ -434,8 +439,14 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 	if f.createAnswer != nil {
 		return *f.createAnswer, nil
 	}
+	// THE ASSIGNEE THE TASK WAS FILED TO, as the tracker reports it: the
+	// named one, or this fake's stand-in for the project's default.
+	assignee := task.Assignee
+	if assignee == "" {
+		assignee = f.defaultAssignee
+	}
 	return tracker.WriteResult{
-		Key: "ENG-9", Outcome: statelog.OutcomeApplied,
+		Key: "ENG-9", Assignee: assignee, Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 11},
 		Version:  11,
 	}, nil
@@ -1751,6 +1762,79 @@ func TestACreateSetsWhenAndHowBig(t *testing.T) {
 	if task.EstimateMinutes != 240 || task.Points != 8 {
 		t.Errorf("sizing is %d minutes / %v points, want 240 and 8",
 			task.EstimateMinutes, task.Points)
+	}
+}
+
+// A TASK IS FILED INTO THE LANE IT WAS FILED FROM. A board lane's "+" names
+// the lane's status, and a create that could only land in `todo` made that two
+// writes, the second free to fail after the first had filed the task in the
+// wrong column. The group travels with the status, and an unknown status is
+// refused by name rather than filed as `todo`.
+func TestACreateStartsInTheStatusItNames(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "already under way", "project": "ENG", "status": "in_progress",
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	task := trk.created[0]
+	if task.Status != tracker.StatusInProgress || task.StatusGroup != tracker.GroupActive {
+		t.Errorf("filed as %s/%s, want in_progress/active", task.Status, task.StatusGroup)
+	}
+
+	plain := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "not started", "project": "ENG",
+	})
+	if plain.Failed || trk.created[1].Status != tracker.StatusTodo {
+		t.Errorf("a create naming no status filed %q (%s), want todo",
+			trk.created[1].Status, plain.Output)
+	}
+
+	bad := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "somewhere", "project": "ENG", "status": "shipping",
+	})
+	if !bad.Failed || !strings.Contains(bad.Output, "shipping") {
+		t.Errorf("an unknown status was not refused by name: %s", bad.Output)
+	}
+	if len(trk.created) != 2 {
+		t.Errorf("the refused create filed a task anyway (%d filed)", len(trk.created))
+	}
+}
+
+// WHO A CREATE WAS FILED TO IS THE TRACKER'S ANSWER, never the argument. A
+// create naming nobody goes to the project's default assignee, which only the
+// create's own snapshot decides — so an answer echoing the empty argument
+// told a model, and a person's surface, that the work went to triage while it
+// sat on a colleague's queue.
+func TestACreatesAnswerNamesWhoTheTrackerFiledItTo(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.defaultAssignee = "bo"
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "nobody named", "project": "ENG",
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	var answer struct {
+		Assignee string `json:"assignee"`
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("decode the answer: %v (%s)", err, got.Output)
+	}
+	if trk.created[0].Assignee != "" {
+		t.Fatalf("the tool named %q itself; the default is the tracker's to settle",
+			trk.created[0].Assignee)
+	}
+	if answer.Assignee != "bo" {
+		t.Errorf("the answer names %q as the assignee, want the tracker's %q",
+			answer.Assignee, "bo")
 	}
 }
 

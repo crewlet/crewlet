@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -676,9 +677,10 @@ func TestPinnedViewCountsAreTheViewsOwnTotal(t *testing.T) {
 	}
 
 	// THE BOARD'S OWN ANSWER for the same view, which is what the count
-	// has to equal.
+	// has to equal — asked the way every surface that runs a view asks it,
+	// every task on its own row.
 	q, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
-		"view": "v-ana", "container": "project:ENG",
+		"view": "v-ana", "container": "project:ENG", "subtasks": "separate",
 	}, tracker.Viewer{Handle: "ana"}, wednesday, time.UTC)
 	if err != nil {
 		t.Fatalf("expand v-ana: %v", err)
@@ -727,6 +729,109 @@ func TestPinnedViewCountsAreTheViewsOwnTotal(t *testing.T) {
 		Now: wednesday, Zone: time.UTC,
 	}); err == nil {
 		t.Error("a strip nobody is looking at was counted — it has no pins")
+	}
+}
+
+// A PINNED VIEW'S COUNT IS THE LIST ITS ROW OPENS, subtree and all.
+//
+// Every surface that runs a view runs it FLAT — the dashboard's shapes send
+// `subtasks=separate` and `list_work_items` overrules to it — so the grammar's
+// default, a predicate on the ROOT whose subtree rides along unfiltered, is an
+// answer nobody who presses the pin is shown. Counted in that default, an
+// open-work view counted the finished subtasks of every open epic: measured on
+// a seeded company, 39 beside a pin whose list said 36 items, including a view
+// SAVED with the tree mode, which is still run flat.
+func TestAPinnedViewCountsTheListItOpens(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
+	// An open epic with one open and one FINISHED subtask, and one open
+	// task on its own: three open tasks, four in the epic's subtree view.
+	for _, id := range []string{"epic", "sub-open", "sub-done", "lone"} {
+		assign(t, r, id, "ana")
+	}
+	epic := "epic"
+	for _, id := range []string{"sub-open", "sub-done"} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-adopt-"+id, id, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Parent: &epic},
+			tracker.ChangeReparented, nil); err != nil {
+			t.Fatalf("adopt %s: %v", id, err)
+		}
+		r.drain()
+	}
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "sub-done", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,
+		nil); err != nil {
+		t.Fatalf("finish sub-done: %v", err)
+	}
+	r.drain()
+
+	open := map[string]string{"status_group": "not_started,active"}
+	for _, view := range []tracker.View{
+		aView("v-open", func(v *tracker.View) { v.Name, v.Params = "Open", open }),
+		aView("v-tree", func(v *tracker.View) {
+			v.Name = "Open, as a tree"
+			v.Params = map[string]string{"status_group": "not_started,active",
+				"subtasks": "collapsed"}
+		}),
+	} {
+		if _, err := r.writer.WriteView(t.Context(), "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		tracker.PersonSubject("ana"), "", tracker.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-open", "v-tree"},
+		}, tracker.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	run := func(params map[string]any) int {
+		t.Helper()
+		q, err := r.reader.ExpandedQuery(t.Context(), params,
+			tracker.Viewer{Handle: "ana"}, wednesday, time.UTC)
+		if err != nil {
+			t.Fatalf("expand %v: %v", params, err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("run %v: %v", params, err)
+		}
+		return answer.TotalHint
+	}
+	// THE FIXTURE BITES: the tree answer carries the finished subtask along
+	// with its open epic, and the list a pin opens does not.
+	if tree, flat := run(map[string]any{"view": "v-open", "container": "project:ENG"}),
+		run(map[string]any{"view": "v-open", "container": "project:ENG",
+			"subtasks": "separate"}); tree != 4 || flat != 3 {
+		t.Fatalf("the fixture is wrong: the tree answer holds %d and the flat one %d, "+
+			"want 4 and 3", tree, flat)
+	}
+
+	listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
+		Container: eng, Viewer: tracker.PartyOf("ana"), Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("Views with counts: %v", err)
+	}
+	for _, row := range listing.Views {
+		if row.Builtin {
+			continue
+		}
+		flat := run(map[string]any{"view": row.ID, "container": "project:ENG",
+			"subtasks": "separate"})
+		switch {
+		case row.Count == nil:
+			t.Errorf("%s carries no count (refused: %q)", row.ID, row.CountRefused)
+		case *row.Count != flat:
+			t.Errorf("%s counts %d beside a pin whose list holds %d — the "+
+				"count took the tree answer's subtree along", row.ID, *row.Count, flat)
+		}
 	}
 }
 
@@ -798,8 +903,12 @@ func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
 	}
 
 	// board is what work_items answers for the view, as the viewer.
+	// Asked flat, as every surface that runs a view asks it — see
+	// [TestAPinnedViewCountsTheListItOpens].
 	board := func(viewer tracker.Viewer, params map[string]any) int {
 		t.Helper()
+		params = maps.Clone(params)
+		params["subtasks"] = "separate"
 		q, err := r.reader.ExpandedQuery(t.Context(), params, viewer, wednesday, time.UTC)
 		if err != nil {
 			t.Fatalf("run %v as %s: %v", params, viewer.Handle, err)
@@ -865,5 +974,82 @@ func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
 					row.CountCapped, row.CountRefused, total)
 			}
 		})
+	}
+}
+
+// EVERY VIEW A PERSON CAN SEE IS LISTED, WHATEVER CONTAINER IT LIVES IN.
+//
+// The inventory and the sidebar's pins read the workspace strip, so a view
+// saved with a project board's "+ View" appeared in neither — it could be
+// pinned from nowhere, and a pin set another way never reached the sidebar. A
+// project view pinned by its viewer is listed first, carries its container,
+// and is counted IN THAT CONTAINER, which is what opening it runs; somebody
+// else's personal view is in nobody else's listing.
+func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t1", "t2"} {
+		assign(t, r, id, "ana")
+	}
+	for _, view := range []tracker.View{
+		aView("v-eng", func(v *tracker.View) {
+			v.Name, v.Params = "ENG, Ana's", map[string]string{"assignee": "ana"}
+		}),
+		aView("v-company", func(v *tracker.View) {
+			v.Name, v.Container = "Company", tracker.Container{Kind: tracker.ContainerWorkspace}
+			v.Params = map[string]string{"assignee": "ana"}
+		}),
+		aView("v-private", func(v *tracker.View) { v.Name, v.Owner = "Bo's own", "bo" }),
+	} {
+		if _, err := r.writer.WriteView(t.Context(), "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		tracker.PersonSubject("ana"), "", tracker.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-eng"},
+		}, tracker.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	// THE FIXTURE BITES: the workspace strip — what both surfaces read —
+	// does not hold the project view at all.
+	for _, row := range r.strip(tracker.Container{Kind: tracker.ContainerWorkspace}, "ana").Views {
+		if row.ID == "v-eng" {
+			t.Fatal("the fixture is wrong: the workspace strip already lists the project view")
+		}
+	}
+
+	listing, err := r.reader.EveryView(t.Context(), tracker.EveryViewQuery{
+		Viewer: tracker.PartyOf("ana"), Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("EveryView: %v", err)
+	}
+	var ids []string
+	for _, row := range listing.Views {
+		ids = append(ids, row.ID)
+	}
+	if want := []string{"v-eng", "v-company"}; !slices.Equal(ids, want) {
+		t.Fatalf("every view for ana is %v, want %v — the pinned project view "+
+			"first, the shared one after it, and nobody else's personal view", ids, want)
+	}
+	pinned := listing.Views[0]
+	switch {
+	case !pinned.Pinned:
+		t.Error("the project view ana pinned is not marked pinned")
+	case pinned.Container != tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}:
+		t.Errorf("the pinned view carries container %+v, want project ENG", pinned.Container)
+	case pinned.Count == nil:
+		t.Errorf("the pinned project view carries no count (refused: %q)", pinned.CountRefused)
+	case *pinned.Count != 2:
+		t.Errorf("the pinned project view counts %d, want the 2 tasks its "+
+			"project list opens on", *pinned.Count)
+	}
+	if listing.Views[1].Count != nil {
+		t.Error("a view that is not pinned was counted")
 	}
 }

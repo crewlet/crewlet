@@ -211,6 +211,42 @@ test("closed work is a column of the grid, not a hidden one", async () => {
   expect(within(rowFor("ENG")).getByText("7")).toBeTruthy();
 });
 
+// THE NAME TAKES THE SLACK, NOT THE BAR. Progress was a flexible track beside
+// Project, so the two split the free width evenly: at 1280 the bar sat in a
+// mostly empty cell while "Product Management" was cut to "Product Managem…".
+// The bar's column is sized to the bar, and the name's column has a floor.
+test("the project name is the flexible column and the progress bar is sized to itself", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const heads = [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent);
+  const tracks = (container.querySelector(".grid-wrap") as HTMLElement | null)?.style
+    .gridTemplateColumns;
+  expect(tracks, "the grid declares no track list").toBeTruthy();
+  const track = (head: string) => splitTracks(tracks!)[heads.indexOf(head)];
+  expect(track("Project")).toBe("minmax(10rem, 1fr)");
+  expect(track("Progress")).toMatch(/^fit-content\(/);
+  // AND IT IS THE ONLY FLEXIBLE TRACK, so nothing else splits the slack.
+  expect(splitTracks(tracks!).filter((t) => t.endsWith("1fr)"))).toEqual(["minmax(10rem, 1fr)"]);
+});
+
+/** A track list split at its top-level spaces, a `minmax(a, b)` kept whole. */
+function splitTracks(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of list) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (ch === " " && depth === 0) {
+      if (current) out.push(current);
+      current = "";
+    } else current += ch;
+  }
+  if (current) out.push(current);
+  return out;
+}
+
 // AND UNIT IS THE ONE THAT IS OPTIONAL, because on a chart-owned company it is
 // the Project column again.
 //
@@ -410,9 +446,8 @@ test("an operator's write is marked as one", async () => {
   await waitFor(() => expect(screen.getByText(/founder \(operator\)/)).toBeTruthy());
 });
 
-// A METER OVER NOTHING IS NOT A CENSUS: three zero segments draw an empty
-// track that reads as a chart which failed to load rather than as a project
-// nobody has filed anything in.
+// A METER OVER NOTHING IS NOT A CENSUS: an empty bar reads as a chart which
+// failed to load rather than as a project nobody has filed anything in.
 test("a project with nothing filed draws no meter", async () => {
   serving({
     work_projects: {
@@ -421,70 +456,50 @@ test("a project with nothing filed draws no meter", async () => {
       complete: true,
     },
   });
-  const { container } = mount();
+  mount();
   await waitFor(() => expect(screen.getByText("Nothing filed yet")).toBeTruthy());
-  expect(container.querySelector(".crewlet-stacked-bar")).toBeNull();
+  expect(screen.queryByRole("img", { name: / of \d+$/ })).toBeNull();
 });
 
-/**
- * Every part the bar actually drew, with the colour it drew it in and its
- * share of the track. The kit grows a part by its VALUE (`flex-grow`) rather
- * than giving it a percentage width, so the share is the part's value over
- * the sum of them — the track itself, gaps aside.
- */
-function drawn(container: HTMLElement): { color: string; width: string }[] {
-  const parts = [...container.querySelectorAll<HTMLElement>(".crewlet-stacked-bar__segment")];
-  const grow = parts.map((s) => Number(s.style.flexGrow || 0));
-  const total = grow.reduce((a, b) => a + b, 0);
-  return parts.map((s, i) => ({
-    color: s.style.getPropertyValue("--crewlet-stacked-bar-segment-color"),
-    width: total > 0 ? `${Math.round((grow[i]! / total) * 100)}%` : "0%",
-  }));
-}
-
-// THE METER IS AN AMOUNT, NOT A SHARE, which is the whole of what it claims: a
-// project holding one open item and nothing else used to draw a FULL solid bar
-// — 100% of its work is open — and read as a project that had finished
-// everything. Nothing done must fill nothing.
-test("a project with nothing done fills nothing", async () => {
+// THE SPLIT SUMS TO THE CENSUS. The bar is the project's work in the three
+// states it is in — done, active, still to do — and the meter's accessible
+// name is exactly those parts over the whole they make: the maintained counts,
+// nothing counted here. Closed work is not in the whole (it left the question
+// rather than answering it), so 3 done, 2 active and 6 to do is "of 11" with
+// one closed beside it in its own column.
+test("the split sums to the census", async () => {
   serving({
     work_projects: {
-      projects: [project({ task_counts: { todo: 1, active: 0, done: 0, closed: 0 } })],
+      projects: [project({ task_counts: { todo: 6, active: 2, done: 3, closed: 1 } })],
       total: 1,
       complete: true,
     },
   });
-  const { container } = mount();
-  await waitFor(() => expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy());
-  // The one part drawn is the remainder, and it is the track: untinted.
-  expect(drawn(container)).toEqual([{ color: "transparent", width: "100%" }]);
+  mount();
+  await waitFor(() =>
+    expect(screen.getByRole("img", { name: "3 done, 2 active, 6 to do of 11" })).toBeTruthy(),
+  );
 });
 
-// AND THE FILL IS DONE AGAINST EVERYTHING FILED. Three of ten done is three
-// tenths of the track, with closed work muted beside it and unfinished work left as
-// the track — not a third of a bar over done + closed.
-test("done fills against everything filed, closed beside it", async () => {
+// NOTHING STARTED IS A BAR OF WORK TO DO, not an empty track and not a full
+// one: the parts that are not drawn are not spoken, and the remainder is the
+// whole.
+test("a project with nothing done or active is all still to do", async () => {
   serving({
     work_projects: {
-      projects: [project({ task_counts: { todo: 6, active: 0, done: 3, closed: 1 } })],
+      projects: [project({ task_counts: { todo: 4, active: 0, done: 0, closed: 0 } })],
       total: 1,
       complete: true,
     },
   });
-  const { container } = mount();
-  await waitFor(() => expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy());
-  expect(drawn(container)).toEqual([
-    { color: "var(--color-feedback-success)", width: "30%" },
-    { color: "var(--color-data-other)", width: "10%" },
-    { color: "transparent", width: "60%" },
-  ]);
+  mount();
+  await waitFor(() => expect(screen.getByRole("img", { name: "4 to do of 4" })).toBeTruthy());
 });
 
 // AND THE LEGEND IS DRAWN ONCE FOR THE COLUMN rather than once per row: an
 // unlabelled stack of colours is colours, and forty legends is not forty facts.
-// It names WHAT FILLS the bar and nothing else — a swatch for the untinted
-// remainder would be a colour that is not on it.
-test("the progress column carries one legend, naming what fills", async () => {
+// It names the three parts the bar is made of.
+test("the progress column carries one legend, naming the three parts", async () => {
   serving({
     work_projects: {
       projects: [project(), project({ key: "PROD", name: "Product" })],
@@ -493,11 +508,11 @@ test("the progress column carries one legend, naming what fills", async () => {
     },
   });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelectorAll(".crewlet-stacked-bar").length).toBe(2));
+  await waitFor(() => expect(screen.getAllByRole("img", { name: / of \d+$/ })).toHaveLength(2));
   expect(container.querySelectorAll(".crewlet-legend")).toHaveLength(1);
   expect(
     [...container.querySelectorAll(".crewlet-legend__label")].map((l) => l.textContent),
-  ).toEqual(["Done", "Closed"]);
+  ).toEqual(["Done", "Active", "To do"]);
 });
 
 // THE SEGMENT IS THE QUESTION, and each one names the engine's own mode.

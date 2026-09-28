@@ -163,6 +163,41 @@ func (w Wake) Notify(leads Leads) *Notify {
 	return notify
 }
 
+// filedTo brings a create's wake up to the assignee its own snapshot settled
+// on — the project's default, which [Writer.landsOn] reads inside the create
+// and which the caller that built this wake could not have known.
+//
+// ONLY WHAT THAT SETTLEMENT MOVED: the routing snapshot's assignee and its
+// watchers (the default assignee follows what they hold), and each delta the
+// move touched, stated as the create's own — from nothing — by [TaskDeltas],
+// so its text is the one every other delta is written in. Nothing else is
+// re-derived, because nothing else was decided here: rebuilding the whole
+// wake would re-state the rest from a second frame, which is the
+// disagreement [TaskDeltas] was exported to end.
+//
+// Without it the record would carry an assignee its own wake did not name,
+// and the recipient rule would route the create as triage — to the lead's
+// fallback — while the task sat on the default assignee's queue with nobody
+// having woken them.
+func (n *Notify) filedTo(was, now Task) {
+	if n == nil {
+		return
+	}
+	n.Snapshot.Assignee = now.Assignee
+	n.Snapshot.Watchers = without(now.Watchers, now.Muted)
+	whole := TaskDeltas(Task{}, now, nil)
+	fields := deltaSet(n.Fields)
+	if fields == nil {
+		fields = deltaSet{}
+	}
+	for field := range TaskDeltas(was, now, nil) {
+		if delta, held := whole[field]; held {
+			fields[field] = delta
+		}
+	}
+	n.Fields = fields.done()
+}
+
 // answered is what this wake's answer tells the asker about the decision it
 // closed, or nil when it answers none.
 func (w Wake) answered() *AnsweredDecision {

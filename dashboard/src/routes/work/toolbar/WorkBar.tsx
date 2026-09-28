@@ -40,6 +40,7 @@ import {
   CalendarGlyph,
   ChartNoAxesGanttGlyph,
   Columns3Glyph,
+  LayersGlyph,
   LayoutDashboardGlyph,
   ListGlyph,
   PinGlyph,
@@ -133,11 +134,26 @@ export function ViewTabs({
   );
 }
 
-/** The link to every saved view, which is what the strip does not draw. */
+/**
+ * The link to every saved view, which is what the strip does not draw.
+ *
+ * A GLYPH NAMED "All saved views", not the words: the strip's end is the
+ * narrowest room on the row and the one place a reader does not look for a
+ * sentence. Written out ("All views →", 70px) it was the item that pushed the
+ * search box and both menus onto a second line at 1280px, where the approved
+ * board holds them on the row. Still a real anchor — middle-clickable like
+ * every other way out of a screen — named for a screen reader and titled for
+ * a pointer.
+ */
 export function AllViewsLink() {
   return (
-    <a className="t-link work-strip-more" href={href(["work", "views"])}>
-      All views →
+    <a
+      className="work-strip-more"
+      href={href(["work", "views"])}
+      aria-label="All saved views"
+      title="All saved views"
+    >
+      <LayersGlyph size="sm" aria-hidden="true" />
     </a>
   );
 }

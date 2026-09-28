@@ -179,3 +179,24 @@ export const GROUP_AXES: readonly { value: string; label: string; workspace?: bo
   // question somebody asks of a list as readily as of a board.
   { value: "due:bucket", label: "Due" },
 ];
+
+/**
+ * The most a task's TITLE holds, in UTF-8 bytes — the engine's `MaxTitle`.
+ *
+ * The New task sheet bounds its title here, BEFORE the press, because a title
+ * past it is refused rather than cut: a person who typed 600 bytes and pressed
+ * Create was answered from the engine, after the fact, with no mark on the
+ * field that was wrong. Bytes rather than characters, because the engine
+ * counts bytes — an accented or non-Latin title reaches the cap in fewer
+ * characters than it looks. Held against the engine's figure by
+ * `internal/tracker/client_gate_test.go`: a copy above it sends titles the
+ * engine refuses, and one below it refuses titles the engine would take.
+ */
+export const TASK_TITLE_MAX_BYTES = 256;
+
+/**
+ * The most a task's DESCRIPTION holds, in UTF-8 bytes — the engine's
+ * `MaxBody`, 32 KiB, bounded on the sheet for the reason the title is. Held by
+ * the same gate.
+ */
+export const TASK_BODY_MAX_BYTES = 32768;

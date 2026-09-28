@@ -2,9 +2,11 @@ package tracker
 
 import (
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,8 +61,8 @@ var unmarkedByDesign = map[string]string{
 // refuses a value with fmt.Errorf compiles, reads fine to a model — and
 // reaches a person's write surface as the node's failure, because what is
 // unmarked is read as the node's (see [ErrInvalid]). So every sentence either
-// carries a sentinel through %w, is built with [invalid], or is named here as
-// the node's own fault with a reason.
+// carries a sentinel through %w, is built with [invalid] or [forbidden], or is
+// named here as the node's own fault with a reason.
 func TestEveryWriteRefusalIsMarked(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -81,7 +83,7 @@ func TestEveryWriteRefusalIsMarked(t *testing.T) {
 				return true
 			}
 			switch {
-			case isIdent(call.Fun, "invalid"):
+			case isIdent(call.Fun, "invalid") || isIdent(call.Fun, "forbidden"):
 				marked++
 			case isSelector(call.Fun, "fmt", "Errorf") && !strings.Contains(format, "%w"):
 				for prefix := range unmarkedByDesign {
@@ -113,19 +115,97 @@ func TestEveryWriteRefusalIsMarked(t *testing.T) {
 	}
 }
 
-// TestAMarkedRefusalKeepsItsSentenceAndItsChain pins the two halves of
-// [invalid]: the text a model was tuned against is unchanged, and a sentinel
-// the sentence wraps is still reachable beside the mark.
+// TestNoRefusalSpellsThePackagePrefix walks EVERY file of the package, not
+// only [writeFiles] — a read's parameter check is built with [invalid] too —
+// for a refusal whose sentence opens with "tracker:". The prefix is the
+// refusal's own to add ([refusal.Error]): spelled again, the log reads
+// "tracker: tracker: …" and [Sentence] hands a person the package's name.
+func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	built := 0
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 ||
+				(!isIdent(call.Fun, "invalid") && !isIdent(call.Fun, "forbidden")) {
+				return true
+			}
+			format, ok := literal(call.Args[0])
+			if !ok {
+				t.Errorf("%s: a refusal's sentence is not a literal, so nothing can "+
+					"check it", fset.Position(call.Pos()))
+				return true
+			}
+			built++
+			if strings.HasPrefix(format, "tracker:") {
+				t.Errorf("%s: %q opens with the package prefix, which the "+
+					"refusal adds itself — write the sentence alone",
+					fset.Position(call.Pos()), format)
+			}
+			return true
+		})
+	}
+	// NOT VACUOUS, for the reason the walk above gives.
+	if built < 100 {
+		t.Fatalf("the walk found %d refusals, want at least 100", built)
+	}
+}
+
+// TestAMarkedRefusalKeepsItsSentenceAndItsChain pins the halves of [invalid]
+// and [forbidden]: the Go error reads as every error here does, prefix and
+// all, which is the text a model was tuned against; a sentinel the sentence
+// wraps is still reachable beside the mark; and [Sentence] is the words alone,
+// which is what a person is shown.
 func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 	t.Parallel()
 	inner := errors.New("disk")
-	err := invalid("tracker: mint a key between %q and %q: %w", "a", "b", inner)
+	err := invalid("mint a key between %q and %q: %w", "a", "b", inner)
 	if got, want := err.Error(), `tracker: mint a key between "a" and "b": disk`; got != want {
+		t.Errorf("the error is %q, want %q", got, want)
+	}
+	if got, want := Sentence(err), `mint a key between "a" and "b": disk`; got != want {
 		t.Errorf("the sentence is %q, want %q", got, want)
 	}
-	if !errors.Is(err, ErrInvalid) || !errors.Is(err, inner) {
-		t.Errorf("the chain lost a link: invalid %v, inner %v",
-			errors.Is(err, ErrInvalid), errors.Is(err, inner))
+	if !errors.Is(err, ErrInvalid) || !errors.Is(err, inner) || errors.Is(err, ErrForbidden) {
+		t.Errorf("the chain is wrong: invalid %v, inner %v, forbidden %v",
+			errors.Is(err, ErrInvalid), errors.Is(err, inner), errors.Is(err, ErrForbidden))
+	}
+
+	// FORBIDDEN SAYS WHOSE IT IS ONCE: the sentinel's own words used to be
+	// appended after a sentence that had already said so.
+	denied := forbidden("view %s is protected and belongs to %s", "v1", "ada")
+	if got, want := denied.Error(), "tracker: view v1 is protected and belongs to ada"; got != want {
+		t.Errorf("the error is %q, want %q", got, want)
+	}
+	if got, want := Sentence(denied), "view v1 is protected and belongs to ada"; got != want {
+		t.Errorf("the sentence is %q, want %q", got, want)
+	}
+	if !errors.Is(denied, ErrForbidden) || errors.Is(denied, ErrInvalid) {
+		t.Errorf("forbidden is classed wrong: forbidden %v, invalid %v",
+			errors.Is(denied, ErrForbidden), errors.Is(denied, ErrInvalid))
+	}
+
+	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: a refusal a caller wrapped
+	// is its whole message, and an error this package did not write as a
+	// refusal is too.
+	wrapped := fmt.Errorf("tracker: create ENG: %w", err)
+	if got := Sentence(wrapped); got != wrapped.Error() {
+		t.Errorf("a wrapped refusal's sentence is %q, want its whole message", got)
+	}
+	if got := Sentence(ErrNoTask); got != ErrNoTask.Error() {
+		t.Errorf("an unmarked error's sentence is %q, want its whole message", got)
 	}
 }
 

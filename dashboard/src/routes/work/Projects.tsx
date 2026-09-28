@@ -17,10 +17,10 @@
  * a different situation from one with four open and nothing else, and the
  * chart drew them identically. Every row carries the four maintained counts —
  * waiting and started apart, because a queue and a team at full stretch are
- * different situations too —
- * AND how much of the whole is done, so both readings are on the same line —
- * the meter is `census.tsx`'s, which is the same one the project's own header
- * wears.
+ * different situations too — AND the same split drawn as one bar (done,
+ * active, still to do), beside the lead's target date, so "how far along" and
+ * "by when" are on the same line. The meter is `census.tsx`'s, which is the
+ * same one the project's own header wears.
  *
  * # A row peeks, because a directory is read to RECOGNISE something
  *
@@ -312,6 +312,9 @@ export function Projects() {
       {
         key: "name",
         header: "Project",
+        // THE POINT OF THE LIST, so it has a floor: at zero it is the column
+        // that gives way to every content-sized one beside it.
+        floor: "10rem",
         sortValue: (row) => row.name || row.key,
         cell: (row) => (
           <span className="col">
@@ -420,6 +423,12 @@ export function Projects() {
       {
         key: "progress",
         header: "Progress",
+        // SIZED TO ITS BAR, not a share of the slack. As a flexible track it
+        // split the free width evenly with Project, so at 1280 the bar sat in
+        // 140px of mostly empty cell while "Product Management" was cut to
+        // "Product Managem…" beside it. A proportion reads at 96px; a name
+        // does not read at all once it is cut.
+        shrink: true,
         // NOT SORTABLE. A proportion over four tasks and one over four hundred
         // are the same number and not the same fact, so ordering by it would
         // rank a project nobody has started below one with a single task
@@ -427,10 +436,7 @@ export function Projects() {
         cell: (row) => (
           // IN A CELL IT IS THE BAR ALONE — the legend is drawn once under the
           // grid, because forty legends is not forty facts.
-          <span
-            className="work-meter"
-            title={`${row.task_counts.done} done of ${filed(row.task_counts)} filed`}
-          >
+          <span className="work-meter">
             <ProjectProgress counts={row.task_counts} />
           </span>
         ),
@@ -470,12 +476,10 @@ export function Projects() {
 
   return (
     <>
-      {/* WHAT THIS PAGE IS, once. Where a project COMES FROM is the sentence
-          somebody needs when there are none, so it lives in the empty state
-          below rather than being printed twice on the one screen that shows
-          both. */}
-      <PageNote>Every project in the company, who leads it and how far along its work is.</PageNote>
-
+      {/* NO INTRODUCTION: the table's own headings say what a row is, and a
+          sentence above them spent a line on every visit saying it again.
+          Where a project COMES FROM is the sentence somebody needs when there
+          are none, so it lives in the empty state below. */}
       <div className="toolbar">
         {/* THE TOTALS AS ONE SENTENCE, not four tiles. They are context for the
             rows under them rather than the point of the page — and the counts

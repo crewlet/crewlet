@@ -980,7 +980,7 @@ describe("the frame's layout", () => {
     ).not.toMatch(/max-width:/);
   });
 
-  test("the page bar wraps by what it holds, and breaks for good only on a phone", () => {
+  test("the page bar wraps by what it holds, a phone's included, and folds there into More", () => {
     const css = sheet("frame.css");
     // THE BREAK'S OWN BODY, braces balanced — not everything after it. Sliced
     // to the end of the file, the "nothing else reorders at this break" case
@@ -1045,7 +1045,15 @@ describe("the frame's layout", () => {
     );
     expect(atBreak, "the page bar's own break is gone").toContain(".page-controls");
     const broken = block(atBreak, ".page-controls");
-    expect(broken).toMatch(/flex:\s*0 0 100%/);
+    // BY WHAT IT HOLDS ON A PHONE TOO: the controls share the trail's or the
+    // lenses' line when they fit and take one of their own when they do not.
+    // A line of their own BY RULE was right for five controls; folded into
+    // "More", a task's controls are one button, and a line for one ellipsis
+    // was a row of chrome with nothing on it.
+    expect(broken).toMatch(/flex:\s*0 0 auto/);
+    expect(broken, "the controls take a line of their own by rule again").not.toMatch(
+      /flex:\s*0 0 100%/,
+    );
     // PAST EVERYTHING ELSE ON THE BAR, WHICH IS A COMPARISON AND NOT A SHAPE:
     // `order: 0` is the initial value and puts the controls back where
     // document order had them.
@@ -1062,6 +1070,15 @@ describe("the frame's layout", () => {
     // rows that push the screen a third of the way down.
     expect(broken).toMatch(/overflow-x:\s*auto/);
     expect(broken).toMatch(/flex-wrap:\s*nowrap/);
+
+    // ONE ACTION IN VIEW, THE REST IN "MORE" — and never both at once: the
+    // menu is not drawn above the break, and what it holds is not drawn
+    // inline below it. The frame's pair is one element only so this can fold
+    // it; above the break it lays out as if it had no wrapper.
+    expect(block(base, ".page-more")).toMatch(/display:\s*none/);
+    expect(block(base, ".page-frame-actions")).toMatch(/display:\s*contents/);
+    expect(block(atBreak, ".page-more")).toMatch(/display:\s*inline-flex/);
+    expect(atBreak).toMatch(/\.page-frame-actions,\s*\.page-action-folds\s*\{[^}]*display:\s*none/);
   });
 
   // THE PANEL TITLE'S CAP IS GONE WITH THE PANEL, deliberately and not by
@@ -1324,4 +1341,32 @@ test("a card's name block is out of the shrink beside a subtitle alone", () => {
   expect(m, "the rule is gone").not.toBeNull();
   expect(m![1]).toMatch(/flex-shrink:\s*0/);
   expect(m![1]).toMatch(/max-width:\s*100%/);
+});
+
+// WORK › SEARCH'S PHRASE KEEPS THE WIDTH A PHRASE IS READ AT. The field, the
+// three modes and Search shared one row that could not wrap, so at 390px the
+// field was what gave way — measured at 20px, a magnifier with no phrase in
+// it. The form wraps by what it holds, and the field's floor is what decides
+// when: it takes a line of its own rather than going under 18rem.
+test("the work search form wraps before its phrase field goes under a readable width", () => {
+  const css = sheet("screens.css");
+  expect(block(css, ".work-search-form")).toMatch(/flex-wrap:\s*wrap/);
+  const phrase = block(css, ".work-search-phrase");
+  expect(phrase).toMatch(/flex:\s*1 1 18rem/);
+  expect(phrase).toMatch(/min-width:\s*min\(100%,\s*18rem\)/);
+});
+
+// AN OBJECT'S LENSES SIT BESIDE ITS NAME, and a page without any costs the bar
+// nothing. The empty slot is no flex item (else it is a gap before the
+// controls on every page), and with lenses the TRAIL stops taking the slack —
+// its grow would push the lenses against the controls at the far end, away
+// from the name they are lenses on — and is capped so a long name ellipsises
+// beside them rather than pushing them onto a line of their own.
+test("the lens slot vanishes when empty and takes the slack beside the trail when not", () => {
+  const css = sheet("frame.css");
+  expect(block(css, ".page-lenses:empty")).toMatch(/display:\s*none/);
+  expect(block(css, ".page-lenses")).toMatch(/flex:\s*1 0 auto/);
+  const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .crumbs");
+  expect(trail).toMatch(/flex:\s*0 100 auto/);
+  expect(trail).toMatch(/max-width:\s*60%/);
 });

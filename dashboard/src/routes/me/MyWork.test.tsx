@@ -432,7 +432,7 @@ test("the assigned tab draws the work list's own toolbar", async () => {
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
   expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
   expect(screen.getByText("Open")).toBeTruthy();
-  expect(screen.getByText("1 item")).toBeTruthy();
+  expect(screen.getByText("1 in Open")).toBeTruthy();
 });
 
 // AND THE BANDS ARE THE ENGINE'S. `due:bucket` is cut against the COMPANY's
@@ -452,6 +452,29 @@ test("the assigned tab opens on the engine's due bands, soonest first", async ()
   expect(asked.group_by).toBe("due:bucket");
   expect(asked.sort).toBe("due");
   expect(asked.status_group).toBe("not_started,active");
+});
+
+// THE STRIP COUNTS WHAT THE TAB LISTS: every task on its own. In the
+// grammar's default a root this person holds brings its subtree along
+// unfiltered — sub-tasks held by somebody else, finished ones — so a strip
+// asked that way said more than the list under it ever drew.
+test("the assigned count asks the list's own subtask mode", async () => {
+  const query = serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
+  mount();
+  const calls = await waitFor(() => {
+    const found = query.mock.calls
+      .filter((c) => c[0] === "work_items")
+      .map((c) => c[1] as Record<string, unknown>);
+    if (!found.some((p) => !p.group_by) || !found.some((p) => p.group_by)) {
+      throw new Error("the strip and the list have not both asked yet");
+    }
+    return found;
+  });
+  const strip = calls.find((p) => !p.group_by)!;
+  const list = calls.find((p) => p.group_by)!;
+  expect(strip.subtasks).toBe("separate");
+  expect(strip.subtasks).toBe(list.subtasks);
+  expect(strip.status_group).toBe(list.status_group);
 });
 
 // THE LOCK REACHES THE WIRE AND NOTHING ELSE. It is what the tab IS rather
@@ -490,7 +513,7 @@ test("the hosted list draws no saved-view strip and asks for none", async () => 
   mount();
   await counts();
   expect(screen.queryByText("All work")).toBeNull();
-  expect(screen.queryByText("All views →")).toBeNull();
+  expect(screen.queryByRole("link", { name: "All saved views" })).toBeNull();
   expect(query.mock.calls.map((c) => c[0])).not.toContain("work_views");
 });
 

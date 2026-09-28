@@ -280,10 +280,11 @@ func stripScope(q ViewQuery) statelog.ScopeSet {
 //
 // THE COUNT IS THE VIEW'S OWN TOTAL: the rows `work_items` answers when the
 // view is run — its saved parameters, scoped to the container it was saved in,
-// with `me` resolved to the viewer — counted by [countHint], the statement
-// that answers that read's `total_hint`. It is not a second definition of what
-// a view selects, and a sidebar number that disagreed with the board it opens
-// would be exactly that.
+// with `me` resolved to the viewer, every task filtered on its own as every
+// surface that runs a view asks ([countView]) — counted by [countHint], the
+// statement that answers that read's `total_hint`. It is not a second
+// definition of what a view selects, and a sidebar number that disagreed with
+// the list it opens would be exactly that.
 func countPinned(ctx context.Context, tx *sql.Tx, q ViewQuery, rows []ViewRow) error {
 	for i := range rows {
 		if !rows[i].Pinned {
@@ -340,6 +341,16 @@ func countView(ctx context.Context, tx *sql.Tx, q ViewQuery, view ViewRow) (
 	}
 	parsed = parsed.forViewer(q.Viewer)
 	parsed.Units = q.Units
+	// FLAT, as every surface that RUNS a view runs it. The dashboard's
+	// shapes send `subtasks=separate` over whatever a view carries (none of
+	// them draws a tree) and `list_work_items` overrules to it for a model
+	// reading a list — so the grammar's default, a root predicate whose
+	// subtree rides along UNFILTERED, is an answer no reader of a pinned view
+	// is ever shown. Counted in it, "open work, org-wide" counted the done
+	// subtasks of every open epic: the sidebar said 39 beside a pin whose
+	// list said 36. OVERRULED rather than defaulted, as those two surfaces
+	// do, because a view saved with a tree mode is still run flat.
+	parsed.Subtasks = SubtasksSeparate
 	fields, err := resolveFields(ctx, tx, parsed)
 	switch {
 	case errors.Is(err, errUnresolvedField):

@@ -707,3 +707,89 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
   await settle();
   expect(screen.getByText(/there is no such screen/)).toBeDefined();
 });
+
+// ON A PHONE THE BAR KEEPS ONE ACTION IN VIEW, and "More" holds the rest: the
+// frame's star and Copy link, and what the screen folds — a project's Edit
+// project, which opens the same dialog its inline button does. Laid out inline
+// at 390px a project's bar stood three rows tall. (What is SHOWN at which
+// width is the stylesheet's container query, which this DOM does not
+// evaluate; what the menu HOLDS, and that its entries act, is asserted here.)
+test("the page bar's More holds the star, the link and what the screen folded", async () => {
+  location.hash = "#/work/ENG";
+  const store = new Store();
+  store.applyHealth({ status: "ok", nodes: 1, applied_epoch: 2 });
+  const socket = new LiveSocket(store);
+  const project = {
+    key: "ENG",
+    name: "Core platform",
+    unit: { resolved: true },
+    lead: { handle: "jane" },
+    task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
+    statuses: [],
+    types: [],
+    fields: [],
+    tags: [],
+    policy_stamp: 1,
+    complete: true,
+  };
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    if (what === "viewer") {
+      return Promise.resolve({
+        operator_id: "U0FOUNDER",
+        operator: true,
+        handle: "jane",
+        name: "Jane Founder",
+        kind: "human",
+        acts: ["write_project", "create_work_item"],
+      });
+    }
+    if (what === "work_project") return Promise.resolve(project);
+    return Promise.reject(new QueryError("unauthorized"));
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <App />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+  fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
+  const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
+  expect(names).toEqual(["Edit project", "Keep in Starred", "Copy link"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Edit project" }));
+  expect(await screen.findByRole("dialog", { name: "Edit Core platform" })).toBeTruthy();
+  cleanup();
+
+  // A TASK'S OWN "MORE" JOINS IT rather than standing as a second ellipsis
+  // beside the frame's, and its entry still goes where the inline one does.
+  location.hash = "#/work/ENG-42";
+  const task = {
+    task: { id: "t-1", key: "ENG-42", project: "ENG", title: "Fix it", status: "todo", version: 3 },
+    reassignment_budget: 8,
+    complete: true,
+  };
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    if (what === "viewer") return Promise.resolve({ operator_id: "U0FOUNDER", operator: true });
+    if (what === "work_item") return Promise.resolve(task);
+    if (what === "work_project") return Promise.resolve(project);
+    return Promise.reject(new QueryError("unauthorized"));
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <App />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+  fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
+  expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
+    "Open on the board",
+    "Keep in Starred",
+    "Copy link",
+  ]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));
+  expect(location.hash).toContain("#/work/ENG");
+  expect(location.hash).toContain("peek=");
+});

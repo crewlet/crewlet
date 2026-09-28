@@ -11,8 +11,9 @@
  *   path, so going anywhere else is a fresh chance to render;
  * - the PEEK (`frame/PeekHost.tsx`), reset by the object it shows, inside the
  *   rail so the rail's own close and `Open ↗` still work;
- * - the COMMAND PALETTE (`Shell.tsx`), whose fallback is a dialog of its own
- *   that closes the way the palette does;
+ * - each LAYER the frame raises (`Shell.tsx` — the command palette and the New
+ *   task sheet, [LayerBoundary]), whose fallback is a dialog of its own that
+ *   closes the way the layer does;
  * - each LIVE SECTION OF THE SIDEBAR ([RailBoundary], `sidebar/Sidebar.tsx`),
  *   so a malformed project row costs the Projects list and never the
  *   navigation above it.
@@ -136,15 +137,24 @@ export function PeekBoundary({ resetKey, children }: { resetKey: string; childre
 }
 
 /**
- * The command palette. Its fallback is a DIALOG, not a block: the palette is
- * a layer over the screen, and a block drawn where it was mounted would land
- * below the frame, out of sight, with the palette's own focus trap gone. The
- * dialog closes the way the palette does, and ⌘K opens a fresh palette.
+ * A layer the frame raises over the screen: the command palette, the New task
+ * sheet. Its fallback is a DIALOG, not a block: the layer is over the screen,
+ * and a block drawn where it was mounted would land below the frame, out of
+ * sight, with the layer's own focus trap gone. The dialog closes the way the
+ * layer does, and the next press opens a fresh one.
+ *
+ * A LAYER'S CODE CAN ARRIVE IN A CHUNK (the sheet is the Work workspace's), so
+ * a load in flight draws nothing — the layer is not on screen until it is —
+ * and a chunk that never came is this dialog, carrying the chunk's own
+ * sentence about reloading.
  */
-export function PaletteBoundary({
+export function LayerBoundary({
+  title,
   onClose,
   children,
 }: {
+  /** What could not be drawn: "Search", "New task". */
+  title: string;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -155,18 +165,31 @@ export function PaletteBoundary({
           open
           onClose={onClose}
           size="sm"
-          title="Search could not be drawn"
+          title={`${title} could not be drawn`}
           footer={
-            <Button variant="secondary" onClick={onClose}>
-              Close
-            </Button>
+            error instanceof ChunkLoadError ? (
+              <>
+                <Button variant="secondary" onClick={onClose}>
+                  Close
+                </Button>
+                <Button variant="primary" onClick={reload}>
+                  Reload
+                </Button>
+              </>
+            ) : (
+              <Button variant="secondary" onClick={onClose}>
+                Close
+              </Button>
+            )
           }
         >
-          <p className="boundary-message">{error.message || error.name}</p>
+          <p className="boundary-message">
+            {error instanceof ChunkLoadError ? error.advice : error.message || error.name}
+          </p>
         </Modal>
       )}
     >
-      {children}
+      <Suspense fallback={null}>{children}</Suspense>
     </ErrorBoundary>
   );
 }

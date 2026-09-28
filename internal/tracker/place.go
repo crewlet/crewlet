@@ -126,23 +126,23 @@ func (w *Writer) PlaceTask(ctx context.Context, opID string, place Place,
 
 	switch {
 	case place.Task == "":
-		return PlaceResult{}, invalid("tracker: a drop names no task")
+		return PlaceResult{}, invalid("a drop names no task")
 	case place.Project == "":
-		return PlaceResult{}, invalid("tracker: a drop of task %s names no "+
+		return PlaceResult{}, invalid("a drop of task %s names no "+
 			"project — the caller resolved a key to reach it and therefore "+
 			"holds one", place.Task)
 	case place.Before != "" && place.After != "":
-		return PlaceResult{}, invalid("tracker: a drop names both a card to " +
+		return PlaceResult{}, invalid("a drop names both a card to " +
 			"sit above and a card to sit below — name the one it was dropped " +
 			"beside")
 	case place.Before == place.Task || place.After == place.Task:
-		return PlaceResult{}, invalid("tracker: task %s cannot be placed "+
+		return PlaceResult{}, invalid("task %s cannot be placed "+
 			"beside itself", place.Task)
 	case place.Before == "" && place.After == "" && place.Status == nil:
-		return PlaceResult{}, invalid("tracker: a drop of task %s names no "+
+		return PlaceResult{}, invalid("a drop of task %s names no "+
 			"neighbour and no lane, so it moves nothing", place.Task)
 	case place.Status != nil && !place.Status.Valid():
-		return PlaceResult{}, invalid("tracker: %q is not a status", *place.Status)
+		return PlaceResult{}, invalid("%q is not a status", *place.Status)
 	}
 
 	out := PlaceResult{Version: int64(place.IfMatch)}
@@ -226,7 +226,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place, ifMatch uint64) (
 		return nil, fmt.Errorf("tracker: task %s is not on this node: %w",
 			place.Task, statelog.ErrUnavailable)
 	case current.Removed != nil:
-		return nil, invalid("tracker: task %s was removed by %s at %s; "+
+		return nil, invalid("task %s was removed by %s at %s; "+
 			"restore it first", place.Task, current.Removed.By,
 			current.Removed.At.Format(time.RFC3339))
 	case ifMatch != 0 && current.Version != ifMatch:

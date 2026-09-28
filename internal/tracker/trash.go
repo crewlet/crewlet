@@ -117,9 +117,9 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 
 	switch {
 	case id == "":
-		return WriteResult{}, invalid("tracker: a removal names no task")
+		return WriteResult{}, invalid("a removal names no task")
 	case project == "":
-		return WriteResult{}, invalid("tracker: a removal on task %s names "+
+		return WriteResult{}, invalid("a removal on task %s names "+
 			"no project — the caller resolved a key to reach this task and "+
 			"therefore holds one", id)
 	}
@@ -134,7 +134,7 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 			return WriteResult{}, err
 		}
 		if len(descendants) > MaxDescendants {
-			return WriteResult{}, invalid("tracker: task %s has %d "+
+			return WriteResult{}, invalid("task %s has %d "+
 				"descendants and a removal carries at most %d — remove them "+
 				"in smaller subtrees, or purge the root if it is really going",
 				id, len(descendants), MaxDescendants)
@@ -181,9 +181,9 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 
 	switch {
 	case id == "":
-		return WriteResult{}, invalid("tracker: a restore names no task")
+		return WriteResult{}, invalid("a restore names no task")
 	case project == "":
-		return WriteResult{}, invalid("tracker: a restore on task %s names "+
+		return WriteResult{}, invalid("a restore on task %s names "+
 			"no project", id)
 	}
 

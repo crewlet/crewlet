@@ -132,6 +132,10 @@ func (emptyWork) TurnsOf(context.Context, string, string, int,
 	return tracker.TaskTurns{Turns: []tracker.TaskTurn{}}, nil
 }
 
+func (emptyWork) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
+	return tracker.ViewListing{}, nil
+}
+
 func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
 	return tracker.ViewListing{}, nil
 }

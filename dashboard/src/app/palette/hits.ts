@@ -18,6 +18,7 @@ import type { Recent } from "~/lib/recents.ts";
 import { DATE_FORMATS, DENSITIES, THEMES, type DateFormat, type ViewerPrefs } from "~/lib/prefs.ts";
 import type { OrgIndex, Seat, Unit } from "~/lib/seats.ts";
 import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
+import { utf8Bytes } from "~/lib/format.ts";
 
 /**
  * The scopes, in the order the tab row draws them and Tab walks them.
@@ -114,7 +115,7 @@ export const PROJECT_PAGE = 200;
  * — so a term past it is not sent, and the chart's own matching answers it.
  */
 export function colleagueSendable(term: string): boolean {
-  return term !== "" && new TextEncoder().encode(term).length <= COLLEAGUE_QUERY_MAX;
+  return term !== "" && utf8Bytes(term) <= COLLEAGUE_QUERY_MAX;
 }
 
 /** How many rows one group may put in All before it gives way to the next. */

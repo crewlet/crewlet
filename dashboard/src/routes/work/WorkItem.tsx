@@ -61,7 +61,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { refToken } from "~/app/frame/objects.ts";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useMediaQuery } from "~/lib/media.ts";
@@ -237,6 +237,26 @@ export function WorkItem({ id }: { id: string }) {
   );
   const liveTurn = live?.turn?.turn_id ?? live?.live_call?.turn_id ?? "";
 
+  // "THIS TASK, ON ITS OWN BOARD", with the rail open: the project is a path
+  // and the task is the frame's `peek=` token.
+  const openOnBoard = () => {
+    if (item) nav.to(["work", item.project], { peek: refToken({ kind: "item", id: item.key }) });
+  };
+  // AND ON A PHONE IT IS IN THE BAR'S ONE "MORE", beside the star and the
+  // link, rather than a second ellipsis next to the frame's.
+  usePageMenu(
+    item
+      ? [
+          {
+            key: "board",
+            label: "Open on the board",
+            icon: <SquareKanbanGlyph size="sm" />,
+            onSelect: openOnBoard,
+          },
+        ]
+      : [],
+  );
+
   return (
     <>
       <PageActions>
@@ -256,24 +276,21 @@ export function WorkItem({ id }: { id: string }) {
         {/* A task in the trash is offered the way back. */}
         {item?.removed && <RestoreButton key={item.key} item={item.key} />}
         {item && (
-          <Menu
-            label={`More for ${item.key}`}
-            icon={<EllipsisGlyph size="sm" />}
-            align="end"
-            items={[
-              {
-                key: "board",
-                label: "Open on the board",
-                icon: <SquareKanbanGlyph size="sm" />,
-                // THE PROJECT IS A PATH AND THE TASK IS THE FRAME'S `peek=`
-                // token: "this task, on its own board", with the rail open.
-                onSelect: () =>
-                  nav.to(["work", item.project], {
-                    peek: refToken({ kind: "item", id: item.key }),
-                  }),
-              },
-            ]}
-          />
+          <span className="page-action-folds">
+            <Menu
+              label={`More for ${item.key}`}
+              icon={<EllipsisGlyph size="sm" />}
+              align="end"
+              items={[
+                {
+                  key: "board",
+                  label: "Open on the board",
+                  icon: <SquareKanbanGlyph size="sm" />,
+                  onSelect: openOnBoard,
+                },
+              ]}
+            />
+          </span>
         )}
       </PageActions>
 

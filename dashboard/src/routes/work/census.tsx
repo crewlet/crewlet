@@ -2,21 +2,29 @@
  * How far along a project is — one reading, drawn in the directory's rows and
  * in the project's own header.
  *
- * # AN AMOUNT, NOT A SHARE
+ * # THE SPLIT OF ITS WORK, NOT A SHARE OF ITS HISTORY
  *
- * It was a share: three segments over open, done and closed, each sized
- * against their own sum. So a project holding one open item and nothing else
- * drew a FULL, solid bar — 100% of its work is open — under a legend naming
- * three colours, and read as a project that had finished everything. Every
- * project whose work sits in one state drew the same complete-looking bar,
- * which is the state a young company's projects are all in.
+ * It was two things in turn. First a share — three segments over open, done
+ * and closed, each sized against their own sum — so a project holding one
+ * open item drew a FULL bar and read as finished. Then an amount of DONE over
+ * everything ever filed, with unfinished work as an untinted track — which
+ * answered "how much is done" and drew the two unfinished states, waiting and
+ * started, as one blank: a project with nine waiting and nobody on any of them
+ * and one with nine under way were the same picture, and those are the two a
+ * lead acts on oppositely.
  *
- * A progress meter answers "how much of this is done", so the WHOLE is what
- * has been filed and the FILL is what is done. Closed work is a muted segment
- * beside it, because it left the question rather than answering it, and unfinished
- * work is the TRACK — untinted, because it is precisely what has not been
- * filled. A project with nothing done now draws an empty track, which is the
- * fact, and one that is finished draws a full one.
+ * The approved design draws the project's WORK split into the three states it
+ * is in — done, active, still to do — on the kit's `SegmentedMeter`, whose
+ * contract is exactly that: parts in their states' tones, the quiet remainder
+ * for the part nobody has started. The whole is `todo + active + done`, the
+ * maintained census (`work_projects`' `task_counts`), so the three parts ARE
+ * the census and nothing here counts anything.
+ *
+ * CLOSED IS NOT PART OF IT. A closed task left the question rather than
+ * answering it — nobody delivered it and nobody will — so it is neither
+ * progress nor work still to do, and a bar that drew it would put abandoned
+ * work on one side of the finish line or the other. It has its own column in
+ * the directory and its own figure in the header.
  *
  * # One component, two frames
  *
@@ -27,86 +35,106 @@
  *
  * # Colour is on state only
  *
- * `--color-feedback-success` for done and the data ramp's neutral residual for closed, per
- * `docs/reference/dashboard-design.md` §"The one rule". Nothing here is tinted
- * by WHICH project it is.
+ * Done is the success tone, active the info tone (working — `in_review` is
+ * working too, per `docs/reference/dashboard-design.md` §"The one rule"), and
+ * still-to-do is the remainder's quiet hairline colour. Nothing is tinted by
+ * WHICH project it is.
  */
 
-import { EmptyValue, Legend, StackedBar, DATA_COLOR_OTHER } from "@crewlethq/ui";
+import { EmptyValue, Legend, SegmentedMeter } from "@crewlethq/ui";
 import type { WorkTaskCounts } from "~/protocol/index.ts";
 import { unfinished } from "~/lib/work.ts";
 
-/** Everything ever filed in a project, which is this meter's whole. */
+/** Everything ever filed in a project — what "nothing filed" is decided against. */
 export function filed(counts: WorkTaskCounts): number {
   return unfinished(counts) + counts.done + counts.closed;
 }
 
 /**
- * The bar alone: done fills, closed is muted beside it, unfinished work is the
- * track.
- *
- * A PROJECT WITH NOTHING FILED GETS THE ABSENT MARK rather than a track. A
- * proportion of nothing is undefined rather than zero, and an empty track
- * would say "nothing is done yet" about a project nobody has filed anything
- * in — which is the one distinction this meter now turns on. The two callers
- * differ on where that mark belongs: the directory draws it in the cell, and
- * the project page draws a whole empty state in place of its list, so the
- * page gates before it calls.
+ * The whole the bar divides: the project's work that is done, active or still
+ * to do. Closed work is not in it — see the file's doc.
  */
-export function ProjectProgress({ counts }: { counts: WorkTaskCounts }) {
-  const whole = filed(counts);
-  const left = unfinished(counts);
-  if (whole === 0) return <EmptyValue label="Nothing filed yet" />;
+export function progressWhole(counts: WorkTaskCounts): number {
+  return counts.todo + counts.active + counts.done;
+}
+
+/**
+ * The parts the bar draws, in the order drawn from the leading end: what is
+ * done, then what is under way. The rest of the whole — still to do — is the
+ * meter's remainder, so the parts and the remainder are the census exactly.
+ */
+export function progressSegments(counts: WorkTaskCounts) {
+  return [
+    { id: "done", label: "done", value: counts.done, tone: "success" as const },
+    { id: "active", label: "active", value: counts.active, tone: "info" as const },
+  ];
+}
+
+/**
+ * The bar alone.
+ *
+ * A PROJECT WITH NO WORK IN IT GETS THE ABSENT MARK rather than an empty bar.
+ * A split of nothing is undefined rather than zero, and an empty remainder
+ * would say "all of it is still to do" about a project nobody has filed
+ * anything in. The two callers differ on where that mark belongs: the
+ * directory draws it in the cell, and the project page draws a whole empty
+ * state in place of its list, so the page gates before it calls.
+ */
+export function ProjectProgress({
+  counts,
+  size = "compact",
+}: {
+  counts: WorkTaskCounts;
+  size?: "compact" | "default";
+}) {
+  const whole = progressWhole(counts);
+  if (whole === 0) {
+    return (
+      <EmptyValue
+        label={counts.closed > 0 ? "Only closed work — nothing to do" : "Nothing filed yet"}
+      />
+    );
+  }
   return (
-    <StackedBar
-      segments={[
-        { id: "done", label: "Done", value: counts.done, color: "var(--color-feedback-success)" },
-        { id: "closed", label: "Closed", value: counts.closed, color: DATA_COLOR_OTHER },
-        // THE REMAINDER IS A SEGMENT, and it is transparent so the track shows
-        // through it. It has to be here: the bar sizes every part against the
-        // sum of the parts it is GIVEN, so leaving it out would fill `done`
-        // against done + closed — the share reading this meter exists to stop
-        // being. ONE segment for waiting and started alike: this bar answers
-        // "how much is done", and both are the part that is not.
-        { id: "unfinished", label: "Not finished", value: left, color: "transparent" },
-      ]}
-      // WHAT THE PICTURE SAYS, for a reader who cannot see it — and it is the
-      // amount rather than three percentages, because that is the sentence the
-      // bar is drawing.
-      summary={() =>
-        `${counts.done} done of ${whole} filed, ${counts.closed} closed, ` +
-        `${counts.active} in progress, ${counts.todo} not started.`
-      }
+    <SegmentedMeter
+      size={size}
+      segments={progressSegments(counts)}
+      total={whole}
+      remainderLabel="to do"
     />
   );
 }
 
 /**
- * What FILLS the bar, named.
- *
- * ONLY THE PARTS THAT FILL IT. Unfinished work is the untinted track, so a
- * swatch for it would be a colour that is not on the bar — and its two counts
- * are already facts in the header's own line and columns of their own in the
- * directory.
+ * What the bar's parts are, named.
  *
  * THE COUNTS ARE THE READOUT WHERE A FRAME CAN CARRY THEM: a header is one
  * project, so "Done 40" is a fact about the bar beside it. The directory's is
  * drawn ONCE for a column of forty rows and has no row's numbers to carry,
  * which is why they are optional rather than two components.
+ *
+ * THE SWATCHES ARE THE METER'S OWN TOKENS — each tone's fill and the
+ * remainder's hairline — so a legend can never name a colour the bar is not.
  */
 export function ProjectProgressLegend({ counts }: { counts?: WorkTaskCounts }) {
   return (
     <Legend
       items={[
         { id: "done", label: "Done", color: "var(--color-feedback-success)", value: counts?.done },
-        { id: "closed", label: "Closed", color: DATA_COLOR_OTHER, value: counts?.closed },
+        {
+          id: "active",
+          label: "Active",
+          color: "var(--color-feedback-info)",
+          value: counts?.active,
+        },
+        { id: "todo", label: "To do", color: "var(--color-border-strong)", value: counts?.todo },
       ]}
     />
   );
 }
 
 /**
- * A project's census as a header wears it: the bar, and what fills it.
+ * A project's census as a header wears it: the bar, and what it is made of.
  *
  * THE WRAPPER IS THE COMPONENT'S, not each caller's. The page wrapped this in
  * `.work-census` and the peek drew it bare, so the same census had a width and
@@ -115,7 +143,7 @@ export function ProjectProgressLegend({ counts }: { counts?: WorkTaskCounts }) {
 export function ProjectCensus({ counts }: { counts: WorkTaskCounts }) {
   return (
     <div className="work-census">
-      <ProjectProgress counts={counts} />
+      <ProjectProgress counts={counts} size="default" />
       <ProjectProgressLegend counts={counts} />
     </div>
   );

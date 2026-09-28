@@ -3,9 +3,19 @@
  *
  * NEVER HIDDEN. It is drawn for every reader and DISABLED with the reason when
  * this browser cannot make the change (`lib/useWriteAccess.ts`): the kit's
- * `disabledReason` keeps it focusable and hoverable, so the sentence is
- * reachable by exactly the reader who needs it — a natively disabled button
- * takes no focus and no hover, and its explanation with it.
+ * `disabledReason` keeps it focusable, and reads the sentence to a screen
+ * reader as the button's description — a natively disabled button takes no
+ * focus, and its explanation with it.
+ *
+ * THE KIT DRAWS THAT SENTENCE FOR NOBODY ELSE: it is visually hidden, so a
+ * sighted reader hovering a dead button learned nothing. The same sentence is
+ * therefore the button's `title` while it is held, which a pointer reveals on
+ * hover and which a screen reader does not read a second time (an element's
+ * `aria-describedby` outranks its title as its description). A tooltip the
+ * pointer and the keyboard both open would have been read twice for exactly
+ * that reason. A form whose primary action is held also writes the reason on
+ * the page beside it (the New task sheet's footer), because neither reaches a
+ * touch screen.
  *
  * AND IT SAYS WHAT BECAME OF THE LAST PRESS, beside itself: a refusal stays
  * under the control until the next press, with a Retry where the node, not
@@ -16,6 +26,7 @@ import type { ReactNode } from "react";
 import { Button, type ButtonProps } from "@crewlethq/ui";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
+import { marked } from "~/ui/Problems.tsx";
 
 export interface WriteButtonProps<T extends ActionTool> extends Omit<
   ButtonProps,
@@ -48,6 +59,22 @@ export interface WriteButtonProps<T extends ActionTool> extends Omit<
   pressing?: boolean;
 }
 
+/**
+ * Whether `write` may be pressed now: this browser may make the change,
+ * nothing holds the press (`blocked`), and no press of it is already out.
+ *
+ * WHAT A WriteButton CHECKS ON ITS OWN CLICK — and every other way into the
+ * same press checks it too, through this. A dialog is a form, so Enter
+ * submits it without touching the button; a reply field sends on ⌘Enter; a
+ * one-line form files on Enter. Each of those went straight to `run`, and a
+ * second Enter while the first answer was out sent the change again, under a
+ * NEW request id — which the engine rightly takes for a second change: two
+ * sub-tasks filed, two comments posted, a target date written twice.
+ */
+export function pressable<T extends ActionTool>(write: Act<T>, blocked?: string): boolean {
+  return write.access.can && blocked === undefined && !write.busy;
+}
+
 export function WriteButton<T extends ActionTool>({
   write,
   onPress,
@@ -65,12 +92,13 @@ export function WriteButton<T extends ActionTool>({
         {...rest}
         loading={pressing ?? busy}
         disabledReason={reason}
+        title={reason ?? rest.title}
         onClick={(event) => {
           // A ROW OR A CARD IS OFTEN AN ANCHOR: the press is this button's,
           // never a navigation to whatever the row links to.
           event.preventDefault();
           event.stopPropagation();
-          if (reason === undefined && !busy) onPress();
+          if (pressable(write, blocked)) onPress();
         }}
       >
         {children}
@@ -80,13 +108,19 @@ export function WriteButton<T extends ActionTool>({
   );
 }
 
-/** A refusal, drawn where the control that caused it is. */
+/**
+ * A refusal, drawn where the control that caused it is.
+ *
+ * THE ENGINE'S SENTENCE NAMES ITS ARGUMENTS IN BACKTICKS ("`labels` …"), which
+ * is the one mark a tool's sentence carries for a value — so it is drawn as
+ * one, in the refusal's own ink, rather than as punctuation around a word.
+ */
 export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) {
   const { refusal, busy } = write;
   if (!refusal) return null;
   return (
     <span className="write-refusal" role="alert">
-      <span>{refusal.sentence}</span>
+      <span>{marked(refusal.sentence, "inherit")}</span>
       {refusal.hint && <span className="t-caption">{refusal.hint}</span>}
       {refusal.retryable && (
         <Button size="small" variant="ghost" loading={busy} onClick={() => void write.retry()}>

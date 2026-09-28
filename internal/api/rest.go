@@ -103,6 +103,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/search", what: "work_search"},
 	{method: "GET", pattern: "/work/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
+	{method: "GET", pattern: "/work/views/saved", what: "work_saved_views"},
 	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
 	{method: "GET", pattern: "/work/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
 	{method: "GET", pattern: "/work/{id}", what: "work_item", path: map[string]string{"id": "id"}},

@@ -83,6 +83,19 @@ test("a window that ends where it begins is refused, and says why", () => {
   expect(set).not.toHaveBeenCalled();
 });
 
+// ENTER IN EITHER BOX APPLIES. A browser submits a form of several date
+// fields on Enter only by pressing the form's submit button (its implicit
+// submission), so Apply has to BE that button: as a plain button beside the
+// form's `onSubmit`, Enter in "From" or "To" did nothing at all.
+test("Apply is the form's submit button, so Enter in a box applies", () => {
+  open();
+  const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+  const from = screen.getByLabelText("From") as HTMLInputElement;
+  expect(apply.type).toBe("submit");
+  expect(apply.form).toBeTruthy();
+  expect(apply.form).toBe(from.form);
+});
+
 test("a window that holds something is applied", () => {
   const set = vi.fn();
   open(picker(set));

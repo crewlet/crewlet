@@ -365,6 +365,22 @@
   padding: 0;
 }
 
+/* THE RAIL'S HEAD: the company's lockup, and the one create the chrome
+   carries at the far end of the same line, as the approved design draws it.
+   The lockup takes what is left, so a long company name truncates rather than
+   pushing the `+` off the rail. */
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  width: 100%;
+}
+.side-head > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
 /* THE ⌘K FIELD SITS ON THE NAV'S OWN GUTTER, so its left edge is the left
    edge every nav row's background starts at. */
 .side-search {
@@ -394,7 +410,7 @@
   gap: var(--spacing-2);
 }
 
-/* The palette's fallback dialog: the thrown message, which wraps rather than
+/* A layer's fallback dialog (the palette, the New task sheet): the thrown message, which wraps rather than
    scrolls, since a reader asked to report it should see all of it. */
 .boundary-message {
   margin: 0;
@@ -732,6 +748,33 @@ a.user-block-who:focus-visible {
   min-width: 5ch;
 }
 
+/* AN OBJECT'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx):
+   `Work › ENG Core · Items | About | History`. On every page without lenses
+   the slot is empty and is no flex item at all, so it costs the bar no gap.
+
+   WITH LENSES, THE LENSES TAKE THE LINE'S SLACK, not the trail: the trail's
+   grow is what keeps the controls in the right-hand corner, and it would push
+   the lenses there too — against the controls, away from the name they are
+   about. So the trail sizes to its content and still gives way first
+   (`flex-shrink: 100`, down to its 20ch floor), capped at 60% of the bar so a
+   long name ellipsises beside its lenses rather than pushing them onto a line
+   of their own; the lens group grows, holding its tabs at its start. */
+.page-lenses {
+  display: flex;
+  align-items: center;
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+.page-lenses:empty {
+  display: none;
+}
+
+.page-bar:has(> .page-lenses:not(:empty)) > .crumbs {
+  flex: 0 100 auto;
+  max-width: 60%;
+}
+
 /* WHAT THIS PAGE CAN DO, in one element — the portalled slot and the frame's
    own actions together, so the container query below can move both onto a
    line of their own with one rule.
@@ -766,6 +809,20 @@ a.user-block-who:focus-visible {
   min-width: 0;
 }
 
+/* THE FRAME'S STAR AND COPY LINK are one element only so the phone rule below
+   can fold them with one selector; on a wide bar they are the controls row's
+   own items, laid out exactly as before they had a wrapper. */
+.page-frame-actions {
+  display: contents;
+}
+
+/* "MORE" IS A PHONE'S CONTROL ONLY (`PageMore` in PageHeader.tsx): on a wider
+   bar every action it holds is drawn inline, and an action in two places at
+   once is two things a reader has to learn are the same. */
+.page-more {
+  display: none;
+}
+
 /* WHO IS WORKING NOW: their faces and the count, a link to what they run. */
 .working-now {
   display: inline-flex;
@@ -787,15 +844,21 @@ a.user-block-who:focus-visible {
 
 /* ---- The page bar on a phone's width -------------------------------------
    THE HEADER'S WIDTH, NOT THE WINDOW'S, and the kit's `breakpoint.phone` (640,
-   `app/layout.ts`). Under it the controls take a line of their own and
-   SCROLL rather than stacking rows: a screen's own control group is as wide
-   as that screen needs, and at 390px some of it is past the edge whatever the
-   bar does. Scrolling keeps every control reachable, where rows of controls
-   would push the screen a third of the way down a phone. */
+   `app/layout.ts`). Under it the controls are ONE line that SCROLLS rather
+   than stacking rows: a screen's own control group is as wide as that screen
+   needs, and at 390px some of it can be past the edge whatever the bar does.
+   Scrolling keeps every control reachable, where rows of controls would push
+   the screen a third of the way down a phone.
+
+   THEY SHARE A LINE WHEN THEY FIT, by the rule the wide bar already keeps (a
+   line breaks only when the trail's floor cannot sit beside them). They used
+   to take a line of their own by rule — right when there were five of them;
+   folded into "More" (below) a task's controls are one button, and a line of
+   their own for one ellipsis was a row of chrome with nothing on it. */
 @container page (width < 640px) {
   .page-controls {
     order: 9;
-    flex: 0 0 100%;
+    flex: 0 0 auto;
     min-width: 0;
     flex-wrap: nowrap;
     justify-content: flex-start;
@@ -813,6 +876,21 @@ a.user-block-who:focus-visible {
        start, the end is past the edge, and the one control a screen most
        wants pressed would be the one a phone reader has to swipe to. */
     order: -1;
+  }
+
+  /* ONE ACTION IN VIEW, THE REST IN "MORE". The frame's star and Copy link,
+     and what a screen marks as folding (Edit project, a task's own menu),
+     leave the line for the one menu that holds them — so a project's New task
+     and its lenses share a line instead of standing as three rows of chrome
+     over the work. */
+  .page-frame-actions,
+  .page-action-folds {
+    display: none;
+  }
+
+  .page-more {
+    display: inline-flex;
+    flex: none;
   }
 }
 

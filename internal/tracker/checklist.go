@@ -126,24 +126,24 @@ func (c ChecklistIntent) grows() bool {
 // The input is never written through: the result shares no slice with it.
 func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 	if !c.Op.Valid() {
-		return nil, invalid("tracker: %q is not a checklist gesture — the "+
+		return nil, invalid("%q is not a checklist gesture — the "+
 			"gestures are %s", c.Op, checklistOpList())
 	}
 	out := cloneChecklists(lists)
 	listAt := func() (int, error) {
 		if c.List == "" {
-			return 0, invalid("tracker: a %s gesture names no list", c.Op)
+			return 0, invalid("a %s gesture names no list", c.Op)
 		}
 		for i := range out {
 			if out[i].ID == c.List {
 				return i, nil
 			}
 		}
-		return 0, invalid("tracker: this task has no checklist %q", c.List)
+		return 0, invalid("this task has no checklist %q", c.List)
 	}
 	itemAt := func() (int, int, error) {
 		if c.Item == "" {
-			return 0, 0, invalid("tracker: a %s gesture names no item", c.Op)
+			return 0, 0, invalid("a %s gesture names no item", c.Op)
 		}
 		for l := range out {
 			for i := range out[l].Items {
@@ -152,16 +152,16 @@ func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 				}
 			}
 		}
-		return 0, 0, invalid("tracker: this task has no checklist item %q", c.Item)
+		return 0, 0, invalid("this task has no checklist item %q", c.Item)
 	}
 
 	switch c.Op {
 	case ChecklistAddList:
 		switch {
 		case c.List == "":
-			return nil, invalid("tracker: an add_list gesture mints no list id")
+			return nil, invalid("an add_list gesture mints no list id")
 		case slices.ContainsFunc(out, func(l Checklist) bool { return l.ID == c.List }):
-			return nil, invalid("tracker: this task already has a checklist %q", c.List)
+			return nil, invalid("this task already has a checklist %q", c.List)
 		}
 		if err := checkChecklistName(c.Name, MaxChecklistName, "checklist name"); err != nil {
 			return nil, err
@@ -264,7 +264,7 @@ func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 // already carries and every one this gesture has added before it.
 func newItem(lists []Checklist, adding []ChecklistItem, item ChecklistItem) (ChecklistItem, error) {
 	if item.ID == "" {
-		return ChecklistItem{}, invalid("tracker: a checklist item is added with no id")
+		return ChecklistItem{}, invalid("a checklist item is added with no id")
 	}
 	taken := slices.ContainsFunc(adding, func(i ChecklistItem) bool { return i.ID == item.ID })
 	for _, list := range lists {
@@ -273,7 +273,7 @@ func newItem(lists []Checklist, adding []ChecklistItem, item ChecklistItem) (Che
 		})
 	}
 	if taken {
-		return ChecklistItem{}, invalid("tracker: this task already has a checklist item %q", item.ID)
+		return ChecklistItem{}, invalid("this task already has a checklist item %q", item.ID)
 	}
 	if err := checkChecklistName(item.Name, MaxChecklistItemName, "checklist item name"); err != nil {
 		return ChecklistItem{}, err
@@ -291,10 +291,10 @@ func checkChecklistName(name string, limit int, field string) error {
 	name = strings.TrimSpace(name)
 	switch {
 	case name == "":
-		return invalid("tracker: a %s is empty — a line nobody can read is "+
+		return invalid("a %s is empty — a line nobody can read is "+
 			"not something anybody can tick", field)
 	case len(name) > limit:
-		return invalid("tracker: the %s is %d bytes and the maximum is %d — it "+
+		return invalid("the %s is %d bytes and the maximum is %d — it "+
 			"is refused rather than cut; a line longer than that is a task "+
 			"of its own", field, len(name), limit)
 	}
@@ -309,21 +309,21 @@ func checkChecklistName(name string, limit int, field string) error {
 // them is a record the arithmetic never allowed for.
 func checkChecklistCaps(lists []Checklist) error {
 	if len(lists) > MaxChecklists {
-		return invalid("tracker: a task carries at most %d checklists and this "+
+		return invalid("a task carries at most %d checklists and this "+
 			"change would leave %d — split the work into subtasks instead",
 			MaxChecklists, len(lists))
 	}
 	total := 0
 	for _, list := range lists {
 		if len(list.Items) > MaxChecklistItems {
-			return invalid("tracker: checklist %q would hold %d items and a "+
+			return invalid("checklist %q would hold %d items and a "+
 				"list holds at most %d — split it, or file some of them as "+
 				"subtasks with create_work_item and remove those lines", list.Name, len(list.Items), MaxChecklistItems)
 		}
 		total += len(list.Items)
 	}
 	if total > MaxChecklistItemsTotal {
-		return invalid("tracker: a task carries at most %d checklist items "+
+		return invalid("a task carries at most %d checklist items "+
 			"across its lists and this change would leave %d — file some of "+
 			"them as subtasks with create_work_item and remove those lines",
 			MaxChecklistItemsTotal, total)
@@ -365,7 +365,7 @@ func settleChecklist(current Task, patch TaskPatch) (TaskPatch, error) {
 		// BOTH SPELLINGS AT ONCE IS A PROGRAMMING ERROR, refused rather
 		// than resolved in some order, exactly as a watch gesture beside
 		// a whole watcher set is.
-		return patch, invalid("tracker: this patch carries both a %s "+
+		return patch, invalid("this patch carries both a %s "+
 			"checklist gesture and a whole checklist collection — a caller "+
 			"states one or the other", patch.Checklist.Op)
 	}

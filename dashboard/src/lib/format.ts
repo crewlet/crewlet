@@ -369,6 +369,17 @@ export function fmtPct(part: number, whole: number, digits = 0): string {
   return `${((part / whole) * 100).toFixed(digits)}%`;
 }
 
+/**
+ * How many UTF-8 BYTES a string takes — the unit every engine text cap is
+ * counted in. `length` counts UTF-16 code units, which agree with it only for
+ * ASCII: a title in Japanese reaches a 256-byte cap at about 85 characters.
+ */
+export function utf8Bytes(s: string): number {
+  return encoder.encode(s).length;
+}
+
+const encoder = new TextEncoder();
+
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
   const units = ["B", "KB", "MB", "GB"];

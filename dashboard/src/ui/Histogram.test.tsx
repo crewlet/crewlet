@@ -57,10 +57,23 @@ test("the axis names its first and its last bucket", () => {
 // a histogram's columns are whatever bucket the window chose, so a rule on
 // weeks would put one tick on an axis of sixty minutes.
 test("the ticks between the ends are an even spread over the buckets", () => {
-  expect(ticksFor(14)).toEqual([0, 3, 7, 10, 13]);
+  // A WEEK LABELS EVERY OTHER DAY — never 22, 24, 25, 27, 28, whose uneven
+  // gaps read as days missing from the data.
+  expect(ticksFor(7)).toEqual([0, 2, 4, 6]);
+  expect(ticksFor(14)).toEqual([0, 4, 8, 13]);
+  expect(ticksFor(31)).toEqual([0, 10, 20, 30]);
   // THE WIDEST AXIS THIS PRODUCT DRAWS — `lib/range.ts`'s own `MAX_BARS` — still
   // carries five labels and no more.
-  expect(ticksFor(90)).toEqual([0, 22, 45, 67, 89]);
+  expect(ticksFor(90)).toEqual([0, 23, 46, 69, 89]);
+  // AND EVERY INTERIOR GAP IS ONE STRIDE, at every window length.
+  for (let n = 1; n <= 90; n++) {
+    const at = ticksFor(n);
+    expect(at.length, `${n} bars`).toBeLessThanOrEqual(5);
+    expect(at[0]).toBe(0);
+    expect(at[at.length - 1]).toBe(n - 1);
+    const gaps = at.slice(1, -1).map((v, i) => v - at[i]!);
+    expect(new Set(gaps).size, `${n} bars: ${at}`).toBeLessThanOrEqual(1);
+  }
   // FEWER BARS THAN LABELS IS NOT FEWER LABELS THAN BARS: every bucket gets its
   // own, and a single bucket gets exactly one rather than two of itself.
   expect(ticksFor(3)).toEqual([0, 1, 2]);

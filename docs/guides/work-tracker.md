@@ -933,7 +933,7 @@ that container a seat owns, and one about CHANGE rather than about state:
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
-| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
+| `create_work_item` | file a task or a subtask. It lands in `todo` unless `status` names another — a board lane's **+** files into that lane in the one record, and an unknown status is refused by name. Left without an `assignee` it goes to the project's **default assignee** (the lead's `write_project` setting, read inside the create itself), and lands in triage — where the project's lead is told — only when the project names none, or names a seat that has since left the chart, which the answer's `warnings` say; the answer's `assignee` is who it was filed to. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
 | `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
@@ -1083,6 +1083,15 @@ else — so nothing writes them here at all; its field declarations, its
 default assignee and its target date are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
+
+The **default assignee** is who a task filed into the project with nobody named
+goes to — every create reads it inside its own snapshot, beside the archived
+flag and the required fields, so a person's sheet, a seat's tool and an
+operator's assistant all land the same task in the same place. Empty is the
+project's own setting for **triage**, where the lead is told. A default naming
+a seat the chart no longer holds is not applied: the task goes to triage and
+the create's answer warns that the setting wants changing, since a task filed
+to a seat nobody runs would wake nobody.
 
 **An archived project stays reachable, and it is SELECTED rather than let
 through.** Archiving stops a project taking new items and keeps every one it
@@ -1324,16 +1333,52 @@ screens rather than one:
   who won it; a checklist tick and following are gestures applied to the task
   as it is when they land, so they never lose a race that was not one. A reader
   who cannot act sees every control, disabled with the sentence that says why.
+- **New task** — on the sidebar's head, beside the Projects heading, at the
+  end of every work screen's bar and on a board lane — opens one sheet that
+  files a whole task in one `create_work_item`: its project, title and
+  description, type, the status it starts in, who holds it, its priority, due
+  date and labels. A lane's **+** files into that lane: it presets the lane's
+  status, type, priority, project, holder or label (a status-group lane, the
+  group's first status), and a lane no one value files into — a due band other
+  than *No due date*, a unit, and the Cancelled and Closed lanes nobody files
+  new work into — has no **+**. Only what you set is sent, so a
+  field you leave alone is the engine's default rather than the sheet's guess
+  of it; left without an assignee, the sheet says where the task lands (the
+  project's default assignee, else triage for its lead). The Assignee field
+  completes against the org chart, and when the engine's own colleague match
+  names exactly one seat that seat leads the list as the **best match** — why
+  it matched ("part of the name matches") is said under the field once you take
+  it. A name typed there and not chosen from the list holds **Create task**
+  until you choose the seat or clear it, so it is never dropped from the task.
+  Every write form sends one press at a time: Enter or ⌘Enter while the first
+  answer is still out sends nothing more, so a task, a comment or a sub-task is
+  never filed twice by a second key. The sheet opens
+  the new task once the engine has applied it, and a refusal — a label the
+  project does not declare, a field it requires — is said in the sheet, naming
+  the argument. A title past 256 bytes or a description past 32 KiB is refused
+  rather than cut, so the sheet counts both in bytes as the engine does, marks
+  the field that is over and holds **Create task** with the reason written
+  beside it. The engine's own refusal of a text past its cap names the argument
+  and the sizes (`` `title` is 600 bytes and a task's title holds at most 256
+  ``) — for a model and for a person alike, and without quoting the id minted
+  for a task that was never filed.
 - **Projects** (`#/work/projects`) is the directory: every project with its
-  lead, the unit that owns it, its three maintained counts, how far along its
-  filed work is and when that work last changed. A row opens the project
+  lead, the unit that owns it, its maintained counts, how far along its work is
+  — one bar split into done, active and still to do, over exactly those counts
+  — its lead's **target date**, and when that work last changed. A row opens the project
   **beside** the list rather than leaving it, and that panel's `Open ↗` is the
   way to the project's own page (⌘-click or middle-click goes straight there).
   The sentence over the grid is the company's own total, and when the engine
   answered fewer projects than the company has it says so rather than quoting
   the page as the company.
 - **History** (`#/work/history`) is the change log over a window you choose,
-  with the kinds, the authors and the projects on the pages loaded as facets.
+  narrowed from one bar — the window, then **Kind**, **By** and **Project**
+  pickers whose options are what the pages loaded hold, with how many of each
+  (said once: the counts are over the changes loaded) — and it says "Showing
+  the latest N" beside **Load older**. A config apply re-declaring the org
+  chart's projects is engine bookkeeping, not somebody's change: a run of them
+  is one quiet line ("Org chart re-applied to 3 projects", by the engine), and
+  the chart epoch they move is never printed.
   The window bounds what the engine is asked for and a page bounds what one ask
   answers, so the two are different limits: **Load older changes** fetches the
   next page back rather than asking you to move the window, and the pages you
@@ -1342,13 +1387,30 @@ screens rather than one:
   project's changes, which is the same narrowing a project's own History lens
   is.
 - **A project** (`#/work/{KEY}`) opens on its work — the **Items** lens, which
-  says how many are open — with an **Overview** lens for what the container
-  itself declares (its statuses, its types, its labels and its fields) and a
-  **History** lens narrowed to it. Under the name is the project's purpose,
-  which is the `purpose` of the unit that declared its `project` key; a project
-  declared on a seat rather than on a unit has none, so the line says which
-  unit owns it instead. A project nothing has been filed into says so and names
-  the ways work arrives, rather than showing an empty list.
+  says how many are open, is the page's first content, with the lenses on the
+  page bar beside the project's name — with an
+  **About** lens for the container itself (who leads it, the unit that owns it,
+  its target, its census and what it declares: its statuses, its types, its
+  labels and its fields) and a **History** lens narrowed to it. About's first
+  line is the project's purpose, which is the `purpose` of the unit that
+  declared its `project` key; a project declared on a seat rather than on a
+  unit has none, so the line says which unit owns it instead. A project nothing
+  has been filed into says so and offers **New task**, rather than showing an
+  empty list. **Edit project** sets or clears the target date
+  (`write_project{target_date}`) — the project's lead may, and so may a person
+  acting as themselves; a seat that does not lead the project is refused.
+- **Search** (`#/work/search`) ranks the company's work against a phrase —
+  **Hybrid** (the default: words and meaning, each ranked and then fused),
+  **Keyword** (the words, BM25) or **Meaning** (`semantic`: what the text is
+  about); each mode's tooltip says what it matches. A company with no
+  embeddings provider asking Hybrid is served Keyword, and the screen — and the
+  command palette's mode pill — says so in the same words ("Asked for Hybrid,
+  served Keyword — …").
+- **Saved views** (`#/work/views`) is the inventory of what somebody saved,
+  in every project and team as well as company-wide — each row says where the
+  view lives, and each has a **Pin**. A view you **pinned** is in your
+  sidebar, and that row **runs** it; the view running on a board can be pinned
+  or unpinned from its own strip too.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
 `/operator/mcp`. It serves the same work tools above, eleven more no seat is
@@ -1758,7 +1820,12 @@ starred things) are held against the list the move would leave.
 tasks the view selects when it is run: its saved parameters, in the container
 it was saved in, with `me` as the viewer, on the company's clock. It is the
 same expansion and the same statement that answer the board's own total for
-that view, so the number beside a pin is the number on the board it opens. At most 32 counts, in the
+that view, so the number beside a pin is the number on the board it opens —
+and it counts every task on its own (`subtasks=separate`), which is how every
+surface that runs a view runs it: the dashboard's shapes and `list_work_items`
+both overrule a view's subtask mode to it. Counted in the grammar's default,
+where a root's subtree rides along unfiltered, an open-work view counted the
+finished subtasks of every open epic, and the pin said 39 over a list of 36. At most 32 counts, in the
 strip's one read. A view that no longer compiles — it filters on a field that
 was since archived, say — carries `count_refused` naming why, rather than no
 count at all.

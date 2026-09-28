@@ -21,24 +21,33 @@
  * # Three lenses, and each is a different question
  *
  * ITEMS is the work, which is why it is the default and why it is the same
- * component the company-wide list is. OVERVIEW is what the CONTAINER is — its
- * vocabulary, its tags, its census, the findings on its own record — which a
- * board can say none of. HISTORY is what has happened, ordered by the log
- * rather than by anything the rows sort on.
+ * component the company-wide list is — drawn first thing in the page, as the
+ * approved Board draws a project: the work is the first screenful, not a
+ * header about it. The lenses themselves are on the PAGE BAR, beside the name
+ * they are lenses on (`PageLenses`): as a row of their own they pushed the
+ * lanes a line further down than the Board puts them. ABOUT is what the CONTAINER is — who leads it, which unit
+ * owns it, its target, how far along it is, its vocabulary, its tags and the
+ * findings on its own record — which a board can say none of. HISTORY is what
+ * has happened, ordered by the log rather than by anything the rows sort on.
  *
  * A LENS IS A SECTION, so each pushes history: a reader who walked Items →
- * Overview → History and pressed Back three times walks out through them.
+ * About → History and pressed Back three times walks out through them.
  *
- * # Read-only, like every other work screen
+ * # What a person can change here
  *
- * Nothing here writes.
+ * The page bar ends with New task, which files into THIS project, and Edit
+ * project — the lead's target date, a company write (`write_project`) the
+ * engine decides who may make. The work itself is written from the list, as
+ * everywhere (`ItemsView.tsx`).
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { href, useRoute } from "~/app/router.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
-import { usePageCoverage, usePageLabels, useWorkingScope } from "~/app/Shell.tsx";
-import { PageActions } from "~/app/frame/PageActions.tsx";
+import { usePageCoverage, usePageLabels, usePageMenu, useWorkingScope } from "~/app/Shell.tsx";
+import { PageActions, PageLenses } from "~/app/frame/PageActions.tsx";
+import { EditProjectButton } from "~/components/writes.tsx";
+import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 // THE HEADER'S FACT IS NOT THE TRACKER'S. `components/work.tsx` exports a
 // `Fact` that DRAWS one in an overview strip; this one is the VALUE an
@@ -48,13 +57,25 @@ import { ObjectHeader, type Fact as HeaderFact } from "~/app/frame/ObjectHeader.
 import { NumberCell } from "~/app/frame/cells.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
-import { Callout, Card, EmptyState, EmptyValue, Skeleton, Tabs, Tag } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  Count,
+  EmptyState,
+  EmptyValue,
+  Skeleton,
+  TabPanel,
+  Tabs,
+  Tag,
+} from "@crewlethq/ui";
 import {
   LayoutDashboardGlyph,
   ChartNoAxesGanttGlyph,
+  PencilGlyph,
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
@@ -62,13 +83,14 @@ import { useNow } from "~/lib/clock.ts";
 import {
   pageCount,
   pageNote,
+  SCOPE_GROUPS,
   statusLabel,
   STATUSES,
   targetLabel,
   typeName,
   unfinished,
 } from "~/lib/work.ts";
-import { describeChange } from "~/lib/work.ts";
+import { describeChange, foldChartReapplies, reapplySentence } from "~/lib/work.ts";
 import { filed, ProjectCensus } from "./census.tsx";
 import { ItemsView } from "./ItemsView.tsx";
 import { HistoryView } from "./History.tsx";
@@ -77,7 +99,14 @@ import { statusDot } from "./shapes/group.tsx";
 import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
 
 /** The lenses, in the order the strip draws them; the first is the default. */
-const LENSES = ["items", "overview", "history"] as const;
+const LENSES = ["items", "about", "history"] as const;
+
+/**
+ * The region the lenses control. The row is on the page bar and the panel is
+ * in the page, so they are tied by id — a screen reader moves from a lens to
+ * the section it opens rather than hearing a tab row that controls nothing.
+ */
+const LENS_PANEL = "project-lens";
 
 export function Project({ projectKey }: { projectKey: string }) {
   const org = useOrg();
@@ -105,6 +134,25 @@ export function Project({ projectKey }: { projectKey: string }) {
   usePageCoverage(detail);
   // THE FACES AT THE HEAD ARE THE SEATS ON THIS PROJECT'S WORK.
   useWorkingScope(projectKey);
+  // EDIT PROJECT, AS THE BAR'S "MORE" OFFERS IT ON A PHONE: the same dialog
+  // the inline button opens, disabled with the same sentence when this reader
+  // cannot make the change.
+  const [editing, setEditing] = useState(false);
+  const editAccess = useWriteAccess("write_project");
+  usePageMenu(
+    detail
+      ? [
+          {
+            key: "edit-project",
+            label: "Edit project",
+            icon: <PencilGlyph size="sm" />,
+            onSelect: () => setEditing(true),
+            disabled: !editAccess.can,
+            description: editAccess.can ? undefined : editAccess.reason,
+          },
+        ]
+      : [],
+  );
 
   const nothingFiled = !!detail && filed(detail.task_counts) === 0 && !inTrash;
 
@@ -112,36 +160,70 @@ export function Project({ projectKey }: { projectKey: string }) {
 
   return (
     <>
+      {detail && (
+        <PageLenses>
+          <Tabs
+            size="sm"
+            ariaLabel="Lens"
+            panelId={LENS_PANEL}
+            value={lens}
+            onValueChange={(value) => setLens(value as (typeof LENSES)[number])}
+            items={[
+              // THE COUNT IS ON THE LENS A READER IS CHOOSING BETWEEN, from
+              // the project's own maintained census — no new read, and it
+              // agrees with About's figures by construction.
+              //
+              // AND ONLY ON THIS ONE, deliberately. About is a description
+              // rather than a collection, and History is PAGED: a count of
+              // the page it loaded would read as a count of the lens, which
+              // is the number a reader would plan against.
+              //
+              // AND IT SAYS WHAT IT COUNTS — OPEN tasks — because the bar
+              // one row below counts the rows in its own scope ("25 in
+              // Recent"), and two numbers both called "items" a row apart
+              // read as a contradiction. The kit's Count carries the noun
+              // for a screen reader; the title carries it for a pointer.
+              {
+                value: "items",
+                label: (
+                  <span className="lens-count" title={`${unfinished(detail.task_counts)} open`}>
+                    Items
+                    <Count value={unfinished(detail.task_counts)} label="open" />
+                  </span>
+                ),
+              },
+              { value: "about", label: "About" },
+              { value: "history", label: "History" },
+            ]}
+          />
+        </PageLenses>
+      )}
       <PageActions>
-        <a className="t-link" href={href(["work"])}>
-          All work →
-        </a>
+        {detail && (
+          // FOLDED ON A PHONE into the bar's "More" (published above), so New
+          // task stays in view beside the lenses rather than a third row of
+          // controls standing over the work.
+          <span className="page-action-folds">
+            <EditProjectButton
+              project={projectKey}
+              name={detail.name}
+              target={detail.target_date}
+              open={editing}
+              onOpenChange={setEditing}
+            />
+          </span>
+        )}
+        <NewTaskButton preset={{ project: projectKey }} />
       </PageActions>
 
       {state.loading && !detail && <Skeleton variant="text" rows={4} label="Loading the project" />}
       <QueryState error={state.error} loading={state.loading}>
         {detail && (
-          <div className="work-main">
-            <ProjectHead detail={detail} chrome={chrome} />
-
-            <Tabs
-              ariaLabel="Lens"
-              value={lens}
-              onValueChange={(value) => setLens(value as (typeof LENSES)[number])}
-              items={[
-                // THE COUNT IS ON THE LENS A READER IS CHOOSING BETWEEN, from
-                // the project's own maintained census — no new read, and it
-                // agrees with the fact line by construction.
-                //
-                // AND ONLY ON THIS ONE, deliberately. Overview is a
-                // description rather than a collection, and History is PAGED:
-                // a count of the page it loaded would read as a count of the
-                // lens, which is the number a reader would plan against.
-                { value: "items", label: "Items", count: unfinished(detail.task_counts) },
-                { value: "overview", label: "Overview" },
-                { value: "history", label: "History" },
-              ]}
-            />
+          <TabPanel id={LENS_PANEL} value={lens} className="work-main">
+            {/* A FINDING ON THE PROJECT'S OWN RECORD is over every lens, not
+                only About's: a unit the chart lost leaves the work on the
+                board below routed to nobody, which is a fact about that work. */}
+            <ProjectBanners detail={detail} />
 
             {/* NOTHING FILED IS THE PROJECT'S OWN STATE, not a list that
                 matched nothing. Gated on the maintained counts, so it is drawn
@@ -155,9 +237,9 @@ export function Project({ projectKey }: { projectKey: string }) {
               ) : (
                 <ItemsView project={projectKey} />
               ))}
-            {lens === "overview" && <ProjectOverview detail={detail} chrome={chrome} />}
+            {lens === "about" && <ProjectAbout detail={detail} chrome={chrome} />}
             {lens === "history" && <HistoryView container={`project:${projectKey}`} embedded />}
-          </div>
+          </TabPanel>
         )}
       </QueryState>
     </>
@@ -167,24 +249,39 @@ export function Project({ projectKey }: { projectKey: string }) {
 /**
  * What the CONTAINER is, as against what is in it.
  *
- * Its vocabulary — the statuses, the types and the fields it declares — its
+ * Its header first — the facts, the sentence and the census the rail wears
+ * too ([ProjectHead]) — then its vocabulary — the statuses, the types and the fields it declares — its
  * labels, and how its open work is distributed. Every one of these is a fact a
  * board cannot state from its rows, and each was either buried in a rail or
  * reachable nowhere at all: a company that renamed four statuses and declared
  * six fields had no screen that said so.
  */
-function ProjectOverview({ detail, chrome }: { detail: WorkProjectDetail; chrome: RowChrome }) {
+function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: RowChrome }) {
   // `group_limit: 1` because only the COUNTS are drawn here and the engine runs
   // one paged statement per column — a column's rows are exactly what this
   // panel does not show, and zero is not a bound the grammar accepts.
+  //
+  // OPEN WORK, EVERY TASK ON ITS OWN. The panel says "open work only", and
+  // the list's default lets a root's SUBTREE ride along unfiltered
+  // (`subtasks=collapsed`, the grammar's default) — so a finished sub-task
+  // of an open epic was counted, and the panel drew a "Done" line under a
+  // caption saying done work was not in it. `separate` files every task on
+  // its own row, each filtered by the open groups the caption names.
   const census = useQuery(
     "work_items",
-    { container: `project:${detail.key}`, group_by: "status", group_limit: 1 },
+    {
+      container: `project:${detail.key}`,
+      group_by: "status",
+      group_limit: 1,
+      status_group: SCOPE_GROUPS.open,
+      subtasks: "separate",
+    },
     { pollMs: 60_000 },
   );
 
   return (
     <div className="col gap-4">
+      <ProjectHead detail={detail} chrome={chrome} banners={false} />
       <Card>
         <Card.Header icon={<LayoutDashboardGlyph size="sm" />}>
           <Card.Title>Where the open work stands</Card.Title>
@@ -312,26 +409,44 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
         {feed.data &&
           (records.length > 0 ? (
             <div className="col gap-2">
-              {records.map((record) => (
-                <div className="col gap-1" key={record.id}>
-                  <div className="row gap-2">
-                    {record.subject_key ? (
-                      <a className="mono t-link" href={href(["work", record.subject_key])}>
-                        {record.subject_key}
-                      </a>
-                    ) : (
-                      <EmptyValue label="No work item" />
-                    )}
-                    <span className="spacer" />
-                    <span className="t-caption" title={fmtDateTime(record.at)}>
-                      {relTime(record.at, now)}
+              {/* A CONFIG APPLY'S RE-DECLARATION IS ONE QUIET LINE, never the
+                  chart epoch it moved — see `lib/work.ts` [foldChartReapplies]. */}
+              {foldChartReapplies(records).map((line) => {
+                if (line.kind === "reapply") {
+                  return (
+                    <div className="row gap-2" key={line.id}>
+                      <span className="t-caption truncate">
+                        {reapplySentence(line.projects)} · the engine
+                      </span>
+                      <span className="spacer" />
+                      <span className="t-caption" title={fmtDateTime(line.at)}>
+                        {relTime(line.at, now)}
+                      </span>
+                    </div>
+                  );
+                }
+                const record = line.record;
+                return (
+                  <div className="col gap-1" key={record.id}>
+                    <div className="row gap-2">
+                      {record.subject_key ? (
+                        <a className="mono t-link" href={href(["work", record.subject_key])}>
+                          {record.subject_key}
+                        </a>
+                      ) : (
+                        <EmptyValue label="No work item" />
+                      )}
+                      <span className="spacer" />
+                      <span className="t-caption" title={fmtDateTime(record.at)}>
+                        {relTime(record.at, now)}
+                      </span>
+                    </div>
+                    <span className="t-caption truncate">
+                      {describeChange(record, chrome)} · {record.actor || "the engine"}
                     </span>
                   </div>
-                  <span className="t-caption truncate">
-                    {describeChange(record, chrome)} · {record.actor || "the engine"}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
               <a className="t-link" href={href(["work", "history"], { project: detail.key })}>
                 Every change →
               </a>
@@ -435,22 +550,25 @@ function ProjectHead({
   chrome,
   size = "page",
   coverage,
+  banners = true,
 }: {
   detail: WorkProjectDetail;
   chrome: RowChrome;
   size?: "page" | "peek";
   coverage?: ReactNode;
+  /** Whether the record's findings are drawn here — the page draws them over every lens instead. */
+  banners?: boolean;
 }) {
   const parts = (
     <>
       <PageNote>{projectLede(detail)}</PageNote>
-      <ProjectBanners detail={detail} />
+      {banners && <ProjectBanners detail={detail} />}
       {coverage}
       {/* THE CENSUS AS A SHAPE, under the header rather than in a card of its
-          own above the work. The three numbers in the fact line say how much;
-          the bar says how much of it is DONE, which is the fact a reader
-          actually wants — "mostly finished" against "barely started". It is a
-          SIBLING rather than a sixth fact because a bar inside `.fact-value` is
+          own above the work. The numbers in the fact line say how much; the
+          bar splits it into done, under way and still to do, which is the fact
+          a reader actually wants — "mostly finished", "all in flight" and
+          "barely started" are three different projects. It is a SIBLING rather than a sixth fact because a bar inside `.fact-value` is
           a bar in a truncated inline box, which is no bar at all. What the bar
           MEANS is argued in `census.tsx`, where the directory's column reads it
           too.
@@ -460,11 +578,11 @@ function ProjectHead({
           "nothing is done yet" about a project with nothing to do.
 
           THE RAIL SAYS SO IN WORDS AND THE PAGE DOES NOT, which is the one
-          place the two frames differ and the reason is structural: the page
-          draws [NothingFiled] in place of its list a few lines below, and
-          saying it twice in one viewport is what this screen's own page note
-          was already guilty of. The rail has no lens under it to carry the
-          sentence. */}
+          place the two frames differ and the reason is structural: on the
+          page this header is the About lens, whose lede already ends "Nothing
+          has been filed in it yet" ([projectLede]) and whose Items lens
+          draws [NothingFiled] — saying it a third time in one viewport is
+          noise. The rail has neither to carry the sentence. */}
       {filed(detail.task_counts) > 0 ? (
         <ProjectCensus counts={detail.task_counts} />
       ) : (
@@ -508,8 +626,11 @@ function projectLede(detail: WorkProjectDetail): string {
     ? `${detail.key} is ${unit}'s project.`
     : `${detail.key} is a project no unit in the chart owns.`;
   if (filed(detail.task_counts) === 0) return `${whose} Nothing has been filed in it yet.`;
+  // A SENTENCE FOR THE PERSON READING IT, not a configuration key: the lede
+  // used to print "A `purpose` on that unit…" with its backticks, which read
+  // as a template nobody filled in.
   return unit
-    ? `${whose} A \`purpose\` on that unit in the company configuration is what this line would say.`
+    ? `${whose} No purpose is set for it — add one to ${unit} in the company configuration and this line will say it.`
     : whose;
 }
 
@@ -525,22 +646,18 @@ function projectLede(detail: WorkProjectDetail): string {
  * that genuinely narrowed.
  *
  * IT NAMES HOW WORK GETS FILED, because a reader looking at an empty project
- * is looking for the way in.
+ * is looking for the way in — and the way in is on the state itself: New task,
+ * filing into this project, as the person the token is bound to.
  */
 function NothingFiled({ detail }: { detail: WorkProjectDetail }) {
   return (
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
       title={`No work has been filed in ${detail.name} yet`}
-      description="A seat files work with create_work_item, and an inbound webhook or a schedule is usually what sets one off. You can file one yourself through your own assistant at /operator/mcp, attributed to your token rather than to a seat."
-      // THE WAY OUT IS THE STATE'S OWN, not only the page bar's: a reader who
-      // opened the wrong key wants the company's work, and `action` is the slot
-      // this design system gives an empty state for exactly that.
-      action={
-        <a className="t-link" href={href(["work"])}>
-          All work →
-        </a>
-      }
+      description="A seat files work with create_work_item, and an inbound webhook or a schedule is usually what sets one off. You can file one yourself here, recorded under your own name."
+      // THE WAY IN IS THE STATE'S OWN, not only the page bar's: `action` is
+      // the slot this design system gives an empty state for exactly that.
+      action={<NewTaskButton preset={{ project: detail.key }} />}
     />
   );
 }

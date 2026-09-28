@@ -490,6 +490,22 @@ export function manualOrder(sort: string, project: string): boolean {
  * like a rendering bug.
  */
 export function describeChange(record: WorkActivityRecord, ctx: LabelContext): string {
+  if (isChartReapply(record)) return "Org chart re-applied";
+  // A SAVED VIEW IS NAMED, not dumped: its record moves the container, the
+  // rank and a params blob — "Params: – → blocked=true, Rank: – → a1" — which
+  // is the engine's storage of a view rather than anything a person did to
+  // one. What they did was save it, or change it, under a name.
+  if (record.kind === "view_saved") {
+    const name = (record.fields?.name as { from?: unknown; to?: unknown } | undefined) ?? {};
+    const was = scalar(name.from);
+    const now = scalar(name.to) || was;
+    if (!was && now) return `Saved the view “${now}”`;
+    if (now)
+      return was && was !== now
+        ? `Renamed the view “${was}” to “${now}”`
+        : `Changed the view “${now}”`;
+    return "Changed a saved view";
+  }
   const moved = deltaSentence(record.fields, ctx);
   if (moved) return moved;
   // THE PROSE THE BODY RENDERS TO, not its source. The excerpt is a cut of a
@@ -500,6 +516,86 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
   // was written for one recipient. See [readdress].
   if (record.excerpt) return readdress(plainText(record.excerpt), record, ctx);
   return record.kind.replaceAll("_", " ");
+}
+
+/**
+ * The delta fields that are the engine's own bookkeeping rather than anything
+ * a person changed, and are never printed.
+ *
+ * `chart_epoch` is the config activation a project's chart fields were last
+ * re-declared at. The tracker records it because it is the only thing such a
+ * re-declaration moves (`internal/tracker/deltas.go`), so the row is not empty
+ * — but "Chart epoch: 1790538626 → 1790538628" is an internal counter, not a
+ * fact about the work. A record whose ONLY delta it is reads as the org chart
+ * being re-applied ([isChartReapply]), and runs of them fold into one line
+ * ([foldChartReapplies]).
+ */
+const BOOKKEEPING = new Set(["chart_epoch"]);
+
+/** Whether a record is a project's chart being re-applied and nothing else. */
+export function isChartReapply(record: WorkActivityRecord): boolean {
+  const fields = Object.keys(record.fields ?? {});
+  return (
+    record.subject_kind === "project" &&
+    fields.length > 0 &&
+    fields.every((field) => BOOKKEEPING.has(field))
+  );
+}
+
+/** One line of a change log: a record, or a run of chart re-applications. */
+export type ChangeLine =
+  | { kind: "record"; record: WorkActivityRecord }
+  | {
+      kind: "reapply";
+      /** The newest record's id, so the line has a stable key. */
+      id: string;
+      /** The newest record's instant: a log is read newest first. */
+      at: string;
+      /** The projects the run touched, in the order the log met them. */
+      projects: string[];
+      records: WorkActivityRecord[];
+    };
+
+/**
+ * The log's records as lines, CONSECUTIVE chart re-applications folded into
+ * one.
+ *
+ * A config activation re-declares every project the chart names, and each is a
+ * record — so one apply over a company of twelve projects was twelve rows of
+ * nothing a person did, pushing the work they came for off the page. ONLY
+ * CONSECUTIVE records fold: a run broken by a real change is two runs, because
+ * a log whose lines moved past each other would not be the log.
+ */
+export function foldChartReapplies(records: readonly WorkActivityRecord[]): ChangeLine[] {
+  const out: ChangeLine[] = [];
+  for (const record of records) {
+    const last = out[out.length - 1];
+    if (!isChartReapply(record)) {
+      out.push({ kind: "record", record });
+      continue;
+    }
+    const project = record.project || record.subject_key || record.subject_id;
+    if (last?.kind === "reapply") {
+      last.records.push(record);
+      if (!last.projects.includes(project)) last.projects.push(project);
+      continue;
+    }
+    out.push({
+      kind: "reapply",
+      id: record.id,
+      at: record.at,
+      projects: [project],
+      records: [record],
+    });
+  }
+  return out;
+}
+
+/** What a folded run says: "Org chart re-applied to ENG", or "to 3 projects". */
+export function reapplySentence(projects: readonly string[]): string {
+  return projects.length === 1
+    ? `Org chart re-applied to ${projects[0]}`
+    : `Org chart re-applied to ${plural(projects.length, "project")}`;
 }
 
 /**
@@ -622,6 +718,8 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
 function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelContext): string {
   const said: string[] = [];
   for (const [field, raw] of Object.entries(fields ?? {})) {
+    // ENGINE BOOKKEEPING IS NOT A CHANGE A PERSON MADE. See [BOOKKEEPING].
+    if (BOOKKEEPING.has(field)) continue;
     const delta = raw as { from?: unknown; to?: unknown } | null;
     if (delta && typeof delta === "object" && ("from" in delta || "to" in delta)) {
       said.push(deltaClause(field, scalar(delta.from), scalar(delta.to), ctx));
@@ -679,6 +777,10 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     case "watchers":
     case "muted":
     case "collaborators":
+    // WHO LAST SET SOMEBODY ELSE'S PRIORITIES — a handle like the rest, and
+    // it printed as one ("Priorities set by: – → jane-founder") beside rows
+    // that named every other person.
+    case "priorities_set_by":
       return people(value);
     case "tags":
       return value
@@ -1027,6 +1129,25 @@ export function shapeOf(viewKey: string, views: WorkView[]): Shape {
  */
 export function defaultView(views: WorkView[]): string {
   return views.find((v) => v.default)?.key ?? LANDING_SHAPE;
+}
+
+/**
+ * Where RUNNING a saved view goes: the list of the container it was saved on,
+ * with the view's key as `view=` — the engine's own expansion, so every one of
+ * its parameters is still the reader's to change.
+ *
+ * ONE ANSWER for every door that runs a view — a sidebar pin, the inventory's
+ * Run — because a view saved on a project is a question about that project,
+ * and a pin that ran it over the whole workspace would answer with the view's
+ * filters and none of its scope.
+ */
+export function viewRun(view: Pick<WorkView, "key" | "container">): {
+  path: string[];
+  query: Record<string, string>;
+} {
+  const path =
+    view.container.kind === "project" && view.container.id ? ["work", view.container.id] : ["work"];
+  return { path, query: { view: view.key } };
 }
 
 /** A view's saved query, or an empty set of defaults. */
@@ -2213,10 +2334,18 @@ export function loadedOf(loaded: number, hint: number, capped?: boolean): string
  * `internal/clientsource` exists to catch. A view carrying one gets the plain
  * count, which is vague rather than wrong.
  */
-export function countedLabel(shown: number, params: Record<string, unknown>): string {
-  const label = plural(shown, "item");
+export function countedLabel(
+  shown: number,
+  params: Record<string, unknown>,
+  scope?: string,
+): string {
   const due = typeof params.due === "string" ? params.due : "";
-  return due.startsWith("range:") ? `${label} due in this window` : label;
+  if (due.startsWith("range:")) return `${plural(shown, "item")} due in this window`;
+  // THE SCOPE IT COUNTED, in the Show picker's own word — "25 in Recent" —
+  // where a screen says which one it is on. "25 items" sat one row under a
+  // project's "Items 19", which counts OPEN tasks: two numbers both called
+  // items, a row apart, that disagree.
+  return scope ? `${shown.toLocaleString()} in ${scope}` : plural(shown, "item");
 }
 
 /**

@@ -167,13 +167,11 @@ function CustomWindow({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            variant="primary"
-            disabled={problem !== ""}
-            onClick={() => {
-              if (!problem && at !== null && till !== null) onPick({ from: at, to: till });
-            }}
-          >
+          {/* THE FORM'S SUBMIT BUTTON, and its only path: a browser submits
+              a form of two date fields on Enter only by pressing its submit
+              button, so while Apply was a plain button Enter in either box
+              did nothing — and the frame's `onSubmit` above had no caller. */}
+          <Button variant="primary" type="submit" disabled={problem !== ""}>
             Apply
           </Button>
         </>

@@ -3,15 +3,24 @@
  *
  * # The engine has always been able to do this
  *
- * `search_work_items` is a builtin every seat holds: BM25 over the engine's own
- * inverted list, which exists because Turso has no fts5 and the alternative
- * was refusing knowledge search on the only driver this build ships. An agent
- * looking for "the thing about the billing webhook" gets a ranked list; the
- * operator reading the same company had `q=` — an escaped LIKE over the
- * excerpt, gated to a span of days, that matches a substring or nothing.
+ * `search_work_items` is a builtin every seat holds, and it ranks the way this
+ * screen does: HYBRID by default — the words (BM25 over the engine's own
+ * inverted list, which exists because Turso has no fts5) and the meaning (the
+ * embeddings the company's vectors domain holds) each ranked and then fused by
+ * reciprocal rank — or either alone. An agent looking for "the thing about the
+ * billing webhook" gets a ranked list; the operator reading the same company
+ * had `q=` — an escaped LIKE over the excerpt, gated to a span of days, that
+ * matches a substring or nothing.
  *
  * So the two readers this product is for were looking at the same items
  * through two different instruments, and only one of them could find anything.
+ *
+ * # No introduction, and no tool names
+ *
+ * The screen opened on a paragraph naming `search_work_items` — a tool a
+ * person has never heard of — to explain a search box. What a person needs is
+ * where they need it: each mode says what it matches in its own tooltip, and
+ * the empty state says what the ranking is over.
  *
  * # Ranked is not filtered, and the screen says which it is
  *
@@ -43,6 +52,16 @@
  * click opens the item in the frame's rail with the list still behind it, and
  * `[` and `]` step DOWN THE RANKING, because the order this screen publishes is
  * the order the engine returned rather than anything the grid sorted.
+ *
+ * # Three rankings, and the answer says which one it is
+ *
+ * Hybrid, Keyword and Meaning are the engine's three modes (`mode=`, the wire's
+ * `hybrid`, `keyword` and `semantic`), and the choice is in the address like
+ * the phrase. What came back says which ranking it IS — `served_mode` — and a
+ * company with no embeddings provider that asked for Hybrid is served Keyword:
+ * the screen says so above the hits, from the engine's own `degraded` value,
+ * because a keyword ranking passed off as a hybrid one is a claim about the
+ * corpus nobody made.
  */
 
 import { useMemo, useRef, useState } from "react";
@@ -50,17 +69,19 @@ import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { StatusBadge, TypeIcon } from "~/components/work.tsx";
-import { Button, EmptyState, EmptyValue, Input } from "@crewlethq/ui";
+import { Button, Callout, EmptyState, EmptyValue, Input } from "@crewlethq/ui";
+import { Segmented } from "~/ui/primitives.tsx";
+import { SEARCH_MODES, asSearchMode, modeLabel, servedNote } from "~/lib/search.ts";
 import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
+import { plainText } from "~/lib/markdown.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 
 /**
@@ -86,8 +107,14 @@ export function WorkSearch() {
   // makes the back button walk a reader's searches rather than their
   // keystrokes: it is a FILTER, so typing replaces the history entry.
   const [q, setQ] = useParam("q", "", "filter");
+  // THE MODE IS IN THE ADDRESS TOO, and a value this build does not draw
+  // falls back to the default rather than meeting a `bad_params` refusal
+  // over a whole screen because of one stale key.
+  const [modeRaw, setMode] = useParam("mode", "hybrid", "filter");
+  const mode = asSearchMode(modeRaw);
   const [typed, setTyped] = useState(q);
-  const hits = useQuery("work_search", { q }, { enabled: q.trim() !== "" });
+  const hits = useQuery("work_search", { q, mode }, { enabled: q.trim() !== "" });
+  const served = servedNote(hits.data);
   usePageCoverage(undefined);
 
   const org = useOrg();
@@ -109,14 +136,14 @@ export function WorkSearch() {
 
   return (
     <>
-      <PageNote>
-        The same ranking a seat gets from <code className="inline">search_work_items</code> — BM25
-        over the engine&rsquo;s own index, not a substring match. The board&rsquo;s filters answer
-        which items are in a state; this answers which are most about a phrase.
-      </PageNote>
-
+      {/* THE PHRASE KEEPS ITS WIDTH. One row of field, three modes and a
+          button is 600px of controls, and on a phone the field was what gave
+          way — to 20px, a magnifier with no phrase in it. The form WRAPS BY
+          WHAT IT HOLDS instead (`.work-search-form`): the field never goes
+          below the width a phrase is read at, and the modes and the button
+          take the next line when they cannot sit beside it. */}
       <form
-        className="row gap-2"
+        className="work-search-form"
         onSubmit={(e) => {
           e.preventDefault();
           setQ(typed.trim());
@@ -127,7 +154,7 @@ export function WorkSearch() {
             and it takes no label of its own — so the accessible name is an
             `aria-label` rather than a visually hidden span this screen had to
             remember to write. Same sentence, same reader. */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="work-search-phrase">
           <Input
             type="search"
             width="full"
@@ -139,16 +166,28 @@ export function WorkSearch() {
             onChange={(e) => setTyped(e.target.value)}
           />
         </div>
-        <Button variant="primary" leadingIcon={<SearchGlyph size="sm" />} type="submit">
-          Search
-        </Button>
+        <div className="work-search-how">
+          <Segmented
+            value={mode}
+            onChange={setMode}
+            ariaLabel="Rank by"
+            options={SEARCH_MODES.map((m) => ({ value: m.value, label: m.label, title: m.hint }))}
+          />
+          <Button variant="primary" leadingIcon={<SearchGlyph size="sm" />} type="submit">
+            Search
+          </Button>
+        </div>
       </form>
+
+      {/* WHAT WAS SERVED, when it is not what was asked — see the file's doc.
+          Above the hits, because it is a fact about every one of them. */}
+      {q.trim() !== "" && served && <Callout variant="info">{served}</Callout>}
 
       {q.trim() === "" ? (
         <EmptyState
           icon={<SearchGlyph size="xl" />}
           title="Type what you half remember"
-          description="The ranking is over titles, bodies and comments — the words somebody actually wrote, rather than a key or a status."
+          description="Finds the tasks most about a phrase — by its words, by what it means, or both — across titles, descriptions and comments. The board's filters answer which tasks are in a state; this answers which are about something."
         />
       ) : hits.data && !hits.data.available ? (
         // NOT AN EMPTY RESULT. See the file head: this node has the items and
@@ -236,8 +275,10 @@ export function WorkSearch() {
                     <TextCell mark={<TypeIcon type={r.type} />}>{r.title}</TextCell>
                     {/* THE INDEX'S OWN EXCERPT — the half a board row cannot
                         have, because a board row does not know what you
-                        asked. */}
-                    {r.snippet && <span className="t-caption">{r.snippet}</span>}
+                        asked. It is a CUT of a markdown body, so it is drawn
+                        as the prose it renders to ([plainText]) rather than
+                        with its `**` and `#` in it. */}
+                    {r.snippet && <span className="t-caption">{plainText(r.snippet)}</span>}
                   </div>
                 ),
               },
@@ -293,7 +334,7 @@ export function WorkSearch() {
                 },
               },
             ]}
-            loadedNote={`${rows.length} ranked by relevance`}
+            loadedNote={`${rows.length} ranked by ${hits.data?.served_mode ? modeLabel(hits.data.served_mode).toLowerCase() : "relevance"}`}
           />
         </QueryState>
       )}

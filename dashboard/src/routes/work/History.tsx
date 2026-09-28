@@ -10,10 +10,14 @@
  * which is the shape of an answer rather than one.
  *
  * The log is its own question, so it gets the frame every other log in this
- * product wears: a window, a time axis, then the rows, with the dimensions a
- * reader narrows on as facet chips. That frame is `TimeRangePicker`,
- * `Histogram` and `FacetRail` — the event log's own — because a reader who has
- * learnt one log in this product has learnt this one. The event log's PAGING
+ * product wears: a window and the dimensions a reader narrows on in ONE bar,
+ * a time axis, then the rows. That frame is `TimeRangePicker` and `Histogram`
+ * — the event log's own — because a reader who has learnt one log in this
+ * product has learnt this one. The dimensions are pickers in that bar rather
+ * than three rails of chips under the chart: a rail per dimension each
+ * ending in the same "counts over the rows loaded" was three rows of chrome
+ * saying one thing three times, where the rest of Work narrows from one
+ * compact bar and says what its counts are once. The event log's PAGING
  * belongs to that frame too, and was the one part of it this screen did not
  * borrow: it asked for one page, printed that older changes existed, and told
  * the reader to narrow the window — which is the gesture that reaches FEWER
@@ -42,23 +46,29 @@
  * read — `work_activity` answers with rows — so the axis is bucketed from the
  * pages the screen is holding. That is a different claim from the event log's
  * and it is stated rather than implied: the caption says the bars cover the
- * changes LOADED, the facets say the same about their counts, and `Histogram`
+ * changes LOADED, the bar says the same about its pickers' counts, once, and
+ * `Histogram`
  * takes that scope as a required prop so the sentence a screen reader hears
  * cannot drift from the one on the card. A client-side count dressed as the
  * engine's is the one thing this product never does.
+ *
+ * # Bookkeeping is not a change
+ *
+ * A config activation re-declares every project and the tracker records the
+ * one thing that moved, the chart epoch. Those rows are folded into one quiet
+ * line by the engine ("Org chart re-applied to 3 projects") and the epoch is
+ * never printed — see `lib/work.ts` [foldChartReapplies].
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type CoverageFacts } from "~/components/work.tsx";
-import { Button, Card, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Card, EmptyValue, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
-import { FacetRail } from "~/ui/FacetRail.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -66,7 +76,13 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { barsOver, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
-import { describeChange, type LabelContext } from "~/lib/work.ts";
+import {
+  describeChange,
+  foldChartReapplies,
+  reapplySentence,
+  type ChangeLine,
+  type LabelContext,
+} from "~/lib/work.ts";
 import { FEED_PAGE } from "./feed.tsx";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
 
@@ -94,10 +110,6 @@ export function History() {
   const [project, setProject] = useParam("project", "");
   return (
     <>
-      <PageNote>
-        Every change the company made to its own work, newest first. Ordered by the LOG rather than
-        by anything a board sorts on, so a change that moved nothing on screen is still here.
-      </PageNote>
       <HistoryView
         container={project ? `project:${project}` : "workspace"}
         projectKey={project}
@@ -283,10 +295,10 @@ export function HistoryView({
     [records, range.since, range.until, range.bucket],
   );
 
-  // THE FACET COUNTS ARE OVER THE ROWS LOADED, and `over="loaded"` is what says
-  // so under the chips: the engine answers this question with rows rather than
-  // with counts, so a chip claiming a total would be a number this screen
-  // invented about somebody's company.
+  // THE PICKERS' COUNTS ARE OVER THE ROWS LOADED, and the bar says so once:
+  // the engine answers this question with rows rather than with counts, so an
+  // option claiming a total would be a number this screen invented about
+  // somebody's company.
   //
   // NULL WHILE NOTHING HAS ANSWERED, never 0: "no change was made by ada" and
   // "we have not asked yet" are different facts, and only the first is one a
@@ -301,16 +313,22 @@ export function HistoryView({
       ),
     [records, state.data],
   );
-  const actors = useMemo(
-    () =>
-      tally(
-        records,
-        (r) => r.actor || "",
-        !!state.data,
-        (value) => index.byHandle.get(value)?.name ?? value,
-      ),
-    [records, state.data, index],
-  );
+  const actors = useMemo(() => {
+    // THE FILTER IS ON THE TOKEN (`actor=` is what the engine narrows by),
+    // and its LABEL is the person the rows name — see [actorName].
+    const person = new Map<string, WorkActivityRecord>();
+    for (const r of records) if (r.actor && !person.has(r.actor)) person.set(r.actor, r);
+    return tally(
+      records,
+      (r) => r.actor || "",
+      !!state.data,
+      (value) => {
+        const r = person.get(value);
+        const name = (h: string) => index.byHandle.get(h)?.name ?? h;
+        return r ? actorName(r, { seatName: name }) : name(value);
+      },
+    );
+  }, [records, state.data, index]);
   // THE THIRD DIMENSION THE RECORD CARRIES. `work_activity` filters on the
   // project the engine already stamps on every row, and the page already owns
   // the `project=` key its chip removes — so until this rail existed the only
@@ -337,26 +355,45 @@ export function HistoryView({
 
       <div className="toolbar">
         <TimeRangePicker range={range} ariaLabel="Window" />
-        {projectKey && onProject && (
-          <Tag
-            appearance="outline"
-            size="sm"
-            onRemove={() => onProject("")}
-            removeAriaLabel="Show every project"
-          >
-            <span className="work-chip-field">Project</span>
-            <span className="work-chip-verb">is</span>
-            <span className="work-chip-value mono">{projectKey}</span>
-          </Tag>
+        {/* THE DIMENSIONS, as pickers in the one bar — see the file's doc. */}
+        <FacetPicker name="Kind" all="Any kind" value={kind} onChange={setKind} facets={kinds} />
+        <FacetPicker name="By" all="Anyone" value={actor} onChange={setActor} facets={actors} />
+        {onProject && (
+          <FacetPicker
+            name="Project"
+            all="Every project"
+            value={projectKey}
+            onChange={onProject}
+            facets={projects}
+          />
+        )}
+        {/* SAID ONCE, and only where a count is: before the first answer the
+            options carry none. */}
+        {state.data && records.length > 0 && (
+          <span className="t-caption">Counts are over the changes loaded</span>
         )}
         <span className="spacer" />
         {/* THE LENS STATES ITS OWN ROWS' COVERAGE and the screen does not:
             the screen's went to the state bar one element up. */}
         {embedded && <Coverage answer={state.data} />}
-        <span className="work-summary">
-          {plural(records.length, "change")} loaded
-          {more ? ", and older ones beyond them" : ""}
-        </span>
+        {records.length > 0 && (
+          <span className="work-summary">
+            {`Showing the latest ${records.length.toLocaleString()}`}
+            {more && (
+              <>
+                {" · "}
+                <Button
+                  size="small"
+                  variant="ghost"
+                  onClick={() => void loadOlder()}
+                  disabled={paging}
+                >
+                  Load older
+                </Button>
+              </>
+            )}
+          </span>
+        )}
       </div>
 
       <Card>
@@ -401,18 +438,6 @@ export function HistoryView({
         )}
       </Card>
 
-      <FacetRail name="Kind" value={kind} onChange={setKind} over="loaded" facets={kinds} />
-      <FacetRail name="By" value={actor} onChange={setActor} over="loaded" facets={actors} />
-      {onProject && (
-        <FacetRail
-          name="Project"
-          value={projectKey}
-          onChange={onProject}
-          over="loaded"
-          facets={projects}
-        />
-      )}
-
       <QueryState
         error={state.error}
         loading={state.loading}
@@ -426,9 +451,13 @@ export function HistoryView({
         }
       >
         <div className="work-log">
-          {records.map((record) => (
-            <HistoryRow key={record.id} record={record} chrome={chrome} now={now} />
-          ))}
+          {foldChartReapplies(records).map((line) =>
+            line.kind === "record" ? (
+              <HistoryRow key={line.record.id} record={line.record} chrome={chrome} now={now} />
+            ) : (
+              <ReapplyRow key={line.id} line={line} now={now} />
+            ),
+          )}
         </div>
       </QueryState>
 
@@ -486,6 +515,93 @@ function PublishCoverage({ answer }: { answer?: CoverageFacts | null }) {
   return null;
 }
 
+/**
+ * A run of chart re-applications, as the one quiet line it is: what the engine
+ * did, to which projects, and never the epoch it did it at.
+ */
+function ReapplyRow({
+  line,
+  now,
+}: {
+  line: Extract<ChangeLine, { kind: "reapply" }>;
+  now: number;
+}) {
+  return (
+    <div className="work-log-row work-log-quiet">
+      <span className="work-log-when" title={fmtDateTime(line.at)}>
+        {relTime(line.at, now)}
+      </span>
+      <span className="work-log-key">
+        <EmptyValue label="No work item" />
+      </span>
+      <span className="work-log-what" title={line.projects.join(", ")}>
+        {reapplySentence(line.projects)}
+      </span>
+      <span className="work-log-who">
+        <span className="truncate">the engine</span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * One dimension of the log, as a picker in the bar.
+ *
+ * ITS OPTIONS ARE WHAT THE LOADED PAGES HOLD, each with how many of them — the
+ * rule the chips it replaced had — and a value on the address that no loaded
+ * row carries is still shown as the value, because the kit keeps a value its
+ * options do not offer: a narrowing a reader cannot see reads as the whole
+ * company's changes.
+ */
+function FacetPicker({
+  name,
+  all,
+  value,
+  facets,
+  onChange,
+}: {
+  name: string;
+  /** What the picker says when nothing is chosen. */
+  all: string;
+  value: string;
+  facets: { value: string; label: string; count: number | null }[];
+  onChange: (next: string) => void;
+}) {
+  return (
+    <label className="work-arrange-row">
+      <span className="t-caption">{name}</span>
+      <Select
+        size="sm"
+        width="auto"
+        value={value}
+        ariaLabel={name}
+        active={value !== ""}
+        onChange={(next) => onChange(String(next))}
+        options={[
+          { value: "", label: all },
+          ...facets.map((f) => ({
+            value: f.value,
+            label: f.label,
+            text: f.label,
+            description: f.count === null ? undefined : plural(f.count, "change"),
+          })),
+        ]}
+      />
+    </label>
+  );
+}
+
+/**
+ * Who made a change, by the name the rest of the product uses: the PERSON an
+ * operator token was bound to where there was one, the seat otherwise, and the
+ * engine where nobody did.
+ */
+export function actorName(record: WorkActivityRecord, chrome: LabelContext): string {
+  const who = record.actor_seat || record.actor;
+  if (!who) return "the engine";
+  return chrome.seatName?.(who) ?? who;
+}
+
 /** One change, as the delta it was. */
 function HistoryRow({
   record,
@@ -524,8 +640,18 @@ function HistoryRow({
           wrapped delta grow rather than overflow. */}
       <span className="work-log-what">{describeChange(record, chrome)}</span>
       <span className="work-log-who">
-        <span className="truncate">
-          {record.actor ? (chrome.seatName?.(record.actor) ?? record.actor) : "the engine"}
+        {/* THE PERSON, NOT THE TOKEN: a change an operator token made names
+            the credential as `actor` — the audit trail — and the seat it was
+            bound to as `actor_seat`, which is who the row is about. Printed
+            as the token, the log said "founder" where every other screen
+            says Jane Founder; the token stays on the title. */}
+        <span
+          className="truncate"
+          title={
+            record.actor_seat && record.actor ? `Through the token ${record.actor}` : undefined
+          }
+        >
+          {actorName(record, chrome)}
         </span>
         {/* AN OPERATOR IS NOT AN AGENT, and the tracker records which: a write
             made with an API token carries the token's own name and the author

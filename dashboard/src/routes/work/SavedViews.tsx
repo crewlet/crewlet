@@ -14,9 +14,17 @@
  * # A builtin is not a row here
  *
  * The ones every container has without anybody saving one have no `id`:
- * there is nothing to rename, protect, rank
- * or pin, and nothing to address. They are the list's own view strip. This
- * screen is what SOMEBODY SAVED.
+ * there is nothing to rename, protect, rank or pin, and nothing to address.
+ * They are the list's own view strip. This screen is what SOMEBODY SAVED —
+ * and it says so by its rows rather than by a paragraph above them.
+ *
+ * # Every container, not the workspace's strip
+ *
+ * The inventory is `work_saved_views`: every view the reader can see, in
+ * whichever container it was saved. It read the WORKSPACE strip once, so a
+ * view saved with a project board's "+ View" was on no inventory and could not
+ * be pinned from here, the one screen that offers a pin for every view. Each
+ * row says which container it lives in, and a pin is offered on every row.
  *
  * # Running one is the tracker, not a copy of it
  *
@@ -34,7 +42,7 @@ import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
-import { Button, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
+import { Button, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
 import { ArrowRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -42,6 +50,7 @@ import { indexOrg, seatLookup, type SeatKind } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { PinButton } from "~/components/writes.tsx";
 import type { WorkView } from "~/protocol/index.ts";
+import { viewRun } from "~/lib/work.ts";
 
 /**
  * How a view's container is written, everywhere it is written.
@@ -53,6 +62,25 @@ import type { WorkView } from "~/protocol/index.ts";
  */
 function containerRef(view: WorkView): string {
   return view.container.id ? `${view.container.kind}:${view.container.id}` : view.container.kind;
+}
+
+/**
+ * Where a view lives, as a person reads it: "Company-wide", a project's key, a
+ * team, or whose own list — the query grammar's `project:ENG` is what the
+ * engine is asked, not what a row says. SORTED by [containerRef], so views
+ * that live together stay together.
+ */
+function containerLabel(view: WorkView, who: (handle: string) => { name: string }): string {
+  switch (view.container.kind) {
+    case "workspace":
+      return "Company-wide";
+    case "project":
+      return view.container.id;
+    case "person":
+      return `${who(view.container.id).name}'s work`;
+    default:
+      return view.container.id;
+  }
 }
 
 /**
@@ -108,13 +136,12 @@ export function SavedViews({ id }: { id?: string }) {
   // handle itself rather than to nothing.
   const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
   // THE VIEWER IS SENT, which is what makes pins and personal views appear at
-  // all: `work_views` answers the SHARED strip without one, so this screen
-  // showed every reader the same list and no pin could ever render.
-  const views = useQuery(
-    "work_views",
-    { container: "workspace", ...(viewer.handle ? { viewer: viewer.handle } : {}) },
-    { pollMs: 120_000 },
-  );
+  // all: without one the engine answers the SHARED views, so this screen
+  // showed every reader the same list and no pin could ever render. AND EVERY
+  // CONTAINER — see the file's doc.
+  const views = useQuery("work_saved_views", viewer.handle ? { viewer: viewer.handle } : {}, {
+    pollMs: 120_000,
+  });
   usePageCoverage(views.data);
 
   const saved = useMemo(
@@ -184,7 +211,10 @@ export function SavedViews({ id }: { id?: string }) {
           <Button
             variant="primary"
             leadingIcon={<ArrowRightGlyph size="sm" />}
-            onClick={() => nav.to(["work"], { view: one.key })}
+            onClick={() => {
+              const run = viewRun(one);
+              nav.to(run.path, run.query);
+            }}
           >
             Run this view on the board
           </Button>
@@ -204,12 +234,11 @@ export function SavedViews({ id }: { id?: string }) {
 
   return (
     <>
-      <PageNote>
-        Every view somebody saved, and what each one is. The builtins a container has without
-        anybody saving one are its own view strip and have no row here: a builtin carries no id, so
-        there is nothing to rename, protect, rank or pin.
-      </PageNote>
-
+      {/* WHILE IT LOADS, SAID: with no introduction above the grid, a read in
+          flight would otherwise be a blank page. */}
+      {views.loading && !views.data && (
+        <Skeleton variant="text" rows={6} label="Loading the saved views" />
+      )}
       <QueryState
         error={views.error}
         loading={views.loading}
@@ -218,7 +247,7 @@ export function SavedViews({ id }: { id?: string }) {
             ? undefined
             : {
                 title: "Nobody has saved a view yet",
-                hint: "A seat or an operator saves one with save_work_view, and it appears in the container's strip and here.",
+                hint: "A view is a list's filters, grouping and shape kept under a name. Save one from any list or board with + View — it appears in that list's strip and here, where you can pin it to your sidebar.",
               }
         }
       >
@@ -233,13 +262,6 @@ export function SavedViews({ id }: { id?: string }) {
               header: "View",
               sortValue: (v) => v.name,
               cell: (v) => <TextCell icon="columns-3">{v.name}</TextCell>,
-            },
-            {
-              key: "key",
-              header: "Key",
-              shrink: true,
-              sortValue: (v) => v.key,
-              cell: (v) => <KeyCell value={v.key} />,
             },
             {
               key: "type",
@@ -270,7 +292,13 @@ export function SavedViews({ id }: { id?: string }) {
               key: "container",
               header: "Container",
               sortValue: containerRef,
-              cell: (v) => <KeyCell value={containerRef(v)} />,
+              // WHERE IT LIVES, in a person's words, with the grammar's own
+              // spelling in the title for somebody writing a `view=` by hand.
+              cell: (v) => (
+                <span className="truncate" title={containerRef(v)}>
+                  {containerLabel(v, who)}
+                </span>
+              ),
             },
             {
               key: "marks",
@@ -293,6 +321,22 @@ export function SavedViews({ id }: { id?: string }) {
                   <EmptyValue label="Not the default, not protected, not pinned by you" />
                 );
               },
+            },
+            {
+              key: "pin",
+              header: "Pin",
+              shrink: true,
+              // A PIN ON EVERY ROW, whatever container the view lives in: the
+              // inventory is where a person meets every view they could pin,
+              // and a view saved on a project board had no row here at all.
+              cell: (v) => (
+                <PinButton
+                  key={v.id as string}
+                  view={v.id as string}
+                  name={v.name}
+                  pinned={Boolean(v.pinned)}
+                />
+              ),
             },
           ]}
           loadedNote={`${saved.length} saved`}

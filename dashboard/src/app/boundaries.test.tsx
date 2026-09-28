@@ -14,8 +14,8 @@ import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { CHUNKS, loadChunk, overrideChunkForTest } from "./lazyScreen.ts";
-import { PaletteBoundary } from "./boundaries.tsx";
+import { CHUNKS, ChunkLoadError, loadChunk, overrideChunkForTest } from "./lazyScreen.ts";
+import { LayerBoundary } from "./boundaries.tsx";
 import { refToken } from "./frame/objects.ts";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 
@@ -199,17 +199,34 @@ describe("a sidebar section that throws", () => {
   });
 });
 
-describe("the palette's boundary", () => {
-  test("is a dialog that says so and closes the way the palette does", () => {
+describe("a layer's boundary", () => {
+  test("is a dialog that says so and closes the way the layer does", () => {
     let closed = 0;
     render(
-      <PaletteBoundary onClose={() => closed++}>
+      <LayerBoundary title="Search" onClose={() => closed++}>
         <Throws />
-      </PaletteBoundary>,
+      </LayerBoundary>,
     );
     const dialog = screen.getByRole("dialog", { name: "Search could not be drawn" });
     expect(dialog.textContent).toContain("model is an object, not a string");
     fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
     expect(closed).toBe(1);
+  });
+
+  // THE NEW TASK SHEET'S CODE IS THE WORK CHUNK'S, so a sheet opened from a
+  // tab an upgrade outdated is a chunk that never arrives — and that is the
+  // chunk's own sentence and a Reload, not the raw rejection.
+  test("a layer whose chunk never came says to reload", () => {
+    function ChunkGone(): never {
+      throw new ChunkLoadError("work", new Error("Failed to fetch"));
+    }
+    render(
+      <LayerBoundary title="New task" onClose={() => {}}>
+        <ChunkGone />
+      </LayerBoundary>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "New task could not be drawn" });
+    expect(dialog.textContent).toContain("reload it to get the current one");
+    expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
   });
 });

@@ -14,7 +14,7 @@
  * alone would still be a fact nobody can name.
  */
 
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { WorkSearch } from "./WorkSearch.tsx";
@@ -63,11 +63,19 @@ const hit = (over: Record<string, unknown>) => ({
   ...over,
 });
 
-function mount(hits: unknown[]) {
+function mount(
+  hits: unknown[],
+  outcome: Record<string, unknown> = {},
+  asked: Record<string, unknown>[] = [],
+) {
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () =>
-    Promise.resolve({ hits, available: true, mode: "hybrid" });
+  (
+    socket as unknown as { query: (w: string, p: Record<string, unknown>) => Promise<unknown> }
+  ).query = (_what, params) => {
+    asked.push(params);
+    return Promise.resolve({ hits, available: true, mode: params.mode ?? "hybrid", ...outcome });
+  };
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -115,4 +123,46 @@ test("an in-progress hit is not marked done", async () => {
   expect(within(row).getByText("In progress")).toBeTruthy();
   expect(within(row).getByText("Bug")).toBeTruthy();
   expect(row.textContent).not.toContain("Done");
+});
+
+// THE MODE REACHES THE WIRE. Hybrid, Keyword and Meaning are the engine's
+// three rankings (`hybrid`, `keyword`, `semantic`); the segment writes `mode=`
+// into the address and the question carries it — Meaning is the word on the
+// control and never on the wire.
+test("the mode a reader picks is the mode the engine is asked for", async () => {
+  const asked: Record<string, unknown>[] = [];
+  mount([hit({})], {}, asked);
+  await waitFor(() => expect(asked.at(-1)?.mode).toBe("hybrid"));
+  fireEvent.click(screen.getByRole("radio", { name: "Meaning" }));
+  await waitFor(() => expect(asked.at(-1)?.mode).toBe("semantic"));
+  expect(location.hash).toContain("mode=semantic");
+});
+
+// WHAT WAS SERVED IS SAID when it is not what was asked: a company with no
+// embeddings provider that asked for Hybrid is answered Keyword, and a keyword
+// ranking passed off as a hybrid one is a claim nobody made.
+test("an answer served in another mode says so, and why", async () => {
+  mount([hit({})], { served_mode: "keyword", degraded: "no_embeddings" });
+  await waitFor(() => expect(screen.getByText(/Asked for Hybrid, served Keyword/)).toBeTruthy());
+  expect(screen.getByText(/no embeddings provider/)).toBeTruthy();
+});
+
+// AND A MODE THIS BUILD DOES NOT DRAW falls back to the default rather than
+// meeting a refusal over the whole screen because of one stale address key.
+test("an unknown mode off the address asks for the default", async () => {
+  location.hash = "#/work/search?q=auth&mode=vibes";
+  const asked: Record<string, unknown>[] = [];
+  mount([hit({})], {}, asked);
+  await waitFor(() => expect(asked.at(-1)?.mode).toBe("hybrid"));
+});
+
+// A SNIPPET IS A CUT OF A MARKDOWN BODY, and it is read as the prose it
+// renders to: `**Repro:**` on a ranked row is two pairs of asterisks nobody
+// wrote to be seen.
+test("a hit's snippet is drawn as prose, without its markdown marks", async () => {
+  mount([hit({ snippet: "**Repro:** run `make soak` on a #cold node" })]);
+  await waitFor(() => expect(screen.getByText("Authentication rework")).toBeTruthy());
+  const row = rowOf("Authentication rework");
+  expect(row.textContent).toContain("Repro: run make soak on a #cold node");
+  expect(row.textContent).not.toContain("**");
 });

@@ -30,10 +30,9 @@
  */
 
 import { useMemo } from "react";
-import { Button, SegmentedControl } from "@crewlethq/ui";
-import { PlusGlyph } from "@crewlethq/icons/glyphs";
+import { SegmentedControl } from "@crewlethq/ui";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { useOpenPalette } from "~/app/palette/opener.ts";
+import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -75,7 +74,6 @@ export function Home() {
   const engine = useEngineHealth();
   const { connected, authRejected } = useConnection();
   const attention = useAttention();
-  const openPalette = useOpenPalette();
   const [rangeValue, setRange] = useParam("range", DEFAULT_RANGE);
   const range = rangeOf(rangeValue);
 
@@ -139,17 +137,9 @@ export function Home() {
   return (
     <div className="home">
       <PageActions>
-        {/* THE NEW TASK IS FILED THROUGH THE PALETTE'S ACTIONS until the sheet
-            it will open lands: "Create task" there takes a title, says which
-            project it lands in, and files it as the signed-in person. */}
-        <Button
-          size="small"
-          variant="primary"
-          leadingIcon={<PlusGlyph size="sm" />}
-          onClick={() => openPalette("actions")}
-        >
-          New task
-        </Button>
+        {/* THE ONE SHEET every "New task" opens — see `app/newTask.ts`. It
+            stood in as the palette's "Create task" until the sheet landed. */}
+        <NewTaskButton />
       </PageActions>
 
       <header className="home-head">

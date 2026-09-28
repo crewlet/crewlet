@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Board, lanesOutOfView } from "./Board.tsx";
+import type { NewTaskPreset } from "~/app/newTask.ts";
 import { ItemsView } from "../ItemsView.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -669,5 +670,88 @@ describe("the board on the work screen", () => {
     // AND THE CARD'S OWN FACTS, opt-in on the wire.
     expect(asked.fields).toBe("tags,dependents_count,open_asks,spend");
     expect(screen.getByRole("combobox", { name: "Which work" }).textContent).toContain("Recent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A lane's own create
+// ---------------------------------------------------------------------------
+
+// A LANE'S `+` FILES INTO THAT LANE: it hands the screen what puts a task
+// there, which the New task sheet files with. Named for its lane, so a screen
+// reader listing the page's buttons does not read a row of identical "+"s. And
+// it is drawn for a reader who cannot file too — it opens a form, whose Create
+// says why.
+describe("a lane's +", () => {
+  test("names its lane and hands the screen what files into it", async () => {
+    const added: NewTaskPreset[] = [];
+    mountBoard({
+      viewer: { operator_id: "", operator: false, handle: "", name: "", acts: [] },
+      props: { onAdd: (preset) => added.push(preset) },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "New task in In progress" }));
+    expect(added).toEqual([{ status: "in_progress" }]);
+  });
+
+  // ONLY ON A LANE IT FILES INTO. A due band other than "No due date" is a
+  // span of days and a unit is the project's own team, and the sheet can hold
+  // neither as one value — so a `+` there opened the sheet with nothing preset
+  // and filed the task into some other lane. And never on a lane of work that
+  // ended undelivered, which the sheet could hold and nobody files into.
+  test.each([
+    ["due:bucket", ["overdue", "today", "this_week", ""], ["New task in No due date"]],
+    ["unit", ["core", ""], []],
+    ["type", ["bug", "task"], ["New task in Bug", "New task in Task"]],
+    // NOR ON WORK THAT ENDED UNDELIVERED: a `+` on Cancelled or Closed filed a
+    // brand-new task that started cancelled or closed. Done keeps its `+`.
+    [
+      "status",
+      ["todo", "in_progress", "done", "cancelled", "closed"],
+      ["New task in Todo", "New task in In progress", "New task in Done"],
+    ],
+    ["status_group", ["not_started", "active", "done", "closed"], "three"],
+  ])(
+    "on a board grouped by %s, only the lanes it files into take one",
+    async (axis, keys, want) => {
+      const bands: Record<string, string> = {
+        overdue: "Overdue",
+        today: "Today",
+        this_week: "This week",
+        "": "No due date",
+      };
+      mountBoard({
+        groups: keys.map((key) => ({
+          key,
+          label:
+            axis === "due:bucket"
+              ? bands[key]
+              : key === ""
+                ? ""
+                : (key[0]!.toUpperCase() + key.slice(1)).replace("_", " "),
+          count: 0,
+          rows: [],
+        })) as WorkGroup[],
+        props: { axis, onAdd: () => {} },
+      });
+      await settle();
+      const pluses = screen
+        .queryAllByRole("button", { name: /^New task in / })
+        .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+      if (want === "three") {
+        // THE GROUP LANES' OWN WORDS are the heading's; what matters is that
+        // the closed group is the one without a `+`.
+        expect(pluses).toHaveLength(3);
+        expect(pluses.some((p) => /closed/i.test(p ?? ""))).toBe(false);
+      } else {
+        expect(pluses).toEqual(want);
+      }
+    },
+  );
+
+  test("is absent where the screen offers no way to file", async () => {
+    mountBoard();
+    await settle();
+    expect(screen.queryByRole("button", { name: /^New task in / })).toBeNull();
   });
 });

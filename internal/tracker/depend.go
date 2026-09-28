@@ -99,16 +99,16 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 
 	switch {
 	case change.Task == "":
-		return DependencyResult{}, invalid("tracker: a dependency change names no task")
+		return DependencyResult{}, invalid("a dependency change names no task")
 	case change.Project == "":
-		return DependencyResult{}, invalid("tracker: the dependency change on "+
+		return DependencyResult{}, invalid("the dependency change on "+
 			"task %s names no project — the caller resolved a key to reach "+
 			"this task and therefore holds one", change.Task)
 	case change.Empty():
-		return DependencyResult{}, invalid("tracker: the dependency change on "+
+		return DependencyResult{}, invalid("the dependency change on "+
 			"task %s adds and removes nothing", change.Task)
 	case len(change.Note) > MaxRelationNote:
-		return DependencyResult{}, invalid("tracker: the note on task %s's "+
+		return DependencyResult{}, invalid("the note on task %s's "+
 			"dependency change is %d bytes and the maximum is %d",
 			change.Task, len(change.Note), MaxRelationNote)
 	}
@@ -426,10 +426,10 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 		for _, id := range group {
 			switch {
 			case id == "":
-				return parties{}, invalid("tracker: the dependency change "+
+				return parties{}, invalid("the dependency change "+
 					"on task %s names an empty counterparty", change.Task)
 			case id == change.Task:
-				return parties{}, invalid("tracker: task %s cannot depend "+
+				return parties{}, invalid("task %s cannot depend "+
 					"on itself — a task that blocks itself is one no close "+
 					"can ever clear", change.Task)
 			}
@@ -439,7 +439,7 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 		}
 	}
 	if len(wanted) > MaxBulkTasks {
-		return parties{}, invalid("tracker: this dependency change names %d "+
+		return parties{}, invalid("this dependency change names %d "+
 			"counterparties and one call may name %d — each is a commit of "+
 			"its own, and a gesture larger than that is a batch",
 			len(wanted), MaxBulkTasks)
@@ -464,7 +464,7 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			adding := slices.Contains(required, id)
 			switch {
 			case !held && adding:
-				return invalid("tracker: there is no task %s, so the "+
+				return invalid("there is no task %s, so the "+
 					"dependency naming it cannot be written — an edge to a "+
 					"task that does not exist resolves to nothing on every "+
 					"node, for ever", id)
@@ -474,12 +474,12 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 				// here and still applied on this task's own side.
 				continue
 			case current.Removed != nil && adding:
-				return invalid("tracker: task %s was removed by %s at %s, "+
+				return invalid("task %s was removed by %s at %s, "+
 					"so nothing can be made to wait on it; restore it first",
 					id, current.Removed.By,
 					current.Removed.At.Format(time.RFC3339))
 			case adding && len(current.Dependents) >= MaxDependents:
-				return invalid("tracker: %d tasks already wait on task %s "+
+				return invalid("%d tasks already wait on task %s "+
 					"and the maximum is %d — every one of them is an object a "+
 					"close of that task has to name in its own scope",
 					len(current.Dependents), id, MaxDependents)

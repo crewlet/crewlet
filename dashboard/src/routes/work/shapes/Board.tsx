@@ -50,7 +50,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { Button, Callout, Menu, cx } from "@crewlethq/ui";
+import { Button, Callout, IconButton, Menu, cx } from "@crewlethq/ui";
 import {
   ChevronDownGlyph,
   ChevronLeftGlyph,
@@ -58,8 +58,10 @@ import {
   EllipsisGlyph,
   EyeOffGlyph,
   ListGlyph,
+  PlusGlyph,
 } from "@crewlethq/icons/glyphs";
 import { WorkCard, type CardFact, type CardWaiting, type RowChrome } from "~/components/work.tsx";
+import { presetForLane, type NewTaskPreset } from "~/app/newTask.ts";
 import { RefusalNote } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
@@ -99,6 +101,7 @@ export function Board({
   finishedLanes,
   weekly,
   laneSlot,
+  onAdd,
   cardOmit,
 }: {
   groups: WorkGroup[];
@@ -135,6 +138,13 @@ export function Board({
    * absent, the board names them above its lanes.
    */
   laneSlot?: HTMLElement | null;
+  /**
+   * File a new task into a lane — its `+`, which opens the New task sheet
+   * with what puts a task in that lane ([presetForLane]). Absent where the
+   * screen offers no way to; and a lane whose value the sheet cannot hold
+   * draws no `+` at all, since its press would file into another lane.
+   */
+  onAdd?: (preset: NewTaskPreset) => void;
   /** The card facts the reader put away (`card_hide=`) — see [CARD_FACTS]. */
   cardOmit?: ReadonlySet<CardFact>;
 }) {
@@ -323,6 +333,7 @@ export function Board({
             const finished = finishedLanes?.has(group.key) ?? false;
             const more = group.count - group.rows.length;
             const label = headingOf(axis, group, ctx);
+            const lanePreset = presetForLane(axis, group.key);
             return (
               <section
                 className={cx("work-col", over?.lane === group.key && "drop-target")}
@@ -346,6 +357,20 @@ export function Board({
                   <span className="work-col-name truncate">{label}</span>
                   <span className="work-col-count">{group.count}</span>
                   <span className="spacer" />
+                  {/* THE LANE'S OWN CREATE, before its menu as the approved
+                      Board draws it. It opens the sheet rather than writing,
+                      so it is drawn for every reader: the sheet's Create is
+                      the write control, and says why one cannot file. And
+                      only on a lane it files INTO — see [presetForLane]. */}
+                  {onAdd && lanePreset && (
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      label={`New task in ${label}`}
+                      icon={<PlusGlyph size="sm" />}
+                      onClick={() => onAdd(lanePreset)}
+                    />
+                  )}
                   {onHide && (
                     <Menu
                       label={`${label} lane options`}

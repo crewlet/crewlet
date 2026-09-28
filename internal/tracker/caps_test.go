@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -293,6 +294,24 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 				t.Errorf("the refusal does not name %q, so a caller cannot "+
 					"tell which value to shorten: %v", tc.field, err)
 			}
+			// TYPED, carrying what a caller names to a person — the
+			// field, what was sent and the cap — and marked as content,
+			// so no surface offers a retry that refuses identically.
+			var capped *tracker.TextCapError
+			if !errors.As(err, &capped) || string(capped.Field) != tc.field ||
+				capped.Size != tc.max+1 || capped.Limit != tc.max {
+				t.Errorf("the refusal is not a TextCapError{%s, %d, %d}: %#v",
+					tc.field, tc.max+1, tc.max, err)
+			}
+			if !errors.Is(err, tracker.ErrInvalid) {
+				t.Errorf("the refusal is not marked as content: %v", err)
+			}
+			// AND IT NAMES NO TASK: the caller named the item it was
+			// editing, and a uuid in the sentence is one more thing a
+			// person is shown that they never typed.
+			if strings.Contains(err.Error(), task.ID) {
+				t.Errorf("the refusal names the task's id: %v", err)
+			}
 			// AND IT NAMES A REMEDY THAT EXISTS. It used to offer "an
 			// attachment", which this tracker has no verb for — a model
 			// told to attach went looking for a tool that is not there.
@@ -302,5 +321,27 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 				t.Errorf("the refusal's remedy is not page linking: %v", err)
 			}
 		})
+	}
+}
+
+// A CREATE PAST A CAP NAMES NO TASK, because there is none. The create's id is
+// minted before the write — so every node derives the same one from the
+// request — and a refusal that quoted it told a person filing from the
+// dashboard that "the title on task 68c5…" was too long, about a task that was
+// never created and could never be looked up.
+func TestACreatePastACapNamesNoTask(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := newTask("t-born-refused")
+	task.Key = ""
+	task.Title = strings.Repeat("t", tracker.MaxTitle+1)
+	_, err := r.writer.CreateTask(r.t.Context(), "op-born-refused", task, nil)
+	var capped *tracker.TextCapError
+	if !errors.As(err, &capped) || capped.Field != tracker.TextTitle {
+		t.Fatalf("a create with a %d-byte title was not refused as a title "+
+			"past its cap: %v", tracker.MaxTitle+1, err)
+	}
+	if strings.Contains(err.Error(), task.ID) {
+		t.Errorf("the refusal names the id of a task that was never created: %v", err)
 	}
 }

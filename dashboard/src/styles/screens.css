@@ -2025,23 +2025,42 @@ details > summary.int-summary::-webkit-details-marker {
   background: var(--color-border-strong);
   flex: none;
 }
+/* The inventory, as the strip's last glyph: a square target at the tabs'
+   height, in the tabs' own quiet ink, lifted on hover as a tab is. */
 .work-strip-more {
-  flex: 0 0 auto;
-  font-size: var(--font-size-compact);
-  white-space: nowrap;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+}
+.work-strip-more:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
 }
 /* THE TOOLS — the box and the Display menu — are ONE flex item on the row, with a
    basis of what they need at their narrowest. A wrapping row breaks lines on
    each item's basis before anything shrinks, so as three items the box never
    gave way and the Display button dropped onto a line of its own at 1280px;
    as one, the cluster shares the line while it fits and moves down together,
-   right-aligned, when it does not. */
+   right-aligned, when it does not.
+
+   THAT BASIS IS `min-content`, the narrowest the cluster can be drawn — the
+   box at its floor beside its menu, measured by the browser rather than
+   estimated here. It was a written 320px, 17px wider than the floor the box
+   and the two menus it then held had (302px), and on a project's board
+   at 1280px the row came up 2px short of holding it: the search box and both
+   menus fell onto a second line the approved board never draws, with room
+   for them on the first. */
 .work-tabs-tools {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--spacing-2);
-  flex: 1 1 320px;
+  flex: 1 1 min-content;
   min-width: 0;
 }
 /* THE BOX IS THE ONE CONTROL A PERSON TYPES INTO, so it is drawn at a width
@@ -3069,22 +3088,25 @@ span.list-position-step {
 
 /* ---- The census, and a meter in a cell ---------------------------------- */
 
-/* The bar under a project's header: the fact line says how much, and this says
-   how much of it is DONE — an amount against everything filed, not a share of
-   three states. `routes/work/census.tsx` is where that reading is argued, and
-   it owns this wrapper so the page and the peek draw one census rather than
-   two widths. */
+/* The bar under a project's header: the fact line says how much, and this
+   splits it — done, active and still to do, over exactly that census, closed
+   work not in the whole. `routes/work/census.tsx` is where that reading is
+   argued, and it owns this wrapper so the page and the peek draw one census
+   rather than two widths. */
 .work-census {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
   max-width: 560px;
 }
-/* IN A CELL IT IS THE BAR ALONE — the legend is drawn once under the grid,
-   because forty legends is not forty facts. */
+/* THE DIRECTORY'S PROGRESS BAR, and its column is sized to it (`shrink` in
+   `Projects.tsx`): 96px holds a three-part proportion legibly, and every pixel
+   past it is taken from the project's name. In a cell it is the bar alone —
+   the legend is drawn once under the grid, because forty legends is not forty
+   facts. */
 .work-meter {
   display: block;
-  width: 120px;
+  width: 6rem;
 }
 /* WHEN, AND WHO, ON ONE LINE. Stacked, this one cell made every row in the
    directory a line and a half tall while its other eight columns held single
@@ -3131,6 +3153,13 @@ span.list-position-step {
 }
 .work-log-row:hover {
   background: var(--color-surface-hover);
+}
+/* THE ENGINE'S OWN BOOKKEEPING, folded to one line (a config apply
+   re-declaring the org chart's projects): said, in the quiet ink, so the
+   changes people made stand out around it. */
+.work-log-quiet .work-log-what,
+.work-log-quiet .work-log-who {
+  color: var(--color-text-tertiary);
 }
 .work-log-when {
   font-size: var(--font-size-2xs);
@@ -6002,4 +6031,68 @@ a.live-row:focus-visible {
   .inbox-pane-compose {
     padding: 0 var(--spacing-4) var(--spacing-4);
   }
+}
+
+/* ---- Work › Search's form (`routes/work/WorkSearch.tsx`) -----------------
+   THE PHRASE NEVER GIVES WAY. The field, the three modes and Search shared
+   one row that did not wrap, and at a phone's width the field shrank to 20px
+   — a magnifier with nowhere to read the phrase. The form wraps BY WHAT IT
+   HOLDS: the field's basis is the width a phrase is read at (18rem), so it
+   takes a line of its own exactly when the modes and the button cannot sit
+   beside it, and grows to fill whatever line it is on. The modes and the
+   button travel together, because the button submits the phrase in the mode
+   chosen beside it. */
+.work-search-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.work-search-phrase {
+  flex: 1 1 18rem;
+  min-width: min(100%, 18rem);
+}
+.work-search-how {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-2);
+  max-width: 100%;
+}
+
+/* ---- The New task sheet (`routes/work/NewTask.tsx`) ----------------------
+   Two short fields side by side — type and status, priority and due — because
+   each is a word or a date and a full sheet width of one is a line the eye
+   crosses for nothing. They stack at a phone's width, where half a sheet is
+   narrower than the longest status a company may name. */
+.new-task-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-3);
+}
+@media (width < 640px) {
+  .new-task-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* The sheet's fields as one keyboard region (`onFieldEnter`) that draws no box:
+   its children are laid out by the stacked body as if it were not there. */
+.new-task-fields {
+  display: contents;
+}
+/* WHY CREATE IS HELD, in the sheet's foot beside it (`footerStart`) — the one
+   place a sighted reader sees it, since the kit reads a held button's reason
+   to a screen reader only. The foot's start gives way before its buttons, so
+   the sentence wraps beside them; `pretty` keeps its last line from being one
+   stranded word. */
+.new-task-hold {
+  text-wrap: pretty;
+}
+
+/* A PROJECT'S ITEMS LENS, with its open count: the kit's Count, carrying "open"
+   for a screen reader, set beside the word the way the tab's own count is. */
+.lens-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }

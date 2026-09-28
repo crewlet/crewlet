@@ -25,6 +25,7 @@ export const SESSION_QUERIES = {
     "work_comments",
     "work_item_turns",
     "work_views",
+    "work_saved_views",
     "work_catalogue",
     "work_person",
     "work_projects",

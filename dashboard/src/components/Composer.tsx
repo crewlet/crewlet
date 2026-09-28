@@ -49,7 +49,7 @@ import {
   SendGlyph,
   XGlyph,
 } from "@crewlethq/icons/glyphs";
-import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
+import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { matchesRow } from "~/app/keymap.ts";
@@ -119,9 +119,13 @@ export const Composer = forwardRef<
     });
   };
 
+  const blocked = text.trim() ? undefined : "Write something first.";
   const send = async () => {
+    // THE BUTTON'S OWN GATE, because ⌘Enter sends from inside the field
+    // without touching the button: a second ⌘Enter while the first answer
+    // was out posted the same comment twice.
+    if (!pressable(write, blocked)) return;
     const body = text.trim();
-    if (!body) return;
     const args =
       mode.kind === "answer"
         ? { item, body, answers: mode.answers }
@@ -283,7 +287,7 @@ export const Composer = forwardRef<
           variant={mode.kind === "comment" ? "secondary" : "primary"}
           leadingIcon={<SendGlyph size="sm" />}
           showRefusal={false}
-          blocked={text.trim() ? undefined : "Write something first."}
+          blocked={blocked}
           onPress={() => void send()}
         >
           {mode.kind === "answer" ? "Send answer" : mode.kind === "comment" ? "Comment" : "Send"}
@@ -386,7 +390,9 @@ function AskDialog({
         ? `Offer at least ${MIN_OPTIONS} options.`
         : undefined;
   const submit = async () => {
-    if (blocked) return;
+    // THE BUTTON'S OWN GATE, for the dialog's submit: an ask is a comment,
+    // and a second one is a second ask.
+    if (!pressable(write, blocked)) return;
     const ids = optionIds(filled);
     const pick = recommended >= 0 ? labels[recommended]?.trim() : "";
     const decision = choose
@@ -542,8 +548,11 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
     { enabled: q.trim().length >= 2 },
   );
   const hits = (search.data?.hits ?? []).filter((h) => h.key !== item);
+  const blocked = chosen ? undefined : "Choose a task first.";
   const submit = async () => {
-    if (!chosen) return;
+    // THE BUTTON'S OWN GATE: the dialog is a form its search field submits
+    // on Enter.
+    if (!chosen || !pressable(write, blocked)) return;
     const result = await write.run(
       { item, linked: { add: [chosen.key] } },
       { done: `Linked ${chosen.key} to ${item}` },
@@ -568,7 +577,7 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
             write={write}
             variant="primary"
             showRefusal={false}
-            blocked={chosen ? undefined : "Choose a task first."}
+            blocked={blocked}
             onPress={() => void submit()}
           >
             Link

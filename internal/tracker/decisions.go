@@ -72,7 +72,7 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 			"no level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
 	case len(q.Who.Handles()) == 0:
-		return DecisionsAnswer{}, invalid("tracker: a decisions read names nobody")
+		return DecisionsAnswer{}, invalid("a decisions read names nobody")
 	}
 	var out DecisionsAnswer
 	served, err := r.log.Read(ctx, statelog.Query{
