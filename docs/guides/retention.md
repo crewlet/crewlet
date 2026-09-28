@@ -816,6 +816,14 @@ acknowledging from it is evidence that the process making the claim is not the
 one holding the request being retired — which is what a maintenance-mode
 acknowledgement could never establish about itself.
 
+A node in either maintenance mode **keeps its presence lease** — the process is
+running, and `crewlet fleet broker list`, the fleet view and the participant set
+below all read it — while it claims **no seat** and hands **no writer** to any
+surface: the operator's MCP endpoint offers only its search tool, the purge
+route is not served, the chart's projects and containers are applied at the
+next normal boot, and a stateless node's writes are answered "not here". Its
+reads are still served.
+
 ### Who has to acknowledge
 
 The seal's proof is that every **broker** process restarted — a request the

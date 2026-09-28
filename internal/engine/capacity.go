@@ -884,8 +884,11 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 			seen[id] = true
 		}
 	}
-	// AND THIS NODE, which is in a maintenance mode and therefore holds
-	// no presence lease and may have published no position yet.
+	// AND THIS NODE AS IT IS, whether or not its presence lease has
+	// landed yet and whether or not it has published a position. It is in
+	// a maintenance mode, and a node there KEEPS its presence — which is
+	// how the members that hold no data are found above, since their
+	// presence is the only record they leave (see maintenance_mode.go).
 	seen[e.id] = true
 	return sortedKeys(seen), nil
 }

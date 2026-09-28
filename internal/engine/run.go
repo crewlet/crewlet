@@ -1004,7 +1004,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		//
 		// Trivially true on a company running the vendor backends, which
 		// have no projection to wait for.
-		SeatsAdmitted: e.NativeHydrated,
+		//
+		// AND NEVER IN A MAINTENANCE MODE, where this same host still
+		// runs for the presence it renews — see [Engine.seatsAdmitted].
+		SeatsAdmitted: e.seatsAdmitted,
 		// AND THE OTHER DIRECTION. Admission withholds new work from a
 		// node that is merely behind; this gives back work already held
 		// by a node whose rows are wrong. Two gates because the remedies
@@ -1082,9 +1085,17 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.dispatch = e.buildDispatcher(opts, backends)
 
 	// EVERYTHING BELOW THIS LINE PUBLISHES, and a maintenance-mode node
-	// starts none of it: the seat host and its mailboxes, every duty, the
-	// scheduler, the change feeds, the notification spine, the retention
-	// trim and the reflection pass.
+	// starts none of it: every duty, the scheduler, the change feeds, the
+	// notification spine, the retention trim and the reflection pass.
+	//
+	// THE NODE ABOVE IS NOT ONE OF THEM, and [Engine.Start] starts it in
+	// every mode: its seat host renews this node's PRESENCE, which is
+	// membership rather than work — the capacity window's participant set,
+	// the estate's read routing and the fleet views all read it while the
+	// fleet is in a maintenance mode. What would publish through it is
+	// withheld where it is decided rather than here: the host claims no
+	// seat unless the mode publishes ([Engine.seatsAdmitted]), and no
+	// surface is handed this node's writers ([Engine.writeSide]).
 	//
 	// ONE GATE RATHER THAN A CONDITION PER LOOP. Each of these is started
 	// by its own call and a per-call check is a list somebody maintains —

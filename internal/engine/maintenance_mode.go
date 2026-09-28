@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // WHAT A MAINTENANCE-MODE NODE DOES, AND WHAT IT REFUSES TO DO.
@@ -37,6 +39,20 @@ import (
 // is established from. An acknowledgement from seal mode is EVIDENCE — that
 // mode cannot write configuration, so the process making the claim cannot be
 // the one holding the request it is retiring.
+//
+// # What a maintenance-mode node keeps, and what it withholds
+//
+// It keeps its PRESENCE LEASE. Presence is membership, not work: it says the
+// process is running, and three things read it during a window — the capacity
+// operation's participant set (a broker member that holds no data is found
+// nowhere else), the estate's routing of a stateless node's reads to a data
+// node that still serves them, and the fleet views an operator reads to see who
+// is up and whom the broker still counts. So the seat host runs in every mode,
+// renewing it.
+//
+// It withholds the two things that write the company's records: SEATS, which
+// the seat host never claims here ([Engine.seatsAdmitted]), and this node's own
+// WRITERS, which no surface is handed ([Engine.writeSide]).
 
 // ErrExcluded is a boot refused because a capacity operation is unresolved.
 //
@@ -199,6 +215,42 @@ func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 // so there is no unknown to resolve here.
 func acknowledges(p placement.NodeProfile) bool {
 	return p.HoldsData() || p.Broker == placement.BrokerMember
+}
+
+// seatsAdmitted is the seat host's claim gate: whether this node may take on a
+// NEW seat now.
+//
+// NEVER IN A MODE THAT DOES NOT PUBLISH. A seat is the first publisher there
+// is — its mailbox attaches, its turns run and its tools write the company's
+// records — and the host that claims seats is started in every mode, because it
+// is also what renews this node's presence. So the claim half is where the mode
+// is enforced: a maintenance-mode node boots holding nothing, and a gate that
+// never opens keeps it that way, while the presence the same host renews goes
+// on saying the process is running.
+//
+// Otherwise it is hydration ([Engine.NativeHydrated]): a node whose copy of the
+// company's records is behind claims nothing new until it has caught up.
+func (e *Engine) seatsAdmitted(ctx context.Context) bool {
+	return e.mode.Publishes() && e.NativeHydrated(ctx)
+}
+
+// writeSide is this node's own tracker writer and knowledge-base store — nil
+// where the runtime runs neither, and nil in a mode that does not publish.
+//
+// ONE GATE FOR EVERY SURFACE THAT WRITES THE COMPANY'S RECORDS through this
+// node: a seat's tools, the operator's MCP, the purge route, the chart's and
+// the containers' applies, and the estate server writing for a stateless node.
+// Each is handed its writer from here, so a maintenance-mode node hands out none
+// — for [New]'s reason for gating its publishers in one place: a check per
+// surface is a list somebody maintains, and the surface it forgets is a publish
+// during the window the mode exists to rule out, into a log whose usage a
+// resize is being decided against.
+func (e *Engine) writeSide() (*tracker.Writer, *pages.Store) {
+	n := e.native.Load()
+	if n == nil || !e.mode.Publishes() {
+		return nil, nil
+	}
+	return n.writer, n.pages
 }
 
 // Mode is what this node started for.

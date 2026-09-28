@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -1043,6 +1044,12 @@ func TestWhoTakesPartInACapacitySealIsTheDataAndTheBrokerMembers(t *testing.T) {
 // produce one. Left out of the participants, its broker could still hold a
 // queued request to resize the log after the seal passed; named but unable to
 // acknowledge, it would wedge every seal for ever.
+//
+// ITS PARTICIPATION IS FOUND FROM WHAT A SEAL-MODE NODE LEAVES BEHIND, never
+// from a lease the case writes for it: such a node has no position and no
+// admission, so the presence its seat host renews — in every mode, claiming no
+// seat — is the one record there is. Each node here boots that host exactly as
+// the engine does, behind the engine's own claim gate.
 func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 	ctx := context.Background()
 	coordinator, fleet := capacityFixture(t, "data-a", statelog.ModeSeal)
@@ -1057,16 +1064,16 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 			Broker: placement.BrokerLeaf},
 	}
 	coordinator.profile = profiles["data-a"]
-	for id, profile := range profiles {
-		if id == coordinator.id {
-			// THE COORDINATOR holds no presence in a maintenance mode;
-			// it names itself.
-			continue
-		}
-		if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
-			Owner: id + ":boot-1", TTL: time.Minute, Meta: profile.Meta(),
-		}); err != nil {
-			t.Fatal(err)
+	nodes := map[string]*Engine{"data-a": coordinator}
+	for _, id := range []string{"broker-1", "agent-1"} {
+		node, _ := capacityFixture(t, id, statelog.ModeSeal)
+		node.backends.Fleet = fleet
+		node.profile = profiles[id]
+		nodes[id] = node
+	}
+	for id, node := range nodes {
+		if held := bootSeatHost(t, node, backend); len(held) != 0 {
+			t.Fatalf("%s booted into seal mode holding %v", id, held)
 		}
 	}
 	participants, err := coordinator.capacityParticipants(ctx)
@@ -1098,10 +1105,7 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 		t.Fatal("the seal held before the dataless member restarted into seal mode")
 	}
 	for _, id := range []string{"broker-1", "agent-1"} {
-		node, _ := capacityFixture(t, id, statelog.ModeSeal)
-		node.backends.Fleet = fleet
-		node.profile = profiles[id]
-		node.acknowledge(ctx, []string{op.Stream})
+		nodes[id].acknowledge(ctx, []string{op.Stream})
 	}
 	acks, err = fleet.MaintenanceAcks(ctx)
 	if err != nil {
@@ -1122,4 +1126,25 @@ func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 		t.Errorf("the dataless member's evidence is %q, want the incarnation it "+
 			"restarted as", incarnations["broker-1"])
 	}
+}
+
+// bootSeatHost runs a node's seat host as the engine builds it — its profile
+// advertised, behind the engine's own claim gate — over a company of two
+// seats, and reports what the first sweep claimed. What it leaves in the lease
+// store is what that node's boot leaves.
+func bootSeatHost(t *testing.T, e *Engine, backend coord.Backend) []string {
+	t.Helper()
+	host, err := seat.New(seat.Config{
+		Backend: backend, Owner: e.incarnation, NodeID: e.id, Profile: e.profile,
+		Seats: func() []placement.Seat {
+			return []placement.Seat{{Handle: "ceo"}, {Handle: "cto"}}
+		},
+		Ready: e.seatsAdmitted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.Start(t.Context())
+	t.Cleanup(func() { host.Stop(context.WithoutCancel(t.Context())) })
+	return host.Held()
 }

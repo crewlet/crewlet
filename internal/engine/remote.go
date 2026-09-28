@@ -291,7 +291,8 @@ func remoteActor(actor builtin.Actor) estate.Actor {
 // WRITES ONLY WHILE THIS NODE PUBLISHES. A node restarted into a maintenance
 // mode is the evidence a capacity operation is established from, and a write
 // it took on a stateless node's behalf would be the publish the mode exists to
-// rule out — so its writers are absent and every write is answered "not here".
+// rule out — so its writers are absent ([Engine.writeSide] hands none out) and
+// every write is answered "not here".
 //
 // ALWAYS A BACKEND, native runtime or not: the event log is this node's own
 // and takes custody of a stateless node's records whatever backends the
@@ -327,20 +328,19 @@ func (e *Engine) estateBackend() (estate.Backend, bool) {
 	if n.searcher != nil {
 		b.Knowledge = n.searcher
 	}
-	if e.mode.Publishes() {
-		if n.writer != nil {
-			b.Writer = func(a estate.Actor) estate.TrackerWriter {
-				// A NIL INTERFACE, never a typed nil: the server reads
-				// nil as "the tracker refused to act as this party".
-				if w := n.writer.As(a.Handle, a.Kind, a.Provenance); w != nil {
-					return w
-				}
-				return nil
+	writer, store := e.writeSide()
+	if writer != nil {
+		b.Writer = func(a estate.Actor) estate.TrackerWriter {
+			// A NIL INTERFACE, never a typed nil: the server reads nil
+			// as "the tracker refused to act as this party".
+			if w := writer.As(a.Handle, a.Kind, a.Provenance); w != nil {
+				return w
 			}
+			return nil
 		}
-		if n.pages != nil {
-			b.PageWriter = n.pages
-		}
+	}
+	if store != nil {
+		b.PageWriter = store
 	}
 	return b, true
 }

@@ -688,13 +688,11 @@ func (e *Engine) Tracker() *tracker.Reader {
 	return n.trackerReader
 }
 
-// TrackerWriter is this node's tracker write side, or nil.
+// TrackerWriter is this node's tracker write side, or nil — nil in a
+// maintenance mode too; see [Engine.writeSide].
 func (e *Engine) TrackerWriter() *tracker.Writer {
-	n := e.native.Load()
-	if n == nil {
-		return nil
-	}
-	return n.writer
+	writer, _ := e.writeSide()
+	return writer
 }
 
 // NodeGate is eviction and readmission over every identity-claiming log, or
@@ -716,13 +714,11 @@ func (e *Engine) Pages() *pages.Reader {
 	return n.pageReader
 }
 
-// PagesStore is this node's knowledge write side, or nil.
+// PagesStore is this node's knowledge write side, or nil — nil in a
+// maintenance mode too; see [Engine.writeSide].
 func (e *Engine) PagesStore() *pages.Store {
-	n := e.native.Load()
-	if n == nil {
-		return nil
-	}
-	return n.pages
+	_, store := e.writeSide()
+	return store
 }
 
 // NativeSearcher is the native knowledge searcher, or nil.
@@ -1436,14 +1432,15 @@ func (e *Engine) trackerHalves() (trackerSeams, bool) {
 		}, true
 	}
 	n := e.native.Load()
-	if n == nil || n.trackerReader == nil || n.writer == nil {
+	writer, _ := e.writeSide()
+	if n == nil || n.trackerReader == nil || writer == nil {
 		return trackerSeams{}, false
 	}
 	return trackerSeams{
 		reader: n.trackerReader,
 		files:  n.trackerReader,
 		as: func(actor builtin.Actor) trackerWriter {
-			return n.writer.As(actor.Handle, actor.Kind, provenanceOf(actor))
+			return writer.As(actor.Handle, actor.Kind, provenanceOf(actor))
 		},
 		await: e.WaitCommitted,
 	}, true
@@ -1645,10 +1642,11 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 		return r.client.Pages(), r.client.Pages(), r.client.Await, true
 	}
 	n := e.native.Load()
-	if n == nil || n.pageReader == nil || n.pages == nil {
+	_, store := e.writeSide()
+	if n == nil || n.pageReader == nil || store == nil {
 		return nil, nil, nil, false
 	}
-	return n.pageReader, n.pages, e.WaitCommitted, true
+	return n.pageReader, store, e.WaitCommitted, true
 }
 
 // reservedContainers are the containers a seat's own writes may not target.
