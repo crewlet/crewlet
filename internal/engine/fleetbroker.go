@@ -39,6 +39,18 @@ import (
 // A fleet on an EXTERNAL cluster has no members of its own: the cluster's
 // membership is its operator's, and both gestures say so rather than
 // answering about a broker this fleet does not run.
+//
+// # A voter is its raft peer id
+//
+// The metadata group counts a voter by its peer id, which nats-server derives
+// from the server's name ([jetstream.PeerIDOf]); the NAME is only what the
+// answering member happens to have heard. A member lost for good whose
+// survivors have since restarted is one none of them has heard, so the group
+// lists it nameless. Both records are therefore held against each other by
+// PEER ID — a live node's id is computed from its node id, which also names a
+// nameless voter whenever its node is alive under another kind — and a removal
+// names the voter by id: the operator's node id, hashed, or the id the listing
+// shows for a voter nobody can name.
 
 // fleetBrokerSubjectPrefix prefixes every member's broker-membership subject.
 const fleetBrokerSubjectPrefix = "crewlet.fleet.broker"
@@ -50,21 +62,33 @@ func fleetBrokerSubject(node string) string {
 	return fleetBrokerSubjectPrefix + "." + coord.DocumentKey(node)
 }
 
-// brokerReadAsk bounds one member's answer to a read of the metadata group.
+// brokerReadWait bounds a read of the metadata group through the members —
+// every member asked at once, the first to report the group answering.
 //
-// TEN SECONDS, the estate's own per-node read attempt: the member answers out
-// of its own memory, so this is a request across the fleet — a leaf link
-// included — and a member silent for many times that is one that is gone
-// rather than slow, and the next one answers sooner.
-const brokerReadAsk = 10 * time.Second
+// FIVE SECONDS, and what fixes it is who waits on the listing: the command
+// line's call and the dashboard's socket query each give a node ten seconds
+// for the whole answer ([BrokerReadWait] is held under both), and the node
+// also lists the fleet's presence before it asks anybody. Half of that wait
+// leaves the other half for the presence read and the answer's way back. A
+// live member answers out of its own memory in one round trip — a leaf link
+// included — so one silent for five seconds is gone rather than slow, and
+// asking every member at once means a silent one costs the listing nothing
+// while another answers.
+const brokerReadWait = 5 * time.Second
 
-// BrokerRemoveWait bounds one member's answer to a removal: the member waits
-// for the metadata group to commit the change within the budget one clustered
-// metadata change gets ([jsprovision.Budget]), and the asker waits that and the
-// read attempt's round trip on top, so a member that answers at the edge of its
-// own budget is still heard. Exported for the surfaces that wait on the
-// gesture, which have to wait longer still.
-func BrokerRemoveWait() time.Duration { return jsprovision.Budget(true) + brokerReadAsk }
+// BrokerReadWait is [brokerReadWait], for the gates that hold the callers'
+// waits above it.
+func BrokerReadWait() time.Duration { return brokerReadWait }
+
+// BrokerRemoveWait bounds a whole removal: the carrying member waits for the
+// metadata group to commit it within the budget one clustered metadata change
+// gets ([jsprovision.Budget]), and its answer takes a fleet round trip back —
+// bounded as a read of the group is ([brokerReadWait]). ONE DEADLINE FOR THE
+// GESTURE, never one per member asked: a member that cannot carry it says so
+// at once and the next is asked inside what is left, and a member that does
+// not answer ends the gesture ([ErrRemovalOutcomeUnknown]). Exported for the
+// surfaces that wait on the gesture, which have to wait longer still.
+func BrokerRemoveWait() time.Duration { return jsprovision.Budget(true) + brokerReadWait }
 
 // brokerMembership is what the engine asks of its own embedded broker.
 // Declared here, by the consumer; a leaf's and a solo member's answer
@@ -107,9 +131,14 @@ func (k BrokerFindingKind) Valid() bool { return slices.Contains(brokerFindingKi
 
 // BrokerFinding is one disagreement, about one node.
 type BrokerFinding struct {
-	Kind   BrokerFindingKind `json:"kind"`
-	Node   string            `json:"node"`
-	Detail string            `json:"detail"`
+	Kind BrokerFindingKind `json:"kind"`
+	// Node is the node id, and empty for a voter no live node is and whose
+	// name the member that answered has never heard.
+	Node string `json:"node"`
+	// Peer is the voter's raft peer id, on a finding about a voter: the
+	// name a removal of one nobody can name goes by.
+	Peer   string `json:"peer,omitempty"`
+	Detail string `json:"detail"`
 }
 
 // BrokerNode is one live node's broker, as its presence advertises it.
@@ -146,19 +175,52 @@ type BrokerView struct {
 	Findings []BrokerFinding `json:"findings"`
 }
 
-// BrokerRemoval is an operator's removal of a member from the metadata group.
+// BrokerRemoval is an operator's removal of a voter from the metadata group,
+// named by EXACTLY ONE of Node and Peer.
 type BrokerRemoval struct {
-	// Node is the member to remove, by node id — the server name.
+	// Node is the member to remove, by node id — the server name, whose
+	// peer id the group counts it by ([jetstream.PeerIDOf]).
 	Node string
-	// Force removes it although it holds a live presence lease.
+	// Peer is the voter to remove, by the raft peer id the listing shows —
+	// for a voter whose name no member has heard, which has no node id to
+	// give.
+	Peer string
+	// Force removes it although its node holds a live presence lease as a
+	// member.
 	Force bool
 	// By is the operator, for the log.
 	By string
 }
 
+// target is the voter a removal names, by peer id, and its node id where the
+// removal gave one.
+func (r BrokerRemoval) target() (peer, node string, err error) {
+	switch {
+	case r.Node != "" && r.Peer != "":
+		return "", "", errors.New("engine: name the voter to remove by its node id " +
+			"or by its peer id, not both")
+	case r.Node != "":
+		if !config.ValidNodeID(r.Node) {
+			return "", "", fmt.Errorf("engine: %q is not a node id", r.Node)
+		}
+		return jetstream.PeerIDOf(r.Node), r.Node, nil
+	case r.Peer != "":
+		if !jetstream.ValidPeerID(r.Peer) {
+			return "", "", fmt.Errorf("engine: %q is not a raft peer id", r.Peer)
+		}
+		return r.Peer, "", nil
+	}
+	return "", "", errors.New("engine: name the voter to remove, by its node id or " +
+		"by the peer id the listing shows")
+}
+
 // BrokerRemoved is a removal the metadata group committed.
 type BrokerRemoved struct {
+	// Node is the removed voter's node id, empty where the removal named
+	// only its peer id and no live node is it.
 	Node string `json:"node"`
+	// Peer is the removed voter's raft peer id.
+	Peer string `json:"peer"`
 	// By is the member whose system account carried it.
 	By string `json:"by"`
 	// Group is the metadata group as that member reads it after the
@@ -173,23 +235,33 @@ var ErrExternalBroker = errors.New("engine: this fleet's broker is an external "
 	"it — change it with that cluster's own tools")
 
 // ErrNoBrokerMember is a gesture with no live member to carry it: every member
-// is gone, or the one named is the only one.
+// is gone, every one that answered could not carry it, or the one named is the
+// only one.
 var ErrNoBrokerMember = errors.New("engine: no live member of the fleet's broker " +
-	"answered")
+	"could carry it")
 
-// BrokerMemberLive is a removal refused because the named node holds a live
-// presence lease — it is running, and a running member removed from the group
-// rejoins as a voter the next time it restarts.
+// ErrRemovalOutcomeUnknown is a removal handed to a member that did not answer
+// within the gesture's wait. It may have proposed the change before it went
+// silent, and the group commits a proposal whoever is listening — so whether
+// the voter is gone is unknown, and the metadata group is what says.
+var ErrRemovalOutcomeUnknown = errors.New("engine: the member carrying the " +
+	"removal did not answer, so whether the metadata group committed it is unknown")
+
+// BrokerMemberLive is a removal refused because the named voter's node holds a
+// live presence lease AS A MEMBER (or does not say what its broker is): it is
+// running, and a running member removed from the group rejoins as a voter the
+// next time it restarts. A node that is alive as a leaf or a client under the
+// voter's name is not refused — its broker runs no JetStream and never rejoins.
 type BrokerMemberLive struct {
 	Node string
 	Kind placement.BrokerKind
 }
 
 func (e *BrokerMemberLive) Error() string {
-	return fmt.Sprintf("engine: %s holds a live presence lease (its broker is %s), "+
-		"so it is still running: stop it first — or remove it with force, knowing "+
-		"a running member removed from the metadata group rejoins it as a voter "+
-		"at its next restart", e.Node, e.Kind)
+	return fmt.Sprintf("engine: %s holds a live presence lease and its broker is %s, "+
+		"so it is still a running member: stop it first — or remove it with force, "+
+		"knowing a running member removed from the metadata group rejoins it as a "+
+		"voter at its next restart", e.Node, e.Kind)
 }
 
 // FleetBroker is the fleet's broker membership, for the operator surfaces.
@@ -199,9 +271,12 @@ type FleetBroker struct{ e *Engine }
 // any node answers the read, asking a member where it is not one.
 func (e *Engine) FleetBroker() *FleetBroker { return &FleetBroker{e: e} }
 
-// brokerRequest is one question to a member, as it crosses the wire.
+// brokerRequest is one question to a member, as it crosses the wire. A removal
+// names the voter by Peer; Node is the operator's name for it, for the log,
+// and empty where the removal gave none.
 type brokerRequest struct {
 	Op   string `json:"op"`
+	Peer string `json:"peer,omitempty"`
 	Node string `json:"node,omitempty"`
 	By   string `json:"by,omitempty"`
 	From string `json:"from,omitempty"`
@@ -225,6 +300,7 @@ const (
 	brokerCodeNotPeer   = "not_a_peer"
 	brokerCodeChanging  = "membership_changing"
 	brokerCodeNoLeader  = "no_leader"
+	brokerCodeSelf      = "removing_self"
 	brokerCodeFailed    = "failed"
 	brokerCodeUnknownOp = "unknown_op"
 )
@@ -243,6 +319,8 @@ func (r brokerReply) errorOf() error {
 		return fmt.Errorf("%w (%s)", jetstream.ErrMembershipChanging, r.Detail)
 	case brokerCodeNoLeader:
 		return fmt.Errorf("%w (%s)", jetstream.ErrNoMetaLeader, r.Detail)
+	case brokerCodeSelf:
+		return fmt.Errorf("%w (%s)", jetstream.ErrRemovingSelf, r.Detail)
 	}
 	return fmt.Errorf("engine: %s refused: %s", r.Node, r.Detail)
 }
@@ -259,6 +337,8 @@ func replyFor(node string, err error) brokerReply {
 		out.Code = brokerCodeChanging
 	case errors.Is(err, jetstream.ErrNoMetaLeader):
 		out.Code = brokerCodeNoLeader
+	case errors.Is(err, jetstream.ErrRemovingSelf):
+		out.Code = brokerCodeSelf
 	default:
 		out.Code = brokerCodeFailed
 	}
@@ -313,7 +393,7 @@ func (e *Engine) answerBroker(ctx context.Context, raw []byte) brokerReply {
 		}
 		return brokerReply{Node: e.id, Group: &group}
 	case brokerOpRemove:
-		return e.removeHere(ctx, req.Node, req.By, req.From)
+		return e.removeHere(ctx, req.Peer, req.Node, req.By, req.From)
 	}
 	// A NEWER PEER'S QUESTION, which this build cannot answer: said so,
 	// so the asker moves on rather than waiting.
@@ -321,23 +401,24 @@ func (e *Engine) answerBroker(ctx context.Context, raw []byte) brokerReply {
 		Detail: fmt.Sprintf("%s does not know the operation %q", e.id, req.Op)}
 }
 
-// removeHere removes a member through THIS member's system account.
+// removeHere removes a voter through THIS member's system account. node is
+// the operator's name for it, for the log alone.
 //
 // ON ITS OWN BUDGET, detached from the request that asked: once the leader has
 // proposed the change the group commits it whoever is listening, so an asker
 // that gave up changes nothing but who hears the answer.
-func (e *Engine) removeHere(ctx context.Context, node, by, from string) brokerReply {
+func (e *Engine) removeHere(ctx context.Context, peer, node, by, from string) brokerReply {
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.Budget(true))
 	defer cancel()
-	if err := e.backends.broker.RemovePeer(removeCtx, jetstream.PeerIDOf(node)); err != nil {
-		log.WarnContext(ctx, "fleet_broker_remove_refused", "node", node, "by", by,
-			"asked_by", from, "error", err.Error())
+	if err := e.backends.broker.RemovePeer(removeCtx, peer); err != nil {
+		log.WarnContext(ctx, "fleet_broker_remove_refused", "peer", peer, "node", node,
+			"by", by, "asked_by", from, "error", err.Error())
 		return replyFor(e.id, err)
 	}
-	log.WarnContext(ctx, "fleet_broker_member_removed", "node", node, "by", by,
-		"asked_by", from, "detail", "the metadata group no longer counts this "+
-			"member in its elections or its creates; a process that restarts under "+
-			"this name joins it again as a new voter")
+	log.WarnContext(ctx, "fleet_broker_member_removed", "peer", peer, "node", node,
+		"by", by, "asked_by", from, "detail", "the metadata group no longer counts "+
+			"this voter in its elections or its creates; a member that restarts "+
+			"under its name joins it again as a new voter")
 	out := brokerReply{Node: e.id}
 	if group, err := e.backends.broker.MetaGroup(); err == nil {
 		out.Group = &group
@@ -371,12 +452,13 @@ func (f *FleetBroker) livePresence(ctx context.Context) (map[string]placement.No
 
 // askOrder is who a gesture asks, in order: this node first when it is a
 // member it can reach in process, then every other node advertising a member,
-// by id, leaving out skip.
+// by id — leaving out the node whose peer id is skip, which is never asked to
+// carry its own removal ([jetstream.ErrRemovingSelf]).
 func (f *FleetBroker) askOrder(live map[string]placement.NodeProfile, skip string) (local bool, remote []string) {
 	local = f.e.profile.Broker == placement.BrokerMember && f.e.backends != nil &&
-		f.e.backends.broker != nil && f.e.id != skip
+		f.e.backends.broker != nil && jetstream.PeerIDOf(f.e.id) != skip
 	for id, profile := range live {
-		if id == f.e.id || id == skip || profile.Broker != placement.BrokerMember {
+		if id == f.e.id || jetstream.PeerIDOf(id) == skip || profile.Broker != placement.BrokerMember {
 			continue
 		}
 		remote = append(remote, id)
@@ -385,30 +467,39 @@ func (f *FleetBroker) askOrder(live map[string]placement.NodeProfile, skip strin
 	return local, remote
 }
 
-// ask puts one request to one member and reads its answer. A member that did
-// not answer within the budget reports false, and the caller asks the next.
-func (f *FleetBroker) ask(ctx context.Context, member string, req brokerRequest,
-	budget time.Duration) (brokerReply, bool, error) {
+// asked is how one member's ask ended.
+type asked int
 
+const (
+	// askNotSent is a request that never left this node: nobody can have
+	// acted on it.
+	askNotSent asked = iota
+	// askSilent is a request sent that nobody answered before the wait ran
+	// out: the member may have acted on it.
+	askSilent
+	// askAnswered is a member's answer, readable or not.
+	askAnswered
+)
+
+// ask puts one request to one member and reads its answer, within ctx.
+func (f *FleetBroker) ask(ctx context.Context, member string, req brokerRequest) (brokerReply, asked, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return brokerReply{}, false, err
+		return brokerReply{}, askNotSent, err
 	}
-	askCtx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	replies, err := f.e.backends.Queue.Ask(askCtx, fleetBrokerSubject(member), body, 1)
+	replies, err := f.e.backends.Queue.Ask(ctx, fleetBrokerSubject(member), body, 1)
 	if err != nil {
-		return brokerReply{}, false, fmt.Errorf("engine: ask %s: %w", member, err)
+		return brokerReply{}, askNotSent, fmt.Errorf("engine: ask %s: %w", member, err)
 	}
 	if len(replies) == 0 {
-		return brokerReply{}, false, nil
+		return brokerReply{}, askSilent, nil
 	}
 	var reply brokerReply
 	if err := json.Unmarshal(replies[0], &reply); err != nil {
-		return brokerReply{}, false, fmt.Errorf("engine: %s answered with something "+
-			"unreadable: %w", member, err)
+		return brokerReply{}, askAnswered, fmt.Errorf("engine: %s answered with "+
+			"something unreadable: %w", member, err)
 	}
-	return reply, true, nil
+	return reply, askAnswered, nil
 }
 
 // List is the fleet's broker membership: what every live node advertises, the
@@ -434,7 +525,14 @@ func (f *FleetBroker) List(ctx context.Context) (BrokerView, error) {
 	return view, nil
 }
 
-// readGroup reads the metadata group from the first member that answers.
+// readGroup reads the metadata group from this member in process, or else
+// from whichever other member reports it first.
+//
+// EVERY OTHER MEMBER AT ONCE, within one [brokerReadWait]: asked one after
+// another, a member that died with its presence lease still live would spend
+// the whole wait of everybody reading the listing before the next was asked.
+// The first report of the group answers; the reasons the others gave, or their
+// silence, are what the listing says when nobody reports one.
 func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.NodeProfile) (
 	*jetstream.MetaGroup, string, string) {
 
@@ -447,45 +545,84 @@ func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.N
 		}
 		why = append(why, fmt.Sprintf("%s: %v", f.e.id, err))
 	}
+	if len(remote) == 0 {
+		if len(why) == 0 {
+			return nil, "", "no live node advertises a member of the fleet's broker, so " +
+				"there is nobody to read the metadata group from"
+		}
+		return nil, "", "no member reported the metadata group: " + joinReasons(why)
+	}
+	readCtx, cancel := context.WithTimeout(ctx, brokerReadWait)
+	defer cancel()
+	type answer struct {
+		member string
+		reply  brokerReply
+		how    asked
+		err    error
+	}
+	answers := make(chan answer, len(remote))
 	for _, member := range remote {
-		reply, answered, err := f.ask(ctx, member,
-			brokerRequest{Op: brokerOpGroup, From: f.e.id}, brokerReadAsk)
+		go func() {
+			reply, how, err := f.ask(readCtx, member,
+				brokerRequest{Op: brokerOpGroup, From: f.e.id})
+			answers <- answer{member: member, reply: reply, how: how, err: err}
+		}()
+	}
+	for range remote {
+		a := <-answers
 		switch {
-		case err != nil:
-			why = append(why, err.Error())
-		case !answered:
-			why = append(why, member+" did not answer")
-		case reply.Group != nil:
-			return reply.Group, reply.Node, ""
+		case a.err != nil:
+			why = append(why, a.err.Error())
+		case a.how == askSilent:
+			why = append(why, a.member+" did not answer")
+		case a.reply.Group != nil:
+			// THE REST ARE ABANDONED, not awaited: the deferred cancel
+			// ends their asks, and the channel holds every answer, so
+			// none of them blocks on a reader that has gone.
+			return a.reply.Group, a.reply.Node, ""
 		default:
-			why = append(why, fmt.Sprintf("%s: %v", member, reply.errorOf()))
+			why = append(why, fmt.Sprintf("%s: %v", a.member, a.reply.errorOf()))
 		}
 	}
-	if len(why) == 0 {
-		return nil, "", "no live node advertises a member of the fleet's broker, so " +
-			"there is nobody to read the metadata group from"
-	}
+	slices.Sort(why)
 	return nil, "", "no member reported the metadata group: " + joinReasons(why)
 }
 
 // brokerFindings holds what the nodes advertise against what the metadata
 // group counts. A group that could not be read yields only the findings the
 // presence rows carry on their own.
+//
+// BY PEER ID, both ways: a voter is the node whose id hashes to it, whatever
+// name — or none — the member that answered has for it. So a voter nobody can
+// name is still recognised as the live node it is, and a live member the group
+// counts under an unknown name is not reported uncounted.
 func brokerFindings(live map[string]placement.NodeProfile, group *jetstream.MetaGroup) []BrokerFinding {
 	out := []BrokerFinding{}
-	voters := map[string]bool{}
+	nodeOf := map[string]string{}
+	for id := range live {
+		nodeOf[jetstream.PeerIDOf(id)] = id
+	}
 	if group != nil {
 		for _, peer := range group.Peers {
-			voters[peer.Name] = true
-			profile, running := live[peer.Name]
+			id, running := nodeOf[peer.Peer]
+			profile := live[id]
 			switch {
+			case !running && peer.Name == "":
+				out = append(out, BrokerFinding{Kind: BrokerDeadMember, Peer: peer.Peer,
+					Detail: "the metadata group counts it as a voter, no live node is " +
+						"it, and the member that answered has not heard its name since " +
+						"it started: its process is gone, and every election and create " +
+						"goes on counting it until it comes back or is removed by its " +
+						"peer id"})
 			case !running:
 				out = append(out, BrokerFinding{Kind: BrokerDeadMember, Node: peer.Name,
+					Peer: peer.Peer,
 					Detail: "the metadata group counts it as a voter and no live node " +
 						"is it: its process is gone, and every election and create " +
 						"goes on counting it until it comes back or is removed"})
 			case profile.Broker == placement.BrokerLeaf || profile.Broker == placement.BrokerClient:
-				out = append(out, BrokerFinding{Kind: BrokerDeadMember, Node: peer.Name,
+				out = append(out, BrokerFinding{Kind: BrokerDeadMember, Node: id,
+					Peer: peer.Peer,
 					Detail: fmt.Sprintf("the metadata group counts it as a voter, and "+
 						"its node now runs as a %s: the member it was is gone and is "+
 						"counted in every election until it is removed", profile.Broker)})
@@ -500,7 +637,8 @@ func brokerFindings(live map[string]placement.NodeProfile, group *jetstream.Meta
 				Detail: "its presence does not say what its broker is — a build " +
 					"older than the field — so it is counted as a member wherever " +
 					"that is the safe reading, a capacity seal included"})
-		case group != nil && profile.Broker == placement.BrokerMember && !voters[id]:
+		case group != nil && profile.Broker == placement.BrokerMember &&
+			!group.Counts(jetstream.PeerIDOf(id)):
 			out = append(out, BrokerFinding{Kind: BrokerNotInGroup, Node: id,
 				Detail: "it advertises a member and the metadata group does not " +
 					"count it: it is still joining, or it was removed while it ran " +
@@ -510,74 +648,125 @@ func brokerFindings(live map[string]placement.NodeProfile, group *jetstream.Meta
 	return out
 }
 
-// Remove removes a member from the metadata group, through a live member's
+// Remove removes a voter from the metadata group, through a live member's
 // system account.
 //
-// REFUSED WHILE THE NAMED NODE HOLDS A LIVE PRESENCE LEASE, unless forced: a
-// running member removed from the group rejoins it as a voter at its next
-// restart, so the gesture is for a member that is gone for good, and the lease
-// is the fleet's own evidence that this one is not. The member that carries it
-// is never the one being removed while another will do.
+// REFUSED WHILE THE VOTER'S NODE HOLDS A LIVE PRESENCE LEASE AS A MEMBER, or
+// without saying what its broker is, unless forced: a running member removed
+// from the group rejoins it as a voter at its next restart, so the gesture is
+// for a member that is gone for good, and the lease is the fleet's own evidence
+// that this one is not. A node alive under the voter's name as a LEAF or a
+// CLIENT is the member it was gone for good — its broker runs no JetStream and
+// never rejoins — so it is removed without force.
+//
+// THE VOTER NEVER CARRIES ITS OWN REMOVAL ([jetstream.ErrRemovingSelf]). With
+// no other member to carry it the gesture is refused, naming why.
+//
+// ONE DEADLINE, [BrokerRemoveWait], FOR THE WHOLE GESTURE: members are asked
+// one after another, in [FleetBroker.askOrder]; one that cannot carry it
+// answers at once and the next is asked inside what is left, and one that does
+// not answer ENDS the gesture — it may have proposed the change before it went
+// silent, and a second proposal through another member would answer as a
+// membership change in flight at best. What the operator is told then is that
+// the outcome is unknown ([ErrRemovalOutcomeUnknown]).
 func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemoved, error) {
-	if !config.ValidNodeID(req.Node) {
-		return BrokerRemoved{}, fmt.Errorf("engine: %q is not a node id", req.Node)
+	peer, node, err := req.target()
+	if err != nil {
+		return BrokerRemoved{}, err
 	}
 	if f.e.profile.Broker == placement.BrokerClient {
 		return BrokerRemoved{}, ErrExternalBroker
 	}
+	ctx, cancel := context.WithTimeout(ctx, BrokerRemoveWait())
+	defer cancel()
 	live, err := f.livePresence(ctx)
 	if err != nil {
 		return BrokerRemoved{}, err
 	}
-	if profile, running := live[req.Node]; running && !req.Force {
-		return BrokerRemoved{}, &BrokerMemberLive{Node: req.Node, Kind: profile.Broker}
+	for id, profile := range live {
+		if jetstream.PeerIDOf(id) != peer {
+			continue
+		}
+		node = id
+		switch profile.Broker {
+		case placement.BrokerMember, placement.BrokerUnknown:
+			if !req.Force {
+				return BrokerRemoved{}, &BrokerMemberLive{Node: id, Kind: profile.Broker}
+			}
+		}
 	}
-	local, remote := f.askOrder(live, req.Node)
+	done := func(reply brokerReply) BrokerRemoved {
+		return BrokerRemoved{Node: node, Peer: peer, By: reply.Node, Group: reply.Group}
+	}
+	// cannotCarry is an answer that says nothing about the group: this member
+	// holds no metadata group to carry it through, or does not know the
+	// operation. The next member is asked.
+	cannotCarry := func(reply brokerReply, err error) bool {
+		return errors.Is(err, jetstream.ErrNoMetaGroup) || reply.Code == brokerCodeUnknownOp
+	}
+
+	local, remote := f.askOrder(live, peer)
+	var why []string
 	if local {
-		reply := f.e.removeHere(ctx, req.Node, req.By, f.e.id)
-		if err := reply.errorOf(); err != nil {
+		reply := f.e.removeHere(ctx, peer, node, req.By, f.e.id)
+		err := reply.errorOf()
+		switch {
+		case err == nil:
+			return done(reply), nil
+		case !cannotCarry(reply, err):
 			return BrokerRemoved{}, err
 		}
-		return BrokerRemoved{Node: req.Node, By: reply.Node, Group: reply.Group}, nil
+		why = append(why, fmt.Sprintf("%s: %v", f.e.id, err))
 	}
-	// THE MEMBER BEING REMOVED CARRIES IT ONLY AS A LAST RESORT, forced: a
-	// member removing itself is still a proposal the leader commits, and
-	// with no other member live there is nobody else to ask.
-	if len(remote) == 0 && req.Force {
-		if profile, running := live[req.Node]; running && profile.Broker == placement.BrokerMember {
-			remote = []string{req.Node}
-		}
-	}
-	var why []string
 	for _, member := range remote {
-		reply, answered, err := f.ask(ctx, member, brokerRequest{
-			Op: brokerOpRemove, Node: req.Node, By: req.By, From: f.e.id,
-		}, BrokerRemoveWait())
+		reply, how, err := f.ask(ctx, member, brokerRequest{
+			Op: brokerOpRemove, Peer: peer, Node: node, By: req.By, From: f.e.id,
+		})
 		switch {
-		case err != nil:
+		case how == askNotSent:
 			why = append(why, err.Error())
 			continue
-		case !answered:
-			why = append(why, member+" did not answer")
-			continue
+		case how == askSilent:
+			return BrokerRemoved{}, fmt.Errorf("%w: %s was asked to carry the removal "+
+				"of %s and did not answer within %s — read the group "+
+				"(`crewlet fleet broker list`) before asking again",
+				ErrRemovalOutcomeUnknown, member, voterName(peer, node), BrokerRemoveWait())
+		case err != nil:
+			// AN ANSWER NOTHING HERE CAN READ from a member that did
+			// act on the request: what it did is not known either.
+			return BrokerRemoved{}, fmt.Errorf("%w: %w", ErrRemovalOutcomeUnknown, err)
 		}
 		if err := reply.errorOf(); err != nil {
-			if errors.Is(err, jetstream.ErrNoMetaGroup) || reply.Code == brokerCodeUnknownOp {
-				// THIS MEMBER CANNOT CARRY IT, which says nothing
-				// about the group: ask the next.
+			if cannotCarry(reply, err) {
 				why = append(why, err.Error())
 				continue
 			}
 			return BrokerRemoved{}, err
 		}
-		return BrokerRemoved{Node: req.Node, By: reply.Node, Group: reply.Group}, nil
+		return done(reply), nil
 	}
-	if len(why) == 0 {
-		return BrokerRemoved{}, fmt.Errorf("%w: no live node other than %s advertises "+
-			"a member, so there is nobody whose system account can carry the removal",
-			ErrNoBrokerMember, req.Node)
+	if len(why) > 0 {
+		return BrokerRemoved{}, fmt.Errorf("%w: %s", ErrNoBrokerMember, joinReasons(why))
 	}
-	return BrokerRemoved{}, fmt.Errorf("%w: %s", ErrNoBrokerMember, joinReasons(why))
+	if profile, running := live[node]; running && profile.Broker == placement.BrokerMember {
+		return BrokerRemoved{}, fmt.Errorf("%w: the only live member is %s, the one "+
+			"to be removed, and a member cannot carry its own removal — it could not "+
+			"see the group drop it, and loses JetStream the moment the change "+
+			"commits. Start another member to carry it, or stop %s and remove it "+
+			"once another is running", ErrNoBrokerMember, node, node)
+	}
+	return BrokerRemoved{}, fmt.Errorf("%w: no live node advertises a member, so "+
+		"there is nobody whose system account can carry the removal of %s",
+		ErrNoBrokerMember, voterName(peer, node))
+}
+
+// voterName is how a removal's voter reads in a sentence: its node id and peer
+// id where it has both, its peer id alone where it has only that.
+func voterName(peer, node string) string {
+	if node == "" {
+		return "the voter " + peer
+	}
+	return fmt.Sprintf("%s (peer %s)", node, peer)
 }
 
 // sortedProfileIDs is a profile map's ids, sorted.
