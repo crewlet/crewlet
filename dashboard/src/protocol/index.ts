@@ -22,8 +22,15 @@ export { api } from "./api.ts";
 export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort, refusedGrants } from "./rest.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";
 export { auth } from "./auth.ts";
-export { currentSessionNeed, needSession, onSessionNeed, sessionRestored } from "./session.ts";
-export type { SessionNeed } from "./session.ts";
+export {
+  confirmStepUp,
+  currentSessionNeed,
+  needSession,
+  onSessionNeed,
+  sessionRestored,
+  setStepUpConfirmer,
+} from "./session.ts";
+export type { SessionNeed, StepUpConfirmer, StepUpWindow } from "./session.ts";
 export {
   apiToken,
   storeToken,

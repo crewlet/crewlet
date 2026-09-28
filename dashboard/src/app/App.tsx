@@ -21,7 +21,9 @@
  * are drawn OUTSIDE the frame (`FRAMELESS` in `nav.ts`), because a browser on
  * one of them holds no session the frame could use. They are also where the
  * transports send a browser that lost its session — `FollowSessionNeed`,
- * mounted once here beside both, is what reads that and moves.
+ * mounted once here beside both, is what reads that and moves. The step-up
+ * ceremony (`StepUp.tsx`) is mounted beside both for the same reason: a
+ * refusal that asks for a fresher proof arrives on either side.
  *
  * # Keyed on the subject, every screen that has one
  *
@@ -36,6 +38,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { Shell } from "./Shell.tsx";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { framelessOf, type FramelessRoute } from "./nav.ts";
+import { StepUpHost } from "./StepUp.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
@@ -355,6 +358,7 @@ export function App() {
           did; it has to be readable over the dialog that caused it. */}
       <LayerHost>
         <FollowSessionNeed />
+        <StepUpHost />
         <Frame />
       </LayerHost>
     </ToastProvider>

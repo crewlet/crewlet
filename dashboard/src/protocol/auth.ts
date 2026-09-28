@@ -92,6 +92,14 @@ export const auth = {
   recoveryCodes: async (): Promise<RecoveryCodes> =>
     (await rest.post("/auth/totp/recovery", {})) as RecoveryCodes,
 
+  /**
+   * Confirm who you are on a session that is already valid: the password,
+   * and the code where a second factor is held. The engine answers a fresh
+   * session cookie and ends the one it replaces.
+   */
+  stepUp: async (body: { password: string; code?: string }): Promise<SignedIn> =>
+    (await rest.post("/auth/step-up", body)) as SignedIn,
+
   /** Who this browser is signed in as. */
   session: async (): Promise<SessionAnswer> => (await rest.get("/auth/session")) as SessionAnswer,
 };

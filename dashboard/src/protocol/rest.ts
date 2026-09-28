@@ -23,7 +23,7 @@
  */
 
 import { apiToken } from "./authToken.ts";
-import { needSession } from "./session.ts";
+import { confirmStepUp, needSession, type StepUpWindow } from "./session.ts";
 
 /**
  * What the engine said when it refused.
@@ -258,6 +258,43 @@ function withQuery(path: string, query: Record<string, QueryValue> | undefined):
 }
 
 /**
+ * The route a step-up is given at. It answers `step_up_required` itself when
+ * the caller is a credential nobody present can confirm — and asking to
+ * confirm the confirmation would be a dialog that reopens for ever.
+ */
+const STEP_UP_PATH = "/auth/step-up";
+
+/** Which window a step-up refusal names, from the envelope's own key. */
+function windowOf(refusal: RestError): StepUpWindow {
+  const window = refusal.body.window;
+  return typeof window === "string" && window !== "" ? window : "step_up";
+}
+
+/**
+ * `waiting`, or the caller's own abort if that comes first. A person can sit
+ * at the confirmation for as long as they like, and a screen that gave up on
+ * its request meanwhile must not be held to an answer it no longer wants.
+ */
+function unlessAborted<T>(waiting: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return waiting;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    waiting.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
  * The one request path, answering the status and entity-tag as well as the
  * body.
  *
@@ -266,11 +303,42 @@ function withQuery(path: string, query: Record<string, QueryValue> | undefined):
  * sealed store's names, an integration's requirements), and a heuristic cache
  * hit on one of those is a screen showing the company as it was. A 304 still
  * reaches the caller, when the caller sent the precondition that asks for it.
+ *
+ * # A step-up is confirmed HERE, and the refused request sent again
+ *
+ * A gesture refused `403 step_up_required` is asked of the person once —
+ * through whatever confirms a step-up (`session.ts`), however many requests
+ * were refused together — and then REPLAYED: the same method, path, body and
+ * headers, so a form that was being saved is saved, rather than lost to a
+ * refusal its screen could only report. Once: a replay refused again is the
+ * refusal. Every screen gets this by sending its writes through here, and no
+ * screen implements it, which is what makes it one ceremony rather than a
+ * dozen that disagree.
+ *
+ * The deadline is each ATTEMPT's, not the gesture's: the time a person spends
+ * typing their password is not the engine taking too long.
  */
 async function request(
   method: string,
   path: string,
   options: RequestOptions = {},
+): Promise<RestResponse> {
+  try {
+    return await attempt(method, path, options);
+  } catch (err) {
+    const refused =
+      err instanceof RestError && err.status === 403 && err.code === "step_up_required";
+    if (!refused || path.split("?")[0] === STEP_UP_PATH) throw err;
+    if (!(await unlessAborted(confirmStepUp(windowOf(err)), options.signal))) throw err;
+    return attempt(method, path, options);
+  }
+}
+
+/** One round trip — see [request] for what surrounds it. */
+async function attempt(
+  method: string,
+  path: string,
+  options: RequestOptions,
 ): Promise<RestResponse> {
   const { body, headers = {}, query, signal, read = "json" } = options;
   const contentType = options.contentType ?? (body === undefined ? undefined : "application/json");
