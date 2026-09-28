@@ -54,14 +54,17 @@ type Fetcher interface {
 	// Fetch pulls up to maxMessages records or maxBytes of them,
 	// whichever binds first, waiting up to wait for the first one.
 	//
-	// EVERYTHING THE BROKER DELIVERED IS RETURNED. An implementation may
-	// not take a prefix of what a pull handed over and drop the rest: a
+	// EVERYTHING THE BROKER DELIVERED IS RETURNED — by this call or a
+	// later one. An implementation may not take a prefix of what a pull
+	// handed over and drop the rest, nor let a delivery reach nobody: a
 	// delivered record the loop never sees is one the broker holds
 	// against the consumer's ack-pending cap and redelivers only after
 	// its ack window — a hole in a strict log, on every pull, for as long
-	// as the window is. Where the broker cannot bound a pull by both
-	// count and bytes, the count is the consumer's own in-flight ceiling
-	// (see [FetchMessages]) and maxMessages is honoured by that.
+	// as the window is. What one call does not return (a bound met, or a
+	// context that ended) is held for the next. Where the broker cannot
+	// bound a pull by both count and bytes, the count is the consumer's
+	// own in-flight ceiling (see [FetchMessages]) and maxMessages is
+	// honoured by that.
 	Fetch(ctx context.Context, maxMessages, maxBytes int, wait time.Duration) ([]Message, error)
 
 	// Pending is how many records this consumer has not yet delivered. It

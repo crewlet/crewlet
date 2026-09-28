@@ -673,17 +673,18 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	}
 }
 
-// A RECORD THAT REACHES AN ABANDONED PULL IS HANDED BACK AT ONCE, not after the
-// ack window.
+// A RECORD THAT REACHES AN ABANDONED PULL GOES TO THE NEXT READER AT ONCE, not
+// after the ack window.
 //
-// A drain whose context ends leaves its pull request standing on the server
+// A fetch whose context ends leaves its pull request standing on the server
 // for the rest of its wait, and a record appended in that window is delivered
-// to it — to a batch nobody reads. Over a connection that stays open (an
+// to it — to a fetch nobody is running. Over a connection that stays open (an
 // applier stopped and another started in the same process) the next pull then
 // waited out the thirty-second ack window for a record already on the log, and
 // a read barrier appended in that window refused every linearizable read as
-// behind for the whole of it. Measured against the build without the hand-back
-// the second fetch below returns nothing.
+// behind for the whole of it. The delivery lands in the handle's standing
+// buffer, and the next fetch takes it; measured against the build that dropped
+// the abandoned pull's inbox, the second fetch below returns nothing.
 func TestARecordReachingAnAbandonedPullIsHandedBack(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_ABANDON_LOG", "crewlet.abandon.log")
@@ -717,6 +718,126 @@ func TestARecordReachingAnAbandonedPullIsHandedBack(t *testing.T) {
 	t.Fatal("the record appended while an abandoned pull stood was not handed to " +
 		"the next reader within five seconds: it sat in a batch nobody reads " +
 		"until the ack window redelivered it")
+}
+
+// A RECORD DELIVERED TO A REQUEST THE CLIENT GAVE UP ON IS TAKEN BY THE NEXT
+// FETCH — at once, never after the ack window.
+//
+// The client and the server each decide when a request ends, on their own
+// clocks, and under load they disagree: the server is still serving a request
+// the client has stopped counting. A pull that dropped its inbox when it
+// stopped counting left what the server then delivered on an inbox nobody
+// held, in flight against the consumer until the thirty-second ack window
+// redelivered it — measured on a loaded cluster as apply latency past thirty
+// seconds and drains of a few thousand records taking a minute and a half.
+//
+// The disagreement is made here directly: a request the server will serve
+// for twenty seconds, which the client counts as already over — what a
+// server running later than [pullGrace] looks like from the client. A record
+// appended then is delivered to it; the next fetch must hand it over at once.
+func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_LATE_LOG", "crewlet.late.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_LATE_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if got, err := cons.Fetch(t.Context(), 1, 0, 10*time.Millisecond); err != nil || len(got) != 0 {
+		t.Fatalf("an empty log answered %d record(s), %v", len(got), err)
+	}
+	p, err := cons.standing()
+	if err != nil {
+		t.Fatalf("the standing pull: %v", err)
+	}
+	p.mu.Lock()
+	if err := p.request(1, 0, 20*time.Second); err != nil {
+		p.mu.Unlock()
+		t.Fatalf("a long request: %v", err)
+	}
+	// THE CLIENT HAS STOPPED COUNTING IT; the server has not.
+	p.requests[len(p.requests)-1].until = time.Now().Add(-time.Second)
+	p.mu.Unlock()
+	waitStanding(t, cons)
+	appendN(t, log, "crewlet.late.log.task", 1)
+
+	took := time.Now()
+	got, err := cons.Fetch(t.Context(), 1, 0, 5*time.Second)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(got) != 1 || got[0].Seq != 1 {
+		t.Fatalf("the next fetch took %d record(s) from %d, want sequence 1 — the "+
+			"record the server delivered to a request the client had given up on "+
+			"was not held for it", len(got), seqOf(got))
+	}
+	if waited := time.Since(took); waited > time.Second {
+		t.Fatalf("the record reached the next fetch after %v; it was delivered "+
+			"before the fetch began", waited)
+	}
+}
+
+// A RECORD IS HANDED OVER WITH ITS BURST, not at the end of the wait.
+//
+// One record does not end a pull request, so a fetch that read its request
+// until it ended held a record appended a millisecond in for the rest of the
+// wait: half a second at the applier's own, which was the 99th-percentile
+// apply latency across a hundred and twenty-nine streams. What
+// [statelog.Fetcher] asks is to wait for the FIRST record; the runner decides
+// whether a partial run is worth another fetch.
+func TestARecordIsHandedOverWithItsBurst(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_BURST_LOG", "crewlet.burst.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_BURST_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	type fetched struct {
+		got []statelog.Message
+		err error
+		at  time.Time
+	}
+	done := make(chan fetched, 1)
+	go func() {
+		got, err := cons.Fetch(t.Context(), statelog.FetchMessages, statelog.FetchBytes,
+			5*time.Second)
+		done <- fetched{got, err, time.Now()}
+	}()
+	waitStanding(t, cons)
+	appended := time.Now()
+	appendN(t, log, "crewlet.burst.log.task", 3)
+	select {
+	case f := <-done:
+		if f.err != nil || len(f.got) == 0 || seqOf(f.got) != 1 {
+			t.Fatalf("the fetch returned %d record(s) from %d, %v", len(f.got), seqOf(f.got), f.err)
+		}
+		if waited := f.at.Sub(appended); waited > time.Second {
+			t.Fatalf("records appended into a standing fetch were handed over "+
+				"%v later — the fetch held them for its wait", waited)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("a fetch holding appended records did not return them before " +
+			"its wait ran out")
+	}
+}
+
+// waitStanding waits until the server holds a request for this consumer, so a
+// record appended next is delivered to it rather than waiting for a request.
+func waitStanding(t *testing.T, cons *DomainConsumer) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		info, err := consumerInfo(t, cons)
+		if err != nil {
+			t.Fatalf("consumer info: %v", err)
+		}
+		if info.NumWaiting > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no request reached the server")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // idlePullBudget is the most one pull of an EMPTY log may allocate, heap

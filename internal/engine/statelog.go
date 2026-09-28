@@ -627,13 +627,15 @@ func (s *stateLog) haltApplier(name string) bool {
 // resumeApplier starts ONE domain's loop again after [stateLog.haltApplier],
 // with its consumer moved back to the checkpoint the rows keep first.
 //
-// THE CONSUMER IS RESET for the reason a rejoin resets every one: a loop ended
-// in the middle of a fetch leaves its pull request pending on the broker, which
-// hands the next record to a reader that is gone and redelivers it only once
-// the acknowledgement window has passed — so on a strict log the resumed loop
-// sat waiting thirty seconds for a record the broker believed delivered. A
-// reset that fails costs exactly that and no more, since the loop resumes from
-// the checkpoint whatever the consumer says, and it is said.
+// THE CONSUMER IS RESET to the checkpoint the rows keep, for the reason a
+// rejoin resets every one: what it delivered before the halt was delivered
+// against the checkpoint the halted loop held, and a re-anchor has just
+// rewritten that — so the consumer is moved to where the rows now say, and
+// what it had delivered goes with it (a record the halted loop's fetch left in
+// the consumer's standing buffer would otherwise be handed to the resumed loop
+// as well). A reset that fails costs redeliveries the loop drops, since the
+// loop resumes from the checkpoint whatever the consumer says, and it is
+// said.
 func (s *stateLog) resumeApplier(ctx context.Context, name string) {
 	running := s.domains[name]
 	at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), running.domain.Stream().Name)
@@ -643,10 +645,9 @@ func (s *stateLog) resumeApplier(ctx context.Context, name string) {
 	if err != nil {
 		log.WarnContext(ctx, "statelog_consumer_not_reset",
 			"domain", name, "checkpoint", at.String(), "error", err.Error(),
-			"detail", "the loop resumes from its checkpoint regardless; a record "+
-				"handed to the fetch that was ended arrives once its "+
-				"acknowledgement window passes, so this costs a delay rather "+
-				"than correctness")
+			"detail", "the loop resumes from its checkpoint regardless, and drops "+
+				"what the consumer hands over below it, so this costs "+
+				"redeliveries rather than correctness")
 	}
 	s.launchApplier(name)
 }

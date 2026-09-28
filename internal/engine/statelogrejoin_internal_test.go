@@ -322,6 +322,21 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	at = running.runner.Committed()
 
 	s.haltAppliers()
+	// AND NOTHING OF IT IS STILL WAITING ON THE LOG. The halted loop's
+	// last fetch leaves its request standing on the broker for the rest of
+	// its wait, and a record appended into it is DELIVERED — to the
+	// consumer's standing buffer, where the next loop on this handle takes
+	// it, which is the whole point of that buffer. A node that has been away
+	// long enough to fall below a floor has nothing standing, so the
+	// barriers below wait until nothing is.
+	waitUntil(t, 20*time.Second, "the halted loop's last request to end", func() bool {
+		cons, err := q.JetStream().Consumer(t.Context(), spec.Name, running.consumer.Name())
+		if err != nil {
+			return false
+		}
+		info, err := cons.Info(t.Context())
+		return err == nil && info.NumWaiting == 0
+	})
 	body, err := tracker.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: at.Generation,

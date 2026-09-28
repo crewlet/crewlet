@@ -51,10 +51,15 @@
 // process running a few hundred. Its count-only fetch costs the same per
 // record of batch — ≈ 172 KiB at the applier's four thousand — and cannot
 // bound bytes at all. [DomainConsumer.Fetch] therefore makes the server's own
-// pull request itself, carrying the count and the byte bound together, into a
-// callback subscription whose queue grows with what arrives; pullrequest.go
-// says why that and not a persistent Messages iterator, whose prefetch would
-// change what a pull is and needs a stop the applier has no call for.
+// pull request itself, carrying the count and the byte bound together, and
+// every request of a consumer is answered on ONE standing inbox — a callback
+// subscription whose queue grows with what arrives, and a buffer of what no
+// fetch has taken — so a delivery to a request the client stopped counting
+// reaches the next fetch rather than waiting out the ack window, and a fetch
+// returns its first burst rather than holding it for the wait. pullrequest.go
+// says why that and not the library's Messages iterator, whose prefetch would
+// hold records in flight whether or not an applier is reading and needs a
+// stop the applier has no call for.
 //
 // Every other pull in this package and in internal/learning/memsync is
 // count-bounded and small — one record for a mailbox's first wait, the

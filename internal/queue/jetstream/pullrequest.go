@@ -13,8 +13,8 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// A PULL REQUEST, MADE BY HAND, because it is the one request the client
-// library does not make in the shape a domain consumer needs.
+// A DOMAIN CONSUMER'S STANDING PULL, made by hand, because the client library
+// makes neither half of it in the shape an applier needs.
 //
 // # What the library offers, and what each one costs
 //
@@ -23,7 +23,7 @@ import (
 // because a record may be a barrier's hundred bytes or a bulk write's
 // megabytes. The server's own request carries both (`batch` and `max_bytes`
 // on `CONSUMER.MSG.NEXT`) and enforces both. The library does not let a
-// caller send that request:
+// caller send that request as a fetch:
 //
 //   - FetchBytes sends `max_bytes` with the batch FIXED at a million, and
 //     sizes the two channels it delivers through by that million — 32 MiB
@@ -34,72 +34,130 @@ import (
 //   - Fetch sends a count and no byte bound at all, and sizes the same two
 //     channels by the count: ~172 KiB per idle pull at the applier's four
 //     thousand, which is the right order of defect rather than a fix.
-//   - Messages and Consume keep a PERSISTENT pull standing and buffer what
-//     it delivers ahead of the reader, which would bound the allocation — but
-//     records it has delivered and nobody has asked for yet are in flight
-//     against the consumer's ack window, it needs a Stop that nothing on the
-//     applier's side calls today (a runner stopped and another started over
-//     the same connection would find the first one's prefetch holding the
-//     consumer's whole in-flight ceiling), and every Reset would have to tear
-//     it down and raise it again around the delete and create. It changes
-//     what a pull IS in order to change what a pull allocates.
 //
-// So the request is made here: the server's own type, on the subject the
-// connection's API answers, into an inbox subscription whose delivery is a
-// callback appending to a slice. What a pull allocates is then a function of
-// what it RECEIVED — the subscription, the request, a timer — and the count
-// and the byte bound are both the SERVER's, which is the only place either is
-// enforced for a record the client never saw.
+// And both are a POLL: an inbox subscribed for one request and dropped when
+// the client decides the request is over. The server decides that too, on its
+// own clock, and under load the two disagree — a request the client has given
+// up on is still being served, and a record the server delivers to it lands
+// on an inbox nobody holds. That record is in flight against the consumer
+// until the ACK WINDOW redelivers it, thirty seconds later. Measured on a
+// three-member cluster under CPU contention: apply latency up to 30.8–34 s,
+// and 57,000-record drains taking 28–99 s instead of about one. A poll also
+// holds whatever reached it until its request ENDS — the whole wait on a quiet
+// log — so a record appended a millisecond into a half-second pull was applied
+// half a second later: 500 ms and more at the 99th percentile across 129
+// streams.
+//
+// # So the pull STANDS
+//
+// One inbox for the life of the handle, which every request of the consumer is
+// answered on, and a buffer of what it delivered that no fetch has taken. A
+// delivery can then reach nothing but the buffer — whichever request it
+// answers, and however long after the client stopped counting that request —
+// so nothing waits out an ack window for a reader that was there all along,
+// and the next fetch hands it over at once. A fetch returns as soon as a burst
+// of records is in, which is what [statelog.Fetcher] asks ("waiting up to
+// wait for the first one"): the newest delivery's own count of what is still
+// pending behind it says when a burst is complete, and the runner decides
+// whether to fetch again. Measured on the same cluster, a standing pull with a
+// message cap and a byte cap applied at a p99 of 3–13 ms, and an idle one
+// costs 9–13 KiB/s. Measured here, against one embedded member: a record
+// appended into a standing fetch reaches its caller in 57 µs at the median and
+// 318 µs at the 99th percentile, where the fetch that held it for its wait
+// took the whole half-second; an idle fetch allocates about 5 KiB.
+//
+// The library's own standing pull (Consume / Messages) is not used, for the
+// reason the poll's allocation was not accepted: it keeps requests standing
+// ahead of the reader by itself, so what it has delivered and nobody has
+// asked for is in flight whether or not an applier is running, and it needs a
+// Stop that nothing on the applier's side calls — a runner stopped and
+// another started over the same handle would find the first one's prefetch
+// holding the consumer's whole in-flight ceiling. Here a request is sent only
+// by a fetch, one at a time, so what stands is at most one fetch's worth, and
+// the buffer that holds what it delivered is the handle's — the next runner
+// over it takes what the last one left.
 
-// pullGrace is how long past its own expiry a pull waits for the server to
-// say it ended.
+// pullGrace is how long past its own expiry a request is still counted as one
+// the server may be serving.
 //
 // The server ends an expired request with a `408`, measured from when IT
 // received the request, so the client's view runs late by a request's transit
 // and the status's return. One second covers a leaf link across a network
-// with room to spare; it is paid only when that status is lost, which is a
-// connection that dropped mid-pull, and there nothing else could have been
-// delivered either.
+// with room to spare. Past it the request is presumed gone and a fetch sends
+// another — and a delivery it does still make lands in the buffer like any
+// other, so a server running later than this costs a second request rather
+// than a record.
 const pullGrace = time.Second
 
-// pull is one pull request in flight.
-type pull struct {
-	sub *nats.Subscription
+// puller is one consumer's standing pull.
+type puller struct {
+	nc      *nats.Conn
+	subject string // the consumer's MSG.NEXT subject, in the connection's API
+	sub     *nats.Subscription
 
-	// batch and maxBytes are what the request asked for, so the client can
-	// tell a request the server has FULFILLED from one it is still serving:
-	// a batch filled exactly, or a byte bound met exactly, ends with no
-	// status at all.
-	batch, maxBytes int
+	// fetching serialises fetches: the buffer's order is the log's, and two
+	// readers would each take part of it.
+	fetching sync.Mutex
 
-	// wake is signalled on every delivery, capacity one, so the reader is
-	// never behind by more than one wake and the callback never blocks.
+	// wake is signalled on every delivery and status, capacity one, so a
+	// fetch is never behind by more than one wake and the callback never
+	// blocks.
 	wake chan struct{}
 
-	mu        sync.Mutex
-	delivered []*nats.Msg
-	received  int
-	bytes     int
-	// ended is the server having nothing further to deliver to this
-	// request, and err a status that says so as a failure.
-	ended bool
-	err   error
-	// abandoned is the reader having stopped reading. What arrives after
-	// that is handed straight back — see [pull.deliver].
-	abandoned bool
+	mu sync.Mutex
+	// buffered is what has been delivered and no fetch has taken, in
+	// delivery order.
+	buffered []*nats.Msg
+	// settled is the newest delivery having reported nothing pending
+	// behind it: the burst it belonged to is complete.
+	settled bool
+	// requests are the requests the server may still be serving, oldest
+	// first — the order the server fills and ends them in.
+	requests []*standingRequest
+	// failure is a status that ended a request as a failure, for the next
+	// fetch to report.
+	failure error
 }
 
-// startPull sends one pull request for up to batch records and maxBytes of
-// them (zero is no byte bound), standing for wait.
-//
-// A wait of zero or less asks for what is there now and waits for nothing.
-func (q *Queue) startPull(stream, consumer string, batch, maxBytes int,
-	wait time.Duration) (*pull, error) {
+// standingRequest is one request as the client counts it: what the server
+// still owes it, and when the client stops expecting its end.
+type standingRequest struct {
+	batch int
+	// bytesLeft is what is left of a byte bound, and bounded whether the
+	// request carried one.
+	bytesLeft int
+	bounded   bool
+	until     time.Time
+}
 
+// newPuller subscribes the standing inbox of one consumer.
+func (q *Queue) newPuller(stream, consumer string) (*puller, error) {
 	subject, err := q.API().Subject(fmt.Sprintf(server.JSApiRequestNextT, stream, consumer))
 	if err != nil {
-		return nil, fmt.Errorf("jetstream: address the pull on %s: %w", consumer, err)
+		return nil, fmt.Errorf("jetstream: address the pulls on %s: %w", consumer, err)
 	}
+	p := &puller{nc: q.nc, subject: subject, wake: make(chan struct{}, 1)}
+	// A CALLBACK SUBSCRIPTION rather than a channel one. A channel the
+	// library delivers into drops what finds it full, and a dropped
+	// delivery is a record in flight that nobody holds until the ack
+	// window returns it — so it would have to be sized by the largest
+	// batch, which is the allocation this file exists to remove. The
+	// callback's queue grows with what arrives.
+	if p.sub, err = q.nc.Subscribe(q.nc.NewInbox(), p.deliver); err != nil {
+		return nil, fmt.Errorf("jetstream: subscribe the pulls on %s: %w", consumer, err)
+	}
+	return p, nil
+}
+
+// close ends the standing inbox. What it had buffered is dropped with it,
+// which is right only where the consumer those records were delivered for is
+// going too — see [DomainConsumer.Reset].
+func (p *puller) close() { _ = p.sub.Unsubscribe() }
+
+// request sends one pull for up to batch records and maxBytes of them (zero is
+// no byte bound), standing for wait; a wait of zero or less asks for what is
+// there now and waits for nothing. Held under p.mu.
+func (p *puller) request(batch, maxBytes int, wait time.Duration) error {
 	request := server.JSApiConsumerGetNextRequest{Batch: batch, MaxBytes: maxBytes}
 	if wait > 0 {
 		request.Expires = wait
@@ -108,113 +166,177 @@ func (q *Queue) startPull(stream, consumer string, batch, maxBytes int,
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
-		return nil, fmt.Errorf("jetstream: encode the pull on %s: %w", consumer, err)
+		return fmt.Errorf("jetstream: encode a pull: %w", err)
 	}
-	p := &pull{batch: batch, maxBytes: maxBytes, wake: make(chan struct{}, 1)}
-	inbox := q.nc.NewInbox()
-	// A CALLBACK SUBSCRIPTION rather than a channel one. A channel the
-	// library delivers into has to hold the whole batch before the reader
-	// drains it — a message that finds it full is DROPPED, and a dropped
-	// delivery is a record in flight that nobody holds until the ack window
-	// returns it — so it would have to be sized by the batch, which is the
-	// allocation this file exists to remove. The callback's queue grows
-	// with what arrives.
-	if p.sub, err = q.nc.Subscribe(inbox, p.deliver); err != nil {
-		return nil, fmt.Errorf("jetstream: subscribe for the pull on %s: %w", consumer, err)
+	if err := p.nc.PublishRequest(p.subject, p.sub.Subject, body); err != nil {
+		return fmt.Errorf("jetstream: send a pull: %w", err)
 	}
-	if err := q.nc.PublishRequest(subject, inbox, body); err != nil {
-		_ = p.sub.Unsubscribe()
-		return nil, fmt.Errorf("jetstream: send the pull on %s: %w", consumer, err)
-	}
-	return p, nil
+	p.requests = append(p.requests, &standingRequest{
+		batch: batch, bytesLeft: maxBytes, bounded: maxBytes > 0,
+		until: time.Now().Add(max(wait, 0) + pullGrace),
+	})
+	return nil
 }
 
-// deliver is the subscription's callback: one delivery or one status.
-//
-// A DELIVERY TO AN ABANDONED PULL IS HANDED BACK AT ONCE. A reader that stops
-// early leaves its request standing on the server for the rest of its wait,
-// and a record appended in that window is delivered to it — held against the
-// consumer's in-flight count until the ACK WINDOW redelivers it, thirty
-// seconds later. On a process that exits the connection goes with it and so
-// does the request; on one that stops an applier and starts another over the
-// same connection — an engine restarted in-process, an estate adopted and
-// reopened — the next applier waited out that window for a record already on
-// the log, and a barrier appended in it refused every linearizable read as
-// `behind` for the whole of it. A negative acknowledgement redelivers at once,
-// to whichever pull asks next.
-func (p *pull) deliver(msg *nats.Msg) {
+// deliver is the inbox's callback: one delivery, or one status about the
+// oldest standing request.
+func (p *puller) deliver(msg *nats.Msg) {
 	status, failure := pullStatus(msg)
 	p.mu.Lock()
 	switch {
-	case status == "" && p.abandoned:
-		p.mu.Unlock()
-		_ = msg.Nak()
-		return
 	case status == "":
-		p.delivered = append(p.delivered, msg)
-		p.received++
-		p.bytes += msg.Size()
-		// FULFILLED WITHOUT A WORD: a batch filled exactly, or a byte
-		// bound met exactly, is a request the server has removed and
-		// ends no status for.
-		if p.received >= p.batch || (p.maxBytes > 0 && p.bytes >= p.maxBytes) {
-			p.ended = true
+		p.buffered = append(p.buffered, msg)
+		// THE BURST IS COMPLETE when the consumer had nothing left to
+		// deliver behind this record. A delivery whose metadata cannot
+		// be read says nothing either way, and is treated as complete
+		// so the fetch hands over what it has rather than waiting on
+		// an answer that will not come.
+		meta, unreadable := msg.Metadata()
+		p.settled = unreadable != nil || meta.NumPending == 0
+		if len(p.requests) > 0 {
+			// The server fills its requests oldest first, and one it
+			// has filled — a batch met, or a byte bound met exactly —
+			// it removes without a word.
+			r := p.requests[0]
+			r.batch--
+			r.bytesLeft -= msg.Size()
+			if r.batch <= 0 || (r.bounded && r.bytesLeft <= 0) {
+				p.requests = p.requests[1:]
+			}
 		}
 	case status == statusHeartbeat:
-		// Not asked for, and no answer about this request.
+		// Not asked for, and no answer about any request.
 		p.mu.Unlock()
 		return
 	default:
-		p.ended, p.err = true, failure
+		if len(p.requests) > 0 {
+			p.requests = p.requests[1:]
+		}
+		if failure != nil {
+			p.failure = failure
+		}
 	}
-	ended, abandoned := p.ended, p.abandoned
 	p.mu.Unlock()
-	if ended && abandoned {
-		// THE DELIVERY'S OWN SUBSCRIPTION, never the field: the field is
-		// written by the goroutine that made the request, and nothing
-		// orders that write before this callback's read.
-		_ = msg.Sub.Unsubscribe()
-	}
 	select {
 	case p.wake <- struct{}{}:
 	default:
 	}
 }
 
-// take hands the reader what has been delivered since it last looked, and
-// whether the request has ended.
-func (p *pull) take() ([]*nats.Msg, bool, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	taken := p.delivered
-	p.delivered = nil
-	return taken, p.ended, p.err
+// fetch returns the next burst of records — up to maxMessages of them and
+// maxBytes (zero: no byte bound) — waiting up to wait for the first.
+//
+// It sends a request only when none the server may still be serving is
+// standing, so what stands is at most one fetch's worth; a request that
+// outlives this call goes on delivering into the buffer, and the next fetch
+// takes what it delivered.
+//
+// A CONTEXT THAT ENDS leaves everything delivered in the buffer: the records
+// are in flight against the consumer whoever holds them, and the next fetch
+// on this handle — the next runner's — takes them at once, where returned
+// beside the error they would be dropped by a caller that is stopping.
+func (p *puller) fetch(ctx context.Context, maxMessages, maxBytes int,
+	wait time.Duration) ([]*nats.Msg, error) {
+
+	p.fetching.Lock()
+	defer p.fetching.Unlock()
+	start := time.Now()
+	deadline := start.Add(max(wait, 0))
+	if wait <= 0 {
+		// A no-wait request's only end is its 404, so the grace alone
+		// bounds it.
+		deadline = start.Add(pullGrace)
+	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	asked := false
+	for {
+		now := time.Now()
+		p.mu.Lock()
+		if failure := p.failure; failure != nil {
+			p.failure = nil
+			p.mu.Unlock()
+			return nil, failure
+		}
+		for len(p.requests) > 0 && now.After(p.requests[0].until) {
+			// Presumed gone — see [pullGrace]. What it still
+			// delivers lands in the buffer all the same.
+			p.requests = p.requests[1:]
+		}
+		standing := len(p.requests) > 0
+		if len(p.buffered) > 0 &&
+			(p.settled || !standing || !now.Before(deadline) || p.full(maxMessages, maxBytes)) {
+			taken := p.take(maxMessages, maxBytes)
+			p.mu.Unlock()
+			return taken, nil
+		}
+		if !standing {
+			if asked && (wait <= 0 || !now.Before(deadline)) {
+				// The no-wait request ended, or the wait is spent,
+				// and nothing came.
+				p.mu.Unlock()
+				return nil, nil
+			}
+			ask := deadline.Sub(now)
+			if wait <= 0 {
+				ask = 0
+			}
+			if err := p.request(maxMessages, maxBytes, ask); err != nil {
+				p.mu.Unlock()
+				return nil, err
+			}
+			asked = true
+		}
+		p.mu.Unlock()
+		select {
+		case <-p.wake:
+		case <-timer.C:
+			// The deadline: the loop hands over what came, or finds
+			// that nothing did.
+			timer.Reset(time.Hour)
+			deadline = time.Now()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
-// finish closes a request whose reader has everything it will get.
-func (p *pull) finish() { _ = p.sub.Unsubscribe() }
-
-// abandon stops reading a request the server may still be serving, and
-// returns what reached it before the reader stopped: those are delivered, and
-// the reader returns them rather than handing them back.
-//
-// The subscription stays for as long as the request can still deliver — until
-// its ending status arrives, or its expiry and [pullGrace] have passed — so
-// that what arrives meanwhile is handed back rather than dropped by the
-// connection as mail to nobody. Its lifetime is the request's: at most the
-// wait it asked for, and the grace.
-func (p *pull) abandon(remaining time.Duration) []*nats.Msg {
-	p.mu.Lock()
-	taken := p.delivered
-	p.delivered = nil
-	p.abandoned = true
-	ended := p.ended
-	p.mu.Unlock()
-	if ended || remaining <= 0 {
-		p.finish()
-		return taken
+// full reports whether the buffer already holds a whole fetch. Held under p.mu.
+func (p *puller) full(maxMessages, maxBytes int) bool {
+	if len(p.buffered) >= maxMessages {
+		return true
 	}
-	time.AfterFunc(remaining+pullGrace, p.finish)
+	if maxBytes <= 0 {
+		return false
+	}
+	total := 0
+	for _, msg := range p.buffered {
+		total += msg.Size()
+	}
+	return total >= maxBytes
+}
+
+// take removes and returns the buffer's head: up to maxMessages records and
+// maxBytes of them, and always at least one — a record larger than the bound
+// is one the server would not have sent under it, so it came under another
+// request's and is handed over rather than stranded. Held under p.mu.
+func (p *puller) take(maxMessages, maxBytes int) []*nats.Msg {
+	n, total := 0, 0
+	for n < len(p.buffered) && n < maxMessages {
+		size := p.buffered[n].Size()
+		if n > 0 && maxBytes > 0 && total+size > maxBytes {
+			break
+		}
+		total += size
+		n++
+	}
+	taken := make([]*nats.Msg, n)
+	copy(taken, p.buffered[:n])
+	if n == len(p.buffered) {
+		p.buffered = nil
+	} else {
+		p.buffered = append([]*nats.Msg(nil), p.buffered[n:]...)
+	}
 	return taken
 }
 
@@ -270,41 +392,3 @@ func pullStatus(msg *nats.Msg) (string, error) {
 // errPullRefused is a pull the server ended as a failure rather than by
 // running out of time or filling a bound.
 var errPullRefused = errors.New("jetstream: pull refused")
-
-// read collects a pull until it ends, the context ends, or its wait and
-// [pullGrace] have passed, handing each delivery to keep.
-//
-// WHAT IS COLLECTED IS RETURNED, on every path: a reader that stops early
-// keeps what already reached it, because those records are delivered and
-// held against the consumer's in-flight count whether or not anybody reads
-// them.
-func (p *pull) read(ctx context.Context, wait time.Duration, keep func(*nats.Msg)) error {
-	started := time.Now()
-	deadline := time.NewTimer(max(wait, 0) + pullGrace)
-	defer deadline.Stop()
-	for {
-		taken, ended, err := p.take()
-		for _, msg := range taken {
-			keep(msg)
-		}
-		if ended {
-			p.finish()
-			return err
-		}
-		select {
-		case <-p.wake:
-		case <-deadline.C:
-			// THE SERVER'S ENDING NEVER CAME, which is a connection that
-			// dropped the request. Nothing more can be delivered to it.
-			for _, msg := range p.abandon(0) {
-				keep(msg)
-			}
-			return nil
-		case <-ctx.Done():
-			for _, msg := range p.abandon(wait - time.Since(started)) {
-				keep(msg)
-			}
-			return ctx.Err()
-		}
-	}
-}
